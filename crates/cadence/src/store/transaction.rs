@@ -52,6 +52,10 @@ pub(crate) enum IntentKind {
     PlanPublication {
         phase: u32,
         inventory: Box<cadence::plan::inventory::Inventory>,
+        /// The trace rows this publication seeds; absent for older intents
+        /// and for publications that seed nothing (D-131).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        requirements: Option<Vec<String>>,
     },
     ContextPublication {
         phase: u32,
@@ -237,6 +241,7 @@ impl Intent {
         let mut context_phase = None;
         let mut plan_targets = Vec::new();
         let mut uat_phase = None;
+        let mut projections: Vec<&str> = Vec::new();
         for participant in &self.participants {
             let known = matches!(
                 participant.target.as_str(),
@@ -246,6 +251,10 @@ impl Intent {
             let context = super::filesystem::phase_context_target(&participant.target)?;
             let plan = super::filesystem::phase_plan_target(&participant.target)?;
             let uat = super::filesystem::phase_uat_target(&participant.target)?;
+            let projection = super::filesystem::projection_target(&participant.target);
+            if projection.is_some() {
+                projections.push(participant.target.as_str());
+            }
             if let Some(identity) = plan {
                 plan_targets.push(identity);
             }
@@ -259,7 +268,7 @@ impl Intent {
             {
                 return Err(Error::Invalid("duplicate UAT participant".into()));
             }
-            if (!known && phase.is_none() && context.is_none() && plan.is_none() && uat.is_none())
+            if (!known && phase.is_none() && context.is_none() && plan.is_none() && uat.is_none() && projection.is_none())
                 || !names.insert(participant.target.as_str())
             {
                 return Err(Error::Invalid(
@@ -275,12 +284,14 @@ impl Intent {
             }
         }
         match &self.kind {
-            IntentKind::PlanPublication { phase, .. }
+            IntentKind::PlanPublication { phase, requirements, .. }
                 if *phase > 0
                     && !plan_targets.is_empty()
                     && plan_targets.iter().all(|(p, _)| p == phase)
                     && context_phase.is_none()
                     && summary_phase.is_none()
+                    && uat_phase.is_none()
+                    && projections == if requirements.is_some() { vec!["requirements"] } else { vec![] }
                     && !names.contains("repo-config")
                     && !names.contains("global-config") => {}
             IntentKind::PlanPublication { .. } => {
@@ -290,6 +301,9 @@ impl Intent {
             }
             _ if !plan_targets.is_empty() => {
                 return Err(Error::Invalid("PLAN needs its publication intent".into()));
+            }
+            _ if !projections.is_empty() => {
+                return Err(Error::Invalid("projection participant needs its owning intent".into()));
             }
             IntentKind::ContextPublication { phase }
                 if *phase > 0
@@ -542,7 +556,7 @@ impl Intent {
                     || snapshot.generation!=previous.generation.checked_add(1).ok_or_else(||Error::Invalid("generation exhausted".into()))?
                 {return Err(Error::Invalid("native admission intent differs from validated immutable transition".into()));}
             }
-            IntentKind::PlanPublication { phase, inventory } => {
+            IntentKind::PlanPublication { phase, inventory, requirements } => {
                 for target in [ITEMS, DECISIONS] {
                     let participant = self
                         .participants
@@ -583,6 +597,15 @@ impl Intent {
                     &documents,
                 )
                 .map_err(|e| cadence::plan::limits::disposition(e, Error::Invalid))?;
+                // The seeded trace rows are exactly the preimage seeded by the
+                // receipt's declared ids; recovery derives the same bytes.
+                let participant = self.participants.iter().find(|p| p.target == "requirements");
+                let seeded = participant.map(|p| cadence::plan::persistence::seeded_requirements(
+                    &previous.data, &snapshot.data, phase, p.expected.bytes.as_deref())).transpose()?.flatten();
+                if participant.map(|p| p.bytes.as_slice()) != seeded.as_ref().map(|(bytes, _)| bytes.as_slice())
+                    || requirements.as_deref() != seeded.as_ref().map(|(_, ids)| ids.as_slice()) {
+                    return Err(Error::Invalid("requirements participant differs from seeding its observed preimage".into()));
+                }
             }
             IntentKind::ExecutionDispatch { phase } => {
                 cadence::plan::persistence::require_legacy_execution(&snapshot.data, phase)?;

@@ -208,3 +208,87 @@ fn phase13_human_results_preserve_first_pass() {
     assert_eq!(reopened(project).snapshot.data["verification"]["uat_originals"], stored.data["verification"]["uat_originals"]);
     assert_eq!(reopened(project).snapshot.data["context"], stored.data["context"]);
 }
+
+const REQUIREMENTS: &str = "# Requirements\n\n## Active\n\n- **T1**: the first parcel is delivered\n- **T2**: the second parcel is delivered\n- **T3**: receipts are signed\n\n## Deferred\n\n- **T9**: not this cycle\n\n## Traceability\n\n| Requirement | Phase | Status |\n|-------------|-------|--------|\n| T3 | Phase 13 | Complete |\n\n## Shipped\n\n| Requirement | Phase | Status | Milestone |\n|---|---|---|---|\n| OLD-01 | 1 | Complete | v1.0.0 |\n";
+
+// The first publication carries the truth's one check; later ones add artifacts.
+fn declaring(project: &std::path::Path, id: &str, requirements: &[&str]) -> Value {
+    let item = if id == "seed-one" { check("check/A", &["truth/A"]) } else { artifact(&format!("artifact/{id}"), &["truth/A"]) };
+    let mut input = proposal(project, id, &[(None, attached(vec![item]))]);
+    input["submission"]["plans"][0]["content"]["requirements"] = json!(requirements);
+    input
+}
+
+#[test]
+fn phase13_publication_seeds_only_missing_trace_rows() {
+    let temp = fixture();
+    let project = temp.path();
+    native_context(project, &[("truth/A", "a parcel arrives", "the recipient", "the parcel")]);
+    let requirements = project.join(".planning/REQUIREMENTS.md");
+    fs::write(&requirements, REQUIREMENTS).unwrap();
+    // A new plan declares one existing row, one missing active id and one id
+    // with no active bullet: only the missing active row is seeded, Pending.
+    let first = declaring(project, "seed-one", &["T3", "T1", "T9"]);
+    let answer = publish(project, &first);
+    assert_eq!(answer["requirements"], json!({"seeded":["T1"]}));
+    let seeded_once = REQUIREMENTS.replace("| T3 | Phase 13 | Complete |\n", "| T3 | Phase 13 | Complete |\n| T1 | Phase 13 | Pending |\n");
+    assert_eq!(fs::read_to_string(&requirements).unwrap(), seeded_once);
+    let after_first = tree(project);
+    let stored = reopened(project).snapshot;
+    // Exact replay reinstalls nothing and reseeds nothing.
+    let replay = apply(project, approve(first.clone()));
+    assert_eq!(replay["replayed"], true, "{replay}");
+    assert_eq!(tree(project), after_first);
+    assert_eq!(reopened(project).snapshot, stored);
+    // A second publication seeds only its own missing row; the resolved and
+    // the already seeded rows keep their bytes and order.
+    let second = declaring(project, "seed-two", &["T1", "T2"]);
+    let answer = publish(project, &second);
+    assert_eq!(answer["requirements"], json!({"seeded":["T2"]}));
+    let seeded_twice = seeded_once.replace("| T1 | Phase 13 | Pending |\n", "| T1 | Phase 13 | Pending |\n| T2 | Phase 13 | Pending |\n");
+    assert_eq!(fs::read_to_string(&requirements).unwrap(), seeded_twice);
+    // Publication never raises a status: a third plan naming every id changes nothing.
+    let third = declaring(project, "seed-none", &["T1", "T2", "T3"]);
+    let answer = publish(project, &third);
+    assert_eq!(answer["requirements"], json!({"seeded":[]}));
+    assert_eq!(fs::read_to_string(&requirements).unwrap(), seeded_twice);
+    let installed: Vec<_> = (1..=3).map(|n| fs::read(project.join(format!(".planning/phases/13/PLAN-{n}.md"))).unwrap()).collect();
+    // A changed projection input is refused before anything installs: the
+    // preimage is no longer an owned regular file.
+    let stored = reopened(project).snapshot;
+    let before = tree(project);
+    fs::remove_file(&requirements).unwrap();
+    fs::create_dir(&requirements).unwrap();
+    let fourth = declaring(project, "seed-refused", &["T2"]);
+    let refused = {
+        let mut client = Client::open(project);
+        let answer = client.call("cadence_apply", approve(fourth.clone()));
+        client.finish();
+        answer
+    };
+    assert_eq!(refused["status"], "refused", "{refused}");
+    assert!(refused["reason"].as_str().unwrap().contains("not an owned regular file"), "{refused}");
+    assert!(!project.join(".planning/phases/13/PLAN-4.md").exists());
+    fs::remove_dir(&requirements).unwrap();
+    fs::write(&requirements, &seeded_twice).unwrap();
+    assert_eq!(tree(project), before);
+    assert_eq!(reopened(project).snapshot, stored, "a refused publication leaves approval and history unchanged");
+    // The same approved request then publishes, seeding nothing new.
+    let answer = publish(project, &fourth);
+    assert_eq!(answer["requirements"], json!({"seeded":[]}));
+    assert_eq!(fs::read_to_string(&requirements).unwrap(), seeded_twice);
+    for (n, bytes) in installed.iter().enumerate() {
+        assert_eq!(fs::read(project.join(format!(".planning/phases/13/PLAN-{}.md", n + 1))).unwrap(), *bytes);
+    }
+    // Without a Traceability table nothing is seeded and publication proceeds.
+    fs::write(&requirements, "# Requirements\n\n## Active\n\n- **T4**: a fourth parcel\n").unwrap();
+    let answer = publish(project, &declaring(project, "seed-tableless", &["T4"]));
+    assert_eq!(answer["requirements"], json!({"seeded":[]}));
+    assert_eq!(fs::read_to_string(&requirements).unwrap(), "# Requirements\n\n## Active\n\n- **T4**: a fourth parcel\n");
+    // Approved context and every publication receipt are exactly retained.
+    let final_snapshot = reopened(project).snapshot;
+    assert_eq!(final_snapshot.data["context"], stored.data["context"]);
+    for id in ["seed-one", "seed-two", "seed-none", "seed-refused", "seed-tableless"] {
+        assert!(final_snapshot.data["plan_publications"]["phases"]["13"]["receipts"][id].is_object(), "{id}");
+    }
+}

@@ -632,6 +632,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let mut context_phase = None;
         let mut plan_phase = None;
         let mut plan_documents = Vec::new();
+        let mut requirements: Option<super::transaction::ExternalChange> = None;
         for change in external {
             let plan_target = super::filesystem::phase_plan_target(&change.target)?;
             if let Some((phase, plan)) = plan_target {
@@ -673,9 +674,16 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     _ => return Err(Error::Invalid("UAT.md needs its human result intent".into())),
                 }
             }
+            let projection = super::filesystem::projection_target(&change.target);
+            if projection.is_some() {
+                if change.target != "requirements" || requirements.replace(change.clone()).is_some() {
+                    return Err(Error::Invalid("projection participant needs its owning intent".into()));
+                }
+            }
             if phase.is_none()
                 && plan_target.is_none()
                 && uat_phase.is_none()
+                && projection.is_none()
                 && !matches!(change.target.as_str(), "repo-config" | "global-config")
             {
                 return Err(Error::Invalid("unknown external participant".into()));
@@ -689,12 +697,26 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         }
         let plan_intent = if let Some(phase) = plan_phase {
             if context_phase.is_some()
-                || participants.len() != plan_documents.len()
+                || participants.len() != plan_documents.len() + usize::from(requirements.is_some())
                 || next.items != self.view.items
                 || next.decisions != self.view.decisions
             {
                 return Err(Error::Invalid("mixed plan publication participants".into()));
             }
+            // The trace seed is recomputed from the exact preimage this writer
+            // observes now; a differing participant or a missing seed refuses.
+            let preimage = self.storage.read("requirements")?;
+            if let Some(change) = &requirements
+                && change.expected != preimage
+            {
+                return Err(Error::Conflict("pending participant changed: requirements".into()));
+            }
+            let seeded = cadence::plan::persistence::seeded_requirements(
+                &self.view.snapshot.data, &next.snapshot.data, phase, preimage.bytes.as_deref())?;
+            if requirements.as_ref().map(|c| c.bytes.as_slice()) != seeded.as_ref().map(|(bytes, _)| bytes.as_slice()) {
+                return Err(Error::Invalid("requirements-projection: REQUIREMENTS.md participant differs from seeding the observed preimage".into()));
+            }
+            let seeded_ids = seeded.map(|(_, ids)| ids);
             let observed = self
                 .storage
                 .read(&format!("phase-plan-inventory:{phase}"))?;
@@ -720,6 +742,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             Some(super::transaction::IntentKind::PlanPublication {
                 phase,
                 inventory: Box::new(inventory),
+                requirements: seeded_ids,
             })
         } else {
             None

@@ -299,6 +299,38 @@ pub fn validate_publication(
     Ok(())
 }
 
+/// The requirement ids the published plans declare, first occurrence first.
+pub fn declared_requirements(results: &[Publication]) -> Vec<String> {
+    let mut ids = Vec::new();
+    for publication in results {
+        for id in &publication.content.requirements {
+            if !ids.contains(id) { ids.push(id.clone()); }
+        }
+    }
+    ids
+}
+
+/// The one allocation receipt this publication adds, with its results.
+fn added_receipt(previous: &Value, proposed: &Value, phase: u32) -> Result<Vec<Publication>> {
+    let old = saved(previous, phase)?;
+    let new = saved(proposed, phase)?.ok_or_else(|| Error::Invalid("missing plan occurrence".into()))?;
+    let receipts: Vec<_> = new.receipts.iter()
+        .filter(|(id, _)| old.as_ref().is_none_or(|o| !o.receipts.contains_key(*id))).collect();
+    if receipts.len() != 1 {
+        return Err(Error::Invalid("publication needs one allocation receipt".into()));
+    }
+    Ok(receipts[0].1.results.clone())
+}
+
+/// The REQUIREMENTS.md bytes a publication installs: exactly the seeding of
+/// the observed preimage by the ids this publication's receipt declares, and
+/// nothing when the preimage seeds nothing (D-131). Commit and recovery both
+/// derive the participant from this.
+pub fn seeded_requirements(previous: &Value, proposed: &Value, phase: u32, preimage: Option<&[u8]>) -> Result<Option<(Vec<u8>, Vec<String>)>> {
+    let declared = declared_requirements(&added_receipt(previous, proposed, phase)?);
+    cadence::verification::projections::seeded_requirements(preimage, phase, &declared)
+}
+
 /// Exact retained publication authority, shared with admission and readback.
 /// This checks historical approval equality without recertifying an old map
 /// under today's content policy; admission separately validates the whole union.

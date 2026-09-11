@@ -113,6 +113,9 @@ impl Filesystem {
         if let Some(phase) = phase_uat_target(target)? {
             return Ok(self.root.join("phases").join(phase.to_string()).join("UAT.md"));
         }
+        if let Some(name) = projection_target(target) {
+            return Ok(self.root.join(name));
+        }
         if let Some(path) = self.participants.get(target) {
             return Ok(path.clone());
         }
@@ -262,6 +265,16 @@ pub(crate) fn phase_context_target(target: &str) -> Result<Option<u32>> {
         return Ok(None);
     };
     phase_summary_target(&format!("phase-summary:{value}"))
+}
+
+/// The two root projections the binary changes narrowly (D-131): a phase box
+/// in ROADMAP.md and requirement trace rows in REQUIREMENTS.md.
+pub(crate) fn projection_target(target: &str) -> Option<&'static str> {
+    match target {
+        "roadmap" => Some("ROADMAP.md"),
+        "requirements" => Some("REQUIREMENTS.md"),
+        _ => None,
+    }
 }
 
 /// The binary-rendered UAT.md of one native phase (D-127).

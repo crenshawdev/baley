@@ -233,6 +233,25 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                     bytes: cadence::plan::render::document(&result.content)?,
                 });
             }
+            // Seed only the missing active requirement rows as Pending, in the
+            // same confirmed transaction, against the exact observed preimage.
+            let mut seeded = Vec::new();
+            {
+                use cadence::store::Storage;
+                let expected = match cadence::store::filesystem::Filesystem::new(root)?.read("requirements") {
+                    Ok(observed) => observed,
+                    Err(error) => return path_error(error),
+                };
+                let declared = persistence::declared_requirements(&results);
+                match cadence::verification::projections::seeded_requirements(expected.bytes.as_deref(), submission.phase.get(), &declared) {
+                    Ok(Some((bytes, ids))) => {
+                        seeded = ids;
+                        external.push(cadence::store::transaction::ExternalChange { target: "requirements".into(), expected, bytes });
+                    }
+                    Ok(None) => {}
+                    Err(error) => return path_error(error),
+                }
+            }
             let transaction = cadence::store::transaction::Transaction {
                 id: format!("plan:{}:{}", submission.occurrence, submission.request_id),
                 items: vec![],
@@ -251,7 +270,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             {
                 Ok(_) => Ok(model::ok(
                     "plan-submit",
-                    json!({"persisted":true,"results":results,"coverage":coverage}),
+                    json!({"persisted":true,"results":results,"coverage":coverage,"requirements":{"seeded":seeded}}),
                 )),
                 Err(error) => {
                     // Another approved request may have won after our owned
