@@ -10,4 +10,5 @@ pub mod status;
 pub mod waivers;
 pub mod human;
 pub mod projections;
+pub mod completion;
 pub mod render;

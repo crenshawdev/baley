@@ -92,6 +92,19 @@ by their numbers; the binary renders UAT.md from the records and refuses a
 hand-edited render. A blank reply is refused, a skipped result resolves
 nothing, first_pass is carried from the earliest known outcome, and only a
 later passed result resolves a failed or imported item.
+Completion is {"operation":"verification-complete","request_id":"...",
+"attempt":"<current attempt>","basis":<exact current basis>,"projections":
+{"roadmap":"<sha256 of ROADMAP.md as read>","requirements":"<sha256 of
+REQUIREMENTS.md as read, or null when absent>"}}. The binary requires all
+required execution complete, a complete verification on the current basis,
+every truth met or effectively waived and every required human result
+resolved; concerns stays incomplete, and a refusal names the unfinished
+truth, item or human result. It records immutable completion authority and
+checks the phase box in ROADMAP.md and the phase's trace rows in
+REQUIREMENTS.md in the same confirmed transaction, refusing a stale preimage
+or an unmatched, repeated or already complete declaration. UAT.md and the
+approved context are unchanged. Completion with waivers is labelled
+complete-with-waivers and never raises the met count.
 An unavailable operation must refuse; its appearance in this contract is never
 a successful receipt.
 

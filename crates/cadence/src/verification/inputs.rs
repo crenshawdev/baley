@@ -33,7 +33,16 @@ pub fn root_binding(root: &Path) -> Result<String> {
 /// Observe actual tracked bytes too: Git's index flags cannot hide modified
 /// files. Symlinks contribute their own text, never their destination's bytes.
 pub fn source(project: &Path) -> Result<Source> {
-    runner::clean(project)?;
+    source_accounting(project, &BTreeMap::new())
+}
+
+/// The same observation, where a tracked file whose working bytes are exactly
+/// the bytes a confirmed binary-owned projection installed is read as HEAD's
+/// bytes. Only the named paths with their exact bytes are accounted for; any
+/// other difference is still ambiguous, and HEAD, tree and index identities
+/// are observed in full (D-131).
+pub fn source_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>) -> Result<Source> {
+    clean_accounting(project, installed)?;
     let head = runner::git_text(project, &["rev-parse", "HEAD"])?;
     let tree = runner::git_text(project, &["rev-parse", "HEAD^{tree}"])?;
     let index = runner::git(project, &["ls-files", "--stage", "-z"])?;
@@ -50,17 +59,37 @@ pub fn source(project: &Path) -> Result<Source> {
             std::fs::read_link(path)?.as_os_str().as_encoded_bytes().to_vec()
         } else if metadata.is_file() { std::fs::read(path)? }
         else { return Err(Error::Invalid(format!("ambiguous source material: {name}"))); };
-        if runner::git(project, &["show", &format!("{head}:{name}")])? != bytes {
-            return Err(Error::Invalid(format!("tracked material differs from HEAD: {name}")));
-        }
+        let committed = runner::git(project, &["show", &format!("{head}:{name}")])?;
+        let bytes = if committed == bytes { bytes }
+            else if installed.get(name).is_some_and(|expected| *expected == bytes) { committed }
+            else { return Err(Error::Invalid(format!("tracked material differs from HEAD: {name}"))); };
         material.push((entry.to_owned(), name.to_owned(), digest(&bytes)));
     }
-    runner::clean(project)?;
+    clean_accounting(project, installed)?;
     if runner::git_text(project, &["rev-parse", "HEAD"])? != head
         || runner::git(project, &["ls-files", "--stage", "-z"])? != index {
         return Err(Error::Conflict("source changed during observation".into()));
     }
     Ok(Source { head, tree, index_digest: digest(&index), material_digest: digest(&serde_json::to_vec(&material)?) })
+}
+
+/// A clean tree, except that a tracked file modified in the working tree to
+/// exactly the installed projection bytes is accounted for. Untracked, staged,
+/// renamed, deleted and otherwise modified paths stay dirty.
+fn clean_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+    if installed.is_empty() { return runner::clean(project); }
+    let status = runner::git(project, &["status", "--porcelain=v1", "-z", "--untracked-files=all"])?;
+    let mut entries = status.split(|b| *b == 0).filter(|e| !e.is_empty());
+    while let Some(entry) = entries.next() {
+        let entry = std::str::from_utf8(entry).map_err(|_| Error::Invalid("unrepresentable status entry".into()))?;
+        let (code, name) = entry.split_at_checked(3).ok_or_else(|| Error::Invalid("invalid status entry".into()))?;
+        if code.starts_with('R') || code.starts_with('C') { entries.next(); }
+        let accounted = code == " M " && installed.get(name).is_some_and(|expected| std::fs::read(project.join(name)).is_ok_and(|bytes| bytes == *expected));
+        if !accounted {
+            return Err(Error::Invalid("evidence-source-dirty: commit source before requesting an evidence run".into()));
+        }
+    }
+    Ok(())
 }
 
 pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
@@ -132,12 +161,19 @@ pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
 /// Transaction replay checks the captured authority against its preimage, and
 /// reobserves external material without asking readback to ignore a live intent.
 pub fn reobserve_external(root: &Path, inputs: &Inputs, documents: &BTreeMap<String, String>) -> Result<()> {
+    reobserve_external_accounting(root, inputs, documents, &BTreeMap::new())
+}
+
+/// The same reobservation for a transaction that installs its own confirmed
+/// projections: those exact bytes, at those paths, are not a source change.
+pub fn reobserve_external_accounting(root: &Path, inputs: &Inputs, documents: &BTreeMap<String, String>,
+    installed: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     let phase = inputs.basis.phase;
     if root_binding(root)? != inputs.basis.root_binding
         || root.parent().map(|p| p.to_string_lossy().into_owned()).as_ref() != Some(&inputs.basis.project) {
         return Err(refuse(phase, "verification-root", "basis", "bound project or root changed"));
     }
-    if source(Path::new(&inputs.basis.project)).map_err(|e| refuse(phase, "verification-source", "source", e.to_string()))? != inputs.basis.source {
+    if source_accounting(Path::new(&inputs.basis.project), installed).map_err(|e| refuse(phase, "verification-source", "source", e.to_string()))? != inputs.basis.source {
         return Err(refuse(phase, "verification-source", "source", "committed source, index or material changed"));
     }
     let observed = plan::inventory::read(root, &phase.to_string(), &json!({}))?;

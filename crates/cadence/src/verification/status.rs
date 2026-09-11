@@ -127,7 +127,7 @@ pub fn judgment(root: &Path, data: &Value, phase: u32) -> Result<Judgment> {
 
 /// Effective waivers are shown beside the derived rows: the row keeps its
 /// derived status, reason and items, and gains the owner's attribution.
-fn overlay_waivers(truths: &mut Value, applicable: &[Value]) -> Result<()> {
+pub fn overlay(truths: &mut Value, applicable: &[Value]) {
     for row in truths.as_array_mut().into_iter().flatten() {
         let Some(waiver) = applicable.iter().find(|w| w["effective"] == true
             && w["truth"]["id"] == row["id"] && w["truth"]["version"] == row["version"]) else { continue };
@@ -137,7 +137,6 @@ fn overlay_waivers(truths: &mut Value, applicable: &[Value]) -> Result<()> {
         row["waiver"] = json!({"id":waiver["id"],"request_id":waiver["request_id"],"owner":waiver["owner"],
             "at":waiver["at"],"reason":waiver["reason_given"]});
     }
-    Ok(())
 }
 
 pub fn counts(truths: &Value) -> Value {
@@ -181,8 +180,13 @@ pub fn report(root: &Path, data: &Value, phase: u32) -> Result<Value> {
         }
     };
     let applicable = waivers::applicability(data, phase, current.map(|(a, _)| (a, &a.inputs.basis)))?;
-    overlay_waivers(&mut truths, &applicable)?;
+    overlay(&mut truths, &applicable);
     let counts = counts(&truths);
+    let completion = match super::completion::applicable(data, phase)? {
+        Some((record, applies, reason)) => json!({"status":if applies { record.label.as_str() } else { "incomplete" },
+            "applicable":applies,"reason":reason,"record":record}),
+        None => json!({"status":"incomplete","applicable":false,"reason":"no completion recorded","record":null}),
+    };
     let waived = counts["waived"].as_u64().unwrap_or_default();
     let advice = (waived > 1).then(|| format!("revisit the plan: {waived} truths are waived"));
     let reason = match (&current, &unavailable, attempts.is_empty()) {
@@ -195,7 +199,7 @@ pub fn report(root: &Path, data: &Value, phase: u32) -> Result<Value> {
         "current":{"applicable":current.is_some(),"attempt":current.map(|(a, _)| &a.id),"patch":current.map(|(_, p)| &p.request_id),
             "reason":reason,"verified_at":current.map(|(a, _)| &a.inputs.basis),"observed":observed,"unavailable":unavailable},
         "truths":truths,"counts":counts,"waivers":applicable,"advice":advice,"history":history,
-        "humans":super::human::items(data, phase)?,
+        "humans":super::human::items(data, phase)?,"completion":completion,
         "legacy":{"summary_document":root.join(format!("phases/{phase}/SUMMARY.md")).is_file(),
             "uat_document":root.join(format!("phases/{phase}/UAT.md")).is_file(),"authority":LEGACY}}))
 }

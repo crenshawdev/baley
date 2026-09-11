@@ -676,8 +676,16 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             }
             let projection = super::filesystem::projection_target(&change.target);
             if projection.is_some() {
-                if change.target != "requirements" || requirements.replace(change.clone()).is_some() {
-                    return Err(Error::Invalid("projection participant needs its owning intent".into()));
+                match &verification_claim {
+                    // Completion installs exactly its own rendered projections.
+                    Some(super::transaction::IntentKind::VerificationCompleteV1 { claim, .. }) => {
+                        let installed = cadence::verification::completion::installed(claim)?;
+                        if installed.iter().find(|(target, _)| *target == change.target).map(|(_, bytes)| bytes) != Some(&change.bytes) {
+                            return Err(Error::Invalid("projection participant differs from the completion render".into()));
+                        }
+                    }
+                    None if change.target == "requirements" && requirements.is_none() => requirements = Some(change.clone()),
+                    _ => return Err(Error::Invalid("projection participant needs its owning intent".into())),
                 }
             }
             if phase.is_none()
@@ -766,19 +774,25 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     /// snapshot, root, source and installed plans included, and a differing
     /// claim, transaction identity or fingerprint is a conflict, never a write.
     fn verification_claim(&self, transaction: &super::transaction::Transaction) -> Result<Option<super::transaction::IntentKind>> {
-        use cadence::verification::{human, verdicts, waivers};
+        use cadence::verification::{completion, human, verdicts, waivers};
         use super::transaction::{IntentKind, Transaction};
-        let Some(record) = transaction.decisions.iter().find(|d| matches!(d.origin.source.as_str(), verdicts::SCHEMA | waivers::SCHEMA | human::SCHEMA)) else {
+        let Some(record) = transaction.decisions.iter().find(|d| matches!(d.origin.source.as_str(),
+            verdicts::SCHEMA | waivers::SCHEMA | human::SCHEMA | completion::SCHEMA)) else {
             return Ok(None);
         };
         let external: Vec<_> = transaction.external.iter().map(|c| c.target.as_str()).collect();
+        let encoded_claim = match &record.decision {
+            model::Decision::Gate { evidence: model::Evidence::Text(encoded), .. } => encoded,
+            _ => return Err(Error::Invalid("verification claim encoding invalid".into())),
+        };
         let expected_external: Vec<String> = match record.origin.source.as_str() {
             human::SCHEMA => {
-                let claim: human::Claim = serde_json::from_str(match &record.decision {
-                    model::Decision::Gate { evidence: model::Evidence::Text(encoded), .. } => encoded,
-                    _ => return Err(Error::Invalid("verification claim encoding invalid".into())),
-                })?;
+                let claim: human::Claim = serde_json::from_str(encoded_claim)?;
                 vec![format!("phase-uat:{}", claim.request.submission.phase)]
+            }
+            completion::SCHEMA => {
+                let claim: completion::Claim = serde_json::from_str(encoded_claim)?;
+                completion::installed(&claim)?.into_iter().map(|(target, _)| target).collect()
             }
             _ => vec![],
         };
@@ -819,6 +833,15 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     return Err(Error::Conflict("human result claim changed at committing snapshot".into()));
                 }
                 IntentKind::VerificationHumanV1 { root_binding, claim: Box::new(claim) }
+            }
+            completion::SCHEMA => {
+                let claim: completion::Claim = serde_json::from_str(encoded)?;
+                let current = completion::prepare(&claim.root, data, claim.request.clone())?;
+                let expected: Vec<_> = transaction.external.iter().map(|c| c.expected.clone()).collect();
+                if claim != current || !same(completion::transaction(data, &claim, &expected)?)? || claim.root_binding != root_binding {
+                    return Err(Error::Conflict("completion claim changed at committing snapshot".into()));
+                }
+                IntentKind::VerificationCompleteV1 { root_binding, claim: Box::new(claim) }
             }
             _ => unreachable!("matched claim sources"),
         };

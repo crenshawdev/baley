@@ -292,3 +292,110 @@ fn phase13_publication_seeds_only_missing_trace_rows() {
         assert!(final_snapshot.data["plan_publications"]["phases"]["13"]["receipts"][id].is_object(), "{id}");
     }
 }
+
+const PASSED_UAT: &str = "---\nstatus: complete\nphase: 13\n---\n\n## Items\n\n### 1. Delivery\nexpected: the parcel arrives\nstatus: pass\n";
+const TRACED: &str = "# Requirements\n\n## Active\n\n- **T1**: the first parcel is delivered\n- **T7**: a later parcel\n\n## Traceability\n\n| Requirement | Phase | Status |\n|-------------|-------|--------|\n| T1 | Phase 13 | Pending |\n| T7 | Phase 14 | Pending |\n";
+
+fn complete(attempt: &Value, id: &str, roadmap: &str, requirements: Option<&str>) -> Value {
+    json!({"operation":"verification-complete","request_id":id,"attempt":attempt["id"],"basis":attempt["inputs"]["basis"],
+        "projections":{"roadmap":roadmap,"requirements":requirements}})
+}
+
+#[test]
+fn phase13_completion_projection_transaction_recovers() {
+    let fixture = Completed::new();
+    let project = fixture.project();
+    let root = project.join(".planning");
+    let (roadmap, requirements, uat) = (root.join("ROADMAP.md"), root.join("REQUIREMENTS.md"), root.join("phases/13/UAT.md"));
+    fs::write(&uat, PASSED_UAT).unwrap();
+    fs::write(&requirements, TRACED).unwrap();
+    // The projections are tracked source here, so the transaction must account
+    // for exactly its own installed bytes and nothing else.
+    git_value(project, &["add", "-f", ".planning/ROADMAP.md", ".planning/REQUIREMENTS.md"]);
+    git_value(project, &["commit", "-m", "Track planning projections"]);
+    let (attempt, _) = verify(project, "complete-basis", &[]);
+    let (roadmap_digest, requirements_digest) = (digest_of(&roadmap), digest_of(&requirements));
+    let context = reopened(project).snapshot.data["context"].clone();
+    let before = tree(project);
+    let stored = reopened(project).snapshot;
+    let unchanged = |project: &std::path::Path| {
+        assert_eq!(tree(project), before, "nothing installed");
+        assert_eq!(reopened(project).snapshot, stored, "nothing acknowledged");
+        assert_eq!(fs::read_to_string(&uat).unwrap(), PASSED_UAT);
+    };
+    // A stale caller preimage for either projection is refused and locates it.
+    let stale = apply(project, complete(&attempt, "stale-roadmap", &"0".repeat(64), Some(&requirements_digest)));
+    assert_eq!(stale["rule"], "verification-projection", "{stale}");
+    assert_eq!(stale["slot"], "projections.roadmap");
+    assert_eq!(stale["details"]["current"], roadmap_digest);
+    unchanged(project);
+    let stale = apply(project, complete(&attempt, "stale-requirements", &roadmap_digest, Some(&"0".repeat(64))));
+    assert_eq!(stale["rule"], "verification-projection", "{stale}");
+    assert_eq!(stale["slot"], "projections.requirements");
+    unchanged(project);
+    let absent = apply(project, complete(&attempt, "absent-requirements", &roadmap_digest, None));
+    assert_eq!(absent["slot"], "projections.requirements", "{absent}");
+    unchanged(project);
+    // A real interruption: the server is killed before it can answer. The
+    // reopened store is wholly confirmed or wholly unconfirmed, never split.
+    let request = complete(&attempt, "complete-13", &roadmap_digest, Some(&requirements_digest));
+    let mut completed = false;
+    for _ in 0..3 {
+        Client::open(project).interrupt("cadence_apply", request.clone());
+        let view = recovered(project);
+        assert!(!root.join(".store-intent.json").exists(), "recovery leaves no intent behind");
+        let completions = view.snapshot.data["verification"]["completions"].as_array().cloned().unwrap_or_default();
+        let checked = fs::read_to_string(&roadmap).unwrap().contains("- [x] **Phase 13: Plan publication**");
+        let traced = fs::read_to_string(&requirements).unwrap().contains("| T1 | Phase 13 | Complete |");
+        assert_eq!((checked, traced), (!completions.is_empty(), !completions.is_empty()), "split authority/projection state");
+        assert_eq!(fs::read_to_string(&uat).unwrap(), PASSED_UAT);
+        if !completions.is_empty() { completed = true; break; }
+        assert_eq!(tree(project), before);
+    }
+    let done = apply(project, request.clone());
+    assert_eq!(done["status"], "ok", "{done}");
+    assert_eq!(done["receipt"]["replayed"], json!(completed));
+    let record = done["receipt"]["record"].clone();
+    assert_eq!(record["schema"], "verification-completion-1");
+    assert_eq!(record["label"], "complete");
+    assert_eq!(record["phase"], 13);
+    assert_eq!(record["attempt"], attempt["id"]);
+    assert_eq!(record["basis"], attempt["inputs"]["basis"]);
+    assert_eq!(record["projections"]["roadmap"]["preimage"], roadmap_digest);
+    assert_eq!(record["projections"]["roadmap"]["line"], 2);
+    assert_eq!(record["projections"]["requirements"]["rows"], json!(["T1"]));
+    assert_eq!(record["truths"], json!([{"id":"truth/A","version":1,"status":"met","derived":"met","waiver":null},
+        {"id":"truth/B","version":1,"status":"met","derived":"met","waiver":null}]));
+    assert_eq!(fs::read_to_string(&roadmap).unwrap(), "## Phases\n- [x] **Phase 13: Plan publication**\n- [ ] **Phase 28: Next phase**\n");
+    assert_eq!(fs::read_to_string(&requirements).unwrap(), TRACED.replace("| T1 | Phase 13 | Pending |", "| T1 | Phase 13 | Complete |"));
+    assert_eq!(fs::read_to_string(&uat).unwrap(), PASSED_UAT, "completion leaves human material untouched");
+    assert_eq!(git_value(project, &["status", "--porcelain"]), " M .planning/REQUIREMENTS.md\n M .planning/ROADMAP.md");
+    let saved = reopened(project).snapshot;
+    assert_eq!(saved.data["context"], context);
+    assert_eq!(saved.data["verification"]["completions"], json!([record]));
+    assert_eq!(saved.data["verification"]["patches"], stored.data["verification"]["patches"]);
+    let read = query(project, json!({"operation":"verification-read","phase":13}));
+    assert_eq!(read["completion"]["status"], "complete");
+    assert_eq!(read["completion"]["applicable"], true);
+    assert_eq!(read["completion"]["record"], record);
+    assert_eq!(read["current"]["applicable"], false, "the uncommitted projections are a source change for verification");
+    assert_eq!(read["current"]["unavailable"]["rule"], "verification-source");
+    // Exact replay, changed payload and a second completion on the same inputs.
+    let after = tree(project);
+    let replay = apply(project, request.clone());
+    assert_eq!(replay["receipt"]["record"], record);
+    assert_eq!(replay["receipt"]["replayed"], true);
+    assert_eq!(tree(project), after);
+    let reused = apply(project, complete(&attempt, "complete-13", &"1".repeat(64), Some(&requirements_digest)));
+    assert_eq!(reused["rule"], "verification-complete-reuse", "{reused}");
+    git_value(project, &["commit", "-am", "Record phase 13 completion"]);
+    let (fresh, _) = verify(project, "after-completion", &[]);
+    let again = apply(project, complete(&fresh, "complete-13-again", &digest_of(&roadmap), Some(&digest_of(&requirements))));
+    assert_eq!(again["rule"], "verification-complete", "{again}");
+    assert_eq!(again["slot"], "phase");
+    let read = query(project, json!({"operation":"verification-read","phase":13}));
+    assert_eq!(read["completion"]["applicable"], true, "committing the projections changes no native input");
+    assert_eq!(read["current"]["attempt"], fresh["id"]);
+    assert_eq!(reopened(project).snapshot.data["verification"]["completions"].as_array().unwrap().len(), 1);
+    assert_eq!(fs::read_to_string(&uat).unwrap(), PASSED_UAT);
+}

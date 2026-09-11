@@ -122,5 +122,16 @@ pub enum Apply {
     #[serde(rename = "verification-human-result")]
     Human { request_id: String, submission: Box<HumanResult>, approval: Box<OwnerApproval<HumanResult>> },
     #[serde(rename = "verification-complete")]
-    Complete { request_id: String, attempt: String, basis: Box<Basis> },
+    Complete { request_id: String, attempt: String, basis: Box<Basis>, projections: Box<Projections> },
+}
+
+/// The caller's expected projection preimages: the digest of ROADMAP.md and,
+/// when it exists, REQUIREMENTS.md as the owner last read them. A stale
+/// digest refuses completion instead of rewriting a document the owner has
+/// not seen.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Projections {
+    pub roadmap: String,
+    pub requirements: Option<String>,
 }

@@ -23,6 +23,10 @@ pub(crate) enum IntentKind {
         claim: Box<cadence::verification::human::Claim>,
         root_binding: String,
     },
+    VerificationCompleteV1 {
+        claim: Box<cadence::verification::completion::Claim>,
+        root_binding: String,
+    },
     VerificationRunV1 {
         record: Box<cadence::verification::runner::Record>,
         root_binding: String,
@@ -112,7 +116,7 @@ impl IntentKind {
     fn verification(&self) -> bool {
         matches!(self, IntentKind::VerificationV1 { .. } | IntentKind::VerificationRunV1 { .. }
             | IntentKind::VerificationSubmitV1 { .. } | IntentKind::VerificationWaiverV1 { .. }
-            | IntentKind::VerificationHumanV1 { .. })
+            | IntentKind::VerificationHumanV1 { .. } | IntentKind::VerificationCompleteV1 { .. })
     }
 }
 
@@ -302,6 +306,16 @@ impl Intent {
             _ if !plan_targets.is_empty() => {
                 return Err(Error::Invalid("PLAN needs its publication intent".into()));
             }
+            IntentKind::VerificationCompleteV1 { claim, .. }
+                if projections == cadence::verification::completion::installed(claim)?.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>()
+                    && context_phase.is_none()
+                    && summary_phase.is_none()
+                    && uat_phase.is_none()
+                    && !names.contains("repo-config")
+                    && !names.contains("global-config") => {}
+            IntentKind::VerificationCompleteV1 { .. } => {
+                return Err(Error::Invalid("invalid completion participants".into()));
+            }
             _ if !projections.is_empty() => {
                 return Err(Error::Invalid("projection participant needs its owning intent".into()));
             }
@@ -452,6 +466,24 @@ impl Intent {
                 let previous = previous_snapshot(&self.participants, "human result")?;
                 validate_claim_transition(&self.participants, &snapshot, items, decisions, &root_binding,
                     human::transaction(&previous.data, &claim, uat.expected.clone())?, human::decision(&claim)?, "human result")?;
+            }
+            IntentKind::VerificationCompleteV1 { claim, root_binding } => {
+                use cadence::verification::completion;
+                if claim.root_binding != root_binding { return Err(Error::Invalid("completion root binding changed".into())); }
+                let installed = completion::installed(&claim)?;
+                if names.len() != 3 + installed.len() { return Err(Error::Invalid("completion changes only its own projections".into())); }
+                let mut expected = Vec::new();
+                for (target, bytes) in &installed {
+                    let participant = self.participants.iter().find(|p| p.target == *target)
+                        .ok_or_else(|| Error::Invalid(format!("completion lacks its {target} participant")))?;
+                    if participant.bytes != *bytes {
+                        return Err(Error::Invalid(format!("{target} participant differs from the completion render")));
+                    }
+                    expected.push(participant.expected.clone());
+                }
+                let previous = previous_snapshot(&self.participants, "completion")?;
+                validate_claim_transition(&self.participants, &snapshot, items, decisions, &root_binding,
+                    completion::transaction(&previous.data, &claim, &expected)?, completion::decision(&claim)?, "completion")?;
             }
             IntentKind::VerificationRunV1 { record, root_binding } => {
                 use cadence::verification::runner;
@@ -1197,6 +1229,13 @@ fn validate_all<S: Storage>(
             return Err(Error::Invalid("human result store binding changed".into()));
         }
         cadence::verification::human::reobserve(claim)?;
+    }
+    if let IntentKind::VerificationCompleteV1 { claim, root_binding } = kind {
+        if storage.read(STATE)?.directory_identity != *root_binding {
+            return Err(Error::Invalid("completion store binding changed".into()));
+        }
+        let previous = previous_snapshot(participants, "completion")?;
+        cadence::verification::completion::reobserve(&previous.data, claim)?;
     }
     if let IntentKind::VerificationRunV1 { record, root_binding } = kind {
         if storage.read(STATE)?.directory_identity != *root_binding {

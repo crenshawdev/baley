@@ -1,5 +1,5 @@
 //! Resident adapter; all writes use the existing session's single store queue.
-use cadence::{store::{Error, Result, Storage, writer::Operation}, verification::{human, inputs, model::{Query, Apply}, persistence, render, runner, status, verdicts, waivers}};
+use cadence::{store::{Error, Result, Storage, writer::Operation}, verification::{completion, human, inputs, model::{Query, Apply}, persistence, render, runner, status, verdicts, waivers}};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -63,7 +63,24 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             written.and_then(|view| human::replay(&view.snapshot.data, &claim.request)?
                 .ok_or_else(|| Error::Invalid("confirmed human result absent".into())))
         }
-        Command::Apply(_) => Err(inputs::refuse(0, "verification-unavailable", "operation", "operation is not implemented")),
+        Command::Apply(Apply::Complete { request_id, attempt, basis, projections }) => {
+            let request = completion::Request { request_id, attempt, basis: *basis, projections: *projections };
+            let session = factory.first_touch(root).await?;
+            session.config()?;
+            let view = session.derivation_view().await?;
+            if let Some(answer) = completion::replay(&view.snapshot.data, &request)? { return Ok(answer); }
+            let claim = completion::prepare(root, &view.snapshot.data, request)?;
+            if claim.answer["status"] != "ok" { return Ok(claim.answer); }
+            let mut filesystem = cadence::store::filesystem::Filesystem::new(root)?;
+            let expected = completion::installed(&claim)?.iter().map(|(target, _)| filesystem.read(target)).collect::<Result<Vec<_>>>()?;
+            let transaction = completion::transaction(&view.snapshot.data, &claim, &expected)?;
+            let written = session.review_store().request(Operation::CompareTransact {
+                expected_generation: view.snapshot.generation, expected_integrity: view.snapshot.integrity, transaction,
+            }).await;
+            written.and_then(|view| completion::records(&view.snapshot.data)?.iter()
+                .any(|r| r.request_id == claim.request.request_id).then_some(claim.answer.clone())
+                .ok_or_else(|| Error::Invalid("confirmed completion absent".into())))
+        }
     };
     match result {
         Ok(answer) => Ok(answer),

@@ -623,3 +623,81 @@ impl Completed {
         Self { temp, map, admission, pairs, statements, dispatches }
     }
 }
+
+// A fresh dispatch, one independent run per saved check and one complete
+// handwritten patch; `verdicts` overrides (item, verdict, observed) rows.
+#[allow(dead_code)]
+pub fn inspect(project: &Path, id: &str, verdicts: &[(&str, &str, &str)]) -> (Value, Value) {
+    let dispatch = query(project, json!({"operation":"verify-next","phase":13,"request_id":id}));
+    assert_eq!(dispatch["status"], "ok", "{dispatch}");
+    let attempt = dispatch["attempt"].clone();
+    let mut items = Vec::new();
+    let mut client = Client::open(project);
+    for item in attempt["inputs"]["map"]["items"].as_array().unwrap() {
+        let mut runs = Vec::new();
+        if item["kind"] == "check" {
+            let run = format!("{id}-{}", item["id"].as_str().unwrap());
+            let launched = client.call("cadence_apply", json!({"operation":"verification-run","request":{
+                "request_id":run,"attempt":attempt["id"],"basis":attempt["inputs"]["basis"],
+                "item":{"id":item["id"],"item_revision":item["item_revision"]}}}));
+            assert_eq!(launched["status"], "ok", "{launched}");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            loop {
+                let read = client.call("cadence_query", json!({"operation":"verification-read","phase":13,"attempt":attempt["id"]}));
+                if let Some(result) = read["runs"].as_array().unwrap().iter()
+                    .find(|r| r["event"]["kind"] == "result" && r["event"]["run_id"] == run) {
+                    assert_eq!(result["event"]["result"]["disposition"], json!({"kind":"exited","code":0}), "{result}");
+                    assert_eq!(result["event"]["result"]["material_unchanged"], true);
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "{read}");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            runs.push(run);
+        }
+        let (verdict, observed) = verdicts.iter().find(|(name, _, _)| item["id"] == *name)
+            .map_or(("accepted", "Inspected the specified fixture evidence."), |(_, verdict, observed)| (verdict, observed));
+        items.push(json!({"id":item["id"],"item_revision":item["item_revision"],"verdict":verdict,"observed":observed,"runs":runs}));
+    }
+    client.finish();
+    let patch = json!({"request_id":format!("{id}-patch"),"attempt":attempt["id"],"basis":attempt["inputs"]["basis"],"items":items});
+    (attempt, patch)
+}
+
+/// Inspect and submit the complete patch; the attempt is then current.
+#[allow(dead_code)]
+pub fn verify(project: &Path, id: &str, verdicts: &[(&str, &str, &str)]) -> (Value, Value) {
+    let (attempt, patch) = inspect(project, id, verdicts);
+    let answer = apply(project, json!({"operation":"verification-submit","patch":patch}));
+    assert_eq!(answer["status"], "ok", "complete patch for {id}: {answer}");
+    (attempt, patch)
+}
+
+#[allow(dead_code)]
+pub fn digest_of(path: &Path) -> String {
+    model::digest(&fs::read(path).unwrap())
+}
+
+impl Client {
+    /// Send one call and kill the server before it can answer: a real
+    /// interruption of whatever the operation was doing at that moment.
+    #[allow(dead_code)]
+    pub fn interrupt(mut self, tool: &str, arguments: Value) {
+        self.send(json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":tool,"arguments":arguments}}));
+        self.child.kill().unwrap();
+        self.child.wait().unwrap();
+    }
+}
+
+/// Reopen the store the way a fresh server does, recovering a retained
+/// intent if one exists, and return the verified view.
+#[allow(dead_code)]
+pub fn recovered(project: &Path) -> cadence::store::writer::View {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let store = Store::open(
+            cadence::store::filesystem::Filesystem::new(project.join(".planning")).unwrap(),
+            cadence::store::writer::PlanningPolicy,
+        ).await.unwrap();
+        store.request(Operation::ReadVerified).await.unwrap()
+    })
+}
