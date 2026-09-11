@@ -68,14 +68,25 @@ fn store_failure(error: crate::store::Error) -> DerivationError {
 /// publication is admitted, no dispatch is active and every admitted plan
 /// and task has its completion; it is complete only through an applicable
 /// completion record. Nothing here reads SUMMARY.md or UAT.md.
+///
+/// A phase with no native authority and a completion declared at import is
+/// complete through that declaration, labelled by its provenance, with no
+/// truths met or waived; the moment the phase gains an approved context the
+/// declaration yields and the native rule above decides.
 pub fn acceptance_overlay(data: &serde_json::Value) -> Result<AcceptanceOverlay, DerivationError> {
-    use crate::{execution::{admission, history}, plan::persistence, verification::completion};
+    use crate::{adoption, execution::{admission, history}, plan::persistence, verification::completion};
     let mut overlay = AcceptanceOverlay::default();
-    let Some(phases) = data.get("context").and_then(|c| c.get("phases")).and_then(|p| p.as_object()) else { return Ok(overlay) };
-    for key in phases.keys() {
+    let mut keys: std::collections::BTreeSet<String> = data.get("context").and_then(|c| c.get("phases"))
+        .and_then(|p| p.as_object()).map(|p| p.keys().cloned().collect()).unwrap_or_default();
+    keys.extend(adoption::records(data).map_err(store_failure)?.iter().map(|r| r.phase.to_string()));
+    for key in &keys {
         let Ok(phase) = key.parse::<u32>() else { continue };
         if phase == 0 || phase.to_string() != *key { continue }
         let native = (|| -> crate::store::Result<AcceptancePhase> {
+            if let Some(declared) = adoption::applicable(data, phase)? {
+                return Ok(AcceptancePhase { published: false, executed: false, completion: Some(declared.id),
+                    label: Some(declared.provenance), met: 0, waived: 0, disagreement: None });
+            }
             let occurrence = persistence::saved(data, phase)?;
             let published = occurrence.as_ref().is_some_and(|o| !o.publications.is_empty());
             let admissions = admission::records(data, phase)?;
@@ -262,6 +273,45 @@ mod overlay_tests {
         capture.phases[0].plans = Observation::Present(vec![]);
         overlay.phases.insert("13".into(), unpublished);
         assert_eq!(derive_with(&capture, &overlay).unwrap().phases[0].status, LifecycleStatus::Unplanned);
+    }
+
+    fn declared(phase: u32) -> crate::adoption::Record {
+        use crate::adoption::{AT_IMPORT, Declaration, Derived, Roadmap, record};
+        let declaration = Declaration { phase, roadmap: Roadmap { line: 2, entry: 0, digest: "d".into() },
+            derived: Derived { status: LifecycleStatus::Executed, legacy_rule: "summary-and-uat".into() }, human_results: None };
+        record("rb", &declaration, AT_IMPORT, 1, "s").unwrap()
+    }
+
+    #[test]
+    fn a_declared_completion_reaches_the_overlay_without_a_context_and_yields_to_one() {
+        let capture = native_capture();
+        // No store at all: the overlay is empty and phase 13 is legacy Executed.
+        assert_eq!(acceptance_overlay(&serde_json::Value::Null).unwrap(), AcceptanceOverlay::default());
+        let record = declared(13);
+        let data = crate::adoption::contribute(&serde_json::Value::Null, &[record.clone()]).unwrap();
+        let overlay = acceptance_overlay(&data).unwrap();
+        assert_eq!(overlay.phases.keys().collect::<Vec<_>>(), ["13"], "the union carries a phase no context names");
+        assert_eq!(overlay.phases["13"], AcceptancePhase { published: false, executed: false, completion: Some(record.id.clone()),
+            label: Some("declared-at-import".into()), met: 0, waived: 0, disagreement: None });
+        let answer = derive_with(&capture, &overlay).unwrap();
+        assert_eq!(answer.phases[0].status, LifecycleStatus::Complete, "SUMMARY present, UAT failing, and still complete through the declaration");
+        assert_eq!(answer.phases[0].uat, Some(UatCounts::default()));
+        assert_eq!(answer.phases[1].status, LifecycleStatus::Executed, "the undeclared phase keeps the legacy table");
+        let parsed = capture.declarations.as_ref().unwrap().as_ref().unwrap();
+        let cursor = normalize_imported_cursor(&serde_json::Value::Null).unwrap();
+        assert_eq!(check_consistency(parsed, &answer, &cursor), Ok(()), "the tick and the derivation agree");
+        assert!(matches!(check_consistency(parsed, &derive(&capture).unwrap(), &cursor), Err(DerivationError::StateConflict { .. })),
+            "without the declaration the same tick conflicts");
+        // An approved context for the phase is native authority: the declaration
+        // yields, the native rule sees no completion, and the tick disagrees again.
+        let mut native = data.clone();
+        native["context"] = serde_json::json!({"schema":"context-1","phases":{"13":{}}});
+        let overlay = acceptance_overlay(&native).unwrap();
+        assert_eq!(overlay.phases["13"], AcceptancePhase { published: false, executed: false, completion: None,
+            label: None, met: 0, waived: 0, disagreement: None });
+        assert_eq!(derive_with(&capture, &overlay).unwrap().phases[0].status, LifecycleStatus::Planned);
+        assert!(check_consistency(parsed, &derive_with(&capture, &overlay).unwrap(), &cursor).is_err());
+        assert_eq!(crate::adoption::records(&native).unwrap(), vec![record], "the record stays in history");
     }
 
     #[test]

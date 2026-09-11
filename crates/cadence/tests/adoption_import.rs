@@ -89,7 +89,7 @@ fn import_declares_ticked_phases_the_documents_cannot_derive_complete() {
     for record in &records {
         assert_eq!(record["id"].as_str().unwrap().len(), 64);
         assert_eq!(record["root_binding"], json!(root_binding));
-        assert_eq!(record["import_generation"], json!(snapshot.generation));
+        assert_eq!(record["import_generation"], json!(1), "the import is the store's first commit");
         assert_eq!(record["source_generation"], snapshot.data["import"]["source_generation"]);
     }
     let shape = |record: &Value| {

@@ -1360,7 +1360,7 @@ fn prepare_import_uses_active_roles_and_retains_conflicting_legacy_evidence() {
         ]
         .into(),
     );
-    let result = prepare_import(root, &legacy, &active, &mut io, false).unwrap();
+    let result = prepare_import(root, &legacy, &active, &mut io, false, &Value::Null).unwrap();
     assert_eq!(
         (
             result.generation.effective.raw_global,
@@ -1427,7 +1427,7 @@ fn prepare_import_refuses_unusable_active_global_without_legacy_normalization() 
         .into(),
     );
     assert_eq!(
-        prepare_import(root, &legacy, &active, &mut io, false).err(),
+        prepare_import(root, &legacy, &active, &mut io, false, &Value::Null).err(),
         Some(Error::Policy(
             "config unavailable: unusable roles.cad-executor.effort".into()
         ))

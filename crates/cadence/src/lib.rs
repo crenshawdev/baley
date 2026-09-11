@@ -1,5 +1,7 @@
 extern crate self as cadence;
 
+/// Completion declared at import for ticked phases the documents cannot derive.
+pub mod adoption;
 /// Two persisted layers; defaults and migration evidence are never a layer.
 pub mod config;
 pub mod config_service;

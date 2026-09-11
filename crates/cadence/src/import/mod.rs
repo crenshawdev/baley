@@ -42,6 +42,10 @@ use crate::config::{
     reload::{self, ConfigIo, FileIo, Generation, Input, Paths, Reload, Shared},
     write,
 };
+use cadence::adoption;
+use cadence::derivation::{
+    self, ArtifactFiles, ArtifactIo, InputFailure, InputFailureCategory, Observation,
+};
 use cadence::store::{
     Error, MutationContext, Policy, Result, Storage,
     filesystem::Stage,
@@ -80,6 +84,107 @@ struct ImportInputs {
     manifest: ImportManifest,
     generation: Generation,
     transaction: Transaction,
+    /// The ticked phases the documents cannot derive complete, with the root
+    /// binding their records carry; the records land in the import's own
+    /// transaction once its committing generation is known.
+    declared: Vec<adoption::Declaration>,
+    root_binding: String,
+}
+
+/// Reads the lifecycle documents through the import's own reader, so the
+/// bytes a declaration is computed from are exactly the bytes its source
+/// guard names. Listing and probing a phase directory stay with the
+/// derivation's reader; a document the reader cannot open refuses the import
+/// the way an unreadable legacy source does.
+struct GuardedDocuments<'a, I: ConfigIo> {
+    io: &'a mut I,
+    files: ArtifactFiles,
+    guards: Vec<SourceGuard>,
+    failure: Option<Error>,
+}
+
+impl<I: ConfigIo> ArtifactIo for GuardedDocuments<'_, I> {
+    fn resolve_root(&mut self, selected: &Path) -> std::result::Result<PathBuf, InputFailure> {
+        self.files.resolve_root(selected)
+    }
+    fn probe_root(&mut self, root: &Path) -> Observation<()> {
+        self.files.probe_root(root)
+    }
+    fn list_phase(&mut self, path: &Path) -> Observation<Vec<String>> {
+        self.files.list_phase(path)
+    }
+    fn probe_summary(&mut self, path: &Path) -> Observation<()> {
+        match self.read(path) {
+            Observation::Present(_) => Observation::Present(()),
+            Observation::Absent => Observation::Absent,
+            Observation::Failed(failure) => Observation::Failed(failure),
+        }
+    }
+    fn read(&mut self, path: &Path) -> Observation<Vec<u8>> {
+        match observe(self.io, path) {
+            Ok(input) => {
+                self.guards.push(guard(path.to_owned(), &input));
+                match input.bytes {
+                    Some(bytes) => Observation::Present(bytes),
+                    None => Observation::Absent,
+                }
+            }
+            Err(error) => {
+                let diagnostic = error.to_string();
+                self.failure.get_or_insert(error);
+                Observation::Failed(InputFailure {
+                    path: path.to_owned(),
+                    category: InputFailureCategory::OtherIo,
+                    diagnostic: Some(diagnostic),
+                })
+            }
+        }
+    }
+}
+
+/// The declaration pass of the import: the roadmap and every phase's
+/// documents read the way derivation reads them, the legacy table applied
+/// with no native authority, and one declaration per ticked phase it derives
+/// short of Complete. ROADMAP.md and each declared phase's SUMMARY.md and
+/// UAT.md come back as source guards. An absent or unparseable roadmap
+/// declares nothing; an unreadable document refuses the import.
+fn declare_at_import<I: ConfigIo>(
+    root: &Path,
+    io: &mut I,
+    existing: &Value,
+) -> Result<(Vec<adoption::Declaration>, Vec<SourceGuard>, String)> {
+    let mut documents = GuardedDocuments { io, files: ArtifactFiles, guards: Vec::new(), failure: None };
+    let capture = derivation::capture_inputs(root, &mut documents)
+        .map_err(|error| Error::Io(format!("legacy documents unavailable at import: {error}")))?;
+    if let Some(error) = documents.failure {
+        return Err(error);
+    }
+    let roadmap = root.join("ROADMAP.md");
+    let take = |guards: &[SourceGuard], path: &Path| guards.iter().find(|g| g.path == path).cloned();
+    let mut kept: Vec<SourceGuard> = take(&documents.guards, &roadmap).into_iter().collect();
+    let legacy = match derivation::derive(&capture) {
+        Ok(legacy) => legacy,
+        Err(
+            derivation::DerivationError::MissingPlanningRoot { .. }
+            | derivation::DerivationError::MissingRoadmap { .. }
+            | derivation::DerivationError::InvalidRoadmap { .. },
+        ) => return Ok((vec![], kept, String::new())),
+        Err(error) => {
+            return Err(Error::Io(format!("legacy documents unreadable at import: {error}")));
+        }
+    };
+    let declared = adoption::declarations(&capture, &legacy, existing)?;
+    if declared.is_empty() {
+        return Ok((vec![], kept, String::new()));
+    }
+    for declaration in &declared {
+        let directory = capture.root.join(format!("phases/{}", declaration.phase));
+        for name in ["SUMMARY.md", "UAT.md"] {
+            kept.extend(take(&documents.guards, &directory.join(name)));
+        }
+    }
+    let root_binding = cadence::verification::inputs::root_binding(root)?;
+    Ok((declared, kept, root_binding))
 }
 
 fn remove_path(value: &mut Value, key: &str) {
@@ -211,6 +316,7 @@ fn prepare_import<I: ConfigIo>(
     active: &Paths,
     io: &mut I,
     owns_global: bool,
+    existing: &Value,
 ) -> Result<ImportInputs> {
     let repo_identity = reload::identity(&legacy.repo)?;
     let global_identity = legacy.global.as_deref().map(reload::identity).transpose()?;
@@ -299,6 +405,8 @@ fn prepare_import<I: ConfigIo>(
             );
         }
     }
+    let (declared, document_guards, root_binding) = declare_at_import(root, io, existing)?;
+    guards.extend(document_guards);
     let items = items::translate(
         sources.get("CAPTURE.md"),
         sources.get("FILED.md"),
@@ -393,7 +501,28 @@ fn prepare_import<I: ConfigIo>(
             snapshot: Some(snapshot),
             external: vec![],
         },
+        declared,
+        root_binding,
     })
+}
+
+/// The declared completions as the import transaction commits them, at the
+/// generation that commit lands: one record per declaration, provenance
+/// `declared-at-import`, appended by the one adoption writer.
+fn declared_snapshot(
+    declared: &[adoption::Declaration],
+    root_binding: &str,
+    source_generation: &str,
+    snapshot: &Value,
+    generation: u64,
+) -> Result<Value> {
+    let records = declared
+        .iter()
+        .map(|declaration| {
+            adoption::record(root_binding, declaration, adoption::AT_IMPORT, generation, source_generation)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    adoption::contribute(snapshot, &records)
 }
 
 struct SessionPolicy<I: ConfigIo> {
@@ -890,11 +1019,13 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
         } else {
             false
         };
-        let audit_only = state
+        let existing = state
             .as_deref()
             .map(serde_json::from_slice::<Snapshot>)
-            .transpose()?
-            .is_some_and(|s| cadence::store::writer::audit::audit_only(&s));
+            .transpose()?;
+        let audit_only = existing
+            .as_ref()
+            .is_some_and(cadence::store::writer::audit::audit_only);
         let importing = Arc::new(Mutex::new(
             if state.is_none() || pending_import || audit_only {
                 Some(prepare_import(
@@ -903,6 +1034,7 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
                     &active,
                     &mut io,
                     owns_global,
+                    &existing.map(|s| s.data).unwrap_or(Value::Null),
                 )?)
             } else {
                 None
@@ -978,12 +1110,17 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
             {
                 add("global-config", &inputs.generation.effective.global)?;
             }
-            Some(transaction)
+            let declared = (
+                inputs.declared.clone(),
+                inputs.root_binding.clone(),
+                inputs.manifest.source_generation.clone(),
+            );
+            Some((transaction, declared))
         } else {
             None
         };
         let store = Store::open(storage, policy).await?;
-        let view = if let Some(mut transaction) = transaction {
+        let view = if let Some((mut transaction, (declared, root_binding, source_generation))) = transaction {
             let current = store.request(Operation::ReadVerified).await?;
             if current.snapshot.data["import"]["complete"] == true {
                 current
@@ -991,6 +1128,20 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
                 if let Some(guard) = current.snapshot.data.get("guard_audit") {
                     transaction.snapshot.as_mut().unwrap()["guard_audit"] = guard.clone();
                 }
+                // The commit lands at the next generation; the records name it.
+                let generation = current
+                    .snapshot
+                    .generation
+                    .checked_add(1)
+                    .ok_or_else(|| Error::Invalid("generation overflow".into()))?;
+                let snapshot = transaction.snapshot.take().expect("import snapshot");
+                transaction.snapshot = Some(declared_snapshot(
+                    &declared,
+                    &root_binding,
+                    &source_generation,
+                    &snapshot,
+                    generation,
+                )?);
                 store
                     .request(Operation::CompareTransact {
                         expected_generation: current.snapshot.generation,
