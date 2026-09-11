@@ -1,5 +1,5 @@
 //! Resident adapter; all writes use the existing session's single store queue.
-use cadence::{store::{Error, Result, Storage, writer::Operation}, verification::{completion, human, inputs, model::{Query, Apply}, persistence, render, runner, status, verdicts, waivers}};
+use cadence::{store::{Error, Result, Storage, writer::Operation}, verification::{audit, completion, human, inputs, model::{Query, Apply}, persistence, render, runner, status, verdicts, waivers}};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -98,7 +98,7 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
     };
     let data = snapshot.as_ref().map(|s| s.data.clone()).unwrap_or_else(|| json!({}));
     match query {
-        Query::Audit { phase } => Err(inputs::refuse(phase, "verification-unavailable", "operation", "verification-audit is not implemented")),
+        Query::Audit { phase, command } => audit::report(root, &data, phase, command.as_deref()),
         Query::Read { phase, attempt } => {
             // The requested attempt selects its receipts; the derived rows are
             // always the phase's current judgment, never the selected one's.

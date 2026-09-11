@@ -12,3 +12,4 @@ pub mod human;
 pub mod projections;
 pub mod completion;
 pub mod render;
+pub mod audit;

@@ -70,7 +70,10 @@ Owner operations are separate: truth-waive and verification-human-result
 require attributed, timed, exact owner approval. You may prepare a submission;
 you may not manufacture its approval. Blank reply is not consent, skip is not
 waiver, and a verifier cannot erase human history. verification-complete is an
-owner request evaluated by the binary; verification-audit is read-only.
+owner request evaluated by the binary; verification-audit is read-only: the
+phase-scoped requirement trace join behind /cad-audit and its alias
+/cad-coverage, naming each broken edge with its current verdict, never a
+status, map or document write.
 A waiver is {"operation":"truth-waive","request_id":"...","submission":
 {"truth":{"id":"...","version":1},"basis":<exact current basis>,"reason":"...",
 "owner":"...","at":"...","supersedes":null,"revoked":false},"approval":

@@ -56,7 +56,10 @@ Owner operations are separate: truth-waive and verification-human-result
 require attributed, timed, exact owner approval. You may prepare a submission;
 you may not manufacture its approval. Blank reply is not consent, skip is not
 waiver, and a verifier cannot erase human history. verification-complete is an
-owner request evaluated by the binary; verification-audit is read-only.
+owner request evaluated by the binary; verification-audit is read-only: the
+phase-scoped requirement trace join behind /cad-audit and its alias
+/cad-coverage, naming each broken edge with its current verdict, never a
+status, map or document write.
 A waiver is {"operation":"truth-waive","request_id":"...","submission":
 {"truth":{"id":"...","version":1},"basis":<exact current basis>,"reason":"...",
 "owner":"...","at":"...","supersedes":null,"revoked":false},"approval":
@@ -99,6 +102,58 @@ pub fn contract_markdown() -> String {
     let schema = serde_json::to_string_pretty(&schemars::schema_for!(super::model::Patch))
         .expect("static verifier schema");
     format!("---\nname: cad-verifier-contract\ndescription: \"Native verifier contract: inspect every dispatched evidence item and return one complete patch.\"\nuser-invocable: false\n---\n\n<role>\nYou are the native verifier. Consume the retained binary dispatch.\n</role>\n\n<instructions>\n{VERIFIER}\n\n{PROTOCOL}\n## Strict item patch schema\n\n```json\n{schema}\n```\n</instructions>\n")
+}
+
+/// The thin `/cad-audit` front door, or its read-only `/cad-coverage` alias
+/// (D-128): the same verification-audit query and view, no generation arm.
+pub fn audit_frontdoor_markdown(coverage: bool) -> String {
+    let (name, description, note) = if coverage {
+        ("cad-coverage",
+         "Read-only alias of /cad-audit: the phase-scoped requirement-to-evidence trace over the retained map and current verdicts; the test-generation arm is removed.",
+         "This alias keeps the old name for the read-only view only. It never\ngenerates tests, never authors a gap plan and never edits status; a\nrequirement without failing-capable evidence appears as a broken or unmet\ntrace for the owner to act on through planning.")
+    } else {
+        ("cad-audit",
+         "Read-only verification audit: every requirement's phase-scoped trace to its plans, truths, evidence and current verdicts, with each broken edge named.",
+         "The audit is the binary's join over the retained records and the owner's\ndocuments as they are. It never repairs a status, seeds a row, infers a\nrequirement-to-truth edge or completes a phase.")
+    };
+    // The worked example above uses phase 13; the note reads the same way.
+    let note_body = super::audit::association_note(13);
+    format!(r#"---
+name: {name}
+description: "{description}"
+argument-hint: "<phase>"
+allowed-tools:
+  - mcp__cadence__cadence_query
+---
+
+Parse the phase as a positive JSON integer. Call cadence_query
+`{{"operation":"verification-audit","phase":13,"command":"{name}"}}` with the
+selected integer. The answer is `verification-audit-1`: `sources` names each
+input as it was read (REQUIREMENTS.md active declarations and trace rows,
+ROADMAP.md declarations, the approved context, the native publications with
+the requirements they claim, the coherent map with its superseded revisions,
+and the current verification with its waivers and history); `traces` carries
+one row per requirement seen anywhere, its origins, each edge as present or
+missing, the phase's truth rows with item origins and current verdicts, every
+break with its next action, and an outcome of met, waived, concerns, unmet,
+pending or broken; `out_of_scope` lists rows assigned to other declared
+phases; `report` is the rendered text.
+
+Present `report`, then every break with its next action, then the out-of-scope
+rows and limits. Structural coverage never certifies rejected or unseen
+evidence, a historical judgment never counts as current, and a waived truth
+is shown beside the met ones, never among them. A refused answer names the
+input it could not use; report it and stop.
+
+{note}
+
+Association, for the example phase: {note_body}. The only edges are requirement->phase (a trace
+row), phase->roadmap (a declaration), phase->plan (a native publication
+naming the requirement), plan->truths (the phase's approved truth set,
+phase-scoped), truth->evidence (the current typed map) and evidence->verdict
+(the current complete verification). Read-only: no status, map, UAT or store
+record is written or repaired.
+"#)
 }
 
 pub fn frontdoor_markdown() -> String {

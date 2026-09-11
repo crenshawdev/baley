@@ -106,8 +106,9 @@ pub enum Query {
     Next { phase: u32, request_id: Option<String> },
     #[serde(rename = "verification-read")]
     Read { phase: u32, attempt: Option<String> },
+    /// Read-only; `command` selects the cad-audit view or its cad-coverage alias.
     #[serde(rename = "verification-audit")]
-    Audit { phase: u32 },
+    Audit { phase: u32, command: Option<String> },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

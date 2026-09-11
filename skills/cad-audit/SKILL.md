@@ -1,38 +1,37 @@
 ---
 name: cad-audit
-description: "Pre-ship traceability audit - every requirement traced to a phase, plan and verification, orphan detection both directions, a FAIL gate before shipping"
-argument-hint: "[milestone | defaults to all active requirements]"
+description: "Read-only verification audit: every requirement's phase-scoped trace to its plans, truths, evidence and current verdicts, with each broken edge named."
+argument-hint: "<phase>"
 allowed-tools:
-  - Read
-  - Bash
-  - Grep
-  - Glob
-  - AskUserQuestion
+  - mcp__cadence__cadence_query
 ---
 
-<objective>
-Before a milestone ships, prove that nothing was silently dropped. Cross-
-reference every requirement against the phases, plans, and verifications that
-were supposed to deliver it, and detect orphans in both directions. Produce a
-PASS/FAIL verdict: FAIL if any requirement is untraced, unverified, or lost.
+Parse the phase as a positive JSON integer. Call cadence_query
+`{"operation":"verification-audit","phase":13,"command":"cad-audit"}` with the
+selected integer. The answer is `verification-audit-1`: `sources` names each
+input as it was read (REQUIREMENTS.md active declarations and trace rows,
+ROADMAP.md declarations, the approved context, the native publications with
+the requirements they claim, the coherent map with its superseded revisions,
+and the current verification with its waivers and history); `traces` carries
+one row per requirement seen anywhere, its origins, each edge as present or
+missing, the phase's truth rows with item origins and current verdicts, every
+break with its next action, and an outcome of met, waived, concerns, unmet,
+pending or broken; `out_of_scope` lists rows assigned to other declared
+phases; `report` is the rendered text.
 
-This is the check that catches the quiet failure a per-phase flow can miss -
-a requirement that no phase ever picked up (an `unpicked` break counted in
-`counts.broken`, not a note beside a PASS), or one marked done while its phase
-never verified. It reads the authoritative status - the REQUIREMENTS
-traceability table (Requirement | Phase | Status) and the ROADMAP `## Phases`
-checkbox, the only persisted status. `/cad-plan` creates a table row (always
-at Pending); no writer but cad-verify ever sets a Status beyond it, and the
-ROADMAP checkbox is cad-verify's alone. It does not write status itself.
-</objective>
+Present `report`, then every break with its next action, then the out-of-scope
+rows and limits. Structural coverage never certifies rejected or unseen
+evidence, a historical judgment never counts as current, and a waived truth
+is shown beside the met ones, never among them. A refused answer names the
+input it could not use; report it and stop.
 
-<execution_context>
-@${CLAUDE_PLUGIN_ROOT}/cadence-core/workflows/audit.md
-</execution_context>
+The audit is the binary's join over the retained records and the owner's
+documents as they are. It never repairs a status, seeds a row, infers a
+requirement-to-truth edge or completes a phase.
 
-<process>
-Run the audit workflow end-to-end and return a clear PASS or FAIL with the
-evidence. A FAIL is a real gate - report exactly which requirements are untraced,
-unverified, or orphaned; do not soften it. Read-only: never edit status to make
-the audit pass.
-</process>
+Association, for the example phase: a requirement assigned to phase 13 is joined to every current truth of phase 13 through the phase's typed map; no direct requirement-to-truth edge is authored or inferred. The only edges are requirement->phase (a trace
+row), phase->roadmap (a declaration), phase->plan (a native publication
+naming the requirement), plan->truths (the phase's approved truth set,
+phase-scoped), truth->evidence (the current typed map) and evidence->verdict
+(the current complete verification). Read-only: no status, map, UAT or store
+record is written or repaired.

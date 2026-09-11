@@ -52,6 +52,12 @@ enum Command {
         #[arg(long)]
         alias: Option<String>,
     },
+    /// Render the read-only cad-audit front door without opening a project.
+    AuditInstructions {
+        /// Render the cad-coverage alias of the same read-only view.
+        #[arg(long)]
+        coverage: bool,
+    },
 }
 
 fn main() -> std::process::ExitCode {
@@ -64,6 +70,14 @@ fn main() -> std::process::ExitCode {
 
 fn run_command(command: Command) -> std::process::ExitCode {
     match command {
+        Command::AuditInstructions { coverage } => {
+            use std::io::Write;
+            let rendered = cadence::verification::instructions::audit_frontdoor_markdown(coverage);
+            match std::io::stdout().lock().write_all(rendered.as_bytes()) {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(_) => std::process::ExitCode::FAILURE,
+            }
+        }
         Command::ReviewInstructions { alias } => {
             use std::io::Write;
             let command = alias.as_deref().unwrap_or(cadence::review::selection::CANONICAL);

@@ -245,7 +245,7 @@ enum QueryArguments {
     #[serde(rename = "verification-read")]
     VerificationRead { phase: NonZeroU32, attempt: Option<String> },
     #[serde(rename = "verification-audit")]
-    VerificationAudit { phase: NonZeroU32 },
+    VerificationAudit { phase: NonZeroU32, command: Option<String> },
     #[serde(rename = "execution-history")]
     ExecutionHistory { phase: NonZeroU32 },
     #[serde(rename = "evidence-read")]
@@ -632,8 +632,8 @@ impl ServerHandler for PublicServer {
                             cadence::verification::model::Query::Next { phase: phase.get(), request_id }).await,
                         Ok(QueryArguments::VerificationRead { phase, attempt }) => self.server.service.verification(&self.root,
                             cadence::verification::model::Query::Read { phase: phase.get(), attempt }).await,
-                        Ok(QueryArguments::VerificationAudit { phase }) => self.server.service.verification(&self.root,
-                            cadence::verification::model::Query::Audit { phase: phase.get() }).await,
+                        Ok(QueryArguments::VerificationAudit { phase, command }) => self.server.service.verification(&self.root,
+                            cadence::verification::model::Query::Audit { phase: phase.get(), command }).await,
                         Ok(_) => unreachable!("selected verification operation"),
                         Err(error) => Ok(serde_json::json!({"status":"refused","rule":"verification-shape","reason":error.to_string()})),
                     };
