@@ -72,7 +72,8 @@ struct Roadmap {
 
 impl Roadmap {
     fn declaration(&self, phase: u32) -> Option<Value> {
-        self.phases.iter().find(|p| p["phase"] == phase.to_string())
+        let address = phase.to_string();
+        self.phases.iter().find(|p| p["phase"] == address)
             .map(|p| json!({"path":"ROADMAP.md","line":p["line"],"checked":p["checked"]}))
     }
 }
@@ -253,7 +254,7 @@ pub fn report(root: &Path, data: &Value, phase: u32, requested: Option<&str>) ->
                         breaks.push(broken("truth->evidence", format!("the evidence map is unavailable: {}", map["reason"].as_str().unwrap_or("inconsistent")), "settle the outstanding intent or inconsistent input, then audit again".into()));
                     } else {
                         let uncovered: Vec<_> = truths.iter().filter(|t| item_ids(t).is_empty()).map(|t| t["id"].as_str().unwrap_or_default().to_owned()).collect();
-                        let mut all: Vec<String> = truths.iter().flat_map(|t| item_ids(t)).collect();
+                        let mut all: Vec<String> = truths.iter().flat_map(&item_ids).collect();
                         all.sort(); all.dedup();
                         if uncovered.is_empty() {
                             edges.push(edge("truth->evidence", "present", json!(all)));
