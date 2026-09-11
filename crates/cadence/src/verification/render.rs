@@ -27,8 +27,26 @@ pub fn text(report: &Value) -> String {
     }
     out.push_str("| truth | status | evidence |\n");
     for row in report["truths"].as_array().into_iter().flatten() {
-        out.push_str(&format!("| {} | {} | {} |\n", row["id"].as_str().unwrap_or_default(),
-            row["status"].as_str().unwrap_or_default(), evidence(row)));
+        let status = match row["derived"].as_str() {
+            Some(derived) => format!("{} (derived {derived})", row["status"].as_str().unwrap_or_default()),
+            None => row["status"].as_str().unwrap_or_default().to_owned(),
+        };
+        out.push_str(&format!("| {} | {status} | {} |\n", row["id"].as_str().unwrap_or_default(), evidence(row)));
+    }
+    let counts = &report["counts"];
+    if counts.is_object() {
+        out.push_str(&format!("Counts: met {}, concerns {}, unmet {}, pending {}, waived {}\n",
+            counts["met"], counts["concerns"], counts["unmet"], counts["pending"], counts["waived"]));
+    }
+    for row in report["truths"].as_array().into_iter().flatten().filter(|r| r["status"] == "waived") {
+        out.push_str(&format!("Waived: {} by {} at {} - {}\n", row["id"].as_str().unwrap_or_default(),
+            row["waiver"]["owner"].as_str().unwrap_or_default(), row["waiver"]["at"].as_str().unwrap_or_default(),
+            row["waiver"]["reason"].as_str().unwrap_or_default()));
+    }
+    if let Some(advice) = report["advice"].as_str() {
+        let mut sentence: Vec<char> = advice.chars().collect();
+        if let Some(first) = sentence.first_mut() { *first = first.to_ascii_uppercase(); }
+        out.push_str(&format!("{}.\n", sentence.into_iter().collect::<String>()));
     }
     out.push_str("History:\n");
     for entry in report["history"].as_array().into_iter().flatten() {

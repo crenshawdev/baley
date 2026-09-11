@@ -71,8 +71,18 @@ require attributed, timed, exact owner approval. You may prepare a submission;
 you may not manufacture its approval. Blank reply is not consent, skip is not
 waiver, and a verifier cannot erase human history. verification-complete is an
 owner request evaluated by the binary; verification-audit is read-only.
-These names define the planned protocol. An unavailable operation must refuse;
-its appearance in this contract is never a successful receipt.
+A waiver is {"operation":"truth-waive","request_id":"...","submission":
+{"truth":{"id":"...","version":1},"basis":<exact current basis>,"reason":"...",
+"owner":"...","at":"...","supersedes":null,"revoked":false},"approval":
+{"approved":true,"owner":"...","at":"...","submission":<exact submission>}}.
+It binds to the complete patch on the current basis, is refused for a met
+truth, and is reported as waived beside the met truths with its derived
+status and rejected evidence kept. Reaffirmation after a changed basis,
+supersession and revocation are further owner events naming the retained
+record in supersedes; revocation also sets revoked. A verifier patch cannot
+create, erase or cover a waiver.
+An unavailable operation must refuse; its appearance in this contract is never
+a successful receipt.
 
 ## Strict item patch schema
 

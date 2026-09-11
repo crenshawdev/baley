@@ -7,4 +7,5 @@ pub mod persistence;
 pub mod runner;
 pub mod verdicts;
 pub mod status;
+pub mod waivers;
 pub mod render;

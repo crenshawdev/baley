@@ -15,6 +15,10 @@ pub(crate) enum IntentKind {
         claim: Box<cadence::verification::verdicts::Claim>,
         root_binding: String,
     },
+    VerificationWaiverV1 {
+        claim: Box<cadence::verification::waivers::Claim>,
+        root_binding: String,
+    },
     VerificationRunV1 {
         record: Box<cadence::verification::runner::Record>,
         root_binding: String,
@@ -95,6 +99,44 @@ impl IntentKind {
     fn validate_provenance(&self, previous: &Value, proposed: &Value) -> Result<()> {
         preserve_provenance(previous, proposed)
     }
+
+    /// The versioned intents that alone may change the verification namespace.
+    fn verification(&self) -> bool {
+        matches!(self, IntentKind::VerificationV1 { .. } | IntentKind::VerificationRunV1 { .. }
+            | IntentKind::VerificationSubmitV1 { .. } | IntentKind::VerificationWaiverV1 { .. })
+    }
+}
+
+fn previous_snapshot(participants: &[Participant], what: &str) -> Result<Snapshot> {
+    let state = participants.last().ok_or_else(|| Error::Invalid("snapshot absent".into()))?;
+    Ok(serde_json::from_slice(state.expected.bytes.as_deref()
+        .ok_or_else(|| Error::Invalid(format!("{what} requires prior snapshot")))?)?)
+}
+
+/// Every claim intent installs exactly the transition its claim module
+/// derives from the previous snapshot: one appended decision, unchanged items,
+/// the derived snapshot, the registered operation and the next generation.
+fn validate_claim_transition(participants: &[Participant], snapshot: &Snapshot, items: &[u8], decisions: &[u8],
+    root_binding: &str, transaction: Transaction, decision: DecisionRecord, what: &str) -> Result<()> {
+    let state = participants.last().expect("state participant");
+    if state.expected.directory_identity != root_binding {
+        return Err(Error::Invalid(format!("{what} root binding changed")));
+    }
+    let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
+        .ok_or_else(|| Error::Invalid(format!("{what} requires prior snapshot")))?)?;
+    let old_items = participants.iter().find(|p| p.target == ITEMS).unwrap().expected.bytes.as_deref();
+    let old_decisions = participants.iter().find(|p| p.target == DECISIONS).unwrap().expected.bytes.as_deref()
+        .ok_or_else(|| Error::Invalid(format!("{what} requires previous decisions")))?;
+    let mut expected_decisions: Vec<DecisionRecord> = model::parse_lines(old_decisions)?;
+    expected_decisions.push(decision);
+    let mut operations = previous.operations.clone();
+    if operations.insert(transaction.id.clone(), transaction.fingerprint()?).is_some()
+        || Some(&snapshot.data) != transaction.snapshot.as_ref() || old_items != Some(items)
+        || decisions != model::render_lines(&expected_decisions)? || snapshot.operations != operations
+        || snapshot.generation != previous.generation.checked_add(1).ok_or_else(|| Error::Invalid("generation exhausted".into()))? {
+        return Err(Error::Invalid(format!("{what} intent differs from immutable complete transition")));
+    }
+    Ok(())
 }
 
 pub fn preserve_provenance(previous: &Value, proposed: &Value) -> Result<()> {
@@ -296,8 +338,7 @@ impl Intent {
         model::validate_items(&model::parse_lines(items)?)?;
         model::validate_decisions(&model::parse_lines(decisions)?)?;
         let snapshot = Snapshot::parse(bytes(STATE)?, items, decisions)?;
-        let verification_intent = matches!(self.kind, IntentKind::VerificationV1 { .. }
-            | IntentKind::VerificationRunV1 { .. } | IntentKind::VerificationSubmitV1 { .. });
+        let verification_intent = self.kind.verification();
         if !verification_intent {
             let previous_decisions = self.participants.iter().find(|p| p.target == DECISIONS)
                 .and_then(|p| p.expected.bytes.as_deref()).unwrap_or_default();
@@ -324,7 +365,7 @@ impl Intent {
             let previous: Snapshot = serde_json::from_slice(previous)?;
             self.kind
                 .validate_provenance(&previous.data, &snapshot.data)?;
-            if !matches!(self.kind, IntentKind::VerificationV1 { .. } | IntentKind::VerificationRunV1 { .. } | IntentKind::VerificationSubmitV1 { .. })
+            if !verification_intent
                 && previous.data.get(cadence::verification::persistence::NAMESPACE) != snapshot.data.get(cadence::verification::persistence::NAMESPACE) {
                 return Err(Error::Invalid("verification changes require their versioned intent".into()));
             }
@@ -348,25 +389,18 @@ impl Intent {
             IntentKind::VerificationSubmitV1 { claim, root_binding } => {
                 use cadence::verification::verdicts;
                 if names.len() != 3 { return Err(Error::Invalid("verification patch cannot change external participants".into())); }
-                let state = self.participants.last().expect("state participant");
-                if state.expected.directory_identity != root_binding || claim.root_binding != root_binding {
-                    return Err(Error::Invalid("verification claim root binding changed".into()));
-                }
-                let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
-                    .ok_or_else(|| Error::Invalid("verification claim requires prior snapshot".into()))?)?;
-                let transaction = verdicts::transaction(&previous.data, &claim)?;
-                let old_items = self.participants.iter().find(|p| p.target == ITEMS).unwrap().expected.bytes.as_deref();
-                let old_decisions = self.participants.iter().find(|p| p.target == DECISIONS).unwrap().expected.bytes.as_deref()
-                    .ok_or_else(|| Error::Invalid("verification claim requires previous decisions".into()))?;
-                let mut expected_decisions: Vec<DecisionRecord> = model::parse_lines(old_decisions)?;
-                expected_decisions.push(verdicts::decision(&claim)?);
-                let mut operations = previous.operations.clone();
-                if operations.insert(transaction.id.clone(), transaction.fingerprint()?).is_some()
-                    || Some(&snapshot.data) != transaction.snapshot.as_ref() || old_items != Some(items)
-                    || decisions != model::render_lines(&expected_decisions)? || snapshot.operations != operations
-                    || snapshot.generation != previous.generation.checked_add(1).ok_or_else(|| Error::Invalid("generation exhausted".into()))? {
-                    return Err(Error::Invalid("verification claim intent differs from immutable complete transition".into()));
-                }
+                if claim.root_binding != root_binding { return Err(Error::Invalid("verification claim root binding changed".into())); }
+                let previous = previous_snapshot(&self.participants, "verification claim")?;
+                validate_claim_transition(&self.participants, &snapshot, items, decisions, &root_binding,
+                    verdicts::transaction(&previous.data, &claim)?, verdicts::decision(&claim)?, "verification claim")?;
+            }
+            IntentKind::VerificationWaiverV1 { claim, root_binding } => {
+                use cadence::verification::waivers;
+                if names.len() != 3 { return Err(Error::Invalid("waiver cannot change external participants".into())); }
+                if claim.root_binding != root_binding { return Err(Error::Invalid("waiver claim root binding changed".into())); }
+                let previous = previous_snapshot(&self.participants, "waiver claim")?;
+                validate_claim_transition(&self.participants, &snapshot, items, decisions, &root_binding,
+                    waivers::transaction(&previous.data, &claim)?, waivers::decision(&claim)?, "waiver claim")?;
             }
             IntentKind::VerificationRunV1 { record, root_binding } => {
                 use cadence::verification::runner;
@@ -1090,6 +1124,13 @@ fn validate_all<S: Storage>(
         let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
             .ok_or_else(|| Error::Invalid("verification claim preimage absent".into()))?)?;
         cadence::verification::verdicts::reobserve(&previous.data, claim)?;
+    }
+    if let IntentKind::VerificationWaiverV1 { claim, root_binding } = kind {
+        if storage.read(STATE)?.directory_identity != *root_binding {
+            return Err(Error::Invalid("waiver claim store binding changed".into()));
+        }
+        let previous = previous_snapshot(participants, "waiver claim")?;
+        cadence::verification::waivers::reobserve(&previous.data, claim)?;
     }
     if let IntentKind::VerificationRunV1 { record, root_binding } = kind {
         if storage.read(STATE)?.directory_identity != *root_binding {

@@ -5,7 +5,7 @@
 //! dispatched from. The current judgment is the latest complete patch whose
 //! full basis equals the basis observed now; every other complete attempt is
 //! historical and keeps its rows, reasons and identities unchanged.
-use super::{inputs, model::{Basis, Patch, Verdict}, persistence::{self, Attempt}, verdicts};
+use super::{inputs, model::{Basis, Patch, Verdict}, persistence::{self, Attempt}, verdicts, waivers};
 use crate::store::{Error, Result};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -24,7 +24,7 @@ const BASIS_FIELDS: [&str; 11] = ["project", "root_binding", "phase", "occurrenc
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Status { Pending, Met, Concerns, Unmet }
+pub enum Status { Pending, Met, Concerns, Unmet, Waived }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ItemRow {
@@ -91,9 +91,58 @@ pub fn rows(attempt: &Attempt, patch: &Patch) -> Result<Vec<TruthRow>> {
     Ok(rows)
 }
 
-fn differs(requested: &Basis, current: &Basis) -> Result<Vec<String>> {
+pub fn differs(requested: &Basis, current: &Basis) -> Result<Vec<String>> {
     let (requested, current) = (serde_json::to_value(requested)?, serde_json::to_value(current)?);
     Ok(BASIS_FIELDS.iter().filter(|f| requested[**f] != current[**f]).map(|f| format!("basis.{f}")).collect())
+}
+
+/// The current judgment: what a dispatch would observe now, every retained
+/// attempt with its complete patch, and the one attempt that is current.
+pub struct Judgment {
+    pub observed: Option<Basis>,
+    pub unavailable: Option<Value>,
+    pub attempts: Vec<Attempt>,
+    pub complete: Vec<Option<Patch>>,
+    pub current: Option<usize>,
+}
+
+impl Judgment {
+    pub fn current(&self) -> Option<(&Attempt, &Patch)> {
+        self.current.map(|i| (&self.attempts[i], self.complete[i].as_ref().expect("complete")))
+    }
+}
+
+pub fn judgment(root: &Path, data: &Value, phase: u32) -> Result<Judgment> {
+    let attempts: Vec<Attempt> = persistence::attempts(data)?.into_iter().filter(|a| a.inputs.basis.phase == phase).collect();
+    let patches = verdicts::patches(data)?;
+    let complete: Vec<Option<Patch>> = attempts.iter().map(|a| patches.iter().find(|p| p.attempt == a.id).cloned()).collect();
+    let (observed, unavailable) = match inputs::observe(root, data, phase) {
+        Ok(observed) => (Some(observed.basis), None),
+        Err(error) => (None, Some(verdicts::error_answer(error))),
+    };
+    let current = observed.as_ref().and_then(|basis| (0..attempts.len()).rev()
+        .find(|i| complete[*i].is_some() && attempts[*i].inputs.basis == *basis));
+    Ok(Judgment { observed, unavailable, attempts, complete, current })
+}
+
+/// Effective waivers are shown beside the derived rows: the row keeps its
+/// derived status, reason and items, and gains the owner's attribution.
+fn overlay_waivers(truths: &mut Value, applicable: &[Value]) -> Result<()> {
+    for row in truths.as_array_mut().into_iter().flatten() {
+        let Some(waiver) = applicable.iter().find(|w| w["effective"] == true
+            && w["truth"]["id"] == row["id"] && w["truth"]["version"] == row["version"]) else { continue };
+        if row["status"] == "met" { continue }
+        row["derived"] = row["status"].clone();
+        row["status"] = json!(Status::Waived);
+        row["waiver"] = json!({"id":waiver["id"],"request_id":waiver["request_id"],"owner":waiver["owner"],
+            "at":waiver["at"],"reason":waiver["reason_given"]});
+    }
+    Ok(())
+}
+
+pub fn counts(truths: &Value) -> Value {
+    let count = |status: &str| truths.as_array().map(|rows| rows.iter().filter(|r| r["status"] == status).count()).unwrap_or_default();
+    json!({"met":count("met"),"concerns":count("concerns"),"unmet":count("unmet"),"pending":count("pending"),"waived":count("waived")})
 }
 
 /// The owner-visible report for one phase. Reading observes the current basis
@@ -101,17 +150,11 @@ fn differs(requested: &Basis, current: &Basis) -> Result<Vec<String>> {
 pub fn report(root: &Path, data: &Value, phase: u32) -> Result<Value> {
     let context = crate::context::persistence::saved(data, phase)?
         .ok_or_else(|| inputs::refuse(phase, "native-approved-truths", "context", "native approved truths required"))?;
-    let attempts: Vec<Attempt> = persistence::attempts(data)?.into_iter().filter(|a| a.inputs.basis.phase == phase).collect();
-    let patches = verdicts::patches(data)?;
-    let complete: Vec<Option<&Patch>> = attempts.iter().map(|a| patches.iter().find(|p| p.attempt == a.id)).collect();
-    let (observed, unavailable) = match inputs::observe(root, data, phase) {
-        Ok(observed) => (Some(observed.basis), None),
-        Err(error) => (None, Some(verdicts::error_answer(error))),
-    };
-    let current = observed.as_ref().and_then(|basis| attempts.iter().zip(&complete).rev()
-        .find(|(a, p)| p.is_some() && a.inputs.basis == *basis).map(|(a, p)| (a, p.expect("complete"))));
+    let judged = judgment(root, data, phase)?;
+    let Judgment { observed, unavailable, attempts, complete, .. } = &judged;
+    let current = judged.current();
     let mut history = Vec::new();
-    for (attempt, patch) in attempts.iter().zip(&complete) {
+    for (attempt, patch) in attempts.iter().zip(complete) {
         let rows = match patch { Some(patch) => rows(attempt, patch)?, None => vec![] };
         let differs = observed.as_ref().map(|basis| differs(&attempt.inputs.basis, basis)).transpose()?.unwrap_or_default();
         let (applicability, reason) = match (patch, &observed) {
@@ -125,10 +168,10 @@ pub fn report(root: &Path, data: &Value, phase: u32) -> Result<Value> {
             },
         };
         history.push(json!({"attempt":attempt.id,"request_id":attempt.request_id,"applicability":applicability,"reason":reason,
-            "application":patch.map(|_| "accepted"),"patch":patch.map(|p| &p.request_id),"basis":attempt.inputs.basis,
+            "application":patch.as_ref().map(|_| "accepted"),"patch":patch.as_ref().map(|p| &p.request_id),"basis":attempt.inputs.basis,
             "differs":differs,"truths":rows}));
     }
-    let truths = match current {
+    let mut truths = match current {
         Some((attempt, patch)) => serde_json::to_value(rows(attempt, patch)?)?,
         None => {
             let mut truths: Vec<_> = context.truths.iter().collect();
@@ -137,6 +180,11 @@ pub fn report(root: &Path, data: &Value, phase: u32) -> Result<Value> {
                 "reason":PENDING,"items":[]})).collect::<Vec<_>>())
         }
     };
+    let applicable = waivers::applicability(data, phase, current.map(|(a, _)| (a, &a.inputs.basis)))?;
+    overlay_waivers(&mut truths, &applicable)?;
+    let counts = counts(&truths);
+    let waived = counts["waived"].as_u64().unwrap_or_default();
+    let advice = (waived > 1).then(|| format!("revisit the plan: {waived} truths are waived"));
     let reason = match (&current, &unavailable, attempts.is_empty()) {
         (_, _, true) => NO_ATTEMPT,
         (Some(_), _, _) => CURRENT,
@@ -146,7 +194,7 @@ pub fn report(root: &Path, data: &Value, phase: u32) -> Result<Value> {
     Ok(json!({"status":"ok","schema":SCHEMA,"phase":phase,
         "current":{"applicable":current.is_some(),"attempt":current.map(|(a, _)| &a.id),"patch":current.map(|(_, p)| &p.request_id),
             "reason":reason,"verified_at":current.map(|(a, _)| &a.inputs.basis),"observed":observed,"unavailable":unavailable},
-        "truths":truths,"history":history,
+        "truths":truths,"counts":counts,"waivers":applicable,"advice":advice,"history":history,
         "legacy":{"summary_document":root.join(format!("phases/{phase}/SUMMARY.md")).is_file(),
             "uat_document":root.join(format!("phases/{phase}/UAT.md")).is_file(),"authority":LEGACY}}))
 }

@@ -580,21 +580,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                         return Err(Error::Conflict(STALE_SNAPSHOT.into()));
                     }
                 }
-                if transaction.decisions.iter().any(|d| d.origin.source == cadence::verification::verdicts::SCHEMA) {
-                    use cadence::verification::verdicts;
-                    let record = transaction.decisions.first().ok_or_else(|| Error::Invalid("verification claim absent".into()))?;
-                    let model::Decision::Gate { evidence: model::Evidence::Text(encoded), .. } = &record.decision else {
-                        return Err(Error::Invalid("verification claim encoding invalid".into()));
-                    };
-                    let claim: verdicts::Claim = serde_json::from_str(encoded)?;
-                    let current = verdicts::prepare(&claim.root, &self.view.snapshot.data, claim.patch.clone())?;
-                    if claim != current || transaction.fingerprint()? != verdicts::transaction(&self.view.snapshot.data, &claim)?.fingerprint()?
-                        || transaction.id != verdicts::transaction(&self.view.snapshot.data, &claim)?.id
-                        || claim.root_binding != self.observed[STATE].directory_identity {
-                        return Err(Error::Conflict("verification claim changed at committing snapshot".into()));
-                    }
-                    verification_claim = Some(claim);
-                }
+                verification_claim = self.verification_claim(&transaction)?;
                 operations.insert(transaction.id, fingerprint);
                 next.items.extend(transaction.items);
                 next.decisions.extend(
@@ -726,13 +712,56 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             operations,
             participants,
             operation_name,
-            if let Some(claim) = verification_claim {
-                super::transaction::IntentKind::VerificationSubmitV1 { root_binding: self.observed[STATE].directory_identity.clone(), claim: Box::new(claim) }
+            if let Some(intent) = verification_claim {
+                intent
             } else { plan_intent.unwrap_or(match context_phase {
                 Some(phase) => super::transaction::IntentKind::ContextPublication { phase },
                 None => super::transaction::IntentKind::Store,
             }) },
         )
+    }
+
+    /// A verification claim transaction carries exactly one decision whose
+    /// source names its claim kind. The claim is recomputed on the committing
+    /// snapshot, root, source and installed plans included, and a differing
+    /// claim, transaction identity or fingerprint is a conflict, never a write.
+    fn verification_claim(&self, transaction: &super::transaction::Transaction) -> Result<Option<super::transaction::IntentKind>> {
+        use cadence::verification::{verdicts, waivers};
+        use super::transaction::{IntentKind, Transaction};
+        let Some(record) = transaction.decisions.iter().find(|d| matches!(d.origin.source.as_str(), verdicts::SCHEMA | waivers::SCHEMA)) else {
+            return Ok(None);
+        };
+        if transaction.decisions.len() != 1 || !transaction.items.is_empty() || !transaction.external.is_empty() {
+            return Err(Error::Invalid("verification claim transaction carries exactly one claim".into()));
+        }
+        let model::Decision::Gate { evidence: model::Evidence::Text(encoded), .. } = &record.decision else {
+            return Err(Error::Invalid("verification claim encoding invalid".into()));
+        };
+        let root_binding = self.observed[STATE].directory_identity.clone();
+        let data = &self.view.snapshot.data;
+        let same = |expected: Transaction| -> Result<bool> {
+            Ok(transaction.fingerprint()? == expected.fingerprint()? && transaction.id == expected.id)
+        };
+        let intent = match record.origin.source.as_str() {
+            verdicts::SCHEMA => {
+                let claim: verdicts::Claim = serde_json::from_str(encoded)?;
+                let current = verdicts::prepare(&claim.root, data, claim.patch.clone())?;
+                if claim != current || !same(verdicts::transaction(data, &claim)?)? || claim.root_binding != root_binding {
+                    return Err(Error::Conflict("verification claim changed at committing snapshot".into()));
+                }
+                IntentKind::VerificationSubmitV1 { root_binding, claim: Box::new(claim) }
+            }
+            waivers::SCHEMA => {
+                let claim: waivers::Claim = serde_json::from_str(encoded)?;
+                let current = waivers::prepare(&claim.root, data, claim.request.clone())?;
+                if claim != current || !same(waivers::transaction(data, &claim)?)? || claim.root_binding != root_binding {
+                    return Err(Error::Conflict("waiver claim changed at committing snapshot".into()));
+                }
+                IntentKind::VerificationWaiverV1 { root_binding, claim: Box::new(claim) }
+            }
+            _ => unreachable!("matched claim sources"),
+        };
+        Ok(Some(intent))
     }
 
     fn verification_run(&mut self, generation: u64, integrity: &str, record: cadence::verification::runner::Record) -> Result<View> {

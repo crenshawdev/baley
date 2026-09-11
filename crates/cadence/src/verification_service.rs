@@ -1,5 +1,5 @@
 //! Resident adapter; all writes use the existing session's single store queue.
-use cadence::{store::{Error, Result, writer::Operation}, verification::{inputs, model::{Query, Apply}, persistence, render, runner, status, verdicts}};
+use cadence::{store::{Error, Result, writer::Operation}, verification::{inputs, model::{Query, Apply}, persistence, render, runner, status, verdicts, waivers}};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -28,6 +28,21 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             }).await;
             written.and_then(|view| verdicts::replay(&view.snapshot.data, &claim.patch)?
                 .ok_or_else(|| Error::Invalid("confirmed verification claim absent".into())))
+        }
+        Command::Apply(Apply::Waive { request_id, submission, approval }) => {
+            let request = waivers::Request { request_id, submission: *submission, approval: *approval };
+            let session = factory.first_touch(root).await?;
+            session.config()?;
+            let view = session.derivation_view().await?;
+            if let Some(answer) = waivers::replay(&view.snapshot.data, &request)? { return Ok(answer); }
+            let claim = waivers::prepare(root, &view.snapshot.data, request)?;
+            if claim.answer["status"] != "ok" { return Ok(claim.answer); }
+            let transaction = waivers::transaction(&view.snapshot.data, &claim)?;
+            let written = session.review_store().request(Operation::CompareTransact {
+                expected_generation: view.snapshot.generation, expected_integrity: view.snapshot.integrity, transaction,
+            }).await;
+            written.and_then(|view| waivers::replay(&view.snapshot.data, &claim.request)?
+                .ok_or_else(|| Error::Invalid("confirmed waiver absent".into())))
         }
         Command::Apply(_) => Err(inputs::refuse(0, "verification-unavailable", "operation", "operation is not implemented")),
     };
