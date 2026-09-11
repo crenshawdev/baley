@@ -466,6 +466,10 @@ pub struct Completed {
     pub dispatches: Vec<Value>,
 }
 
+impl Default for Completed {
+    fn default() -> Self { Self::new() }
+}
+
 impl Completed {
     pub fn project(&self) -> &Path { self.temp.path() }
 
