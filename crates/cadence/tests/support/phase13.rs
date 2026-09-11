@@ -245,6 +245,14 @@ pub fn artifact(id: &str, truths: &[&str]) -> Value {
         "associations":edges(truths)})
 }
 
+pub fn observation(id: &str, truths: &[&str]) -> Value {
+    json!({"kind":"observation","id":id,"reason":"A real host must witness the delivery.",
+        "spec":{"episode":"The owner sees a real delivery.",
+            "specification":{"source":"O1","document":"CONTEXT.md","approved_by":"Fixture Owner","approved_at":"2026-09-10"},
+            "status":"pending"},
+        "associations":edges(truths)})
+}
+
 // Handwritten phase-28 section grammar. No production renderer, validator or
 // typed map serializer participates in this caller's expected document.
 pub fn section_json(value: &Value, depth: usize) -> String {
@@ -262,6 +270,8 @@ pub fn section_json(value: &Value, depth: usize) -> String {
                 } else if fields.contains_key("file") { &["file", "function"] }
                 else if fields.contains_key("locators") { &["locators", "substance"] }
                 else if fields.contains_key("caller") || fields.contains_key("callee") { &["caller", "callee", "value"] }
+                else if fields.contains_key("episode") { &["episode", "specification", "status"] }
+                else if fields.contains_key("approved_by") { &["source", "document", "approved_by", "approved_at"] }
                 else { &["kind", "value"] };
             let mut keys = order.iter().copied().filter(|k| fields.contains_key(*k)).collect::<Vec<_>>();
             keys.extend(fields.keys().map(String::as_str).filter(|k| !order.contains(k)));
@@ -473,7 +483,15 @@ impl Default for Completed {
 impl Completed {
     pub fn project(&self) -> &Path { self.temp.path() }
 
-    pub fn new() -> Self {
+    pub fn new() -> Self { Self::build(false) }
+
+    /// A separate generic fixture phase whose second plan also carries a
+    /// supplementary observation, so the observation cap can be exercised.
+    /// Only the verification check binary needs it; the other includers do not.
+    #[allow(dead_code)]
+    pub fn with_observation() -> Self { Self::build(true) }
+
+    fn build(observed: bool) -> Self {
         use std::os::unix::fs::PermissionsExt;
         let temp = fixture();
         let project = temp.path();
@@ -507,6 +525,7 @@ impl Completed {
                 "setup":"the subject starts at six","call":"answer()","boundary":"real Python subject","fakes":[]});
             let mut items = vec![item, shared.clone()];
             if name == "a" { items.push(link.clone()); }
+            if name == "b" && observed { items.push(observation("observation/host", &["truth/B"])); }
             maps.push((None, attached(items)));
         }
         let mut input = proposal(project, "two-plans", &maps);

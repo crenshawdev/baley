@@ -4,6 +4,12 @@ use phase13::*;
 use serde_json::{Value, json};
 
 fn inspected_patch(project: &std::path::Path, id: &str) -> (Value, Value) {
+    inspected_with(project, id, &[])
+}
+
+// A fresh dispatch, one independent run per saved check, and one complete
+// handwritten patch; `verdicts` overrides (item, verdict, observed) rows.
+fn inspected_with(project: &std::path::Path, id: &str, verdicts: &[(&str, &str, &str)]) -> (Value, Value) {
     let dispatch = query(project, json!({"operation":"verify-next","phase":13,"request_id":id}));
     assert_eq!(dispatch["status"], "ok", "{dispatch}");
     let attempt = dispatch["attempt"].clone();
@@ -31,8 +37,10 @@ fn inspected_patch(project: &std::path::Path, id: &str) -> (Value, Value) {
             }
             runs.push(run);
         }
+        let (verdict, observed) = verdicts.iter().find(|(name, _, _)| item["id"] == *name)
+            .map_or(("accepted", "Inspected the specified fixture evidence."), |(_, verdict, observed)| (verdict, observed));
         items.push(json!({"id":item["id"],"item_revision":item["item_revision"],
-            "verdict":"accepted","observed":"Inspected the specified fixture evidence.","runs":runs}));
+            "verdict":verdict,"observed":observed,"runs":runs}));
     }
     client.finish();
     let patch = json!({"request_id":format!("{id}-patch"),"attempt":attempt["id"],
@@ -272,4 +280,236 @@ fn phase13_dispatch_carries_current_verification_inputs() {
     // An absent authority must not be replaced with a fabricated attempt.
     assert!(!serde_json::to_string(&tree(missing.path())).unwrap().contains("verification-attempt-1"));
     assert_eq!(tree(missing.path()), before);
+}
+
+fn report(project: &std::path::Path) -> Value {
+    query(project, json!({"operation":"verification-read","phase":13}))
+}
+
+fn submitted(project: &std::path::Path, id: &str, verdicts: &[(&str, &str, &str)]) -> (Value, Value) {
+    let (attempt, patch) = inspected_with(project, id, verdicts);
+    let answer = apply(project, json!({"operation":"verification-submit","patch":patch}));
+    assert_eq!(answer["status"], "ok", "complete patch for {id}: {answer}");
+    (attempt, patch)
+}
+
+// Handwritten truth row. Items are (id, kind, verdict, observed) in id order;
+// a check's independent run id follows the inspection id it was launched under.
+fn row(map: &Value, run: &str, truth: &str, text: &str, status: &str, reason: &str, items: &[(&str, &str, &str, &str)]) -> Value {
+    let items: Vec<_> = items.iter().map(|(id, kind, verdict, observed)| {
+        let saved = map["items"].as_array().unwrap().iter().find(|i| i["id"] == *id).unwrap();
+        json!({"id":id,"kind":kind,"item_revision":saved["item_revision"],"verdict":verdict,"observed":observed,
+            "runs":if *kind == "check" { json!([format!("{run}-{id}")]) } else { json!([]) },
+            "reasons":["This causes the promised delivery."]})
+    }).collect();
+    json!({"id":truth,"version":1,"text":text,"status":status,"reason":reason,"items":items})
+}
+
+fn pending(truth: &str, text: &str) -> Value {
+    json!({"id":truth,"version":1,"text":text,"status":"pending","reason":"no complete applicable verification","items":[]})
+}
+
+const A: &str = "When a parcel arrives, the recipient gets the parcel.";
+const B: &str = "When a second parcel arrives, the recipient gets the parcel.";
+const SEEN: &str = "Inspected the specified fixture evidence.";
+const MET: &str = "every item accepted and none is an observation";
+const CONCERNS: &str = "every item accepted and at least one is an observation";
+const LEGACY: &str = "historical classification only; never native evidence";
+
+#[test]
+fn phase13_report_derives_truth_status_from_every_item() {
+    let fixture = Completed::new();
+    let project = fixture.project();
+    let map = &fixture.map;
+    let context = reopened(project).snapshot.data["context"].clone();
+    // Execution is complete and SUMMARY claims success; nothing is verified yet.
+    let before = tree(project);
+    let read = report(project);
+    assert_eq!(read["status"], "ok", "{read}");
+    assert_eq!(read["schema"], "verification-report-1");
+    assert_eq!(read["current"]["applicable"], false);
+    assert_eq!(read["current"]["reason"], "no verification attempt");
+    assert_eq!(read["current"]["attempt"], Value::Null);
+    assert_eq!(read["current"]["verified_at"], Value::Null);
+    assert_eq!(read["current"]["observed"]["source"]["head"], git_value(project, &["rev-parse", "HEAD"]));
+    assert_eq!(read["truths"], json!([pending("truth/A", A), pending("truth/B", B)]));
+    assert_eq!(read["history"], json!([]));
+    assert_eq!(read["legacy"], json!({"summary_document":true,"uat_document":false,"authority":LEGACY}));
+    let text = read["report"].as_str().unwrap();
+    assert!(text.contains("Current: none - no verification attempt"), "{text}");
+    assert!(text.contains("| truth/A | pending | - |"), "{text}");
+    assert!(text.contains("Legacy: SUMMARY present, UAT absent - historical classification only, never native evidence."), "{text}");
+    assert_eq!(tree(project), before, "readback writes nothing");
+    // An open attempt with finished runs is still not a verification.
+    let (first, first_patch) = inspected_patch(project, "all-accepted");
+    let read = report(project);
+    assert_eq!(read["current"]["applicable"], false);
+    assert_eq!(read["current"]["reason"], "no complete verification on the current basis");
+    assert_eq!(read["truths"], json!([pending("truth/A", A), pending("truth/B", B)]));
+    assert_eq!(read["history"][0]["attempt"], first["id"]);
+    assert_eq!(read["history"][0]["applicability"], "open");
+    assert_eq!(read["history"][0]["reason"], "attempt has no complete patch");
+    assert_eq!(read["history"][0]["application"], Value::Null);
+    let answer = apply(project, json!({"operation":"verification-submit","patch":first_patch}));
+    assert_eq!(answer["status"], "ok", "{answer}");
+    let read = report(project);
+    assert_eq!(read["current"], json!({"applicable":true,"attempt":first["id"],"patch":"all-accepted-patch",
+        "reason":"complete patch on the current basis","verified_at":first["inputs"]["basis"],
+        "observed":first["inputs"]["basis"],"unavailable":null}));
+    assert_eq!(read["current"]["verified_at"]["map_digest"], map["input_digest"]);
+    assert_eq!(read["current"]["verified_at"]["source"]["head"], git_value(project, &["rev-parse", "HEAD"]));
+    assert_eq!(read["current"]["verified_at"]["source"]["tree"], git_value(project, &["rev-parse", "HEAD^{tree}"]));
+    assert_eq!(read["current"]["verified_at"]["publications"], fixture.admission["receipt"]["request"]["contract"]["plans"]);
+    let met_a = row(map, "all-accepted", "truth/A", A, "met", MET, &[
+        ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]);
+    let met_b = row(map, "all-accepted", "truth/B", B, "met", MET, &[
+        ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "accepted", SEEN)]);
+    assert_eq!(read["truths"], json!([met_a, met_b]));
+    assert_eq!(read["history"][0]["applicability"], "current");
+    assert_eq!(read["history"][0]["application"], "accepted");
+    assert_eq!(read["history"][0]["patch"], "all-accepted-patch");
+    assert_eq!(read["history"][0]["truths"], read["truths"]);
+    let text = read["report"].as_str().unwrap();
+    assert!(text.contains(&format!("Current: attempt {}, patch all-accepted-patch", first["id"].as_str().unwrap())), "{text}");
+    assert!(text.contains("| truth/A | met | artifact/shared accepted; check/A accepted; link/parcel accepted |"), "{text}");
+    assert!(text.contains("| truth/B | met | artifact/shared accepted; check/B accepted |"), "{text}");
+    // Restart: the store is reopened and a fresh server derives the same rows.
+    let stored = reopened(project).snapshot;
+    assert_eq!(report(project), read);
+    assert_eq!(reopened(project).snapshot, stored);
+    assert_eq!(query(project, json!({"operation":"verification-read","phase":13,"attempt":first["id"]}))["truths"], read["truths"]);
+    // A rejected shared artifact reaches every association it names, and the
+    // accepted checks cannot cover it.
+    let (second, _) = submitted(project, "rejected-artifact", &[("artifact/shared", "rejected", "The destination is an empty placeholder directory.")]);
+    let read = report(project);
+    assert_eq!(read["current"]["attempt"], second["id"]);
+    let unmet_a = row(map, "rejected-artifact", "truth/A", A, "unmet", "rejected or not seen: artifact/shared", &[
+        ("artifact/shared", "artifact", "rejected", "The destination is an empty placeholder directory."),
+        ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]);
+    let unmet_b = row(map, "rejected-artifact", "truth/B", B, "unmet", "rejected or not seen: artifact/shared", &[
+        ("artifact/shared", "artifact", "rejected", "The destination is an empty placeholder directory."),
+        ("check/B", "check", "accepted", SEEN)]);
+    assert_eq!(read["truths"], json!([unmet_a, unmet_b]));
+    assert_eq!(read["history"][0]["applicability"], "historical");
+    assert_eq!(read["history"][0]["reason"], format!("superseded by attempt {}", second["id"].as_str().unwrap()));
+    assert_eq!(read["history"][0]["truths"], json!([met_a, met_b]), "historical judgments keep their rows");
+    assert_eq!(read["history"][1]["applicability"], "current");
+    let text = read["report"].as_str().unwrap();
+    assert!(text.contains("| truth/A | unmet | artifact/shared rejected; check/A accepted; link/parcel accepted |"), "{text}");
+    assert!(text.contains("| truth/B | unmet | artifact/shared rejected; check/B accepted |"), "{text}");
+    assert!(text.contains(&format!("- attempt {}: historical - superseded by attempt {}; truth/A met; truth/B met",
+        first["id"].as_str().unwrap(), second["id"].as_str().unwrap())), "{text}");
+    // A rejected link named by one truth leaves the other truth met.
+    let (third, _) = submitted(project, "rejected-link", &[("link/parcel", "rejected", "The sender never hands the recipient a parcel.")]);
+    let read = report(project);
+    assert_eq!(read["current"]["attempt"], third["id"]);
+    assert_eq!(read["truths"], json!([
+        row(map, "rejected-link", "truth/A", A, "unmet", "rejected or not seen: link/parcel", &[
+            ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN),
+            ("link/parcel", "link", "rejected", "The sender never hands the recipient a parcel.")]),
+        row(map, "rejected-link", "truth/B", B, "met", MET, &[
+            ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "accepted", SEEN)])]));
+    // Explicit not_seen is complete and negative.
+    let (fourth, _) = submitted(project, "not-seen", &[("check/B", "not_seen", "tests/b.py could not be opened during inspection.")]);
+    let read = report(project);
+    assert_eq!(read["current"]["attempt"], fourth["id"]);
+    let not_seen_a = row(map, "not-seen", "truth/A", A, "met", MET, &[
+        ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]);
+    let not_seen_b = row(map, "not-seen", "truth/B", B, "unmet", "rejected or not seen: check/B", &[
+        ("artifact/shared", "artifact", "accepted", SEEN),
+        ("check/B", "check", "not_seen", "tests/b.py could not be opened during inspection.")]);
+    assert_eq!(read["truths"], json!([not_seen_a, not_seen_b]));
+    assert_eq!(read["history"].as_array().unwrap().len(), 4);
+    assert_eq!(read["history"][2]["reason"], format!("superseded by attempt {}", fourth["id"].as_str().unwrap()));
+    // No truth status was written into the approved context, and execution
+    // completion never became acceptance.
+    assert_eq!(reopened(project).snapshot.data["context"], context);
+    assert_eq!(reopened(project).snapshot.data["verification"]["patches"].as_array().unwrap().len(), 4);
+    // A real repair commit makes every judgment historical until reverified.
+    let old_head = git_value(project, &["rev-parse", "HEAD"]);
+    std::fs::write(project.join("src/b.py"), "def answer():\n    return 7 # repaired implementation\n").unwrap();
+    git_value(project, &["add", "src/b.py"]);
+    git_value(project, &["commit", "-m", "Fixture repair"]);
+    let new_head = git_value(project, &["rev-parse", "HEAD"]);
+    let read = report(project);
+    assert_eq!(read["current"]["applicable"], false);
+    assert_eq!(read["current"]["attempt"], Value::Null);
+    assert_eq!(read["current"]["reason"], "no complete verification on the current basis");
+    assert_eq!(read["current"]["observed"]["source"]["head"], new_head);
+    assert_eq!(read["truths"], json!([pending("truth/A", A), pending("truth/B", B)]));
+    for (index, attempt) in [&first, &second, &third, &fourth].into_iter().enumerate() {
+        assert_eq!(read["history"][index]["attempt"], attempt["id"]);
+        assert_eq!(read["history"][index]["applicability"], "historical");
+        assert_eq!(read["history"][index]["basis"], attempt["inputs"]["basis"]);
+        assert_eq!(read["history"][index]["basis"]["source"]["head"], old_head);
+        assert_eq!(read["history"][index]["differs"], json!(["basis.source"]));
+    }
+    assert_eq!(read["history"][3]["reason"], "basis differs from current: basis.source");
+    assert_eq!(read["history"][3]["truths"], json!([not_seen_a, not_seen_b]));
+    let text = read["report"].as_str().unwrap();
+    assert!(text.contains("Current: none - no complete verification on the current basis"), "{text}");
+    // Uncommitted source is ambiguous: nothing is current and the refusal is located.
+    std::fs::write(project.join("src/a.py"), "def answer():\n    return 9\n").unwrap();
+    let read = report(project);
+    assert_eq!(read["status"], "ok", "{read}");
+    assert_eq!(read["current"]["applicable"], false);
+    assert_eq!(read["current"]["reason"], "current verification inputs unavailable");
+    assert_eq!(read["current"]["unavailable"]["rule"], "verification-source");
+    assert_eq!(read["current"]["observed"], Value::Null);
+    assert_eq!(read["truths"], json!([pending("truth/A", A), pending("truth/B", B)]));
+    assert_eq!(read["history"][3]["reason"], "current verification inputs unavailable");
+    std::fs::write(project.join("src/a.py"), "def answer():\n    return 7\n").unwrap();
+    // A fresh applicable attempt restores the current rows; the rejected
+    // original attempt stays in history with its own identity.
+    let (fifth, _) = submitted(project, "fresh", &[]);
+    let read = report(project);
+    assert_eq!(read["current"]["attempt"], fifth["id"]);
+    assert_eq!(read["current"]["verified_at"]["source"]["head"], new_head);
+    assert_eq!(read["truths"], json!([
+        row(map, "fresh", "truth/A", A, "met", MET, &[
+            ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]),
+        row(map, "fresh", "truth/B", B, "met", MET, &[
+            ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "accepted", SEEN)])]));
+    assert_eq!(read["history"].as_array().unwrap().len(), 5);
+    assert_eq!(read["history"][3]["applicability"], "historical");
+    assert_eq!(read["history"][3]["reason"], "basis differs from current: basis.source");
+    assert_eq!(read["history"][3]["truths"], json!([not_seen_a, not_seen_b]));
+    assert_eq!(read["history"][4]["applicability"], "current");
+    let stored = reopened(project).snapshot;
+    assert_eq!(report(project), read);
+    assert_eq!(reopened(project).snapshot, stored);
+    for name in ["findings.md", ".planning/findings.md", ".planning/phases/13/UAT.md"] {
+        assert!(!project.join(name).exists());
+    }
+    // A separate generic fixture phase carries a supplementary observation:
+    // all accepted caps at concerns, and a negative observation verdict is unmet.
+    let generic = Completed::with_observation();
+    let host = generic.project();
+    let map = &generic.map;
+    let observed = |observed: &str| row(map, "seen", "truth/B", B, "concerns", CONCERNS, &[
+        ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "accepted", SEEN),
+        ("observation/host", "observation", "accepted", observed)]);
+    submitted(host, "seen", &[("observation/host", "accepted", "Seen by Fixture Owner on 2026-09-11 on the real host.")]);
+    let read = report(host);
+    assert_eq!(read["truths"], json!([
+        row(map, "seen", "truth/A", A, "met", MET, &[
+            ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]),
+        observed("Seen by Fixture Owner on 2026-09-11 on the real host.")]));
+    let text = read["report"].as_str().unwrap();
+    assert!(text.contains("| truth/B | concerns | artifact/shared accepted; check/B accepted; observation/host accepted |"), "{text}");
+    submitted(host, "unseen", &[("observation/host", "not_seen", "No host episode was available to the inspector.")]);
+    let read = report(host);
+    assert_eq!(read["truths"][0]["status"], "met");
+    assert_eq!(read["truths"][1], row(map, "unseen", "truth/B", B, "unmet", "rejected or not seen: observation/host", &[
+        ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "accepted", SEEN),
+        ("observation/host", "observation", "not_seen", "No host episode was available to the inspector.")]));
+    submitted(host, "refuted", &[("observation/host", "rejected", "The host showed no delivery.")]);
+    let read = report(host);
+    assert_eq!(read["truths"][0]["status"], "met");
+    assert_eq!(read["truths"][1]["status"], "unmet");
+    assert_eq!(read["truths"][1]["reason"], "rejected or not seen: observation/host");
+    assert_eq!(read["history"][0]["truths"][1]["status"], "concerns", "the capped judgment stays in history");
+    let stored = reopened(host).snapshot;
+    assert_eq!(report(host), read);
+    assert_eq!(reopened(host).snapshot, stored);
 }
