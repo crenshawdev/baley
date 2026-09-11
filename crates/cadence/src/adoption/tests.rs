@@ -96,7 +96,7 @@ fn contribute_appends_under_its_own_namespace_and_applicability_yields_to_native
     let one = Declaration { phase: 9, roadmap: Roadmap { line: 3, entry: 1, digest: ROADMAP_DIGEST.into() },
         derived: Derived { status: LifecycleStatus::Planned, legacy_rule: LEGACY_RULE.into() }, human_results: None };
     let first = record("rb", &one, AT_IMPORT, 1, "s").unwrap();
-    let data = contribute(&Value::Null, &[first.clone()]).unwrap();
+    let data = contribute(&Value::Null, std::slice::from_ref(&first)).unwrap();
     assert_eq!(data, json!({"adoption":{"schema":"adoption-1","declared_completions":[first]}}));
     assert_eq!(contribute(&data, &[]).unwrap(), data, "nothing to write leaves the snapshot as it was");
     assert_eq!(records(&data).unwrap(), vec![first.clone()]);
@@ -105,7 +105,7 @@ fn contribute_appends_under_its_own_namespace_and_applicability_yields_to_native
     assert_eq!(applicable(&data, 10).unwrap(), None);
     // A later declaration for the same phase is the one that applies.
     let later = record("rb", &one, "declared-at-adoption", 4, "s2").unwrap();
-    let data = contribute(&data, &[later.clone()]).unwrap();
+    let data = contribute(&data, std::slice::from_ref(&later)).unwrap();
     assert_eq!(records(&data).unwrap(), vec![first.clone(), later.clone()]);
     assert_eq!(applicable(&data, 9).unwrap(), Some(later));
     // An approved context is native authority: the declaration yields, the record stays.

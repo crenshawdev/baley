@@ -288,7 +288,7 @@ mod overlay_tests {
         // No store at all: the overlay is empty and phase 13 is legacy Executed.
         assert_eq!(acceptance_overlay(&serde_json::Value::Null).unwrap(), AcceptanceOverlay::default());
         let record = declared(13);
-        let data = crate::adoption::contribute(&serde_json::Value::Null, &[record.clone()]).unwrap();
+        let data = crate::adoption::contribute(&serde_json::Value::Null, std::slice::from_ref(&record)).unwrap();
         let overlay = acceptance_overlay(&data).unwrap();
         assert_eq!(overlay.phases.keys().collect::<Vec<_>>(), ["13"], "the union carries a phase no context names");
         assert_eq!(overlay.phases["13"], AcceptancePhase { published: false, executed: false, completion: Some(record.id.clone()),
