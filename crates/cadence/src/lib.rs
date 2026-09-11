@@ -16,3 +16,4 @@ pub mod plan;
 pub mod rail;
 pub mod review;
 pub mod store;
+pub mod verification;

@@ -40,6 +40,12 @@ enum Command {
         #[arg(long)]
         frontdoor: bool,
     },
+    /// Render the compiled verifier contract without opening a project.
+    VerifierInstructions {
+        /// Render the cad-verify front door from the same compiled source.
+        #[arg(long)]
+        frontdoor: bool,
+    },
 }
 
 fn main() -> std::process::ExitCode {
@@ -52,6 +58,18 @@ fn main() -> std::process::ExitCode {
 
 fn run_command(command: Command) -> std::process::ExitCode {
     match command {
+        Command::VerifierInstructions { frontdoor } => {
+            use std::io::Write;
+            let rendered = if frontdoor {
+                cadence::verification::instructions::frontdoor_markdown()
+            } else {
+                cadence::verification::instructions::contract_markdown()
+            };
+            match std::io::stdout().lock().write_all(rendered.as_bytes()) {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(_) => std::process::ExitCode::FAILURE,
+            }
+        }
         Command::Serve => run_serve(None),
         Command::Guard => guard::run(),
         Command::ReviewStop => review_hook::run(),
