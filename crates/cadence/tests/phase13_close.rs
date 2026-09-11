@@ -63,7 +63,8 @@ impl Settings {
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
         let code = output.status.code().unwrap();
         // Bypass libtest capture so the report can quote this actual invocation.
-        writeln!(std::io::stdout(), "CLOSE_REHEARSAL {}", json!({
+        let mut output = std::io::stdout().lock();
+        writeln!(output, "CLOSE_REHEARSAL {}", json!({
             "program":"python3","script":script,"args":args,"exit":code,"answer":value})).unwrap();
         (code, value)
     }
@@ -108,10 +109,12 @@ fn phase13_rules_gate_retirement_rehearsal() {
     reopened(project);
     assert_eq!(query(project, json!({"operation":"verify-next","phase":13,"request_id":"close-prerequisite"})), verify);
     assert_eq!(tree(project), baseline);
-    writeln!(std::io::stdout(), "CLOSE_PREREQUISITE {}", json!({
+    let mut output = std::io::stdout().lock();
+    writeln!(output, "CLOSE_PREREQUISITE {}", json!({
         "planner":"plan-instructions plus real stdio native plan-read/plan-submit",
         "planner_bytes_sha256":sha(planner.as_bytes()),"executor_dispatches":fixture.dispatches.iter().map(|d| &d["dispatch"]["id"]).collect::<Vec<_>>(),
         "verifier_attempt":verify["attempt"]["id"],"prompt_digest":verify["attempt"]["prompt_digest"]})).unwrap();
+    drop(output);
 
     let disposable = tempfile::tempdir().unwrap();
     let case = Settings::new(disposable.path(), "success");
