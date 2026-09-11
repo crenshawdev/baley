@@ -513,3 +513,210 @@ fn phase13_report_derives_truth_status_from_every_item() {
     assert_eq!(report(host), read);
     assert_eq!(reopened(host).snapshot, stored);
 }
+
+fn waive(id: &str, submission: &Value) -> Value {
+    json!({"operation":"truth-waive","request_id":id,"submission":submission,
+        "approval":{"approved":true,"owner":"Fixture Owner","at":"2026-09-11T15:00:00Z","submission":submission}})
+}
+
+fn waiver(basis: &Value, truth: &str, version: u32, reason: &str) -> Value {
+    json!({"truth":{"id":truth,"version":version},"basis":basis,"reason":reason,
+        "owner":"Fixture Owner","at":"2026-09-11T15:00:00Z","supersedes":null,"revoked":false})
+}
+
+#[test]
+fn phase13_owner_waiver_is_distinct_from_met() {
+    let fixture = Completed::new();
+    let project = fixture.project();
+    let map = &fixture.map;
+    let context = reopened(project).snapshot.data["context"].clone();
+    // One met and one unmet truth, with the rejection retained.
+    let rejected = "tests/b.py asserts nothing about the second parcel.";
+    let (reviewed, _) = submitted(project, "reviewed", &[("check/B", "rejected", rejected)]);
+    let basis = reviewed["inputs"]["basis"].clone();
+    let met_a = row(map, "reviewed", "truth/A", A, "met", MET, &[
+        ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]);
+    let unmet_b = row(map, "reviewed", "truth/B", B, "unmet", "rejected or not seen: check/B", &[
+        ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "rejected", rejected)]);
+    let read = report(project);
+    assert_eq!(read["truths"], json!([met_a, unmet_b]));
+    assert_eq!(read["counts"], json!({"met":1,"concerns":0,"unmet":1,"pending":0,"waived":0}));
+    assert_eq!(read["waivers"], json!([]));
+    let valid = waiver(&basis, "truth/B", 1, "The second parcel ships in phase 14.");
+    let before = tree(project);
+    let stored = reopened(project).snapshot;
+    // Only exact owner approval waives. Each variant is refused with the
+    // offending input located and nothing durable changes.
+    let mut variants: Vec<(Value, &str, &str)> = Vec::new();
+    let mut unapproved = waive("unapproved", &valid);
+    unapproved["approval"]["approved"] = json!(false);
+    variants.push((unapproved, "verification-approval", "approval.approved"));
+    let mut mismatched = waive("mismatched", &valid);
+    mismatched["approval"]["submission"]["reason"] = json!("A different reason than the owner saw.");
+    variants.push((mismatched, "verification-approval", "approval.submission"));
+    let mut anonymous = waive("anonymous", &valid);
+    anonymous["approval"]["owner"] = json!("   ");
+    variants.push((anonymous, "verification-approval", "approval.owner"));
+    let mut undated = waive("undated", &valid);
+    undated["approval"]["at"] = json!("");
+    variants.push((undated, "verification-approval", "approval.at"));
+    for (field, slot) in [("reason", "submission.reason"), ("owner", "submission.owner"), ("at", "submission.at")] {
+        let mut blank = valid.clone();
+        blank[field] = json!("  ");
+        variants.push((waive(&format!("blank-{field}"), &blank), "verification-waiver", slot));
+    }
+    variants.push((waive("stale-version", &waiver(&basis, "truth/B", 2, "Version two never existed.")), "verification-truth", "submission.truth"));
+    variants.push((waive("unknown-truth", &waiver(&basis, "truth/C", 1, "No such promise.")), "verification-truth", "submission.truth"));
+    variants.push((waive("met-truth", &waiver(&basis, "truth/A", 1, "Already met; nothing to waive.")), "verification-truth", "submission.truth"));
+    let mut stale = valid.clone();
+    stale["basis"]["source"]["head"] = json!("0000000000000000000000000000000000000000");
+    variants.push((waive("stale-source", &stale), "verification-basis", "basis.source"));
+    let mut foreign = valid.clone();
+    foreign["basis"]["map_digest"] = json!("stale-map");
+    variants.push((waive("stale-map", &foreign), "verification-basis", "basis.map_digest"));
+    let mut orphan = valid.clone();
+    orphan["supersedes"] = json!("no-such-waiver");
+    variants.push((waive("orphan-supersession", &orphan), "verification-waiver", "submission.supersedes"));
+    let mut revoke_nothing = valid.clone();
+    revoke_nothing["revoked"] = json!(true);
+    variants.push((waive("revoke-nothing", &revoke_nothing), "verification-waiver", "submission.supersedes"));
+    for (request, rule, slot) in variants {
+        let response = apply(project, request.clone());
+        assert_eq!(response["status"], "refused", "{request}\n{response}");
+        assert_eq!(response["rule"], rule, "{response}");
+        assert_eq!(response["slot"], slot, "{response}");
+        assert_eq!(tree(project), before, "an invalid waiver changes nothing");
+        assert_eq!(report(project)["truths"], json!([met_a, unmet_b]));
+    }
+    // A verifier cannot author a waiver from its patch arm, and an absent
+    // approval is a transport shape refusal rather than a prepared payload.
+    let mut prepared = waive("prepared", &valid);
+    prepared.as_object_mut().unwrap().remove("approval");
+    assert_eq!(apply(project, prepared)["rule"], "verification-shape");
+    let (_, mut patch) = inspected_patch(project, "verifier-authored");
+    patch["waivers"] = json!([valid]);
+    assert_eq!(apply(project, json!({"operation":"verification-submit","patch":patch}))["rule"], "verification-shape");
+    assert_eq!(reopened(project).snapshot.data["verification"].get("waivers"), None);
+    // The exact owner waiver is effective and shown beside the met truth.
+    let accepted = apply(project, waive("waive-b", &valid));
+    assert_eq!(accepted["status"], "ok", "{accepted}");
+    let record = accepted["receipt"]["record"].clone();
+    assert_eq!(record["schema"], "verification-waiver-1");
+    assert_eq!(record["kind"], "waive");
+    assert_eq!(record["request_id"], "waive-b");
+    assert_eq!(record["submission"], valid);
+    assert_eq!(record["approval"]["owner"], "Fixture Owner");
+    assert_eq!(record["reviewed"]["attempt"], reviewed["id"]);
+    assert_eq!(record["reviewed"]["patch"], "reviewed-patch");
+    assert_eq!(record["reviewed"]["status"], "unmet");
+    let waived_b = {
+        let mut row = unmet_b.clone();
+        row["status"] = json!("waived");
+        row["derived"] = json!("unmet");
+        row["waiver"] = json!({"id":record["id"],"request_id":"waive-b","owner":"Fixture Owner",
+            "at":"2026-09-11T15:00:00Z","reason":"The second parcel ships in phase 14."});
+        row
+    };
+    let read = report(project);
+    assert_eq!(read["truths"], json!([met_a, waived_b]));
+    assert_eq!(read["counts"], json!({"met":1,"concerns":0,"unmet":0,"pending":0,"waived":1}));
+    assert_eq!(read["waivers"].as_array().unwrap().len(), 1);
+    assert_eq!(read["waivers"][0]["id"], record["id"]);
+    assert_eq!(read["waivers"][0]["effective"], true);
+    assert_eq!(read["waivers"][0]["truth"], json!({"id":"truth/B","version":1}));
+    assert_eq!(read["advice"], Value::Null);
+    assert_eq!(read["history"][0]["truths"], json!([met_a, unmet_b]), "the derived judgment is kept as derived");
+    let text = read["report"].as_str().unwrap();
+    assert!(text.contains("| truth/A | met | artifact/shared accepted; check/A accepted; link/parcel accepted |"), "{text}");
+    assert!(text.contains(&format!("| truth/B | waived (derived unmet) | artifact/shared accepted; check/B rejected |")), "{text}");
+    assert!(text.contains("Waived: truth/B by Fixture Owner at 2026-09-11T15:00:00Z - The second parcel ships in phase 14."), "{text}");
+    assert!(text.contains("Counts: met 1, concerns 0, unmet 0, pending 0, waived 1"), "{text}");
+    // Restart and replay: one immutable record, the same answer, no new bytes.
+    let saved = reopened(project).snapshot;
+    assert_eq!(saved.data["verification"]["waivers"], json!([record]));
+    assert_eq!(saved.data["context"], context);
+    assert_eq!(saved.data["verification"]["patches"], stored.data["verification"]["patches"]);
+    assert_eq!(report(project), read);
+    let after = tree(project);
+    assert_eq!(apply(project, waive("waive-b", &valid)), accepted);
+    assert_eq!(tree(project), after);
+    let mut changed = valid.clone();
+    changed["reason"] = json!("A different reason under the same request.");
+    let reused = apply(project, waive("waive-b", &changed));
+    assert_eq!(reused["rule"], "verification-waiver-reuse", "{reused}");
+    let duplicate = apply(project, waive("waive-b-again", &valid));
+    assert_eq!(duplicate["rule"], "verification-waiver", "{duplicate}");
+    assert_eq!(duplicate["slot"], "submission.supersedes");
+    assert_eq!(reopened(project).snapshot.data["verification"]["waivers"], json!([record]));
+    assert_eq!(tree(project), after);
+    // A later verifier patch neither erases the waiver nor is covered by it:
+    // the new judgment is derived from its own verdicts and the retained
+    // waiver needs explicit owner reaffirmation against the new evidence.
+    let (again, _) = submitted(project, "again", &[("check/B", "rejected", rejected)]);
+    let unmet_b_again = row(map, "again", "truth/B", B, "unmet", "rejected or not seen: check/B", &[
+        ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "rejected", rejected)]);
+    let met_a_again = row(map, "again", "truth/A", A, "met", MET, &[
+        ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]);
+    let read = report(project);
+    assert_eq!(read["current"]["attempt"], again["id"]);
+    assert_eq!(read["truths"], json!([met_a_again, unmet_b_again]));
+    assert_eq!(read["counts"]["waived"], 0);
+    assert_eq!(read["waivers"][0]["id"], record["id"]);
+    assert_eq!(read["waivers"][0]["effective"], false);
+    assert_eq!(read["waivers"][0]["reason"], format!("reviewed attempt {} is not the current attempt {}", reviewed["id"].as_str().unwrap(), again["id"].as_str().unwrap()));
+    assert_eq!(reopened(project).snapshot.data["verification"]["waivers"], json!([record]));
+    // Reaffirmation is a separate owner event naming the retained waiver.
+    let mut reaffirm = waiver(&again["inputs"]["basis"], "truth/B", 1, "Still shipping in phase 14.");
+    reaffirm["supersedes"] = record["id"].clone();
+    let reaffirmed = apply(project, waive("reaffirm-b", &reaffirm));
+    assert_eq!(reaffirmed["status"], "ok", "{reaffirmed}");
+    let second = reaffirmed["receipt"]["record"].clone();
+    assert_eq!(second["kind"], "reaffirm");
+    let read = report(project);
+    assert_eq!(read["truths"][1]["status"], "waived");
+    assert_eq!(read["truths"][1]["waiver"]["id"], second["id"]);
+    assert_eq!(read["truths"][1]["waiver"]["reason"], "Still shipping in phase 14.");
+    assert_eq!(read["counts"], json!({"met":1,"concerns":0,"unmet":0,"pending":0,"waived":1}));
+    assert_eq!(read["waivers"][0]["effective"], false);
+    assert_eq!(read["waivers"][0]["superseded_by"], second["id"]);
+    assert_eq!(read["waivers"][1]["effective"], true);
+    // Revocation is another owner event; the derived unmet judgment returns.
+    let mut revoke = reaffirm.clone();
+    revoke["supersedes"] = second["id"].clone();
+    revoke["revoked"] = json!(true);
+    revoke["reason"] = json!("Phase 14 will not take the second parcel after all.");
+    let revoked = apply(project, waive("revoke-b", &revoke));
+    assert_eq!(revoked["status"], "ok", "{revoked}");
+    assert_eq!(revoked["receipt"]["record"]["kind"], "revoke");
+    let read = report(project);
+    assert_eq!(read["truths"], json!([met_a_again, unmet_b_again]));
+    assert_eq!(read["counts"], json!({"met":1,"concerns":0,"unmet":1,"pending":0,"waived":0}));
+    assert_eq!(read["waivers"][1]["effective"], false);
+    assert_eq!(read["waivers"][1]["revoked_by"], revoked["receipt"]["record"]["id"]);
+    assert_eq!(read["waivers"].as_array().unwrap().len(), 3);
+    assert_eq!(reopened(project).snapshot.data["verification"]["waivers"].as_array().unwrap().len(), 3);
+    // Several waivers cue "revisit the plan"; waived never counts as met.
+    let (both, _) = submitted(project, "both", &[("check/A", "rejected", "tests/a.py asserts nothing."), ("check/B", "rejected", rejected)]);
+    let read = report(project);
+    assert_eq!(read["counts"], json!({"met":0,"concerns":0,"unmet":2,"pending":0,"waived":0}));
+    for (id, truth) in [("waive-a-both", "truth/A"), ("waive-b-both", "truth/B")] {
+        let answer = apply(project, waive(id, &waiver(&both["inputs"]["basis"], truth, 1, "Deferred to phase 14.")));
+        assert_eq!(answer["status"], "ok", "{answer}");
+    }
+    let read = report(project);
+    assert_eq!(read["counts"], json!({"met":0,"concerns":0,"unmet":0,"pending":0,"waived":2}));
+    assert_eq!(read["truths"][0]["status"], "waived");
+    assert_eq!(read["truths"][0]["derived"], "unmet");
+    assert_eq!(read["truths"][1]["status"], "waived");
+    assert_eq!(read["advice"], "revisit the plan: 2 truths are waived");
+    assert!(read["report"].as_str().unwrap().contains("Revisit the plan: 2 truths are waived."));
+    assert_eq!(reopened(project).snapshot.data["context"], context);
+    let final_tree = tree(project);
+    let final_snapshot = reopened(project).snapshot;
+    assert_eq!(report(project), read);
+    assert_eq!(tree(project), final_tree);
+    assert_eq!(reopened(project).snapshot, final_snapshot);
+    for name in ["findings.md", ".planning/findings.md", ".planning/phases/13/UAT.md"] {
+        assert!(!project.join(name).exists());
+    }
+}
