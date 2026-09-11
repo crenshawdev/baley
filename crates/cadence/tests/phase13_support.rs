@@ -115,8 +115,14 @@ fn phase13_human_results_preserve_first_pass() {
     let occurrence = query(project, json!({"operation":"plan-read","phase_address":"13"}))["occurrence"].clone();
     let read = |project: &std::path::Path| query(project, json!({"operation":"verification-read","phase":13}));
     let before = tree(project);
+    // The unretained historical document is classified, never adopted: the
+    // failure is unfinished human work, the pass is neither required nor native.
     let humans = read(project)["humans"].clone();
-    assert_eq!(humans, json!([]), "an unretained historical document is not a native record");
+    assert_eq!(humans.as_array().unwrap().len(), 2);
+    assert_eq!((humans[0]["id"].as_str(), humans[0]["source"].as_str(), humans[0]["status"].as_str(), humans[0]["required"].as_bool(), humans[0]["history"].as_array().map(Vec::len)),
+        (Some("1"), Some("imported"), Some("fail"), Some(true), Some(0)));
+    assert_eq!((humans[1]["id"].as_str(), humans[1]["source"].as_str(), humans[1]["status"].as_str(), humans[1]["resolved"].as_bool(), humans[1]["required"].as_bool()),
+        (Some("2"), Some("imported"), Some("pass"), Some(false), Some(false)));
     assert_eq!(tree(project), before, "readback retains nothing");
     // A native failure retains the original verbatim and renders beneath it.
     let failed = apply(project, human("fail-1", &result(&occurrence, "1", "Still no parcel at the door.", "failed", None)));

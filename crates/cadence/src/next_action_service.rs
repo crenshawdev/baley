@@ -56,6 +56,9 @@ async fn recheck_continuation(
     let observed = observed.clone();
     let driver = driver.clone();
     tokio::task::spawn_blocking(move || {
+        // The native acceptance overlay is a function of the owned snapshot,
+        // which every caller compares after this recapture; only the artifact
+        // capture and material need an independent second observation here.
         let current = derivation::capture_inputs(&capture.root, (driver.artifacts)().as_mut())?;
         if current != capture || material_observations(&capture.root, &material) != observed {
             return Err(DerivationError::InputsChanged);

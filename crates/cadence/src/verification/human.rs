@@ -287,15 +287,24 @@ pub fn reobserve(claim: &Claim) -> Result<()> {
 /// were never passed, and native results whose latest outcome is not a pass,
 /// are unfinished human work. An imported pass is classification only.
 pub fn items(data: &Value, phase: u32) -> Result<Vec<Value>> {
+    items_with(data, phase, None)
+}
+
+/// The same rows where, until an original is retained, the caller-owned
+/// document observed on disk supplies the imported items: a historical
+/// failure is unfinished human work before any native result exists.
+pub fn items_with(data: &Value, phase: u32, observed: Option<&str>) -> Result<Vec<Value>> {
     let history = records(data)?;
     let originals = originals(data)?;
     let mut rows = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    if let Some(original) = originals.get(&phase.to_string()) {
-        for item in &original.items {
-            seen.insert(item.id.clone());
-            rows.push(row(&history, phase, &item.id, Some(item)));
-        }
+    let imported = match originals.get(&phase.to_string()) {
+        Some(original) => original.items.clone(),
+        None => observed.map(imported_items).unwrap_or_default(),
+    };
+    for item in &imported {
+        seen.insert(item.id.clone());
+        rows.push(row(&history, phase, &item.id, Some(item)));
     }
     for record in history.iter().filter(|r| r.submission.phase == phase) {
         if seen.insert(record.submission.id.clone()) { rows.push(row(&history, phase, &record.submission.id, None)); }
@@ -322,6 +331,27 @@ fn row(history: &[Record], phase: u32, id: &str, imported: Option<&ImportedItem>
 }
 
 /// Unfinished human work for a phase: every required, unresolved item.
-pub fn unfinished(data: &Value, phase: u32) -> Result<Vec<Value>> {
-    Ok(items(data, phase)?.into_iter().filter(|r| r["required"] == true).collect())
+pub fn unfinished(data: &Value, phase: u32, observed: Option<&str>) -> Result<Vec<Value>> {
+    Ok(items_with(data, phase, observed)?.into_iter().filter(|r| r["required"] == true).collect())
+}
+
+/// The caller-owned UAT.md as it stands, for classification only.
+pub fn observed_document(root: &Path, phase: u32) -> Option<String> {
+    std::fs::read(uat_path(root, phase)).ok().and_then(|bytes| String::from_utf8(bytes).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn imported_items_follow_the_historical_grammar() {
+        let text = "---\nstatus: testing\n---\n\n## Items\n\n### 1. Delivery\nexpected: arrives\nstatus: fail\nfirst_pass: fail\nstatus: pass\n\n### 2. Receipt\nstatus: pass\n\n## Notes\nstatus: nothing here\n\n### Not an item\nstatus: skipped\n\n### 3.Bad\nstatus: fail\n";
+        let items = imported_items(text);
+        assert_eq!(items.iter().map(|i| (i.id.as_str(), i.name.as_str())).collect::<Vec<_>>(), [("1", "Delivery"), ("2", "Receipt")]);
+        assert_eq!(items[0].fields.get("status").map(String::as_str), Some("fail"), "first occurrence wins");
+        assert_eq!(items[0].fields.get("first_pass").map(String::as_str), Some("fail"));
+        assert_eq!(items[1].fields.get("status").map(String::as_str), Some("pass"));
+        assert_eq!(items[1].fields.len(), 1, "a later section closes the item");
+    }
 }

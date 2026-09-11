@@ -6,6 +6,7 @@ use std::path::Path;
 #[derive(Debug)]
 pub struct PreparedLifecycle {
     capture: CapturedInputs,
+    overlay: AcceptanceOverlay,
     answer: Lifecycle,
     intake: Option<ValidatedIntake>,
 }
@@ -14,8 +15,16 @@ impl PreparedLifecycle {
     pub fn capture(&self) -> &CapturedInputs {
         &self.capture
     }
+    /// The native acceptance authority this derivation was made with.
+    pub fn overlay(&self) -> &AcceptanceOverlay {
+        &self.overlay
+    }
     pub fn answer(&self) -> &Lifecycle {
         &self.answer
+    }
+    /// The memo identity of every input, native authority included.
+    pub fn input_key(&self) -> Result<String, DerivationError> {
+        super::memo::input_key_with(&self.capture, &self.overlay)
     }
 }
 
@@ -32,6 +41,9 @@ impl RecheckedLifecycle {
     }
     pub fn capture(&self) -> &CapturedInputs {
         &self.prepared.capture
+    }
+    pub fn overlay(&self) -> &AcceptanceOverlay {
+        &self.prepared.overlay
     }
     pub fn answer(&self) -> &Lifecycle {
         &self.prepared.answer
@@ -70,10 +82,15 @@ fn prepare(
     observation: Option<&IntakeObservation>,
 ) -> Result<PreparedLifecycle, DerivationError> {
     let capture = capture_inputs(selected, io)?;
-    let answer = derive(&capture)?;
+    // Native acceptance is read from the store files beside the artifacts,
+    // before any consistency check, so a natively completed phase agrees
+    // with its checked box without SUMMARY.md or UAT.md (D-131).
+    let overlay = observe_acceptance(&capture.root)?;
+    let answer = derive_with(&capture, &overlay)?;
     check_consistency(validate_inputs(&capture)?, &answer, cursor)?;
     Ok(PreparedLifecycle {
         capture,
+        overlay,
         answer,
         intake: observation.map(|observation| ValidatedIntake {
             cursor: cursor.clone(),
@@ -106,7 +123,7 @@ fn recheck(
     // the second observation of a relative selection.
     let second = capture_inputs(&prepared.capture.root, io)?;
     validate_observation_failures(&second)?;
-    if second != prepared.capture {
+    if second != prepared.capture || observe_acceptance(&prepared.capture.root)? != prepared.overlay {
         return Err(DerivationError::InputsChanged);
     }
     if let Some(expected) = &prepared.intake {
@@ -118,6 +135,7 @@ fn recheck(
     Ok(RecheckedLifecycle {
         prepared: PreparedLifecycle {
             capture: prepared.capture.clone(),
+            overlay: prepared.overlay.clone(),
             answer: prepared.answer.clone(),
             intake: prepared.intake.clone(),
         },

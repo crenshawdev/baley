@@ -100,7 +100,12 @@ pub async fn checked_query<I: ConfigIo + Clone + Sync>(
         .await
         .map_err(store_error)?;
     let view = session.derivation_view().await.map_err(store_error)?;
-    let key = input_key(prepared.capture())?;
+    // The native acceptance authority was read beside the artifacts; the
+    // owned view is the authority, and a difference is a changed input.
+    if acceptance_overlay(&view.snapshot.data)? != *prepared.overlay() {
+        return Err(DerivationError::InputsChanged);
+    }
+    let key = prepared.input_key()?;
     // Validate the namespace before intake interprets its retirement sibling.
     let raw = memo_from_data(&view.snapshot.data, &key)?;
     let selected = select_intake(&view.snapshot.data)?;

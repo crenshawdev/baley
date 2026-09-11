@@ -874,9 +874,18 @@ fn phase13_incomplete_verification_cannot_complete_phase() {
     let again = apply(project, completion(&root, "complete-13-again", &accepted["id"], &basis));
     assert_eq!(again["rule"], "verification-complete", "{again}");
     assert_eq!(tree(project), after);
+    // The lifecycle derives phase 13 complete from the native completion, so
+    // the next phase is current and no state conflict names the checked box.
     let next = query(project, json!({"operation":"execute-next","phase":13}));
-    assert_eq!((next["status"].as_str(), next["outcome"].as_str()), (Some("ok"), Some("complete")), "native completion is the lifecycle authority: {next}");
-    assert_eq!(tree(project), after);
+    assert_eq!((next["status"].as_str(), next["code"].as_str()), (Some("refused"), Some("phase-not-current")), "native completion is the lifecycle authority: {next}");
+    // A lifecycle query records its own refusal and memo; it repairs and
+    // completes nothing: projections, human material and authority are as left.
+    assert_eq!(std::fs::read_to_string(&roadmap).unwrap(), ROADMAP_DONE);
+    assert_eq!(std::fs::read_to_string(&requirements).unwrap(), seeded.replace("| T1 | Phase 13 | Pending |", "| T1 | Phase 13 | Complete |"));
+    assert_eq!(std::fs::read_to_string(&uat).unwrap(), rendered);
+    let saved = reopened(project).snapshot;
+    assert_eq!(saved.data["verification"]["completions"], json!([record]));
+    assert_eq!(saved.data["context"], context);
     assert_eq!(report(project), read);
     assert_eq!(reopened(project).snapshot, saved);
     // A later publication changes the native inputs: the completion is no

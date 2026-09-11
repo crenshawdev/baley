@@ -92,6 +92,19 @@ pub fn input_key(capture: &CapturedInputs) -> Result<String, DerivationError> {
     Ok(digest(&encode_inputs(capture)?))
 }
 
+/// The memo identity with native acceptance authority included: a legacy
+/// tree keeps its key, and any change to a native phase's published,
+/// executed or completion inputs is a different key, never a stale hit.
+pub fn input_key_with(capture: &CapturedInputs, overlay: &AcceptanceOverlay) -> Result<String, DerivationError> {
+    if overlay.phases.is_empty() {
+        return input_key(capture);
+    }
+    let mut out = encode_inputs(capture)?;
+    bytes(&mut out, b"acceptance-overlay-1");
+    bytes(&mut out, &serde_json::to_vec(overlay).map_err(|e| DerivationError::InvalidRoadmap { detail: e.to_string() })?);
+    Ok(digest(&out))
+}
+
 use serde_json::Value;
 
 fn conflict(key: &str, raw: Option<&Value>, fields: Vec<String>) -> DerivationError {

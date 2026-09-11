@@ -281,6 +281,30 @@ pub struct SelectedIntake {
     pub observation: IntakeObservation,
 }
 
+/// One native phase's acceptance authority, observed from the store snapshot
+/// alone (D-131): whether its plans are published and admitted, whether the
+/// required execution is complete, and whether an applicable completion
+/// record certifies acceptance. For such a phase this overlay, never
+/// SUMMARY.md or UAT.md, decides Planned, Executed and Complete.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcceptancePhase {
+    pub published: bool,
+    pub executed: bool,
+    /// The applicable completion record id, when one applies.
+    pub completion: Option<String>,
+    pub label: Option<String>,
+    pub met: usize,
+    pub waived: usize,
+    /// Why a recorded completion no longer applies, when it does not.
+    pub disagreement: Option<String>,
+}
+
+/// Native acceptance authority by phase address; empty for a legacy tree.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcceptanceOverlay {
+    pub phases: std::collections::BTreeMap<String, AcceptancePhase>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LifecycleMemo {
     pub encoding_version: u64,

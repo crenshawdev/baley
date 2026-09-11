@@ -62,6 +62,8 @@ pub struct Claim {
     pub unavailable: Option<Value>,
     pub roadmap: Option<String>,
     pub requirements: Option<String>,
+    /// The caller-owned UAT.md observed on disk, classification only.
+    pub uat: Option<String>,
     pub unreadable: Option<String>,
     pub answer: Value,
 }
@@ -135,7 +137,7 @@ pub fn prepare(root: &Path, data: &Value, request: Request) -> Result<Claim> {
     let phase = request.basis.phase;
     let mut claim = Claim { schema: SCHEMA.into(), root: root.into(), root_binding: inputs::root_binding(root)?,
         payload_digest: payload_digest(&request)?, authority_digest: inputs::authority_digest(data)?, request,
-        observed: None, documents: BTreeMap::new(), unavailable: None, roadmap: None, requirements: None, unreadable: None, answer: Value::Null };
+        observed: None, documents: BTreeMap::new(), unavailable: None, roadmap: None, requirements: None, uat: None, unreadable: None, answer: Value::Null };
     let observation = (|| -> Result<()> {
         let observed = inputs::observe(root, data, phase)?;
         claim.documents = plan::inventory::read(root, &phase.to_string(), data)?.documents;
@@ -146,6 +148,10 @@ pub fn prepare(root: &Path, data: &Value, request: Request) -> Result<Claim> {
     match (read_text(&root.join("ROADMAP.md")), read_text(&root.join("REQUIREMENTS.md"))) {
         (Ok(roadmap), Ok(requirements)) => { claim.roadmap = roadmap; claim.requirements = requirements; }
         (Err(reason), _) | (_, Err(reason)) => claim.unreadable = Some(reason),
+    }
+    match read_text(&human::uat_path(root, phase)) {
+        Ok(uat) => claim.uat = uat,
+        Err(reason) => claim.unreadable = Some(reason),
     }
     claim.answer = assess(data, &claim)?;
     Ok(claim)
@@ -247,7 +253,7 @@ fn assess(data: &Value, claim: &Claim) -> Result<Value> {
                     .map(|i| json!({"id":i["id"],"verdict":i["verdict"]})).collect::<Vec<_>>()}));
         }
     }
-    for item in human::unfinished(data, phase)? {
+    for item in human::unfinished(data, phase, claim.uat.as_deref())? {
         unfinished.push(json!({"kind":"human","id":item["id"],"status":item["status"],"source":item["source"],"first_pass":item["first_pass"]}));
     }
     if let Some(first) = unfinished.first() {
@@ -287,7 +293,7 @@ fn assess(data: &Value, claim: &Claim) -> Result<Value> {
         label: if waived.is_empty() { "complete".into() } else { "complete-with-waivers".into() },
         truths: truths.as_array().into_iter().flatten().map(|r| json!({"id":r["id"],"version":r["version"],"status":r["status"],
             "derived":r.get("derived").cloned().unwrap_or(r["status"].clone()),"waiver":r["waiver"]["id"]})).collect(),
-        humans: human::items(data, phase)?.into_iter().map(|i| json!({"id":i["id"],"status":i["status"],"first_pass":i["first_pass"],"source":i["source"]})).collect(),
+        humans: human::items_with(data, phase, claim.uat.as_deref())?.into_iter().map(|i| json!({"id":i["id"],"status":i["status"],"first_pass":i["first_pass"],"source":i["source"]})).collect(),
         projections: json!({"roadmap":{"preimage":digest(roadmap.as_bytes()),"installed":digest(roadmap_bytes.as_bytes()),"line":line},
             "requirements":requirements.as_ref().map(|(bytes, ids)| json!({"preimage":claim.requirements.as_ref().map(|t| digest(t.as_bytes())),
                 "installed":digest(bytes.as_bytes()),"rows":ids}))}) };
@@ -386,4 +392,34 @@ pub fn reobserve(data: &Value, claim: &Claim) -> Result<()> {
     let attempt = persistence::attempts(data)?.into_iter().find(|a| a.id == claim.request.attempt)
         .ok_or_else(|| Error::Invalid("completion attempt absent".into()))?;
     inputs::reobserve_external_accounting(&claim.root, &attempt.inputs, &claim.documents, &accounted(claim)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roadmap_render_checks_exactly_one_open_box() {
+        let text = "# Roadmap\n\n## Phases\n- [ ] **Phase 12: Twelve** - done soon\n- [ ] **Phase 13: Thirteen**\r\n- [x] **Phase 14: Fourteen**\n";
+        let (rendered, line) = render_roadmap(text, 13).unwrap();
+        assert_eq!(line, 5);
+        assert_eq!(rendered, text.replace("- [ ] **Phase 13: Thirteen**\r\n", "- [x] **Phase 13: Thirteen**\r\n"));
+        assert_eq!(render_roadmap(text, 14).unwrap_err(), "ROADMAP.md already declares phase 14 complete");
+        assert_eq!(render_roadmap(text, 15).unwrap_err(), "ROADMAP.md declares no phase 15");
+        let twice = "## Phases\n- [ ] **Phase 13: A**\n- [ ] **Phase 13: B**\n";
+        assert_eq!(render_roadmap(twice, 13).unwrap_err(), "ROADMAP.md declares phase 13 more than once");
+    }
+
+    #[test]
+    fn requirements_render_completes_only_this_phase_rows_and_refuses_ambiguity() {
+        let text = "## Traceability\n\n| Requirement | Phase | Status |\n|---|---|---|\n| A-01 | Phase 13 | Pending |\n| B-02 | Phase 14 | Pending |\n| C-03 | Phase 13 | Complete |\n";
+        let ids = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (rendered, rows) = render_requirements(text, 13, &ids(&["A-01", "Z-99"])).unwrap().unwrap();
+        assert_eq!(rows, ["A-01"]);
+        assert_eq!(rendered, text.replace("| A-01 | Phase 13 | Pending |", "| A-01 | Phase 13 | Complete |"));
+        assert_eq!(render_requirements(text, 13, &ids(&["Z-99"])).unwrap(), None);
+        assert_eq!(render_requirements("no table\n", 13, &ids(&["A-01"])).unwrap(), None);
+        assert_eq!(render_requirements(text, 13, &ids(&["B-02"])).unwrap_err(), "REQUIREMENTS.md traces B-02 to Phase 14, not phase 13");
+        assert_eq!(render_requirements(text, 13, &ids(&["C-03"])).unwrap_err(), "REQUIREMENTS.md already marks C-03 Complete");
+    }
 }

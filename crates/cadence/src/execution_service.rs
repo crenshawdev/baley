@@ -2451,7 +2451,11 @@ async fn checked_execution<I: ConfigIo + Clone + Sync>(
         let prepared = prepare_query(&root, io.as_mut())?;
         #[cfg(test)]
         (driver.event)(derivation_service::Event::Derived);
-        let key = input_key(prepared.capture())?;
+        // The same native authority the owned view holds, or nothing.
+        if acceptance_overlay(&data)? != *prepared.overlay() {
+            return Err(DerivationError::InputsChanged);
+        }
+        let key = prepared.input_key()?;
         let raw = memo_from_data(&data, &key)?;
         let selected = select_intake(&data)?;
         let prepared = prepared.with_intake(&selected)?;
