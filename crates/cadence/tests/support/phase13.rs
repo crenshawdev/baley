@@ -501,6 +501,14 @@ impl Completed {
     /// `prepare` runs on the fresh project before the context is authored.
     #[allow(dead_code)]
     pub fn published(observed: bool, prepare: impl FnOnce(&Path)) -> Self {
+        Self::published_shaped(observed, prepare, |_, _| {})
+    }
+
+    /// The same, with `shape(index, plan entry)` applied to each plan's
+    /// submission entry before publication, so a check can declare the
+    /// requirements each plan claims.
+    #[allow(dead_code)]
+    pub fn published_shaped(observed: bool, prepare: impl FnOnce(&Path), mut shape: impl FnMut(usize, &mut Value)) -> Self {
         use std::os::unix::fs::PermissionsExt;
         let temp = fixture();
         let project = temp.path();
@@ -545,6 +553,7 @@ impl Completed {
             entry["content"]["directories"] = json!([]);
             entry["content"]["execution"] = json!({"schema":1,"suite":format!("python3 -B tests/{name}.py"),
                 "tasks":[{"id":format!("task-{name}"),"verify":[format!("python3 -B tests/{name}.py")]}]});
+            shape(index, entry);
         }
         publish(project, &input);
         let map = query(project, json!({"operation":"evidence-read","phase":13}));
