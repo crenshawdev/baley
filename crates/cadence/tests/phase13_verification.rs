@@ -628,7 +628,7 @@ fn phase13_owner_waiver_is_distinct_from_met() {
     assert_eq!(read["history"][0]["truths"], json!([met_a, unmet_b]), "the derived judgment is kept as derived");
     let text = read["report"].as_str().unwrap();
     assert!(text.contains("| truth/A | met | artifact/shared accepted; check/A accepted; link/parcel accepted |"), "{text}");
-    assert!(text.contains(&format!("| truth/B | waived (derived unmet) | artifact/shared accepted; check/B rejected |")), "{text}");
+    assert!(text.contains("| truth/B | waived (derived unmet) | artifact/shared accepted; check/B rejected |"), "{text}");
     assert!(text.contains("Waived: truth/B by Fixture Owner at 2026-09-11T15:00:00Z - The second parcel ships in phase 14."), "{text}");
     assert!(text.contains("Counts: met 1, concerns 0, unmet 0, pending 0, waived 1"), "{text}");
     // Restart and replay: one immutable record, the same answer, no new bytes.

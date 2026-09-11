@@ -95,9 +95,8 @@ pub fn prepare(root: &Path, data: &Value, request: Request) -> Result<Claim> {
 
 /// The latest record for a truth that no later event superseded or revoked.
 fn active<'a>(history: &'a [Record], truth: &str) -> Option<&'a Record> {
-    history.iter().filter(|r| r.kind != Kind::Revoke && r.submission.truth.id == truth)
-        .filter(|r| !history.iter().any(|later| later.submission.supersedes.as_deref() == Some(&r.id)))
-        .next_back()
+    history.iter().rfind(|r| r.kind != Kind::Revoke && r.submission.truth.id == truth
+        && !history.iter().any(|later| later.submission.supersedes.as_deref() == Some(&r.id)))
 }
 
 fn blank(text: &str) -> bool { text.trim().is_empty() || text.len() > 4096 }

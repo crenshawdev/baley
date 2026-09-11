@@ -78,8 +78,8 @@ pub fn traceability(text: &str) -> Option<TraceTable> {
     let (start, end) = section(&lines, "## Traceability")?;
     let header = (start + 1..end).find(|i| separator(lines[*i]))?;
     let mut anchor = header;
-    for i in header + 1..end {
-        if lines[i].starts_with('|') { anchor = i } else { break }
+    for (i, line) in lines.iter().enumerate().take(end).skip(header + 1) {
+        if line.starts_with('|') { anchor = i } else { break }
     }
     let mut rows = Vec::new();
     for (i, line) in lines.iter().enumerate().take(end).skip(start + 1) {

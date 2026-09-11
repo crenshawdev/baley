@@ -129,8 +129,9 @@ fn previous_snapshot(participants: &[Participant], what: &str) -> Result<Snapsho
 /// Every claim intent installs exactly the transition its claim module
 /// derives from the previous snapshot: one appended decision, unchanged items,
 /// the derived snapshot, the registered operation and the next generation.
-fn validate_claim_transition(participants: &[Participant], snapshot: &Snapshot, items: &[u8], decisions: &[u8],
+fn validate_claim_transition(participants: &[Participant], snapshot: &Snapshot, rendered: (&[u8], &[u8]),
     root_binding: &str, transaction: Transaction, decision: DecisionRecord, what: &str) -> Result<()> {
+    let (items, decisions) = rendered;
     let state = participants.last().expect("state participant");
     if state.expected.directory_identity != root_binding {
         return Err(Error::Invalid(format!("{what} root binding changed")));
@@ -442,7 +443,7 @@ impl Intent {
                 if names.len() != 3 { return Err(Error::Invalid("verification patch cannot change external participants".into())); }
                 if claim.root_binding != root_binding { return Err(Error::Invalid("verification claim root binding changed".into())); }
                 let previous = previous_snapshot(&self.participants, "verification claim")?;
-                validate_claim_transition(&self.participants, &snapshot, items, decisions, &root_binding,
+                validate_claim_transition(&self.participants, &snapshot, (items, decisions), &root_binding,
                     verdicts::transaction(&previous.data, &claim)?, verdicts::decision(&claim)?, "verification claim")?;
             }
             IntentKind::VerificationWaiverV1 { claim, root_binding } => {
@@ -450,7 +451,7 @@ impl Intent {
                 if names.len() != 3 { return Err(Error::Invalid("waiver cannot change external participants".into())); }
                 if claim.root_binding != root_binding { return Err(Error::Invalid("waiver claim root binding changed".into())); }
                 let previous = previous_snapshot(&self.participants, "waiver claim")?;
-                validate_claim_transition(&self.participants, &snapshot, items, decisions, &root_binding,
+                validate_claim_transition(&self.participants, &snapshot, (items, decisions), &root_binding,
                     waivers::transaction(&previous.data, &claim)?, waivers::decision(&claim)?, "waiver claim")?;
             }
             IntentKind::VerificationHumanV1 { claim, root_binding } => {
@@ -464,7 +465,7 @@ impl Intent {
                     return Err(Error::Invalid("UAT participant differs from the native render".into()));
                 }
                 let previous = previous_snapshot(&self.participants, "human result")?;
-                validate_claim_transition(&self.participants, &snapshot, items, decisions, &root_binding,
+                validate_claim_transition(&self.participants, &snapshot, (items, decisions), &root_binding,
                     human::transaction(&previous.data, &claim, uat.expected.clone())?, human::decision(&claim)?, "human result")?;
             }
             IntentKind::VerificationCompleteV1 { claim, root_binding } => {
@@ -482,7 +483,7 @@ impl Intent {
                     expected.push(participant.expected.clone());
                 }
                 let previous = previous_snapshot(&self.participants, "completion")?;
-                validate_claim_transition(&self.participants, &snapshot, items, decisions, &root_binding,
+                validate_claim_transition(&self.participants, &snapshot, (items, decisions), &root_binding,
                     completion::transaction(&previous.data, &claim, &expected)?, completion::decision(&claim)?, "completion")?;
             }
             IntentKind::VerificationRunV1 { record, root_binding } => {
