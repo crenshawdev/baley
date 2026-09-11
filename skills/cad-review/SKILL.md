@@ -1,7 +1,7 @@
 ---
-name: cad-decision-review
-description: "Alias of /cad-review decision: refute one named decision in one named document."
-argument-hint: "<document> <decision-id>"
+name: cad-review
+description: "Review one explicitly selected target - a decision, a minimalism delete-list over code, or a plan - through the native review subsystem."
+argument-hint: "decision <document> <decision-id> | minimalism <file|directory|phase> | plan <phase|plan-path>"
 allowed-tools:
   - mcp__cadence__cadence_query
   - mcp__cadence__cadence_apply
@@ -17,8 +17,8 @@ applies a finding: no file is changed, deleted, staged or committed.
 
 <process>
 1. Select. Split `$ARGUMENTS` on whitespace and call cadence_query
-   `{"operation":"review-select","command":"cad-decision-review","arguments":[<tokens>]}`.
-   This alias selects the `decision` kind; the arguments are the document path and the decision id.
+   `{"operation":"review-select","command":"cad-review","arguments":[<tokens>]}`.
+   The first token selects the kind: `decision`, `minimalism` or `plan`; the rest is the target.
    A refused answer names what is missing, ambiguous or unresolvable in its
    reason: report that request and stop. Never widen a target to its parent
    directory, the whole phase or the tree, and never substitute a paragraph of

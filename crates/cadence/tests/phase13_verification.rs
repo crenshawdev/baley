@@ -935,12 +935,19 @@ fn deliver(project: &std::path::Path, admission: &Value) -> (Value, Value, Vec<(
     assert_eq!(next["status"], "ok", "{next}");
     assert_eq!(next["result"]["state"], "dispatch", "{next}");
     let attempt = next["result"]["attempt"].clone();
+    // A range retains an absent side as an absent entry; only available
+    // entries carry bytes, and those are the ones the reviewer is told to read.
+    let inventory = client.call("cadence_query", json!({"operation":"review-inventory"}));
+    let manifest = inventory["result"]["records"]["manifests"][next["result"]["admission"]["artifact"].as_str().unwrap()].clone();
     let mut entries = Vec::new();
     for entry in attempt["view"]["entries"].as_array().unwrap() {
+        let saved = manifest["entries"].as_array().unwrap().iter().find(|e| e["entry"] == *entry).unwrap();
+        if saved["availability"] != "available" { entries.push((saved.clone(), vec![])); continue; }
         let read = client.call("cadence_query", json!({"operation":"review-material","attempt":attempt["attempt"],"entry":entry}));
         assert_eq!(read["status"], "ok", "{read}");
         let bytes: Vec<u8> = serde_json::from_value(read["result"]["bytes"].clone()).unwrap();
-        entries.push((read["result"]["entry"].clone(), bytes));
+        assert_eq!(read["result"]["entry"], *saved);
+        entries.push((saved.clone(), bytes));
     }
     client.finish();
     (admitted, next, entries)
@@ -1125,8 +1132,8 @@ fn phase13_review_surface_selects_target_and_intent() {
     assert_eq!(entries.iter().find(|(e, _)| e["side"] == "head" && e["path"] == "src/a.py").unwrap().1, subject);
     // Plan: the phase's native slices and locked context reach the reviewer
     // through the ordinary manual-plan trigger with its configured gate.
-    std::fs::write(project.join(".planning/config.json"), serde_json::to_vec(&json!({"review":{"triggers":{
-        "plan":{"gate":"blocking"},"risk_surface":{"surfaces":cadence::rail::risk::CATEGORIES}}}})).unwrap()).unwrap();
+    let configured = apply(project, json!({"operation":"config-apply","layer":"repo","updates":[{"key":"review.triggers.plan.gate","value":"blocking"}]}));
+    assert_eq!(configured["status"], "ok", "{configured}");
     let context = std::fs::read(project.join(".planning/phases/13/CONTEXT.md")).unwrap();
     let plan1 = std::fs::read(project.join(".planning/phases/13/PLAN-1.md")).unwrap();
     let plan2 = std::fs::read(project.join(".planning/phases/13/PLAN-2.md")).unwrap();

@@ -46,6 +46,12 @@ enum Command {
         #[arg(long)]
         frontdoor: bool,
     },
+    /// Render the merged cad-review front door, or one alias, without opening a project.
+    ReviewInstructions {
+        /// cad-decision-review, cad-minimalism-review or cad-plan-review.
+        #[arg(long)]
+        alias: Option<String>,
+    },
 }
 
 fn main() -> std::process::ExitCode {
@@ -58,6 +64,18 @@ fn main() -> std::process::ExitCode {
 
 fn run_command(command: Command) -> std::process::ExitCode {
     match command {
+        Command::ReviewInstructions { alias } => {
+            use std::io::Write;
+            let command = alias.as_deref().unwrap_or(cadence::review::selection::CANONICAL);
+            let Some(rendered) = cadence::review::instructions::frontdoor_markdown(command) else {
+                eprintln!("cadence: {command} is not a review command");
+                return std::process::ExitCode::FAILURE;
+            };
+            match std::io::stdout().lock().write_all(rendered.as_bytes()) {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(_) => std::process::ExitCode::FAILURE,
+            }
+        }
         Command::VerifierInstructions { frontdoor } => {
             use std::io::Write;
             let rendered = if frontdoor {

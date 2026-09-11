@@ -1,5 +1,6 @@
 //! Local dispatch instructions consume saved admission, never current routing.
-use super::model::{Admission, Attempt, Gate, Specialist};
+use super::instructions;
+use super::model::{Admission, Attempt, Gate};
 use serde::Serialize;
 
 pub fn advisory_contract(target: &str, _mode: &Gate) -> String {
@@ -19,18 +20,8 @@ pub struct LocalDispatch {
 }
 
 pub fn local_dispatch(admission: &Admission, attempt: &Attempt) -> LocalDispatch {
-    let intent = match admission.specialist {
-        Some(Specialist::Minimalism) => {
-            "Rank unnecessary code: reinvented libraries, one-implementation abstractions, unused flexibility and unused configuration. Propose deletions; apply nothing."
-        }
-        Some(Specialist::Decision) => {
-            "Refute the retained selected decision in its retained inline context. Apply no amendment."
-        }
-        Some(Specialist::Diagnosis) => {
-            "Examine retained named source files with the reported symptom and proposed cause. Return findings; leave fix selection to the user."
-        }
-        None => "Try to falsify correctness against the retained artifact and supporting evidence.",
-    };
+    // The same compiled fragment the provider payload carries.
+    let intent = instructions::intent(admission);
     LocalDispatch {
         attempt: attempt.attempt.clone(),
         agent: attempt.requested.agent.clone(),
@@ -51,7 +42,7 @@ pub fn local_dispatch(admission: &Admission, attempt: &Attempt) -> LocalDispatch
 
 #[cfg(test)]
 mod gap155_dispatch_tests {
-    use super::super::model::RequestedVoice;
+    use super::super::model::{RequestedVoice, Specialist};
     use super::*;
     use serde_json::{Value, json};
     #[test]

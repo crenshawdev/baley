@@ -39,6 +39,15 @@ pub enum Query {
         attempt: Option<String>,
         supplied: Option<Value>,
     },
+    /// Resolve one explicit review target (D-133): `command` is cad-review or
+    /// one of its three aliases, `arguments` the whitespace-split tokens. The
+    /// answer carries the exact admission request to submit unchanged.
+    #[serde(rename = "review-select")]
+    Select {
+        command: String,
+        arguments: Vec<String>,
+        replay_key: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -151,6 +160,11 @@ struct AdmissionRequest {
     target: Target,
     decision: Option<review::targets::DecisionMaterial>,
     risk_observation: Option<String>,
+    /// A review-select decision binding: the document, its digest and the
+    /// resolved line span. When present the binary resolves the decision from
+    /// the document again and refuses a supplied paragraph that differs.
+    #[serde(default)]
+    selection: Option<Value>,
 }
 
 pub(super) enum AdmissionResolution {
@@ -241,6 +255,7 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
         );
     }
     validate_paths(&request.target)?;
+    validate_selection(root, &request)?;
     let minimalism = request.specialist == Some(Specialist::Minimalism);
     let (generation, route, supplied_gate, refresh) = match resolution {
         AdmissionResolution::Refresh => {
@@ -412,6 +427,7 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
                 &manifest_id,
                 &request.target,
                 request.decision.as_ref(),
+                &view.snapshot.data,
                 &mut source,
                 &mut git,
                 &mut clock,
@@ -423,6 +439,7 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
             &manifest_id,
             &request.target,
             request.decision.as_ref(),
+            &view.snapshot.data,
             &mut source,
             &mut git,
             &mut clock,
@@ -718,16 +735,78 @@ async fn commit_admission<C, V>(
     output("review-admit", acknowledge(&committed, contribution)?)
 }
 
+/// A review-select decision binding is re-resolved from the document at
+/// admission; a caller cannot substitute its own paragraph for the selection.
+fn validate_selection(root: &Path, request: &AdmissionRequest) -> Result<()> {
+    let Some(selection) = &request.selection else { return Ok(()) };
+    let Target::Decision { selected, .. } = &request.target else {
+        return Err(Error::Invalid("selection binds decision targets only".into()));
+    };
+    let document = selection["document"]
+        .as_str()
+        .ok_or_else(|| Error::Invalid("selection names no document".into()))?;
+    let project_root = root
+        .parent()
+        .ok_or_else(|| Error::Invalid("project root unavailable".into()))?;
+    let mut source = review::material_io::SourceFiles {
+        root: project_root.into(),
+    };
+    let bytes = review::io::MaterialIo::read(&mut source, document)?
+        .bytes
+        .ok_or_else(|| Error::Invalid(format!("selected document {document} is absent")))?;
+    if selection["digest"] != json!(cadence::store::model::digest(&bytes)) {
+        return Err(Error::Invalid(format!(
+            "selected document {document} changed since selection"
+        )));
+    }
+    let (lines, text) = review::selection::decision_lines(&bytes, selected)
+        .map_err(|refusal| Error::Invalid(refusal.reason))?;
+    let utf8 = |bytes: Vec<u8>| {
+        String::from_utf8(bytes).map_err(|_| Error::Invalid("selected document is not UTF-8".into()))
+    };
+    let resolved = review::targets::DecisionMaterial {
+        decision: selected.clone(),
+        text: utf8(text)?,
+        context: utf8(bytes)?,
+    };
+    if selection["lines"] != json!(lines) || request.decision.as_ref() != Some(&resolved) {
+        return Err(Error::Invalid(
+            "selected decision differs from the resolved document".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn acquire_target(
     fire: &str,
     id: &str,
     target: &Target,
     decision: Option<&review::targets::DecisionMaterial>,
+    data: &Value,
     source: &mut impl review::io::MaterialIo,
     git: &mut impl review::io::GitIo,
     clock: &mut impl review::io::Clock,
 ) -> Result<(Manifest, persistence::MaterialStorage)> {
     match target {
+        // A phase's native plan slices and locked context are resolved by the
+        // binary again here; the label carries no material of its own.
+        Target::InlineText { label } => {
+            let phase = label
+                .strip_prefix("plan:")
+                .and_then(|n| n.parse::<u32>().ok())
+                .filter(|n| *n > 0)
+                .ok_or_else(|| Error::Invalid("inline text targets are selected through review-select".into()))?;
+            let entries = review::selection::plan_material(data, phase, source)
+                .map_err(|refusal| Error::Invalid(refusal.reason))?;
+            retain_inline(
+                fire,
+                id,
+                target.clone(),
+                entries.into_iter().map(|(_, path, bytes)| (path, bytes)).collect(),
+                clock,
+            )
+        }
         Target::Decision { selected, .. } => {
             let value = decision
                 .ok_or_else(|| Error::Invalid("decision text and context required".into()))?;
@@ -1177,7 +1256,64 @@ async fn query_saved(store: &Store, root: &Path, query: Query) -> Answer {
             output("review-consumer", input)
         }
         Query::Next { fire } => next(store, &fire).await,
+        Query::Select {
+            command,
+            arguments,
+            replay_key,
+        } => {
+            let view = persistence::read(store).await?;
+            select(root, &view.snapshot.data, &command, &arguments, replay_key)
+        }
     }
+}
+
+/// Resolve the selection against the real files and the snapshot, and hand
+/// back the exact review-admit request. Read-only: nothing is admitted here.
+fn select(
+    root: &Path,
+    data: &Value,
+    command: &str,
+    arguments: &[String],
+    replay_key: Option<String>,
+) -> Answer {
+    let project_root = root
+        .parent()
+        .ok_or_else(|| Error::Invalid("project root unavailable".into()))?;
+    let mut source = review::material_io::SourceFiles {
+        root: project_root.into(),
+    };
+    let selected = match review::selection::select(command, arguments, &mut source, data) {
+        Ok(selected) => selected,
+        Err(refusal) => {
+            return Ok(Envelope::Refused {
+                code: refusal.code.into(),
+                reason: refusal.reason,
+            });
+        }
+    };
+    let kind = selected.kind;
+    let (caller, trigger, specialist) = match kind {
+        review::selection::Kind::Decision => ("cad-review", Value::Null, json!("decision")),
+        review::selection::Kind::Minimalism => ("cad-review", Value::Null, json!("minimalism")),
+        review::selection::Kind::Plan => ("manual-plan", json!("plan"), Value::Null),
+    };
+    let home = match selected.phase {
+        Some(phase) => json!({"kind":"phase","id":phase.to_string()}),
+        None => json!({"kind":"root-inline","id":format!("select-{}", &selected.discriminator[..16])}),
+    };
+    let admission = json!({
+        "replay_key":replay_key.unwrap_or_else(|| format!("review-select:{}", selected.discriminator)),
+        "caller":caller,"trigger":trigger,"specialist":specialist,
+        "project":project_root.to_string_lossy(),"cycle":"live","home":home,
+        "discriminator":selected.discriminator,"phase":selected.phase,"plan":null,"anchor":null,"round":1,
+        "target":selected.target,"decision":selected.decision,"risk_observation":null,"selection":selected.selection,
+    });
+    output(
+        "review-select",
+        json!({"command":command,"canonical":review::selection::CANONICAL,"kind":kind,"aliases":[kind.alias()],
+            "target":selected.target,"material":selected.material,"intent":review::instructions::intent_for(kind),
+            "discriminator":selected.discriminator,"admission":admission}),
+    )
 }
 
 pub(super) async fn next(store: &Store, fire: &str) -> Answer {

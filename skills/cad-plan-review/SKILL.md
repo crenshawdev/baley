@@ -1,55 +1,60 @@
 ---
 name: cad-plan-review
-description: "On-demand adversarial plan review of a phase PLAN.md before code - for a hand-written, imported or just-edited plan (/cad-plan fires this itself)"
-argument-hint: "[phase number | path/to/PLAN.md]"
+description: "Alias of /cad-review plan: review a phase's native plan slices with its locked context, or one plan document."
+argument-hint: "<phase|plan-path>"
 allowed-tools:
-  - mcp__cadence__cadence_apply
   - mcp__cadence__cadence_query
-  - Read
-  - Bash
-  - Glob
-  - Grep
+  - mcp__cadence__cadence_apply
   - Task
-  - AskUserQuestion
 ---
 
 <objective>
-Manually run the review subsystem's `plan` trigger against a chosen plan. The
-review capability lives entirely in the subsystem (references/review-triggers.md);
-this skill is just the on-demand entry
-point for cases the automatic review does not cover - a plan written by hand,
-imported from elsewhere, or edited after its first review. When /cad-plan
-writes a plan it already fires this trigger, so you do not need this skill in the
-normal flow.
-
-There is no separate reviewer here and no convergence loop (cut in DESIGN §6):
-this delegates to native ordinary admission; phase 10 owns settlement.
+Deliver exactly the review the owner selected. The binary resolves the target,
+retains its exact bytes, compiles the kind-specific intent into the dispatch
+and records every delivery event; this front door only relays. Nothing here
+applies a finding: no file is changed, deleted, staged or committed.
 </objective>
 
 <process>
-1. **Resolve the target plan** from `$ARGUMENTS`:
-   - a number `N` -> `.planning/phases/<N>/PLAN*.md` (all slices of that phase).
-   - a path -> that file.
-   - empty -> the current phase from the STATE.md cursor; if that is ambiguous,
-     ask (ask-user seam) which phase.
-   If no plan file is found, report it and stop - there is nothing to review.
-   (Resolve the plan path and, for the empty-args case, the cursor read as one
-   batched step - independent; conventions.md Parallel work.)
-
-2. **Admit the plan review** through cad-review-delivery, ordinary caller
-   manual-plan and trigger plan. Use the binary's configured gate (default
-   advisory), retained target and saved routing. Wait for exact raw delivery and
-   durable acknowledgment; deferred requires durable enqueue before continuation.
-
-3. **Report** the outcome: for advisory, the findings; for blocking, the
-   PASS/FAIL and surviving blocker/high findings; for adjudicated, the grounded
-   survivor list. Do NOT auto-apply changes to the plan - present the survivors
-   and let the user decide what to fix (the plan-creation flow triages the same
-   way).
+1. Select. Split `$ARGUMENTS` on whitespace and call cadence_query
+   `{"operation":"review-select","command":"cad-plan-review","arguments":[<tokens>]}`.
+   This alias selects the `plan` kind; the argument is a phase number or a plan document path.
+   A refused answer names what is missing, ambiguous or unresolvable in its
+   reason: report that request and stop. Never widen a target to its parent
+   directory, the whole phase or the tree, and never substitute a paragraph of
+   your own for the resolved document. Retain `result.kind`, `result.target`,
+   `result.material`, `result.intent` and `result.admission`.
+2. Admit. Call cadence_apply `{"operation":"review-admit","request":<result.admission, unchanged>}`.
+   Only an answer with an admitted fire proceeds; a replayed answer names the
+   review already admitted for this selection.
+3. Deliver. Call cadence_query `{"operation":"review-next","fire":<fire>}` and
+   follow only the saved dispatch: invoke Task with `dispatch.agent` and exactly
+   `dispatch.prompt`, passing `dispatch.model` only when present. Forward the
+   actual launch and return events with review-observation and the unchanged
+   raw return with review-return under the issued identity, wait for the
+   durable acknowledgment, then poll review-next again until delivery is
+   usable-complete or complete-with-failure. Provider work stays with the
+   resident binary; missing or malformed output is failure, never an empty
+   clean result.
+4. Present. Show the reviewer's findings unedited - file, line, severity, claim
+   and failure scenario - beside the retained target and the selected kind. A
+   clean pass names the target that was read; it is never a bare "no findings".
+   The owner decides what to change and does it; this command edits nothing.
 </process>
 
-<review_delivery>
-At the review boundary follow cad-review-delivery for native retained admission, saved dispatch, unchanged raw return and durable acknowledgment. This contract takes precedence over frozen reviewer resolution, writes and lifecycle closes. Keep the remaining specialist/reporting workflow.
+<intent>
+The binary compiles the intent for the selected kind into the local dispatch
+and the provider payload alike:
 
-@${CLAUDE_PLUGIN_ROOT}/skills/cad-review-delivery/SKILL.md
-</review_delivery>
+- decision: Refute the selected decision: argue against it from the retained decision text and its retained inline context, name the claim each objection rests on, and apply no amendment.
+- minimalism: Rank code that should not exist, as a deletion list ordered by severity: reinvented standard library or dependency, an abstraction with one implementation, unused flexibility and configuration nobody sets. Propose deletions; apply nothing.
+- plan: Work backward from the phase goal and its locked decisions: for each task ask which truth it serves, whether the retained plan can deliver it as written, and whether any step contradicts a locked or durable decision. Return findings; edit nothing.
+
+A decision review takes the exact decision line and the whole document as its
+inline context. A minimalism review retains the named file, the frozen
+directory membership or the native phase range and dispatches the one base
+reviewer with no provider and no gate. A plan review by phase retains every
+native plan slice with the approved locked context and uses the ordinary
+manual-plan trigger with its configured gate; by path it retains that one
+document.
+</intent>
