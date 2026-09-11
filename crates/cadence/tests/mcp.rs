@@ -1137,6 +1137,8 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     for (relative, args) in [
         ("skills/cad-executor-contract/SKILL.md", vec!["executor-instructions"]),
         ("skills/cad-execute/SKILL.md", vec!["executor-instructions", "--frontdoor"]),
+        ("skills/cad-verifier-contract/SKILL.md", vec!["verifier-instructions"]),
+        ("skills/cad-verify/SKILL.md", vec!["verifier-instructions", "--frontdoor"]),
     ] {
         let rendered = Command::new(env!("CARGO_BIN_EXE_cadence"))
             .args(&args)
@@ -1147,6 +1149,25 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
         assert!(rendered.status.success(), "{}", String::from_utf8_lossy(&rendered.stderr));
         let installed = fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative)).unwrap();
         assert_eq!(installed, rendered.stdout, "{relative} is rendered by the binary");
+    }
+    let (verify, frontdoor) = markdown_parts("skills/cad-verify/SKILL.md");
+    let (verifier_contract, verifier) = markdown_parts("skills/cad-verifier-contract/SKILL.md");
+    assert_eq!(verify["allowed-tools"], json!(["mcp__cadence__cadence_query", "mcp__cadence__cadence_apply", "Task"]));
+    assert_eq!(verifier_contract["user-invocable"], false);
+    assert!(frontdoor.contains("verify-next") && frontdoor.contains("attempt.prompt"));
+    assert!(verifier.contains("verification-run") && verifier.contains("verification-submit"));
+    for (name, effort) in [("cad-verifier", "high"), ("cad-verifier-low", "low"),
+        ("cad-verifier-medium", "medium"), ("cad-verifier-xhigh", "xhigh"), ("cad-verifier-max", "max")] {
+        let (agent, body) = markdown_parts(&format!("agents/{name}.md"));
+        assert_eq!(agent["name"], name);
+        assert_eq!(agent["effort"], effort);
+        assert_eq!(agent["skills"], json!(["cad-verifier-contract"]));
+        assert_eq!(agent["tools"].as_str().unwrap().split(", ").collect::<Vec<_>>(),
+            ["Read", "Bash", "Grep", "Glob", "mcp__excerpt__excerpt_read", "mcp__excerpt__excerpt_search",
+                "mcp__cadence__cadence_query", "mcp__cadence__cadence_apply"]);
+        assert_eq!(agent["disallowedTools"], "Write, Edit, MultiEdit");
+        assert!(body.contains("`cad-verifier-contract`"));
+        assert!(!body.contains("verification-") && !body.contains("suite"));
     }
     let (skill, main) = markdown_parts("skills/cad-execute/SKILL.md");
     let (contract, executor) = markdown_parts("skills/cad-executor-contract/SKILL.md");

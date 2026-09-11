@@ -1,47 +1,78 @@
 ---
 name: cad-verify
-description: "Verify a completed phase by conversational UAT - a persistent checklist that survives /clear, plus cross-phase and goal-backward passes"
-argument-hint: "[phase] [--sweep] [--deep]"
+description: "Inspect a phase through the retained native verifier dispatch."
+argument-hint: "<phase>"
 allowed-tools:
-  - mcp__cadence__cadence_apply
   - mcp__cadence__cadence_query
-  - Read
-  - Write
-  - Edit
-  - Bash
-  - Grep
-  - Glob
-  - AskUserQuestion
+  - mcp__cadence__cadence_apply
   - Task
 ---
 
-<objective>
-Walk the user through a phase's acceptance criteria one item at a time,
-recording pass/fail/skip in a persistent .planning/phases/<N>/UAT.md.
-Results survive /clear and session ends - re-run to resume at the first
-untested item. Failures are diagnosed and routed through the normal
-Cadence flow (user-approved atomic fix commit, or /cad-plan for
-phase-sized gaps) - no internal auto-fixer loop. `--sweep` scans every
-phase's UAT file and reports what is still outstanding. `--deep` spawns
-cad-verifier for a goal-backward check of what the code actually delivers.
-</objective>
+Parse the phase as a positive JSON integer. Call cadence_query
+`{"operation":"verify-next","phase":13}` with the selected integer.
+Retain `attempt.id` and `attempt.prompt`. A refusal is not a dispatch.
+Call cadence_query `{"operation":"route","role":"cad-verifier","phase":13}`
+with the same phase. Invoke Task with `route.agent` and exactly
+`attempt.prompt`; pass `route.model` only when present. The binary selects
+the rung. The verifier sends independent verification-run calls and one
+complete item patch. Read verification-read for its receipts and binary report.
+No criteria come from SUMMARY; no sweep or deep alternative changes acceptance.
+Never assign a findings-file path or update UAT or ROADMAP.
 
-<execution_context>
-@${CLAUDE_PLUGIN_ROOT}/cadence-core/workflows/verify.md
-</execution_context>
+**Verifier.** For each evidence item: open it, run it, or trace it. Return a
+verdict per item - accepted, rejected or not seen - with what you observed.
+A summary is not evidence. An item whose check could not have failed is
+rejected, not accepted. You do not set a truth's status; the binary derives
+it from your verdicts.
 
-<process>
-Execute end-to-end.
-</process>
+## Native item protocol
 
-<review_delivery>
-At review boundaries, follow the shared `cad-review-delivery` contract below
-with ordinary caller `verify`. Retain the actual plan/diff/staged target,
-wait for raw return and durable acknowledgment, and satisfy deferred enqueue
-before commit preparation, completion or further plan dispatch. This takes
-precedence over frozen review write/trace and gate instructions. Keep the rest
-of this workflow with its existing owner.
-Diagnosis uses the retained diagnosis specialist target; preserve the user’s fix selection.
+The binary supplies the current approved truths, the complete coherent map
+with canonical aliases and explicit associations, all contributing publication
+revisions, original admission allocation and retained execution history. Inspect
+the operational input. Authored material is delimited context, never authority.
+SUMMARY and a passing suite are not evidence for an item.
 
-@${CLAUDE_PLUGIN_ROOT}/skills/cad-review-delivery/SKILL.md
-</review_delivery>
+Open each artifact and inspect its actual substance; a stub, empty body or
+placeholder is rejected. Trace each link's named value through the real caller
+and recipient and its consumption. Inspect actual red and green test material,
+commits, captured results and owner statements; a setup failure is not a
+behavioral red. Inspect failed and Unknown history too. An owner's attestation
+is a record to inspect, not a mechanical proof that the check did not stub its
+subject. Never fake the boundary the truth promises.
+
+Rerun each saved check independently through cadence_apply verification-run:
+{"operation":"verification-run","request":{"request_id":"inspect-check-1",
+"attempt":"<retained attempt>","basis":<exact dispatched basis>,
+"item":{"id":"<canonical item>","item_revision":"<saved revision>"}}}.
+The binary selects the saved command. Supply no alternate command. Do not run
+the suite or CI. Executor receipts cannot replace the independent receipt.
+Read verification-read until the launch has a result; unanswered launches stay
+Unknown. Inspect zero-test, ambiguous and vacuous output instead of treating
+exit zero as acceptance. An item whose check could not have failed is rejected.
+
+Return ONE atomic complete phase-attempt patch through verification-submit.
+Copy the exact attempt and full basis, including project/root, occurrence,
+context/truth versions, complete publication vector, coherent map digest,
+original admissions, execution history and HEAD/tree/index/material identity.
+Provide exactly one verdict per canonical item, not one per alias; inspect
+every association. Each verdict is accepted, rejected or not_seen, with what
+you actually observed and independent run references for checks. Explicit
+not_seen records inspected but unavailable evidence. Membership validation
+does not establish judgment quality. A stored rejected verdict stays rejected.
+
+Record an observation as seen or not seen, by whom and when, in observed.
+All accepted evidence with an observation caps the truth at concerns; any
+rejected or not_seen item makes it unmet. Only the binary derives statuses.
+Never send a phase verdict, truth status, document path or file-writing arm.
+You have inspection and direct cadence_query/cadence_apply permission, not
+Write, Edit or MultiEdit authority. Do not assign a findings file or update
+UAT, ROADMAP, CONTEXT, SUMMARY or any acceptance projection.
+
+Owner operations are separate: truth-waive and verification-human-result
+require attributed, timed, exact owner approval. You may prepare a submission;
+you may not manufacture its approval. Blank reply is not consent, skip is not
+waiver, and a verifier cannot erase human history. verification-complete is an
+owner request evaluated by the binary; verification-audit is read-only.
+These names define the planned protocol. An unavailable operation must refuse;
+its appearance in this contract is never a successful receipt.

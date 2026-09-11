@@ -61,5 +61,28 @@ pub fn contract_markdown() -> String {
 }
 
 pub fn frontdoor_markdown() -> String {
-    format!("---\nname: cad-verify\ndescription: \"Inspect a phase through the retained native verifier dispatch.\"\nargument-hint: \"<phase>\"\nallowed-tools: Read, Glob, Grep, Bash, Agent, mcp__cadence__cadence_query, mcp__cadence__cadence_apply\n---\n\nParse the phase as a positive JSON integer. Call cadence_query\n`{{\"operation\":\"verify-next\",\"phase\":13}}` with the selected integer.\nDispatch only the returned retained prompt to the selected verifier. A refusal\nis not a dispatch. Read `verification-read` for the attempt and its receipts.\nThe verifier sends independent verification-run calls and one complete item\npatch, then reads the binary report. No criteria come from SUMMARY; no sweep\nor deep alternative changes acceptance. Never assign a findings-file path.\n\n{VERIFIER}\n\n{PROTOCOL}")
+    format!(r#"---
+name: cad-verify
+description: "Inspect a phase through the retained native verifier dispatch."
+argument-hint: "<phase>"
+allowed-tools:
+  - mcp__cadence__cadence_query
+  - mcp__cadence__cadence_apply
+  - Task
+---
+
+Parse the phase as a positive JSON integer. Call cadence_query
+`{{"operation":"verify-next","phase":13}}` with the selected integer.
+Retain `attempt.id` and `attempt.prompt`. A refusal is not a dispatch.
+Call cadence_query `{{"operation":"route","role":"cad-verifier","phase":13}}`
+with the same phase. Invoke Task with `route.agent` and exactly
+`attempt.prompt`; pass `route.model` only when present. The binary selects
+the rung. The verifier sends independent verification-run calls and one
+complete item patch. Read verification-read for its receipts and binary report.
+No criteria come from SUMMARY; no sweep or deep alternative changes acceptance.
+Never assign a findings-file path or update UAT or ROADMAP.
+
+{VERIFIER}
+
+{PROTOCOL}"#)
 }
