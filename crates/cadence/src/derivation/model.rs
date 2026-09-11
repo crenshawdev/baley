@@ -303,6 +303,10 @@ pub struct AcceptancePhase {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcceptanceOverlay {
     pub phases: std::collections::BTreeMap<String, AcceptancePhase>,
+    /// Phases holding a native approved context: native authority the
+    /// imported compatibility cursor yields to.
+    #[serde(default)]
+    pub contexted: std::collections::BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

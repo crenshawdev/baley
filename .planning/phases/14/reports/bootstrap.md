@@ -226,3 +226,24 @@ constant and still refuses one byte over); `cargo test -p cadence --test mcp`
 warnings` clean; the same 101,169-byte preview then answered `status: ok`,
 `coverage.uncovered: []`, `coverage.without_check: []`, six documents. The
 full suite was not rerun for a one-constant change; the next plan close runs it.
+
+## ADOPT-3: the imported cursor yields to native authority, hand-applied, not an acceptance item
+
+After the six plans published, `execute-next 14` was refused `state-conflict`
+`{"source":"data.cursor","field":"status","declared":"unplanned","derived":"planned"}`:
+the cursor imported from STATE.md at first touch is compared with the derived
+status until a successful checked query retires it, and no checked query had
+ever succeeded on this store, so the stale assertion blocked every one. A 3.x
+tree whose STATE.md says "context gathered" and is then planned natively hits
+the same wall. Change: `AcceptanceOverlay.contexted` records the phases with a
+native approved context; `derivation/query.rs::yielded` treats an Assertion
+cursor as Unavailable for the consistency check when the current phase is one
+of them (both call sites); the stored cursor is unchanged and the first
+successful checked query retires it as designed. Verified by
+`derivation::overlay_tests::an_imported_cursor_yields_to_a_native_context_on_the_current_phase`
+(`cargo test -p cadence --lib derivation` -> `33 passed; 0 failed`), the
+derivation_consistency, derivation_inputs and next_action targets (6, 12, 7
+passed, 0 failed) and clippy clean. Not yet proven live: the live proof is
+`execute-next 14` on the real tree, which also issues plan 1's first dispatch,
+so it waits for the owner's go; a copy cannot stand in because the store is
+bound to this directory's identity.

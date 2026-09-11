@@ -75,6 +75,26 @@ pub fn prepare_query_with_intake(
     prepare(selected, io, cursor, Some(observation))
 }
 
+/// The imported cursor is a compatibility assertion about the current phase.
+/// Once that phase holds a native approved context, native authority decides
+/// its status and the assertion is checked no further; the first successful
+/// checked query then retires the cursor as before. Nothing stored changes:
+/// the selected cursor is still what adoption records.
+pub(super) fn yielded(
+    cursor: &CompatibilityCursor,
+    overlay: &AcceptanceOverlay,
+    answer: &Lifecycle,
+) -> CompatibilityCursor {
+    match (cursor, answer.current) {
+        (CompatibilityCursor::Assertion { provenance, .. }, Some(current))
+            if overlay.contexted.contains(&current.address()) =>
+        {
+            CompatibilityCursor::Unavailable(provenance.clone())
+        }
+        _ => cursor.clone(),
+    }
+}
+
 fn prepare(
     selected: &Path,
     io: &mut (impl ArtifactIo + ?Sized),
@@ -87,7 +107,7 @@ fn prepare(
     // with its checked box without SUMMARY.md or UAT.md (D-131).
     let overlay = observe_acceptance(&capture.root)?;
     let answer = derive_with(&capture, &overlay)?;
-    check_consistency(validate_inputs(&capture)?, &answer, cursor)?;
+    check_consistency(validate_inputs(&capture)?, &answer, &yielded(cursor, &overlay, &answer))?;
     Ok(PreparedLifecycle {
         capture,
         overlay,
@@ -172,7 +192,7 @@ impl PreparedLifecycle {
         check_consistency(
             validate_inputs(&self.capture)?,
             &self.answer,
-            &selected.cursor,
+            &yielded(&selected.cursor, &self.overlay, &self.answer),
         )?;
         self.intake = Some(ValidatedIntake {
             cursor: selected.cursor.clone(),
