@@ -15,7 +15,10 @@ use std::{
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const RAW_LIMIT: usize = 4_194_304;
-const METADATA_LIMIT: usize = 65_536;
+// Envelope metadata carries a whole plan-submit: every plan body, its typed
+// map and the exact approval copy, in one frame. Six plans crossed 200 KiB
+// (phase 14), so the bound matches the raw bound rather than 64 KiB.
+const METADATA_LIMIT: usize = 4_194_304;
 const CHUNK: usize = 1024;
 const DEPTH: usize = 128;
 

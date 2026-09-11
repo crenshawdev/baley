@@ -208,3 +208,21 @@ made by this commit.)
    foreground call and was killed by it at `phase13_close` after ten minutes;
    the run was then repeated detached, without a timeout, and that is the run
    reported above. No cargo process was killed by hand.
+
+## ADOPT-2: the stdio metadata bound, hand-applied, not an acceptance item
+
+The planner's full six-plan preview (101,169 bytes on the wire) was refused by
+the live binary with `input refused: envelope-metadata-too-large`:
+`review_ingress.rs` bounded every non-raw frame at 65,536 bytes
+(`METADATA_LIMIT`, phase 9 item 157, commit 6873ea6b). A single-plan batch
+was refused `uncovered-truth` (every current truth must be covered in one
+batch), and an approved `plan-submit` carries the submission twice, so no
+phase of this size could publish natively. Change: `METADATA_LIMIT` raised
+from 65,536 to 4,194,304, equal to `RAW_LIMIT`; the frame bound follows.
+Verified: `cargo test -p cadence --bin cadence review_ingress::` -> `10 passed;
+0 failed` (`gap157_metadata_excess_stops_before_frame_end` is relative to the
+constant and still refuses one byte over); `cargo test -p cadence --test mcp`
+-> `18 passed; 0 failed`; `cargo clippy --workspace --all-targets -- -D
+warnings` clean; the same 101,169-byte preview then answered `status: ok`,
+`coverage.uncovered: []`, `coverage.without_check: []`, six documents. The
+full suite was not rerun for a one-constant change; the next plan close runs it.
