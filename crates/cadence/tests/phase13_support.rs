@@ -92,3 +92,119 @@ fn phase13_runner_retains_independent_receipts() {
     assert_eq!(saved.data["native_tasks"], native_before.data["native_tasks"]);
     assert_eq!(tree(project), stopped);
 }
+
+fn human(id: &str, submission: &Value) -> Value {
+    json!({"operation":"verification-human-result","request_id":id,"submission":submission,
+        "approval":{"approved":true,"owner":"Fixture Owner","at":"2026-09-11T16:00:00Z","submission":submission}})
+}
+
+fn result(occurrence: &Value, item: &str, reply: &str, outcome: &str, supersedes: Option<&Value>) -> Value {
+    json!({"phase":13,"occurrence":occurrence,"id":item,"reply":reply,"outcome":outcome,
+        "owner":"Fixture Owner","at":"2026-09-11T16:00:00Z","supersedes":supersedes})
+}
+
+const ORIGINAL: &str = "---\nstatus: testing\nphase: 13\n---\n\n## Items\n\n### 1. Delivery\nexpected: the parcel arrives\nstatus: fail\nfirst_pass: fail\nreported: \"the parcel never came\"\n\n### 2. Receipt\nexpected: the recipient signs\nstatus: pass\n";
+
+#[test]
+fn phase13_human_results_preserve_first_pass() {
+    let fixture = Completed::new();
+    let project = fixture.project();
+    let uat = project.join(".planning/phases/13/UAT.md");
+    // A caller-owned historical UAT with one failure and one pass.
+    fs::write(&uat, ORIGINAL).unwrap();
+    let occurrence = query(project, json!({"operation":"plan-read","phase_address":"13"}))["occurrence"].clone();
+    let read = |project: &std::path::Path| query(project, json!({"operation":"verification-read","phase":13}));
+    let before = tree(project);
+    let humans = read(project)["humans"].clone();
+    assert_eq!(humans, json!([]), "an unretained historical document is not a native record");
+    assert_eq!(tree(project), before, "readback retains nothing");
+    // A native failure retains the original verbatim and renders beneath it.
+    let failed = apply(project, human("fail-1", &result(&occurrence, "1", "Still no parcel at the door.", "failed", None)));
+    assert_eq!(failed["status"], "ok", "{failed}");
+    let first = failed["receipt"]["record"].clone();
+    assert_eq!(first["first_pass"], "fail");
+    assert_eq!(first["imported"]["name"], "Delivery");
+    assert_eq!(first["imported"]["fields"]["reported"], "\"the parcel never came\"");
+    let rendered = fs::read_to_string(&uat).unwrap();
+    assert!(rendered.starts_with(ORIGINAL), "the imported original is kept verbatim first:\n{rendered}");
+    let native = &rendered[ORIGINAL.len()..];
+    assert!(native.starts_with("\n## Native human results\n"), "{native}");
+    assert!(native.contains(&format!("\n### 1. 1\nname: Delivery\nstatus: fail\nfirst_pass: fail\nreported: \"Still no parcel at the door.\"\nowner: Fixture Owner\nat: 2026-09-11T16:00:00Z\nrecord: {}\nresults: 1\n", first["id"].as_str().unwrap())), "{native}");
+    let saved = reopened(project).snapshot;
+    assert_eq!(saved.data["verification"]["uat_originals"]["13"]["text"], ORIGINAL);
+    assert_eq!(saved.data["verification"]["uat_originals"]["13"]["items"][0]["fields"]["status"], "fail");
+    assert_eq!(saved.data["verification"]["humans"], json!([first]));
+    let rows = read(project)["humans"].clone();
+    assert_eq!(rows.as_array().unwrap().len(), 2);
+    assert_eq!((rows[0]["id"].as_str(), rows[0]["source"].as_str(), rows[0]["status"].as_str(), rows[0]["first_pass"].as_str(), rows[0]["resolved"].as_bool(), rows[0]["required"].as_bool()),
+        (Some("1"), Some("native"), Some("fail"), Some("fail"), Some(false), Some(true)));
+    assert_eq!((rows[1]["id"].as_str(), rows[1]["source"].as_str(), rows[1]["status"].as_str(), rows[1]["resolved"].as_bool(), rows[1]["required"].as_bool()),
+        (Some("2"), Some("imported"), Some("pass"), Some(false), Some(false)));
+    let after_fail = tree(project);
+    // Blank reply, unapproved input, a stale chain and a verifier's patch arm
+    // change nothing; the rendered bytes and the retained history stay.
+    let blank = apply(project, human("blank", &result(&occurrence, "1", "   ", "passed", Some(&first["id"]))));
+    assert_eq!(blank["rule"], "verification-human", "{blank}");
+    assert_eq!(blank["slot"], "submission.reply");
+    let mut unapproved = human("unapproved", &result(&occurrence, "1", "Looks fine to me.", "passed", Some(&first["id"])));
+    unapproved["approval"]["approved"] = json!(false);
+    assert_eq!(apply(project, unapproved)["rule"], "verification-approval");
+    let stale = apply(project, human("stale-chain", &result(&occurrence, "1", "It arrived.", "passed", None)));
+    assert_eq!(stale["rule"], "verification-human", "{stale}");
+    assert_eq!(stale["slot"], "submission.supersedes");
+    let foreign = apply(project, human("foreign", &result(&json!("another-occurrence"), "1", "It arrived.", "passed", Some(&first["id"]))));
+    assert_eq!(foreign["slot"], "submission.occurrence", "{foreign}");
+    let attempt = query(project, json!({"operation":"verify-next","phase":13,"request_id":"human-attempt"}))["attempt"].clone();
+    let patch = json!({"request_id":"overwrite","attempt":attempt["id"],"basis":attempt["inputs"]["basis"],
+        "items":[],"humans":[{"id":"1","outcome":"passed"}]});
+    let overwrite = apply(project, json!({"operation":"verification-submit","patch":patch}));
+    assert_eq!(overwrite["rule"], "verification-shape", "{overwrite}");
+    assert_eq!(fs::read_to_string(&uat).unwrap(), rendered);
+    let mut current = tree(project);
+    current.retain(|path, _| !path.ends_with("state.json") && !path.ends_with("decisions.jsonl"));
+    let mut expected = after_fail.clone();
+    expected.retain(|path, _| !path.ends_with("state.json") && !path.ends_with("decisions.jsonl"));
+    assert_eq!(current, expected, "only the retained verification attempt appended to the journal");
+    assert_eq!(reopened(project).snapshot.data["verification"]["humans"], json!([first]));
+    assert_eq!(reopened(project).snapshot.data["verification"]["uat_originals"]["13"]["text"], ORIGINAL);
+    // An explicit later pass supersedes the failure; first pass stays fail.
+    let passed = apply(project, human("pass-1", &result(&occurrence, "1", "The parcel arrived this morning.", "passed", Some(&first["id"]))));
+    assert_eq!(passed["status"], "ok", "{passed}");
+    let second = passed["receipt"]["record"].clone();
+    assert_eq!(second["first_pass"], "fail");
+    assert_eq!(second["submission"]["supersedes"], first["id"]);
+    let rendered = fs::read_to_string(&uat).unwrap();
+    assert!(rendered.starts_with(ORIGINAL));
+    assert!(rendered.contains(&format!("\n### 1. 1\nname: Delivery\nstatus: pass\nfirst_pass: fail\nreported: \"The parcel arrived this morning.\"\nowner: Fixture Owner\nat: 2026-09-11T16:00:00Z\nrecord: {}\nresults: 2\n", second["id"].as_str().unwrap())), "{rendered}");
+    let rows = read(project)["humans"].clone();
+    assert_eq!((rows[0]["status"].as_str(), rows[0]["first_pass"].as_str(), rows[0]["resolved"].as_bool(), rows[0]["required"].as_bool()),
+        (Some("pass"), Some("fail"), Some(true), Some(false)));
+    assert_eq!(rows[0]["history"].as_array().unwrap().len(), 2);
+    assert_eq!(rows[0]["history"][0]["reply"], "Still no parcel at the door.");
+    assert_eq!(rows[0]["history"][1]["reply"], "The parcel arrived this morning.");
+    // Skip is not a pass: it is retained but leaves the item unresolved.
+    let skipped = apply(project, human("skip-2", &result(&occurrence, "2", "No device available today.", "skipped", None)));
+    assert_eq!(skipped["status"], "ok", "{skipped}");
+    let rows = read(project)["humans"].clone();
+    assert_eq!((rows[1]["source"].as_str(), rows[1]["status"].as_str(), rows[1]["first_pass"].as_str(), rows[1]["resolved"].as_bool(), rows[1]["required"].as_bool()),
+        (Some("native"), Some("skipped"), Some("pass"), Some(false), Some(true)));
+    // Restart: reopened bytes, exact replay, changed payload reuse.
+    let stored = reopened(project).snapshot;
+    let files = tree(project);
+    assert_eq!(stored.data["verification"]["humans"].as_array().unwrap().len(), 3);
+    assert_eq!(stored.data["verification"]["humans"][0], first);
+    assert_eq!(stored.data["verification"]["humans"][1], second);
+    assert_eq!(apply(project, human("pass-1", &result(&occurrence, "1", "The parcel arrived this morning.", "passed", Some(&first["id"])))), passed);
+    let reused = apply(project, human("pass-1", &result(&occurrence, "1", "A different reply under the same request.", "passed", Some(&first["id"]))));
+    assert_eq!(reused["rule"], "verification-human-reuse", "{reused}");
+    assert_eq!(tree(project), files);
+    assert_eq!(reopened(project).snapshot, stored);
+    // A hand edit of the rendered document is refused, never adopted.
+    fs::write(&uat, format!("{}\nstatus: pass\n", fs::read_to_string(&uat).unwrap())).unwrap();
+    let drifted = apply(project, human("after-drift", &result(&occurrence, "1", "Another look.", "passed", Some(&second["id"]))));
+    assert_eq!(drifted["rule"], "verification-human", "{drifted}");
+    assert_eq!(drifted["slot"], "uat");
+    assert_eq!(reopened(project).snapshot.data["verification"]["humans"], stored.data["verification"]["humans"]);
+    assert_eq!(reopened(project).snapshot.data["verification"]["uat_originals"], stored.data["verification"]["uat_originals"]);
+    assert_eq!(reopened(project).snapshot.data["context"], stored.data["context"]);
+}

@@ -195,6 +195,7 @@ pub fn report(root: &Path, data: &Value, phase: u32) -> Result<Value> {
         "current":{"applicable":current.is_some(),"attempt":current.map(|(a, _)| &a.id),"patch":current.map(|(_, p)| &p.request_id),
             "reason":reason,"verified_at":current.map(|(a, _)| &a.inputs.basis),"observed":observed,"unavailable":unavailable},
         "truths":truths,"counts":counts,"waivers":applicable,"advice":advice,"history":history,
+        "humans":super::human::items(data, phase)?,
         "legacy":{"summary_document":root.join(format!("phases/{phase}/SUMMARY.md")).is_file(),
             "uat_document":root.join(format!("phases/{phase}/UAT.md")).is_file(),"authority":LEGACY}}))
 }

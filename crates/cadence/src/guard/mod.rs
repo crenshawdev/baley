@@ -299,10 +299,13 @@ fn protected_target(target: &Path) -> Result<bool, String> {
         .filter_map(|(index, value)| (value == ".planning").then_some(index))
     {
         let suffix = &components[index + 1..];
+        // SUMMARY.md is the execution projection; UAT.md is the binary's render
+        // of attributed human results (D-127). Both are exact owned outputs,
+        // never a claim over arbitrary shell writes.
         if matches!(suffix, [file] if matches!(file.as_str(), "state.json" | "decisions.jsonl" | "items.jsonl"))
-            || matches!(suffix, [phases, number, summary]
+            || matches!(suffix, [phases, number, owned]
                 if phases == "phases"
-                    && summary == "SUMMARY.md"
+                    && matches!(owned.as_str(), "SUMMARY.md" | "UAT.md")
                     && positive_integer(number))
         {
             return Ok(true);

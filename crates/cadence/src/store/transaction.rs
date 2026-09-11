@@ -19,6 +19,10 @@ pub(crate) enum IntentKind {
         claim: Box<cadence::verification::waivers::Claim>,
         root_binding: String,
     },
+    VerificationHumanV1 {
+        claim: Box<cadence::verification::human::Claim>,
+        root_binding: String,
+    },
     VerificationRunV1 {
         record: Box<cadence::verification::runner::Record>,
         root_binding: String,
@@ -103,7 +107,8 @@ impl IntentKind {
     /// The versioned intents that alone may change the verification namespace.
     fn verification(&self) -> bool {
         matches!(self, IntentKind::VerificationV1 { .. } | IntentKind::VerificationRunV1 { .. }
-            | IntentKind::VerificationSubmitV1 { .. } | IntentKind::VerificationWaiverV1 { .. })
+            | IntentKind::VerificationSubmitV1 { .. } | IntentKind::VerificationWaiverV1 { .. }
+            | IntentKind::VerificationHumanV1 { .. })
     }
 }
 
@@ -231,6 +236,7 @@ impl Intent {
         let mut summary_phase = None;
         let mut context_phase = None;
         let mut plan_targets = Vec::new();
+        let mut uat_phase = None;
         for participant in &self.participants {
             let known = matches!(
                 participant.target.as_str(),
@@ -239,6 +245,7 @@ impl Intent {
             let phase = super::filesystem::phase_summary_target(&participant.target)?;
             let context = super::filesystem::phase_context_target(&participant.target)?;
             let plan = super::filesystem::phase_plan_target(&participant.target)?;
+            let uat = super::filesystem::phase_uat_target(&participant.target)?;
             if let Some(identity) = plan {
                 plan_targets.push(identity);
             }
@@ -247,7 +254,12 @@ impl Intent {
             {
                 return Err(Error::Invalid("duplicate context participant".into()));
             }
-            if (!known && phase.is_none() && context.is_none() && plan.is_none())
+            if let Some(uat) = uat
+                && uat_phase.replace(uat).is_some()
+            {
+                return Err(Error::Invalid("duplicate UAT participant".into()));
+            }
+            if (!known && phase.is_none() && context.is_none() && plan.is_none() && uat.is_none())
                 || !names.insert(participant.target.as_str())
             {
                 return Err(Error::Invalid(
@@ -292,6 +304,17 @@ impl Intent {
                 return Err(Error::Invalid(
                     "context requires its approved publication intent".into(),
                 ));
+            }
+            IntentKind::VerificationHumanV1 { claim, .. }
+                if uat_phase == Some(claim.request.submission.phase)
+                    && summary_phase.is_none()
+                    && !names.contains("repo-config")
+                    && !names.contains("global-config") => {}
+            IntentKind::VerificationHumanV1 { .. } => {
+                return Err(Error::Invalid("invalid human result participants".into()));
+            }
+            _ if uat_phase.is_some() => {
+                return Err(Error::Invalid("UAT.md needs its human result intent".into()));
             }
             _ => {}
         }
@@ -401,6 +424,20 @@ impl Intent {
                 let previous = previous_snapshot(&self.participants, "waiver claim")?;
                 validate_claim_transition(&self.participants, &snapshot, items, decisions, &root_binding,
                     waivers::transaction(&previous.data, &claim)?, waivers::decision(&claim)?, "waiver claim")?;
+            }
+            IntentKind::VerificationHumanV1 { claim, root_binding } => {
+                use cadence::verification::{human, projections};
+                let phase = claim.request.submission.phase;
+                let uat = self.participants.iter().find(|p| p.target == format!("phase-uat:{phase}"))
+                    .ok_or_else(|| Error::Invalid("human result lacks its UAT participant".into()))?;
+                if names.len() != 4 { return Err(Error::Invalid("human result changes only its own UAT participant".into())); }
+                if claim.root_binding != root_binding { return Err(Error::Invalid("human result root binding changed".into())); }
+                if projections::uat(&snapshot.data, phase)?.map(String::into_bytes).as_ref() != Some(&uat.bytes) {
+                    return Err(Error::Invalid("UAT participant differs from the native render".into()));
+                }
+                let previous = previous_snapshot(&self.participants, "human result")?;
+                validate_claim_transition(&self.participants, &snapshot, items, decisions, &root_binding,
+                    human::transaction(&previous.data, &claim, uat.expected.clone())?, human::decision(&claim)?, "human result")?;
             }
             IntentKind::VerificationRunV1 { record, root_binding } => {
                 use cadence::verification::runner;
@@ -1131,6 +1168,12 @@ fn validate_all<S: Storage>(
         }
         let previous = previous_snapshot(participants, "waiver claim")?;
         cadence::verification::waivers::reobserve(&previous.data, claim)?;
+    }
+    if let IntentKind::VerificationHumanV1 { claim, root_binding } = kind {
+        if storage.read(STATE)?.directory_identity != *root_binding {
+            return Err(Error::Invalid("human result store binding changed".into()));
+        }
+        cadence::verification::human::reobserve(claim)?;
     }
     if let IntentKind::VerificationRunV1 { record, root_binding } = kind {
         if storage.read(STATE)?.directory_identity != *root_binding {

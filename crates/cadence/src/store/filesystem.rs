@@ -110,6 +110,9 @@ impl Filesystem {
                 .join(phase.to_string())
                 .join("CONTEXT.md"));
         }
+        if let Some(phase) = phase_uat_target(target)? {
+            return Ok(self.root.join("phases").join(phase.to_string()).join("UAT.md"));
+        }
         if let Some(path) = self.participants.get(target) {
             return Ok(path.clone());
         }
@@ -261,6 +264,14 @@ pub(crate) fn phase_context_target(target: &str) -> Result<Option<u32>> {
     phase_summary_target(&format!("phase-summary:{value}"))
 }
 
+/// The binary-rendered UAT.md of one native phase (D-127).
+pub(crate) fn phase_uat_target(target: &str) -> Result<Option<u32>> {
+    let Some(value) = target.strip_prefix("phase-uat:") else {
+        return Ok(None);
+    };
+    phase_summary_target(&format!("phase-summary:{value}"))
+}
+
 pub(crate) fn phase_plan_target(target: &str) -> Result<Option<(u32, u32)>> {
     let Some(value) = target.strip_prefix("phase-plan:") else {
         return Ok(None);
@@ -353,7 +364,7 @@ impl Storage for Filesystem {
                 directory_identity: String::new(),
             });
         }
-        if phase_context_target(target)?.is_some() || phase_plan_target(target)?.is_some() {
+        if phase_context_target(target)?.is_some() || phase_plan_target(target)?.is_some() || phase_uat_target(target)?.is_some() {
             // Only the approved writer path requests this participant. Bind and
             // sync its parents before capturing the expected-file identity.
             if self.directories.get(&self.root) != Some(&directory_identity(&self.root)?) {

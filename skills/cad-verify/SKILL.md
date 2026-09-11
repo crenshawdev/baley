@@ -91,5 +91,16 @@ status and rejected evidence kept. Reaffirmation after a changed basis,
 supersession and revocation are further owner events naming the retained
 record in supersedes; revocation also sets revoked. A verifier patch cannot
 create, erase or cover a waiver.
+A human result is {"operation":"verification-human-result","request_id":"...",
+"submission":{"phase":13,"occurrence":"<phase occurrence>","id":"<item>",
+"reply":"<verbatim reply>","outcome":"passed|failed|skipped","owner":"...",
+"at":"...","supersedes":<latest retained result id for the item, or null>},
+"approval":{"approved":true,"owner":"...","at":"...","submission":<exact
+submission>}}. The first native result for a phase retains any existing
+UAT.md verbatim as the imported original, whose numbered items are addressed
+by their numbers; the binary renders UAT.md from the records and refuses a
+hand-edited render. A blank reply is refused, a skipped result resolves
+nothing, first_pass is carried from the earliest known outcome, and only a
+later passed result resolves a failed or imported item.
 An unavailable operation must refuse; its appearance in this contract is never
 a successful receipt.

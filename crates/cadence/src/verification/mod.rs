@@ -8,4 +8,6 @@ pub mod runner;
 pub mod verdicts;
 pub mod status;
 pub mod waivers;
+pub mod human;
+pub mod projections;
 pub mod render;

@@ -196,6 +196,9 @@ pub fn contribute(data: &Value, binding: &str, claim: &Claim) -> Result<Value> {
     let mut history = records(data)?;
     history.push(record);
     let mut next = data.clone();
+    if next.get(persistence::NAMESPACE).is_none() {
+        next[persistence::NAMESPACE] = json!({"schema":"verification-1","attempts":[]});
+    }
     next[persistence::NAMESPACE]["waivers"] = json!(history);
     Ok(next)
 }

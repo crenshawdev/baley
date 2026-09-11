@@ -657,8 +657,25 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 )
                 .map_err(|error| Error::Invalid(error.to_string()))?;
             }
+            let uat_phase = super::filesystem::phase_uat_target(&change.target)?;
+            if let Some(uat_phase) = uat_phase {
+                // UAT.md is installed only by its human result intent, and only
+                // as the render of the snapshot that intent commits.
+                match &verification_claim {
+                    Some(super::transaction::IntentKind::VerificationHumanV1 { claim, .. })
+                        if claim.request.submission.phase == uat_phase =>
+                    {
+                        let rendered = cadence::verification::projections::uat(&next.snapshot.data, uat_phase)?;
+                        if rendered.map(String::into_bytes).as_ref() != Some(&change.bytes) {
+                            return Err(Error::Invalid("UAT participant differs from the native render".into()));
+                        }
+                    }
+                    _ => return Err(Error::Invalid("UAT.md needs its human result intent".into())),
+                }
+            }
             if phase.is_none()
                 && plan_target.is_none()
+                && uat_phase.is_none()
                 && !matches!(change.target.as_str(), "repo-config" | "global-config")
             {
                 return Err(Error::Invalid("unknown external participant".into()));
@@ -726,13 +743,24 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     /// snapshot, root, source and installed plans included, and a differing
     /// claim, transaction identity or fingerprint is a conflict, never a write.
     fn verification_claim(&self, transaction: &super::transaction::Transaction) -> Result<Option<super::transaction::IntentKind>> {
-        use cadence::verification::{verdicts, waivers};
+        use cadence::verification::{human, verdicts, waivers};
         use super::transaction::{IntentKind, Transaction};
-        let Some(record) = transaction.decisions.iter().find(|d| matches!(d.origin.source.as_str(), verdicts::SCHEMA | waivers::SCHEMA)) else {
+        let Some(record) = transaction.decisions.iter().find(|d| matches!(d.origin.source.as_str(), verdicts::SCHEMA | waivers::SCHEMA | human::SCHEMA)) else {
             return Ok(None);
         };
-        if transaction.decisions.len() != 1 || !transaction.items.is_empty() || !transaction.external.is_empty() {
-            return Err(Error::Invalid("verification claim transaction carries exactly one claim".into()));
+        let external: Vec<_> = transaction.external.iter().map(|c| c.target.as_str()).collect();
+        let expected_external: Vec<String> = match record.origin.source.as_str() {
+            human::SCHEMA => {
+                let claim: human::Claim = serde_json::from_str(match &record.decision {
+                    model::Decision::Gate { evidence: model::Evidence::Text(encoded), .. } => encoded,
+                    _ => return Err(Error::Invalid("verification claim encoding invalid".into())),
+                })?;
+                vec![format!("phase-uat:{}", claim.request.submission.phase)]
+            }
+            _ => vec![],
+        };
+        if transaction.decisions.len() != 1 || !transaction.items.is_empty() || external != expected_external {
+            return Err(Error::Invalid("verification claim transaction carries exactly one claim and its own participants".into()));
         }
         let model::Decision::Gate { evidence: model::Evidence::Text(encoded), .. } = &record.decision else {
             return Err(Error::Invalid("verification claim encoding invalid".into()));
@@ -758,6 +786,16 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     return Err(Error::Conflict("waiver claim changed at committing snapshot".into()));
                 }
                 IntentKind::VerificationWaiverV1 { root_binding, claim: Box::new(claim) }
+            }
+            human::SCHEMA => {
+                let claim: human::Claim = serde_json::from_str(encoded)?;
+                let current = human::prepare(&claim.root, data, claim.request.clone())?;
+                let expected = transaction.external.first().map(|c| c.expected.clone())
+                    .ok_or_else(|| Error::Invalid("human result lacks its UAT participant".into()))?;
+                if claim != current || !same(human::transaction(data, &claim, expected)?)? || claim.root_binding != root_binding {
+                    return Err(Error::Conflict("human result claim changed at committing snapshot".into()));
+                }
+                IntentKind::VerificationHumanV1 { root_binding, claim: Box::new(claim) }
             }
             _ => unreachable!("matched claim sources"),
         };
