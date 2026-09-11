@@ -203,6 +203,11 @@ mod resident {
     };
 
     enum Request {
+        Verification {
+            root: PathBuf,
+            query: cadence::verification::model::Query,
+            reply: oneshot::Sender<Result<serde_json::Value>>,
+        },
         Plan {
             root: PathBuf,
             command: crate::server::plan_service::Command,
@@ -411,6 +416,10 @@ mod resident {
                 let mut caches = BTreeMap::<PathBuf, Option<Cached>>::new();
                 while let Some(request) = receiver.recv().await {
                     match request {
+                        Request::Verification { root, query, reply } => {
+                            let result = crate::server::verification_service::execute(&factory, &root, query).await;
+                            let _ = reply.send(result);
+                        }
                         Request::Plan {
                             root,
                             command,
@@ -580,6 +589,12 @@ mod resident {
                 })
                 .await
                 .map_err(|_| Error::Closed)?;
+            receive.await.map_err(|_| Error::Closed)?
+        }
+
+        pub async fn verification(&self, root: &Path, query: cadence::verification::model::Query) -> Result<serde_json::Value> {
+            let (reply, receive) = oneshot::channel();
+            self.requests.send(Request::Verification { root: root.into(), query, reply }).await.map_err(|_| Error::Closed)?;
             receive.await.map_err(|_| Error::Closed)?
         }
 

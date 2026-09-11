@@ -78,6 +78,8 @@ pub mod context_service;
 
 #[path = "plan_service.rs"]
 pub mod plan_service;
+#[path = "verification_service.rs"]
+pub mod verification_service;
 
 /// What `cadence_version` reports on success.
 ///
@@ -238,6 +240,12 @@ struct VersionArguments {}
 #[derive(Deserialize, JsonSchema)]
 #[serde(tag = "operation", deny_unknown_fields)]
 enum QueryArguments {
+    #[serde(rename = "verify-next")]
+    VerifyNext { phase: NonZeroU32, request_id: Option<String> },
+    #[serde(rename = "verification-read")]
+    VerificationRead { phase: NonZeroU32, attempt: Option<String> },
+    #[serde(rename = "verification-audit")]
+    VerificationAudit { phase: NonZeroU32 },
     #[serde(rename = "execution-history")]
     ExecutionHistory { phase: NonZeroU32 },
     #[serde(rename = "evidence-read")]
@@ -283,6 +291,7 @@ enum QueryArguments {
 #[derive(Deserialize, JsonSchema)]
 #[serde(untagged)]
 enum ApplyArguments {
+    Verification(cadence::verification::model::Apply),
     NativeProgress(cadence::execution::history::ProgressApply),
     NativeClose(cadence::execution::receipts::CloseApply),
     NativeOwner(cadence::execution::receipts::OwnerApply),
@@ -617,6 +626,19 @@ impl ServerHandler for PublicServer {
                 .into())
             }
             "cadence_query" => {
+                if raw.as_ref().and_then(|v| v["operation"].as_str()).is_some_and(|op| matches!(op, "verify-next" | "verification-read" | "verification-audit")) {
+                    let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
+                        Ok(QueryArguments::VerifyNext { phase, request_id }) => self.server.service.verification(&self.root,
+                            cadence::verification::model::Query::Next { phase: phase.get(), request_id }).await,
+                        Ok(QueryArguments::VerificationRead { phase, attempt }) => self.server.service.verification(&self.root,
+                            cadence::verification::model::Query::Read { phase: phase.get(), attempt }).await,
+                        Ok(QueryArguments::VerificationAudit { phase }) => self.server.service.verification(&self.root,
+                            cadence::verification::model::Query::Audit { phase: phase.get() }).await,
+                        Ok(_) => unreachable!("selected verification operation"),
+                        Err(error) => Ok(serde_json::json!({"status":"refused","rule":"verification-shape","reason":error.to_string()})),
+                    };
+                    return structured_result(answer.map(QueryOutput::NativeExecution));
+                }
                 if raw.as_ref().is_some_and(|v| v["operation"] == "execution-history") {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
                         Ok(QueryArguments::ExecutionHistory { phase }) => self.server.service.native_execution_history(&self.root, phase.get()).await,
@@ -845,6 +867,7 @@ impl ServerHandler for PublicServer {
                             "risk-status arguments do not match the strict operation schema",
                         )));
                     }
+                    Some(QueryArguments::VerifyNext { .. } | QueryArguments::VerificationRead { .. } | QueryArguments::VerificationAudit { .. }) => unreachable!("verification routed before generic query"),
                     None => self.refuse_raw(BoundaryTool::CadenceQuery, raw).await,
                 };
                 let envelope = answer
@@ -852,6 +875,17 @@ impl ServerHandler for PublicServer {
                 structured_result(Ok(QueryOutput::Execution(envelope)))
             }
             "cadence_apply" => {
+                if raw.as_ref().and_then(|v| v["operation"].as_str()).is_some_and(|op| op.starts_with("verification-") || op == "truth-waive") {
+                    let answer = match serde_json::from_value::<ApplyArguments>(raw.unwrap()) {
+                        Ok(ApplyArguments::Verification(operation)) => {
+                            let operation = serde_json::to_value(operation).expect("typed verification operation")["operation"].clone();
+                            serde_json::json!({"status":"refused","rule":"verification-unavailable","operation":operation,"reason":"operation is not implemented"})
+                        }
+                        Err(error) => serde_json::json!({"status":"refused","rule":"verification-shape","reason":error.to_string()}),
+                        Ok(_) => unreachable!("selected verification operation"),
+                    };
+                    return structured_result(Ok(ApplyOutput::NativeExecution(answer)));
+                }
                 if raw.as_ref().and_then(|v|v["operation"].as_str()).is_some_and(|op|op.starts_with("execution-")) {
                     return structured_result(self.server.service.native_execution_apply(&self.root,raw.unwrap()).await.map(ApplyOutput::NativeExecution));
                 }
@@ -1023,6 +1057,7 @@ impl ServerHandler for PublicServer {
                             "risk-check arguments do not match the strict operation schema",
                         )));
                     }
+                    Some(ApplyArguments::Verification(_)) => unreachable!("verification routed before generic apply"),
                     None => self.refuse_raw(BoundaryTool::CadenceApply, raw).await,
                 };
                 execution_result(answer)

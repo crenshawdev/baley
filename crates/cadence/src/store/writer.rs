@@ -50,6 +50,11 @@ pub enum BoundaryChange {
 pub type InputCheck = Box<dyn FnMut() -> Result<()> + Send>;
 
 pub enum Operation {
+    VerificationV1 {
+        expected_generation: u64,
+        expected_integrity: String,
+        request: Box<cadence::verification::persistence::Request>,
+    },
     NativeTaskV1 {
         expected_generation: u64,
         expected_integrity: String,
@@ -388,6 +393,8 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             self.observed = observed;
         }
         match operation {
+            Operation::VerificationV1 { expected_generation, expected_integrity, request } =>
+                self.verification(expected_generation, &expected_integrity, *request),
             Operation::NativeTaskV1 { expected_generation, expected_integrity, request } =>
                 self.native_task(expected_generation, &expected_integrity, *request),
             Operation::NativePlanV1 { expected_generation, expected_integrity, request } =>
@@ -597,6 +604,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 "rewrite_snapshot"
             }
             Operation::CheckedTransact { .. }
+            | Operation::VerificationV1 { .. }
             | Operation::RailReceipt { .. }
             | Operation::RailObservation { .. }
             | Operation::GuardAudit(..)
@@ -699,6 +707,26 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 None => super::transaction::IntentKind::Store,
             }),
         )
+    }
+
+    fn verification(&mut self, generation: u64, integrity: &str, request: cadence::verification::persistence::Request) -> Result<View> {
+        use cadence::verification::{inputs, persistence};
+        let root_binding = self.observed[STATE].directory_identity.clone();
+        if let Some(prior) = persistence::replay(&self.view.snapshot.data, &root_binding,
+            request.attempt.inputs.basis.phase, &request.attempt.request_id)? {
+            if prior != request.attempt || !self.view.decisions.contains(&persistence::decision(&prior)?) {
+                return Err(Error::Invalid("verification replay differs from retained attempt or journal".into()));
+            }
+            return Ok(self.view.clone());
+        }
+        self.check_expected(generation, integrity)?;
+        let current = inputs::observe(&request.root, &self.view.snapshot.data, request.attempt.inputs.basis.phase)?;
+        if current != request.attempt.inputs { return Err(Error::Conflict("verification inputs changed at committing snapshot".into())); }
+        let mut next = self.view.clone();
+        next.snapshot.data = persistence::contribute(&next.snapshot.data, &root_binding, &request)?;
+        next.decisions.push(persistence::decision(&request.attempt)?);
+        self.persist(next, self.view.snapshot.operations.clone(), Vec::new(), "verification",
+            super::transaction::IntentKind::VerificationV1 { request: Box::new(request), root_binding })
     }
 
     fn native_task(&mut self, generation: u64, integrity: &str, request: cadence::execution::history::Request) -> Result<View> {

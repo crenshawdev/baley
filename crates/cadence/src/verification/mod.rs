@@ -1,3 +1,6 @@
 //! Native verification authority, independent from execution completion.
 pub mod instructions;
 pub mod model;
+pub mod inputs;
+pub mod dispatch;
+pub mod persistence;
