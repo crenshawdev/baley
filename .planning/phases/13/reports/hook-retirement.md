@@ -84,3 +84,41 @@ The verifier inspects those actual records and does not author this report.
 
 Installed root, preimage identities, command, removal outcome, both absence
 checks and preserved unrelated bytes: **pending; no success claimed**.
+
+## PLAN-4 executor handoff — 2026-09-11
+
+PLAN-4 changed nothing above and performed no installed inspection or
+removal; the installed section stays pending. What PLAN-4 adds is the
+compiled prerequisite the retirement waits on and the exact inputs the
+orchestrator supplies when it runs the procedure for real.
+
+Compiled prerequisite, as it stands at the PLAN-4 commits: all three
+operational role dispatches are binary-composed (`plan-instructions`,
+`executor-instructions`, `verifier-instructions`), and the remaining hand
+front doors this phase owns are rendered by the binary too
+(`review-instructions [--alias <name>]` for `cad-review` and its three
+aliases, `audit-instructions [--coverage]` for `cad-audit` and
+`cad-coverage`). Their bytes are asserted equal to the binary's rendering by
+the two PLAN-4 checks. The adoption rehearsal in
+`.planning/phases/13/close/readiness.md` re-exercised real serve/stdio
+planner, executor and verifier surfaces on disposable roots; see
+`adoption-readiness.md`, section 1.
+
+Inputs the orchestrator supplies, each recorded before the script runs:
+
+| input | how it is obtained |
+| --- | --- |
+| settings root | the explicitly selected canonical absolute directory holding the owner's `settings.json` and `hooks/`; never HOME, never discovered by the script |
+| settings SHA-256 | `sha256sum` of the raw `settings.json` bytes at that root, or the literal `absent` |
+| hook SHA-256 | `sha256sum` of the raw `hooks/rules-gate.mjs` bytes at that root, or `absent` |
+| command | the exact registered spelling: `node` (or the registered node path) followed by that root's absolute `hooks/rules-gate.mjs` |
+| recovery directory | a new explicit canonical directory outside the settings root, kept until installed review is complete |
+| unrelated guards | raw bytes and SHA-256 of every sibling hook file (reviewer-stop bridge, read/subagent trace, any other guard) before and after |
+
+Script identity to use: `.planning/phases/13/close/retire-rules-gate.py`,
+SHA-256 `41fc19c934873d88bc1ab432a6cad05c052e8b394b4754924fe852c9f8dd1392`,
+unchanged since PLAN-1. Run it only after section 3 of
+`adoption-readiness.md` (installed binary and front doors) is recorded, in
+the order PLAN-4's "Mandatory close sequence" gives. A refusal, an exit 2, a
+killed process or a surviving registration is unfinished retirement; recover
+with the same bindings and inspect again before any claim.
