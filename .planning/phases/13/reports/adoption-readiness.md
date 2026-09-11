@@ -2,9 +2,9 @@
 
 Mandatory close work under D-130 (P13-CLOSE-READINESS). Not an acceptance-map
 item; no observation. Every section names its producer and its subject.
-Sections marked PENDING are the orchestrator's and carry the exact inputs
-still owed. **No section of this report says "ready"; the go/no-go below is
-withheld until the pending sections are recorded.**
+Sections 2 to 5 are the orchestrator's, recorded 2026-09-11. **No section
+of this report says the live system is "ready"; section 5 records the
+owner's decision.**
 
 ## 1. Disposable rehearsal (executor; recorded 2026-09-11)
 
@@ -172,7 +172,7 @@ project and cannot stand in for the seven outer rewrite functions.
   14); installed-model acceptance (phase 18, P1); review edit application
   (phase 30, P4).
 
-## 2. Outer rewrite checks (orchestrator; PENDING)
+## 2. Outer rewrite checks (orchestrator; recorded 2026-09-11)
 
 For each of the seven `crates/cadence/tests/phase13_verification.rs`
 functions, record the implementation red and green commits with their P13
@@ -200,7 +200,27 @@ selected), observer and time. The verifier's item judgments bind to these
 same outer identities; the orchestrator records that result with its inputs
 and any unresolved limit.
 
-## 3. Installed state (orchestrator; PENDING)
+### 2a. Orchestrator-observed independent reruns at the final reviewed revision
+
+Recorded by the orchestrator (John Crenshaw's session) on 2026-09-11T19:30:12Z, host hephaestus, rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1.1), cargo 1.98.1 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.1-1.1).
+
+Common identities: checkout root `/code/cadence`; HEAD `99126c45fe8e36b244752d059f5ba9ad2d04cd68`; tree `19aa8f2411ff3084003187ad54dcc05f098745ad`; index (git write-tree) `19aa8f2411ff3084003187ad54dcc05f098745ad`; material identity (sha256 of `git diff HEAD` plus the sorted untracked list) `9bfc8a040027669151004c79f2f777188818028cef38a0d33bae0fbb824dde8e`; untracked files at the time: .planning/phases/13/reports/plan-1.md .planning/phases/13/reports/plan-2.md .planning/phases/13/reports/plan-3.md .planning/phases/13/reports/plan-4.md ; test file `crates/cadence/tests/phase13_verification.rs` sha256 `80e5ba6cf3f11436f17b386b8af3439ff1a4a93a64f77fbcb1eeecbc47aafe3e`.
+
+| function | exit | selection | binary sha256 | stdout sha256 | stderr sha256 | finished |
+|---|---|---|---|---|---|---|
+| `phase13_dispatch_carries_current_verification_inputs` | 0 | 1 passed; 0 failed, 6 filtered out (`phase13_dispatch_carries_current_verification_inputs ... ok`) | `79b7cf06f124e0ecf04ffdc1814d515a54c13421cdfe2a25a5259889db5c0e8e` (`target/debug/deps/phase13_verification-88890940e5771de5`) | `af0d9c0673d892324f76fa28e5d9a6033be94f7ef9ad05afaa949b2d2a6e80d3` | `aae223cc38ffe875686218adc1216e26722073f25dc6b8c883d9c788bd1a67d6` | finished in 7.83s |
+| `phase13_mismatched_verdict_patch_is_refused` | 0 | 1 passed; 0 failed, 6 filtered out (`phase13_mismatched_verdict_patch_is_refused ... ok`) | `79b7cf06f124e0ecf04ffdc1814d515a54c13421cdfe2a25a5259889db5c0e8e` (`target/debug/deps/phase13_verification-88890940e5771de5`) | `b0a9444324f1741125c7ab45ed916ea5f0687e9a7c2c9e7927f58ab972d0aa53` | `a1e5cf2ba0cc10b1e662e414fac367994e5fc9bea2d850a953f1ff5429effe63` | finished in 51.99s |
+| `phase13_report_derives_truth_status_from_every_item` | 0 | 1 passed; 0 failed, 6 filtered out (`phase13_report_derives_truth_status_from_every_item ... ok`) | `79b7cf06f124e0ecf04ffdc1814d515a54c13421cdfe2a25a5259889db5c0e8e` (`target/debug/deps/phase13_verification-88890940e5771de5`) | `9c297b77f36b44b25a60b75a62e24091149b44c6c36613c84b590a4fe259d8d0` | `a1e5cf2ba0cc10b1e662e414fac367994e5fc9bea2d850a953f1ff5429effe63` | finished in 84.95s |
+| `phase13_owner_waiver_is_distinct_from_met` | 0 | 1 passed; 0 failed, 6 filtered out (`phase13_owner_waiver_is_distinct_from_met ... ok`) | `79b7cf06f124e0ecf04ffdc1814d515a54c13421cdfe2a25a5259889db5c0e8e` (`target/debug/deps/phase13_verification-88890940e5771de5`) | `176287f6ad16550f4311c53b7ac557c05752e8359a740710d38b39373204d356` | `f959ad00bad02412b5a97f7e6b9d476aeb776ba8e1f88e9621694f968ec587f8` | finished in 56.28s |
+| `phase13_incomplete_verification_cannot_complete_phase` | 0 | 1 passed; 0 failed, 6 filtered out (`phase13_incomplete_verification_cannot_complete_phase ... ok`) | `79b7cf06f124e0ecf04ffdc1814d515a54c13421cdfe2a25a5259889db5c0e8e` (`target/debug/deps/phase13_verification-88890940e5771de5`) | `90706dd3739a1ae67cb682ccf0660e92b5ca1fd0e42350f3f7478de1f5b63187` | `aae223cc38ffe875686218adc1216e26722073f25dc6b8c883d9c788bd1a67d6` | finished in 40.96s |
+| `phase13_review_surface_selects_target_and_intent` | 0 | 1 passed; 0 failed, 6 filtered out (`phase13_review_surface_selects_target_and_intent ... ok`) | `79b7cf06f124e0ecf04ffdc1814d515a54c13421cdfe2a25a5259889db5c0e8e` (`target/debug/deps/phase13_verification-88890940e5771de5`) | `da0f9ed8cd9979a6f520f4cfee2bd24db832df80c504d3e84de5d9b0b5ea6bfa` | `a1e5cf2ba0cc10b1e662e414fac367994e5fc9bea2d850a953f1ff5429effe63` | finished in 18.42s |
+| `phase13_audit_reports_broken_verification_traces` | 0 | 1 passed; 0 failed, 6 filtered out (`phase13_audit_reports_broken_verification_traces ... ok`) | `79b7cf06f124e0ecf04ffdc1814d515a54c13421cdfe2a25a5259889db5c0e8e` (`target/debug/deps/phase13_verification-88890940e5771de5`) | `df0d9f4fac35fb6d11f70cc2701d60396b1433175ad254f290b8f92da23e00cf` | `a1e5cf2ba0cc10b1e662e414fac367994e5fc9bea2d850a953f1ff5429effe63` | finished in 23.55s |
+
+Bounded stdout and stderr for each run are kept beside this session's scratchpad (`section2-logs/<function>.stdout|.stderr`); the digests above are of those exact files. These are orchestrator-observed implementation and independent rerun records, never native verification-run receipts.
+
+Unresolved limit: the seven red commits were confirmed as behavioral failures by the executors' recorded failure lines and, for P13-4-T1 and P13-4-T2, by the orchestrator's own rerun of each red commit in a throwaway worktree (`invalid-review-operation` and `verification-audit is not implemented`); the other five reds are left to the verifier's inspection.
+
+## 3. Installed state (orchestrator; recorded 2026-09-11)
 
 Owed: the installed binary path and SHA-256; the installed path and SHA-256
 of each generated front door and contract (`skills/cad-verify`,
@@ -212,16 +232,127 @@ fresh disposable native project, that planner, executor and verifier
 dispatches come from that installed binary. Nothing here is inferred from
 this tree or from a build.
 
-## 4. Hook retirement (orchestrator; PENDING)
+### 3a. What "installed" means at this close
 
-Owed: the installed outcome recorded in `hook-retirement.md`, "Installed
-result", following `close/rules-gate.md` - inspected preimage identities,
-the exact command, both targeted absences and the preserved unrelated bytes.
-The PLAN-1 rehearsal is not that outcome.
+The owner decided on 2026-09-11, before this close, that no Cadence is
+installed in the live Claude setup until 4.0 ships (the 3.7.12 plugin was
+uninstalled everywhere that day). At this close the owner chose an isolated
+install: the current built binary and the generated front doors are installed
+into a dedicated Claude config root that is not the live `~/.claude`, and the
+dispatch confirmation below is made from that root. Nothing below is inferred
+from the tree or a build; every byte was copied to the root and hashed there.
 
-## 5. Go/no-go (orchestrator; PENDING)
+- Install root: `/claude/cadence-close-13` (private, outside every repository).
+- Config root for Claude (`CLAUDE_CONFIG_DIR`): `/claude/cadence-close-13/config`,
+  whose `.claude.json` registers the MCP server `cadence` as
+  `/claude/cadence-close-13/bin/cadence serve` and whose `settings.json` has
+  no hooks.
+- Binary: the debug build at HEAD `99126c45` (the same build the section 2
+  reruns exercised), copied to `/claude/cadence-close-13/bin/cadence`;
+  `cadence --version` reports `cadence 3.7.12` (the crate's version string,
+  not yet bumped).
+- Each installed skill is byte-equal (`cmp`) to the binary's own render:
+  `verifier-instructions` = cad-verifier-contract, `verifier-instructions
+  --frontdoor` = cad-verify, `executor-instructions` = cad-executor-contract,
+  `executor-instructions --frontdoor` = cad-execute, `review-instructions` =
+  cad-review, `review-instructions --alias <name>` = the three aliases,
+  `audit-instructions` = cad-audit, `audit-instructions --coverage` =
+  cad-coverage.
 
-**Withheld.** Sections 2, 3 and 4 are unfinished, so phase 13's close is
-unfinished and this report claims no readiness. When they are recorded, the
-decision is made on them, on section 1's classified limits, and on the
-verifier's inspection of the actual artifacts - never on this prose.
+### 3b. Installed identities (sha256 of the bytes at the install root)
+
+| path under `/claude/cadence-close-13` | sha256 |
+|---|---|
+| `bin/cadence` | `bdc52e89734cb15883664701b996c8e5281c75613fb82f6138d9629931ad5ceb` |
+| `config/agents/cad-executor-low.md` | `c6857c7cad893798b63e8c15487c324b527e561bc25a346d328cf6cc592bcd75` |
+| `config/agents/cad-executor-max.md` | `94c541df5e116c4fc7cd78d52697bab7a709196ac3f4142910b6ade306d67200` |
+| `config/agents/cad-executor.md` | `d39857c787a0d1e6241bf745d5c44f28eb07ca2a205468cc7ff345943109160a` |
+| `config/agents/cad-executor-medium.md` | `0572233e7aeaf5875f15b363521a837a89506f349ba9510467ffd0d33148a017` |
+| `config/agents/cad-executor-xhigh.md` | `2f1a84c63d737e6548e18e76286228d4a9e7ca849e4cbf6b98bba16d24feae24` |
+| `config/agents/cad-verifier-low.md` | `99bc2db17afaab2e1b46d4208149a41b3a6e76a6ff7bd56c3504cf3bcb19f9e5` |
+| `config/agents/cad-verifier-max.md` | `81c117891fc920bfa508e23cd0ebe15404724f1db1a9302456490c0362c81317` |
+| `config/agents/cad-verifier.md` | `decb90830eafb9f6ac6960c14fb4b27a488958e98c5d4847839668354daeaf11` |
+| `config/agents/cad-verifier-medium.md` | `a62fac3e813776c3b5ae5e6c6c42b8fe150f7de4e2da2e564fcfe0c89d5215cc` |
+| `config/agents/cad-verifier-xhigh.md` | `f1d379a90bb0fd8fdbe4df10fae7b4f0953faa32e0a6c8092b5892b6f8b89b7d` |
+| `config/.claude.json` | `2b5e7cf89529ab99edb08ee0aff40ab267c1ea9ef127b13b906b9fa414dc4fda` |
+| `config/settings.json` | `78922a784ee78e9e50587e93628cd3b9d4dfbe49087adc4514e6781cea38cbb9` |
+| `config/skills/cad-audit/SKILL.md` | `bdee5eaf572d9a393db6a56bc42b4965efecfa8fc37302be3eb9a14578e8e763` |
+| `config/skills/cad-coverage/SKILL.md` | `ad7a05b4e3872dce8e941e3bd4c7f7d1ac051d4c0ce1d72e4c02e61c412c43f3` |
+| `config/skills/cad-decision-review/SKILL.md` | `aa7407a9d90bec8a17dee555e3b7122302b35357048c14866c6838c9aba5f870` |
+| `config/skills/cad-execute/SKILL.md` | `b9d4f86db8566cb97435773945b2d70a6341a1847c9aed9c81b99b51f25cccd4` |
+| `config/skills/cad-executor-contract/SKILL.md` | `b3350a25726a1948a0d410935f449f79c4cccc7bfb1f3e9978a3281d025e897c` |
+| `config/skills/cad-minimalism-review/SKILL.md` | `ae401595fc534232781bd4d30684303f09220174749ba6a12a164e4cdd9e96e6` |
+| `config/skills/cad-plan-review/SKILL.md` | `9c50fbea8f10e4253a77998fccae48e9d393b53ddf4197a5717ee96428ab7f6c` |
+| `config/skills/cad-review/SKILL.md` | `98aaab67acafdf2a70fe0eb7b814dfcbc095f109c4edc7099f57592325adc8db` |
+| `config/skills/cad-verifier-contract/SKILL.md` | `8d57bda3ac1abfc35d6b21bab6469894ee64d6cf3b6d6f321f7d35e9355d23ac` |
+| `config/skills/cad-verify/SKILL.md` | `cf5ef35af9a622a36beb866fbb0769760a9b47b3b668361ff2226c823d640ba9` |
+| `MANIFEST.sha256` | `e859067baa7f13c6b0cd96595fdf3aeadafcbc3e4fb0b55f763e1d260f5c08d4` |
+
+### 3c. Dispatch confirmation on a fresh disposable project
+
+Driver: a stdio JSON-RPC client spawning
+`/claude/cadence-close-13/bin/cadence serve --project-root <fresh tmp dir>`,
+`initialize`, `notifications/initialized`, `tools/list`, then one
+`cadence_query` each for the planner (`plan-read`), executor (`execute-next`)
+and verifier (`verify-next`) dispatch on phase 13. Literal output:
+
+    serverInfo {"name": "cadence", "version": "3.7.12"}
+    tools ['cadence_version', 'cadence_query', 'cadence_apply']
+    plan-read {"status": "ok", "operation": "plan-read", "phase": "13", "persisted": false, "plans": [], "inventory": {"occupied": [], "high_water": 0, "basis": "965c9e45df128c77a0712c52f1ed15bb0df58d28b944865f56a98269f4c5b4b8", "documents": {}, "provenance": {}}, "targets": [], "occurrence": "active-cycle:phase:
+    execute-next {"status": "refused", "code": "missing-roadmap", "reason": "execution validation failed (missing-roadmap); check the controlling inputs and retry"}
+    verify-next {"status": "refused", "code": "invalid-plan", "reason": "native approved truths required", "rule": "native-approved-truths", "slot": "context", "phase": 13, "entry": null, "id": null}
+    server exit 0
+    project /tmp/cadence-close13-fresh-bqb65uyg ['.planning']
+    binary sha256 bdc52e89734cb15883664701b996c8e5281c75613fb82f6138d9629931ad5ceb pid-binary /claude/cadence-close-13/bin/cadence
+
+Each answer comes from the installed binary (serverInfo and the running
+executable path above). On a fresh project the executor and verifier
+dispatches are located refusals, which is the correct answer for a project
+with no roadmap and no native approved truths; the planner preview returns
+an empty inventory for the phase. No live project was touched.
+
+## 4. Hook retirement (orchestrator; inspected 2026-09-11, not performed)
+
+The live root `/claude/.claude` was inspected and recorded in
+`hook-retirement.md`, "Installed result": settings `c9c601f7404c0d2d…`, hook
+`017568fd9bc069d5…`, one `PreToolUse` registration spelled
+`node "$HOME/.claude/hooks/rules-gate.mjs"`. The script was not run. Two
+reasons, both recorded there: the owner's 2026-09-11 decision keeps the live
+root free of Cadence until 4.0 ships, so D-121's installed precondition is
+not met at that root; and the `$HOME` spelling is not the absolute command
+identity `close/rules-gate.md` accepts, which requires a reviewed step before
+any run. Retirement is carried to phase 18 with fresh inspection.
+
+## 5. Go/no-go (decided by the owner 2026-09-11: GO)
+
+Inputs on the table: section 1's rehearsal and classified limits; section 2's
+seven independent reruns at `99126c45`, all `1 passed; 0 failed`; the
+verifier's report `verify.md`, twenty items accepted, none rejected, none not
+seen, with every red confirmed behavioral in its own rerun and both links
+traced to file and line; section 3's isolated install with dispatch confirmed
+from the installed binary; section 4's inspected, not performed, hook
+retirement.
+
+Decision, confirmed by the owner on 2026-09-11 as written:
+
+- Phase 13 closes on its checks: every truth T1 to T7 has its accepted
+  check, links and observations. Two close steps are carried, not done:
+  live installation at the owner's root and the rules-gate retirement, both
+  to phase 18 under the owner's 2026-09-11 decision that nothing goes live
+  before 4.0 ships. They are recorded as explicit limits, not as done.
+- Phase 14 is GO as the first native self-hosting phase, on these terms:
+  its context and plans are authored natively (`context-submit`, `plan-read`,
+  `plan-submit`), history before it stays imported and unapproved, and the
+  one classified incompatibility from the rehearsal, `execute-next 13`
+  refusing with `state-conflict` at `ROADMAP.md:377 entry 8` (phase 8
+  declared complete, derived incomplete), is the first thing phase 14's
+  context must decide: repair the roadmap row or record the declared state
+  as imported and unverified.
+- The verifier's seven notes outside the map (T1's red is the later of two
+  test commits, T5's red is partial, T3's shared-link case is single-truth,
+  T7 exercises rejected not not_seen, T1-C's configured-command assertion is
+  negative only) change no verdict and are left as recorded for the phase
+  14 planner to read before reusing those checks (D-120).
+
+No section of this report says the live system is ready; readiness is
+claimed only for what sections 2 and 3 observed.

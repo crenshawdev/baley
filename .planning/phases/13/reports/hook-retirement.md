@@ -71,7 +71,40 @@ CLOSE_REHEARSAL {"program":"python3","script":"/code/cadence/.planning/phases/13
 CLOSE_REHEARSAL {"program":"python3","script":"/code/cadence/.planning/phases/13/close/retire-rules-gate.py","args":["retire","--settings-root","/tmp/.tmpsIo31q/partial","--settings-sha256","af844ec764c424ebf52c5a5c74062a741f7e8ad4468458d1e1cdce67887fb78f","--hook-sha256","c025096641631a2ecfffab64d7631fd4d9a7c98a63d5c5242eb9bb202a66fce2","--command","node /tmp/.tmpsIo31q/partial/hooks/rules-gate.mjs","--recovery","/tmp/.tmpsIo31q/reinspected-recovery"],"exit":0,"answer":{"status":"retired","binding":{"root":"/tmp/.tmpsIo31q/partial","command":["node","/tmp/.tmpsIo31q/partial/hooks/rules-gate.mjs"],"settings":"af844ec764c424ebf52c5a5c74062a741f7e8ad4468458d1e1cdce67887fb78f","hook":"c025096641631a2ecfffab64d7631fd4d9a7c98a63d5c5242eb9bb202a66fce2"},"removed":3,"settings_after":"71fe5b5f249cc03172973a38bb2bb347267014d92352755009cacea2cc9da1ed","recovery":"/tmp/.tmpsIo31q/reinspected-recovery"}}
 ```
 
-## Installed result — PENDING PLAN-4 close
+## Installed result — inspected 2026-09-11, retirement NOT performed
+
+Inspection only; the script was not run and no live byte changed.
+
+| input | observed |
+| --- | --- |
+| settings root | `/claude/.claude` (the owner's live root; `$HOME` resolves to `/claude`) |
+| settings SHA-256 | `c9c601f7404c0d2df7271e4d4a682e88b8bc46f9b9064002ea78dd71f8b5df3a` |
+| hook SHA-256 | `017568fd9bc069d5a16cf737df60d6d82f5540d9cbc3fffa592ce8a90b7bcf5f` (`hooks/rules-gate.mjs`, present) |
+| registrations | one: `PreToolUse`, matcher `mcp__codex__codex|Agent`, command `node "$HOME/.claude/hooks/rules-gate.mjs"` |
+| sibling hooks in the same root | `memory-recall-gate.py`, `rules-gate.mjs.2026-09-08-pre-eleven.bak`, `rules-gate.mjs.2026-09-09-pre-suspend.bak`; untouched |
+
+Why it was not retired, in the owner's order:
+
+1. The owner decided on 2026-09-11 that no Cadence is installed live until
+   4.0 ships. Section 3 of `adoption-readiness.md` therefore records an
+   isolated install (`/claude/cadence-close-13`), not the live root. D-121's
+   precondition, that the three role dispatches are binary-composed and
+   installed where the hook lives, is not met at the live root, so the
+   registration still does its job there: it is the only check on the
+   prompts the orchestrator hands to agents while dispatch is done by hand.
+2. The live registration spells the hook path as `"$HOME/.claude/hooks/rules-gate.mjs"`.
+   `close/rules-gate.md` accepts only `node` plus the root's absolute
+   `hooks/rules-gate.mjs`, and says a different installed form requires
+   review before the procedure runs and the matcher is never broadened. The
+   `$HOME` form is that different form. When retirement is scheduled, the
+   reviewed step is to record the registration bytes, then either rewrite the
+   registration to the absolute spelling under the same inspection before
+   running `retire`, or extend the script's accepted command identity with
+   its own test; neither is done here.
+
+Retirement is carried to the phase that puts the binary live at the owner's
+root (phase 18, live-host acceptance), with the identities above as the
+preimage to re-inspect; they will be stale by then and must be taken again.
 
 No installed-state inspection or removal has been performed by PLAN-1.
 The orchestrator must inspect the installed binary and compiled front doors,
