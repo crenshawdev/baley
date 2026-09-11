@@ -33,6 +33,26 @@ pub fn result<'a>(records: &'a [Record], run_id: &str) -> Option<&'a Record> {
     records.iter().find(|r| matches!(&r.event, Event::Result { run_id: id, .. } if id == run_id))
 }
 
+/// Exit zero alone is not an independent observed check. Require a complete,
+/// recognized successful summary that actually reports at least one test.
+pub fn acceptable(result: &RunResult) -> bool {
+    use crate::execution::receipts::{Disposition, Observation, Summary};
+    if result.disposition != (Disposition::Exited { code: 0 }) || !result.stdout.complete || !result.stderr.complete {
+        return false;
+    }
+    let passed = matches!(&result.observation,
+        Observation::ResultsObserved { summary: Summary::Cargo { failed: false } }
+        | Observation::ResultsObserved { summary: Summary::Unittest { failed: false, failures: 0, errors: 0 } });
+    let nonempty = [&result.stdout, &result.stderr].iter().any(|capture| {
+        String::from_utf8_lossy(&capture.bytes).lines().any(|line| {
+            let words: Vec<_> = line.split_whitespace().collect();
+            (words.first() == Some(&"Ran") && words.get(1).is_some_and(|n| n.parse::<u64>().is_ok_and(|n| n > 0)))
+                || (line.starts_with("test result: ok.") && words.get(3).is_some_and(|n| n.parse::<u64>().is_ok_and(|n| n > 0)))
+        })
+    });
+    passed && nonempty
+}
+
 pub fn decision(record: &Record) -> Result<DecisionRecord> {
     Ok(DecisionRecord { version: 1, id: format!("verification-run:{}", record.id), revision: 1,
         origin: Origin { source: "verification-run-1".into(), original: Evidence::Missing },

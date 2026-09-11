@@ -50,6 +50,13 @@ every association. Each verdict is accepted, rejected or not_seen, with what
 you actually observed and independent run references for checks. Explicit
 not_seen records inspected but unavailable evidence. Membership validation
 does not establish judgment quality. A stored rejected verdict stays rejected.
+An attempt accepts one complete patch. A later inspection needs a fresh
+verify-next request identity; it cannot revise the completed attempt. An exact
+submission replay returns the original acknowledgment, including a historical
+refusal. Changed payload under that request identity is refused. Reference the
+latest independent launch for each accepted check; it must have a complete,
+successful, nonzero-test result on this exact source. Inspect its actual output
+and assertion strength; recognition alone does not establish judgment quality.
 
 Record an observation as seen or not seen, by whom and when, in observed.
 All accepted evidence with an observation caps the truth at concerns; any

@@ -876,12 +876,16 @@ impl ServerHandler for PublicServer {
             }
             "cadence_apply" => {
                 if raw.as_ref().and_then(|v| v["operation"].as_str()).is_some_and(|op| op.starts_with("verification-") || op == "truth-waive") {
-                    let answer = match serde_json::from_value::<ApplyArguments>(raw.unwrap()) {
-                        Ok(ApplyArguments::Verification(operation)) => {
+                    let raw = raw.unwrap();
+                    if raw.to_string().len() > 262144 {
+                        return structured_result(Ok(ApplyOutput::NativeExecution(serde_json::json!({"status":"refused",
+                            "rule":"verification-shape","slot":"patch","reason":"verification input exceeds 262144 bytes"}))));
+                    }
+                    let answer = match serde_json::from_value::<cadence::verification::model::Apply>(raw) {
+                        Ok(operation) => {
                             return structured_result(self.server.service.verification_apply(&self.root, operation).await.map(ApplyOutput::NativeExecution));
                         }
-                        Err(error) => serde_json::json!({"status":"refused","rule":"verification-shape","reason":error.to_string()}),
-                        Ok(_) => unreachable!("selected verification operation"),
+                        Err(error) => serde_json::json!({"status":"refused","rule":"verification-shape","reason":error.to_string().chars().take(2048).collect::<String>()}),
                     };
                     return structured_result(Ok(ApplyOutput::NativeExecution(answer)));
                 }
@@ -1056,7 +1060,7 @@ impl ServerHandler for PublicServer {
                             "risk-check arguments do not match the strict operation schema",
                         )));
                     }
-                    Some(ApplyArguments::Verification(_)) => unreachable!("verification routed before generic apply"),
+                    Some(ApplyArguments::Verification(operation)) => unreachable!("verification routed before generic apply: {operation:?}"),
                     None => self.refuse_raw(BoundaryTool::CadenceApply, raw).await,
                 };
                 execution_result(answer)

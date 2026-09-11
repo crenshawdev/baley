@@ -1,5 +1,5 @@
 //! Resident adapter; all writes use the existing session's single store queue.
-use cadence::{store::{Error, Result, writer::Operation}, verification::{inputs, model::{Query, Apply}, persistence, runner}};
+use cadence::{store::{Error, Result, writer::Operation}, verification::{inputs, model::{Query, Apply}, persistence, runner, verdicts}};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -15,6 +15,19 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             session.config()?;
             runner::launch(session.review_store().clone(), root.into(), *request).await
                 .map(|receipt| json!({"status":"ok","receipt":receipt}))
+        }
+        Command::Apply(Apply::Submit { patch }) => {
+            let session = factory.first_touch(root).await?;
+            session.config()?;
+            let view = session.derivation_view().await?;
+            if let Some(answer) = verdicts::replay(&view.snapshot.data, &patch)? { return Ok(answer); }
+            let claim = verdicts::prepare(root, &view.snapshot.data, *patch)?;
+            let transaction = verdicts::transaction(&view.snapshot.data, &claim)?;
+            let written = session.review_store().request(Operation::CompareTransact {
+                expected_generation: view.snapshot.generation, expected_integrity: view.snapshot.integrity, transaction,
+            }).await;
+            written.and_then(|view| verdicts::replay(&view.snapshot.data, &claim.patch)?
+                .ok_or_else(|| Error::Invalid("confirmed verification claim absent".into())))
         }
         Command::Apply(_) => Err(inputs::refuse(0, "verification-unavailable", "operation", "operation is not implemented")),
     };

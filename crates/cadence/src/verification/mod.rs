@@ -5,3 +5,4 @@ pub mod inputs;
 pub mod dispatch;
 pub mod persistence;
 pub mod runner;
+pub mod verdicts;

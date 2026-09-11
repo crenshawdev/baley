@@ -512,6 +512,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let mut next = self.view.clone();
         let mut external = Vec::new();
         let mut operations = next.snapshot.operations.clone();
+        let mut verification_claim = None;
         let operation_name = match operation {
             Operation::ObservePlan { phase, plan, reply } => {
                 self.revalidate()?;
@@ -578,6 +579,21 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     {
                         return Err(Error::Conflict(STALE_SNAPSHOT.into()));
                     }
+                }
+                if transaction.decisions.iter().any(|d| d.origin.source == cadence::verification::verdicts::SCHEMA) {
+                    use cadence::verification::verdicts;
+                    let record = transaction.decisions.first().ok_or_else(|| Error::Invalid("verification claim absent".into()))?;
+                    let model::Decision::Gate { evidence: model::Evidence::Text(encoded), .. } = &record.decision else {
+                        return Err(Error::Invalid("verification claim encoding invalid".into()));
+                    };
+                    let claim: verdicts::Claim = serde_json::from_str(encoded)?;
+                    let current = verdicts::prepare(&claim.root, &self.view.snapshot.data, claim.patch.clone())?;
+                    if claim != current || transaction.fingerprint()? != verdicts::transaction(&self.view.snapshot.data, &claim)?.fingerprint()?
+                        || transaction.id != verdicts::transaction(&self.view.snapshot.data, &claim)?.id
+                        || claim.root_binding != self.observed[STATE].directory_identity {
+                        return Err(Error::Conflict("verification claim changed at committing snapshot".into()));
+                    }
+                    verification_claim = Some(claim);
                 }
                 operations.insert(transaction.id, fingerprint);
                 next.items.extend(transaction.items);
@@ -710,10 +726,12 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             operations,
             participants,
             operation_name,
-            plan_intent.unwrap_or(match context_phase {
+            if let Some(claim) = verification_claim {
+                super::transaction::IntentKind::VerificationSubmitV1 { root_binding: self.observed[STATE].directory_identity.clone(), claim: Box::new(claim) }
+            } else { plan_intent.unwrap_or(match context_phase {
                 Some(phase) => super::transaction::IntentKind::ContextPublication { phase },
                 None => super::transaction::IntentKind::Store,
-            }),
+            }) },
         )
     }
 
