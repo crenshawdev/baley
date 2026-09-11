@@ -910,3 +910,300 @@ fn phase13_incomplete_verification_cannot_complete_phase() {
         assert!(!project.join(name).exists());
     }
 }
+
+// The real decision document: D-1 continues onto a second line, D-2 is one
+// line, and D-3 is declared twice so the selection is ambiguous.
+const DECISIONS: &str = "# Fixture decisions\n\n## Decisions\n\n- D-1. Parcels ship by ground.\n  Ground shipping is cheaper for the fixture.\n- D-2. The recipient signs on delivery.\n- D-3. Insurance is optional.\n- D-3. Insurance is required.\n";
+const D2: &str = "- D-2. The recipient signs on delivery.\n";
+// Handwritten compiled intents. Both the local dispatch and the provider
+// payload fragment must carry exactly these words for the selected kind.
+const DECISION_INTENT: &str = "Refute the selected decision: argue against it from the retained decision text and its retained inline context, name the claim each objection rests on, and apply no amendment.";
+const MINIMALISM_INTENT: &str = "Rank code that should not exist, as a deletion list ordered by severity: reinvented standard library or dependency, an abstraction with one implementation, unused flexibility and configuration nobody sets. Propose deletions; apply nothing.";
+const PLAN_INTENT: &str = "Work backward from the phase goal and its locked decisions: for each task ask which truth it serves, whether the retained plan can deliver it as written, and whether any step contradicts a locked or durable decision. Return findings; edit nothing.";
+
+fn select(project: &std::path::Path, command: &str, arguments: &[&str], key: &str) -> Value {
+    query(project, json!({"operation":"review-select","command":command,"arguments":arguments,"replay_key":key}))
+}
+
+// Admit the selection exactly as returned, take the saved dispatch, and read
+// every retained entry back through review-material: (admitted, next, entries).
+fn deliver(project: &std::path::Path, admission: &Value) -> (Value, Value, Vec<(Value, Vec<u8>)>) {
+    let mut client = Client::open(project);
+    let admitted = client.call("cadence_apply", json!({"operation":"review-admit","request":admission}));
+    assert_eq!(admitted["status"], "ok", "{admitted}");
+    let next = client.call("cadence_query", json!({"operation":"review-next","fire":admitted["result"]["fire"]}));
+    assert_eq!(next["status"], "ok", "{next}");
+    assert_eq!(next["result"]["state"], "dispatch", "{next}");
+    let attempt = next["result"]["attempt"].clone();
+    let mut entries = Vec::new();
+    for entry in attempt["view"]["entries"].as_array().unwrap() {
+        let read = client.call("cadence_query", json!({"operation":"review-material","attempt":attempt["attempt"],"entry":entry}));
+        assert_eq!(read["status"], "ok", "{read}");
+        let bytes: Vec<u8> = serde_json::from_value(read["result"]["bytes"].clone()).unwrap();
+        entries.push((read["result"]["entry"].clone(), bytes));
+    }
+    client.finish();
+    (admitted, next, entries)
+}
+
+fn entry_bytes<'a>(entries: &'a [(Value, Vec<u8>)], path: &str) -> &'a [u8] {
+    &entries.iter().find(|(entry, _)| entry["path"] == path).unwrap_or_else(|| panic!("retained entry {path}")).1
+}
+
+#[test]
+fn phase13_review_surface_selects_target_and_intent() {
+    let fixture = Completed::new();
+    let project = fixture.project();
+    let root = project.to_string_lossy().into_owned();
+    std::fs::create_dir(project.join("docs")).unwrap();
+    std::fs::write(project.join("docs/decisions.md"), DECISIONS).unwrap();
+    git_value(project, &["add", "docs/decisions.md"]);
+    git_value(project, &["commit", "-m", "Fixture decisions"]);
+    let subject = std::fs::read(project.join("src/a.py")).unwrap();
+    assert_eq!(subject, b"def answer():\n    return 7\n");
+    let sha = |bytes: &[u8]| cadence::store::model::digest(bytes);
+    let before = tree(project);
+    let stored = reopened(project).snapshot;
+    let inventory = || query(project, json!({"operation":"review-inventory"}));
+    let admissions = |value: &Value| value["result"]["records"]["admissions"].as_object().map_or(0, |a| a.len());
+    assert_eq!(admissions(&inventory()), 0);
+    // Missing, ambiguous and unresolvable selections request a target and
+    // stop: nothing is admitted and nothing widens to a parent or the tree.
+    std::fs::write(project.join("13"), b"a file whose name is also a phase number\n").unwrap();
+    for (command, arguments, code, request) in [
+        ("cad-review", vec![], "review-kind-required", "decision, minimalism or plan"),
+        ("cad-review", vec!["diff", "src/a.py"], "review-kind-unknown", "decision, minimalism or plan"),
+        ("cad-unknown-review", vec!["src/a.py"], "review-command-unknown", "cad-review"),
+        ("cad-review", vec!["decision"], "review-target-required", "<document> <decision-id>"),
+        ("cad-review", vec!["decision", "docs/decisions.md"], "review-target-required", "<decision-id>"),
+        ("cad-decision-review", vec![], "review-target-required", "<document> <decision-id>"),
+        ("cad-review", vec!["decision", "docs/decisions.md", "D-2", "extra"], "review-target-ambiguous", "one document and one decision id"),
+        ("cad-review", vec!["decision", "docs/decisions.md", "D-3"], "review-target-ambiguous", "lines 8 and 9"),
+        ("cad-review", vec!["decision", "docs/decisions.md", "D-9"], "review-target-unresolvable", "D-9"),
+        ("cad-review", vec!["decision", "docs/missing.md", "D-1"], "review-target-unresolvable", "docs/missing.md"),
+        ("cad-review", vec!["minimalism"], "review-target-required", "<file|directory|phase>"),
+        ("cad-minimalism-review", vec![], "review-target-required", "<file|directory|phase>"),
+        ("cad-review", vec!["minimalism", "src/none.py"], "review-target-unresolvable", "src/none.py"),
+        ("cad-review", vec!["minimalism", "13"], "review-target-ambiguous", "phase:13"),
+        ("cad-review", vec!["minimalism", "phase:42"], "review-target-unresolvable", "phase 42"),
+        ("cad-review", vec!["minimalism", "src", "tests"], "review-target-ambiguous", "one file, directory or phase"),
+        ("cad-review", vec!["plan"], "review-target-required", "<phase|plan-path>"),
+        ("cad-plan-review", vec![], "review-target-required", "<phase|plan-path>"),
+        ("cad-review", vec!["plan", "42"], "review-target-unresolvable", "phase 42"),
+        ("cad-review", vec!["plan", ".planning/phases/13/PLAN-9.md"], "review-target-unresolvable", "PLAN-9.md"),
+    ] {
+        let refused = select(project, command, &arguments, "refused");
+        assert_eq!(refused["status"], "refused", "{command} {arguments:?}: {refused}");
+        assert_eq!(refused["code"], code, "{command} {arguments:?}: {refused}");
+        assert!(refused["reason"].as_str().unwrap().contains(request), "{command} {arguments:?}: {refused}");
+    }
+    assert_eq!(admissions(&inventory()), 0, "a refused selection admits nothing");
+    assert_eq!(std::fs::read(project.join("docs/decisions.md")).unwrap(), DECISIONS.as_bytes());
+    std::fs::remove_file(project.join("13")).unwrap();
+    assert_eq!(tree(project), before, "selection is read-only");
+    assert_eq!(reopened(project).snapshot, stored);
+    // Decision: the exact decision line and the exact document bytes reach
+    // the reviewer with the compiled refutation intent; the alias selects the
+    // same canonical kind and target.
+    let decision = select(project, "cad-review", &["decision", "docs/decisions.md", "D-2"], "decision-key");
+    assert_eq!(decision["status"], "ok", "{decision}");
+    let selected = &decision["result"];
+    assert_eq!(selected["command"], "cad-review");
+    assert_eq!(selected["canonical"], "cad-review");
+    assert_eq!(selected["kind"], "decision");
+    assert_eq!(selected["aliases"], json!(["cad-decision-review"]));
+    assert_eq!(selected["target"], json!({"kind":"decision","selected":"D-2","context_entries":["docs/decisions.md"]}));
+    assert_eq!(selected["material"], json!([
+        {"label":"decision","path":"docs/decisions.md","lines":[7,7],"digest":sha(D2.as_bytes())},
+        {"label":"context","path":"docs/decisions.md","lines":[1,9],"digest":sha(DECISIONS.as_bytes())}]));
+    assert_eq!(selected["intent"], DECISION_INTENT);
+    let discriminator = selected["discriminator"].as_str().unwrap();
+    assert_eq!(discriminator.len(), 64);
+    assert_eq!(selected["admission"], json!({"replay_key":"decision-key","caller":"cad-review","trigger":null,"specialist":"decision",
+        "project":root,"cycle":"live","home":{"kind":"root-inline","id":format!("select-{}", &discriminator[..16])},
+        "discriminator":discriminator,"phase":null,"plan":null,"anchor":null,"round":1,
+        "target":selected["target"],"decision":{"decision":"D-2","text":D2,"context":DECISIONS},"risk_observation":null,
+        "selection":{"kind":"decision","document":"docs/decisions.md","digest":sha(DECISIONS.as_bytes()),"lines":[7,7]}}));
+    assert_eq!(select(project, "cad-review", &["decision", "docs/decisions.md", "D-2"], "decision-key"), decision, "selection replays identically");
+    let alias = select(project, "cad-decision-review", &["docs/decisions.md", "D-2"], "decision-key");
+    assert_eq!(alias["status"], "ok", "{alias}");
+    assert_eq!(alias["result"]["command"], "cad-decision-review");
+    let mut canonical = alias["result"].clone();
+    canonical["command"] = json!("cad-review");
+    assert_eq!(canonical, *selected, "the alias resolves the same canonical selection");
+    let d1 = select(project, "cad-review", &["decision", "docs/decisions.md", "D-1"], "d1-key");
+    assert_eq!(d1["result"]["admission"]["decision"]["text"], "- D-1. Parcels ship by ground.\n  Ground shipping is cheaper for the fixture.\n");
+    assert_eq!(d1["result"]["material"][0]["lines"], json!([5,6]));
+    // A caller cannot substitute its own paragraph for the resolved document.
+    let mut tampered = selected["admission"].clone();
+    tampered["decision"]["text"] = json!("- D-2. The recipient never signs.\n");
+    let refused = apply(project, json!({"operation":"review-admit","request":tampered}));
+    assert_eq!(refused["status"], "refused", "{refused}");
+    assert!(refused["reason"].as_str().unwrap().contains("selected decision differs from the resolved document"), "{refused}");
+    assert_eq!(admissions(&inventory()), 0);
+    let (admitted, next, entries) = deliver(project, &selected["admission"]);
+    assert_eq!(admitted["result"]["replayed"], false);
+    let dispatch = &next["result"]["dispatch"];
+    assert_eq!(dispatch["local"], true);
+    assert_eq!(dispatch["agent"], "cad-reviewer");
+    let prompt = dispatch["prompt"].as_str().unwrap();
+    assert!(prompt.contains(DECISION_INTENT), "{prompt}");
+    assert!(prompt.contains(&format!("Review retained target {}", admitted["result"]["fire"].as_str().unwrap().replace('f', "m"))), "{prompt}");
+    assert_eq!(next["result"]["admission"]["specialist"], "decision");
+    assert_eq!(next["result"]["admission"]["trigger"], Value::Null);
+    assert_eq!(next["result"]["admission"]["gate"], Value::Null);
+    assert_eq!(next["result"]["admission"]["discriminator"], discriminator);
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entry_bytes(&entries, "decision"), D2.as_bytes());
+    assert_eq!(entry_bytes(&entries, "context"), DECISIONS.as_bytes());
+    let replayed = apply(project, json!({"operation":"review-admit","request":selected["admission"]}));
+    assert_eq!(replayed["result"], json!({"fire":admitted["result"]["fire"],"attempt":admitted["result"]["attempt"],"replayed":true}));
+    assert_eq!(admissions(&inventory()), 1);
+    // Minimalism over a named file, a frozen directory and a native phase
+    // range: the base reviewer, no provider, no gate, ranked deletion intent.
+    let file = select(project, "cad-review", &["minimalism", "src/a.py"], "file-key");
+    assert_eq!(file["status"], "ok", "{file}");
+    assert_eq!(file["result"]["kind"], "minimalism");
+    assert_eq!(file["result"]["aliases"], json!(["cad-minimalism-review"]));
+    assert_eq!(file["result"]["target"], json!({"kind":"named-file","path":"src/a.py","head":null}));
+    assert_eq!(file["result"]["material"], json!([{"label":"file","path":"src/a.py","lines":[1,2],"digest":sha(&subject)}]));
+    assert_eq!(file["result"]["intent"], MINIMALISM_INTENT);
+    let file_discriminator = file["result"]["discriminator"].as_str().unwrap();
+    assert_eq!(file["result"]["admission"], json!({"replay_key":"file-key","caller":"cad-review","trigger":null,"specialist":"minimalism",
+        "project":root,"cycle":"live","home":{"kind":"root-inline","id":format!("select-{}", &file_discriminator[..16])},
+        "discriminator":file_discriminator,"phase":null,"plan":null,"anchor":null,"round":1,
+        "target":file["result"]["target"],"decision":null,"risk_observation":null,"selection":null}));
+    let mut alias = select(project, "cad-minimalism-review", &["src/a.py"], "file-key");
+    assert_eq!(alias["result"]["command"], "cad-minimalism-review");
+    alias["result"]["command"] = json!("cad-review");
+    assert_eq!(alias, file);
+    assert_eq!(select(project, "cad-review", &["minimalism", "file:src/a.py"], "file-key"), file);
+    let (_, next, entries) = deliver(project, &file["result"]["admission"]);
+    let prompt = next["result"]["dispatch"]["prompt"].as_str().unwrap();
+    assert!(prompt.contains(MINIMALISM_INTENT), "{prompt}");
+    assert!(!prompt.contains(DECISION_INTENT) && !prompt.contains(PLAN_INTENT));
+    assert_eq!(next["result"]["admission"]["specialist"], "minimalism");
+    assert_eq!(next["result"]["admission"]["gate"], Value::Null);
+    assert_eq!(next["result"]["admission"]["trigger"], Value::Null);
+    assert_eq!(next["result"]["admission"]["routing"], Value::Null);
+    assert_eq!(next["result"]["admission"]["selection"], json!({"mode":"single","choices":["base"],"fallback":null}));
+    assert_eq!(next["result"]["admission"]["roster"], json!({"required":["base"],"completion":"all-required-terminal"}));
+    assert_eq!(next["result"]["attempt"]["requested"], json!({"agent":"cad-reviewer","model":null,"effort":null,"routing":null,
+        "selection_evidence":format!("minimalism:{}", next["result"]["admission"]["artifact"].as_str().unwrap())}));
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entry_bytes(&entries, "src/a.py"), subject.as_slice());
+    let directory = select(project, "cad-review", &["minimalism", "src"], "dir-key");
+    assert_eq!(directory["status"], "ok", "{directory}");
+    assert_eq!(directory["result"]["target"], json!({"kind":"directory","path":"src","members":["a.py","b.py"]}));
+    assert_eq!(directory["result"]["material"], json!([
+        {"label":"member","path":"src/a.py","lines":[1,2],"digest":sha(&subject)},
+        {"label":"member","path":"src/b.py","lines":[1,2],"digest":sha(&std::fs::read(project.join("src/b.py")).unwrap())}]));
+    assert_eq!(select(project, "cad-review", &["minimalism", "dir:src"], "dir-key"), directory);
+    let (_, next, entries) = deliver(project, &directory["result"]["admission"]);
+    assert!(next["result"]["dispatch"]["prompt"].as_str().unwrap().contains(MINIMALISM_INTENT));
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entry_bytes(&entries, "src/a.py"), subject.as_slice());
+    assert_eq!(entry_bytes(&entries, "src/b.py"), std::fs::read(project.join("src/b.py")).unwrap().as_slice());
+    let execution = history(project);
+    let base = execution["events"].as_array().unwrap().iter()
+        .find(|e| e["request"]["event"]["kind"] == "attempt").unwrap()["request"]["event"]["base_commit"].clone();
+    let head = fixture.pairs[1]["green_commit"].clone();
+    let phase = select(project, "cad-review", &["minimalism", "phase:13"], "phase-key");
+    assert_eq!(phase["status"], "ok", "{phase}");
+    assert_eq!(phase["result"]["target"], json!({"kind":"phase-range","phase":"13","base":base,"head":head}));
+    assert_eq!(phase["result"]["admission"]["phase"], 13);
+    assert_eq!(phase["result"]["admission"]["home"], json!({"kind":"phase","id":"13"}));
+    assert_eq!(select(project, "cad-review", &["minimalism", "13"], "phase-key"), phase, "unambiguous once the file named 13 is gone");
+    let (_, next, entries) = deliver(project, &phase["result"]["admission"]);
+    assert!(next["result"]["dispatch"]["prompt"].as_str().unwrap().contains(MINIMALISM_INTENT));
+    assert_eq!(next["result"]["admission"]["specialist"], "minimalism");
+    assert_eq!(next["result"]["admission"]["gate"], Value::Null);
+    let diff = String::from_utf8(entries.iter().find(|(e, _)| e["label"] == "diff").unwrap().1.clone()).unwrap();
+    assert!(diff.contains("+++ b/src/a.py") && diff.contains("+    return 7"), "{diff}");
+    let heads: Vec<_> = entries.iter().filter(|(e, _)| e["side"] == "head").map(|(e, _)| e["path"].as_str().unwrap()).collect();
+    assert_eq!(heads, ["src/a.py", "src/b.py", "tests/a.py", "tests/b.py"]);
+    assert_eq!(entries.iter().find(|(e, _)| e["side"] == "head" && e["path"] == "src/a.py").unwrap().1, subject);
+    // Plan: the phase's native slices and locked context reach the reviewer
+    // through the ordinary manual-plan trigger with its configured gate.
+    std::fs::write(project.join(".planning/config.json"), serde_json::to_vec(&json!({"review":{"triggers":{
+        "plan":{"gate":"blocking"},"risk_surface":{"surfaces":cadence::rail::risk::CATEGORIES}}}})).unwrap()).unwrap();
+    let context = std::fs::read(project.join(".planning/phases/13/CONTEXT.md")).unwrap();
+    let plan1 = std::fs::read(project.join(".planning/phases/13/PLAN-1.md")).unwrap();
+    let plan2 = std::fs::read(project.join(".planning/phases/13/PLAN-2.md")).unwrap();
+    let published = query(project, json!({"operation":"plan-read","phase_address":"13"}));
+    assert_eq!(published["native"]["publications"]["1"]["revision"], sha(&plan1));
+    let plan = select(project, "cad-review", &["plan", "13"], "plan-key");
+    assert_eq!(plan["status"], "ok", "{plan}");
+    assert_eq!(plan["result"]["kind"], "plan");
+    assert_eq!(plan["result"]["aliases"], json!(["cad-plan-review"]));
+    assert_eq!(plan["result"]["target"], json!({"kind":"inline-text","label":"plan:13"}));
+    assert_eq!(plan["result"]["material"], json!([
+        {"label":"locked-context","path":".planning/phases/13/CONTEXT.md","lines":[1,context.split(|b| *b == b'\n').count() - 1],"digest":sha(&context)},
+        {"label":"plan","path":".planning/phases/13/PLAN-1.md","lines":[1,plan1.split(|b| *b == b'\n').count() - 1],"digest":sha(&plan1)},
+        {"label":"plan","path":".planning/phases/13/PLAN-2.md","lines":[1,plan2.split(|b| *b == b'\n').count() - 1],"digest":sha(&plan2)}]));
+    assert_eq!(plan["result"]["intent"], PLAN_INTENT);
+    let plan_discriminator = plan["result"]["discriminator"].as_str().unwrap();
+    assert_eq!(plan["result"]["admission"], json!({"replay_key":"plan-key","caller":"manual-plan","trigger":"plan","specialist":null,
+        "project":root,"cycle":"live","home":{"kind":"phase","id":"13"},"discriminator":plan_discriminator,
+        "phase":13,"plan":null,"anchor":null,"round":1,"target":plan["result"]["target"],"decision":null,"risk_observation":null,"selection":null}));
+    let mut alias = select(project, "cad-plan-review", &["13"], "plan-key");
+    assert_eq!(alias["result"]["command"], "cad-plan-review");
+    alias["result"]["command"] = json!("cad-review");
+    assert_eq!(alias, plan);
+    let (_, next, entries) = deliver(project, &plan["result"]["admission"]);
+    let prompt = next["result"]["dispatch"]["prompt"].as_str().unwrap();
+    assert!(prompt.contains(PLAN_INTENT), "{prompt}");
+    assert_eq!(next["result"]["admission"]["trigger"], "plan");
+    assert_eq!(next["result"]["admission"]["gate"], "blocking", "the configured gate, not an invented one");
+    assert_eq!(next["result"]["admission"]["caller"], "manual-plan");
+    assert_eq!(next["result"]["admission"]["specialist"], Value::Null);
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entry_bytes(&entries, ".planning/phases/13/CONTEXT.md"), context.as_slice());
+    assert_eq!(entry_bytes(&entries, ".planning/phases/13/PLAN-1.md"), plan1.as_slice());
+    assert_eq!(entry_bytes(&entries, ".planning/phases/13/PLAN-2.md"), plan2.as_slice());
+    let slice = select(project, "cad-review", &["plan", ".planning/phases/13/PLAN-2.md"], "slice-key");
+    assert_eq!(slice["status"], "ok", "{slice}");
+    assert_eq!(slice["result"]["target"], json!({"kind":"named-file","path":".planning/phases/13/PLAN-2.md","head":null}));
+    assert_eq!(slice["result"]["material"], json!([{"label":"plan","path":".planning/phases/13/PLAN-2.md","lines":[1,plan2.split(|b| *b == b'\n').count() - 1],"digest":sha(&plan2)}]));
+    assert_eq!(slice["result"]["admission"]["phase"], 13);
+    assert_eq!(slice["result"]["admission"]["trigger"], "plan");
+    let (_, next, entries) = deliver(project, &slice["result"]["admission"]);
+    assert!(next["result"]["dispatch"]["prompt"].as_str().unwrap().contains(PLAN_INTENT));
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entry_bytes(&entries, ".planning/phases/13/PLAN-2.md"), plan2.as_slice());
+    // Nothing was edited: every target file is byte-identical and the tree is clean.
+    assert_eq!(std::fs::read(project.join("docs/decisions.md")).unwrap(), DECISIONS.as_bytes());
+    assert_eq!(std::fs::read(project.join("src/a.py")).unwrap(), subject);
+    assert_eq!(std::fs::read(project.join(".planning/phases/13/PLAN-1.md")).unwrap(), plan1);
+    assert_eq!(std::fs::read(project.join(".planning/phases/13/PLAN-2.md")).unwrap(), plan2);
+    assert_eq!(std::fs::read(project.join(".planning/phases/13/CONTEXT.md")).unwrap(), context);
+    assert_eq!(git_value(project, &["status", "--porcelain"]), "");
+    assert_eq!(admissions(&inventory()), 6);
+    // The shared compiled fragment: the provider payload and the local
+    // dispatch name the same instructions module, and the four generated
+    // skills are the binary's own rendering of it.
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source = |path: &str| std::fs::read_to_string(repo.join(path)).unwrap();
+    assert!(source("crates/cadence/src/review/provider/payload.rs").contains("instructions::intent("));
+    assert!(source("crates/cadence/src/review/invoking.rs").contains("instructions::intent("));
+    let instructions = source("crates/cadence/src/review/instructions.rs");
+    for intent in [DECISION_INTENT, MINIMALISM_INTENT, PLAN_INTENT] {
+        assert!(instructions.contains(intent), "compiled fragment carries the handwritten intent");
+    }
+    for (args, skill, hint) in [
+        (vec!["review-instructions"], "skills/cad-review/SKILL.md", "decision <document> <decision-id> | minimalism <file|directory|phase> | plan <phase|plan-path>"),
+        (vec!["review-instructions", "--alias", "cad-decision-review"], "skills/cad-decision-review/SKILL.md", "<document> <decision-id>"),
+        (vec!["review-instructions", "--alias", "cad-minimalism-review"], "skills/cad-minimalism-review/SKILL.md", "<file|directory|phase>"),
+        (vec!["review-instructions", "--alias", "cad-plan-review"], "skills/cad-plan-review/SKILL.md", "<phase|plan-path>"),
+    ] {
+        let rendered = std::process::Command::new(env!("CARGO_BIN_EXE_cadence")).args(&args)
+            .current_dir(std::env::temp_dir()).stdin(std::process::Stdio::null()).output().unwrap();
+        assert!(rendered.status.success(), "{}", String::from_utf8_lossy(&rendered.stderr));
+        assert_eq!(std::fs::read(repo.join(skill)).unwrap(), rendered.stdout, "{skill} is rendered by the binary");
+        let text = String::from_utf8(rendered.stdout).unwrap();
+        assert!(text.contains(&format!("argument-hint: \"{hint}\"")), "{skill}");
+        assert!(text.contains("review-select") && text.contains("review-admit") && text.contains("review-next"), "{skill}");
+        for intent in [DECISION_INTENT, MINIMALISM_INTENT, PLAN_INTENT] { assert!(text.contains(intent), "{skill}"); }
+        assert!(!text.contains("CLAUDE_PLUGIN_ROOT") && !text.contains("Write") && !text.contains("Edit"), "{skill} applies nothing");
+    }
+}
