@@ -720,3 +720,184 @@ fn phase13_owner_waiver_is_distinct_from_met() {
         assert!(!project.join(name).exists());
     }
 }
+
+const HISTORICAL_UAT: &str = "---\nstatus: testing\nphase: 13\n---\n\n## Items\n\n### 1. Delivery\nexpected: the parcel arrives\nstatus: fail\nfirst_pass: fail\nreported: \"the parcel never came\"\n\n### 2. Receipt\nexpected: the recipient signs\nstatus: pass\n";
+const REQUIREMENTS_T5: &str = "# Requirements\n\n## Active\n\n- **T1**: the first parcel is delivered\n- **T2**: the second parcel is delivered\n\n## Traceability\n\n| Requirement | Phase | Status |\n|-------------|-------|--------|\n| T2 | Phase 13 | Pending |\n";
+const ROADMAP_OPEN: &str = "## Phases\n- [ ] **Phase 13: Plan publication**\n- [ ] **Phase 28: Next phase**\n";
+const ROADMAP_DONE: &str = "## Phases\n- [x] **Phase 13: Plan publication**\n- [ ] **Phase 28: Next phase**\n";
+
+fn completion(root: &std::path::Path, id: &str, attempt: &Value, basis: &Value) -> Value {
+    let requirements = root.join("REQUIREMENTS.md");
+    json!({"operation":"verification-complete","request_id":id,"attempt":attempt,"basis":basis,
+        "projections":{"roadmap":digest_of(&root.join("ROADMAP.md")),
+            "requirements":requirements.exists().then(|| digest_of(&requirements))}})
+}
+
+#[test]
+fn phase13_incomplete_verification_cannot_complete_phase() {
+    let mut fixture = Completed::published(false, |project| {
+        std::fs::write(project.join(".planning/REQUIREMENTS.md"), REQUIREMENTS_T5).unwrap();
+        std::fs::write(project.join(".planning/phases/13/UAT.md"), HISTORICAL_UAT).unwrap();
+    });
+    let project = fixture.project().to_path_buf();
+    let project = project.as_path();
+    let root = project.join(".planning");
+    let (roadmap, requirements, uat) = (root.join("ROADMAP.md"), root.join("REQUIREMENTS.md"), root.join("phases/13/UAT.md"));
+    // Publication seeded the one missing active row, Pending, after the
+    // existing row; it raised nothing and touched no other byte.
+    let seeded = format!("{REQUIREMENTS_T5}| T1 | Phase 13 | Pending |\n");
+    assert_eq!(std::fs::read_to_string(&requirements).unwrap(), seeded);
+    assert_eq!(std::fs::read_to_string(&roadmap).unwrap(), ROADMAP_OPEN);
+    let context = reopened(project).snapshot.data["context"].clone();
+    let placeholder = json!({"project":"","root_binding":"","phase":13,"occurrence":"","context_digest":"","truths":[],
+        "publications":[],"map_digest":"","admission_digests":[],"execution_digest":"",
+        "source":{"head":"","tree":"","index_digest":"","material_digest":""}});
+    let projections_unchanged = |uat_expected: &str| {
+        assert_eq!(std::fs::read_to_string(&roadmap).unwrap(), ROADMAP_OPEN);
+        assert_eq!(std::fs::read_to_string(&requirements).unwrap(), seeded);
+        assert_eq!(std::fs::read_to_string(&uat).unwrap(), uat_expected);
+        let saved = reopened(project).snapshot;
+        assert_eq!(saved.data["verification"].get("completions"), None, "no completion authority");
+        assert_eq!(saved.data["context"], context, "approved context unchanged");
+    };
+    let refused = |request: Value, rule: &str, slot: &str, uat_expected: &str| -> Value {
+        let answer = apply(project, request.clone());
+        assert_eq!(answer["status"], "refused", "{request}\n{answer}");
+        assert_eq!(answer["rule"], rule, "{answer}");
+        assert_eq!(answer["slot"], slot, "{answer}");
+        projections_unchanged(uat_expected);
+        answer
+    };
+    // Publication alone: the located refusal names the unadmitted execution.
+    let answer = refused(completion(&root, "after-publication", &json!(""), &placeholder), "admission-required", "admissions", HISTORICAL_UAT);
+    assert_eq!(answer["phase"], 13);
+    // Execution complete, SUMMARY present, no verdicts: still not acceptance.
+    fixture.execute();
+    let next = query(project, json!({"operation":"execute-next","phase":13}));
+    assert_eq!((next["status"].as_str(), next["outcome"].as_str()), (Some("ok"), Some("complete")), "execution is complete: {next}");
+    let read = report(project);
+    assert_eq!(read["current"]["applicable"], false);
+    assert_eq!(read["completion"], json!({"status":"incomplete","applicable":false,"reason":"no completion recorded","record":null}));
+    let basis = read["current"]["observed"].clone();
+    assert!(basis.is_object(), "{read}");
+    let answer = refused(completion(&root, "after-execution", &json!(""), &basis), "verification-incomplete", "verification", HISTORICAL_UAT);
+    assert!(answer["reason"].as_str().unwrap().contains("no complete verification"), "{answer}");
+    // An open attempt with finished runs is not a verification either.
+    let (open, _) = inspect(project, "open", &[]);
+    refused(completion(&root, "open-attempt", &open["id"], &basis), "verification-incomplete", "verification", HISTORICAL_UAT);
+    // One unmet truth: the refusal names it, its negative item and the
+    // imported human failure that is also unfinished.
+    let (partial, _) = verify(project, "partial", &[("check/B", "rejected", "tests/b.py proves nothing about the second parcel.")]);
+    let answer = refused(completion(&root, "partial", &partial["id"], &basis), "verification-incomplete", "truths", HISTORICAL_UAT);
+    assert_eq!(answer["id"], "truth/B");
+    assert_eq!(answer["details"]["requested"]["unfinished"], json!([
+        {"kind":"truth","id":"truth/B","version":1,"status":"unmet","reason":"rejected or not seen: check/B","items":[{"id":"check/B","verdict":"rejected"}]},
+        {"kind":"human","id":"1","status":"fail","source":"imported","first_pass":"fail"}]));
+    assert_eq!(answer["details"]["current"]["counts"], json!({"met":1,"concerns":0,"unmet":1,"pending":0,"waived":0}));
+    // A real repair commit makes that verification historical.
+    std::fs::write(project.join("src/b.py"), "def answer():\n    return 7 # repaired implementation\n").unwrap();
+    git_value(project, &["add", "src/b.py"]);
+    git_value(project, &["commit", "-m", "Fixture repair"]);
+    let answer = refused(completion(&root, "stale", &partial["id"], &basis), "verification-basis", "basis.source", HISTORICAL_UAT);
+    assert_eq!(answer["details"]["current"]["head"], git_value(project, &["rev-parse", "HEAD"]));
+    let read = report(project);
+    assert_eq!(read["current"]["applicable"], false);
+    assert_eq!(read["history"][1]["applicability"], "historical");
+    let basis = read["current"]["observed"].clone();
+    refused(completion(&root, "stale-attempt", &partial["id"], &basis), "verification-incomplete", "verification", HISTORICAL_UAT);
+    // Every item accepted on fresh independent runs; the human failure remains.
+    let (accepted, _) = verify(project, "accepted", &[]);
+    let read = report(project);
+    assert_eq!(read["counts"], json!({"met":2,"concerns":0,"unmet":0,"pending":0,"waived":0}));
+    let answer = refused(completion(&root, "human-conflict", &accepted["id"], &basis), "verification-incomplete", "humans", HISTORICAL_UAT);
+    assert_eq!(answer["id"], "1");
+    assert_eq!(answer["details"]["requested"]["unfinished"], json!([{"kind":"human","id":"1","status":"fail","source":"imported","first_pass":"fail"}]));
+    let stored = reopened(project).snapshot;
+    assert_eq!(apply(project, completion(&root, "human-conflict", &accepted["id"], &basis)), answer, "repeating asks nothing new");
+    assert_eq!(reopened(project).snapshot, stored);
+    // The verifier's patch arm cannot resolve human work, and a wrong attempt cannot either.
+    let overwrite = json!({"request_id":"resolve-by-patch","attempt":accepted["id"],"basis":basis,"items":[],"humans":[{"id":"1","outcome":"passed"}]});
+    assert_eq!(apply(project, json!({"operation":"verification-submit","patch":overwrite}))["rule"], "verification-shape");
+    refused(completion(&root, "wrong-attempt", &partial["id"], &basis), "verification-attempt", "attempt", HISTORICAL_UAT);
+    assert_eq!(reopened(project).snapshot.data["verification"].get("humans"), None);
+    // Only the authorized human path resolves it; first pass stays fail.
+    let occurrence = query(project, json!({"operation":"plan-read","phase_address":"13"}))["occurrence"].clone();
+    let submission = json!({"phase":13,"occurrence":occurrence,"id":"1","reply":"The parcel arrived on the second attempt.",
+        "outcome":"passed","owner":"Fixture Owner","at":"2026-09-11T17:00:00Z","supersedes":null});
+    let resolved = apply(project, json!({"operation":"verification-human-result","request_id":"resolve-1","submission":submission,
+        "approval":{"approved":true,"owner":"Fixture Owner","at":"2026-09-11T17:00:00Z","submission":submission}}));
+    assert_eq!(resolved["status"], "ok", "{resolved}");
+    assert_eq!(resolved["receipt"]["record"]["first_pass"], "fail");
+    let rendered = std::fs::read_to_string(&uat).unwrap();
+    assert!(rendered.starts_with(HISTORICAL_UAT), "{rendered}");
+    assert!(rendered.contains("\n### 1. 1\nname: Delivery\nstatus: pass\nfirst_pass: fail\nreported: \"The parcel arrived on the second attempt.\"\n"), "{rendered}");
+    let read = report(project);
+    assert_eq!(read["humans"][0]["resolved"], true);
+    assert_eq!(read["humans"][0]["first_pass"], "fail");
+    assert_eq!(read["humans"][0]["history"][0]["reply"], "The parcel arrived on the second attempt.");
+    // Interleaved reads change nothing; a stale caller preimage still refuses.
+    assert_eq!(query(project, json!({"operation":"plan-read","phase_address":"13"}))["status"], "ok");
+    assert_eq!(query(project, json!({"operation":"execute-next","phase":13}))["outcome"], "complete");
+    let mut stale = completion(&root, "stale-preimage", &accepted["id"], &basis);
+    stale["projections"]["requirements"] = json!(cadence::store::model::digest(REQUIREMENTS_T5.as_bytes()));
+    refused(stale, "verification-projection", "projections.requirements", &rendered);
+    // The fully applicable completion: authority and both projections, once.
+    let request = completion(&root, "complete-13", &accepted["id"], &basis);
+    let done = apply(project, request.clone());
+    assert_eq!(done["status"], "ok", "{done}");
+    let record = done["receipt"]["record"].clone();
+    assert_eq!(record["label"], "complete");
+    assert_eq!(record["attempt"], accepted["id"]);
+    assert_eq!(record["basis"], basis);
+    assert_eq!(record["truths"], json!([{"id":"truth/A","version":1,"status":"met","derived":"met","waiver":null},
+        {"id":"truth/B","version":1,"status":"met","derived":"met","waiver":null}]));
+    assert_eq!(record["humans"], json!([{"id":"1","status":"pass","first_pass":"fail","source":"native"},
+        {"id":"2","status":"pass","first_pass":"pass","source":"imported"}]));
+    assert_eq!(record["projections"]["requirements"]["rows"], json!(["T1"]));
+    assert_eq!(std::fs::read_to_string(&roadmap).unwrap(), ROADMAP_DONE);
+    assert_eq!(std::fs::read_to_string(&requirements).unwrap(), seeded.replace("| T1 | Phase 13 | Pending |", "| T1 | Phase 13 | Complete |"));
+    assert_eq!(std::fs::read_to_string(&uat).unwrap(), rendered, "completion leaves UAT.md alone");
+    let saved = reopened(project).snapshot;
+    assert_eq!(saved.data["context"], context);
+    assert_eq!(saved.data["verification"]["completions"], json!([record]));
+    let read = report(project);
+    assert_eq!(read["completion"]["status"], "complete");
+    assert_eq!(read["completion"]["applicable"], true);
+    assert_eq!(read["current"]["attempt"], accepted["id"], "untracked projections are not source");
+    // Once only: exact replay answers the same, a second completion refuses,
+    // and the lifecycle now agrees with the checked box.
+    let after = tree(project);
+    let replay = apply(project, request);
+    assert_eq!(replay["receipt"]["record"], record);
+    assert_eq!(replay["receipt"]["replayed"], true);
+    assert_eq!(tree(project), after);
+    let again = apply(project, completion(&root, "complete-13-again", &accepted["id"], &basis));
+    assert_eq!(again["rule"], "verification-complete", "{again}");
+    assert_eq!(tree(project), after);
+    let next = query(project, json!({"operation":"execute-next","phase":13}));
+    assert_eq!((next["status"].as_str(), next["outcome"].as_str()), (Some("ok"), Some("complete")), "native completion is the lifecycle authority: {next}");
+    assert_eq!(tree(project), after);
+    assert_eq!(report(project), read);
+    assert_eq!(reopened(project).snapshot, saved);
+    // A later publication changes the native inputs: the completion is no
+    // longer applicable, the report says which input, and the lifecycle
+    // names the exact disagreement with the checked box.
+    let gap = proposal(project, "gap", &[(None, attached(vec![artifact("artifact/gap", &["truth/A"])]))]);
+    publish(project, &gap);
+    let read = report(project);
+    assert_eq!(read["completion"]["status"], "incomplete");
+    assert_eq!(read["completion"]["applicable"], false);
+    assert_eq!(read["completion"]["reason"], "native inputs changed since completion: publications");
+    assert_eq!(read["completion"]["record"], record, "history is preserved");
+    assert_eq!(read["current"]["applicable"], false);
+    let next = query(project, json!({"operation":"execute-next","phase":13}));
+    assert_eq!(next["status"], "refused", "{next}");
+    assert_eq!(next["code"], "state-conflict", "{next}");
+    assert!(next["reason"].as_str().unwrap().contains("ROADMAP.md:2"), "{next}");
+    assert_eq!(std::fs::read_to_string(&roadmap).unwrap(), ROADMAP_DONE, "a query repairs nothing");
+    assert_eq!(reopened(project).snapshot.data["verification"]["completions"], json!([record]));
+    assert_eq!(reopened(project).snapshot.data["context"], context);
+    for name in ["findings.md", ".planning/findings.md"] {
+        assert!(!project.join(name).exists());
+    }
+}
