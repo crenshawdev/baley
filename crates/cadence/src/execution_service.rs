@@ -2293,11 +2293,10 @@ fn public_request_digest(tool: BoundaryTool, raw: Option<&Value>) -> String {
 }
 
 fn stable_reason(code: &str, detail: &str) -> String {
-    if matches!(code, "provisional-authoring" | "reconciliation-required") {
+    if matches!(code, "provisional-authoring" | "reconciliation-required" | "state-conflict" | "invalid-phase" | "invalid-patch") {
         return detail.to_owned();
     }
     match code {
-        "invalid-phase" => "phase must be a positive integer; supply the native phase number".into(),
         "foreign-dispatch" => "the patch does not identify a dispatch in this store; request the next execution dispatch".into(),
         "continuation-refusal" => "execution needs current continuation authority; resolve the pending decision before retrying".into(),
         _ => format!("execution validation failed ({code}); check the controlling inputs and retry"),
@@ -2391,7 +2390,7 @@ pub async fn refuse_arguments<I: ConfigIo + Clone + Sync>(
         tool_operation(tool),
         &public_request_digest(tool, raw.as_ref()),
         failure.code(),
-        "invalid execution arguments",
+        cadence::execution::boundary::argument_detail(raw.as_ref()),
         None,
     )
     .await
@@ -2408,6 +2407,11 @@ async fn derivation_refusal<I: ConfigIo>(
         return Err(Failure::Store);
     }
     let view = session.derivation_view().await.map_err(store_failure)?;
+    let detail = match &error {
+        cadence::derivation::DerivationError::StateConflict { source, field, declared, derived } =>
+            json!({"source":source,"field":field,"declared":declared,"derived":derived}).to_string(),
+        _ => format!("lifecycle input validation failed: {}", error.code()),
+    };
     record_refusal(
         session,
         &view,
@@ -2416,7 +2420,7 @@ async fn derivation_refusal<I: ConfigIo>(
         tool_operation(tool),
         request,
         error.code(),
-        "lifecycle input validation failed",
+        detail,
         None,
     )
     .await

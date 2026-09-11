@@ -120,6 +120,65 @@ Every path in an evidence or completion commit, both rename endpoints and the
 whole staged set must be covered, or the close is refused with the path named.
 Work on the current branch; do not push, reset, amend, revert or force-push.
 
+## Admission, continuation and owner records
+
+Wire phases are positive JSON integers. Parse a canonical digit spelling into
+an integer, preserving its value; refuse decimals, fractions, signs and missing
+input instead of rounding or defaulting. Send `"phase":13`, never `"phase":"13"`.
+The read-only authoring operation instead takes `"phase_address":"13"`.
+
+Before execute-next, read `plan-read` with the phase_address and `evidence-read`
+with the integer phase. Copy the occurrence and each current publication's
+plan number, `approval.submission.request_id`, content `revision` and
+`map_revision`. Copy canonical check ids and `item_revision` from evidence-read.
+Explicitly allocate every ordered task, including tasks delivering no checks
+with `checks:[]`; allocate each current canonical check exactly once across
+the entire phase. Shared aliases do not create additional closing owners.
+
+Minimal complete admission example (replace every saved identity with the
+acknowledged value; include every current plan and task):
+```json
+{"operation":"execution-admit","request":{"request_id":"admit-13",
+"expected_set_version":0,"contract":{"phase":13,"occurrence":"<saved occurrence>",
+"plans":[{"plan":1,"publication_request":"<saved publication request>",
+"content_revision":"<saved content revision>","map_revision":"<saved map revision>"}],
+"allocation":[{"plan":1,"task":"task-A","checks":[{"id":"check/A",
+"item_revision":"<saved item revision>"}]},{"plan":1,"task":"task-B","checks":[]}]}}}
+```
+Initial admission uses expected_set_version 0. A new approved gap identity
+needs execution-extend with the current expected_set_version and the complete
+expanded contract BEFORE execute-next; preserve prior allocations and outcomes.
+An admission or located refusal never repairs state or manufactures approval.
+
+A retained checkpoint id differs from a question/gate id, authorization id and
+task id. Read execution-history's checkpoint_history. A linked Stop continues
+only with later owner approval naming that same checkpoint. An unlinked Stop
+has no checkpoint: later execution-authorize needs actual owner approval with
+checkpoint omitted or null. Stop itself never authorizes either continuation.
+The authorization fields are phase, request_id, owner, at, response,
+optional checkpoint and disposition `approve` or `stop`; preserve the owner's
+actual response. A task's question is answered through execution-task-answer.
+
+Use a conventional completion subject with the actual task token, for example
+`feat: deliver task-A`. Completion commits must be signed. Git signing and
+verify-commit use repository configuration and the server's environment,
+including its signing program and key material; there is no Cadence keyring.
+
+The exact Inspection payload is
+`{check:{id,item_revision},test_digest,evidence:[red_run,green_run],no_subject_stub}`.
+execution-owner-attest takes request_id, task, attempt, expected_version and
+`statement:{submission:Inspection,approval:{approved,owner,at,submission:Inspection},supersedes}`.
+The approval's submission must echo the exact Inspection; approved is true,
+owner and at are nonblank, and supersedes is an optional prior statement id.
+Only the owner's actual attributed, timed approval supplies this record.
+A prepared payload and the executor's no_subject_stub assertion are not approval.
+
+A malformed wire request reports a bounded supplied field/value; a lifecycle
+state-conflict retains source, field, declared and derived. Display the exact
+located reason. A JSON-RPC transport error is not an acknowledged domain
+refusal; neither result repairs state, and a replay keeps its original receipt.
+
+
 ## Return
 
 The binary already holds every closed task, run and receipt; your reply to the

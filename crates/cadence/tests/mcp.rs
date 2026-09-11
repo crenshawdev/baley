@@ -21,6 +21,9 @@ use std::{collections::BTreeSet, fs, path::Path};
 #[path = "support/signing.rs"]
 mod signing;
 
+#[path = "support/phase13.rs"]
+pub mod phase13;
+
 /// A tiny JSON-RPC-over-stdio client for the spawned `cadence serve` process.
 struct Client {
     child: Child,
@@ -945,33 +948,90 @@ impl Fixture {
 
 #[test]
 fn execution_calls_refuse_noninteger_phases_and_legacy_plans_without_dispatch() {
-    let fixture = Fixture::new(&[&["T1"]]);
-    let mut client = fixture.client();
-    let before = fixture.semantic_bytes();
-    for phase in ["0", "-1", "6.0", "6.5", "6e0", "\"6\"", "null"] {
-        let input = serde_json::from_str(&format!(
-            r#"{{"operation":"execute-next","phase":{phase}}}"#
-        ))
-        .unwrap();
-        let answer = fixture.call(&mut client, "cadence_query", input);
-        assert_eq!(answer["status"], "refused", "phase {phase}");
-        assert!(answer.get("dispatch").is_none());
-        assert_eq!(fixture.semantic_bytes(), before);
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (args, skill) in [
+        (vec!["executor-instructions"], "skills/cad-executor-contract/SKILL.md"),
+        (vec!["executor-instructions", "--frontdoor"], "skills/cad-execute/SKILL.md"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_cadence")).args(args)
+            .stdin(Stdio::null()).output().unwrap();
+        assert!(output.status.success());
+        let rendered = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(rendered, fs::read_to_string(repo.join(skill)).unwrap());
+        for required in ["positive JSON integers", "\"phase\":13", "\"phase\":\"13\"",
+            "plan-read", "evidence-read", "approval.submission.request_id", "map_revision",
+            "item_revision", "checks:[]", "execution-extend", "expected_set_version",
+            "complete", "checkpoint_history", "same checkpoint", "omitted or null",
+            "feat: deliver task-A", "repository configuration", "server's environment",
+            "{check:{id,item_revision},test_digest,evidence:[red_run,green_run],no_subject_stub}",
+            "approval:{approved,owner,at,submission:Inspection}", "supersedes",
+            "JSON-RPC transport error"] {
+            assert!(rendered.contains(required), "{skill}: missing {required}");
+        }
+        let example = rendered.split("Minimal complete admission example").nth(1).unwrap()
+            .split("```json\n").nth(1).unwrap().split("\n```").next().unwrap();
+        let admission: Value = serde_json::from_str(example).unwrap();
+        assert_eq!(admission, json!({"operation":"execution-admit","request":{
+            "request_id":"admit-13","expected_set_version":0,"contract":{"phase":13,
+            "occurrence":"<saved occurrence>","plans":[{"plan":1,
+            "publication_request":"<saved publication request>","content_revision":"<saved content revision>",
+            "map_revision":"<saved map revision>"}],"allocation":[{"plan":1,"task":"task-A",
+            "checks":[{"id":"check/A","item_revision":"<saved item revision>"}]},
+            {"plan":1,"task":"task-B","checks":[]}]}}}));
     }
-
-    // A legacy plan has the original frontmatter but no native execution block.
-    // It must not acquire a dispatch from its prose or the seeded authority.
-    fs::write(
-        fixture.root().join(".planning/phases/6/PLAN-1.md"),
-        "---\nphase: 6\nplan: 1\nrequirements: [AC2]\nfiles: [src/shared.txt]\n---\nComplete T1 and run the suite.\n",
-    )
-    .unwrap();
-    let legacy = fixture.query(&mut client);
-    assert_eq!(legacy["status"], "refused");
+    let fixture = phase13::fixture();
+    let project = fixture.path();
+    phase13::native_context(project, &[("T1","a request arrives","the caller","a bounded answer")]);
+    let before = phase13::reopened(project).snapshot.data;
+    let mut client = phase13::Client::open(project);
+    let mut replies = Vec::new();
+    for (phase, detail) in [("0","0"),("-1","-1"),("13.0","13.0"),("13.5","13.5"),
+        ("13e0","13e+0"),("\"13\"","\"13\""),("null","null")] {
+        let input: Value = serde_json::from_str(&format!(
+            r#"{{"operation":"execute-next","phase":{phase}}}"#)).unwrap();
+        let answer = client.call("cadence_query", input.clone());
+        assert_eq!(answer["status"], "refused", "{answer}");
+        assert!(answer.get("dispatch").is_none());
+        assert_eq!(answer["reason"], format!("phase={detail}; phase must be a positive JSON integer"));
+        replies.push((input, answer));
+    }
+    // A prose-only historical plan never acquires native execution authority.
+    let plan = project.join(".planning/phases/13/PLAN-1.md");
+    let legacy_bytes = b"---\nphase: 13\nplan: 1\nrequirements: [T1]\nfiles: [src/shared.txt]\n---\nComplete T1 and run the suite.\n";
+    fs::write(&plan, legacy_bytes).unwrap();
+    let request = json!({"operation":"execute-next","phase":13});
+    let legacy = client.call("cadence_query", request.clone());
+    assert_eq!(legacy["status"], "refused", "{legacy}");
     assert!(legacy.get("dispatch").is_none());
-    assert_eq!(fixture.semantic_bytes(), before);
-    assert!(fixture.read().snapshot.data.get("execution").is_none());
-    assert!(client.finish().success());
+    client.finish();
+    let reopened = phase13::reopened(project);
+    assert_eq!(reopened.snapshot.data["execution"], before["execution"]);
+    assert_eq!(reopened.snapshot.data["contexts"], before["contexts"]);
+    let mut client = phase13::Client::open(project);
+    for (input, answer) in &replies {
+        assert_eq!(client.call("cadence_query", input.clone()), *answer);
+    }
+    assert_eq!(client.call("cadence_query", request.clone()), legacy);
+    client.finish();
+    let roadmap = project.join(".planning/ROADMAP.md");
+    let conflict_bytes = b"## Phases\n- [x] **Phase 13: Plan publication**\n- [ ] **Phase 28: Next phase**\n";
+    fs::write(&roadmap, conflict_bytes).unwrap();
+    let mut client = phase13::Client::open(project);
+    let conflict = client.call("cadence_query", request.clone());
+    assert_eq!(conflict["code"], "state-conflict", "{conflict}");
+    assert_eq!(serde_json::from_str::<Value>(conflict["reason"].as_str().unwrap()).unwrap(),
+        json!({"source":"ROADMAP.md:2 entry 0","field":"complete","declared":"true","derived":"false"}));
+    assert!(conflict.get("dispatch").is_none());
+    client.finish();
+    let durable = phase13::tree(project);
+    assert_eq!(phase13::reopened(project).snapshot.data["execution"], before["execution"]);
+    let mut client = phase13::Client::open(project);
+    assert_eq!(client.call("cadence_query", request), conflict);
+    client.finish();
+    phase13::reopened(project);
+    assert_eq!(phase13::tree(project), durable);
+    assert_eq!(fs::read(plan).unwrap(), legacy_bytes);
+    assert_eq!(fs::read(roadmap).unwrap(), conflict_bytes);
 }
 
 #[test]

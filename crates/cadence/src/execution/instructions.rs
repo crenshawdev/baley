@@ -124,6 +124,65 @@ whether the suite was requested. Do not restate evidence the history already
 records, do not write any Cadence state or planning file through any tool,
 and do not invent a result the binary did not observe."#;
 
+const USABILITY: &str = r#"## Admission, continuation and owner records
+
+Wire phases are positive JSON integers. Parse a canonical digit spelling into
+an integer, preserving its value; refuse decimals, fractions, signs and missing
+input instead of rounding or defaulting. Send `"phase":13`, never `"phase":"13"`.
+The read-only authoring operation instead takes `"phase_address":"13"`.
+
+Before execute-next, read `plan-read` with the phase_address and `evidence-read`
+with the integer phase. Copy the occurrence and each current publication's
+plan number, `approval.submission.request_id`, content `revision` and
+`map_revision`. Copy canonical check ids and `item_revision` from evidence-read.
+Explicitly allocate every ordered task, including tasks delivering no checks
+with `checks:[]`; allocate each current canonical check exactly once across
+the entire phase. Shared aliases do not create additional closing owners.
+
+Minimal complete admission example (replace every saved identity with the
+acknowledged value; include every current plan and task):
+```json
+{"operation":"execution-admit","request":{"request_id":"admit-13",
+"expected_set_version":0,"contract":{"phase":13,"occurrence":"<saved occurrence>",
+"plans":[{"plan":1,"publication_request":"<saved publication request>",
+"content_revision":"<saved content revision>","map_revision":"<saved map revision>"}],
+"allocation":[{"plan":1,"task":"task-A","checks":[{"id":"check/A",
+"item_revision":"<saved item revision>"}]},{"plan":1,"task":"task-B","checks":[]}]}}}
+```
+Initial admission uses expected_set_version 0. A new approved gap identity
+needs execution-extend with the current expected_set_version and the complete
+expanded contract BEFORE execute-next; preserve prior allocations and outcomes.
+An admission or located refusal never repairs state or manufactures approval.
+
+A retained checkpoint id differs from a question/gate id, authorization id and
+task id. Read execution-history's checkpoint_history. A linked Stop continues
+only with later owner approval naming that same checkpoint. An unlinked Stop
+has no checkpoint: later execution-authorize needs actual owner approval with
+checkpoint omitted or null. Stop itself never authorizes either continuation.
+The authorization fields are phase, request_id, owner, at, response,
+optional checkpoint and disposition `approve` or `stop`; preserve the owner's
+actual response. A task's question is answered through execution-task-answer.
+
+Use a conventional completion subject with the actual task token, for example
+`feat: deliver task-A`. Completion commits must be signed. Git signing and
+verify-commit use repository configuration and the server's environment,
+including its signing program and key material; there is no Cadence keyring.
+
+The exact Inspection payload is
+`{check:{id,item_revision},test_digest,evidence:[red_run,green_run],no_subject_stub}`.
+execution-owner-attest takes request_id, task, attempt, expected_version and
+`statement:{submission:Inspection,approval:{approved,owner,at,submission:Inspection},supersedes}`.
+The approval's submission must echo the exact Inspection; approved is true,
+owner and at are nonblank, and supersedes is an optional prior statement id.
+Only the owner's actual attributed, timed approval supplies this record.
+A prepared payload and the executor's no_subject_stub assertion are not approval.
+
+A malformed wire request reports a bounded supplied field/value; a lifecycle
+state-conflict retains source, field, declared and derived. Display the exact
+located reason. A JSON-RPC transport error is not an acknowledged domain
+refusal; neither result repairs state, and a replay keeps its original receipt.
+"#;
+
 const CONTRACT_HEAD: &str = r#"---
 name: cad-executor-contract
 description: "Native executor contract: the binary's dispatch is the authority, tasks close through Cadence, red before green."
@@ -162,9 +221,9 @@ continuation authority: keep no local execution state, inspect no project
 files, reconstruct no task list and approve no evidence on the owner's behalf.
 
 <process>
-1. Call `mcp__cadence__cadence_query` with `operation: "execute-next"` and the user's phase spelling unchanged as `phase`. Do not normalize, round, infer, default or repair it; the binary validates it.
+1. Read the native plan/map identities and complete admission/allocation as described below. Parse the phase into a positive JSON integer and call `mcp__cadence__cadence_query` with `operation: "execute-next"` and that integer as `phase`; never pass an unchanged slash-command string. Do not round, infer, default or repair it.
 2. Read the structured envelope. For `complete`, report completion and stop. For `judgment-stop`, display the stop identifiers and stop. For `refused`, `unknown` or `not-applicable`, display `code` and `reason`; when the code is `continuation-refusal` or `reconciliation-required` continue at step 3; when it is `suite-failed`, the plan's suite reported a failure and its repair is a newly approved gap plan admitted through `execution-extend`, never a rerun, so stop and say so; otherwise stop. For `dispatch`, continue at step 4.
-3. Collect the owner's actual answer in the conversation and submit exactly what the owner states, then repeat from step 1: an unanswered task checkpoint is answered through `execution-task-answer`; a retained Stop is continued or declined through `execution-authorize` naming that `checkpoint`; unacknowledged commits are reconciled through `execution-task-progress`. A restart, a summary or an old report is never an answer.
+3. Collect the owner's actual answer in the conversation and submit exactly what the owner states, then repeat from step 1: an unanswered task checkpoint is answered through `execution-task-answer`; a linked Stop is continued or declined through `execution-authorize` naming the same retained `checkpoint`; an unlinked Stop needs later owner approval with `checkpoint` omitted or null; unacknowledged commits are reconciled through `execution-task-progress`. A restart, a summary or an old report is never an answer.
 4. Invoke `Task` with `dispatch.route.choice.agent` and exactly the returned prompt, unchanged. Pass `dispatch.route.choice.model` only when present; otherwise omit the model argument for session inheritance. Use this admitted selection and issue no fresh route query. Add no instructions or context: the prompt already carries the admitted checks, the current task state and the compiled executor instructions.
 5. Read the executor's digest without interpreting it. The binary holds the closed tasks and receipts; the executor's reply is a digest, not a patch, and a refusal or an Unknown run it reports is displayed and retained, never converted into completion.
 6. Owner records are actual round trips through `mcp__cadence__cadence_apply`, each submitted exactly as the owner states it and shown with the retained bytes it names: the no-subject-stub inspection (`execution-owner-attest`), the separate classification of an Unknown custom-check run (`execution-classify-run`), and the dead-launch absence attestation for a suite launch with no recognized result (`execution-suite-relaunch`). The owner's interpretation is shown beside the binary's observation class and never replaces it.
@@ -184,7 +243,7 @@ Handle a grouped review response before any execution response: run the saved re
 
 /// The instructions section of every state-composed native dispatch.
 pub fn dispatch_text() -> String {
-    format!("{EXECUTOR_BLOCK}\n\n{CLASSICAL_DEFAULT}\n\n{PROTOCOL}")
+    format!("{EXECUTOR_BLOCK}\n\n{CLASSICAL_DEFAULT}\n\n{PROTOCOL}\n\n{USABILITY}")
 }
 
 /// `skills/cad-executor-contract/SKILL.md`, a generated artifact.
@@ -194,7 +253,7 @@ pub fn contract_markdown() -> String {
 
 /// `skills/cad-execute/SKILL.md`, a generated artifact.
 pub fn frontdoor_markdown() -> String {
-    FRONTDOOR.to_owned()
+    format!("{FRONTDOOR}\n{USABILITY}")
 }
 
 /// A configured command as the effective configuration reports it, with the

@@ -11,6 +11,24 @@ pub const ENVELOPE_CODEC: u32 = 1;
 pub const MAX_COMPACT_BYTES: usize = 16 * 1024;
 pub const MAX_REASON_BYTES: usize = 1024;
 
+/// Preserve the caller's scalar diagnostic without dumping arbitrary objects.
+pub fn argument_detail(raw: Option<&Value>) -> String {
+    let value = raw.and_then(|v| v.get("phase")).unwrap_or(&Value::Null);
+    let displayed = match value {
+        Value::Object(_) => "<object>".to_owned(),
+        Value::Array(_) => "<array>".to_owned(),
+        Value::String(s) => serde_json::to_string(&s.chars().take(160).collect::<String>()).expect("scalar"),
+        other => other.to_string(),
+    };
+    if raw.is_some_and(|v| v["operation"] == "execute-next") {
+        format!("phase={displayed}; phase must be a positive JSON integer")
+    } else {
+        let error = raw.cloned().map(serde_json::from_value::<super::model::ExecutorPatch>)
+            .and_then(Result::err).map(|e| e.to_string()).unwrap_or_else(|| "arguments must match the execution schema".into());
+        format!("arguments: {}", error.chars().take(512).collect::<String>())
+    }
+}
+
 /// Native operations have their own encoding; old boundaries stay unchanged.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag="operation",deny_unknown_fields)]
