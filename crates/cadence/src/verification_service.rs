@@ -1,5 +1,5 @@
 //! Resident adapter; all writes use the existing session's single store queue.
-use cadence::{store::{Error, Result, writer::Operation}, verification::{inputs, model::{Query, Apply}, persistence, runner, verdicts}};
+use cadence::{store::{Error, Result, writer::Operation}, verification::{inputs, model::{Query, Apply}, persistence, render, runner, status, verdicts}};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -49,12 +49,24 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
     match query {
         Query::Audit { phase } => Err(inputs::refuse(phase, "verification-unavailable", "operation", "verification-audit is not implemented")),
         Query::Read { phase, attempt } => {
+            // The requested attempt selects its receipts; the derived rows are
+            // always the phase's current judgment, never the selected one's.
             let saved = persistence::attempts(&data)?.into_iter().rev()
-                .find(|a| a.inputs.basis.phase == phase && attempt.as_ref().is_none_or(|id| a.id == *id))
-                .ok_or_else(|| inputs::refuse(phase, "verification-attempt", "attempt", "retained attempt absent"))?;
-            let runs: Vec<_> = runner::records(&data)?.into_iter().filter(|r| r.attempt == saved.id).collect();
+                .find(|a| a.inputs.basis.phase == phase && attempt.as_ref().is_none_or(|id| a.id == *id));
+            if attempt.is_some() && saved.is_none() {
+                return Err(inputs::refuse(phase, "verification-attempt", "attempt", "retained attempt absent"));
+            }
+            let mut answer = status::report(root, &data, phase)?;
+            let runs: Vec<_> = runner::records(&data)?.into_iter().filter(|r| saved.as_ref().is_some_and(|a| r.attempt == a.id)).collect();
             let unknown: Vec<_> = runs.iter().filter(|r| matches!(r.event, runner::Event::Launch { .. }) && runner::result(&runs, &r.id).is_none()).map(|r| r.id.clone()).collect();
-            Ok(json!({"status":"ok","attempt":saved,"runs":runs,"unknown_runs":unknown}))
+            let claims: Vec<_> = verdicts::claims(&data)?.into_iter().filter(|c| saved.as_ref().is_some_and(|a| c.patch.attempt == a.id))
+                .map(|c| json!({"request_id":c.patch.request_id,"answer":c.answer})).collect();
+            answer["attempt"] = json!(saved);
+            answer["runs"] = json!(runs);
+            answer["unknown_runs"] = json!(unknown);
+            answer["claims"] = json!(claims);
+            answer["report"] = json!(render::text(&answer));
+            Ok(answer)
         }
         Query::Next { phase, request_id } => {
             if phase == 0 { return Err(inputs::refuse(phase, "verification-phase", "phase", "positive integer phase required")); }

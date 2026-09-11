@@ -44,7 +44,7 @@ pub fn refusal(rule: &str, slot: &str, id: &str, reason: &str, requested: Value,
         "reason":reason,"details":{"requested":bounded(requested),"current":bounded(current)}})
 }
 
-fn error_answer(error: Error) -> Value {
+pub(crate) fn error_answer(error: Error) -> Value {
     if let Error::Invalid(text) | Error::Conflict(text) = &error
         && let Some(encoded) = text.strip_prefix("plan-refusal:")
         && let Ok(diagnostic) = serde_json::from_str::<crate::plan::model::Diagnostic>(encoded) {
