@@ -878,8 +878,7 @@ impl ServerHandler for PublicServer {
                 if raw.as_ref().and_then(|v| v["operation"].as_str()).is_some_and(|op| op.starts_with("verification-") || op == "truth-waive") {
                     let answer = match serde_json::from_value::<ApplyArguments>(raw.unwrap()) {
                         Ok(ApplyArguments::Verification(operation)) => {
-                            let operation = serde_json::to_value(operation).expect("typed verification operation")["operation"].clone();
-                            serde_json::json!({"status":"refused","rule":"verification-unavailable","operation":operation,"reason":"operation is not implemented"})
+                            return structured_result(self.server.service.verification_apply(&self.root, operation).await.map(ApplyOutput::NativeExecution));
                         }
                         Err(error) => serde_json::json!({"status":"refused","rule":"verification-shape","reason":error.to_string()}),
                         Ok(_) => unreachable!("selected verification operation"),

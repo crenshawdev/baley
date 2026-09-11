@@ -11,6 +11,10 @@ pub const INTENT: &str = ".store-intent.json";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum IntentKind {
+    VerificationRunV1 {
+        record: Box<cadence::verification::runner::Record>,
+        root_binding: String,
+    },
     VerificationV1 {
         request: Box<cadence::verification::persistence::Request>,
         root_binding: String,
@@ -299,7 +303,7 @@ impl Intent {
             let previous: Snapshot = serde_json::from_slice(previous)?;
             self.kind
                 .validate_provenance(&previous.data, &snapshot.data)?;
-            if !matches!(self.kind, IntentKind::VerificationV1 { .. })
+            if !matches!(self.kind, IntentKind::VerificationV1 { .. } | IntentKind::VerificationRunV1 { .. })
                 && previous.data.get(cadence::verification::persistence::NAMESPACE) != snapshot.data.get(cadence::verification::persistence::NAMESPACE) {
                 return Err(Error::Invalid("verification changes require their versioned intent".into()));
             }
@@ -320,6 +324,26 @@ impl Intent {
             }
         }
         match self.kind.clone() {
+            IntentKind::VerificationRunV1 { record, root_binding } => {
+                use cadence::verification::runner;
+                if names.len() != 3 { return Err(Error::Invalid("verification run cannot change external participants".into())); }
+                let state = self.participants.last().expect("state participant");
+                if state.expected.directory_identity != root_binding { return Err(Error::Invalid("verification run root binding changed".into())); }
+                let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
+                    .ok_or_else(|| Error::Invalid("verification run requires prior snapshot".into()))?)?;
+                let expected = runner::contribute(&previous.data, &root_binding, &record)?;
+                let old_items = self.participants.iter().find(|p| p.target == ITEMS).unwrap().expected.bytes.as_deref();
+                let old_decisions = self.participants.iter().find(|p| p.target == DECISIONS).unwrap().expected.bytes.as_deref()
+                    .ok_or_else(|| Error::Invalid("verification run requires previous decisions".into()))?;
+                let mut expected_decisions: Vec<DecisionRecord> = model::parse_lines(old_decisions)?;
+                expected_decisions.push(runner::decision(&record)?);
+                if snapshot.data != expected || old_items != Some(items)
+                    || decisions != model::render_lines(&expected_decisions)?
+                    || snapshot.operations != previous.operations
+                    || snapshot.generation != previous.generation.checked_add(1).ok_or_else(|| Error::Invalid("generation exhausted".into()))? {
+                    return Err(Error::Invalid("verification run intent differs from immutable transition".into()));
+                }
+            }
             IntentKind::VerificationV1 { request, root_binding } => {
                 use cadence::verification::persistence;
                 if names.len() != 3 { return Err(Error::Invalid("verification cannot change external participants".into())); }
@@ -1014,6 +1038,15 @@ fn validate_all<S: Storage>(
     replay: bool,
     kind: &IntentKind,
 ) -> Result<()> {
+    if let IntentKind::VerificationRunV1 { record, root_binding } = kind {
+        if storage.read(STATE)?.directory_identity != *root_binding {
+            return Err(Error::Invalid("verification run store binding changed".into()));
+        }
+        let state = participants.last().ok_or_else(|| Error::Invalid("snapshot absent".into()))?;
+        let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
+            .ok_or_else(|| Error::Invalid("verification run preimage absent".into()))?)?;
+        cadence::verification::runner::reobserve_launch(&previous.data, record)?;
+    }
     if let IntentKind::VerificationV1 { request, root_binding } = kind {
         if storage.read(STATE)?.directory_identity != *root_binding {
             return Err(Error::Invalid("verification store binding changed".into()));

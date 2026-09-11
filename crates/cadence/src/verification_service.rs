@@ -1,12 +1,24 @@
 //! Resident adapter; all writes use the existing session's single store queue.
-use cadence::{store::{Error, Result, writer::Operation}, verification::{inputs, model::Query, persistence}};
+use cadence::{store::{Error, Result, writer::Operation}, verification::{inputs, model::{Query, Apply}, persistence, runner}};
 use serde_json::{Value, json};
 use std::path::Path;
 
+pub enum Command { Query(Query), Apply(Apply) }
+
 pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
-    factory: &crate::import::SessionFactory<I>, root: &Path, query: Query,
+    factory: &crate::import::SessionFactory<I>, root: &Path, command: Command,
 ) -> Result<Value> {
-    match execute_inner(factory, root, query).await {
+    let result = match command {
+        Command::Query(query) => execute_inner(factory, root, query).await,
+        Command::Apply(Apply::Run { request }) => {
+            let session = factory.first_touch(root).await?;
+            session.config()?;
+            runner::launch(session.review_store().clone(), root.into(), *request).await
+                .map(|receipt| json!({"status":"ok","receipt":receipt}))
+        }
+        Command::Apply(_) => Err(inputs::refuse(0, "verification-unavailable", "operation", "operation is not implemented")),
+    };
+    match result {
         Ok(answer) => Ok(answer),
         Err(error) => Ok(super::execution_service::native_error(error)),
     }
@@ -15,7 +27,11 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
 async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
     factory: &crate::import::SessionFactory<I>, root: &Path, query: Query,
 ) -> Result<Value> {
-    let snapshot = cadence::plan::persistence::read_snapshot(root)?;
+    let snapshot = if matches!(query, Query::Read { .. }) && root.join(cadence::store::model::STATE).exists() {
+        Some(factory.first_touch(root).await?.derivation_view().await?.snapshot)
+    } else {
+        cadence::plan::persistence::read_snapshot(root)?
+    };
     let data = snapshot.as_ref().map(|s| s.data.clone()).unwrap_or_else(|| json!({}));
     match query {
         Query::Audit { phase } => Err(inputs::refuse(phase, "verification-unavailable", "operation", "verification-audit is not implemented")),
@@ -23,7 +39,9 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let saved = persistence::attempts(&data)?.into_iter().rev()
                 .find(|a| a.inputs.basis.phase == phase && attempt.as_ref().is_none_or(|id| a.id == *id))
                 .ok_or_else(|| inputs::refuse(phase, "verification-attempt", "attempt", "retained attempt absent"))?;
-            Ok(json!({"status":"ok","attempt":saved}))
+            let runs: Vec<_> = runner::records(&data)?.into_iter().filter(|r| r.attempt == saved.id).collect();
+            let unknown: Vec<_> = runs.iter().filter(|r| matches!(r.event, runner::Event::Launch { .. }) && runner::result(&runs, &r.id).is_none()).map(|r| r.id.clone()).collect();
+            Ok(json!({"status":"ok","attempt":saved,"runs":runs,"unknown_runs":unknown}))
         }
         Query::Next { phase, request_id } => {
             if phase == 0 { return Err(inputs::refuse(phase, "verification-phase", "phase", "positive integer phase required")); }

@@ -50,6 +50,11 @@ pub enum BoundaryChange {
 pub type InputCheck = Box<dyn FnMut() -> Result<()> + Send>;
 
 pub enum Operation {
+    VerificationRunV1 {
+        expected_generation: u64,
+        expected_integrity: String,
+        record: Box<cadence::verification::runner::Record>,
+    },
     VerificationV1 {
         expected_generation: u64,
         expected_integrity: String,
@@ -393,6 +398,8 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             self.observed = observed;
         }
         match operation {
+            Operation::VerificationRunV1 { expected_generation, expected_integrity, record } =>
+                self.verification_run(expected_generation, &expected_integrity, *record),
             Operation::VerificationV1 { expected_generation, expected_integrity, request } =>
                 self.verification(expected_generation, &expected_integrity, *request),
             Operation::NativeTaskV1 { expected_generation, expected_integrity, request } =>
@@ -604,6 +611,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 "rewrite_snapshot"
             }
             Operation::CheckedTransact { .. }
+            | Operation::VerificationRunV1 { .. }
             | Operation::VerificationV1 { .. }
             | Operation::RailReceipt { .. }
             | Operation::RailObservation { .. }
@@ -707,6 +715,22 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 None => super::transaction::IntentKind::Store,
             }),
         )
+    }
+
+    fn verification_run(&mut self, generation: u64, integrity: &str, record: cadence::verification::runner::Record) -> Result<View> {
+        use cadence::verification::runner;
+        let binding = self.observed[STATE].directory_identity.clone();
+        if let Some(prior) = runner::records(&self.view.snapshot.data)?.iter().find(|r| r.id == record.id) {
+            return if prior == &record && self.view.decisions.contains(&runner::decision(prior)?) { Ok(self.view.clone()) }
+                else { Err(Error::Invalid("verification run request reused".into())) };
+        }
+        self.check_expected(generation, integrity)?;
+        runner::reobserve_launch(&self.view.snapshot.data, &record)?;
+        let mut next = self.view.clone();
+        next.snapshot.data = runner::contribute(&next.snapshot.data, &binding, &record)?;
+        next.decisions.push(runner::decision(&record)?);
+        self.persist(next, self.view.snapshot.operations.clone(), Vec::new(), "verification_run",
+            super::transaction::IntentKind::VerificationRunV1 { record: Box::new(record), root_binding: binding })
     }
 
     fn verification(&mut self, generation: u64, integrity: &str, request: cadence::verification::persistence::Request) -> Result<View> {

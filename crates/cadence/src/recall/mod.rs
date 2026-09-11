@@ -205,7 +205,7 @@ mod resident {
     enum Request {
         Verification {
             root: PathBuf,
-            query: cadence::verification::model::Query,
+            command: crate::server::verification_service::Command,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
         Plan {
@@ -416,8 +416,8 @@ mod resident {
                 let mut caches = BTreeMap::<PathBuf, Option<Cached>>::new();
                 while let Some(request) = receiver.recv().await {
                     match request {
-                        Request::Verification { root, query, reply } => {
-                            let result = crate::server::verification_service::execute(&factory, &root, query).await;
+                        Request::Verification { root, command, reply } => {
+                            let result = crate::server::verification_service::execute(&factory, &root, command).await;
                             let _ = reply.send(result);
                         }
                         Request::Plan {
@@ -594,7 +594,13 @@ mod resident {
 
         pub async fn verification(&self, root: &Path, query: cadence::verification::model::Query) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
-            self.requests.send(Request::Verification { root: root.into(), query, reply }).await.map_err(|_| Error::Closed)?;
+            self.requests.send(Request::Verification { root: root.into(), command: crate::server::verification_service::Command::Query(query), reply }).await.map_err(|_| Error::Closed)?;
+            receive.await.map_err(|_| Error::Closed)?
+        }
+
+        pub async fn verification_apply(&self, root: &Path, input: cadence::verification::model::Apply) -> Result<serde_json::Value> {
+            let (reply, receive) = oneshot::channel();
+            self.requests.send(Request::Verification { root: root.into(), command: crate::server::verification_service::Command::Apply(input), reply }).await.map_err(|_| Error::Closed)?;
             receive.await.map_err(|_| Error::Closed)?
         }
 

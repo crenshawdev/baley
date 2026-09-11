@@ -266,7 +266,7 @@ fn capture(mut reader: impl Read) -> Capture {
     Capture { digest: digest(&bytes), bytes, complete }
 }
 
-fn observe_child(project: &Path, launch: &Launch) -> RunResult {
+pub fn observe_child(project: &Path, launch: &Launch) -> RunResult {
     use std::os::unix::process::{CommandExt, ExitStatusExt};
     if !material(project, &launch.material.command, &launch.material.test_file).is_ok_and(|m| m == launch.material) {
         return RunResult { run_id: launch.run_id.clone(), disposition: Disposition::LaunchFailed { reason: "committed material changed before spawn".into() },

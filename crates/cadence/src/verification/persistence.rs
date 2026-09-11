@@ -70,7 +70,8 @@ pub fn contribute(data: &Value, root_binding: &str, request: &Request) -> Result
     let mut saved = attempts(data)?;
     saved.push(attempt.clone());
     let mut next = data.clone();
-    next[NAMESPACE] = json!({"schema":"verification-1","attempts":saved});
+    if next.get(NAMESPACE).is_none() { next[NAMESPACE] = json!({"schema":"verification-1"}); }
+    next[NAMESPACE]["attempts"] = json!(saved);
     Ok(next)
 }
 

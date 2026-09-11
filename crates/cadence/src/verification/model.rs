@@ -114,13 +114,13 @@ pub enum Query {
 #[serde(tag = "operation", deny_unknown_fields)]
 pub enum Apply {
     #[serde(rename = "verification-run")]
-    Run { request: Run },
+    Run { request: Box<Run> },
     #[serde(rename = "verification-submit")]
-    Submit { patch: Patch },
+    Submit { patch: Box<Patch> },
     #[serde(rename = "truth-waive")]
-    Waive { request_id: String, submission: Waiver, approval: OwnerApproval<Waiver> },
+    Waive { request_id: String, submission: Box<Waiver>, approval: Box<OwnerApproval<Waiver>> },
     #[serde(rename = "verification-human-result")]
-    Human { request_id: String, submission: HumanResult, approval: OwnerApproval<HumanResult> },
+    Human { request_id: String, submission: Box<HumanResult>, approval: Box<OwnerApproval<HumanResult>> },
     #[serde(rename = "verification-complete")]
-    Complete { request_id: String, attempt: String, basis: Basis },
+    Complete { request_id: String, attempt: String, basis: Box<Basis> },
 }

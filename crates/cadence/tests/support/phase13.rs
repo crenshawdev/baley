@@ -13,7 +13,7 @@ use std::{
 };
 
 pub struct Client {
-    child: Child,
+    pub child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<std::process::ChildStdout>,
 }
@@ -535,7 +535,7 @@ impl Completed {
                 "request_id":format!("start-{plan}"),"task":task["task"],"attempt":format!("attempt-{plan}"),
                 "expected_version":0,"predecessor":null,"checks":[check]}}));
             assert_eq!(started["status"], "ok", "{started}");
-            let source = format!("import sys, unittest, pathlib, time\nsys.path.insert(0, 'src')\nfrom {name} import answer\nunittest.runner.time.perf_counter = lambda: 0.0\nclass Check(unittest.TestCase):\n    def test_answer(self):\n        with pathlib.Path('.run/{name}-runs').open('a') as f:\n            f.write('run\\n')\n        if pathlib.Path('.run/wait').exists():\n            pathlib.Path('.run/ready').write_text('ready')\n            time.sleep(120)\n        self.assertEqual(answer(), 7)\nif __name__ == '__main__':\n    unittest.main()\n");
+            let source = format!("import sys, unittest, pathlib, time\nsys.path.insert(0, 'src')\nfrom {name} import answer\nunittest.runner.time.perf_counter = lambda: 0.0\nclass Check(unittest.TestCase):\n    def test_answer(self):\n        with pathlib.Path('.run/{name}-runs').open('a') as f:\n            f.write('run\\n')\n        if pathlib.Path('.run/wait').exists():\n            pathlib.Path('.run/ready').write_text(str(__import__('os').getpid()))\n            time.sleep(120)\n        self.assertEqual(answer(), 7)\nif __name__ == '__main__':\n    unittest.main()\n");
             fs::write(project.join(format!("tests/{name}.py")), source).unwrap();
             git_value(project, &["add", &format!("tests/{name}.py")]);
             git_value(project, &["commit", "-m", &format!("test(13): red task-{name}")]);
