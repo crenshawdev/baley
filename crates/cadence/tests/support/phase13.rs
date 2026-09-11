@@ -527,7 +527,9 @@ impl Completed {
             assert_eq!(dispatch["status"], "ok", "{dispatch}");
             dispatches.push(dispatch);
             let task = state(project, plan);
-            let check = task["checks"][0].clone();
+            let allocation = contract(project);
+            let check = allocation["allocation"].as_array().unwrap().iter()
+                .find(|a| a["plan"] == plan).unwrap()["checks"][0].clone();
             assert_eq!(check["id"], id);
             let started = apply(project, json!({"operation":"execution-task-start","request":{
                 "request_id":format!("start-{plan}"),"task":task["task"],"attempt":format!("attempt-{plan}"),
