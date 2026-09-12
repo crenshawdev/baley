@@ -80,6 +80,31 @@ pub struct ImportManifest {
     pub shared_global: Option<SourceGuard>,
 }
 
+/// Snapshot field holding the layer mapping as it stands now. The import
+/// manifest keeps where the layers were at import and never changes; this
+/// record keeps where they are, the digest of the global layer's bytes as the
+/// store last wrote them (the writer refreshes it on every global-config
+/// participant), and every relocation the store accepted.
+pub const LAYERS: &str = "layers";
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LayerRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<Paths>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relocations: Vec<Relocation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Relocation {
+    pub from: PathBuf,
+    pub to: PathBuf,
+    /// The generation that recorded the move.
+    pub generation: u64,
+}
+
 struct ImportInputs {
     manifest: ImportManifest,
     generation: Generation,
@@ -278,6 +303,67 @@ fn guard(path: PathBuf, input: &Input) -> SourceGuard {
         content: input.bytes.as_deref().map(digest),
     }
 }
+/// The global layer's identity is a canonical path, so a home that moves
+/// between a symlink and a real directory changes the layer mapping while
+/// every byte stays the same. Only the global layer may move, only to a place
+/// holding exactly the bytes the store last knew (the writer's record, or the
+/// import's content guard for a store that predates the record), and the
+/// refusal names both places. A repo move, an absent record, or different
+/// bytes are a different layer mapping and stay refused.
+fn relocate_global_layer<I: ConfigIo>(
+    io: &mut I,
+    manifest: &ImportManifest,
+    layers: &LayerRecord,
+    recorded: &Paths,
+    active: &Paths,
+    generation: u64,
+) -> Result<LayerRecord> {
+    let display = |paths: &Paths| {
+        paths
+            .global
+            .as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(none)".into())
+    };
+    let refused = |why: &str| {
+        Error::Conflict(format!(
+            "changed layer mapping: {why}; global layer recorded at {}, now {}",
+            display(recorded),
+            display(active)
+        ))
+    };
+    if recorded.repo != active.repo {
+        return Err(refused("the repo layer moved"));
+    }
+    let (Some(old), Some(new)) = (&recorded.global, &active.global) else {
+        return Err(refused("the global layer appeared or disappeared"));
+    };
+    let Some(expected) = layers
+        .global_content
+        .as_deref()
+        .or_else(|| manifest.shared_global.as_ref()?.content.as_deref())
+    else {
+        return Err(refused(
+            "no recorded content proves the new place is the same layer",
+        ));
+    };
+    let current = observe(io, new)?;
+    if current.bytes.as_deref().map(digest).as_deref() != Some(expected) {
+        return Err(refused(
+            "the bytes at the new place differ from the recorded layer",
+        ));
+    }
+    let mut next = layers.clone();
+    next.active = Some(active.clone());
+    next.global_content = Some(expected.to_owned());
+    next.relocations.push(Relocation {
+        from: old.clone(),
+        to: new.clone(),
+        generation,
+    });
+    Ok(next)
+}
+
 fn validate_sources<I: ConfigIo>(io: &mut I, expected: &[SourceGuard]) -> Result<()> {
     for source in expected {
         let current = observe(io, &source.path)?;
@@ -657,12 +743,12 @@ impl<I: ConfigIo> Session<I> {
                 cadence::store::writer::STALE_SNAPSHOT.into(),
             ));
         }
-        if !data.is_object() || data.get("import") != Some(&serde_json::to_value(&self.manifest)?) {
+        if !data.is_object() || data.get("import") != current.snapshot.data.get("import") {
             return Err(Error::Invalid(
                 "derivation replacement must preserve import manifest".into(),
             ));
         }
-        for field in ["source_evidence", "archive", "cursor"] {
+        for field in ["source_evidence", "archive", "cursor", LAYERS] {
             if data.get(field) != current.snapshot.data.get(field) {
                 return Err(Error::Invalid(format!(
                     "derivation replacement changed provenance: {field}"
@@ -1157,10 +1243,8 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
             .map_err(|_| {
                 Error::Conflict("new-format generation lacks import completion metadata".into())
             })?;
-        if manifest.format != 1 || !manifest.complete || manifest.active != active {
-            return Err(Error::Conflict(
-                "invalid import completion or changed layer mapping".into(),
-            ));
+        if manifest.format != 1 || !manifest.complete {
+            return Err(Error::Conflict("invalid import completion".into()));
         }
         *importing
             .lock()
@@ -1169,6 +1253,44 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
             .lock()
             .map_err(|_| Error::Policy("config unavailable".into()))?
             .refresh()?;
+        let layers: LayerRecord = view
+            .snapshot
+            .data
+            .get(LAYERS)
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
+        let recorded = layers
+            .active
+            .clone()
+            .unwrap_or_else(|| manifest.active.clone());
+        if recorded != active {
+            // A moved home changes the identity the global layer canonicalizes
+            // to without changing a byte. The store's record of the layer's
+            // bytes decides whether the new place is that same layer; the
+            // mapping is then recorded at its own generation so the next open
+            // is exact. The import manifest stays as history.
+            let generation = view
+                .snapshot
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| Error::Invalid("generation overflow".into()))?;
+            let next =
+                relocate_global_layer(&mut io, &manifest, &layers, &recorded, &active, generation)?;
+            let mut data = view.snapshot.data.clone();
+            data[LAYERS] = serde_json::to_value(&next)?;
+            store
+                .request(Operation::CompareRewriteSnapshot {
+                    expected_generation: view.snapshot.generation,
+                    expected_integrity: view.snapshot.integrity.clone(),
+                    data,
+                })
+                .await?;
+        }
+        // The session's manifest names the layers where they stand now.
+        let mut manifest = manifest;
+        manifest.active = active;
         let session = Arc::new(Session {
             root: root.clone(),
             store,

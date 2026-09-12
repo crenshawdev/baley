@@ -961,6 +961,114 @@ fn resident_policy_follows_rename_symlink_retarget_and_layer_collapse() {
 }
 
 #[test]
+fn relocated_global_layer_reopens_by_identical_content_and_refuses_other_bytes() {
+    let fixture = extraction();
+    let root = fixture.path().join(".planning");
+    let global = global_fixture(fixture.path());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let open = |legacy: PathBuf| {
+        runtime.block_on(async {
+            let session = SessionFactory::new(Some(legacy), allow_evaluation())
+                .first_touch(&root)
+                .await?;
+            let view = session.request(Operation::Read).await?;
+            Ok::<_, Error>((session, view))
+        })
+    };
+    let (session, view) = open(global.clone()).unwrap();
+    let first = session.import_manifest().clone();
+    let generation = view.snapshot.generation;
+    // The import created the global layer, so the manifest carries no content
+    // guard; the writer's record of the written bytes is the only oracle.
+    assert!(first.shared_global.is_none());
+    let layers = &view.snapshot.data[LAYERS];
+    let written = std::fs::read(first.active.global.as_ref().unwrap()).unwrap();
+    assert_eq!(layers["global_content"], json!(digest(&written)));
+    assert!(layers.get("active").is_none());
+    drop(session);
+    let old_active = first.active.global.clone().unwrap();
+    // The home moves: the old directory is gone, every byte is at the new place.
+    let moved = fixture.path().join("home/.claude/cadence");
+    std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
+    std::fs::rename(global.parent().unwrap(), &moved).unwrap();
+    let legacy = moved.join("config.json");
+    let active = moved.join("config.v4.json");
+    // Negative control: different bytes at the new place are a different layer.
+    change_config(&active, "workflow.verifier", json!(false));
+    let before = semantic_bytes(&root);
+    let refused = open(legacy.clone()).err().unwrap().to_string();
+    assert!(refused.contains("changed layer mapping"), "{refused}");
+    assert!(
+        refused.contains(&old_active.display().to_string()),
+        "{refused}"
+    );
+    assert!(refused.contains(&active.display().to_string()), "{refused}");
+    assert_eq!(semantic_bytes(&root), before);
+    // Identical bytes reopen the store and record the mapping once.
+    std::fs::write(&active, &written).unwrap();
+    let (session, view) = open(legacy.clone()).unwrap();
+    let relocated = session.import_manifest().clone();
+    assert_eq!(view.snapshot.generation, generation + 1);
+    assert_eq!(relocated.active.repo, first.active.repo);
+    assert_eq!(relocated.active.global.as_deref(), Some(active.as_path()));
+    let history = ImportManifest {
+        active: first.active.clone(),
+        ..relocated.clone()
+    };
+    assert_eq!(
+        history, first,
+        "the import manifest is history and is untouched"
+    );
+    assert_eq!(
+        view.snapshot.data["import"],
+        serde_json::to_value(&first).unwrap()
+    );
+    let layers: LayerRecord = serde_json::from_value(view.snapshot.data[LAYERS].clone()).unwrap();
+    assert_eq!(layers.active.as_ref(), Some(&relocated.active));
+    assert_eq!(layers.global_content.as_deref(), Some(digest(&written).as_str()));
+    assert_eq!(
+        layers.relocations,
+        vec![Relocation {
+            from: old_active.clone(),
+            to: active.clone(),
+            generation: generation + 1
+        }]
+    );
+    // A restart at the new place is exact: no further rewrite.
+    drop(session);
+    let (session, again) = open(legacy.clone()).unwrap();
+    assert_eq!(again.snapshot.generation, generation + 1);
+    // A global write through the store refreshes the record, so a second move
+    // after an edit still proves itself.
+    let view = runtime
+        .block_on(session.set_config(Layer::Global, "workflow.verifier", json!(false)))
+        .unwrap();
+    let edited = std::fs::read(&active).unwrap();
+    assert_ne!(edited, written);
+    assert_eq!(
+        view.snapshot.data[LAYERS]["global_content"],
+        json!(digest(&edited))
+    );
+    assert_eq!(
+        view.snapshot.data["import"],
+        serde_json::to_value(&first).unwrap()
+    );
+    drop(session);
+    let moved_again = fixture.path().join("elsewhere/cadence");
+    std::fs::create_dir_all(moved_again.parent().unwrap()).unwrap();
+    std::fs::rename(&moved, &moved_again).unwrap();
+    let (session, view) = open(moved_again.join("config.json")).unwrap();
+    let layers: LayerRecord = serde_json::from_value(view.snapshot.data[LAYERS].clone()).unwrap();
+    assert_eq!(layers.relocations.len(), 2);
+    assert_eq!(layers.relocations[1].from, active);
+    assert_eq!(layers.relocations[1].to, moved_again.join("config.v4.json"));
+    assert_eq!(
+        session.import_manifest().active.global.as_deref(),
+        Some(moved_again.join("config.v4.json").as_path())
+    );
+}
+
+#[test]
 fn capture_threshold_counts_active_identities_across_durable_revisions() {
     use cadence::store::items::{ItemChange, revise};
     let fixture = extraction();

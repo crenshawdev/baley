@@ -697,6 +697,22 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 return Err(Error::Invalid("unknown external participant".into()));
             }
             change.validate(&self.storage.read(&change.target)?, false)?;
+            if change.target == "global-config"
+                && let Some(data) = next.snapshot.data.as_object_mut()
+            {
+                // The store is the global layer's only writer; its record of
+                // the bytes lets a relocated home prove the layer is the same.
+                // The import manifest is history and is never touched.
+                let layers = data
+                    .entry("layers")
+                    .or_insert_with(|| Value::Object(Default::default()));
+                if let Some(layers) = layers.as_object_mut() {
+                    layers.insert(
+                        "global_content".into(),
+                        Value::String(model::digest(&change.bytes)),
+                    );
+                }
+            }
             participants.push(super::transaction::Participant {
                 target: change.target,
                 expected: change.expected,

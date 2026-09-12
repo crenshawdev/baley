@@ -11,6 +11,18 @@ Only routing, gate, and refusal records enter the decisions log. Observed effort
 normalization treats whitespace-only text as missing and preserves other host
 spellings without comparing them to requested effort.
 
+The `import` snapshot field is the import's own history and never changes after
+completion. The layer mapping as it stands now lives in the `layers` field: the
+current `active` paths, the digest of the global layer's bytes as the store last
+wrote them (the writer refreshes it on every `global-config` participant), and
+each accepted relocation with the generation that recorded it. A global layer
+that canonicalizes to a new path at open, as when a home moves between a symlink
+and a real directory, is accepted only when the bytes at the new place equal that
+record, or the import's shared-global guard for a store that predates the record;
+the mapping is then recorded at its own generation and the next open is exact.
+A repo move, an absent record, or different bytes are refused as a changed layer
+mapping, and the refusal names both places.
+
 `Store::open` starts one dedicated blocking OS thread. A bounded Tokio request
 queue feeds it; each request carries a separate oneshot reply. Tokio and file I/O
 are outside the synchronous record algebra. Admitted work continues when a caller

@@ -139,7 +139,8 @@ stale proposal without erasing the winner. No store lock primitive was added.
 `Session::request` retains its existing `current` wrapper for legacy snapshot
 replacements. `derivation_view` and `commit_derivation` refresh config and call
 the explicit operations directly. The commit path requires the original
-import manifest, source evidence, archive, and raw cursor provenance. It submits
+import manifest, source evidence, archive, raw cursor provenance, and the layer
+record. It submits
 the complete data object, preserving its top-level placement.
 
 Errors remain distinct:
