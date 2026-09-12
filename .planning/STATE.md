@@ -1,6 +1,6 @@
 # State
 
-Phase: 14 of 30 (Receipts and retune)
+Phase: 31 of 33 (The read layer)
 Status: unplanned
-Next: context 14 natively through the binary (context-submit), then plan-read/plan-submit, then execute-next 14
-Updated: 2026-09-11
+Next: context 31 through the binary (context-submit), the read layer first; phases 14 to 26 and 30 re-planned behind 31 to 33
+Updated: 2026-09-12

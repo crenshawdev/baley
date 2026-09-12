@@ -213,6 +213,13 @@ on `cadence/binary-owns-process`. The design is
 `docs/rationale/architecture-v4.md`; `ROADMAP.md` carries the execution
 order and three open questions.
 
+**The boundary fix, approved 2026-09-12.** Dogfooding phase 14 found the
+boundary inverted: the model read and carried whole documents, the binary
+echoed them back, and 4.0 cost more tokens than 3.7. Design at
+`docs/architecture/boundary-fix.md` (two flowcharts, eight rules). Phases 31
+to 33 build it and run before phase 14; 14 to 26 and 30 are re-planned behind
+them. The stores stand.
+
 **The frozen reference is the tag `v3.7.12`** at commit `c39bbd8c`, and the
 maintenance line is the branch `3.x` cut from it. Phase 1 is a spike and runs
 first because the 3.x baseline it measures cannot be taken once 3.x stops being

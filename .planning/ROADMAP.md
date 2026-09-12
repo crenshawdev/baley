@@ -9,6 +9,18 @@ model owns engineering judgment, and the skill orchestrates between them. The
 design is `docs/rationale/architecture-v4.md`; this roadmap is the execution
 order, not a second copy of it.
 
+**The boundary fix, approved 2026-09-12, runs next.** Dogfooding phase 14
+showed the boundary cut the wrong way: the model read whole documents and
+carried them to the binary, and the binary echoed them back, so 4.0 cost more
+tokens than 3.7. The design is `docs/architecture/boundary-fix.md`: nothing on
+the wire is a document, the binary owns location, bytes and rendering, the
+model hands over typed judgment and reads slices through the binary, workers
+live under the same boundary. Phases 31 to 33 build it and run before phase
+14; phases 14 to 26 and 30 are re-planned behind them against the new wire.
+The stores from phases 1 to 13 and 27 to 29 stand. Every phase from 31 on
+carries the cycle's purpose as a truth with a check, and closes with a token
+number against the 3.7 baseline (planner median 183k, executor 142k).
+
 **It is a REARCHITECTURE, not a port. John's ruling, 2026-09-06:** "cadence up
 to three dot seven was an excellent learning experience, it's now time to take
 all of that knowledge and really do a rearchitecture and a redesign around
@@ -396,6 +408,9 @@ Delivery order after phase 11 is 27, 28, 29, 12, 13, then 14 onward; see
 - [x] **Phase 28: Evidence associations** - the evidence map attached to current phase truths, orphans refused
 - [x] **Phase 29: Check and link limits** - a check needs a command and expected output, one check per truth, links only where the truth names a value
 - [ ] **Phase 30: Plan review handoff** - `cad-plan` fires the review trigger and persists only selected review edits
+- [ ] **Phase 31: The read layer** - search and slice operations in the binary, ported from excerpt; the model and every worker read through them and never open a file
+- [ ] **Phase 32: Typed authoring and rendering** - context and plan submissions as typed pieces; the binary renders CONTEXT.md and PLAN.md, answers with a digest, and approval binds by digest; nothing echoed, no path on the wire
+- [ ] **Phase 33: Execution and verification under the boundary** - a worker gets a dispatch id, reports progress and completion as typed pieces, the binary renders SUMMARY.md, and review material reaches the binary without crossing the wire
 
 ## Phase Details
 
@@ -1415,3 +1430,35 @@ reference material, and only owner-selected review edits are persisted into
 the PLAN files, refused against a plan changed since review. Parked from
 phase 11 on 2026-09-09 (candidates T47-T50). Blocked on an explicit
 replacement for the settlement dependency phase 10 dropped.
+
+### Phase 31: The read layer
+
+**Goal.** The model and every worker read the project through the binary.
+`search` returns hits in a scope; `read` returns one slice; both are the
+excerpt crate's operations, ported. Rule 5 of the boundary fix. The cycle's
+purpose truth is authored here and inherited by every later phase: the model
+never opens a project document whole, checked by the reads the harness
+records. Closes with the token number for a planner round against the 3.7
+median of 183k.
+
+### Phase 32: Typed authoring and rendering
+
+**Goal.** Rules 1 to 4 and 6 to 7. `context-submit` and `plan-submit` take
+typed pieces only, a truth, a task, a check, an evidence item; no `body`, no
+path. The binary renders CONTEXT.md and PLAN.md itself, stores them, and
+answers with the digest of what it rendered. The owner reads the rendered
+draft and the approval carries owner, time and digest; a draft changed since
+is refused with a location. Nothing is echoed back. Phase 27 to 29 records
+are unchanged underneath. Closes with the token number for publishing a
+six-plan phase against the 113KB-twice of 2026-09-12.
+
+### Phase 33: Execution and verification under the boundary
+
+**Goal.** Rule 8. `execute-next` answers a dispatch id and a route, never a
+prompt with the plan pasted in; the worker fetches what it needs through
+phase 31's read layer, reports progress, checkpoints and completion as typed
+pieces, and the binary renders SUMMARY.md. `verify-next` and the review
+operations take the same shape, and review material reaches the binary by
+identity, not as bytes on the wire. Writing source and tests stays with the
+worker's own edit tools. Closes with the token number for an executor round
+against the 3.7 median of 142k.
