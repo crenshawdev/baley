@@ -317,6 +317,9 @@ pub(crate) fn phase_summary_target(target: &str) -> Result<Option<u32>> {
 }
 
 impl Storage for Filesystem {
+    fn root_path(&self) -> Option<&Path> {
+        Some(&self.root)
+    }
     type Prepared = Prepared;
 
     fn acquire(&mut self) -> Result<Box<dyn Send>> {

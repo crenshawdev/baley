@@ -23,6 +23,23 @@ the mapping is then recorded at its own generation and the next open is exact.
 A repo move, an absent record, or different bytes are refused as a changed layer
 mapping, and the refusal names both places.
 
+The `root` snapshot field holds the chain the store was bound to in `bound`,
+the absolute store directory `path`, and each accepted identity change in
+`relocations`, with `from`, `to`, and the generation that recorded it. Retained
+records and new records use `bound`; a changed filesystem identity at open is
+accepted only at the same path and only when the store's bytes match the
+snapshot's integrity and its items and decisions digests. The change is recorded
+at its own generation, and the last accepted chain makes the next open exact.
+A store that predates the field binds to the one chain its retained records
+carry, or the live chain if no records carry one, and the absolute store path
+held by the filesystem adapter; disagreeing records are refused with both
+chains. New stores record the live chain and that absolute path at creation,
+with no relocations. Root binding never depends on an import. It lives beside
+`data`, so application data can retain any JSON shape. A different path or
+different bytes is refused with the bound and live chains and the path. The import manifest stays
+as history, and the writer's in-process directory-change detection still uses
+live filesystem identities.
+
 `Store::open` starts one dedicated blocking OS thread. A bounded Tokio request
 queue feeds it; each request carries a separate oneshot reply. Tokio and file I/O
 are outside the synchronous record algebra. Admitted work continues when a caller
