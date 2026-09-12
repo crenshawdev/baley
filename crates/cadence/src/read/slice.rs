@@ -35,8 +35,17 @@ impl ReadDomain {
     fn read_named(&mut self, token: &str, name: &str) -> Value {
         let Some(Capability::File { path, revision }) = self.registry.get(token) else { return refusal("file", "location-not-issued", "file reference was not issued by this resident"); };
         let content = match self.current(&path, &revision) { Ok(content) => content, Err(answer) => return answer };
-        let matches: Vec<_> = self.units(&path, &content).into_iter().filter(|unit| unit.name == name || unit.bare == name).collect();
-        if matches.len() != 1 { return json!({"status":"ok","kind":"outline","bound":ANSWER_BOUND,"rows":matches,"reason":if matches.is_empty(){"missing-unit"}else{"ambiguous-unit"}}); }
+        let units = self.units(&path, &content);
+        let matches: Vec<_> = units.iter().filter(|unit| unit.name == name || unit.bare == name).cloned().collect();
+        if matches.len() != 1 {
+            let missing = matches.is_empty();
+            let selected = if missing { units } else { matches };
+            let rows: Vec<_> = selected.into_iter().map(|unit| {
+                let location = self.registry.unit(path.clone(), revision.clone(), unit.clone(), unit.first_byte);
+                json!({"name":unit.name,"kind":unit.kind,"range":unit.range(),"location":location})
+            }).collect();
+            return json!({"status":"ok","kind":"outline","bound":ANSWER_BOUND,"source_revision":revision,"rows":rows,"reason":if missing{"missing-unit"}else{"ambiguous-unit"},"incomplete":false,"continuation":Value::Null});
+        }
         let unit = matches.into_iter().next().unwrap();
         self.slice(path, revision, unit.clone(), unit.first_byte, &content)
     }
