@@ -9,7 +9,7 @@ use std::{
     io,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -601,6 +601,36 @@ impl<R: AsyncRead + Unpin, W> InputTransport<R, W> {
         )
     }
 }
+/// Requests whose answer has not been written yet. One process serves one
+/// session, so a process-wide count is the whole truth.
+static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+/// Counts one request for as long as its handler runs. The counter is a
+/// parameter so a test can observe one it owns rather than the live session's.
+pub struct InFlight(&'static AtomicUsize);
+impl InFlight {
+    pub fn enter() -> Self {
+        Self::on(&IN_FLIGHT)
+    }
+    fn on(counter: &'static AtomicUsize) -> Self {
+        counter.fetch_add(1, Ordering::AcqRel);
+        Self(counter)
+    }
+}
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// What to say when stdin closes. Silence is correct only when nothing was
+/// still running; otherwise an answer was owed and will never be written.
+fn eof_notice(pending: usize) -> Option<String> {
+    (pending > 0).then(|| format!(
+        "cadence: stdin closed with {pending} request(s) still running; their answers were never sent. A client keeps stdin open until it has read every response."
+    ))
+}
+
 impl<R, W> Transport<RoleServer> for InputTransport<R, W>
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -624,7 +654,15 @@ where
             Ok(Some(frame)) => serde_json::from_slice(&frame)
                 .map(Some)
                 .map_err(io::Error::other),
-            Ok(None) => Ok(None),
+            // Closing stdin ends the session, so anything still running dies
+            // with it and its answer is never written. Exiting silently makes
+            // that indistinguishable from a server that had nothing to say.
+            Ok(None) => {
+                if let Some(notice) = eof_notice(IN_FLIGHT.load(Ordering::Acquire)) {
+                    eprintln!("{notice}");
+                }
+                Ok(None)
+            }
             Err(error) => Err(error),
         };
         match received {
@@ -652,6 +690,32 @@ mod tests {
         task::{Context, Poll, Waker},
     };
     use tokio::io::ReadBuf;
+
+    static TEST_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn a_closed_stdin_with_nothing_running_says_nothing() {
+        assert_eq!(eof_notice(0), None);
+    }
+
+    #[test]
+    fn a_closed_stdin_names_the_answers_it_dropped() {
+        let notice = eof_notice(2).expect("a notice when work was still running");
+        assert!(notice.contains("2 request(s) still running"), "{notice}");
+        assert!(notice.contains("keeps stdin open"), "{notice}");
+    }
+
+    #[test]
+    fn a_request_is_counted_for_the_life_of_its_guard() {
+        assert_eq!(TEST_IN_FLIGHT.load(Ordering::Acquire), 0);
+        {
+            let _outer = InFlight::on(&TEST_IN_FLIGHT);
+            let _inner = InFlight::on(&TEST_IN_FLIGHT);
+            assert_eq!(TEST_IN_FLIGHT.load(Ordering::Acquire), 2);
+        }
+        assert_eq!(TEST_IN_FLIGHT.load(Ordering::Acquire), 0);
+    }
+
 
     const PREFIX: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"cadence_apply","arguments":{"operation":"review-return","raw":""#;
     const SUFFIX: &[u8] = b"\"}}}\n";

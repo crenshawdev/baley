@@ -608,6 +608,7 @@ impl ServerHandler for PublicServer {
         request: CallToolRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        let _in_flight = crate::review_ingress::InFlight::enter();
         let raw = request.arguments.map(Value::Object);
         match request.name.as_ref() {
             "cadence_version" => {
