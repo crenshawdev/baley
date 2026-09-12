@@ -39,7 +39,7 @@ fn native_unit_contract(command: &str) -> (serde_json::Value, std::collections::
         {"id":"document","verify":["printf documented"]}]},"body":body,"evidence_map":map}})).unwrap()).collect();
     let submission = Submission { phase: 12.try_into().unwrap(), occurrence:"active-cycle:phase:12".into(),
         request_id:"unit-publication".into(), inventory_basis:"unit-inventory".into(), plans:entries };
-    let approval = Approval { approved:true, owner:Some("Fixture Owner".into()), at:Some("2026-09-10T14:00:00Z".into()), submission:Some(submission.clone()) };
+    let approval = Approval { approved:true, owner:Some("Fixture Owner".into()), at:Some("2026-09-10T14:00:00Z".into()), submission:Some(submission.clone()), submission_digest:None };
     let mut documents = std::collections::BTreeMap::new();
     let mut publications = std::collections::BTreeMap::new();
     let mut revisions = Vec::new();
@@ -175,13 +175,13 @@ fn native_admission_commits_versioned_extensions() {
         let replacing=crate::plan::model::Submission {phase:12.try_into().unwrap(),occurrence:first.contract.occurrence.clone(),
             request_id:"replace-undispatched".into(),inventory_basis:inventory.basis.clone(),plans:vec![crate::plan::model::Entry {
                 target:old.identity,content:old.content,replacement:Some(replacement)}]};
-        let approved=crate::plan::model::Approval {approved:true,owner:Some("Fixture Owner".into()),at:Some("2026-09-10T15:00:00Z".into()),submission:Some(replacing.clone())};
+        let approved=crate::plan::model::Approval {approved:true,owner:Some("Fixture Owner".into()),at:Some("2026-09-10T15:00:00Z".into()),submission:Some(replacing.clone()),submission_digest:None};
         assert!(crate::plan::persistence::contribute(&view.snapshot.data,&replacing,&approved,&inventory).unwrap_err().to_string().contains("admitted-plan"));
         let mut content=crate::plan::persistence::saved(&view.snapshot.data,12).unwrap().unwrap().publications[&1].content.clone();
         content.plan=3.try_into().unwrap();
         let submission=crate::plan::model::Submission {phase:12.try_into().unwrap(),occurrence:first.contract.occurrence.clone(),request_id:"gap".into(),
             inventory_basis:inventory.basis.clone(),plans:vec![crate::plan::model::Entry {target:crate::plan::model::Identity {phase:12.try_into().unwrap(),plan:3.try_into().unwrap()},content,replacement:None}]};
-        let approval=crate::plan::model::Approval {approved:true,owner:Some("Fixture Owner".into()),at:Some("2026-09-10T15:00:00Z".into()),submission:Some(submission.clone())};
+        let approval=crate::plan::model::Approval {approved:true,owner:Some("Fixture Owner".into()),at:Some("2026-09-10T15:00:00Z".into()),submission:Some(submission.clone()),submission_digest:None};
         let (next,publications)=crate::plan::persistence::contribute(&view.snapshot.data,&submission,&approval,&inventory).unwrap();
         let publication=&publications[0];
         let mut filesystem=Filesystem::new(&root).unwrap();
@@ -570,7 +570,7 @@ fn native_material_includes_scoped_evidence_commits() {
         content.plan = 3.try_into().unwrap();
         let submission = crate::plan::model::Submission { phase: 12.try_into().unwrap(), occurrence: contract.occurrence.clone(), request_id: "material-gap".into(),
             inventory_basis: inventory.basis.clone(), plans: vec![crate::plan::model::Entry { target: crate::plan::model::Identity { phase: 12.try_into().unwrap(), plan: 3.try_into().unwrap() }, content, replacement: None }] };
-        let approval = crate::plan::model::Approval { approved: true, owner: Some("Fixture Owner".into()), at: Some("2026-09-10T15:00:00Z".into()), submission: Some(submission.clone()) };
+        let approval = crate::plan::model::Approval { approved: true, owner: Some("Fixture Owner".into()), at: Some("2026-09-10T15:00:00Z".into()), submission: Some(submission.clone()), submission_digest: None };
         let (next, publications) = crate::plan::persistence::contribute(&view.snapshot.data, &submission, &approval, &inventory).unwrap();
         let publication = &publications[0];
         let view = store.request(Operation::CompareTransact { expected_generation: view.snapshot.generation, expected_integrity: view.snapshot.integrity,

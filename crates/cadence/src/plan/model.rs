@@ -75,7 +75,15 @@ pub struct Approval {
     pub approved: bool,
     pub owner: Option<String>,
     pub at: Option<String>,
+    /// The approved submission. On the wire the owner may bind by
+    /// `submission_digest` instead; the binary fills this copy before it
+    /// records the publication, so retained records always carry it.
     pub submission: Option<Submission>,
+    /// The digest of the exact submission, as `plan-submit` reports it on a
+    /// draft answer. Either binding proves the same thing; the digest spares
+    /// the caller a second copy of the whole plan set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission_digest: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]

@@ -285,13 +285,29 @@ fn phase27_approved_plan_is_published_at_returned_identity() {
             assert_eq!(answer["persisted"], false, "{answer}");
             assert_eq!(tree(project), before);
         }
-        let approved = approve(draft);
+        let approved = approve(draft.clone());
         let mut changed = approved.clone();
         changed["submission"]["plans"][0]["content"]["body"] = json!("Unapproved edit");
         let answer = client.call("cadence_apply", changed);
         assert_eq!(answer["rule"], "exact-submission-approval", "{answer}");
         assert_eq!(tree(project), before);
-        let answer = client.call("cadence_apply", approved.clone());
+        // The draft answer reports the digest an approval may carry instead of
+        // a second copy of the whole submission. A stale digest is refused; the
+        // digest form publishes and is recorded exactly as the copy form is.
+        let unsigned = client.call("cadence_apply", draft.clone());
+        let digest = unsigned["submission_digest"].as_str().unwrap().to_owned();
+        assert_eq!(digest.len(), 64, "{unsigned}");
+        let mut stale = draft.clone();
+        stale["submission"]["plans"][0]["content"]["body"] = json!("Unapproved edit");
+        stale["approval"] = json!({"approved":true,"owner":"John Crenshaw",
+            "at":"2026-09-10T14:00:00Z","submission_digest":digest});
+        let answer = client.call("cadence_apply", stale);
+        assert_eq!(answer["rule"], "exact-submission-approval", "{answer}");
+        assert_eq!(tree(project), before);
+        let mut by_digest = draft.clone();
+        by_digest["approval"] = json!({"approved":true,"owner":"John Crenshaw",
+            "at":"2026-09-10T14:00:00Z","submission_digest":digest});
+        let answer = client.call("cadence_apply", by_digest);
         assert_eq!(
             answer["status"], "ok",
             "approved plan must publish: {answer}"

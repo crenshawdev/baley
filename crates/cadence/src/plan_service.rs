@@ -125,6 +125,10 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 Ok(value) => value,
                 Err(error) => return Ok(model::refused("submission", error.to_string())),
             };
+            let approval = match approval.map(|a| persistence::bound(&submission, a)).transpose() {
+                Ok(value) => value,
+                Err(error) => return path_error(error),
+            };
             match persistence::replay(&data, &submission, approval.as_ref()) {
                 Ok(Some(receipt)) => return replay_answer(root, &data, receipt),
                 Ok(None) => {}
@@ -150,16 +154,17 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let Some(approval) = approval.filter(|a| a.approved) else {
                 return Ok(model::ok(
                     "plan-submit",
-                    json!({"persisted":false,"validation":"draft","submission":submission}),
+                    json!({"persisted":false,"validation":"draft","submission":submission,
+                        "submission_digest":persistence::submission_digest(&submission)?}),
                 ));
             };
             if approval.owner.as_ref().is_none_or(|s| s.trim().is_empty())
                 || approval.at.as_ref().is_none_or(|s| s.trim().is_empty())
-                || approval.submission.as_ref() != Some(&submission)
+                || !persistence::binds(&submission, &approval)?
             {
                 return Ok(model::refused(
                     "exact-submission-approval",
-                    "approval needs owner, reported time and the exact complete submission",
+                    "approval needs owner, reported time and the exact submission, as a copy or as the submission_digest a draft answer reports",
                 ));
             }
             if cadence::context::persistence::saved(&data, submission.phase.get())?.is_none() {
@@ -317,7 +322,8 @@ fn complete_preview(root: &Path, data: &Value, mut submission: model::Submission
     validation::replacement_preview(data, &submission, &inventory)?;
     persistence::validate_candidate(data, &submission, &inventory)?;
     let coverage = cadence::plan::associations::validate(data, &submission)?;
-    Ok(model::ok("plan-read", json!({"persisted":false,"submission":submission,"documents":documents,
+    Ok(model::ok("plan-read", json!({"persisted":false,"submission":submission,
+        "submission_digest":persistence::submission_digest(&submission)?,"documents":documents,
         "readiness":"provisional-authoring","coverage":coverage})))
 }
 

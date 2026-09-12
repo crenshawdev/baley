@@ -211,13 +211,18 @@ complete `submission` through `cadence_query`, without a `count`:
 Keep the returned final `submission` and `documents`, including each document's
 `revision`, `document`, `old_section` and `section`. This preview validates the
 whole candidate union without a writer, normalizes the map section and updates
-the matching replacement content. Approval must copy this final submission.
+the matching replacement content. The preview and every draft `plan-submit`
+answer also report `submission_digest`, the binary's fingerprint of that exact
+final submission; approval binds to it.
 
 Show the entire proposed submission, including every ordered target and the full
 content of every plan. Obtain the identified owner's explicit approval of that
 exact proposal and their reported approval time; do not invent either. Add
-`approval: {approved: true, owner: <identity>, at: <reported time>, submission:
-<exact copy of the entire submission>}`. Submit only that approved request.
+`approval: {approved: true, owner: <identity>, at: <reported time>,
+submission_digest: <the digest the preview reported>}` and send the submission
+once. Never compute the digest yourself and never send a second copy of the
+submission in the approval; a full `submission` copy inside `approval` is
+accepted but costs the whole plan set twice. Submit only that approved request.
 Keep a missing or declined approval as a conversation draft; never publish to
 save progress. Any content or allocation change requires fresh approval.
 
@@ -242,7 +247,8 @@ Add `replacement` to that entry with ALL of these fields:
 - `content`: an exact copy of the proposed new content in the entry.
 
 Show this complete replacement proposal and obtain its exact approval. The outer
-approval must also copy the entire submission, including `replacement`. Original
+approval binds the entire submission, including `replacement`, through the
+`submission_digest` the preview reported after the replacement was added. Original
 approval, general planning permission, gap labels and review prose are insufficient.
 Stale old bytes or revision lose; read the winner, prepare a new request and obtain
 fresh approval. The binary retains prior publications/approvals and does not
@@ -384,7 +390,9 @@ location slots (`slot`, `phase`, `entry`, `id`), plus optional structured
 - `number-exhaustion` or `active-cycle`: stop for explicit owner resolution;
   never wrap, reset or migrate a counter automatically.
 - `submission`, `publication`, `native-identity` or `exact-submission-approval`:
-  inspect the returned schema/reason and correct the complete proposal honestly.
+  inspect the returned schema/reason and correct the complete proposal honestly;
+  a digest that does not match means the submission changed after the preview,
+  so preview again and approve the new digest.
 
 Never fall back to direct PLAN, store or STATE writes, the frozen workflow,
 post-write gates, automatic retargeting, reviewer/checker dispatch, paid review,

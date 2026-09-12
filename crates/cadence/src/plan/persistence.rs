@@ -54,9 +54,31 @@ pub fn require_execution_ready(data:&Value,phase:u32,documents:&std::collections
     let Some(current)=saved(data,phase)?.filter(|o|!o.publications.is_empty()) else {return Ok(())};
     let retained=admission::records(data,phase)?;
     let number=current.publications.keys().next().expect("nonempty");
-    let record=retained.last().ok_or_else(||admission::refuse(phase,"admission-required","contract",&number.to_string(),format!("phase {phase} plan {number} requires an explicit complete execution admission")))?;
+    let record=retained.last().ok_or_else(||admission::refuse(phase,"admission-required","contract",&number.to_string(),format!("phase {phase} plan {number} requires an explicit complete execution admission: submit cadence_apply execution-admit with expected_set_version 0 and a contract naming every published plan's publication_request, content_revision and map_revision, allocating every task and giving each current check exactly one owner")))?;
     admission::validate(data,documents,&record.request.contract)?;
     Ok(())
+}
+
+/// The digest a draft answer reports and an approval may carry instead of
+/// the copy: the exact typed submission, serialized once by the binary.
+pub fn submission_digest(submission: &Submission) -> Result<String> {
+    Ok(digest(&serde_json::to_vec(submission)?))
+}
+
+/// True when the approval binds this exact submission, by copy or by digest.
+pub fn binds(submission: &Submission, approval: &Approval) -> Result<bool> {
+    Ok(approval.submission.as_ref() == Some(submission)
+        || approval.submission_digest.as_deref() == Some(submission_digest(submission)?.as_str()))
+}
+
+/// The approval as it is recorded: the copy filled and the wire digest
+/// dropped, so a digest-bound approval and a copy-bound one publish, replay
+/// and read back identically.
+pub fn bound(submission: &Submission, approval: Approval) -> Result<Approval> {
+    if !binds(submission, &approval)? {
+        return Ok(approval);
+    }
+    Ok(Approval { submission: Some(submission.clone()), submission_digest: None, ..approval })
 }
 
 pub fn approve(submission: &Submission, approval: &Approval) -> Result<()> {
@@ -64,12 +86,12 @@ pub fn approve(submission: &Submission, approval: &Approval) -> Result<()> {
         return Err(Error::Invalid(serde_json::to_string(&refusal)?));
     }
     if !approval.approved
-        || approval.submission.as_ref() != Some(submission)
+        || !binds(submission, approval)?
         || approval.owner.as_ref().is_none_or(|s| s.trim().is_empty())
         || approval.at.as_ref().is_none_or(|s| s.trim().is_empty())
     {
         return Err(Error::Invalid(
-            "exact-submission-approval: owner, time and complete submission required".into(),
+            "exact-submission-approval: owner, time and the submission copy or its digest required".into(),
         ));
     }
     if submission.request_id.trim().is_empty() || submission.plans.is_empty() {
