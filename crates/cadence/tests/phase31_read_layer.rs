@@ -3,6 +3,7 @@ mod phase31;
 
 use phase31::{Client, Fixture};
 use serde_json::json;
+use std::fs;
 
 #[test]
 fn phase31_search_returns_located_units() {
@@ -91,5 +92,43 @@ fn phase31_unissued_location_is_refused() {
     }
     let expired = client.call("cadence_query", json!({"operation":"read","location":first}));
     assert_eq!(expired["code"], "location-not-issued", "{expired}");
+    client.finish();
+}
+
+#[test]
+fn phase31_read_returns_exact_slice_and_continuation() {
+    let fixture = Fixture::new();
+    let long_line = format!("    // first-marker {} last-marker\\n", "é".repeat(40_000));
+    let oversized = format!("fn oversized() {{\\n{long_line}}}\\n");
+    fs::write(fixture.path("src/oversized.rs"), &oversized).unwrap();
+    let mut client = Client::open(fixture.project());
+
+    let search = client.call("cadence_query", json!({"operation":"search","pattern":"first-marker",
+        "scope":{"kind":"directory","selector":"src"}}));
+    let location = search["hits"].as_array().unwrap().iter()
+        .find(|hit| hit["name"] == "oversized").unwrap()["location"].as_str().unwrap().to_owned();
+
+    let mut page = client.call("cadence_query", json!({"operation":"read","location":location}));
+    assert_eq!(page["status"], "ok", "{page}");
+    assert_eq!(page["kind"], "slice");
+    assert_eq!(page["truncated"], true, "{page}");
+    assert!(page["continuation"].as_str().is_some_and(|value| !value.is_empty()), "{page}");
+    assert!(page["continue_from_byte"].as_u64().is_some_and(|byte| byte > 0), "{page}");
+
+    let mut served = String::new();
+    loop {
+        served.push_str(page["body"].as_str().unwrap());
+        let Some(next) = page["continuation"].as_str() else { break };
+        page = client.call("cadence_query", json!({"operation":"read","location":next}));
+        assert_eq!(page["status"], "ok", "{page}");
+    }
+    assert_eq!(served, oversized);
+    assert_eq!(page["truncated"], false);
+    assert!(page["continuation"].is_null());
+
+    let beta = client.call("cadence_query", json!({"operation":"search","pattern":"fn beta",
+        "scope":{"kind":"directory","selector":"src"}}))["hits"][0]["location"].as_str().unwrap().to_owned();
+    let short = client.call("cadence_query", json!({"operation":"read","location":beta}));
+    assert_eq!(short["body"], "fn beta() {\n    let needle = 3;\n}\n");
     client.finish();
 }
