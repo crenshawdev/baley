@@ -52,3 +52,44 @@ fn phase31_search_returns_located_units() {
     assert_eq!(refusal["slot"], "pattern");
     client.finish();
 }
+
+#[test]
+fn phase31_unissued_location_is_refused() {
+    let fixture = Fixture::new();
+    let mut client = Client::open(fixture.project());
+    let search = client.call("cadence_query", json!({"operation":"search","pattern":"needle",
+        "scope":{"kind":"directory","selector":"src"}}));
+    let location = search["hits"].as_array().unwrap().iter()
+        .find(|hit| hit["name"] == "beta").unwrap()["location"].as_str().unwrap().to_owned();
+    let valid = client.call("cadence_query", json!({"operation":"read","location":location}));
+    assert_eq!(valid["status"], "ok", "{valid}");
+    assert_eq!(valid["kind"], "slice");
+    assert_eq!(valid["body"], "fn beta() {\n    let needle = 3;\n}\n");
+    for token in ["unissued-opaque-token", "/etc/passwd", "../outside", "loc-altered"] {
+        let answer = client.call("cadence_query", json!({"operation":"read","location":token}));
+        assert_eq!(answer["status"], "refused", "{answer}");
+        assert_eq!(answer["code"], "location-not-issued", "{answer}");
+        assert_eq!(answer["rule"], "D-147", "{answer}");
+        assert_eq!(answer["slot"], "location", "{answer}");
+        assert!(answer.get("body").is_none(), "{answer}");
+    }
+    let malformed = client.call("cadence_query", json!({"operation":"read","location":location,
+        "path":"src/units.rs","start":1,"end":8}));
+    assert_eq!(malformed["status"], "refused", "{malformed}");
+    assert_eq!(malformed["code"], "read-contract", "{malformed}");
+    let other_fixture = Fixture::new();
+    let mut other = Client::open(other_fixture.project());
+    let foreign = other.call("cadence_query", json!({"operation":"read","location":location}));
+    assert_eq!(foreign["code"], "location-not-issued", "{foreign}");
+    other.finish();
+    let first = client.call("cadence_query", json!({"operation":"search","pattern":"beta",
+        "scope":{"kind":"directory","selector":"src"}}))["hits"][0]["location"].as_str().unwrap().to_owned();
+    for _ in 0..65 {
+        let answer = client.call("cadence_query", json!({"operation":"search","pattern":"alpha",
+            "scope":{"kind":"directory","selector":"src"}}));
+        assert_eq!(answer["status"], "ok", "{answer}");
+    }
+    let expired = client.call("cadence_query", json!({"operation":"read","location":first}));
+    assert_eq!(expired["code"], "location-not-issued", "{expired}");
+    client.finish();
+}
