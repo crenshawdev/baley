@@ -660,10 +660,7 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
             "query-next",
             &raw_request,
             "continuation-refusal",
-            format!(
-                "continuation authority returned {:?}",
-                continuation.decision
-            ),
+            continuation_next_call(&continuation.decision),
             None,
         )
         .await;
@@ -2292,13 +2289,45 @@ fn public_request_digest(tool: BoundaryTool, raw: Option<&Value>) -> String {
     )
 }
 
+/// A continuation refusal names the answer that is missing and the call that
+/// supplies it. Without this the caller learns only that something is pending
+/// and has to read `next_action::continuation` to find out what.
+fn continuation_next_call(decision: &ContinuationDecision) -> String {
+    use ContinuationDecision as D;
+    use cadence::evidence::gates::Purpose;
+    match decision {
+        D::AwaitAcceptance => "no owner answer is on record for this phase: submit cadence_apply execution-authorize with the phase, a fresh request_id, the owner, the time and the owner's actual response, naming no checkpoint".into(),
+        D::Stop(answer) => format!(
+            "the Stop answered on question {} is still in force: continue or decline it with cadence_apply execution-authorize carrying the owner's actual response and naming the same checkpoint that Stop named",
+            answer.question_id
+        ),
+        D::NeedQuestion(gate) => format!(
+            "task checkpoint {} has no question on record: answer it with cadence_apply execution-task-answer",
+            gate.checkpoint_id.as_deref().unwrap_or(&gate.id)
+        ),
+        D::Wait(gate) if gate.purpose == Purpose::Progress => format!(
+            "question {} is unanswered: submit cadence_apply execution-authorize with the owner's actual response",
+            gate.id
+        ),
+        D::Wait(gate) => format!(
+            "question {} is unanswered: record the owner's actual answer to it before retrying",
+            gate.id
+        ),
+        D::RepairSuite { .. } => "the plan's suite reported a failure: its repair is a newly approved gap plan admitted through cadence_apply execution-extend, never a rerun".into(),
+        D::Ended(_) => "this execution occurrence has ended; no further dispatch is issued for it".into(),
+        D::Revise => "the controlling check failed and its revision is unspent: publish the revised plan before retrying".into(),
+        D::FreshCheck => "the controlling check is missing or stale: a current check is required before execution continues".into(),
+        D::OverrideRequired => "continuation needs an active override that is not on record".into(),
+        D::Continue { .. } => "continuation authority is current".into(),
+    }
+}
+
 fn stable_reason(code: &str, detail: &str) -> String {
-    if matches!(code, "provisional-authoring" | "reconciliation-required" | "state-conflict" | "invalid-phase" | "invalid-patch") {
+    if matches!(code, "provisional-authoring" | "reconciliation-required" | "state-conflict" | "invalid-phase" | "invalid-patch" | "continuation-refusal") {
         return detail.to_owned();
     }
     match code {
         "foreign-dispatch" => "the patch does not identify a dispatch in this store; request the next execution dispatch".into(),
-        "continuation-refusal" => "execution needs current continuation authority; resolve the pending decision before retrying".into(),
         _ => format!("execution validation failed ({code}); check the controlling inputs and retry"),
     }
 }
