@@ -1,6 +1,6 @@
 [package]
 name = "cadence"
-version = "3.7.12"
+version = "4.0.0"
 edition = "2024"
 license = "MIT"
 description = "The Cadence plan/execute/verify loop, served over MCP stdio."
