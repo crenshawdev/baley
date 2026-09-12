@@ -132,3 +132,38 @@ fn phase31_read_returns_exact_slice_and_continuation() {
     assert_eq!(short["body"], "fn beta() {\n    let needle = 3;\n}\n");
     client.finish();
 }
+
+#[test]
+fn phase31_large_file_returns_unit_outline() {
+    let fixture = Fixture::new();
+    let padding = "// outline padding\n".repeat(2_000);
+    let large = format!(
+        "fn first_unit() {{\n    let outline_needle = 1;\n}}\n{padding}fn second_unit() {{\n    let outline_needle = 2;\n}}\n"
+    );
+    assert!(large.len() > 24 * 1024);
+    fs::write(fixture.path("src/outline.rs"), large).unwrap();
+    let mut client = Client::open(fixture.project());
+
+    let search = client.call("cadence_query", json!({"operation":"search","pattern":"outline_needle",
+        "scope":{"kind":"directory","selector":"src"}}));
+    let file = search["hits"].as_array().unwrap().iter()
+        .find(|hit| hit["name"] == "first_unit").unwrap()["file_reference"].as_str().unwrap().to_owned();
+    let outline = client.call("cadence_query", json!({"operation":"read","file":file}));
+    assert_eq!(outline["status"], "ok", "{outline}");
+    assert_eq!(outline["kind"], "outline");
+    assert!(outline.get("body").is_none(), "{outline}");
+    let rows = outline["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{outline}");
+    assert_eq!(rows[0]["name"], "first_unit");
+    assert_eq!(rows[0]["range"], json!([1, 3]));
+    assert!(rows.iter().all(|row| row["location"].as_str().is_some_and(|value| !value.is_empty())));
+
+    let selected = client.call("cadence_query", json!({"operation":"read","file":file,"unit":"second_unit"}));
+    assert_eq!(selected["kind"], "slice");
+    assert_eq!(selected["body"], "fn second_unit() {\n    let outline_needle = 2;\n}\n");
+    let missing = client.call("cadence_query", json!({"operation":"read","file":file,"unit":"missing_unit"}));
+    assert_eq!(missing["kind"], "outline");
+    assert_eq!(missing["reason"], "missing-unit");
+    assert_eq!(missing["rows"].as_array().unwrap().len(), 2, "{missing}");
+    client.finish();
+}
