@@ -76,8 +76,10 @@ Inputs appear in this order:
 4. Ordered parsed phase count. For every declaration: canonical numeric address,
    relative phase path, listing outcome and successful admitted basename list
    with its count, SUMMARY existence outcome, UAT read outcome and all successful
-   bytes. PLAN names are lexically sorted; phase declarations retain ascending
-   numeric order and textual order for ties. Repeated IDs use the same captured
+   bytes. PLAN names are lexically sorted; phase declarations keep the roadmap's
+   textual order, which is the run order: the current phase is the first
+   declaration in that order that is not complete, whatever its number
+   (semantics version 2, 2026-09-12; version 1 sorted by number). Repeated IDs use the same captured
    path observation without another read.
 
 Absent and empty successful reads/listings differ. Failed captures can be encoded

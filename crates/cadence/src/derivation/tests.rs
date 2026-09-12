@@ -309,7 +309,7 @@ fn complete(phase: &mut PhaseObservation) {
 }
 
 #[test]
-fn ac2_current_is_numeric_and_invariant_under_unequal_permutation() {
+fn ac2_current_follows_list_order_not_number() {
     for order in [
         [8, 2, 5],
         [8, 5, 2],
@@ -324,7 +324,7 @@ fn ac2_current_is_numeric_and_invariant_under_unequal_permutation() {
         let mut capture = captured(&format!("## Phases\n{entries}"));
         complete(&mut capture.phases[0]);
         let answer = derive(&capture).unwrap();
-        assert_eq!(answer.current, Some(PhaseId(5.0)));
+        assert_eq!(answer.current, Some(PhaseId(f64::from(order[1]))));
         assert_eq!(answer.total, 3);
         assert_eq!(
             answer
@@ -332,10 +332,10 @@ fn ac2_current_is_numeric_and_invariant_under_unequal_permutation() {
                 .iter()
                 .map(|p| p.id.number())
                 .collect::<Vec<_>>(),
-            [2.0, 5.0, 8.0]
+            order.map(f64::from)
         );
         capture.phases[0].uat = Observation::Present(b"### 1. Check\nstatus: pending".to_vec());
-        assert_eq!(derive(&capture).unwrap().current, Some(PhaseId(2.0)));
+        assert_eq!(derive(&capture).unwrap().current, Some(PhaseId(f64::from(order[0]))));
     }
 }
 
@@ -356,11 +356,11 @@ fn ac2_numeric_ties_share_evidence_and_preserve_names_and_order() {
             .iter()
             .map(|p| p.name.as_str())
             .collect::<Vec<_>>(),
-        ["One", "First tie", "Second tie", "Two"]
+        ["Two", "First tie", "One", "Second tie"]
     );
-    assert_eq!(answer.phases[1].plans, answer.phases[2].plans);
+    assert_eq!(answer.phases[1].plans, answer.phases[3].plans);
     assert_eq!(answer.phases[1].status, LifecycleStatus::Planned);
-    assert_eq!(answer.phases[2].status, LifecycleStatus::Planned);
+    assert_eq!(answer.phases[3].status, LifecycleStatus::Planned);
 }
 
 #[test]
@@ -451,9 +451,9 @@ fn parsers_roadmap_fences_match_character_length_and_empty_info() {
             .iter()
             .map(|p| p.name.as_str())
             .collect::<Vec<_>>(),
-        ["First", "Real"]
+        ["Real", "First"]
     );
-    assert!(parsed.phases[1].checked);
+    assert!(parsed.phases[0].checked);
     // Four spaces do not open a fence in the frozen scanner.
     assert_eq!(
         parse_roadmap("## Phases\n    ```\n- [ ] **Phase 1: Real**")
@@ -469,7 +469,7 @@ fn parsers_numeric_ties_keep_textual_order_and_number_addresses() {
     let parsed = parse_roadmap("## Phases\n- [ ] **Phase 2: Two**\n- [ ] **Phase 1.10: Decimal A**\n- [ ] **Phase 01: Alias A**\n- [ ] **Phase 1.1: Decimal B**\n- [ ] **Phase 1.0: Alias B**\n- [ ] **Phase 1: Alias C**").unwrap();
     assert_eq!(
         parsed.phases.iter().map(|p| p.ordinal).collect::<Vec<_>>(),
-        [2, 4, 5, 1, 3, 0]
+        [0, 1, 2, 3, 4, 5]
     );
     assert_eq!(
         parsed
@@ -477,7 +477,7 @@ fn parsers_numeric_ties_keep_textual_order_and_number_addresses() {
             .iter()
             .map(|p| p.id.address())
             .collect::<Vec<_>>(),
-        ["1", "1", "1", "1.1", "1.1", "2"]
+        ["2", "1.1", "1", "1.1", "1", "1"]
     );
     for p in parsed.phases {
         assert_eq!(
@@ -1377,7 +1377,11 @@ fn ac3_each_input_outcome_category_and_negative_encoders() {
     assert!(omitted_reason.contains(&"uat reason"));
     let c = key_fixture();
     let original = encode_inputs(&c).unwrap();
-    for (domain, encoding, semantics) in [("other", 1, 1), (DOMAIN, 2, 1), (DOMAIN, 1, 2)] {
+    for (domain, encoding, semantics) in [
+        ("other", ENCODING_VERSION, SEMANTICS_VERSION),
+        (DOMAIN, ENCODING_VERSION + 1, SEMANTICS_VERSION),
+        (DOMAIN, ENCODING_VERSION, SEMANTICS_VERSION + 1),
+    ] {
         assert_ne!(
             crate::store::model::digest(&original),
             crate::store::model::digest(
@@ -1401,7 +1405,7 @@ fn ac3_each_input_outcome_category_and_negative_encoders() {
 fn encoding_boundaries_fixed_v1_and_semantic_order() {
     let mut c = captured("## Phases\n");
     c.root = "/p".into();
-    let expected = "0000000000000011636164656e63652e6c6966656379636c650000000000000001000000000000000100000000000000022f700101000000000000000a2323205068617365730a0000000000000000";
+    let expected = "0000000000000011636164656e63652e6c6966656379636c650000000000000001000000000000000200000000000000022f700101000000000000000a2323205068617365730a0000000000000000";
     let bytes = encode_inputs(&c).unwrap();
     assert_eq!(
         bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(),
@@ -1409,7 +1413,7 @@ fn encoding_boundaries_fixed_v1_and_semantic_order() {
     );
     assert_eq!(
         input_key(&c).unwrap(),
-        "98cecd75f986e2ee2e1fcc21c469a7b52a6e7e2471a8689cc03e83c6346c7d36"
+        "21216b54184a118ca4bdbe093bd3a0f4f87c2662c19c0e4d3276e6a7d2b69180"
     );
     let mut a = key_fixture();
     let mut b = a.clone();
@@ -1492,10 +1496,10 @@ fn memo_comparison_all_fields_and_unconditional_hit_negative_control() {
     assert!(!rejects(&|_| Ok(MemoDisposition::Hit)));
     for name in ["encoding_version", "semantics_version", "input_hash"] {
         let mut changed = raw.clone();
-        changed[name] = if name == "input_hash" {
-            serde_json::json!("a".repeat(64))
-        } else {
-            serde_json::json!(2)
+        changed[name] = match name {
+            "input_hash" => serde_json::json!("a".repeat(64)),
+            "encoding_version" => serde_json::json!(ENCODING_VERSION + 1),
+            _ => serde_json::json!(SEMANTICS_VERSION + 1),
         };
         assert_eq!(
             check_memo(Some(&changed), &key, &fresh),
@@ -1543,7 +1547,7 @@ fn memo_comparison_envelope_malformed_namespace_and_current_payload() {
         );
     }
     let mut old = raw.clone();
-    old["semantics_version"] = json!(2);
+    old["semantics_version"] = json!(SEMANTICS_VERSION + 1);
     old["answer"] = json!({"opaque":"older schema"});
     assert_eq!(
         check_memo(Some(&old), &key, &fresh),

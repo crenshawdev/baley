@@ -182,7 +182,8 @@ pub fn parse_roadmap(text: &str) -> Result<ParsedRoadmap, DerivationError> {
         }
     }
     if !phases.is_empty() {
-        phases.sort_by(|a, b| a.id.number().total_cmp(&b.id.number()));
+        // The `## Phases` list order is the run order; the first declaration
+        // that is not complete is the current phase, whatever its number.
         return Ok(ParsedRoadmap {
             cycle: Cycle::Live,
             phases,

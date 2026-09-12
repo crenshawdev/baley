@@ -96,7 +96,7 @@ pub struct RoadmapPhase {
     pub checked: bool,
     /// One-based line in the normalized document.
     pub source_line: usize,
-    /// Zero-based textual order before numeric sorting.
+    /// Zero-based textual order; the list order is the run order.
     pub ordinal: usize,
     /// Shared observation address, relative to the planning root.
     pub relative_path: PathBuf,

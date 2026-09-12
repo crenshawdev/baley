@@ -391,6 +391,9 @@ Delivery order after phase 11 is 27, 28, 29, 12, 13, then 14 onward; see
 - [x] **Phase 11: First approved context** - truths authored through the binary as typed slots, refused at authoring, persisted only on approval
 - [x] **Phase 12: Execution and tasks** - `cad-execute` in full, and `cad-task`
 - [x] **Phase 13: Verification and audit** - `cad-verify`, the merged `cad-review` command surface, `cad-audit`
+- [ ] **Phase 31: The read layer** - search and slice operations in the binary, ported from excerpt; the model and every worker read through them and never open a file
+- [ ] **Phase 32: Typed authoring and rendering** - context and plan submissions as typed pieces; the binary renders CONTEXT.md and PLAN.md, answers with a digest, and approval binds by digest; nothing echoed, no path on the wire
+- [ ] **Phase 33: Execution and verification under the boundary** - a worker gets a dispatch id, reports progress and completion as typed pieces, the binary renders SUMMARY.md, and review material reaches the binary without crossing the wire
 - [ ] **Phase 14: Receipts and retune** - `cad-progress`, `cad-why`, `cad-suggest`, `cad-capture`
 - [ ] **Phase 15: Landing and milestones** - `cad-land`, `cad-milestone`, `cad-undo`
 - [ ] **Phase 16: Support** - `cad-debug`, `cad-spike`, `cad-help`
@@ -408,9 +411,6 @@ Delivery order after phase 11 is 27, 28, 29, 12, 13, then 14 onward; see
 - [x] **Phase 28: Evidence associations** - the evidence map attached to current phase truths, orphans refused
 - [x] **Phase 29: Check and link limits** - a check needs a command and expected output, one check per truth, links only where the truth names a value
 - [ ] **Phase 30: Plan review handoff** - `cad-plan` fires the review trigger and persists only selected review edits
-- [ ] **Phase 31: The read layer** - search and slice operations in the binary, ported from excerpt; the model and every worker read through them and never open a file
-- [ ] **Phase 32: Typed authoring and rendering** - context and plan submissions as typed pieces; the binary renders CONTEXT.md and PLAN.md, answers with a digest, and approval binds by digest; nothing echoed, no path on the wire
-- [ ] **Phase 33: Execution and verification under the boundary** - a worker gets a dispatch id, reports progress and completion as typed pieces, the binary renders SUMMARY.md, and review material reaches the binary without crossing the wire
 
 ## Phase Details
 

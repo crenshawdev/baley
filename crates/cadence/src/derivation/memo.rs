@@ -3,7 +3,7 @@ use crate::store::model::digest;
 
 pub const DOMAIN: &str = "cadence.lifecycle";
 pub const ENCODING_VERSION: u64 = 1;
-pub const SEMANTICS_VERSION: u64 = 1;
+pub const SEMANTICS_VERSION: u64 = 2;
 
 fn number(out: &mut Vec<u8>, n: u64) {
     out.extend(n.to_be_bytes());
