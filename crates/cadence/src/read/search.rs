@@ -1,0 +1,85 @@
+use super::{ReadDomain, model::{SearchRequest, Scope}, source};
+use globset::{GlobBuilder, GlobMatcher};
+use ignore::WalkBuilder;
+use serde_json::{Value, json};
+use std::path::{Component, Path, PathBuf};
+
+const ANSWER_BOUND: usize = 65_536;
+
+fn refusal(slot: &str, code: &str, reason: impl Into<String>) -> Value {
+    json!({"status":"refused","code":code,"rule":"D-147","slot":slot,"reason":reason.into()})
+}
+
+fn selector(project: &Path, scope: &Scope) -> Result<(PathBuf, Option<GlobMatcher>), Value> {
+    match scope {
+        Scope::Project => Ok((project.to_path_buf(), None)),
+        Scope::Directory { selector } => {
+            let path = confined_selector(project, selector).ok_or_else(|| refusal("scope", "invalid-scope", "directory selector must be relative and confined"))?;
+            if !path.is_dir() { return Err(refusal("scope", "invalid-scope", "directory selector does not name a directory")); }
+            Ok((path, None))
+        }
+        Scope::Glob { selector } => {
+            if absolute_or_escape(selector) { return Err(refusal("scope", "invalid-scope", "glob selector must be relative and confined")); }
+            let glob = GlobBuilder::new(selector).literal_separator(true).build()
+                .map_err(|error| refusal("scope", "invalid-scope", error.to_string()))?.compile_matcher();
+            Ok((project.to_path_buf(), Some(glob)))
+        }
+    }
+}
+
+fn absolute_or_escape(selector: &str) -> bool {
+    Path::new(selector).is_absolute() || Path::new(selector).components().any(|part| matches!(part, Component::ParentDir))
+}
+
+fn confined_selector(project: &Path, selector: &str) -> Option<PathBuf> {
+    (!absolute_or_escape(selector)).then(|| project.join(selector)).and_then(|path| source::confined(project, &path))
+}
+
+fn files(root: &Path, project: &Path, glob: Option<&GlobMatcher>) -> Vec<PathBuf> {
+    let mut paths: Vec<_> = WalkBuilder::new(root).hidden(false).require_git(false).follow_links(false)
+        .filter_entry(|entry| entry.file_name() != ".git" && entry.file_name() != ".planning")
+        .build().filter_map(Result::ok).filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+        .map(|entry| entry.into_path()).filter(|path| source::confined(project, path).is_some())
+        .filter(|path| glob.is_none_or(|matcher| matcher.is_match(path.strip_prefix(project).unwrap_or(path)))).collect();
+    paths.sort(); paths
+}
+
+impl ReadDomain {
+    pub(super) fn search(&mut self, request: SearchRequest) -> Value {
+        if request.cursor.is_some() { return refusal("cursor", "location-not-issued", "search cursor was not issued for this resident"); }
+        let matcher = match regex::RegexBuilder::new(&request.pattern).case_insensitive(request.case_insensitive.unwrap_or(false)).build() {
+            Ok(matcher) => matcher,
+            Err(error) => return refusal("pattern", "invalid-pattern", error.to_string()),
+        };
+        let (root, glob) = match selector(&self.project, &request.scope) { Ok(scope) => scope, Err(answer) => return answer };
+        let mut hits = Vec::new();
+        for candidate in files(&root, &self.project, glob.as_ref()) {
+            let Ok((path, revision, content)) = source::content(&self.project, &candidate) else { continue };
+            let units = self.units(&path, &content);
+            let starts = source::line_starts(&content);
+            let mut selected: Vec<(super::model::Unit, Vec<usize>)> = Vec::new();
+            for found in matcher.find_iter(&content) {
+                let Some(unit) = units.iter().filter(|unit| found.start() >= unit.first_byte && found.end() <= unit.last_byte)
+                    .min_by_key(|unit| unit.last_byte - unit.first_byte).cloned() else { continue };
+                let line = source::line_for(&starts, found.start());
+                if let Some((_, lines)) = selected.iter_mut().find(|(candidate, _)| candidate.name == unit.name && candidate.first_byte == unit.first_byte && candidate.last_byte == unit.last_byte) {
+                    lines.push(line);
+                } else { selected.push((unit, vec![line])); }
+            }
+            for (unit, match_lines) in selected {
+                let location = self.registry.unit(path.clone(), revision.clone(), unit.clone(), unit.first_byte);
+                let file = self.registry.file(path.clone(), revision.clone());
+                let body = content.get(unit.first_byte..unit.last_byte).unwrap_or("").to_owned();
+                hits.push(json!({"file":path.strip_prefix(&self.project).unwrap().to_string_lossy(),"name":unit.name,"kind":unit.kind,"range":unit.range(),"match_lines":match_lines,"body":body,"location":location,"file_reference":file}));
+            }
+        }
+        hits.sort_by(|left, right| left["file"].as_str().cmp(&right["file"].as_str()).then(left["range"].to_string().cmp(&right["range"].to_string())));
+        let mut answer = json!({"status":"ok","kind":"search","bound":ANSWER_BOUND,"incomplete":false,"cursor":Value::Null,"hits":hits,"notes":[]});
+        while serde_json::to_vec(&answer).is_ok_and(|bytes| bytes.len() > ANSWER_BOUND) {
+            answer["hits"].as_array_mut().unwrap().pop();
+            answer["incomplete"] = json!(true);
+            answer["notes"] = json!(["search answer was bounded; reacquire with a narrower scope"]);
+        }
+        answer
+    }
+}

@@ -275,6 +275,11 @@ mod resident {
             phase: u32,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
+        Read {
+            root: PathBuf,
+            query: cadence::read::Query,
+            reply: oneshot::Sender<serde_json::Value>,
+        },
         ExecutionApply {
             root: PathBuf,
             patch: cadence::execution::model::ExecutorPatch,
@@ -414,8 +419,13 @@ mod resident {
             let (requests, mut receiver) = mpsc::channel::<Request>(32);
             tokio::spawn(async move {
                 let mut caches = BTreeMap::<PathBuf, Option<Cached>>::new();
+                let mut read_domains = BTreeMap::<PathBuf, cadence::read::ReadDomain>::new();
                 while let Some(request) = receiver.recv().await {
                     match request {
+                        Request::Read { root, query, reply } => {
+                            let result = crate::server::read_service::execute(&mut read_domains, &root, query);
+                            let _ = reply.send(result);
+                        }
                         Request::Verification { root, command, reply } => {
                             let result = crate::server::verification_service::execute(&factory, &root, command).await;
                             let _ = reply.send(result);
@@ -783,6 +793,14 @@ mod resident {
                 .await
                 .map_err(|_| Error::Closed)?;
             completion.await.map_err(|_| Error::Closed)?
+        }
+
+        pub async fn read(&self, root: &Path, query: cadence::read::Query) -> serde_json::Value {
+            let (reply, completion) = oneshot::channel();
+            if self.requests.send(Request::Read { root: root.into(), query, reply }).await.is_err() {
+                return crate::server::read_service::unavailable("resident closed");
+            }
+            completion.await.unwrap_or_else(|_| crate::server::read_service::unavailable("resident closed"))
         }
 
         #[cfg(test)]

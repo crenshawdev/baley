@@ -80,6 +80,8 @@ pub mod context_service;
 pub mod plan_service;
 #[path = "verification_service.rs"]
 pub mod verification_service;
+#[path = "read_service.rs"]
+pub mod read_service;
 
 /// What `cadence_version` reports on success.
 ///
@@ -240,6 +242,12 @@ struct VersionArguments {}
 #[derive(Deserialize, JsonSchema)]
 #[serde(tag = "operation", deny_unknown_fields)]
 enum QueryArguments {
+    #[serde(rename = "search")]
+    Search(cadence::read::model::SearchRequest),
+    #[serde(rename = "read")]
+    Read(cadence::read::model::ReadRequest),
+    #[serde(rename = "document")]
+    Document(cadence::read::model::DocumentRequest),
     #[serde(rename = "verify-next")]
     VerifyNext { phase: NonZeroU32, request_id: Option<String> },
     #[serde(rename = "verification-read")]
@@ -323,6 +331,7 @@ enum ApplyOutput {
 #[derive(Serialize, JsonSchema)]
 #[serde(untagged)]
 enum QueryOutput {
+    Read(Value),
     NativeExecution(Value),
     Plan(Box<cadence::plan::model::Answer>),
     Context(Box<cadence::context::model::Answer>),
@@ -627,6 +636,16 @@ impl ServerHandler for PublicServer {
                 .into())
             }
             "cadence_query" => {
+                if raw.as_ref().and_then(|value| value["operation"].as_str()).is_some_and(|operation| matches!(operation, "search" | "read" | "document")) {
+                    let query = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
+                        Ok(QueryArguments::Search(request)) => cadence::read::Query::Search(request),
+                        Ok(QueryArguments::Read(request)) => cadence::read::Query::Read(request),
+                        Ok(QueryArguments::Document(request)) => cadence::read::Query::Document(request),
+                        Err(error) => return structured_result(Ok(QueryOutput::Read(serde_json::json!({"status":"refused","code":"read-contract","rule":"D-147","slot":"arguments","reason":error.to_string()})))),
+                        Ok(_) => unreachable!("read operation selected before generic query"),
+                    };
+                    return structured_result(Ok(QueryOutput::Read(self.server.service.read(&self.root, query).await)));
+                }
                 if raw.as_ref().and_then(|v| v["operation"].as_str()).is_some_and(|op| matches!(op, "verify-next" | "verification-read" | "verification-audit")) {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
                         Ok(QueryArguments::VerifyNext { phase, request_id }) => self.server.service.verification(&self.root,
@@ -756,6 +775,7 @@ impl ServerHandler for PublicServer {
                     Some(QueryArguments::ContextIntake { .. }) => {
                         unreachable!("context intake is decoded before execution fallback")
                     }
+                    Some(QueryArguments::Search(_) | QueryArguments::Read(_) | QueryArguments::Document(_)) => unreachable!("read operation routed before generic query"),
                     Some(QueryArguments::ExecutionHistory { .. }) => unreachable!("native history decoded before execution fallback"),
                     Some(QueryArguments::PlanRead { .. } | QueryArguments::EvidenceRead { .. }) => {
                         unreachable!("plan read decoded before execution")
