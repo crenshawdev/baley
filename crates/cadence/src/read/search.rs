@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use std::path::{Component, Path, PathBuf};
 
 const ANSWER_BOUND: usize = 65_536;
+const HIT_BODY_BOUND: usize = 60_000;
 
 fn refusal(slot: &str, code: &str, reason: impl Into<String>) -> Value {
     json!({"status":"refused","code":code,"rule":"D-147","slot":slot,"reason":reason.into()})
@@ -44,6 +45,13 @@ fn files(root: &Path, project: &Path, glob: Option<&GlobMatcher>) -> Vec<PathBuf
     paths.sort(); paths
 }
 
+fn bounded_body(body: &str) -> (String, bool) {
+    if body.len() <= HIT_BODY_BOUND { return (body.to_owned(), false); }
+    let mut end = HIT_BODY_BOUND;
+    while end > 0 && !body.is_char_boundary(end) { end -= 1; }
+    (body[..end].to_owned(), true)
+}
+
 impl ReadDomain {
     pub(super) fn search(&mut self, request: SearchRequest) -> Value {
         if request.cursor.is_some() { return refusal("cursor", "location-not-issued", "search cursor was not issued for this resident"); }
@@ -69,8 +77,8 @@ impl ReadDomain {
             for (unit, match_lines) in selected {
                 let location = self.registry.unit(path.clone(), revision.clone(), unit.clone(), unit.first_byte);
                 let file = self.registry.file(path.clone(), revision.clone());
-                let body = content.get(unit.first_byte..unit.last_byte).unwrap_or("").to_owned();
-                hits.push(json!({"file":path.strip_prefix(&self.project).unwrap().to_string_lossy(),"name":unit.name,"kind":unit.kind,"range":unit.range(),"match_lines":match_lines,"body":body,"location":location,"file_reference":file}));
+                let (body, body_truncated) = bounded_body(content.get(unit.first_byte..unit.last_byte).unwrap_or(""));
+                hits.push(json!({"file":path.strip_prefix(&self.project).unwrap().to_string_lossy(),"name":unit.name,"kind":unit.kind,"range":unit.range(),"match_lines":match_lines,"body":body,"body_truncated":body_truncated,"location":location,"file_reference":file}));
             }
         }
         hits.sort_by(|left, right| left["file"].as_str().cmp(&right["file"].as_str()).then(left["range"].to_string().cmp(&right["range"].to_string())));

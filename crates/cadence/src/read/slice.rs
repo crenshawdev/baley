@@ -62,7 +62,9 @@ impl ReadDomain {
         let starts = source::line_starts(content);
         let served_first = source::line_for(&starts, offset);
         let served_last = source::line_for(&starts, end.saturating_sub(1));
-        json!({"status":"ok","kind":"slice","bound":ANSWER_BOUND,"source_revision":revision,"name":unit.name,"requested_range":unit.range(),"served_range":[served_first,served_last],"body":content.get(offset..end).unwrap_or(""),"truncated":truncated,"continuation":continuation,"continue_from_line":truncated.then(||source::line_for(&starts,end))})
+        let continue_from_line = truncated.then(|| source::line_for(&starts, end));
+        let continue_from_byte = continue_from_line.map(|line| end.saturating_sub(starts[line - 1]));
+        json!({"status":"ok","kind":"slice","bound":ANSWER_BOUND,"source_revision":revision,"name":unit.name,"requested_range":unit.range(),"served_range":[served_first,served_last],"body":content.get(offset..end).unwrap_or(""),"truncated":truncated,"continuation":continuation,"continue_from_line":continue_from_line,"continue_from_byte":continue_from_byte})
     }
 
     fn outline(&mut self, path: std::path::PathBuf, revision: String, content: &str) -> Value {

@@ -26,7 +26,10 @@ fn find_block_end(content: &str, start: usize) -> usize {
     let mut depth = 0usize;
     let mut opened = false;
     for (offset, character) in content[start..].char_indices() {
-        match character { '{' => { depth += 1; opened = true; }, '}' if opened => { depth -= 1; if depth == 0 { let end = start + offset + 1; return end + usize::from(content.as_bytes().get(end) == Some(&b'\n')); } }, _ => {} }
+        match character { '{' => { depth += 1; opened = true; }, '}' if opened => { depth -= 1; if depth == 0 {
+            let end = start + offset + 1;
+            return if content[end..].starts_with("\\n") { end + 2 } else { end + usize::from(content.as_bytes().get(end) == Some(&b'\n')) };
+        } }, _ => {} }
     }
     content.len()
 }
