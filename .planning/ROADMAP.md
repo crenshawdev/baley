@@ -392,6 +392,7 @@ Delivery order after phase 11 is 27, 28, 29, 12, 13, then 14 onward; see
 - [x] **Phase 12: Execution and tasks** - `cad-execute` in full, and `cad-task`
 - [x] **Phase 13: Verification and audit** - `cad-verify`, the merged `cad-review` command surface, `cad-audit`
 - [ ] **Phase 34: The blocked path** - an owner retires an unfinished task with a reason and the plan ends blocked the way a failed suite does; the next plan dispatches and a repaired phase derives as executed
+- [ ] **Phase 35: The moved home** - the stored import manifest stays history and the session carries where the layers stand now beside it, so a store whose global config moved still records the owner's answers
 - [ ] **Phase 31: The read layer** - search and slice operations in the binary, ported from excerpt; the model and every worker read through them and never open a file
 - [ ] **Phase 32: Typed authoring and rendering** - context and plan submissions as typed pieces; the binary renders CONTEXT.md and PLAN.md, answers with a digest, and approval binds by digest; nothing echoed, no path on the wire
 - [ ] **Phase 33: Execution and verification under the boundary** - a worker gets a dispatch id, reports progress and completion as typed pieces, the binary renders SUMMARY.md, and review material reaches the binary without crossing the wire
@@ -1477,3 +1478,16 @@ closure is demanded only of completed plans. No new records beyond the
 retirement. Phase 31 resumes on this: P31-3-T1 retired, plans 4 to 6 run,
 T6 waived at verification and re-specified in phase 32 without the Codex
 worker leg.
+
+### Phase 35: The moved home
+
+**Goal.** The session's import manifest carries one field for two jobs: at
+open, `active` is rewritten to where the config layers stand now so config
+writers see current paths, while the stored manifest keeps where they were
+at import as history. The evidence guard compares the two byte for byte, so
+after any accepted relocation every gate answer, checkpoint and
+authorization is refused. The session keeps the stored manifest untouched
+and carries the current layer paths as a separate field; the guard compares
+against the manifest; writers read the current paths. No new records. Runs
+after 34 and before 31 resumes, so the temporary binary is retired the
+moment 31 plan 5 lands.
