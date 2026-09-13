@@ -160,15 +160,20 @@ fn tree(project: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
 
 #[test]
 fn phase11_unapproved_context_changes_nothing() {
-    for (native, phase, pending) in [
-        (true, true, false),
-        (true, false, false),
-        (false, true, false),
-        (false, false, false),
-        (true, true, true),
+    for (case, native, phase, pending, approved) in [
+        ("native", false, false, false, true),
+        ("historical", false, true, false, false),
+        ("missing", false, false, false, false),
+        ("pending", true, true, true, false),
     ] {
         for intake_only in [true, false] {
             let temp = fixture(native, phase, pending);
+            if approved {
+                let mut client = Client::open(temp.path());
+                let answer = client.call("cadence_apply", approve(submission()));
+                assert_eq!(answer["persisted"], true, "native fixture: {answer}");
+                client.finish();
+            }
             let before = tree(temp.path());
             let mut client = Client::open(temp.path());
             let intake = client.call(
@@ -181,14 +186,35 @@ fn phase11_unapproved_context_changes_nothing() {
             );
             assert_eq!(intake["operation"], "context-intake");
             assert!(intake["contract"].is_object(), "{intake}");
-            assert_eq!(
-                intake["context"],
-                if phase {
-                    json!("# Prior context\n\nOwner prose: déjà vu.\n")
-                } else {
-                    Value::Null
+            assert!(intake.get("context_document").is_none(), "{intake}");
+            assert!(intake.get("roadmap_document").is_none(), "{intake}");
+            match case {
+                "native" => {
+                    assert_eq!(intake["context"]["identity"], json!({"kind":"phase-context","phase":11}));
+                    assert_eq!(intake["context"]["classification"], "native-context");
+                    let index = client.call("cadence_query", json!({"operation":"document",
+                        "identity":intake["context"]["identity"]}));
+                    assert_eq!(index["kind"], "document-index", "{index}");
+                    assert!(index.get("body").is_none(), "{index}");
+                    assert!(index["parts"].as_array().unwrap().iter().any(|part| part["part"] == "truth:T1"));
+                    let truth = client.call("cadence_query", json!({"operation":"document",
+                        "identity":intake["context"]["identity"],"part":"truth:T1"}));
+                    assert_eq!(truth["kind"], "document-slice", "{truth}");
+                    assert!(truth["body"].as_str().unwrap().contains("the approved decisions"), "{truth}");
                 }
-            );
+                "historical" | "pending" => {
+                    assert_eq!(intake["context"], json!({"identity":{"kind":"phase-context","phase":11},
+                        "classification":"legacy-input","availability":"historical-unsupported"}));
+                    let unavailable = client.call("cadence_query", json!({"operation":"document",
+                        "identity":intake["context"]["identity"]}));
+                    assert_eq!(unavailable["status"], "refused", "{unavailable}");
+                    assert!(unavailable.get("body").is_none(), "{unavailable}");
+                }
+                "missing" => assert!(intake["context"].is_null(), "{intake}"),
+                _ => unreachable!(),
+            }
+            assert_eq!(intake["roadmap"]["identity"], json!({"kind":"phase-roadmap-row","phase":11}));
+            assert_eq!(intake["roadmap"]["availability"], "unavailable");
             assert_eq!(tree(temp.path()), before);
             if !intake_only {
                 for approval in [
@@ -201,7 +227,11 @@ fn phase11_unapproved_context_changes_nothing() {
                         draft["approval"] = approval.clone();
                     }
                     let answer = client.call("cadence_apply", draft);
-                    if approval["approved"] == true {
+                    if case == "native" {
+                        assert_eq!(answer["status"], "refused", "{answer}");
+                        assert!(["identity-collision", "native-context-exists"]
+                            .contains(&answer["rule"].as_str().unwrap()), "{answer}");
+                    } else if approval["approved"] == true {
                         assert_eq!(answer["status"], "refused", "{answer}");
                         assert_eq!(answer["slot"], "approval", "{answer}");
                     } else {

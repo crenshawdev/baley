@@ -388,16 +388,18 @@ pub fn contract(project:&Path) -> Value {
     let mut plans=Vec::new(); let mut allocation=Vec::new();
     for publication in publications.values() {
         let number=publication["identity"]["plan"].clone();
-        plans.push(json!({"plan":number,"publication_request":publication["approval"]["submission"]["request_id"],
+        plans.push(json!({"plan":number,"publication_request":publication["publication_request"],
             "content_revision":publication["revision"],"map_revision":publication.get("map_revision").cloned().unwrap_or(json!(""))}));
-        let items=publication["content"]["evidence_map"]["items"].as_array().cloned().unwrap_or_default();
-        for (index,task) in publication["content"]["execution"]["tasks"].as_array().unwrap().iter().enumerate() {
+        let item_ids=map["aliases"].as_array().unwrap().iter()
+            .filter(|alias| alias["origin"]["plan"] == number)
+            .map(|alias| alias["id"].clone()).collect::<Vec<_>>();
+        for (index,task) in publication["tasks"].as_array().unwrap().iter().enumerate() {
             let mut checks=Vec::new();
             if index==0 {
-                for item in &items {
-                    if item["kind"]=="check" && assigned.insert(item["id"].as_str().unwrap().to_owned()) {
-                        let saved=map["items"].as_array().unwrap().iter().find(|i|i["id"]==item["id"]).unwrap();
-                        checks.push(json!({"id":item["id"],"item_revision":saved["item_revision"]}));
+                for id in &item_ids {
+                    let saved=map["items"].as_array().unwrap().iter().find(|item|item["id"]==*id).unwrap();
+                    if saved["kind"]=="check" && assigned.insert(id.as_str().unwrap().to_owned()) {
+                        checks.push(json!({"id":id,"item_revision":saved["item_revision"]}));
                     }
                 }
             }

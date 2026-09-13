@@ -319,10 +319,16 @@ fn phase27_approved_plan_is_published_at_returned_identity() {
         );
         assert_eq!(answer["results"][0]["readiness"], "provisional-authoring");
         let readback = client.read("27", None);
-        assert_eq!(
-            readback["native"]["publications"]["1"]["content"],
-            approved["submission"]["plans"][0]["content"]
-        );
+        let publication = &readback["native"]["publications"]["1"];
+        assert_eq!(publication["identity"], json!({"kind":"phase-plan","phase":27,"plan":1}));
+        assert_eq!(publication["revision"], answer["results"][0]["revision"]);
+        assert_eq!(publication["publication_request"], "first-publication");
+        assert_eq!(publication["tasks"], approved["submission"]["plans"][0]["content"]["execution"]["tasks"]);
+        assert!(publication.get("content").is_none(), "{publication}");
+        let document = client.call("cadence_query", json!({"operation":"document",
+            "identity":publication["identity"]}));
+        assert_eq!(document["status"], "refused", "historical body has no unambiguous task part: {document}");
+        assert_eq!(document["code"], "document-ambiguous", "{document}");
         assert_eq!(readback["readiness"], "provisional-authoring");
         let execution = client.call(
             "cadence_query",

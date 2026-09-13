@@ -115,7 +115,10 @@ fn phase13_adoption_copy_preserves_history_and_recovers() {
         } else { vec![] };
         let plans: Vec<Value> = read["plans"].as_array().unwrap().iter().map(|p| {
             assert_eq!(p["classification"], "legacy-input", "phase {phase}: {p}");
-            json!({"plan":p["identity"]["plan"],"document_sha256":sha(p["document"].as_str().unwrap().as_bytes())})
+            let plan = p["identity"]["plan"].as_u64().unwrap();
+            let numbered = directory.join(format!("PLAN-{plan}.md"));
+            let path = if numbered.is_file() { numbered } else { directory.join("PLAN.md") };
+            json!({"plan":plan,"document_sha256":sha(&fs::read(path).unwrap())})
         }).collect();
         let unretained: Vec<&String> = documents.iter().filter(|name| !(name.starts_with("PLAN") || name.starts_with("SUMMARY")
             || name.starts_with("UAT") || *name == "CONTEXT.md" || *name == "reports")).collect();

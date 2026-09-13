@@ -1329,7 +1329,16 @@ fn phase28_accepted_map_is_attached_to_published_plan() {
         assert_eq!(acknowledgment["persisted"], true, "{acknowledgment}");
         assert_eq!(acknowledgment["results"][0]["identity"], json!({"phase":27,"plan":1}));
         assert_eq!(acknowledgment["results"][0]["readiness"], "provisional-authoring");
-        assert_eq!(client.read("27", None)["native"]["publications"]["1"]["content"]["evidence_map"], map);
+        let readback = client.read("27", None);
+        assert_eq!(readback["native"]["publications"]["1"]["identity"],
+            json!({"kind":"phase-plan","phase":27,"plan":1}));
+        assert!(readback["native"]["publications"]["1"].get("content").is_none(), "{readback}");
+        let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":27}));
+        for expected in map["items"].as_array().unwrap() {
+            let actual = evidence["items"].as_array().unwrap().iter()
+                .find(|item| item["id"] == expected["id"]).unwrap();
+            assert_eq!(actual["spec"], expected["spec"]);
+        }
         client.finish();
         let installed = fs::read(project.join(".planning/phases/27/PLAN-1.md")).unwrap();
         let parsed = cadence::execution::plan::parse_plan(&installed, 27, 1).unwrap();
@@ -1364,8 +1373,18 @@ fn phase28_accepted_map_is_attached_to_published_plan() {
         let after = tree(project);
         let mut client = Client::open(project);
         let read = client.read("27", None);
-        assert_eq!(read["native"]["publications"]["1"], acknowledgment["results"][0]);
-        assert_eq!(read["native"]["publications"]["1"]["content"]["evidence_map"], map);
+        let publication = &read["native"]["publications"]["1"];
+        assert_eq!(publication["identity"], json!({"kind":"phase-plan","phase":27,"plan":1}));
+        assert_eq!(publication["revision"], acknowledgment["results"][0]["revision"]);
+        assert_eq!(publication["map_revision"], acknowledgment["results"][0]["map_revision"]);
+        assert_eq!(publication["publication_request"], "attached");
+        assert!(publication.get("content").is_none(), "{publication}");
+        let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":27}));
+        for expected in map["items"].as_array().unwrap() {
+            let actual = evidence["items"].as_array().unwrap().iter()
+                .find(|item| item["id"] == expected["id"]).unwrap();
+            assert_eq!(actual["spec"], expected["spec"]);
+        }
         client.finish();
         assert_eq!(tree(project), after);
     }
