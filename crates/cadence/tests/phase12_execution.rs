@@ -1624,7 +1624,8 @@ fn phase12_incomplete_execution_contract_is_refused() {
         let input=&e["request"]["params"]["arguments"];
         (input["operation"]=="plan-submit").then(||input.clone())
     }).unwrap();
-    let before=tree(root);let prior=reopened(root).snapshot;
+    // Opening the predating fixture records its root before the replay baseline.
+    let prior=reopened(root).snapshot;let before=tree(root);
     assert_eq!(apply(root,old_request)["replayed"],true);
     unchanged(root,&before,&prior);
     let mut historical_contract=contract(root);
@@ -1634,4 +1635,35 @@ fn phase12_incomplete_execution_contract_is_refused() {
     assert_eq!(historical_contract["plans"][0]["plan"],2);
     admission_refusal(root,admit_request(historical_contract,"historical",0),"check-command",
         "current.plans[1].evidence_map.items[0].spec.command","check/historical");
+}
+
+#[test]
+fn phase12_native_task_continues_after_same_path_root_identity_change() {
+    let fixture = Tiny::new("dispatch");
+    let project = fixture.project();
+    let root = project.join(".planning");
+    let before = snapshot(project);
+    let admissions = before.data["native_admissions"].clone();
+    let bound = before.root.as_ref().unwrap().bound.clone();
+    let backup = tempfile::tempdir().unwrap();
+    let aside = backup.path().join("old-planning");
+    fs::rename(&root, &aside).unwrap();
+    assert!(Command::new("cp").arg("-r").arg(&aside).arg(&root).status().unwrap().success());
+    let moved = reopened(project).snapshot;
+    assert_eq!(moved.generation, before.generation + 1);
+    assert_eq!(moved.data["native_admissions"], admissions);
+    assert_eq!(moved.root.as_ref().unwrap().bound, bound);
+    assert_eq!(moved.root.as_ref().unwrap().relocations.len(), 1);
+    assert_eq!(moved.root.as_ref().unwrap().relocations[0].generation, moved.generation);
+    for i in 0..2 {
+        let answer = apply(project, fixture.owner(i, &format!("owner-after-root-change-{i}"), true));
+        assert_eq!(answer["status"], "ok", "{answer}");
+    }
+    let closed = apply(project, fixture.close("close-after-root-change"));
+    assert_eq!(closed["status"], "ok", "{closed}");
+    let history = execution_history(project);
+    let record = history["events"].as_array().unwrap().iter()
+        .find(|record| record["request"]["request_id"] == "close-after-root-change").unwrap();
+    assert_eq!(record["root_binding"], bound);
+    assert_eq!(snapshot(project).root, moved.root);
 }

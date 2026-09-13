@@ -2,6 +2,7 @@ pub mod decisions;
 pub mod filesystem;
 pub mod items;
 pub mod model;
+pub mod root;
 pub mod transaction;
 pub mod writer;
 
@@ -63,6 +64,10 @@ pub struct Observed {
 /// and confirm must check the installed bytes before the writer acknowledges.
 pub trait Storage: Send + 'static {
     type Prepared;
+    /// Absolute directory for durable filesystem root binding; absent in memory.
+    fn root_path(&self) -> Option<&std::path::Path> {
+        None
+    }
     /// Hold root and registered shared-parent ownership until the guard is dropped.
     /// In-memory adapters already have one owner and need no additional lock.
     fn acquire(&mut self) -> Result<Box<dyn Send>> {

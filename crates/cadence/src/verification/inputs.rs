@@ -27,7 +27,14 @@ pub fn authority_digest(data: &Value) -> Result<String> {
 }
 
 pub fn root_binding(root: &Path) -> Result<String> {
-    Ok(crate::store::filesystem::Filesystem::new(root)?.read(crate::store::model::STATE)?.directory_identity)
+    use crate::store::{filesystem::Filesystem, model::{STATE, ITEMS, DECISIONS}};
+    let mut filesystem = Filesystem::new(root)?;
+    let state = filesystem.read(STATE)?;
+    let items = filesystem.read(ITEMS)?;
+    let decisions = filesystem.read(DECISIONS)?;
+    crate::store::root::at_open(&state, filesystem.root_path().expect("filesystem root"),
+        items.bytes.as_deref().unwrap_or_default(), decisions.bytes.as_deref().unwrap_or_default())?;
+    crate::store::root::binding(&state)
 }
 
 /// Observe actual tracked bytes too: Git's index flags cannot hide modified
