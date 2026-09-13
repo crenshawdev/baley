@@ -231,9 +231,9 @@ pub fn process_plan_submission(allocation: &Value, large_task: &str) -> Value {
     );
     let plan_two = format!(concat!(
         "# Fixture plan two\n\n## Goal\n\nPLAN TWO GOAL SENTINEL\n\n## Tasks\n\n",
-        "### Task 1: Requested fixture task\n\nPLAN TWO TASK ONE UNIQUE\n{large_task}\n",
+        "### Task 1: Requested fixture task\n\nPLAN TWO TASK ONE UNIQUE\n{}\n",
         "### Task 2: Neighbor fixture task\n\nPLAN TWO TASK TWO SENTINEL\n",
-    ));
+    ), large_task);
     json!({"operation":"plan-submit","submission":{
         "phase":31,"occurrence":allocation["occurrence"],"request_id":"fixture-two-plans",
         "inventory_basis":allocation["inventory"]["basis"],"plans":[
