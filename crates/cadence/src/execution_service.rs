@@ -82,6 +82,35 @@ pub async fn native_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root
             attempt: input.attempt, expected_version: input.expected_version, event: history::Event::OwnerStatement(input.statement) }).await;
         return Ok(match result { Ok(receipt) => json!({"status":"ok","receipt":receipt}), Err(error) => native_error(error) });
     }
+    if raw["operation"] == "execution-task-retire" {
+        use cadence::execution::{history::{self, RetirementApply}, runner};
+        let input = match serde_json::from_value::<RetirementApply>(raw) {
+            Ok(RetirementApply::Retire { request }) => request,
+            Err(error) => return Ok(native_error(Error::Invalid(error.to_string()))),
+        };
+        let session = factory.first_touch(root).await?;
+        session.config()?;
+        let phase = input.task.phase;
+        let plan = input.task.plan;
+        let result = runner::append(session.review_store(), history::Request {
+            request_id: input.request_id,
+            task: input.task,
+            attempt: input.attempt,
+            expected_version: input.expected_version,
+            event: history::Event::Retirement { owner: input.owner, at: input.at, reason: input.reason },
+        }).await;
+        return Ok(match result {
+            Ok(receipt) => {
+                let view = session.derivation_view().await?;
+                let outcome = view.snapshot.data["execution"]["occurrences"][phase.to_string()]["plans"]
+                    .as_array().and_then(|plans| plans.iter().find(|outcome| {
+                        outcome["plan"] == plan && outcome["transition_id"] == receipt.request_digest
+                    })).cloned().ok_or_else(|| Error::Invalid("confirmed retirement outcome missing".into()))?;
+                json!({"status":"ok","receipt":receipt,"outcome":outcome})
+            }
+            Err(error) => native_error(error),
+        });
+    }
     if matches!(raw["operation"].as_str(), Some("execution-task-start" | "execution-run")) {
         return super::execution_runner_service::apply(factory, root, raw).await;
     }

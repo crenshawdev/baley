@@ -31,6 +31,7 @@ pub enum Event {
     Progress { text: String, evidence: Vec<String> },
     FailedAttempt { reason: String, evidence: Vec<String> },
     Deviation { text: String, evidence: Vec<String> },
+    Retirement { owner: String, at: String, reason: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,12 +185,35 @@ pub fn contribute(data: &Value, root: &str, request: &Request) -> Result<(Value,
     if request.expected_version != projection.version {
         return Err(refuse("task-version", "expected task version is stale"));
     }
+    let mut retirement = None;
     match &request.event {
         Event::Attempt { predecessor, checks, base_commit } => {
             if *checks != assignment.checks || base_commit.is_empty() || *predecessor != projection.attempt
                 || history.iter().any(|r| r.request.task == *task && r.request.attempt == request.attempt) {
                 return Err(refuse("task-attempt", "attempt must echo allocation and link its predecessor exactly"));
             }
+        }
+        Event::Retirement { owner, at, reason } => {
+            for (field, value) in [("owner", owner), ("at", at), ("reason", reason)] {
+                if value.trim().is_empty() {
+                    return Err(admission::refuse(task.phase, "task-retirement", field, &task.task,
+                        "owner retirement requires nonblank owner, time and reason"));
+                }
+            }
+            let active: super::model::ActiveDispatch = data["execution"]["occurrences"]
+                .get(task.phase.to_string()).and_then(|occurrence| occurrence.get("active"))
+                .filter(|active| !active.is_null()).cloned().map(serde_json::from_value).transpose()?
+                .ok_or_else(|| admission::refuse(task.phase, "task-active", "task", &task.task,
+                    "retirement requires the task's exact active dispatch"))?;
+            if active.phase != task.phase || active.plan != task.plan
+                || !active.tasks.iter().any(|spec| spec.id == task.task) {
+                return Err(admission::refuse(task.phase, "task-active", "task", &task.task,
+                    "retirement requires the task's exact active dispatch"));
+            }
+            if projection.attempt.as_deref() != Some(&request.attempt) {
+                return Err(refuse("task-attempt", "event requires the current named attempt"));
+            }
+            retirement = Some((active, reason.clone()));
         }
         _ if projection.attempt.as_deref() != Some(&request.attempt) => {
             return Err(refuse("task-attempt", "event requires the current named attempt"));
@@ -259,7 +283,7 @@ pub fn contribute(data: &Value, root: &str, request: &Request) -> Result<(Value,
     let mut proposed = data.clone();
     let namespace = proposed.as_object_mut().ok_or_else(|| refuse("task-shape", "snapshot must be an object"))?
         .entry(NAMESPACE).or_insert_with(|| json!({"schema":"native-tasks-1","phases":{}}));
-    namespace["phases"][task.phase.to_string()] = serde_json::to_value(history)?;
+    namespace["phases"][task.phase.to_string()] = serde_json::to_value(&history)?;
     if let Event::Checkpoint {records,..}=&request.event {
         proposed=checkpoint_projection(&proposed,task,records)?;
     }
@@ -267,7 +291,34 @@ pub fn contribute(data: &Value, root: &str, request: &Request) -> Result<(Value,
         let basis = crate::rail::risk::NativeExecutionBasis::new(&proof.dispatch, task.clone(), proof.source.clone(), record.request_digest.clone())?;
         proposed = crate::rail::risk::project_native_execution_basis(&proposed, &basis)?;
     }
+    if let Some((active, reason)) = retirement {
+        let plan = PlanIdentity { phase: task.phase, occurrence: task.occurrence.clone(),
+            admission_digest: task.admission_digest.clone(), plan: task.plan };
+        let blocker = super::model::Blocker { id: format!("task-retired:{}", task.task),
+            text: reason, evidence: vec![] };
+        proposed = end_dispatch(&proposed, &plan, &active, &history,
+            super::model::PlanDisposition::Blocked, vec![blocker], &record.request_digest)?;
+    }
     Ok((proposed, record))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RetirementInput {
+    pub request_id: String,
+    pub task: Task,
+    pub attempt: String,
+    pub expected_version: u64,
+    pub owner: String,
+    pub at: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag="operation", deny_unknown_fields)]
+pub enum RetirementApply {
+    #[serde(rename="execution-task-retire")]
+    Retire { request: RetirementInput },
 }
 
 pub fn decision(record: &Record) -> Result<DecisionRecord> {
@@ -319,7 +370,8 @@ fn checkpoint_projection(data:&Value,task:&Task,records:&[crate::evidence::Recor
 
 // Plan-level events: the suite lifecycle and native completion. They are
 // immutable like task events, keyed by the plan's admission binding, and
-// the only records that end a plan's dispatch.
+// Suite and completion are plan events; owner retirement is the one task event
+// that ends a plan's dispatch through the same retained outcome transition.
 pub const PLAN_NAMESPACE: &str = "native_plans";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -509,7 +561,14 @@ fn end_dispatch(data: &Value, plan: &PlanIdentity, active: &super::model::Active
         let task = Task { phase: plan.phase, occurrence: plan.occurrence.clone(), admission_digest: plan.admission_digest.clone(), plan: plan.plan, task: spec.id.clone() };
         let Some(proof) = records.iter().find_map(|r| match &r.request.event {
             Event::Close(proof) if r.request.task == task => Some(proof), _ => None,
-        }) else { tasks.push(TaskOutcome::NotRun { task_id: spec.id.clone() }); continue };
+        }) else {
+            if records.iter().any(|r| r.request.task == task && matches!(&r.request.event, Event::Retirement { .. })) {
+                tasks.push(TaskOutcome::Blocked { task_id: spec.id.clone(), blocker_id: format!("task-retired:{}", spec.id) });
+            } else {
+                tasks.push(TaskOutcome::NotRun { task_id: spec.id.clone() });
+            }
+            continue
+        };
         let commands = proof.submission.verification.iter().filter_map(|id| {
             let launch = records.iter().find_map(|r| match &r.request.event { Event::Launch(l) if r.request.task == task && l.run_id == *id => Some(l), _ => None })?;
             let result = records.iter().find_map(|r| match &r.request.event { Event::Result(res) if r.request.task == task && res.run_id == *id => Some(res), _ => None })?;

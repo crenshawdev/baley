@@ -102,6 +102,10 @@ CI is not the plan-close run. The plan-level requests name the plan the way
 `output_identity` is the retained run's output identity or null when the dead
 launch retained no result.
 
+`execution-task-retire` is an owner-only plan exit with `{request_id, task,
+attempt, expected_version, owner, at, reason}`. The owner invokes it; the
+executor never does.
+
 Commands and configuration (D-115): the admitted plan's explicit `verify` and
 `suite` commands govern; `workflow.test_command` and `workflow.lint_command`
 from configuration are proposals a planner may adopt before admission and can
