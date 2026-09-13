@@ -68,16 +68,37 @@ fn declared_phases(roadmap: &str) -> Vec<(u32, bool)> {
 
 const STORE_FILES: [&str; 4] = ["state.json", "items.jsonl", "decisions.jsonl", "config.v4.json"];
 
+/// The rewrite tree as it stood at the adoption rehearsal (cea1f28c, phase 13
+/// close). The live tree has carried its own native store since dogfooding
+/// began and is no longer a pre-adoption source.
+const ADOPTION_SOURCE: &str = "cea1f28c192d868995fd74167bb81f936263dc8c";
+
+/// Export the pinned `.planning` tree from git into `into`, never the live tree.
+fn adoption_source(into: &Path) -> PathBuf {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+    let archive = into.join("source.tar");
+    let exported = Command::new("git").args(["archive", "--format=tar", "-o"]).arg(&archive)
+        .args([ADOPTION_SOURCE, ".planning"]).current_dir(&repository).stdin(Stdio::null()).output().unwrap();
+    assert!(exported.status.success(), "{}", String::from_utf8_lossy(&exported.stderr));
+    let source = into.join("source");
+    fs::create_dir_all(&source).unwrap();
+    let extracted = Command::new("tar").arg("-xf").arg(&archive).arg("-C").arg(&source)
+        .stdin(Stdio::null()).output().unwrap();
+    assert!(extracted.status.success(), "{}", String::from_utf8_lossy(&extracted.stderr));
+    fs::remove_file(&archive).unwrap();
+    source.join(".planning")
+}
+
 #[test]
 fn phase13_adoption_copy_preserves_history_and_recovers() {
-    // The live rewrite tree is the source: read, hashed, copied, never opened.
-    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.planning").canonicalize().unwrap();
+    // The pinned rewrite tree is the source: exported, hashed, copied, never opened.
+    let disposable = tempfile::tempdir().unwrap();
+    let source_root = adoption_source(disposable.path());
     for file in STORE_FILES {
-        assert!(!source_root.join(file).exists(), "the live rewrite tree has no native store and this rehearsal gives it none");
+        assert!(!source_root.join(file).exists(), "the rehearsal source has no native store and this rehearsal gives it none");
     }
     let source = manifest(&source_root);
     let source_identity = identity(&source);
-    let disposable = tempfile::tempdir().unwrap();
     let project = disposable.path().join("project");
     fs::create_dir_all(&project).unwrap();
     git(&project, &["init", "--initial-branch=fixture/adoption"]);
