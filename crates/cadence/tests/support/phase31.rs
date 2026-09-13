@@ -71,6 +71,24 @@ impl Client {
         structured
     }
 
+    pub fn wait_for_event(&mut self, phase: u32, run_id: &str) -> Value {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let history = self.call(
+                "cadence_query",
+                json!({"operation":"execution-history","phase":phase}),
+            );
+            if let Some(event) = history["events"].as_array().unwrap().iter().find_map(|record| {
+                let event = &record["request"]["event"];
+                (event["kind"] == "result" && event["run_id"] == run_id).then(|| event.clone())
+            }) {
+                return event;
+            }
+            assert!(std::time::Instant::now() < deadline, "missing run {run_id}: {history}");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     pub fn finish(mut self) {
         drop(self.stdin.take());
         assert!(self.child.wait().unwrap().success());
@@ -117,4 +135,119 @@ impl Fixture {
 
     pub fn project(&self) -> &Path { self.temp.path() }
     pub fn path(&self, relative: &str) -> PathBuf { self.project().join(relative) }
+}
+
+pub fn approve(mut request: Value) -> Value {
+    request["approval"] = json!({"approved":true,"owner":"Fixture Owner",
+        "at":"2026-09-13T12:00:00Z","submission":request["submission"].clone()});
+    request
+}
+
+pub fn git(project: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(project)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GNUPGHOME", project.join(".fixture-gnupg"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8(output.stdout).unwrap().trim_end().to_owned()
+}
+
+pub struct ProcessFixture {
+    temp: tempfile::TempDir,
+}
+
+impl ProcessFixture {
+    pub fn new() -> Self {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path();
+        for path in [".planning/phases/31", ".fixture-gnupg", "src", "tests", "docs"] {
+            fs::create_dir_all(project.join(path)).unwrap();
+        }
+        fs::set_permissions(project.join(".fixture-gnupg"), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(project.join(".planning/ROADMAP.md"), concat!(
+            "## Phases\n",
+            "- [x] **Phase 30: Before** - neighboring prior row\n",
+            "- [ ] **Phase 31: The read layer** - uniquely selected roadmap row\n",
+            "- [ ] **Phase 32: After** - neighboring next row\n",
+        )).unwrap();
+        fs::write(project.join(".planning/config.json"), "{}\n").unwrap();
+        fs::write(project.join(".gitignore"), ".planning/\n.fixture-gnupg/\n.run/\n").unwrap();
+        fs::write(project.join("src/lease.rs"), "pub fn lease_needle() -> u32 { 31 }\n").unwrap();
+        fs::write(project.join("src/other.rs"), "pub fn outside_lease() -> u32 { 32 }\n").unwrap();
+        fs::write(project.join("tests/tiny.py"), concat!(
+            "import unittest\n",
+            "unittest.runner.time.perf_counter = lambda: 0.0\n",
+            "class Tiny(unittest.TestCase):\n",
+            "    def test_ok(self):\n",
+            "        self.assertEqual(31, 31)\n",
+            "if __name__ == '__main__':\n",
+            "    unittest.main()\n",
+        )).unwrap();
+        fs::write(project.join("docs/PLAN.md"), "MISLEADING RAW PLAN ALIAS\n").unwrap();
+        let key = Command::new("gpg")
+            .env("GNUPGHOME", project.join(".fixture-gnupg"))
+            .args(["--batch", "--pinentry-mode", "loopback", "--passphrase", "", "--quick-generate-key",
+                "Cadence Phase31 <phase31@example.invalid>", "ed25519", "sign", "0"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(key.status.success(), "{}", String::from_utf8_lossy(&key.stderr));
+        git(project, &["init", "--initial-branch=fixture/process"]);
+        git(project, &["config", "user.name", "Cadence Phase31"]);
+        git(project, &["config", "user.email", "phase31@example.invalid"]);
+        git(project, &["config", "user.signingkey", "phase31@example.invalid"]);
+        git(project, &["add", "."]);
+        git(project, &["-c", "commit.gpgsign=false", "commit", "-m", "Fixture baseline"]);
+        Self { temp }
+    }
+
+    pub fn project(&self) -> &Path { self.temp.path() }
+}
+
+pub fn process_plan_submission(allocation: &Value, large_task: &str) -> Value {
+    let check = json!({
+        "kind":"check","id":"fixture/T4","reason":"The process record must be readable.",
+        "spec":{"command":"python3 -B tests/tiny.py","expected":{"kind":"property","value":"the test passes"},
+            "test":{"file":"tests/tiny.py","function":"Tiny.test_ok"},"setup":"A real fixture project.",
+            "call":"Run the real binary.","boundary":"stdio to the bound project","fakes":[]},
+        "associations":[{"truth_id":"T4","truth_version":1,"reason":"This observes the process read."}]
+    });
+    let artifact = |id: &str| json!({
+        "kind":"artifact","id":id,"reason":"The rendered identity needs an owner.",
+        "spec":{"locators":["read-layer"],"substance":"Identity-owned process rendering."},
+        "associations":[{"truth_id":"T4","truth_version":1,"reason":"This owns the rendered identity."}]
+    });
+    let plan_one = concat!(
+        "# Fixture plan one\n\n## Goal\n\nPLAN ONE GOAL SENTINEL\n\n## Tasks\n\n",
+        "### Task 1: Completed fixture task\n\nPLAN ONE TASK ONE SENTINEL\n\n",
+        "### Task 2: Deferred fixture task\n\nPLAN ONE TASK TWO SENTINEL\n",
+    );
+    let plan_two = format!(concat!(
+        "# Fixture plan two\n\n## Goal\n\nPLAN TWO GOAL SENTINEL\n\n## Tasks\n\n",
+        "### Task 1: Requested fixture task\n\nPLAN TWO TASK ONE UNIQUE\n{large_task}\n",
+        "### Task 2: Neighbor fixture task\n\nPLAN TWO TASK TWO SENTINEL\n",
+    ));
+    json!({"operation":"plan-submit","submission":{
+        "phase":31,"occurrence":allocation["occurrence"],"request_id":"fixture-two-plans",
+        "inventory_basis":allocation["inventory"]["basis"],"plans":[
+            {"target":allocation["targets"][0],"content":{"phase":31,"plan":1,"requirements":["T4"],
+                "files":["src/lease.rs","tests/tiny.py"],"directories":[],
+                "execution":{"schema":1,"suite":"python3 -B tests/tiny.py","tasks":[
+                    {"id":"fixture-one-a","verify":["python3 -B tests/tiny.py"]},
+                    {"id":"fixture-one-b","verify":["python3 -B tests/tiny.py"]}]},
+                "body":plan_one,"evidence_map":{"mode":"attached","items":[check, artifact("fixture/artifact-one")]}}},
+            {"target":allocation["targets"][1],"content":{"phase":31,"plan":2,"requirements":["T4"],
+                "files":["src/lease.rs"],"directories":[],
+                "execution":{"schema":1,"suite":"python3 -B tests/tiny.py","tasks":[
+                    {"id":"fixture-two-a","verify":["python3 -B tests/tiny.py"]},
+                    {"id":"fixture-two-b","verify":["python3 -B tests/tiny.py"]}]},
+                "body":plan_two,"evidence_map":{"mode":"attached","items":[artifact("fixture/artifact-two")]}}}
+        ]}})
 }

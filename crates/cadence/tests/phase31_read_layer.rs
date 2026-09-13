@@ -1,7 +1,7 @@
 #[path = "support/phase31.rs"]
 mod phase31;
 
-use phase31::{Client, Fixture};
+use phase31::{Client, Fixture, ProcessFixture, approve, git, process_plan_submission};
 use serde_json::json;
 use std::fs;
 
@@ -165,5 +165,189 @@ fn phase31_large_file_returns_unit_outline() {
     assert_eq!(missing["kind"], "outline");
     assert_eq!(missing["reason"], "missing-unit");
     assert_eq!(missing["rows"].as_array().unwrap().len(), 2, "{missing}");
+    client.finish();
+}
+
+#[test]
+fn phase31_process_identity_returns_rendered_slice() {
+    fn no_process_path(value: &serde_json::Value) {
+        let text = value.to_string();
+        for forbidden in [".planning", "CONTEXT.md", "PLAN-", "ROADMAP.md"] {
+            assert!(!text.contains(forbidden), "process path leaked in {value}");
+        }
+    }
+
+    let fixture = ProcessFixture::new();
+    let project = fixture.project();
+    let mut client = Client::open(project);
+    let context = client.call("cadence_apply", approve(json!({
+        "operation":"context-submit","submission":{"phase":31,"title":"The read layer",
+        "scope":format!("Bounded native scope. {}", "unrelated context padding ".repeat(4_000)),
+        "durable_decisions":[],"decisions":[],"assumptions":[],
+        "truths":[{"id":"T4","trigger":"the caller requests the native truth",
+            "observer":"the caller","verb":"gets","outcome":"HANDWRITTEN NATIVE TRUTH SENTENCE",
+            "kind":"property","observable":true,"fixed_oracle":true}]}
+    })));
+    assert_eq!(context["persisted"], true, "{context}");
+
+    let allocation = client.call("cadence_query", json!({
+        "operation":"plan-read","phase_address":"31","count":2
+    }));
+    let large_task = "LARGE SELECTED TASK PAGE\n".repeat(4_000);
+    let preview = client.call("cadence_query", {
+        let request = process_plan_submission(&allocation, &large_task);
+        json!({"operation":"plan-read","phase_address":"31","submission":request["submission"]})
+    });
+    assert_eq!(preview["status"], "ok", "{preview}");
+    let published = client.call("cadence_apply", approve(json!({
+        "operation":"plan-submit","submission":preview["submission"]
+    })));
+    assert_eq!(published["persisted"], true, "{published}");
+    let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":31}));
+    let check_revision = evidence["items"].as_array().unwrap().iter()
+        .find(|item| item["id"] == "fixture/T4").unwrap()["item_revision"].clone();
+    let plans = published["results"].as_array().unwrap();
+    let contract = json!({"phase":31,"occurrence":allocation["occurrence"],
+        "plans":plans.iter().map(|publication| json!({
+            "plan":publication["identity"]["plan"],
+            "publication_request":publication["approval"]["submission"]["request_id"],
+            "content_revision":publication["revision"],"map_revision":publication["map_revision"]
+        })).collect::<Vec<_>>(),
+        "allocation":[
+            {"plan":1,"task":"fixture-one-a","checks":[]},
+            {"plan":1,"task":"fixture-one-b","checks":[{"id":"fixture/T4","item_revision":check_revision}]},
+            {"plan":2,"task":"fixture-two-a","checks":[]},
+            {"plan":2,"task":"fixture-two-b","checks":[]}
+        ]});
+    let admitted = client.call("cadence_apply", json!({"operation":"execution-admit","request":{
+        "request_id":"fixture-admit","expected_set_version":0,"contract":contract
+    }}));
+    assert_eq!(admitted["status"], "ok", "{admitted}");
+    let authorized = client.call("cadence_apply", json!({"operation":"execution-authorize","phase":31,
+        "request_id":"fixture-authorize","owner":"Fixture Owner","at":"2026-09-13T12:01:00Z",
+        "response":"Proceed with the fixture execution"}));
+    assert_eq!(authorized["status"], "ok", "{authorized}");
+    let dispatch = client.call("cadence_query", json!({"operation":"execute-next","phase":31}));
+    assert_eq!(dispatch["status"], "ok", "{dispatch}");
+    let operational = &dispatch["dispatch"]["operational"];
+    let task = operational["tasks"].as_array().unwrap().iter()
+        .find(|task| task["id"] == "fixture-one-a").unwrap();
+    let lease_scope = task["lease_scope"].clone();
+    assert_eq!(lease_scope["kind"], "current-task-lease", "{dispatch}");
+    let task_identity = json!({"phase":31,"occurrence":operational["occurrence"],
+        "admission_digest":operational["admission_digest"],"plan":1,"task":"fixture-one-a"});
+    let started = client.call("cadence_apply", json!({"operation":"execution-task-start","request":{
+        "request_id":"fixture-start","task":task_identity,"attempt":"fixture-attempt",
+        "expected_version":0,"predecessor":null,"checks":[]
+    }}));
+    assert_eq!(started["status"], "ok", "{started}");
+
+    let before_lease = fs::read(project.join(".planning/state.json")).unwrap();
+    let lease = client.call("cadence_query", json!({"operation":"search","pattern":"lease_needle",
+        "scope":lease_scope}));
+    assert_eq!(lease["status"], "ok", "{lease}");
+    assert_eq!(lease["hits"].as_array().unwrap().len(), 1, "{lease}");
+    assert_eq!(lease["hits"][0]["file"], "src/lease.rs");
+    assert!(lease["hits"].as_array().unwrap().iter().all(|hit| hit["file"] != "src/other.rs"));
+    assert_eq!(fs::read(project.join(".planning/state.json")).unwrap(), before_lease);
+
+    fs::write(project.join("src/lease.rs"), "pub fn lease_needle() -> u32 { 310 }\n").unwrap();
+    git(project, &["add", "src/lease.rs"]);
+    git(project, &["commit", "-S", "-m", "feat(read): complete fixture task (fixture-one-a)"]);
+    let completion = git(project, &["rev-parse", "HEAD"]);
+    let history = client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
+    let state = history["tasks"].as_array().unwrap().iter()
+        .find(|entry| entry["task"]["task"] == "fixture-one-a").unwrap();
+    let launched = client.call("cadence_apply", json!({"operation":"execution-run","request":{
+        "request_id":"fixture-verify","task":state["task"],"attempt":"fixture-attempt",
+        "expected_version":state["state"]["version"],"command":"python3 -B tests/tiny.py",
+        "check":null,"stage":"verify"
+    }}));
+    assert_eq!(launched["status"], "ok", "{launched}");
+    let result = client.wait_for_event(31, "fixture-verify");
+    assert_eq!(result["disposition"], json!({"kind":"exited","code":0}), "{result}");
+    let history = client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
+    let state = history["tasks"].as_array().unwrap().iter()
+        .find(|entry| entry["task"]["task"] == "fixture-one-a").unwrap();
+    let closed = client.call("cadence_apply", json!({"operation":"execution-task-close","request":{
+        "request_id":"fixture-close","task":state["task"],"attempt":"fixture-attempt",
+        "expected_version":state["state"]["version"],"completion":completion,"checks":[],
+        "verification":["fixture-verify"]
+    }}));
+    assert_eq!(closed["status"], "ok", "{closed}");
+
+    let intake = client.call("cadence_query", json!({"operation":"context-intake","phase":31}));
+    assert!(intake["context"]["identity"].is_object(), "{intake}");
+    assert!(intake["roadmap"]["identity"].is_object(), "{intake}");
+    assert!(intake["context"].get("document").is_none(), "{intake}");
+    let readback = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"31"}));
+    assert!(readback["plans"].as_array().unwrap().iter().all(|plan| plan.get("document").is_none()
+        && plan.get("publication").is_none()), "{readback}");
+
+    let context_identity = intake["context"]["identity"].clone();
+    let context_index = client.call("cadence_query", json!({"operation":"document","identity":context_identity}));
+    assert_eq!(context_index["kind"], "document-index", "{context_index}");
+    assert!(context_index.get("body").is_none(), "{context_index}");
+    let truth = client.call("cadence_query", json!({"operation":"document",
+        "identity":intake["context"]["identity"],"part":"truth:T4"}));
+    assert_eq!(truth["body"], "When the caller requests the native truth, the caller gets HANDWRITTEN NATIVE TRUTH SENTENCE.\n");
+
+    let plan_identity = readback["plans"].as_array().unwrap().iter()
+        .find(|plan| plan["identity"]["plan"] == 2).unwrap()["identity"].clone();
+    let mut page = client.call("cadence_query", json!({"operation":"document","identity":plan_identity,
+        "part":"task:fixture-two-a"}));
+    let mut task_body = String::new();
+    loop {
+        task_body.push_str(page["body"].as_str().unwrap());
+        let Some(continuation) = page["continuation"].as_str() else { break };
+        page = client.call("cadence_query", json!({"operation":"document","identity":page["identity"],
+            "part":continuation}));
+    }
+    assert!(task_body.contains("PLAN TWO TASK ONE UNIQUE"));
+    assert!(task_body.contains("LARGE SELECTED TASK PAGE"));
+    assert!(!task_body.contains("PLAN ONE"));
+    assert!(!task_body.contains("PLAN TWO TASK TWO SENTINEL"));
+
+    let roadmap = client.call("cadence_query", json!({"operation":"document",
+        "identity":intake["roadmap"]["identity"],"part":"row"}));
+    assert_eq!(roadmap["body"], "- [ ] **Phase 31: The read layer** - uniquely selected roadmap row\n");
+    assert!(!roadmap["body"].as_str().unwrap().contains("Phase 30"));
+    assert!(!roadmap["body"].as_str().unwrap().contains("Phase 32"));
+
+    let resumed = client.call("cadence_query", json!({"operation":"execute-next","phase":31}));
+    let completed = resumed["dispatch"]["operational"]["completed"].as_array().unwrap().iter()
+        .find(|entry| entry["id"] == "fixture-one-a").unwrap();
+    assert_eq!(completed["completion"], completion);
+    let summary = client.call("cadence_query", json!({"operation":"document",
+        "identity":completed["document_identity"],"part":"row"}));
+    assert!(summary["body"].as_str().unwrap().contains("fixture-one-a"), "{summary}");
+    assert!(summary["body"].as_str().unwrap().contains(&completion), "{summary}");
+
+    let phase_hits = client.call("cadence_query", json!({"operation":"search",
+        "pattern":"HANDWRITTEN NATIVE TRUTH SENTENCE","scope":{"kind":"phase-documents","phase":31}}));
+    assert_eq!(phase_hits["hits"].as_array().unwrap().len(), 1, "{phase_hits}");
+    assert!(phase_hits["hits"][0]["identity"].is_object(), "{phase_hits}");
+    assert_eq!(phase_hits["hits"][0]["part"], "truth:T4");
+    assert!(phase_hits["hits"][0].get("file").is_none(), "{phase_hits}");
+    let followed = client.call("cadence_query", json!({"operation":"document",
+        "identity":phase_hits["hits"][0]["identity"],"part":phase_hits["hits"][0]["part"]}));
+    assert_eq!(followed["body"], truth["body"]);
+
+    for answer in [
+        client.call("cadence_query", json!({"operation":"document",
+            "identity":{"kind":"phase-plan","phase":31,"plan":99},"part":"task:missing"})),
+        client.call("cadence_query", json!({"operation":"document",
+            "identity":{"kind":"phase-context","phase":30},"part":"truth:T4"})),
+        client.call("cadence_query", json!({"operation":"read","file":"phases/31/PLAN-2.md"})),
+        client.call("cadence_query", json!({"operation":"document",
+            "identity":{"kind":"path","path":"phases/31/PLAN-2.md"},"part":"task:fixture-two-a"})),
+    ] {
+        assert_eq!(answer["status"], "refused", "{answer}");
+        assert!(answer.get("body").is_none(), "{answer}");
+        no_process_path(&answer);
+    }
+    for answer in [&intake, &readback, &context_index, &truth, &page, &roadmap, &summary, &phase_hits] {
+        no_process_path(answer);
+    }
     client.finish();
 }
