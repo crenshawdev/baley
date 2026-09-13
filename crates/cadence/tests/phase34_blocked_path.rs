@@ -1,5 +1,6 @@
 //! Phase 34 acceptance checks cross the real stdio, policy, journal and filesystem boundary.
 #[path = "support/phase13.rs"]
+#[allow(dead_code)]
 mod support;
 
 use cadence::store::model;
