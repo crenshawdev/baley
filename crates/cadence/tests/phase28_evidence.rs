@@ -845,9 +845,8 @@ fn phase28_republication_supersedes_previous_map() {
         assert!(content.get("evidence_map").is_none());
         assert!(content.get("provisional").is_none());
     }
-    // Record the predating fixture's root before capturing replay invariants.
-    let saved = reopened(project).snapshot;
     let before = tree(project);
+    let saved = reopened(project).snapshot;
     assert_eq!(saved.data["import"]["active"], capture["provenance"]["active"]);
     let mut client = Client::open(project);
     let replay = client.call("cadence_apply", original_request.clone());

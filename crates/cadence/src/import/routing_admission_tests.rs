@@ -80,13 +80,7 @@ fn final_intent_preparation_cannot_admit_a_stale_route() {
     use cadence::store::writer::BoundaryChange;
     use serde_json::json;
     let root = tempfile::tempdir().unwrap();
-    let snapshot = cadence::store::model::Snapshot::new(0, b"", b"", json!({})).unwrap()
-        .with_root(Some(cadence::store::root::Root {
-            bound: cadence::verification::inputs::root_binding(root.path()).unwrap(),
-            path: root.path().to_owned(),
-            relocations: vec![],
-        })).unwrap();
-    std::fs::write(root.path().join("state.json"), snapshot.render().unwrap()).unwrap();
+    std::fs::write(root.path().join("state.json"), r#"{"version":1,"generation":0,"items_digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","decisions_digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","data":{},"operations":{},"integrity":"e9756a2c9107069a015c009d174bacbc989df7121a7646ecc1a770afdfbf35bd"}"#).unwrap();
     std::fs::write(root.path().join("items.jsonl"), b"").unwrap();
     std::fs::write(root.path().join("decisions.jsonl"), b"").unwrap();
     let config_path = root.path().join("config.json");
@@ -139,7 +133,9 @@ fn final_intent_preparation_cannot_admit_a_stale_route() {
             store
                 .request(Operation::BoundaryV1 {
                     expected_generation: 0,
-                    expected_integrity: snapshot.integrity.clone(),
+                    expected_integrity:
+                        "e9756a2c9107069a015c009d174bacbc989df7121a7646ecc1a770afdfbf35bd"
+                            .into(),
                     operation_id: "fixture-admission".into(),
                     decision: BoundaryV1 {
                         codec: 1,
