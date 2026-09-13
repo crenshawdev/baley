@@ -314,7 +314,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let _ownership = storage.acquire()?;
         super::transaction::recover(&mut storage, &mut policy)?;
         let (view, observed) = Self::observe(&mut storage)?;
-        let mut writer = Self {
+        Ok(Self {
             storage,
             policy: CheckedPolicy {
                 policy,
@@ -323,18 +323,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             observed,
             view,
             failed: None,
-        };
-        if let Some(path) = writer.storage.root_path()
-            && let Some(root) = super::root::at_open(&writer.observed[STATE], path,
-                writer.observed[ITEMS].bytes.as_deref().unwrap_or_default(),
-                writer.observed[DECISIONS].bytes.as_deref().unwrap_or_default())?
-        {
-            let mut next = writer.view.clone();
-            next.snapshot.root = Some(root);
-            writer.persist(next, writer.view.snapshot.operations.clone(), vec![],
-                "bind_root", super::transaction::IntentKind::Store)?;
-        }
-        Ok(writer)
+        })
     }
 
     fn observe(storage: &mut S) -> Result<(View, BTreeMap<String, Observed>)> {
@@ -344,9 +333,6 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         }
         let items_bytes = observed[ITEMS].bytes.as_deref().unwrap_or_default();
         let decision_bytes = observed[DECISIONS].bytes.as_deref().unwrap_or_default();
-        if let Some(path) = storage.root_path() {
-            super::root::at_open(&observed[STATE], path, items_bytes, decision_bytes)?;
-        }
         let snapshot = match observed[STATE].bytes.as_deref() {
             Some(bytes) if observed.values().all(|file| file.bytes.is_some()) => {
                 Snapshot::parse(bytes, items_bytes, decision_bytes)?
@@ -832,7 +818,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let model::Decision::Gate { evidence: model::Evidence::Text(encoded), .. } = &record.decision else {
             return Err(Error::Invalid("verification claim encoding invalid".into()));
         };
-        let root_binding = super::root::binding(&self.observed[STATE])?;
+        let root_binding = self.observed[STATE].directory_identity.clone();
         let data = &self.view.snapshot.data;
         let same = |expected: Transaction| -> Result<bool> {
             Ok(transaction.fingerprint()? == expected.fingerprint()? && transaction.id == expected.id)
@@ -880,7 +866,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
 
     fn verification_run(&mut self, generation: u64, integrity: &str, record: cadence::verification::runner::Record) -> Result<View> {
         use cadence::verification::runner;
-        let binding = super::root::binding(&self.observed[STATE])?;
+        let binding = self.observed[STATE].directory_identity.clone();
         if let Some(prior) = runner::records(&self.view.snapshot.data)?.iter().find(|r| r.id == record.id) {
             return if prior == &record && self.view.decisions.contains(&runner::decision(prior)?) { Ok(self.view.clone()) }
                 else { Err(Error::Invalid("verification run request reused".into())) };
@@ -896,7 +882,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
 
     fn verification(&mut self, generation: u64, integrity: &str, request: cadence::verification::persistence::Request) -> Result<View> {
         use cadence::verification::{inputs, persistence};
-        let root_binding = super::root::binding(&self.observed[STATE])?;
+        let root_binding = self.observed[STATE].directory_identity.clone();
         if let Some(prior) = persistence::replay(&self.view.snapshot.data, &root_binding,
             request.attempt.inputs.basis.phase, &request.attempt.request_id)? {
             if prior != request.attempt || !self.view.decisions.contains(&persistence::decision(&prior)?) {
@@ -916,7 +902,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
 
     fn native_task(&mut self, generation: u64, integrity: &str, request: cadence::execution::history::Request) -> Result<View> {
         use cadence::execution::history;
-        let root_binding = super::root::binding(&self.observed[STATE])?;
+        let root_binding = self.observed[STATE].directory_identity.clone();
         if let Some(record) = history::replay(&self.view.snapshot.data, &root_binding, &request)? {
             if !history::decisions(&record)?.iter().all(|decision|self.view.decisions.contains(decision)) {
                 return Err(Error::Invalid("native task receipt lacks its immutable event".into()));
@@ -934,7 +920,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
 
     fn native_plan(&mut self, generation: u64, integrity: &str, request: cadence::execution::history::PlanRequest) -> Result<View> {
         use cadence::execution::history;
-        let root_binding = super::root::binding(&self.observed[STATE])?;
+        let root_binding = self.observed[STATE].directory_identity.clone();
         if let Some(record) = history::plan_replay(&self.view.snapshot.data, &root_binding, &request)? {
             if !self.view.decisions.contains(&history::plan_decision(&record)?) {
                 return Err(Error::Invalid("native plan receipt lacks its immutable event".into()));
@@ -952,7 +938,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
 
     fn native_admission(&mut self, generation:u64, integrity:&str, request:cadence::execution::admission::Request) -> Result<View> {
         use cadence::execution::admission;
-        let root_binding=super::root::binding(&self.observed[STATE])?;
+        let root_binding=self.observed[STATE].directory_identity.clone();
         if let Some(record)=admission::replay(&self.view.snapshot.data,&root_binding,&request)? {
             if !self.view.decisions.contains(&admission::decision(&record)?) {
                 return Err(Error::Invalid("native admission receipt lacks its immutable event".into()));
@@ -1671,21 +1657,11 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             operation: operation_name,
             snapshot: &self.view.snapshot,
         })?;
-        if self.observed[STATE].bytes.is_none()
-            && let Some(path) = self.storage.root_path()
-        {
-            next.snapshot.root = Some(super::root::Root {
-                bound: self.observed[STATE].directory_identity.clone(),
-                path: path.to_owned(),
-                relocations: vec![],
-            });
-        }
         let items = model::render_lines(&next.items)?;
         let decisions = model::render_lines(&next.decisions)?;
         let generation = self.next_generation()?;
         next.snapshot = Snapshot::new(generation, &items, &decisions, next.snapshot.data)?
-            .with_operations(operations)?
-            .with_root(next.snapshot.root)?;
+            .with_operations(operations)?;
         let state = next.snapshot.render()?;
         for (name, bytes) in [(ITEMS, items), (DECISIONS, decisions), (STATE, state)] {
             participants.push(super::transaction::Participant {

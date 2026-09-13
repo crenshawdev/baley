@@ -113,8 +113,6 @@ pub struct Snapshot {
     pub items_digest: String,
     pub decisions_digest: String,
     pub data: Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<super::root::Root>,
     pub operations: BTreeMap<String, String>,
     pub integrity: String,
 }
@@ -131,7 +129,6 @@ impl Snapshot {
             items_digest: digest(items),
             decisions_digest: digest(decisions),
             data,
-            root: None,
             operations: BTreeMap::new(),
             integrity: String::new(),
         };
@@ -141,12 +138,6 @@ impl Snapshot {
 
     pub fn with_operations(mut self, operations: BTreeMap<String, String>) -> Result<Self> {
         self.operations = operations;
-        self.integrity = self.content_digest()?;
-        Ok(self)
-    }
-
-    pub fn with_root(mut self, root: Option<super::root::Root>) -> Result<Self> {
-        self.root = root;
         self.integrity = self.content_digest()?;
         Ok(self)
     }

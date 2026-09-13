@@ -133,7 +133,7 @@ fn validate_claim_transition(participants: &[Participant], snapshot: &Snapshot, 
     root_binding: &str, transaction: Transaction, decision: DecisionRecord, what: &str) -> Result<()> {
     let (items, decisions) = rendered;
     let state = participants.last().expect("state participant");
-    if super::root::binding(&state.expected)? != root_binding {
+    if state.expected.directory_identity != root_binding {
         return Err(Error::Invalid(format!("{what} root binding changed")));
     }
     let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
@@ -502,7 +502,7 @@ impl Intent {
                 use cadence::verification::runner;
                 if names.len() != 3 { return Err(Error::Invalid("verification run cannot change external participants".into())); }
                 let state = self.participants.last().expect("state participant");
-                if super::root::binding(&state.expected)? != root_binding { return Err(Error::Invalid("verification run root binding changed".into())); }
+                if state.expected.directory_identity != root_binding { return Err(Error::Invalid("verification run root binding changed".into())); }
                 let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
                     .ok_or_else(|| Error::Invalid("verification run requires prior snapshot".into()))?)?;
                 let expected = runner::contribute(&previous.data, &root_binding, &record)?;
@@ -522,7 +522,7 @@ impl Intent {
                 use cadence::verification::persistence;
                 if names.len() != 3 { return Err(Error::Invalid("verification cannot change external participants".into())); }
                 let state = self.participants.last().expect("state participant");
-                if super::root::binding(&state.expected)? != root_binding { return Err(Error::Invalid("verification root binding changed".into())); }
+                if state.expected.directory_identity != root_binding { return Err(Error::Invalid("verification root binding changed".into())); }
                 let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
                     .ok_or_else(|| Error::Invalid("verification requires prior snapshot".into()))?)?;
                 let expected = persistence::contribute(&previous.data, &root_binding, &request)?;
@@ -542,7 +542,7 @@ impl Intent {
                 use cadence::execution::history;
                 if names.len() != 3 { return Err(Error::Invalid("native plan event cannot change external participants".into())); }
                 let state = self.participants.last().expect("state participant");
-                if super::root::binding(&state.expected)? != root_binding {
+                if state.expected.directory_identity != root_binding {
                     return Err(Error::Invalid("native plan root binding changed".into()));
                 }
                 let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
@@ -563,7 +563,7 @@ impl Intent {
                 use cadence::execution::history;
                 if names.len() != 3 { return Err(Error::Invalid("native task event cannot change external participants".into())); }
                 let state = self.participants.last().expect("state participant");
-                if super::root::binding(&state.expected)? != root_binding {
+                if state.expected.directory_identity != root_binding {
                     return Err(Error::Invalid("native task root binding changed".into()));
                 }
                 let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
@@ -584,7 +584,7 @@ impl Intent {
                 use cadence::execution::admission;
                 if names.len()!=3 {return Err(Error::Invalid("native admission cannot change external participants".into()));}
                 let state=self.participants.last().expect("state participant");
-                if super::root::binding(&state.expected)?!=root_binding {return Err(Error::Invalid("native admission root binding changed".into()));}
+                if state.expected.directory_identity!=root_binding {return Err(Error::Invalid("native admission root binding changed".into()));}
                 let previous:Snapshot=serde_json::from_slice(state.expected.bytes.as_deref()
                     .ok_or_else(||Error::Invalid("native admission requires prior snapshot".into()))?)?;
                 let inventory:cadence::plan::inventory::Inventory=serde_json::from_slice(inventory.bytes.as_deref()
@@ -1222,7 +1222,7 @@ fn validate_all<S: Storage>(
     kind: &IntentKind,
 ) -> Result<()> {
     if let IntentKind::VerificationSubmitV1 { claim, root_binding } = kind {
-        if super::root::binding(&storage.read(STATE)?)? != *root_binding {
+        if storage.read(STATE)?.directory_identity != *root_binding {
             return Err(Error::Invalid("verification claim store binding changed".into()));
         }
         let state = participants.last().ok_or_else(|| Error::Invalid("snapshot absent".into()))?;
@@ -1231,27 +1231,27 @@ fn validate_all<S: Storage>(
         cadence::verification::verdicts::reobserve(&previous.data, claim)?;
     }
     if let IntentKind::VerificationWaiverV1 { claim, root_binding } = kind {
-        if super::root::binding(&storage.read(STATE)?)? != *root_binding {
+        if storage.read(STATE)?.directory_identity != *root_binding {
             return Err(Error::Invalid("waiver claim store binding changed".into()));
         }
         let previous = previous_snapshot(participants, "waiver claim")?;
         cadence::verification::waivers::reobserve(&previous.data, claim)?;
     }
     if let IntentKind::VerificationHumanV1 { claim, root_binding } = kind {
-        if super::root::binding(&storage.read(STATE)?)? != *root_binding {
+        if storage.read(STATE)?.directory_identity != *root_binding {
             return Err(Error::Invalid("human result store binding changed".into()));
         }
         cadence::verification::human::reobserve(claim)?;
     }
     if let IntentKind::VerificationCompleteV1 { claim, root_binding } = kind {
-        if super::root::binding(&storage.read(STATE)?)? != *root_binding {
+        if storage.read(STATE)?.directory_identity != *root_binding {
             return Err(Error::Invalid("completion store binding changed".into()));
         }
         let previous = previous_snapshot(participants, "completion")?;
         cadence::verification::completion::reobserve(&previous.data, claim)?;
     }
     if let IntentKind::VerificationRunV1 { record, root_binding } = kind {
-        if super::root::binding(&storage.read(STATE)?)? != *root_binding {
+        if storage.read(STATE)?.directory_identity != *root_binding {
             return Err(Error::Invalid("verification run store binding changed".into()));
         }
         let state = participants.last().ok_or_else(|| Error::Invalid("snapshot absent".into()))?;
@@ -1260,7 +1260,7 @@ fn validate_all<S: Storage>(
         cadence::verification::runner::reobserve_launch(&previous.data, record)?;
     }
     if let IntentKind::VerificationV1 { request, root_binding } = kind {
-        if super::root::binding(&storage.read(STATE)?)? != *root_binding {
+        if storage.read(STATE)?.directory_identity != *root_binding {
             return Err(Error::Invalid("verification store binding changed".into()));
         }
         cadence::verification::inputs::reobserve_external(&request.root, &request.attempt.inputs, &request.documents)?;
@@ -1269,7 +1269,8 @@ fn validate_all<S: Storage>(
         && let cadence::execution::history::Event::Checkpoint {records,..}=&request.event
     {
         for record in records {
-            if cadence::verification::inputs::root_binding(std::path::Path::new(&record.scope.planning_root)).map_err(super::writer::rail_error)?!=*root_binding {
+            let mut filesystem=super::filesystem::Filesystem::new(&record.scope.planning_root)?;
+            if filesystem.read(STATE)?.directory_identity!=*root_binding {
                 return Err(Error::Invalid("native checkpoint differs from bound store".into()));
             }
         }
@@ -1277,14 +1278,15 @@ fn validate_all<S: Storage>(
     if let IntentKind::NativeTaskV1 {request,root_binding}=kind
         && let cadence::execution::history::Event::Close(proof)=&request.event
     {
-        if cadence::verification::inputs::root_binding(&proof.planning_root).map_err(super::writer::rail_error)?!=*root_binding {
+        let mut filesystem=super::filesystem::Filesystem::new(&proof.planning_root)?;
+        if filesystem.read(STATE)?.directory_identity!=*root_binding {
             return Err(Error::Invalid("native close project differs from bound store".into()));
         }
         cadence::execution::receipts::reobserve_source(&proof.project,&proof.dispatch,&request.task.task,&proof.source)?;
     }
     if let IntentKind::NativeAdmissionV1 {request,root_binding,inventory}=kind {
         let observed=storage.read(&format!("phase-plan-inventory:{}",request.contract.phase))?;
-        if observed!=*inventory || super::root::binding(&storage.read(STATE)?)?!=*root_binding {
+        if observed!=*inventory || storage.read(STATE)?.directory_identity!=*root_binding {
             return Err(cadence::execution::admission::refuse(request.contract.phase,"admission-inputs-changed","contract.plans","","installed PLAN inventory or root changed before confirmation"));
         }
     }
