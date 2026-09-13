@@ -8,6 +8,7 @@ use serde_json::json;
 use std::fs;
 
 #[test]
+#[ignore = "P31-3-T1 retired; T6 re-specified in phase 32"]
 fn phase31_worker_hosts_receive_main_thread_answers() {
     phase31_hosts::prove_worker_hosts_receive_main_thread_answers();
 }
