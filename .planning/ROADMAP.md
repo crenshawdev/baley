@@ -394,6 +394,7 @@ Delivery order after phase 11 is 27, 28, 29, 12, 13, then 14 onward; see
 - [ ] **Phase 31: The read layer** - search and slice operations in the binary, ported from excerpt; the model and every worker read through them and never open a file
 - [ ] **Phase 32: Typed authoring and rendering** - context and plan submissions as typed pieces; the binary renders CONTEXT.md and PLAN.md, answers with a digest, and approval binds by digest; nothing echoed, no path on the wire
 - [ ] **Phase 33: Execution and verification under the boundary** - a worker gets a dispatch id, reports progress and completion as typed pieces, the binary renders SUMMARY.md, and review material reaches the binary without crossing the wire
+- [ ] **Phase 34: The blocked path** - an owner retires an unfinished task with a reason and the plan ends blocked the way a failed suite does; the next plan dispatches and a repaired phase derives as executed
 - [ ] **Phase 14: Receipts and retune** - `cad-progress`, `cad-why`, `cad-suggest`, `cad-capture`
 - [ ] **Phase 15: Landing and milestones** - `cad-land`, `cad-milestone`, `cad-undo`
 - [ ] **Phase 16: Support** - `cad-debug`, `cad-spike`, `cad-help`
@@ -1462,3 +1463,17 @@ operations take the same shape, and review material reaches the binary by
 identity, not as bytes on the wire. Writing source and tests stays with the
 worker's own edit tools. Closes with the token number for an executor round
 against the 3.7 median of 142k.
+
+### Phase 34: The blocked path
+
+**Goal.** The two exits the execution model lacks, found by running the
+D-120 gap path end to end on phase 31. An owner retirement,
+`execution-task-retire`, records owner, time and reason against an
+unfinished task; the plan ends blocked exactly as a failed suite does,
+receipts kept, active dispatch cleared, no phase-level stop, and the next
+admitted plan dispatches. The derivation follows `phase_complete`: a blocked
+plan counts as executed when a later-admitted plan completed, and task
+closure is demanded only of completed plans. No new records beyond the
+retirement. Phase 31 resumes on this: P31-3-T1 retired, plans 4 to 6 run,
+T6 waived at verification and re-specified in phase 32 without the Codex
+worker leg.
