@@ -971,8 +971,8 @@ fn effective_config_changes_only_unplanned_and_unavailable_refuses() {
         fs::write(&global, r#"{"workflow":{"skip_discuss":true}}"#).unwrap();
         let f = SessionFactory::new(Some(global), Arc::new(|_, _| Ok(())));
         let session = f.first_touch(&root).await.unwrap();
-        let active = session.import_manifest().active.repo.clone();
-        let active_global = session.import_manifest().active.global.clone().unwrap();
+        let active = session.active_paths().repo.clone();
+        let active_global = session.active_paths().global.clone().unwrap();
         let server = CadenceServer::with_factory(f);
         assert_eq!(instruction(&server, &root).await, "/cad-plan 1");
         fs::write(&active, r#"{"workflow":{"skip_discuss":false}}"#).unwrap();
@@ -1077,7 +1077,7 @@ fn consumed_report_config_store_and_lifecycle_changes_refuse_mixed_answer() {
                                 .unwrap()
                         }
                         "config" => fs::write(
-                            &session.import_manifest().active.repo,
+                            &session.active_paths().repo,
                             r#"{"workflow":{"skip_discuss":true}}"#,
                         )
                         .unwrap(),

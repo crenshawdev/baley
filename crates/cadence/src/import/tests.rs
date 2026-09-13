@@ -1007,16 +1007,13 @@ fn relocated_global_layer_reopens_by_identical_content_and_refuses_other_bytes()
     // Identical bytes reopen the store and record the mapping once.
     std::fs::write(&active, &written).unwrap();
     let (session, view) = open(legacy.clone()).unwrap();
-    let relocated = session.import_manifest().clone();
+    let relocated = session.active_paths().clone();
     assert_eq!(view.snapshot.generation, generation + 1);
-    assert_eq!(relocated.active.repo, first.active.repo);
-    assert_eq!(relocated.active.global.as_deref(), Some(active.as_path()));
-    let history = ImportManifest {
-        active: first.active.clone(),
-        ..relocated.clone()
-    };
+    assert_eq!(relocated.repo, first.active.repo);
+    assert_eq!(relocated.global.as_deref(), Some(active.as_path()));
     assert_eq!(
-        history, first,
+        session.import_manifest(),
+        &first,
         "the import manifest is history and is untouched"
     );
     assert_eq!(
@@ -1024,7 +1021,7 @@ fn relocated_global_layer_reopens_by_identical_content_and_refuses_other_bytes()
         serde_json::to_value(&first).unwrap()
     );
     let layers: LayerRecord = serde_json::from_value(view.snapshot.data[LAYERS].clone()).unwrap();
-    assert_eq!(layers.active.as_ref(), Some(&relocated.active));
+    assert_eq!(layers.active.as_ref(), Some(&relocated));
     assert_eq!(layers.global_content.as_deref(), Some(digest(&written).as_str()));
     assert_eq!(
         layers.relocations,
@@ -1063,8 +1060,73 @@ fn relocated_global_layer_reopens_by_identical_content_and_refuses_other_bytes()
     assert_eq!(layers.relocations[1].from, active);
     assert_eq!(layers.relocations[1].to, moved_again.join("config.v4.json"));
     assert_eq!(
-        session.import_manifest().active.global.as_deref(),
+        session.active_paths().global.as_deref(),
         Some(moved_again.join("config.v4.json").as_path())
+    );
+    assert_eq!(session.import_manifest(), &first);
+}
+
+#[test]
+fn relocated_global_layer_still_records_evidence() {
+    use cadence::evidence::{
+        Fact, Record, Scope, VERSION,
+        checkpoint::{Checkpoint, CheckpointType, State},
+    };
+    let fixture = extraction();
+    let root = fixture.path().join(".planning");
+    let global = global_fixture(fixture.path());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let open = |legacy: PathBuf| {
+        runtime.block_on(async {
+            let session = SessionFactory::new(Some(legacy), allow_evaluation())
+                .first_touch(&root)
+                .await?;
+            let view = session.request(Operation::Read).await?;
+            Ok::<_, Error>((session, view))
+        })
+    };
+    let (session, _) = open(global.clone()).unwrap();
+    let first = session.import_manifest().clone();
+    let written = std::fs::read(first.active.global.as_ref().unwrap()).unwrap();
+    drop(session);
+    // The home moves with every byte intact; the store accepts the relocation.
+    let moved = fixture.path().join("home/.claude/cadence");
+    std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
+    std::fs::rename(global.parent().unwrap(), &moved).unwrap();
+    std::fs::write(moved.join("config.v4.json"), &written).unwrap();
+    let (session, view) = open(moved.join("config.json")).unwrap();
+    // The relocation is a state every later write must survive: the stored
+    // manifest is history, and a guard that protects it compares against it.
+    let record = Record {
+        version: VERSION,
+        scope: Scope {
+            project: fixture.path().to_str().unwrap().into(),
+            planning_root: root.to_str().unwrap().into(),
+            cycle: "v4".into(),
+            occurrence: "dispatch-1-1".into(),
+            phase: "1".into(),
+            plan: "phases/1/PLAN-1.md".into(),
+            report: "phases/1/reports/plan-1.md".into(),
+        },
+        fact: Fact::Checkpoint(Checkpoint {
+            id: "checkpoint-1".into(),
+            checkpoint_type: CheckpointType::Structural,
+            task_number: 1,
+            task_name: "after the move".into(),
+            need: "record a gate answer".into(),
+            completed_work: vec![],
+            state: State::Unresolved,
+            failing_output: None,
+        }),
+    };
+    let recorded = runtime
+        .block_on(session.commit_evidence(&view, "relocated-checkpoint", &record))
+        .unwrap();
+    assert_eq!(recorded.snapshot.generation, view.snapshot.generation + 1);
+    assert_eq!(
+        recorded.snapshot.data["import"],
+        serde_json::to_value(&first).unwrap(),
+        "the import manifest is history and is untouched"
     );
 }
 
@@ -1399,6 +1461,7 @@ async fn session_config_reads_thirteen_independently_persisted_reopened_values()
             active.clone(),
             SuppliedConfig([(active.global.clone().unwrap(), FIRST_RUN.to_vec())].into()),
         ))),
+        active: active.clone(),
         manifest: serde_json::from_value(
             json!({"format":1,"complete":true,"source_generation":"fixture",
             "sources":[],"active":active,"created":[],"warnings":[]}),
@@ -1657,10 +1720,11 @@ async fn snapshot_session() -> Session<SuppliedConfig> {
         root: "/fixture/project/.planning".into(),
         store: Store::open(memory, Allow).await.unwrap(),
         config: Arc::new(Mutex::new(Reload::new(
-            active,
+            active.clone(),
             SuppliedConfig(BTreeMap::new()),
         ))),
         manifest,
+        active,
     }
 }
 

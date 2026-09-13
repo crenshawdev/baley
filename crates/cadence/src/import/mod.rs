@@ -678,7 +678,10 @@ pub struct Session<I: ConfigIo = FileIo> {
     root: PathBuf,
     store: Store,
     config: Shared<I>,
+    /// Where the layers were at import. History; never rewritten.
     manifest: ImportManifest,
+    /// Where the layers stand now, after every relocation the store accepted.
+    active: Paths,
 }
 impl<I: ConfigIo> Session<I> {
     /// Saved review operations read admitted policy; the writer still validates
@@ -689,6 +692,9 @@ impl<I: ConfigIo> Session<I> {
 
     pub fn import_manifest(&self) -> &ImportManifest {
         &self.manifest
+    }
+    pub fn active_paths(&self) -> &Paths {
+        &self.active
     }
     pub fn config(&self) -> Result<Generation> {
         self.config
@@ -814,7 +820,7 @@ impl<I: ConfigIo> Session<I> {
     pub async fn set_config(&self, layer: Layer, key: &str, value: Value) -> Result<View> {
         write::ConfigWriter {
             root: self.root.clone(),
-            active: self.manifest.active.clone(),
+            active: self.active.clone(),
             store: self.store.clone(),
             config: self.config.clone(),
         }
@@ -828,7 +834,7 @@ impl<I: ConfigIo> Session<I> {
     ) -> Result<write::Written> {
         write::ConfigWriter {
             root: self.root.clone(),
-            active: self.manifest.active.clone(),
+            active: self.active.clone(),
             store: self.store.clone(),
             config: self.config.clone(),
         }
@@ -850,7 +856,7 @@ impl<I: ConfigIo> Session<I> {
             config::interview::answers(&generation, mode, &captured, accepted, answers)?;
         write::ConfigWriter {
             root: self.root.clone(),
-            active: self.manifest.active.clone(),
+            active: self.active.clone(),
             store: self.store.clone(),
             config: self.config.clone(),
         }
@@ -1288,14 +1294,14 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
                 })
                 .await?;
         }
-        // The session's manifest names the layers where they stand now.
-        let mut manifest = manifest;
-        manifest.active = active;
+        // The import manifest stays as history; the session carries where the
+        // layers stand now beside it.
         let session = Arc::new(Session {
             root: root.clone(),
             store,
             config,
             manifest,
+            active,
         });
         sessions.insert(root, session.clone());
         Ok(session)

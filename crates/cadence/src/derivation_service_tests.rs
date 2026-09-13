@@ -360,7 +360,7 @@ fn query_guards_stale_publication_and_store_config_errors_remain_distinct() {
     let winner = rt.block_on(session.derivation_view()).unwrap();
     assert_eq!(winner.snapshot.data["intervening"], true);
     assert!(winner.snapshot.data.get("derivation").is_none());
-    std::fs::write(&session.import_manifest().active.repo, "invalid config").unwrap();
+    std::fs::write(&session.active_paths().repo, "invalid config").unwrap();
     assert!(matches!(
         rt.block_on(server.lifecycle(root.path())),
         Err(DerivationError::Store { .. })
@@ -766,7 +766,7 @@ fn ac3_exclusions_real_files_metadata_order_snapshot_and_positive_controls() {
     ));
     rt.block_on(replace(&session, before.snapshot.data));
     std::fs::write(
-        &session.import_manifest().active.repo,
+        &session.active_paths().repo,
         "invalid controlling config",
     )
     .unwrap();

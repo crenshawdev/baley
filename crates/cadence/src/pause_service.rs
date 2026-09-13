@@ -302,7 +302,7 @@ fn surfaces_from_answer(gate: &Gate) -> Result<Option<Vec<String>>> {
 
 fn receipt_paths<I: ConfigIo>(session: &Session<I>, root: &Path) -> Result<BTreeSet<PathBuf>> {
     let root = fs::canonicalize(root)?;
-    let active = &session.import_manifest().active;
+    let active = session.active_paths();
     let configs: BTreeSet<_> = std::iter::once(&active.repo)
         .chain(active.global.iter())
         .cloned()
