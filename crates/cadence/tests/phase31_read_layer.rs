@@ -1,9 +1,16 @@
 #[path = "support/phase31.rs"]
 mod phase31;
+#[path = "support/phase31_hosts.rs"]
+mod phase31_hosts;
 
 use phase31::{Client, Fixture, ProcessFixture, approve, git, process_plan_submission};
 use serde_json::json;
 use std::fs;
+
+#[test]
+fn phase31_worker_hosts_receive_main_thread_answers() {
+    phase31_hosts::prove_worker_hosts_receive_main_thread_answers();
+}
 
 #[test]
 fn phase31_search_returns_located_units() {
