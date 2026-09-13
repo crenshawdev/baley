@@ -87,7 +87,7 @@ fn artifact() -> Value {
 }
 
 fn body(map: &Value) -> String {
-    format!("# Fixture plan\n\n## Evidence map\n\n```json\n{}\n```\n",
+    format!("# Fixture plan\n\n## Evidence map\n\n```json\n{}\n```\n\n",
         support::section_json(map, 0))
 }
 
