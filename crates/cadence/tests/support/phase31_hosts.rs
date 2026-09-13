@@ -33,18 +33,17 @@ pub fn prove_worker_hosts_receive_main_thread_answers() {
         assert!(evidence.output.status.success(),
             "{} host/authentication/worker evidence is required; status={}\nstdout:\n{}\nstderr:\n{}",
             host.name(), evidence.output.status,
-            String::from_utf8_lossy(&evidence.output.stdout),
-            String::from_utf8_lossy(&evidence.output.stderr));
+            bounded_output(&evidence.output.stdout), bounded_output(&evidence.output.stderr));
         assert!(!evidence.events.is_empty(), "{} emitted no JSON host evidence", host.name());
         assert!(evidence.worker_ids.len() == 1,
-            "{} must dispatch one actual worker, got {:?}\n{}", host.name(), evidence.worker_ids,
-            String::from_utf8_lossy(&evidence.output.stdout));
+            "{} must dispatch one actual worker, got {:?}; events={}", host.name(),
+            evidence.worker_ids, event_summary(&evidence.events));
 
         let calls = host.calls(&evidence.events);
         let callers: BTreeSet<_> = calls.iter().map(|call| call.caller.as_str()).collect();
         assert!(callers.len() >= 2,
-            "{} did not expose distinct main/worker tool-result identities: {calls:#?}\n{}",
-            host.name(), String::from_utf8_lossy(&evidence.output.stdout));
+            "{} did not expose distinct main/worker tool-result identities; calls={}",
+            host.name(), call_summary(&calls));
         let worker = evidence.worker_ids.iter().next().unwrap();
         let worker_calls: Vec<_> = calls.iter().filter(|call| call.caller == *worker).collect();
         let main_calls: Vec<_> = calls.iter().filter(|call| call.caller != *worker).collect();
@@ -78,6 +77,24 @@ fn stable_hits(answer: &Value) -> Vec<Value> {
     })).collect()
 }
 
+fn bounded_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(&bytes[..bytes.len().min(4_096)]).into_owned()
+}
+
+fn event_summary(events: &[Value]) -> String {
+    events.iter().filter_map(|event| {
+        let item = event.get("item")?;
+        Some(format!("{}:{}", item["type"].as_str().unwrap_or("?"),
+            item["tool"].as_str().or_else(|| item["server"].as_str()).unwrap_or("?")))
+    }).collect::<Vec<_>>().join(",")
+}
+
+fn call_summary(calls: &[Call]) -> String {
+    calls.iter().map(|call| format!("{}:{}:{}", call.caller,
+        call.arguments["operation"].as_str().unwrap_or("?"),
+        call.result["status"].as_str().unwrap_or("?"))).collect::<Vec<_>>().join(",")
+}
+
 fn oracle_round(client: &mut Client) -> Vec<Call> {
     let mut calls = Vec::new();
     fn call(client: &mut Client, calls: &mut Vec<Call>, arguments: Value) {
@@ -100,24 +117,27 @@ fn oracle_round(client: &mut Client) -> Vec<Call> {
 
 fn assert_round(label: &str, calls: &[impl std::borrow::Borrow<Call>]) {
     let calls: Vec<_> = calls.iter().map(std::borrow::Borrow::borrow).collect();
+    let summary = calls.iter().map(|call| format!("{}:{}:{}", call.caller,
+        call.arguments["operation"].as_str().unwrap_or("?"),
+        call.result["status"].as_str().unwrap_or("?"))).collect::<Vec<_>>().join(",");
     let find = |operation: &str, pattern: Option<&str>| calls.iter().find(|call| {
         call.arguments["operation"] == operation
             && pattern.is_none_or(|wanted| call.arguments["pattern"] == wanted)
-    }).unwrap_or_else(|| panic!("{label} omitted {operation} {pattern:?}: {calls:#?}"));
+    }).unwrap_or_else(|| panic!("{label} omitted {operation} {pattern:?}: {summary}"));
     let search = find("search", Some("fn beta"));
-    assert_eq!(search.result["status"], "ok", "{label}: {search:#?}");
-    assert_eq!(search.result["hits"][0]["name"], "beta", "{label}: {search:#?}");
-    assert_eq!(search.result["hits"][0]["range"], json!([5, 7]), "{label}: {search:#?}");
+    assert_eq!(search.result["status"], "ok", "{label}: {summary}");
+    assert_eq!(search.result["hits"][0]["name"], "beta", "{label}: {summary}");
+    assert_eq!(search.result["hits"][0]["range"], json!([5, 7]), "{label}: {summary}");
     assert_eq!(search.result["hits"][0]["body"], "fn beta() {\n    let needle = 3;\n}\n");
     assert!(calls.iter().any(|call| call.arguments["operation"] == "read"
         && call.result["body"] == "fn beta() {\n    let needle = 3;\n}\n"), "{label} omitted the short slice");
     let outline = calls.iter().find(|call| call.arguments["operation"] == "read"
-        && call.result["kind"] == "outline").unwrap_or_else(|| panic!("{label} omitted outline: {calls:#?}"));
+        && call.result["kind"] == "outline").unwrap_or_else(|| panic!("{label} omitted outline: {summary}"));
     assert_eq!(outline.result["rows"][0]["name"], "first_unit");
     assert_eq!(outline.result["rows"][0]["range"], json!([1, 3]));
     assert_eq!(outline.result["rows"][1]["name"], "second_unit");
     let cut = calls.iter().find(|call| call.result["kind"] == "slice"
-        && call.result["truncated"] == true).unwrap_or_else(|| panic!("{label} omitted cut slice: {calls:#?}"));
+        && call.result["truncated"] == true).unwrap_or_else(|| panic!("{label} omitted cut slice: {summary}"));
     assert!(cut.result["body"].as_str().unwrap().starts_with("fn oversized() {\n    // first-marker"));
     assert!(cut.result["continuation"].as_str().is_some_and(|value| !value.is_empty()));
     assert!(calls.iter().any(|call| call.arguments["operation"] == "document"
@@ -173,7 +193,7 @@ fn run_codex(project: &Path) -> Evidence {
     let mut command = Command::new("codex");
     command.args(["exec","--json","--ephemeral","--ignore-user-config","--skip-git-repo-check",
         "--dangerously-bypass-approvals-and-sandbox","--config",&override_value,
-        main_prompt("spawn_agent", "cad-read-worker")])
+        main_prompt("spawn_agent", "cad_read_worker")])
         .current_dir(project).stdin(Stdio::null());
     run_and_capture(command, Host::Codex)
 }
