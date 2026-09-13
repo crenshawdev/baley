@@ -374,7 +374,10 @@ fn contract(project:&Path) -> Value {
     for publication in publications.values() {
         let number=publication["identity"]["plan"].clone();
         plans.push(json!({"plan":number,"publication_request":publication["publication_request"],
-            "content_revision":publication["revision"],"map_revision":publication.get("map_revision").cloned().unwrap_or(json!(""))}));
+            "content_revision":publication["revision"],
+            // Compact plan-read emits null for a provisional publication's map; the
+            // fixture binds it as the shape-valid empty string so validation is reached.
+            "map_revision":publication.get("map_revision").filter(|revision| !revision.is_null()).cloned().unwrap_or(json!(""))}));
         let item_ids=map["aliases"].as_array().unwrap().iter()
             .filter(|alias| alias["origin"]["plan"] == number)
             .map(|alias| alias["id"].clone()).collect::<Vec<_>>();
