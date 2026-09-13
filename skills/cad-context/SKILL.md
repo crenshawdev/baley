@@ -3,9 +3,6 @@ name: cad-context
 description: "Discuss a phase's scope, decisions and truths with its owner, then publish only the exact approved set through Cadence"
 argument-hint: "[phase number]"
 allowed-tools:
-  - Read
-  - Grep
-  - Glob
   - AskUserQuestion
   - mcp__cadence__cadence_query
   - mcp__cadence__cadence_apply
@@ -28,13 +25,16 @@ with the owner before authoring. Call `mcp__cadence__cadence_query` with:
 
 The operation is bound to the project's running `cadence serve` session. Do not
 send another root or filesystem destination. A successful intake has `status: ok`,
-`operation: context-intake`, `phase`, `context` (prior authored Markdown or null),
-`roadmap` (authored roadmap or null), `contract` (the submission schema), and
-`persisted: false`. Intake does not initialize storage or recover pending work.
+`operation: context-intake`, `phase`, bounded `context` and `roadmap` identity
+references (or null), `contract` (the submission schema), and `persisted: false`.
+Call `document` with each returned identity and no part to obtain its bounded part
+index, then call it again with the selected part. Intake does not return document
+bytes, initialize storage or recover pending work.
 
-Read the phase scope and priors from that intake, and inspect relevant existing
-project documentation or code through read-only tools when it helps clarify a
-decision. Resolve missing scope with the owner. Discuss unresolved choices in
+Read the phase scope and priors through `document`, and inspect relevant existing
+project documentation or code through `search`, `read`, and `document` on the
+same Cadence query surface when it helps clarify a decision. Never originate a
+path or open a project file directly. Resolve missing scope with the owner. Discuss unresolved choices in
 small, relevant questions. Distinguish decisions that should carry forward from
 phase-local decisions. Retain the owner's authored prose, Markdown, evidence
 citations, ordering and flagged assumptions. Do not replace them with a template.

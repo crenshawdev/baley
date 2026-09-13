@@ -4,9 +4,6 @@ name: cad-plan
 description: "Author a phase's plans and publish the exact owner-approved content through Cadence"
 argument-hint: "[phase number] [--gaps]"
 allowed-tools:
-  - Read
-  - Grep
-  - Glob
   - AskUserQuestion
   - mcp__cadence__cadence_query
   - mcp__cadence__cadence_apply
@@ -41,10 +38,13 @@ using the actual phase in place of 27:
 ```
 
 Both use `mcp__cadence__cadence_query` against the running project's bound session.
-Do not pass another root or destination. Context intake supplies the roadmap and
-context. Plan read returns prior `plans` with their `document` and classification,
-`inventory` with occupied identities and source documents, `native` publication
-records, `occurrence`, `native_truths_approved`, `readiness` and the apply `contract`.
+Do not pass another root or destination. Context intake supplies bounded roadmap
+and context identities. Plan read returns prior `plans` as bounded identities
+with classification and revisions, compact inventory and native publication
+metadata, `occurrence`, `native_truths_approved`, `readiness` and the apply
+`contract`. For each process identity, call `document` without a part for its
+index and then with the selected part. Search code through `search` and follow
+only its issued locations through `read`; never open a project file or originate a path.
 Read the authoritative phase truths and saved evidence through the same query tool:
 
 ```json
@@ -56,8 +56,9 @@ not introduced truth revision, so native current versions are presently 1. The
 record supplies the number: never derive it from text, a heading, O1 provenance,
 an item id or this instruction. A missing native truth set requires context
 authoring before publication.
-Read SUMMARY, UAT and reports as well as prior plans, and inspect the existing
-code and callers the tasks will change. Legacy files are inputs, never native
+Read SUMMARY, UAT and reports as well as prior plans through their returned
+process identities, and inspect the existing code and callers through `search`
+and `read`. Legacy files are inputs, never native
 approval. Decimal phase addresses are read-only and cannot alias native phases.
 
 Read-only intake and research may proceed without approved truths. If
@@ -229,8 +230,8 @@ save progress. Any content or allocation change requires fresh approval.
 Wait for `status: ok`, `operation: plan-submit`, `persisted: true` before reporting
 that the transaction was acknowledged. Its ordered `results` contain stable
 identity, original content revision, approval, `map_revision` for an attached map,
-and provisional readiness. Use `plan-read` for the published document and
-`evidence-read` for the authoritative phase map. Do not infer
+and provisional readiness. Use `plan-read` for the published identity,
+`document` for its selected parts and `evidence-read` for the authoritative phase map. Do not infer
 publication from a preview, draft response, storage error or uncertain transport.
 
 ## Replacement is a separate exact authorization

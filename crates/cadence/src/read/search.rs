@@ -1,4 +1,4 @@
-use super::{ReadDomain, model::{SearchRequest, Scope}, source};
+use super::{ReadDomain, document, model::{SearchRequest, Scope}, source};
 use globset::{GlobBuilder, GlobMatcher};
 use ignore::WalkBuilder;
 use serde_json::{Value, json};
@@ -25,6 +25,9 @@ fn selector(project: &Path, scope: &Scope) -> Result<(PathBuf, Option<GlobMatche
                 .map_err(|error| refusal("scope", "invalid-scope", error.to_string()))?.compile_matcher();
             Ok((project.to_path_buf(), Some(glob)))
         }
+        Scope::CurrentTaskLease { .. } | Scope::PhaseDocuments { .. } => {
+            unreachable!("named scopes are resolved from retained authority")
+        }
     }
 }
 
@@ -36,7 +39,7 @@ fn confined_selector(project: &Path, selector: &str) -> Option<PathBuf> {
     (!absolute_or_escape(selector)).then(|| project.join(selector)).and_then(|path| source::confined(project, &path))
 }
 
-fn files(root: &Path, project: &Path, glob: Option<&GlobMatcher>) -> Vec<PathBuf> {
+pub(super) fn files(root: &Path, project: &Path, glob: Option<&GlobMatcher>) -> Vec<PathBuf> {
     let mut paths: Vec<_> = WalkBuilder::new(root).hidden(false).require_git(false).follow_links(false)
         .filter_entry(|entry| entry.file_name() != ".git" && entry.file_name() != ".planning")
         .build().filter_map(Result::ok).filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
@@ -53,17 +56,62 @@ fn bounded_body(body: &str) -> (String, bool) {
 }
 
 impl ReadDomain {
+    fn search_documents(&self, matcher: &regex::Regex, phase: u32) -> Value {
+        let records = match document::catalog(&self.planning_root, phase) {
+            Ok(records) => records,
+            Err(answer) => return answer,
+        };
+        let mut hits = Vec::new();
+        for record in records {
+            for part in record.parts {
+                let starts = source::line_starts(&part.body);
+                let match_lines = matcher.find_iter(&part.body)
+                    .map(|found| source::line_for(&starts, found.start())).collect::<Vec<_>>();
+                if match_lines.is_empty() { continue; }
+                let (body, body_truncated) = bounded_body(&part.body);
+                hits.push(json!({"identity":record.identity,"part":part.selector,"name":part.title,
+                    "kind":"process-part","match_lines":match_lines,"body":body,
+                    "body_truncated":body_truncated,"classification":record.classification,
+                    "revision":record.revision}));
+            }
+        }
+        hits.sort_by(|left, right| left["identity"].to_string().cmp(&right["identity"].to_string())
+            .then(left["part"].as_str().cmp(&right["part"].as_str())));
+        bounded_answer(hits)
+    }
+
     pub(super) fn search(&mut self, request: SearchRequest) -> Value {
         if request.cursor.is_some() { return refusal("cursor", "location-not-issued", "search cursor was not issued for this resident"); }
         let matcher = match regex::RegexBuilder::new(&request.pattern).case_insensitive(request.case_insensitive.unwrap_or(false)).build() {
             Ok(matcher) => matcher,
             Err(error) => return refusal("pattern", "invalid-pattern", error.to_string()),
         };
-        let (root, glob) = match selector(&self.project, &request.scope) { Ok(scope) => scope, Err(answer) => return answer };
+        if let Scope::PhaseDocuments { phase } = &request.scope {
+            return self.search_documents(&matcher, phase.get());
+        }
+        let lease_scope = matches!(&request.scope, Scope::CurrentTaskLease { .. });
+        let candidates = match &request.scope {
+            Scope::CurrentTaskLease { phase, occurrence, plan, task } => {
+                match super::scope::task_lease_files(self, phase.get(), occurrence, plan.get(), task) {
+                    Ok(paths) => paths,
+                    Err(answer) => return answer,
+                }
+            }
+            _ => {
+                let (root, glob) = match selector(&self.project, &request.scope) {
+                    Ok(scope) => scope,
+                    Err(answer) => return answer,
+                };
+                files(&root, &self.project, glob.as_ref())
+            }
+        };
         let mut hits = Vec::new();
-        for candidate in files(&root, &self.project, glob.as_ref()) {
+        for candidate in candidates {
             let Ok((path, revision, content)) = source::content(&self.project, &candidate) else { continue };
-            let units = self.units(&path, &content);
+            let mut units = self.units(&path, &content);
+            if lease_scope && units.is_empty() {
+                units = source::fallback(&path, &content);
+            }
             let starts = source::line_starts(&content);
             let mut selected: Vec<(super::model::Unit, Vec<usize>)> = Vec::new();
             for found in matcher.find_iter(&content) {
@@ -82,12 +130,17 @@ impl ReadDomain {
             }
         }
         hits.sort_by(|left, right| left["file"].as_str().cmp(&right["file"].as_str()).then(left["range"].to_string().cmp(&right["range"].to_string())));
-        let mut answer = json!({"status":"ok","kind":"search","bound":ANSWER_BOUND,"incomplete":false,"cursor":Value::Null,"hits":hits,"notes":[]});
-        while serde_json::to_vec(&answer).is_ok_and(|bytes| bytes.len() > ANSWER_BOUND) {
-            answer["hits"].as_array_mut().unwrap().pop();
-            answer["incomplete"] = json!(true);
-            answer["notes"] = json!(["search answer was bounded; reacquire with a narrower scope"]);
-        }
-        answer
+        bounded_answer(hits)
     }
+}
+
+fn bounded_answer(hits: Vec<Value>) -> Value {
+    let mut answer = json!({"status":"ok","kind":"search","bound":ANSWER_BOUND,"incomplete":false,
+        "cursor":Value::Null,"hits":hits,"notes":[]});
+    while serde_json::to_vec(&answer).is_ok_and(|bytes| bytes.len() > ANSWER_BOUND) {
+        answer["hits"].as_array_mut().unwrap().pop();
+        answer["incomplete"] = json!(true);
+        answer["notes"] = json!(["search answer was bounded; reacquire with a narrower scope"]);
+    }
+    answer
 }

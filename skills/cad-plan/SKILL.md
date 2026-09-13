@@ -3,9 +3,6 @@ name: cad-plan
 description: "Author a phase's plans and publish the exact owner-approved content through Cadence"
 argument-hint: "[phase number] [--gaps]"
 allowed-tools:
-  - Read
-  - Grep
-  - Glob
   - AskUserQuestion
   - mcp__cadence__cadence_query
   - mcp__cadence__cadence_apply
@@ -40,10 +37,13 @@ using the actual phase in place of 27:
 ```
 
 Both use `mcp__cadence__cadence_query` against the running project's bound session.
-Do not pass another root or destination. Context intake supplies the roadmap and
-context. Plan read returns prior `plans` with their `document` and classification,
-`inventory` with occupied identities and source documents, `native` publication
-records, `occurrence`, `native_truths_approved`, `readiness` and the apply `contract`.
+Do not pass another root or destination. Context intake supplies bounded roadmap
+and context identities. Plan read returns prior `plans` as bounded identities
+with classification and revisions, compact inventory and native publication
+metadata, `occurrence`, `native_truths_approved`, `readiness` and the apply
+`contract`. For each process identity, call `document` without a part for its
+index and then with the selected part. Search code through `search` and follow
+only its issued locations through `read`; never open a project file or originate a path.
 Read the authoritative phase truths and saved evidence through the same query tool:
 
 ```json
@@ -55,8 +55,9 @@ not introduced truth revision, so native current versions are presently 1. The
 record supplies the number: never derive it from text, a heading, O1 provenance,
 an item id or this instruction. A missing native truth set requires context
 authoring before publication.
-Read SUMMARY, UAT and reports as well as prior plans, and inspect the existing
-code and callers the tasks will change. Legacy files are inputs, never native
+Read SUMMARY, UAT and reports as well as prior plans through their returned
+process identities, and inspect the existing code and callers through `search`
+and `read`. Legacy files are inputs, never native
 approval. Decimal phase addresses are read-only and cannot alias native phases.
 
 Read-only intake and research may proceed without approved truths. If
@@ -210,21 +211,26 @@ complete `submission` through `cadence_query`, without a `count`:
 Keep the returned final `submission` and `documents`, including each document's
 `revision`, `document`, `old_section` and `section`. This preview validates the
 whole candidate union without a writer, normalizes the map section and updates
-the matching replacement content. Approval must copy this final submission.
+the matching replacement content. The preview and every draft `plan-submit`
+answer also report `submission_digest`, the binary's fingerprint of that exact
+final submission; approval binds to it.
 
 Show the entire proposed submission, including every ordered target and the full
 content of every plan. Obtain the identified owner's explicit approval of that
 exact proposal and their reported approval time; do not invent either. Add
-`approval: {approved: true, owner: <identity>, at: <reported time>, submission:
-<exact copy of the entire submission>}`. Submit only that approved request.
+`approval: {approved: true, owner: <identity>, at: <reported time>,
+submission_digest: <the digest the preview reported>}` and send the submission
+once. Never compute the digest yourself and never send a second copy of the
+submission in the approval; a full `submission` copy inside `approval` is
+accepted but costs the whole plan set twice. Submit only that approved request.
 Keep a missing or declined approval as a conversation draft; never publish to
 save progress. Any content or allocation change requires fresh approval.
 
 Wait for `status: ok`, `operation: plan-submit`, `persisted: true` before reporting
 that the transaction was acknowledged. Its ordered `results` contain stable
 identity, original content revision, approval, `map_revision` for an attached map,
-and provisional readiness. Use `plan-read` for the published document and
-`evidence-read` for the authoritative phase map. Do not infer
+and provisional readiness. Use `plan-read` for the published identity,
+`document` for its selected parts and `evidence-read` for the authoritative phase map. Do not infer
 publication from a preview, draft response, storage error or uncertain transport.
 
 ## Replacement is a separate exact authorization
@@ -241,7 +247,8 @@ Add `replacement` to that entry with ALL of these fields:
 - `content`: an exact copy of the proposed new content in the entry.
 
 Show this complete replacement proposal and obtain its exact approval. The outer
-approval must also copy the entire submission, including `replacement`. Original
+approval binds the entire submission, including `replacement`, through the
+`submission_digest` the preview reported after the replacement was added. Original
 approval, general planning permission, gap labels and review prose are insufficient.
 Stale old bytes or revision lose; read the winner, prepare a new request and obtain
 fresh approval. The binary retains prior publications/approvals and does not
@@ -383,7 +390,9 @@ location slots (`slot`, `phase`, `entry`, `id`), plus optional structured
 - `number-exhaustion` or `active-cycle`: stop for explicit owner resolution;
   never wrap, reset or migrate a counter automatically.
 - `submission`, `publication`, `native-identity` or `exact-submission-approval`:
-  inspect the returned schema/reason and correct the complete proposal honestly.
+  inspect the returned schema/reason and correct the complete proposal honestly;
+  a digest that does not match means the submission changed after the preview,
+  so preview again and approve the new digest.
 
 Never fall back to direct PLAN, store or STATE writes, the frozen workflow,
 post-write gates, automatic retargeting, reviewer/checker dispatch, paid review,
@@ -1086,6 +1095,7 @@ The schema below is also returned as the `plan-read` contract.
           ]
         },
         "submission": {
+          "description": "The approved submission. On the wire the owner may bind by\n`submission_digest` instead; the binary fills this copy before it\nrecords the publication, so retained records always carry it.",
           "anyOf": [
             {
               "$ref": "#/$defs/Submission"
@@ -1093,6 +1103,13 @@ The schema below is also returned as the `plan-read` contract.
             {
               "type": "null"
             }
+          ]
+        },
+        "submission_digest": {
+          "description": "The digest of the exact submission, as `plan-submit` reports it on a\ndraft answer. Either binding proves the same thing; the digest spares\nthe caller a second copy of the whole plan set.",
+          "type": [
+            "string",
+            "null"
           ]
         }
       },

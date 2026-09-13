@@ -1,4 +1,4 @@
-use super::model::Unit;
+use super::model::{DocumentIdentity, Unit};
 use sha2::{Digest, Sha256};
 use std::{collections::{BTreeMap, VecDeque}, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
 
@@ -8,6 +8,7 @@ const MAX_CAPABILITIES: usize = 64;
 pub enum Capability {
     Unit { path: PathBuf, revision: String, unit: Unit, offset: usize },
     File { path: PathBuf, revision: String },
+    Document { identity: DocumentIdentity, part: String, revision: String, offset: usize },
 }
 
 pub struct Registry {
@@ -42,6 +43,9 @@ impl Registry {
     }
     pub fn file(&mut self, path: PathBuf, revision: String) -> String {
         self.issue("file", Capability::File { path, revision })
+    }
+    pub fn document(&mut self, identity: DocumentIdentity, part: String, revision: String, offset: usize) -> String {
+        self.issue("doc", Capability::Document { identity, part, revision, offset })
     }
     pub fn get(&self, token: &str) -> Option<Capability> { self.entries.get(token).cloned() }
 }

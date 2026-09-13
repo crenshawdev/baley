@@ -26,6 +26,7 @@ impl Client {
             .env("GIT_CONFIG_VALUE_1", "Cadence Phase31")
             .env("GIT_CONFIG_KEY_2", "user.email")
             .env("GIT_CONFIG_VALUE_2", "phase31@example.invalid")
+            .env("GNUPGHOME", project.join(".fixture-gnupg"))
             .current_dir(project)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

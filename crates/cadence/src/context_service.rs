@@ -9,30 +9,45 @@ pub enum Command {
     Apply(Value),
 }
 
-fn read_optional(path: &Path) -> Result<Option<String>> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
-    }
-}
-
 pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
     factory: &crate::import::SessionFactory<I>,
     root: &Path,
     command: Command,
 ) -> Result<Answer> {
     match command {
-        Command::Intake(phase) => Ok(model::ok(
-            "context-intake",
-            json!({
-                "phase":phase,
-                "context":read_optional(&root.join(format!("phases/{phase}/CONTEXT.md")))?,
-                "roadmap":read_optional(&root.join("ROADMAP.md"))?,
-                "contract":schemars::schema_for!(Apply),
-                "persisted":false
-            }),
-        )),
+        Command::Intake(phase) => {
+            let observed = cadence::context::persistence::read_snapshot(root)?;
+            let saved = observed.as_ref().map(|snapshot| {
+                cadence::context::persistence::saved(&snapshot.data, phase)
+            }).transpose()?.flatten();
+            let context = if let Some(saved) = saved {
+                let rendered = cadence::context::render::document(&saved);
+                json!({"identity":{"kind":"phase-context","phase":phase},
+                    "classification":"native-context","revision":cadence::store::model::digest(rendered.as_bytes())})
+            } else if root.join(format!("phases/{phase}/CONTEXT.md")).is_file() {
+                json!({"identity":{"kind":"phase-context","phase":phase},
+                    "classification":"legacy-input","availability":"historical-unsupported"})
+            } else {
+                Value::Null
+            };
+            let roadmap = if root.join("ROADMAP.md").is_file() {
+                let bytes = std::fs::read(root.join("ROADMAP.md"))?;
+                let available = std::str::from_utf8(&bytes).ok()
+                    .and_then(|text| cadence::derivation::parse_roadmap(text).ok())
+                    .is_some_and(|parsed| parsed.phases.iter()
+                        .filter(|entry| entry.id.address() == phase.to_string()).count() == 1);
+                json!({"identity":{"kind":"phase-roadmap-row","phase":phase},
+                    "classification":"canonical-roadmap-row","revision":cadence::store::model::digest(&bytes),
+                    "availability":if available {"available"} else {"unavailable"}})
+            } else {
+                Value::Null
+            };
+            Ok(model::ok(
+                "context-intake",
+                json!({"phase":phase,"context":context,"roadmap":roadmap,
+                    "contract":schemars::schema_for!(Apply),"persisted":false}),
+            ))
+        }
         Command::Apply(raw) => {
             if let Some(refusal) = cadence::context::validation::validate(&raw) {
                 return Ok(refusal);

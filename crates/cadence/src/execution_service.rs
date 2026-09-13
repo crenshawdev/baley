@@ -1104,7 +1104,9 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
     let mut executable = Vec::new();
     let mut unfinished = Vec::new();
     for task in views {
-        if let Some(done) = history::completed_view(&records, &task) {
+        if let Some(mut done) = history::completed_view(&records, &task) {
+            done["document_identity"] = json!({"kind":"task-summary","phase":task.task.phase,
+                "occurrence":task.task.occurrence,"plan":task.task.plan,"task":task.task.task});
             completed.push(done);
             continue;
         }
@@ -1115,7 +1117,9 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
                 task.task.task, uncertainty["commits"], uncertainty["dirty_source"] == true), Some(admitted.id.clone())).await;
         }
         tasks.push(json!({"id":task.task.task,"verify":task.verify,"checks":task.checks,"state":task.state,
-            "uncertainty":uncertainty,"checkpoints":history::task_checkpoints(&records, &task.task)}));
+            "uncertainty":uncertainty,"checkpoints":history::task_checkpoints(&records, &task.task),
+            "lease_scope":{"kind":"current-task-lease","phase":task.task.phase,
+                "occurrence":task.task.occurrence,"plan":task.task.plan,"task":task.task.task}}));
         executable.push(TaskSpec { id: task.task.task.clone(), verify: task.verify.clone() });
         unfinished.push(task);
     }

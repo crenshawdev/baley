@@ -104,6 +104,40 @@ fn valid_evidence(value: &EvidenceReference) -> bool {
     }
 }
 
+/// Render one row from the confirmed native close record, without consulting a
+/// mutable SUMMARY projection.
+pub fn render_native_task_row(
+    records: &[super::history::Record],
+    phase: u32,
+    occurrence: &str,
+    plan: u32,
+    task: &str,
+) -> crate::store::Result<Option<String>> {
+    let matches = records
+        .iter()
+        .filter_map(|record| {
+            let identity = &record.request.task;
+            if identity.phase != phase
+                || identity.occurrence != occurrence
+                || identity.plan != plan
+                || identity.task != task
+            {
+                return None;
+            }
+            match &record.request.event {
+                super::history::Event::Close(proof) => Some(&proof.submission.completion),
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    if matches.len() > 1 {
+        return Err(crate::store::Error::Invalid("completed task identity is ambiguous".into()));
+    }
+    Ok(matches.first().map(|commit| {
+        format!("| {plan} | {task} | completed | {commit} | passed |\n")
+    }))
+}
+
 fn judgment_ids(outcomes: &[&PlanOutcome], deviations: bool) -> String {
     let values = outcomes
         .iter()

@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroU32;
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
@@ -7,6 +8,13 @@ pub enum Scope {
     Project,
     Directory { selector: String },
     Glob { selector: String },
+    CurrentTaskLease {
+        phase: NonZeroU32,
+        occurrence: String,
+        plan: NonZeroU32,
+        task: String,
+    },
+    PhaseDocuments { phase: NonZeroU32 },
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -29,8 +37,22 @@ pub struct ReadRequest {
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DocumentRequest {
-    pub identity: String,
+    pub identity: DocumentIdentity,
     pub part: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum DocumentIdentity {
+    PhaseContext { phase: NonZeroU32 },
+    PhasePlan { phase: NonZeroU32, plan: NonZeroU32 },
+    PhaseRoadmapRow { phase: NonZeroU32 },
+    TaskSummary {
+        phase: NonZeroU32,
+        occurrence: String,
+        plan: NonZeroU32,
+        task: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]

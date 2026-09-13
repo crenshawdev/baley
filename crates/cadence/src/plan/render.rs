@@ -2,6 +2,13 @@
 use super::model::Content;
 use cadence::store::{Error, Result};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Part {
+    pub selector: String,
+    pub title: String,
+    pub body: String,
+}
+
 pub fn document(content: &Content) -> Result<Vec<u8>> {
     if normalize(content)? != content.body {
         return Err(Error::Invalid("evidence-map-section: approve the complete previewed document before publication".into()));
@@ -59,6 +66,69 @@ fn headings(body: &str) -> Vec<(usize, String)> {
         offset += line.len();
     }
     found
+}
+
+fn task_headings(body: &str) -> Vec<(usize, String)> {
+    let mut found = Vec::new();
+    let mut fence: Option<(u8, usize)> = None;
+    let mut offset = 0;
+    let mut in_tasks = false;
+    for line in body.split_inclusive('\n') {
+        let text = line.trim_end_matches(['\r', '\n']);
+        let indent = text.bytes().take_while(|byte| *byte == b' ').count();
+        if indent <= 3 {
+            let text = &text[indent..];
+            let bytes = text.as_bytes();
+            if let Some(&(marker, size)) = fence.as_ref() {
+                let count = bytes.iter().take_while(|byte| **byte == marker).count();
+                if count >= size && text[count..].trim().is_empty() {
+                    fence = None;
+                }
+            } else {
+                let marker = bytes.first().copied().unwrap_or(0);
+                let size = bytes.iter().take_while(|byte| **byte == marker).count();
+                if matches!(marker, b'`' | b'~') && size >= 3
+                    && (marker != b'`' || !text[size..].contains('`'))
+                {
+                    fence = Some((marker, size));
+                } else if let Some(rest) = text.strip_prefix("##")
+                    && !rest.starts_with('#')
+                    && (rest.is_empty() || rest.starts_with([' ', '\t']))
+                {
+                    in_tasks = rest.trim().trim_end_matches('#').trim_end() == "Tasks";
+                } else if in_tasks
+                    && let Some(rest) = text.strip_prefix("###")
+                    && !rest.starts_with('#')
+                    && (rest.is_empty() || rest.starts_with([' ', '\t']))
+                {
+                    found.push((offset, rest.trim().trim_end_matches('#').trim_end().to_owned()));
+                }
+            }
+        }
+        offset += line.len();
+    }
+    found
+}
+
+/// Fence-aware task spans aligned to the plan's retained execution task ids.
+pub fn task_parts(content: &Content) -> Result<Vec<Part>> {
+    let headings = task_headings(&content.body);
+    if headings.len() != content.execution.tasks.len() {
+        return Err(Error::Invalid(format!(
+            "plan task headings are ambiguous: {} headings for {} retained tasks",
+            headings.len(),
+            content.execution.tasks.len()
+        )));
+    }
+    Ok(headings
+        .iter()
+        .enumerate()
+        .map(|(index, (start, title))| Part {
+            selector: format!("task:{}", content.execution.tasks[index].id),
+            title: title.clone(),
+            body: content.body[*start..headings.get(index + 1).map_or(content.body.len(), |next| next.0)].to_owned(),
+        })
+        .collect())
 }
 
 fn map_span(body: &str) -> Result<Option<std::ops::Range<usize>>> {

@@ -573,7 +573,17 @@ where
         return structured_result(Ok(QueryOutput::Review(Box::new(review))));
     }
     let envelope = answer.map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-    structured_result(Ok(QueryOutput::Execution(envelope)))
+    let mut value = serde_json::to_value(QueryOutput::Execution(envelope))
+        .map_err(|_| ErrorData::internal_error("execution answer encoding is invalid", None))?;
+    if value["status"] == "ok" && value["outcome"] == "dispatch"
+        && let Some(prompt) = value["prompt"].as_str()
+        && let Some(start) = prompt.find("Operational input:\n").map(|at| at + "Operational input:\n".len())
+        && let Some(end) = prompt[start..].find("\n\nInstructions:").map(|at| start + at)
+        && let Ok(operational) = serde_json::from_str::<Value>(&prompt[start..end])
+    {
+        value["dispatch"]["operational"] = operational;
+    }
+    Ok(CallToolResult::structured(value).into())
 }
 
 impl ServerHandler for PublicServer {

@@ -70,10 +70,18 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                     if *number == 1 { inventory.documents.get(&bare) } else { None }
                 })?;
                 let publication = saved.as_ref().and_then(|o| o.publications.get(number));
-                Some(json!({"identity":{"phase":native.map(|p| p.get()),"plan":number},
-                    "phase_address":phase,"document":document,
+                let identity = native.map_or(Value::Null, |phase| {
+                    json!({"kind":"phase-plan","phase":phase,"plan":number})
+                });
+                Some(json!({"identity":identity,"phase_address":phase,
                     "classification":if publication.is_some() {"native-publication"} else {"legacy-input"},
-                    "publication":publication}))
+                    "revision":publication.map(|value| value.revision.clone())
+                        .unwrap_or_else(|| cadence::store::model::digest(document.as_bytes())),
+                    "map_revision":publication.and_then(|value| value.map_revision.clone()),
+                    "occurrence":publication.map(|value| value.occurrence.clone()),
+                    "publication_request":publication.and_then(|value| value.approval.submission.as_ref())
+                        .map(|submission| submission.request_id.clone()),
+                    "tasks":publication.map(|value| &value.content.execution.tasks)}))
             }).collect::<Vec<_>>();
             let mut targets = Vec::new();
             if let Some(count) = count {
@@ -99,12 +107,26 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                     targets.push(json!({"phase":native.unwrap(), "plan":plan}));
                 }
             }
+            let inventory = json!({"occupied":inventory.occupied,"high_water":inventory.high_water,
+                "basis":inventory.basis});
+            let native = saved.as_ref().map(|saved| {
+                let publications = saved.publications.iter().map(|(number, publication)| {
+                    (number.to_string(), json!({"identity":{"kind":"phase-plan","phase":publication.identity.phase,
+                        "plan":publication.identity.plan},"occurrence":publication.occurrence,
+                        "revision":publication.revision,"map_revision":publication.map_revision,
+                        "readiness":publication.readiness,
+                        "publication_request":publication.approval.submission.as_ref().map(|submission| &submission.request_id),
+                        "tasks":publication.content.execution.tasks}))
+                }).collect::<serde_json::Map<_, _>>();
+                json!({"id":saved.id,"phase":saved.phase,"cycle":saved.cycle,
+                    "high_water":saved.high_water,"consumed":saved.consumed,"publications":publications})
+            });
             Ok(model::ok(
                 "plan-read",
                 json!({"phase":phase,"persisted":false,"plans":plans,
                 "inventory":inventory,"targets":targets,"occurrence":occurrence,
                 "native_truths_approved":approved,"next":if approved {"plan-submit"} else {"context-intake"},
-                "native":saved,"map_history":map_history,"legacy_readiness":"legacy-input","readiness":"provisional-authoring",
+                "native":native,"map_history":map_history,"legacy_readiness":"legacy-input","readiness":"provisional-authoring",
                 "contract":model::contract()}),
             ))
         }
