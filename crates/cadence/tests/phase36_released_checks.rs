@@ -210,3 +210,49 @@ fn phase36_blocked_check_can_be_republished_with_changed_spec() {
     assert_eq!(preview["coverage"]["uncovered"], json!([]));
     assert_eq!(preview["coverage"]["without_check"], json!([]));
 }
+
+#[test]
+fn phase36_evidence_read_retains_released_check_as_superseded() {
+    let fixture = fixture();
+    let project = fixture.path();
+    let old_map_revision = publish_and_block(project);
+
+    let evidence = call(project, "cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
+
+    assert_eq!(evidence["status"], "ok", "{evidence}");
+    assert_eq!(evidence["schema"], "acceptance-map-view-1");
+    assert_eq!(evidence["coherence"], "consistent");
+    assert_eq!(evidence["contributions"].as_array().unwrap().len(), 1);
+    assert_eq!(evidence["items"].as_array().unwrap().len(), 1);
+    assert_eq!(evidence["items"][0]["kind"], "artifact");
+    assert_eq!(evidence["items"][0]["id"], "artifact/remains");
+    assert_eq!(evidence["items"][0]["reason"],
+        "The blocked plan's non-check work remains current.");
+    assert_eq!(evidence["items"][0]["spec"], artifact()["spec"]);
+
+    let history = &evidence["history"][0];
+    assert_eq!(evidence["history"].as_array().unwrap().len(), 1);
+    assert_eq!(history["status"], "superseded");
+    assert_eq!(history["superseded_by"], Value::Null);
+    assert_eq!(history["publication"]["revision"], old_map_revision);
+    assert_eq!(history["publication"]["items"], json!([old_check(), artifact()]));
+    let item_revisions = &history["publication"]["item_revisions"];
+    let artifact_revision = &item_revisions["artifact/remains"];
+
+    assert_eq!(evidence["items"][0]["item_revision"], *artifact_revision);
+    assert_eq!(evidence["aliases"], json!([{
+        "origin":{"plan":1,"map_revision":old_map_revision,
+            "item_id":"artifact/remains","item_revision":artifact_revision},
+        "id":"artifact/remains","item_revision":artifact_revision
+    }]));
+    assert_eq!(evidence["associations"], json!([{
+        "truth_id":"T1","truth_version":1,
+        "reason":"This proves the owner-visible release of blocked check ownership.",
+        "origin":{"plan":1,"map_revision":old_map_revision,
+            "item_id":"artifact/remains","item_revision":artifact_revision,"association_index":0}
+    }]));
+    assert_eq!(evidence["coverage"]["uncovered"], json!([]));
+    assert_eq!(evidence["coverage"]["without_check"], json!(["T1"]));
+    assert_eq!(evidence["coverage"]["checks"],
+        json!([{"truth_id":"T1","truth_version":1,"item_ids":[]}]))
+}
