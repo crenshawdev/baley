@@ -143,6 +143,13 @@ pub fn checked_map(data: &Value, phase: u32, publication: &model::Publication) -
     Ok(event.clone())
 }
 
+fn is_released_check(item: &super::evidence::Item, item_revision: &str,
+    admitted_at: Option<u64>, released: &BTreeMap<String, u64>) -> bool
+{
+    matches!(item, super::evidence::Item::Check { .. })
+        && admitted_at.is_some_and(|at| released.get(item_revision).is_some_and(|through| at <= *through))
+}
+
 fn assemble(data: &Value, phase: u32, inputs: &BTreeMap<String, Input>) -> Result<Value> {
     let context = cadence::context::persistence::saved(data, phase)?;
     let mut truths = context.as_ref().map(|c| c.truths.iter().collect::<Vec<_>>()).unwrap_or_default();
@@ -154,6 +161,9 @@ fn assemble(data: &Value, phase: u32, inputs: &BTreeMap<String, Input>) -> Resul
     let mut projections = Vec::new();
     let mut covered = BTreeSet::new();
     let mut checks: BTreeMap<(String, u32), BTreeSet<String>> = BTreeMap::new();
+    let released = super::associations::released_check_revisions(data, phase)?;
+    let admitted: BTreeMap<_, _> = crate::execution::history::admitted_plans(data, phase)?
+        .into_iter().map(|(identity, version)| (identity.plan, version)).collect();
     if let Some(saved) = persistence::saved(data, phase)? {
         for publication in saved.publications.values() {
             persistence::validate_retained(data, phase, publication)?;
@@ -175,6 +185,9 @@ fn assemble(data: &Value, phase: u32, inputs: &BTreeMap<String, Input>) -> Resul
             for item in ordered {
                 let item_revision = event.item_revisions.get(item.id())
                     .ok_or_else(|| cadence::store::Error::Invalid("item revision is absent".into()))?;
+                if is_released_check(item, item_revision, admitted.get(&publication.identity.plan).copied(), &released) {
+                    continue;
+                }
                 let mut definition = map_history::definition(item)?;
                 definition["item_revision"] = json!(item_revision);
                 if items.insert(item.id().to_owned(), definition.clone()).is_some_and(|prior| prior != definition) {
@@ -203,6 +216,20 @@ fn assemble(data: &Value, phase: u32, inputs: &BTreeMap<String, Input>) -> Resul
     let check_ids: Vec<_> = truths.iter().map(|t| json!({"truth_id":t.id,"truth_version":t.version,
         "item_ids":checks.get(&(t.id.clone(), t.version)).cloned().unwrap_or_default()})).collect();
     let mut history = map_history::view(data, phase)?;
+    let released_history: BTreeSet<_> = map_history::saved(data, phase)?.map(|saved| {
+        saved.revisions.into_iter().filter(|event| {
+            let admitted_at = admitted.get(&event.identity.plan).copied();
+            event.items.iter().any(|item| event.item_revisions.get(item.id())
+                .is_some_and(|revision| is_released_check(item, revision, admitted_at, &released)))
+        }).map(|event| event.revision).collect()
+    }).unwrap_or_default();
+    for entry in &mut history {
+        if entry["publication"]["revision"].as_str()
+            .is_some_and(|revision| released_history.contains(revision))
+        {
+            entry["status"] = json!("superseded");
+        }
+    }
     history.sort_by(|a, b| {
         (a["publication"]["identity"]["plan"].as_u64(), a["publication"]["revision"].as_str())
             .cmp(&(b["publication"]["identity"]["plan"].as_u64(), b["publication"]["revision"].as_str()))
