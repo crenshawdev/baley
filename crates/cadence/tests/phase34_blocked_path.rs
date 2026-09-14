@@ -72,6 +72,27 @@ fn association() -> Value {
         "reason":"This proves the visible blocked handoff."}])
 }
 
+fn repair_association() -> Value {
+    json!([{"truth_id":"T2","truth_version":1,
+        "reason":"This proves the owner-visible lifecycle after a blocked plan is repaired."}])
+}
+
+fn repair_check() -> Value {
+    json!({"kind":"check","id":"check/blocked-repair","reason":"Without the public flow the owner cannot observe executed after repair.",
+        "spec":{"command":COMMAND,"expected":{"kind":"literal","value":"phase status is executed"},
+            "test":{"file":"tests/control.py","function":"Check.test_answer"},
+            "setup":"Plan 1 is retired before the later plan repairs the subject.",
+            "call":"Read execution-history before and after completing the later plan.",
+            "boundary":"Real owner caller through MCP stdio, durable execution and lifecycle derivation.","fakes":[]},
+        "associations":repair_association()})
+}
+
+fn repair_artifact() -> Value {
+    json!({"kind":"artifact","id":"artifact/blocked-repair","reason":"The blocked outcome must remain while the later plan completes.",
+        "spec":{"locators":["src/control.py"],"substance":"The later admitted plan repairs the blocked work."},
+        "associations":repair_association()})
+}
+
 fn check() -> Value {
     json!({"kind":"check","id":"check/retirement","reason":"Without the public flow the owner cannot observe the handoff.",
         "spec":{"command":COMMAND,"expected":{"kind":"property","value":"answer is seven"},
@@ -127,6 +148,41 @@ fn publish(project: &Path) {
     client.finish();
 }
 
+fn publish_blocked_repair(project: &Path) {
+    let truth = json!({"id":"T2","trigger":"a blocked plan is followed by a later admitted plan that completed",
+        "observer":"the owner","verb":"sees","outcome":"the phase derived as executed",
+        "kind":"literal","observable":true,"fixed_oracle":true});
+    let context = call(project, "cadence_apply", support::approve(json!({
+        "operation":"context-submit","submission":{"phase":PHASE,"title":"The blocked path",
+        "scope":"A later completed plan repairs a blocked outcome.","durable_decisions":[],
+        "decisions":[],"assumptions":[],"truths":[truth]}
+    })));
+    assert_eq!(context["persisted"], true, "{context}");
+
+    let mut client = Client::open(project);
+    let allocation = client.read("34", Some(2));
+    assert_eq!(allocation["status"], "ok", "{allocation}");
+    let maps = [map(vec![repair_artifact()]), map(vec![repair_check()])];
+    let plans = maps.iter().enumerate().map(|(index, evidence_map)| {
+        let target = allocation["targets"][index].clone();
+        let task = if index == 0 { "retire" } else { "repair" };
+        json!({"target":target,"content":{"phase":PHASE,"plan":target["plan"],"requirements":["T2"],
+            "files":["src/control.py","tests/control.py"],"directories":[],
+            "execution":{"schema":1,"suite":COMMAND,"tasks":[{"id":task,"verify":[COMMAND]}]},
+            "body":body(evidence_map),"evidence_map":evidence_map}})
+    }).collect::<Vec<_>>();
+    let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],
+        "request_id":"publish-blocked-repair","inventory_basis":allocation["inventory"]["basis"],
+        "plans":plans});
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"34",
+        "submission":submission}));
+    assert_eq!(preview["status"], "ok", "{preview}");
+    let published = client.call("cadence_apply", support::approve(json!({
+        "operation":"plan-submit","submission":submission})));
+    assert_eq!(published["persisted"], true, "{published}");
+    client.finish();
+}
+
 fn contract(project: &Path) -> Value {
     let mut client = Client::open(project);
     let plans = client.read("34", None);
@@ -144,6 +200,30 @@ fn contract(project: &Path) -> Value {
                 let item = evidence["items"].as_array().unwrap().iter()
                     .find(|item| item["id"] == "check/retirement").unwrap();
                 json!([{"id":"check/retirement","item_revision":item["item_revision"]}])
+            } else { json!([]) };
+            allocation.push(json!({"plan":plan,"task":task["id"],"checks":checks}));
+        }
+    }
+    json!({"phase":PHASE,"occurrence":plans["occurrence"],"plans":bindings,"allocation":allocation})
+}
+
+fn blocked_repair_contract(project: &Path) -> Value {
+    let mut client = Client::open(project);
+    let plans = client.read("34", None);
+    let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
+    client.finish();
+    let check = evidence["items"].as_array().unwrap().iter()
+        .find(|item| item["id"] == "check/blocked-repair").unwrap();
+    let publications = plans["native"]["publications"].as_object().unwrap();
+    let mut bindings = Vec::new();
+    let mut allocation = Vec::new();
+    for publication in publications.values() {
+        let plan = publication["identity"]["plan"].clone();
+        bindings.push(json!({"plan":plan,"publication_request":publication["publication_request"],
+            "content_revision":publication["revision"],"map_revision":publication["map_revision"]}));
+        for task in publication["tasks"].as_array().unwrap() {
+            let checks = if plan == 2 && task["id"] == "repair" {
+                json!([{"id":"check/blocked-repair","item_revision":check["item_revision"]}])
             } else { json!([]) };
             allocation.push(json!({"plan":plan,"task":task["id"],"checks":checks}));
         }
@@ -170,10 +250,10 @@ fn start(project: &Path, plan: u32, name: &str, checks: Value) -> Value {
         "expected_version":current["state"]["version"],"predecessor":null,"checks":checks}}))
 }
 
-fn run(project: &Path, id: &str, check: Value, stage: &str) -> Value {
-    let current = task(project, 1, "control");
+fn run_task(project: &Path, plan: u32, name: &str, id: &str, check: Value, stage: &str) -> Value {
+    let current = task(project, plan, name);
     let request = json!({"operation":"execution-run","request":{"request_id":id,"task":current["task"],
-        "attempt":"attempt-control","expected_version":current["state"]["version"],"command":COMMAND,
+        "attempt":format!("attempt-{name}"),"expected_version":current["state"]["version"],"command":COMMAND,
         "check":check,"stage":stage}});
     let mut client = Client::open(project);
     let launched = client.call("cadence_apply", request);
@@ -199,7 +279,7 @@ fn close_control(project: &Path, allocated: Value) -> (String, String, Value) {
     git(project, &["add", "tests/control.py"]);
     git(project, &["commit", "-S", "-m", "test(34): control task red"]);
     let red = git(project, &["rev-parse", "HEAD"]);
-    let result = run(project, "control-red", allocated.clone(), "red");
+    let result = run_task(project, 1, "control", "control-red", allocated.clone(), "red");
     assert_eq!(result["disposition"], json!({"kind":"exited","code":1}));
     assert_eq!(result["observation"]["summary"]["failures"], 1);
 
@@ -207,7 +287,7 @@ fn close_control(project: &Path, allocated: Value) -> (String, String, Value) {
     git(project, &["add", "src/control.py"]);
     git(project, &["commit", "-S", "-m", "feat(34): control task green"]);
     let green = git(project, &["rev-parse", "HEAD"]);
-    let result = run(project, "control-green", allocated.clone(), "green");
+    let result = run_task(project, 1, "control", "control-green", allocated.clone(), "green");
     assert_eq!(result["disposition"], json!({"kind":"exited","code":0}));
 
     let events = history(project);
@@ -344,4 +424,131 @@ fn phase34_owner_retires_unfinished_task_and_next_plan_dispatches() {
     let final_history = history(project);
     assert_eq!(final_history["events"], after["events"]);
     assert_eq!(model::digest(&serde_json::to_vec(&retired["receipt"]).unwrap()).len(), 64);
+}
+
+#[test]
+fn phase34_blocked_then_completed_phase_is_derived_executed() {
+    let fixture = fixture();
+    let project = fixture.path();
+    publish_blocked_repair(project);
+    let contract = blocked_repair_contract(project);
+    let admitted = call(project, "cadence_apply", json!({"operation":"execution-admit","request":{
+        "request_id":"admit-blocked-repair","expected_set_version":0,"contract":contract}}));
+    assert_eq!(admitted["status"], "ok", "{admitted}");
+    let authorized = call(project, "cadence_apply", json!({"operation":"execution-authorize","phase":PHASE,
+        "request_id":"authorize-blocked-repair","owner":OWNER,"at":AT,
+        "response":"Run the blocked plan and its approved repair."}));
+    assert_eq!(authorized["status"], "ok", "{authorized}");
+
+    let first = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
+    assert_eq!(first["outcome"], "dispatch", "{first}");
+    assert_eq!(first["dispatch"]["plan"], 1);
+    assert_eq!(start(project, 1, "retire", json!([]))["status"], "ok");
+    let retired = call(project, "cadence_apply",
+        retire_request(project, 1, "retire", "retire-blocked-plan", OWNER, AT, REASON));
+    assert_eq!(retired["status"], "ok", "{retired}");
+    assert_eq!(retired["outcome"]["disposition"], "blocked");
+
+    let intermediate = history(project);
+    assert_eq!(intermediate["phase_status"], "planned", "{intermediate}");
+    assert!(!intermediate["plan_events"].as_array().unwrap().iter().any(|record|
+        record["request"]["plan"]["plan"] == 1
+            && record["request"]["event"]["kind"] == "completion"));
+    let retired_task = intermediate["tasks"].as_array().unwrap().iter()
+        .find(|entry| entry["task"]["plan"] == 1 && entry["task"]["task"] == "retire").unwrap();
+    assert_eq!(retired_task["state"]["completed"], false);
+
+    let second = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
+    assert_eq!(second["outcome"], "dispatch", "{second}");
+    assert_eq!(second["dispatch"]["plan"], 2);
+    let allocated = contract["allocation"].as_array().unwrap().iter()
+        .find(|entry| entry["plan"] == 2 && entry["task"] == "repair").unwrap()["checks"][0].clone();
+    assert_eq!(start(project, 2, "repair", json!([allocated.clone()]))["status"], "ok");
+
+    fs::write(project.join("tests/control.py"),
+        "import sys, unittest\nsys.path.insert(0, 'src')\nfrom control import answer\nunittest.runner.time.perf_counter = lambda: 0.0\nclass Check(unittest.TestCase):\n    def test_answer(self):\n        self.assertEqual(answer(), 7)\nif __name__ == '__main__':\n    unittest.main()\n").unwrap();
+    git(project, &["add", "tests/control.py"]);
+    git(project, &["commit", "-S", "-m", "test(34): blocked repair red"]);
+    let red = git(project, &["rev-parse", "HEAD"]);
+    let red_result = run_task(project, 2, "repair", "repair-red", allocated.clone(), "red");
+    assert_eq!(red_result["disposition"], json!({"kind":"exited","code":1}));
+    assert_eq!(red_result["observation"]["summary"]["failures"], 1);
+
+    fs::write(project.join("src/control.py"), "def answer():\n    return 7\n").unwrap();
+    git(project, &["add", "src/control.py"]);
+    git(project, &["commit", "-S", "-m", "feat(34): blocked repair green"]);
+    let green = git(project, &["rev-parse", "HEAD"]);
+    let green_result = run_task(project, 2, "repair", "repair-green", allocated.clone(), "green");
+    assert_eq!(green_result["disposition"], json!({"kind":"exited","code":0}));
+    let verify_result = run_task(project, 2, "repair", "repair-verify", Value::Null, "verify");
+    assert_eq!(verify_result["disposition"], json!({"kind":"exited","code":0}));
+
+    let events = history(project);
+    let launch = events["events"].as_array().unwrap().iter()
+        .find(|record| record["request"]["event"]["kind"] == "launch"
+            && record["request"]["event"]["run_id"] == "repair-red").unwrap();
+    let inspection = json!({"check":allocated,
+        "test_digest":launch["request"]["event"]["material"]["test_digest"],
+        "evidence":["repair-red","repair-green"],"no_subject_stub":true});
+    let current = task(project, 2, "repair");
+    let attested = call(project, "cadence_apply", json!({"operation":"execution-owner-attest","request":{
+        "request_id":"attest-repair","task":current["task"],"attempt":"attempt-repair",
+        "expected_version":current["state"]["version"],"statement":{"submission":inspection,
+        "supersedes":null,"approval":{"approved":true,"owner":OWNER,"at":AT,"submission":inspection}}}}));
+    assert_eq!(attested["status"], "ok", "{attested}");
+    let pair = json!({"check":allocated,"red_commit":red,"green_commit":green,
+        "red_run":"repair-red","green_run":"repair-green"});
+    let current = task(project, 2, "repair");
+    let closed = call(project, "cadence_apply", json!({"operation":"execution-task-close","request":{
+        "request_id":"close-repair","task":current["task"],"attempt":"attempt-repair",
+        "expected_version":current["state"]["version"],"completion":green,"checks":[pair],
+        "verification":["repair-verify"]}}));
+    assert_eq!(closed["status"], "ok", "{closed}");
+
+    let before_suite = history(project);
+    let plan = before_suite["plans"].as_array().unwrap().iter()
+        .find(|entry| entry["plan"]["plan"] == 2).unwrap();
+    let mut client = Client::open(project);
+    let suite = client.call("cadence_apply", json!({"operation":"execution-suite","request":{
+        "request_id":"suite-repair","plan":plan["plan"],"expected_version":plan["state"]["version"]}}));
+    assert_eq!(suite["status"], "ok", "{suite}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let current = client.call("cadence_query", json!({"operation":"execution-history","phase":PHASE}));
+        if let Some(result) = current["plan_events"].as_array().unwrap().iter()
+            .find(|record| record["request"]["event"]["kind"] == "suite-result"
+                && record["request"]["event"]["run_id"] == "suite-repair") {
+            assert_eq!(result["request"]["event"]["disposition"], json!({"kind":"exited","code":0}));
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "missing suite result: {current}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    client.finish();
+
+    let active = support::reopened(project).snapshot.data["execution"]["occurrences"]["34"]["active"]["id"].clone();
+    let risk = call(project, "cadence_apply", json!({"operation":"risk-check","request_id":"risk-repair",
+        "scope":{"phase":PHASE,"occurrence":"phase-34-execution","worker":"2"},
+        "source":{"kind":"execution","plan":2,"dispatch_id":active},"surfaces":null}));
+    assert_eq!(risk["status"], "ok", "{risk}");
+    assert_eq!(risk["observation"]["scan"]["matches"], json!([]));
+    let before_complete = history(project);
+    let plan = before_complete["plans"].as_array().unwrap().iter()
+        .find(|entry| entry["plan"]["plan"] == 2).unwrap();
+    let completed = call(project, "cadence_apply", json!({"operation":"execution-plan-complete","request":{
+        "request_id":"complete-repair","plan":plan["plan"],"expected_version":plan["state"]["version"]}}));
+    assert_eq!(completed["status"], "ok", "{completed}");
+
+    let final_history = history(project);
+    assert_eq!(final_history["phase_status"], "executed", "{final_history}");
+    assert_eq!(retired["outcome"]["disposition"], "blocked");
+    let repaired_plan = final_history["plans"].as_array().unwrap().iter()
+        .find(|entry| entry["plan"]["plan"] == 2).unwrap();
+    assert_eq!(repaired_plan["state"]["outcome"], "complete");
+    assert!(!final_history["plan_events"].as_array().unwrap().iter().any(|record|
+        record["request"]["plan"]["plan"] == 1
+            && record["request"]["event"]["kind"] == "completion"));
+    let retired_task = final_history["tasks"].as_array().unwrap().iter()
+        .find(|entry| entry["task"]["plan"] == 1 && entry["task"]["task"] == "retire").unwrap();
+    assert_eq!(retired_task["state"]["completed"], false);
 }
