@@ -110,9 +110,38 @@ fn history(project: &Path) -> Value {
 }
 
 fn task(project: &Path) -> Value {
+    task_for(project, 1, "blocked-owner")
+}
+
+fn task_for(project: &Path, plan: u32, name: &str) -> Value {
     history(project)["tasks"].as_array().unwrap().iter()
-        .find(|entry| entry["task"]["plan"] == 1 && entry["task"]["task"] == "blocked-owner")
+        .find(|entry| entry["task"]["plan"] == plan && entry["task"]["task"] == name)
         .unwrap().clone()
+}
+
+fn run_task(project: &Path, plan: u32, name: &str, id: &str, check: Value, stage: &str) -> Value {
+    let current = task_for(project, plan, name);
+    let request = json!({"operation":"execution-run","request":{"request_id":id,
+        "task":current["task"],"attempt":format!("attempt-{name}"),
+        "expected_version":current["state"]["version"],"command":OLD_COMMAND,
+        "check":check,"stage":stage}});
+    let mut client = Client::open(project);
+    let launched = client.call("cadence_apply", request);
+    assert_eq!(launched["status"], "ok", "{launched}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let result = loop {
+        let current = client.call("cadence_query",
+            json!({"operation":"execution-history","phase":PHASE}));
+        if let Some(record) = current["events"].as_array().unwrap().iter()
+            .find(|record| record["request"]["event"]["kind"] == "result"
+                && record["request"]["event"]["run_id"] == id) {
+            break record["request"]["event"].clone();
+        }
+        assert!(std::time::Instant::now() < deadline, "missing result {id}: {current}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    client.finish();
+    result
 }
 
 fn publish_and_block(project: &Path) -> (Value, Value) {
@@ -309,4 +338,173 @@ fn phase36_extension_reassigns_released_check() {
     assert_eq!(receipt["request"]["contract"], contract);
     assert_eq!(receipt["request"]["contract"]["allocation"][0], old_assignment);
     assert_eq!(receipt["request"]["contract"]["allocation"][1], later_assignment);
+}
+
+#[test]
+fn phase36_blocked_then_completed_phase_gets_verification_attempt() {
+    let fixture = fixture();
+    let project = fixture.path();
+    let (_, old_contract) = publish_and_block(project);
+    let old_assignment = old_contract["allocation"][0].clone();
+
+    let later_map = map(vec![old_check()]);
+    let mut client = Client::open(project);
+    let allocation = client.read("36", Some(1));
+    assert_eq!(allocation["status"], "ok", "{allocation}");
+    let target = allocation["targets"][0].clone();
+    let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],
+        "request_id":"publish-verification-repair","inventory_basis":allocation["inventory"]["basis"],
+        "plans":[{"target":target,"content":{"phase":PHASE,"plan":target["plan"],
+            "requirements":["T1"],"files":["src/control.py","tests/old_control.py"],"directories":[],
+            "execution":{"schema":1,"suite":OLD_COMMAND,
+                "tasks":[{"id":"later-owner","verify":[OLD_COMMAND]}]},
+            "body":body(&later_map),"evidence_map":later_map}}]});
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"36",
+        "submission":submission}));
+    assert_eq!(preview["status"], "ok", "{preview}");
+    let published = client.call("cadence_apply", support::approve(json!({
+        "operation":"plan-submit","submission":preview["submission"]
+    })));
+    assert_eq!(published["persisted"], true, "{published}");
+    client.finish();
+
+    let mut client = Client::open(project);
+    let plans = client.read("36", None);
+    let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
+    client.finish();
+    let check = evidence["items"].as_array().unwrap().iter()
+        .find(|item| item["id"] == "check/released").unwrap();
+    let bindings = plans["native"]["publications"].as_object().unwrap().values().map(|publication| {
+        json!({"plan":publication["identity"]["plan"],
+            "publication_request":publication["publication_request"],
+            "content_revision":publication["revision"],"map_revision":publication["map_revision"]})
+    }).collect::<Vec<_>>();
+    let allocated = json!({"id":"check/released","item_revision":check["item_revision"]});
+    let later_assignment = json!({"plan":2,"task":"later-owner","checks":[allocated.clone()]});
+    let contract = json!({"phase":PHASE,"occurrence":plans["occurrence"],"plans":bindings,
+        "allocation":[old_assignment,later_assignment]});
+    let extended = call(project, "cadence_apply", json!({"operation":"execution-extend","request":{
+        "request_id":"extend-verification-repair","expected_set_version":1,"contract":contract}}));
+    assert_eq!(extended["status"], "ok", "{extended}");
+
+    let authorized = call(project, "cadence_apply", json!({"operation":"execution-authorize",
+        "phase":PHASE,"request_id":"authorize-verification-repair","owner":OWNER,"at":AT,
+        "response":"Run the approved verification repair."}));
+    assert_eq!(authorized["status"], "ok", "{authorized}");
+    let dispatch = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
+    assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
+    assert_eq!(dispatch["dispatch"]["plan"], 2, "{dispatch}");
+    let current = task_for(project, 2, "later-owner");
+    let started = call(project, "cadence_apply", json!({"operation":"execution-task-start","request":{
+        "request_id":"start-verification-repair","task":current["task"],"attempt":"attempt-later-owner",
+        "expected_version":current["state"]["version"],"predecessor":null,"checks":[allocated.clone()]}}));
+    assert_eq!(started["status"], "ok", "{started}");
+
+    fs::create_dir(project.join("tests")).unwrap();
+    fs::write(project.join("tests/old_control.py"),
+        "import sys, unittest\nsys.path.insert(0, 'src')\nfrom control import answer\nunittest.runner.time.perf_counter = lambda: 0.0\nclass OldCheck(unittest.TestCase):\n    def test_answer(self):\n        self.assertEqual(answer(), 7)\nif __name__ == '__main__':\n    unittest.main()\n").unwrap();
+    git(project, &["add", "tests/old_control.py"]);
+    git(project, &["commit", "-S", "-m", "test(36): verification repair red"]);
+    let red = git(project, &["rev-parse", "HEAD"]);
+    let red_result = run_task(project, 2, "later-owner", "verification-repair-red",
+        allocated.clone(), "red");
+    assert_eq!(red_result["disposition"], json!({"kind":"exited","code":1}));
+    assert_eq!(red_result["observation"]["summary"]["failures"], 1);
+
+    fs::write(project.join("src/control.py"), "def answer():\n    return 7\n").unwrap();
+    git(project, &["add", "src/control.py"]);
+    git(project, &["commit", "-S", "-m", "feat(36): verification repair green"]);
+    let green = git(project, &["rev-parse", "HEAD"]);
+    let green_result = run_task(project, 2, "later-owner", "verification-repair-green",
+        allocated.clone(), "green");
+    assert_eq!(green_result["disposition"], json!({"kind":"exited","code":0}));
+    let verify_result = run_task(project, 2, "later-owner", "verification-repair-verify",
+        Value::Null, "verify");
+    assert_eq!(verify_result["disposition"], json!({"kind":"exited","code":0}));
+
+    let events = history(project);
+    let launch = events["events"].as_array().unwrap().iter()
+        .find(|record| record["request"]["event"]["kind"] == "launch"
+            && record["request"]["event"]["run_id"] == "verification-repair-red").unwrap();
+    let inspection = json!({"check":allocated,
+        "test_digest":launch["request"]["event"]["material"]["test_digest"],
+        "evidence":["verification-repair-red","verification-repair-green"],"no_subject_stub":true});
+    let current = task_for(project, 2, "later-owner");
+    let attested = call(project, "cadence_apply", json!({"operation":"execution-owner-attest","request":{
+        "request_id":"attest-verification-repair","task":current["task"],"attempt":"attempt-later-owner",
+        "expected_version":current["state"]["version"],"statement":{"submission":inspection,
+        "supersedes":null,"approval":{"approved":true,"owner":OWNER,"at":AT,"submission":inspection}}}}));
+    assert_eq!(attested["status"], "ok", "{attested}");
+    let pair = json!({"check":allocated,"red_commit":red,"green_commit":green,
+        "red_run":"verification-repair-red","green_run":"verification-repair-green"});
+    let current = task_for(project, 2, "later-owner");
+    let closed = call(project, "cadence_apply", json!({"operation":"execution-task-close","request":{
+        "request_id":"close-verification-repair","task":current["task"],"attempt":"attempt-later-owner",
+        "expected_version":current["state"]["version"],"completion":green,"checks":[pair],
+        "verification":["verification-repair-verify"]}}));
+    assert_eq!(closed["status"], "ok", "{closed}");
+
+    let before_suite = history(project);
+    let plan = before_suite["plans"].as_array().unwrap().iter()
+        .find(|entry| entry["plan"]["plan"] == 2).unwrap();
+    let mut client = Client::open(project);
+    let suite = client.call("cadence_apply", json!({"operation":"execution-suite","request":{
+        "request_id":"suite-verification-repair","plan":plan["plan"],
+        "expected_version":plan["state"]["version"]}}));
+    assert_eq!(suite["status"], "ok", "{suite}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let current = client.call("cadence_query",
+            json!({"operation":"execution-history","phase":PHASE}));
+        if let Some(result) = current["plan_events"].as_array().unwrap().iter()
+            .find(|record| record["request"]["event"]["kind"] == "suite-result"
+                && record["request"]["event"]["run_id"] == "suite-verification-repair") {
+            assert_eq!(result["request"]["event"]["disposition"],
+                json!({"kind":"exited","code":0}));
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "missing suite result: {current}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    client.finish();
+
+    let active = support::reopened(project).snapshot.data["execution"]["occurrences"]["36"]
+        ["active"]["id"].clone();
+    let risk = call(project, "cadence_apply", json!({"operation":"risk-check",
+        "request_id":"risk-verification-repair",
+        "scope":{"phase":PHASE,"occurrence":"phase-36-execution","worker":"2"},
+        "source":{"kind":"execution","plan":2,"dispatch_id":active},"surfaces":null}));
+    assert_eq!(risk["status"], "ok", "{risk}");
+    assert_eq!(risk["observation"]["scan"]["matches"], json!([]));
+    let before_complete = history(project);
+    let plan = before_complete["plans"].as_array().unwrap().iter()
+        .find(|entry| entry["plan"]["plan"] == 2).unwrap();
+    let completed = call(project, "cadence_apply", json!({"operation":"execution-plan-complete","request":{
+        "request_id":"complete-verification-repair","plan":plan["plan"],
+        "expected_version":plan["state"]["version"]}}));
+    assert_eq!(completed["status"], "ok", "{completed}");
+
+    let final_history = history(project);
+    let plan_one = final_history["plans"].as_array().unwrap().iter()
+        .find(|entry| entry["plan"]["plan"] == 1).unwrap();
+    let plan_two = final_history["plans"].as_array().unwrap().iter()
+        .find(|entry| entry["plan"]["plan"] == 2).unwrap();
+    assert_eq!(plan_one["state"]["completed"], false, "{final_history}");
+    assert_eq!(plan_two["state"]["outcome"], "complete", "{final_history}");
+    assert!(final_history["events"].as_array().unwrap().iter().any(|record|
+        record["request"]["task"]["plan"] == 1
+            && record["request"]["event"]["kind"] == "retirement"));
+    assert!(!final_history["events"].as_array().unwrap().iter().any(|record|
+        record["request"]["task"]["plan"] == 1
+            && record["request"]["event"]["kind"] == "close"));
+
+    let verification = call(project, "cadence_query", json!({"operation":"verify-next",
+        "phase":PHASE,"request_id":"verify-blocked-then-completed"}));
+    assert_eq!(verification["status"], "ok", "{verification}");
+    let inputs = &verification["attempt"]["inputs"];
+    assert_eq!(inputs["basis"]["phase"], PHASE);
+    assert_eq!(inputs["admissions"].as_array().unwrap().len(), 2);
+    assert_eq!(inputs["checks"].as_array().unwrap().len(), 1);
+    assert_eq!(inputs["execution"]["events"], final_history["events"]);
+    assert_eq!(inputs["execution"]["plan_events"], final_history["plan_events"]);
 }
