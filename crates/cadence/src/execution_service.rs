@@ -511,7 +511,18 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
             )
             .await;
         }
-        if let Some(terminal) = &occurrence.terminal {
+        // A stored Complete terminal is history once a later extension admits a
+        // plan without an outcome: phase_complete, not the stored field, decides
+        // whether the phase still answers complete (D-162).
+        let current_terminal = match &occurrence.terminal {
+            Some(TerminalOutcome::Complete { .. }) => {
+                cadence::execution::history::phase_complete(&view.snapshot.data, phase)
+                    .map_err(store_failure)?
+            }
+            Some(_) => true,
+            None => false,
+        };
+        if let Some(terminal) = occurrence.terminal.as_ref().filter(|_| current_terminal) {
             let response = terminal_response(phase, terminal);
             return record_observation(
                 &session,

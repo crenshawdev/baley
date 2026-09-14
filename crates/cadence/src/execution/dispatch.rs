@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use super::model::{
     ActiveDispatch, BranchPolicy, DispatchPolicy, EXECUTION_SCHEMA, ExecutionOccurrence,
-    ExecutionPlan, ExecutorRung, ReviewPolicy,
+    ExecutionPlan, ExecutorRung, ReviewPolicy, TerminalOutcome,
 };
 use super::plan::PlanError;
 use crate::store::model::digest;
@@ -206,7 +206,12 @@ pub fn admit_dispatch(
             "candidate dispatch does not match the execution occurrence",
         ));
     }
-    if occurrence.terminal.is_some() {
+    // A stored Complete terminal is history once a later extension admits a
+    // plan with no retained outcome; that plan reopens the occurrence (D-162).
+    // A judgment stop still ends it.
+    let reopened = matches!(occurrence.terminal, Some(TerminalOutcome::Complete { .. }))
+        && !occurrence.plans.iter().any(|outcome| outcome.plan == candidate.plan);
+    if occurrence.terminal.is_some() && !reopened {
         return Err(error(
             "dispatch-terminal",
             "execution occurrence already has a terminal outcome",
@@ -222,6 +227,9 @@ pub fn admit_dispatch(
         ));
     }
     let mut next = occurrence.clone();
+    if reopened {
+        next.terminal = None;
+    }
     next.active = Some(candidate.clone());
     next.version = next.version.checked_add(1).ok_or_else(|| {
         error(
