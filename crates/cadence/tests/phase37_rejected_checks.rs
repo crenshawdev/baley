@@ -165,6 +165,7 @@ fn run_suite(project: &Path, plan_number: u32, id: &str) {
     client.finish();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn complete_task(project: &Path, plan: u32, name: &str, command: &str, check: Value,
     test_file: &str, test_source: &str, green_source: &str, prefix: &str, dispatch_id: &Value)
 {
@@ -431,7 +432,15 @@ fn phase37_extension_reassigns_rejected_check() {
 #[test]
 fn phase37_evidence_read_retains_rejected_check_as_superseded() {
     let fixture = RejectedFixture::new();
-    let evidence = call(fixture.project(), "cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
+    let project = fixture.project();
+    let changed = changed_check();
+    let (preview, _) = later_submission(project, "publish-evidence-successor", changed.clone(),
+        NEW_COMMAND, "replacement-owner", "tests/new_control.py");
+    let published = publish_preview(project, &preview);
+    let later_map_revision = published["results"][0]["map_revision"].clone();
+    let evidence = call(project, "cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
+    let changed_check_revision = evidence["history"][1]["publication"]["item_revisions"]
+        ["check/rejected"].clone();
 
     assert_eq!(evidence["status"], "ok", "{evidence}");
     assert_eq!(evidence["schema"], "acceptance-map-view-1");
@@ -439,29 +448,47 @@ fn phase37_evidence_read_retains_rejected_check_as_superseded() {
     assert_eq!(evidence["items"], json!([{
         "kind":"artifact","id":"artifact/remains","reason":"The completed plan's non-check work remains current.",
         "spec":artifact()["spec"],"item_revision":fixture.artifact_revision
+    },{
+        "kind":"check","id":"check/rejected","reason":"The replacement check proves the changed definition.",
+        "spec":changed["spec"],"item_revision":changed_check_revision
     }]));
     assert_eq!(evidence["aliases"], json!([{
         "origin":{"plan":1,"map_revision":fixture.old_map_revision,
             "item_id":"artifact/remains","item_revision":fixture.artifact_revision},
         "id":"artifact/remains","item_revision":fixture.artifact_revision
+    },{
+        "origin":{"plan":2,"map_revision":later_map_revision,
+            "item_id":"check/rejected","item_revision":changed_check_revision},
+        "id":"check/rejected","item_revision":changed_check_revision
     }]));
     assert_eq!(evidence["associations"], json!([{
         "truth_id":"T1","truth_version":1,
         "reason":"This proves the owner-visible replacement of rejected evidence.",
         "origin":{"plan":1,"map_revision":fixture.old_map_revision,
             "item_id":"artifact/remains","item_revision":fixture.artifact_revision,"association_index":0}
+    },{
+        "truth_id":"T1","truth_version":1,
+        "reason":"This proves the owner-visible replacement of rejected evidence.",
+        "origin":{"plan":2,"map_revision":later_map_revision,
+            "item_id":"check/rejected","item_revision":changed_check_revision,"association_index":0}
     }]));
     assert_eq!(evidence["coverage"]["uncovered"], json!([]));
-    assert_eq!(evidence["coverage"]["without_check"], json!(["T1"]));
+    assert_eq!(evidence["coverage"]["without_check"], json!([]));
     assert_eq!(evidence["coverage"]["checks"],
-        json!([{"truth_id":"T1","truth_version":1,"item_ids":[]} ]));
-    assert_eq!(evidence["history"].as_array().unwrap().len(), 1);
+        json!([{"truth_id":"T1","truth_version":1,"item_ids":["check/rejected"]}]));
+    assert_eq!(evidence["history"].as_array().unwrap().len(), 2);
     let retained = &evidence["history"][0];
     assert_eq!(retained["status"], "superseded");
     assert_eq!(retained["superseded_by"], Value::Null);
     assert_eq!(retained["publication"]["revision"], fixture.old_map_revision);
     assert_eq!(retained["publication"]["items"], json!([old_check(), artifact()]));
     assert_eq!(retained["publication"]["item_revisions"]["check/rejected"], fixture.old_check_revision);
+    let current = &evidence["history"][1];
+    assert_eq!(current["status"], "current");
+    assert_eq!(current["superseded_by"], Value::Null);
+    assert_eq!(current["publication"]["revision"], later_map_revision);
+    assert_eq!(current["publication"]["items"], json!([changed]));
+    assert_eq!(current["publication"]["item_revisions"]["check/rejected"], changed_check_revision);
 }
 
 #[test]

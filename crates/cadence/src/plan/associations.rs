@@ -46,10 +46,16 @@ impl Contribution {
     }
 }
 
-/// Canonical check revisions released by blocked plans or rejected verification,
-/// paired with the admission version through which their saved definitions stop
-/// being current.
+/// Canonical check revisions released by blocked plans or replaced rejected
+/// verification, paired with the admission version through which their saved
+/// definitions stop being current.
 pub fn released_check_revisions(data: &Value, phase: u32) -> Result<BTreeMap<String, u64>> {
+    released_check_revisions_with_submission(data, phase, None)
+}
+
+fn released_check_revisions_with_submission(data: &Value, phase: u32,
+    submission: Option<&Submission>) -> Result<BTreeMap<String, u64>>
+{
     use crate::execution::{history, model::{PlanDisposition, PlanOutcome}};
 
     let records = history::records(data, phase)?;
@@ -73,6 +79,30 @@ pub fn released_check_revisions(data: &Value, phase: u32) -> Result<BTreeMap<Str
             }
         }
     }
+    let saved = persistence::saved(data, phase)?;
+    let map_history = map_history::saved(data, phase)?;
+    let mut current_events = Vec::new();
+    if let Some(saved) = &saved {
+        for publication in saved.publications.values() {
+            let Some(revision) = &publication.map_revision else { continue };
+            let (position, event) = map_history.as_ref()
+                .and_then(|history| history.revisions.iter().enumerate()
+                    .find(|(_, event)| &event.revision == revision))
+                .ok_or_else(|| Error::Invalid("current publication lacks its acceptance map".into()))?;
+            if event.identity != publication.identity || event.content_revision != publication.revision
+                || event.occurrence != publication.occurrence
+            {
+                return Err(Error::Invalid("current map publication binding is inconsistent".into()));
+            }
+            current_events.push((position, event));
+        }
+    }
+    let previewed_checks = submission.iter().flat_map(|submission| &submission.plans)
+        .flat_map(|entry| match &entry.content.evidence_map {
+            Some(Map::Attached { items }) => items.as_slice(),
+            _ => &[],
+        }).filter(|item| matches!(item, Item::Check { .. }))
+        .map(Item::id).collect::<std::collections::BTreeSet<_>>();
     let patches = crate::verification::verdicts::patches(data)?;
     for (identity, admitted_at) in admitted {
         for task in history::plan_task_views(data, &records, phase, identity.plan)? {
@@ -83,6 +113,16 @@ pub fn released_check_revisions(data: &Value, phase: u32) -> Result<BTreeMap<Str
                             && item.id == check.id && item.item_revision == check.item_revision
                     });
                 if !rejected { continue; }
+                let owner_position = current_events.iter()
+                    .find(|(_, event)| event.identity.plan.get() == identity.plan)
+                    .map(|(position, _)| *position);
+                let saved_replacement = owner_position.is_some_and(|owner_position| {
+                    current_events.iter().any(|(position, event)| *position > owner_position
+                        && event.items.iter().any(|item| {
+                            matches!(item, Item::Check { .. }) && item.id() == check.id
+                        }))
+                });
+                if !previewed_checks.contains(check.id.as_str()) && !saved_replacement { continue; }
                 released.entry(check.item_revision).and_modify(|through| {
                     *through = (*through).max(admitted_at);
                 }).or_insert(admitted_at);
@@ -96,7 +136,7 @@ pub fn candidate(data: &Value, submission: &Submission) -> Result<Vec<Contributi
     let phase = submission.phase.get();
     let mut contributions = Vec::new();
     let history = map_history::saved(data, phase)?;
-    let released = released_check_revisions(data, phase)?;
+    let released = released_check_revisions_with_submission(data, phase, Some(submission))?;
     let admitted: BTreeMap<_, _> = crate::execution::history::admitted_plans(data, phase)?
         .into_iter().map(|(identity, version)| (identity.plan, version)).collect();
     if let Some(saved) = persistence::saved(data, phase)? {
