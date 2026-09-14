@@ -109,13 +109,16 @@ pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
     if data["execution"]["occurrences"][phase.to_string()]["active"].is_object() {
         return Err(refuse(phase, "verification-execution", "execution.active", "execution dispatch remains active"));
     }
+    if !history::phase_complete(data, phase)? {
+        return Err(refuse(phase, "verification-execution", "execution.plans",
+            "admitted plans are not complete or repaired by a later completed plan"));
+    }
     for (identity, _) in history::admitted_plans(data, phase)? {
-        if !history::plan_project(&plan_events, &identity).completed {
-            return Err(refuse(phase, "verification-execution", "execution.plans", format!("plan {} has unfinished suite or risk settlement", identity.plan)));
-        }
         for task in history::plan_task_views(data, &events, phase, identity.plan)? {
-            if !task.state.completed || !task.state.unknown_runs.is_empty() {
-                return Err(refuse(phase, "verification-execution", "execution.tasks", format!("task {} is unfinished or has unanswered launches", task.task.task)));
+            if !task.state.completed { continue }
+            if !task.state.unknown_runs.is_empty() {
+                return Err(refuse(phase, "verification-execution", "execution.tasks",
+                    format!("task {} has unanswered launches", task.task.task)));
             }
             let proof = events.iter().find_map(|r| match &r.request.event {
                 history::Event::Close(proof) if r.request.task == task.task => Some(proof), _ => None,
