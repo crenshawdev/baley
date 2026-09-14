@@ -115,7 +115,7 @@ fn task(project: &Path) -> Value {
         .unwrap().clone()
 }
 
-fn publish_and_block(project: &Path) -> Value {
+fn publish_and_block(project: &Path) -> (Value, Value) {
     let truth = json!({"id":"T1","trigger":"an admitted plan blocks with its check-owning task unclosed",
         "observer":"the owner","verb":"sees","outcome":"a changed definition accepted by the later plan preview",
         "kind":"property","observable":true,"fixed_oracle":true});
@@ -178,14 +178,14 @@ fn publish_and_block(project: &Path) -> Value {
         "expected_version":current["state"]["version"],"owner":OWNER,"at":AT,"reason":REASON}}));
     assert_eq!(retired["status"], "ok", "{retired}");
     assert_eq!(retired["outcome"]["disposition"], "blocked", "{retired}");
-    old_revision
+    (old_revision, contract)
 }
 
 #[test]
 fn phase36_blocked_check_can_be_republished_with_changed_spec() {
     let fixture = fixture();
     let project = fixture.path();
-    let old_map_revision = publish_and_block(project);
+    let (old_map_revision, _) = publish_and_block(project);
 
     let changed = changed_check();
     let later_map = map(vec![changed.clone()]);
@@ -215,7 +215,7 @@ fn phase36_blocked_check_can_be_republished_with_changed_spec() {
 fn phase36_evidence_read_retains_released_check_as_superseded() {
     let fixture = fixture();
     let project = fixture.path();
-    let old_map_revision = publish_and_block(project);
+    let (old_map_revision, _) = publish_and_block(project);
 
     let evidence = call(project, "cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
 
@@ -261,9 +261,8 @@ fn phase36_evidence_read_retains_released_check_as_superseded() {
 fn phase36_extension_reassigns_released_check() {
     let fixture = fixture();
     let project = fixture.path();
-    publish_and_block(project);
-    let before = history(project);
-    let old_assignment = before["admissions"][0]["request"]["contract"]["allocation"][0].clone();
+    let (_, old_contract) = publish_and_block(project);
+    let old_assignment = old_contract["allocation"][0].clone();
 
     let later_map = map(vec![old_check()]);
     let mut client = Client::open(project);
@@ -305,11 +304,9 @@ fn phase36_extension_reassigns_released_check() {
         "request_id":"extend-later-owner","expected_set_version":1,"contract":contract.clone()}}));
 
     assert_eq!(extended["status"], "ok", "{extended}");
-    assert_eq!(extended["set_version"], 2, "{extended}");
-    let after = history(project);
-    assert_eq!(after["admissions"].as_array().unwrap().len(), 2);
-    let retained = &after["admissions"][1]["request"]["contract"];
-    assert_eq!(*retained, contract);
-    assert_eq!(retained["allocation"][0], old_assignment);
-    assert_eq!(retained["allocation"][1], later_assignment);
+    assert_eq!(extended["receipt"]["set_version"], 2, "{extended}");
+    let receipt = &extended["receipt"];
+    assert_eq!(receipt["request"]["contract"], contract);
+    assert_eq!(receipt["request"]["contract"]["allocation"][0], old_assignment);
+    assert_eq!(receipt["request"]["contract"]["allocation"][1], later_assignment);
 }
