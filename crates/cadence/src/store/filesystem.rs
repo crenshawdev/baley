@@ -285,6 +285,23 @@ pub(crate) fn phase_uat_target(target: &str) -> Result<Option<u32>> {
     phase_summary_target(&format!("phase-summary:{value}"))
 }
 
+/// Whether `name` is one `prepare` gives a staging file: the target's own
+/// name behind a dot, the writing process id, the writer's sequence and
+/// `.tmp`. A source observation that runs while a commit is between
+/// `prepare` and its rename sees this file; it is the binary's, never the
+/// user's (D-160).
+pub fn is_staging_name(name: &str) -> bool {
+    let Some(inner) = name.strip_prefix('.').and_then(|n| n.strip_suffix(".tmp")) else {
+        return false;
+    };
+    let mut parts = inner.rsplitn(3, '.');
+    let (Some(sequence), Some(pid), Some(target)) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    let number = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    !target.is_empty() && number(pid) && number(sequence)
+}
+
 pub(crate) fn phase_plan_target(target: &str) -> Result<Option<(u32, u32)>> {
     let Some(value) = target.strip_prefix("phase-plan:") else {
         return Ok(None);

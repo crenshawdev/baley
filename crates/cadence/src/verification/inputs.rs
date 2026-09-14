@@ -78,13 +78,8 @@ pub fn source_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>) 
 /// renamed, deleted and otherwise modified paths stay dirty.
 fn clean_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     if installed.is_empty() { return runner::clean(project); }
-    let status = runner::git(project, &["status", "--porcelain=v1", "-z", "--untracked-files=all"])?;
-    let mut entries = status.split(|b| *b == 0).filter(|e| !e.is_empty());
-    while let Some(entry) = entries.next() {
-        let entry = std::str::from_utf8(entry).map_err(|_| Error::Invalid("unrepresentable status entry".into()))?;
-        let (code, name) = entry.split_at_checked(3).ok_or_else(|| Error::Invalid("invalid status entry".into()))?;
-        if code.starts_with('R') || code.starts_with('C') { entries.next(); }
-        let accounted = code == " M " && installed.get(name).is_some_and(|expected| std::fs::read(project.join(name)).is_ok_and(|bytes| bytes == *expected));
+    for (code, name) in runner::status(project)? {
+        let accounted = code == " M " && installed.get(&name).is_some_and(|expected| std::fs::read(project.join(&name)).is_ok_and(|bytes| bytes == *expected));
         if !accounted {
             return Err(Error::Invalid("evidence-source-dirty: commit source before requesting an evidence run".into()));
         }
