@@ -413,7 +413,7 @@ fn phase36_blocked_then_completed_phase_gets_verification_attempt() {
 
     fs::write(project.join("src/control.py"), "def answer():\n    return 7\n").unwrap();
     git(project, &["add", "src/control.py"]);
-    git(project, &["commit", "-S", "-m", "feat(36): verification repair green"]);
+    git(project, &["commit", "-S", "-m", "feat(36): complete later-owner repair"]);
     let green = git(project, &["rev-parse", "HEAD"]);
     let green_result = run_task(project, 2, "later-owner", "verification-repair-green",
         allocated.clone(), "green");
