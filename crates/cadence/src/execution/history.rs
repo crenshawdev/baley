@@ -149,10 +149,10 @@ pub fn request_digest(request: &Request) -> Result<String> {
     Ok(digest(&super::boundary::canonical_bytes(request).map_err(|e| Error::Invalid(e.to_string()))?))
 }
 
-pub fn replay(data: &Value, root: &str, request: &Request) -> Result<Option<Record>> {
+pub fn replay(data: &Value, request: &Request) -> Result<Option<Record>> {
     if let Some(record) = records(data, request.task.phase)?.into_iter().find(|r| r.request.request_id == request.request_id) {
-        if record.root_binding != root || record.request != *request || record.request_digest != request_digest(request)? {
-            return Err(admission::refuse(request.task.phase, "task-request-reuse", "request_id", &request.request_id, "request already names another payload or root"));
+        if record.request != *request || record.request_digest != request_digest(request)? {
+            return Err(admission::refuse(request.task.phase, "task-request-reuse", "request_id", &request.request_id, "request already names another payload"));
         }
         return Ok(Some(record));
     }
@@ -160,16 +160,16 @@ pub fn replay(data: &Value, root: &str, request: &Request) -> Result<Option<Reco
 }
 
 pub fn contribute(data: &Value, root: &str, request: &Request) -> Result<(Value, Record)> {
-    if let Some(record) = replay(data, root, request)? { return Ok((data.clone(), record)) }
+    if let Some(record) = replay(data, request)? { return Ok((data.clone(), record)) }
     let task = &request.task;
     let refuse = |rule: &str, reason: &str| admission::refuse(task.phase, rule, "task", &task.task, reason);
     if request.request_id.trim().is_empty() || request.attempt.trim().is_empty() {
         return Err(refuse("task-identity", "request and attempt identities required"));
     }
     let admissions = admission::records(data, task.phase)?;
-    let basis = admissions.iter().find(|r| r.request_digest == task.admission_digest && r.root_binding == root
+    let basis = admissions.iter().find(|r| r.request_digest == task.admission_digest
         && r.request.contract.occurrence == task.occurrence)
-        .ok_or_else(|| refuse("task-admission", "task must name its immutable admission and bound root"))?;
+        .ok_or_else(|| refuse("task-admission", "task must name its immutable admission"))?;
     let assignment = basis.request.contract.allocation.iter().find(|a| a.plan == task.plan && a.task == task.task)
         .ok_or_else(|| refuse("task-allocation", "task is not in this admission"))?;
     // A gap extension never rekeys the original task's receipt identity.
@@ -508,10 +508,10 @@ pub fn plan_request_digest(request: &PlanRequest) -> Result<String> {
     Ok(digest(&super::boundary::canonical_bytes(request).map_err(|e| Error::Invalid(e.to_string()))?))
 }
 
-pub fn plan_replay(data: &Value, root: &str, request: &PlanRequest) -> Result<Option<PlanRecord>> {
+pub fn plan_replay(data: &Value, request: &PlanRequest) -> Result<Option<PlanRecord>> {
     if let Some(record) = plan_records(data, request.plan.phase)?.into_iter().find(|r| r.request.request_id == request.request_id) {
-        if record.root_binding != root || record.request != *request || record.request_digest != plan_request_digest(request)? {
-            return Err(admission::refuse(request.plan.phase, "plan-request-reuse", "request_id", &request.request_id, "request already names another payload or root"));
+        if record.request != *request || record.request_digest != plan_request_digest(request)? {
+            return Err(admission::refuse(request.plan.phase, "plan-request-reuse", "request_id", &request.request_id, "request already names another payload"));
         }
         return Ok(Some(record));
     }
@@ -600,14 +600,14 @@ fn end_dispatch(data: &Value, plan: &PlanIdentity, active: &super::model::Active
 }
 
 pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Result<(Value, PlanRecord)> {
-    if let Some(record) = plan_replay(data, root, request)? { return Ok((data.clone(), record)) }
+    if let Some(record) = plan_replay(data, request)? { return Ok((data.clone(), record)) }
     let plan = &request.plan;
     let refuse = |rule: &str, reason: &str| admission::refuse(plan.phase, rule, "plan", &plan.plan.to_string(), reason);
     if request.request_id.trim().is_empty() { return Err(refuse("plan-identity", "request identity required")); }
     let admissions = admission::records(data, plan.phase)?;
-    if !admissions.iter().any(|r| r.request_digest == plan.admission_digest && r.root_binding == root
+    if !admissions.iter().any(|r| r.request_digest == plan.admission_digest
         && r.request.contract.occurrence == plan.occurrence && r.request.contract.plans.iter().any(|b| b.plan == plan.plan)) {
-        return Err(refuse("plan-admission", "plan must name its immutable admission and bound root"));
+        return Err(refuse("plan-admission", "plan must name its immutable admission"));
     }
     if admissions.iter().take_while(|r| r.request_digest != plan.admission_digest)
         .any(|r| r.request.contract.plans.iter().any(|b| b.plan == plan.plan)) {

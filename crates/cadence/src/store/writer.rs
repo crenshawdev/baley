@@ -883,7 +883,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     fn verification(&mut self, generation: u64, integrity: &str, request: cadence::verification::persistence::Request) -> Result<View> {
         use cadence::verification::{inputs, persistence};
         let root_binding = self.observed[STATE].directory_identity.clone();
-        if let Some(prior) = persistence::replay(&self.view.snapshot.data, &root_binding,
+        if let Some(prior) = persistence::replay(&self.view.snapshot.data,
             request.attempt.inputs.basis.phase, &request.attempt.request_id)? {
             if prior != request.attempt || !self.view.decisions.contains(&persistence::decision(&prior)?) {
                 return Err(Error::Invalid("verification replay differs from retained attempt or journal".into()));
@@ -903,7 +903,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     fn native_task(&mut self, generation: u64, integrity: &str, request: cadence::execution::history::Request) -> Result<View> {
         use cadence::execution::history;
         let root_binding = self.observed[STATE].directory_identity.clone();
-        if let Some(record) = history::replay(&self.view.snapshot.data, &root_binding, &request)? {
+        if let Some(record) = history::replay(&self.view.snapshot.data, &request)? {
             if !history::decisions(&record)?.iter().all(|decision|self.view.decisions.contains(decision)) {
                 return Err(Error::Invalid("native task receipt lacks its immutable event".into()));
             }
@@ -921,7 +921,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     fn native_plan(&mut self, generation: u64, integrity: &str, request: cadence::execution::history::PlanRequest) -> Result<View> {
         use cadence::execution::history;
         let root_binding = self.observed[STATE].directory_identity.clone();
-        if let Some(record) = history::plan_replay(&self.view.snapshot.data, &root_binding, &request)? {
+        if let Some(record) = history::plan_replay(&self.view.snapshot.data, &request)? {
             if !self.view.decisions.contains(&history::plan_decision(&record)?) {
                 return Err(Error::Invalid("native plan receipt lacks its immutable event".into()));
             }
@@ -939,7 +939,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     fn native_admission(&mut self, generation:u64, integrity:&str, request:cadence::execution::admission::Request) -> Result<View> {
         use cadence::execution::admission;
         let root_binding=self.observed[STATE].directory_identity.clone();
-        if let Some(record)=admission::replay(&self.view.snapshot.data,&root_binding,&request)? {
+        if let Some(record)=admission::replay(&self.view.snapshot.data,&request)? {
             if !self.view.decisions.contains(&admission::decision(&record)?) {
                 return Err(Error::Invalid("native admission receipt lacks its immutable event".into()));
             }

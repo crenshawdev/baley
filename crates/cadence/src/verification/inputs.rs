@@ -101,8 +101,8 @@ pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
     let inventory = plan::inventory::read(root, &phase.to_string(), data)?;
     admission::validate(data, &inventory.documents, &latest.request.contract)?;
     let binding = root_binding(root)?;
-    if admissions.iter().any(|a| a.root_binding != binding || admission::request_digest(&a.request).ok().as_ref() != Some(&a.request_digest)) {
-        return Err(refuse(phase, "verification-admission", "admissions", "admission identity differs from this root"));
+    if admissions.iter().any(|a| admission::request_digest(&a.request).ok().as_ref() != Some(&a.request_digest)) {
+        return Err(refuse(phase, "verification-admission", "admissions", "admission identity differs from its request"));
     }
     let events = history::records(data, phase)?;
     let plan_events = history::plan_records(data, phase)?;
@@ -126,12 +126,12 @@ pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
         }
     }
     for record in &events {
-        if record.root_binding != binding || record.request_digest != history::request_digest(&record.request)? {
+        if record.request_digest != history::request_digest(&record.request)? {
             return Err(refuse(phase, "verification-execution", "execution.events", "task event identity mismatch"));
         }
     }
     for record in &plan_events {
-        if record.root_binding != binding || record.request_digest != history::plan_request_digest(&record.request)? {
+        if record.request_digest != history::plan_request_digest(&record.request)? {
             return Err(refuse(phase, "verification-execution", "execution.plan_events", "plan event identity mismatch"));
         }
     }
@@ -169,9 +169,8 @@ pub fn reobserve_external(root: &Path, inputs: &Inputs, documents: &BTreeMap<Str
 pub fn reobserve_external_accounting(root: &Path, inputs: &Inputs, documents: &BTreeMap<String, String>,
     installed: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     let phase = inputs.basis.phase;
-    if root_binding(root)? != inputs.basis.root_binding
-        || root.parent().map(|p| p.to_string_lossy().into_owned()).as_ref() != Some(&inputs.basis.project) {
-        return Err(refuse(phase, "verification-root", "basis", "bound project or root changed"));
+    if root.parent().map(|p| p.to_string_lossy().into_owned()).as_ref() != Some(&inputs.basis.project) {
+        return Err(refuse(phase, "verification-root", "basis", "bound project changed"));
     }
     if source_accounting(Path::new(&inputs.basis.project), installed).map_err(|e| refuse(phase, "verification-source", "source", e.to_string()))? != inputs.basis.source {
         return Err(refuse(phase, "verification-source", "source", "committed source, index or material changed"));

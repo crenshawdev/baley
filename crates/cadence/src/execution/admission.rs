@@ -63,11 +63,11 @@ pub fn request_digest(request: &Request) -> Result<String> {
     Ok(digest(&super::boundary::canonical_bytes(request).map_err(|e|Error::Invalid(e.to_string()))?))
 }
 
-pub fn replay(data: &Value, root_binding: &str, request: &Request) -> Result<Option<Record>> {
+pub fn replay(data: &Value, request: &Request) -> Result<Option<Record>> {
     let records=records(data,request.contract.phase)?;
     if let Some(record)=records.iter().find(|r|r.request.request_id==request.request_id) {
-        if record.root_binding!=root_binding || record.request_digest!=request_digest(request)? || record.request!=*request {
-            return Err(refuse(request.contract.phase,"admission-request-reuse","request_id",&request.request_id,"request identity already names another payload or root"));
+        if record.request_digest!=request_digest(request)? || record.request!=*request {
+            return Err(refuse(request.contract.phase,"admission-request-reuse","request_id",&request.request_id,"request identity already names another payload"));
         }
         return Ok(Some(record.clone()));
     }
@@ -75,7 +75,7 @@ pub fn replay(data: &Value, root_binding: &str, request: &Request) -> Result<Opt
 }
 
 pub fn contribute(data: &Value, documents: &BTreeMap<String,String>, root_binding: &str, request: &Request) -> Result<(Value,Record)> {
-    if let Some(record)=replay(data,root_binding,request)? {return Ok((data.clone(),record))}
+    if let Some(record)=replay(data,request)? {return Ok((data.clone(),record))}
     let phase=request.contract.phase;
     if request.request_id.trim().is_empty() || root_binding.is_empty() {
         return Err(refuse(phase,"admission-request","request_id",&request.request_id,"request and bound root required"));
@@ -87,8 +87,8 @@ pub fn contribute(data: &Value, documents: &BTreeMap<String,String>, root_bindin
     }
     validate(data,documents,&request.contract)?;
     if let Some(old)=prior.last() {
-        if old.root_binding!=root_binding || old.request.contract.occurrence!=request.contract.occurrence {
-            return Err(refuse(phase,"admission-occurrence","contract.occurrence","","extension must retain the same bound root and occurrence"));
+        if old.request.contract.occurrence!=request.contract.occurrence {
+            return Err(refuse(phase,"admission-occurrence","contract.occurrence","","extension must retain the same occurrence"));
         }
         for binding in &old.request.contract.plans {
             if !request.contract.plans.contains(binding) {

@@ -100,8 +100,8 @@ fn assess(data: &Value, claim: &Claim) -> Result<Value> {
             return Ok(denied("verification-basis", &format!("basis.{field}"), "", "patch differs from dispatched input", requested[field].clone(), retained[field].clone()));
         }
     }
-    if claim.root_binding != patch.basis.root_binding || claim.root.parent() != Some(Path::new(&patch.basis.project)) {
-        return Ok(denied("verification-basis", "basis.root_binding", "", "attempt belongs to another project root", json!(patch.basis.root_binding), json!(claim.root_binding)));
+    if claim.root.parent() != Some(Path::new(&patch.basis.project)) {
+        return Ok(denied("verification-basis", "basis.project", "", "attempt belongs to another project", json!(patch.basis.project), json!(claim.root.parent())));
     }
     if claim.map_digest.as_deref() != Some(&patch.basis.map_digest) {
         return Ok(denied("verification-basis", "basis.map_digest", "", "dispatched map is historical", json!(patch.basis.map_digest), json!(claim.map_digest)));

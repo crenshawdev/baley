@@ -249,6 +249,30 @@ fn native_admission_commits_versioned_extensions() {
 }
 
 #[test]
+fn native_records_outlive_the_directory_identity_they_were_stamped_with() {
+    // A reboot or restore gives .planning new device and inode numbers at the
+    // same path. The records a store retains were stamped under the old
+    // identity; the identity is provenance, never a key the next process must
+    // reproduce, so admissions, task events and plan events still bind.
+    use super::{admission, history::{self, Event, Request, Task}};
+    let (data, documents, contract) = native_unit_contract("custom-delivery-check");
+    let before_reboot = "46:302462;46:302461;46:1;36:256;";
+    let after_reboot = "46:302568;46:302566;46:1;36:256;";
+    let admit = admission::Request { request_id: "admit".into(), expected_set_version: 0, contract };
+    let (data, basis) = admission::contribute(&data, &documents, before_reboot, &admit).unwrap();
+    assert_eq!(basis.root_binding, before_reboot);
+    assert_eq!(admission::replay(&data, &admit).unwrap(), Some(basis.clone()));
+    let task = Task { phase: 12, occurrence: "active-cycle:phase:12".into(), admission_digest: basis.request_digest.clone(),
+        plan: 1, task: "deliver".into() };
+    let check = basis.request.contract.allocation[0].checks[0].clone();
+    let start = Request { request_id: "event-0".into(), task: task.clone(), attempt: "attempt-1".into(), expected_version: 0,
+        event: Event::Attempt { predecessor: None, checks: vec![check], base_commit: "unit-base".into() } };
+    let (data, event) = history::contribute(&data, after_reboot, &start).unwrap();
+    assert_eq!(event.root_binding, after_reboot);
+    assert_eq!(history::replay(&data, &start).unwrap(), Some(event));
+}
+
+#[test]
 fn native_task_records_replay_confirmed_events() {
     use super::{admission, history::{self, Event, Request, Task}, receipts::*};
     use crate::store::{filesystem::{Filesystem, Stage as FsStage}, writer::{Store, Operation, PlanningPolicy}, model::digest};
@@ -315,7 +339,7 @@ fn native_task_records_replay_confirmed_events() {
             let replay = store.request(Operation::NativeTaskV1 { expected_generation: 0, expected_integrity: "stale".into(),
                 request: Box::new(request.clone()) }).await.unwrap();
             assert_eq!(replay, view);
-            assert_eq!(history::replay(&replay.snapshot.data, &records[i].root_binding, request).unwrap(), Some(records[i].clone()));
+            assert_eq!(history::replay(&replay.snapshot.data, request).unwrap(), Some(records[i].clone()));
             let mut changed = request.clone();
             changed.event = Event::Progress { text: "changed payload".into(), evidence: vec![] };
             assert!(store.request(Operation::NativeTaskV1 { expected_generation: 0, expected_integrity: "stale".into(),

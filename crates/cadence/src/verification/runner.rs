@@ -69,7 +69,7 @@ pub fn contribute(data: &Value, binding: &str, record: &Record) -> Result<Value>
             Err(refuse(phase, "verification-run-reuse", "request_id", "run identity already names another payload"))
         };
     }
-    if record.schema != "verification-run-1" || record.root_binding != binding || binding != attempt.inputs.basis.root_binding {
+    if record.schema != "verification-run-1" || record.root_binding != binding {
         return Err(refuse(phase, "verification-run-binding", "basis", "verification run root or schema mismatch"));
     }
     match &record.event {

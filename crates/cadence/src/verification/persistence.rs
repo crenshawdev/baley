@@ -32,10 +32,10 @@ pub fn attempts(data: &Value) -> Result<Vec<Attempt>> {
     Ok(serde_json::from_value(namespace["attempts"].clone())?)
 }
 
-pub fn replay(data: &Value, root: &str, phase: u32, request_id: &str) -> Result<Option<Attempt>> {
+pub fn replay(data: &Value, phase: u32, request_id: &str) -> Result<Option<Attempt>> {
     let saved = attempts(data)?.into_iter().find(|a| a.request_id == request_id);
-    if saved.as_ref().is_some_and(|a| a.inputs.basis.phase != phase || a.inputs.basis.root_binding != root) {
-        return Err(refuse(phase, "verification-request-reuse", "request_id", "request already names another phase or root"));
+    if saved.as_ref().is_some_and(|a| a.inputs.basis.phase != phase) {
+        return Err(refuse(phase, "verification-request-reuse", "request_id", "request already names another phase"));
     }
     Ok(saved)
 }
@@ -55,7 +55,7 @@ pub fn prepare(root: PathBuf, data: &Value, phase: u32, request_id: String) -> R
 pub fn contribute(data: &Value, root_binding: &str, request: &Request) -> Result<Value> {
     let attempt = &request.attempt;
     let phase = attempt.inputs.basis.phase;
-    if let Some(prior) = replay(data, root_binding, phase, &attempt.request_id)? {
+    if let Some(prior) = replay(data, phase, &attempt.request_id)? {
         return if prior == *attempt { Ok(data.clone()) }
             else { Err(refuse(phase, "verification-request-reuse", "request_id", "attempt payload changed")) };
     }

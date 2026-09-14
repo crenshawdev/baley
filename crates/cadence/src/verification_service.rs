@@ -123,12 +123,11 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
             if phase == 0 { return Err(inputs::refuse(phase, "verification-phase", "phase", "positive integer phase required")); }
             if cadence::context::persistence::saved(&data, phase)?.is_none() {
                 // Request identity reuse is checked first whenever a store exists.
-                if let Some(id) = &request_id { persistence::replay(&data, &inputs::root_binding(root)?, phase, id)?; }
+                if let Some(id) = &request_id { persistence::replay(&data, phase, id)?; }
                 return Err(inputs::refuse(phase, "native-approved-truths", "context", "native approved truths required"));
             }
-            let binding = inputs::root_binding(root)?;
             if let Some(id) = &request_id
-                && let Some(saved) = persistence::replay(&data, &binding, phase, id)? {
+                && let Some(saved) = persistence::replay(&data, phase, id)? {
                 return Ok(json!({"status":"ok","attempt":saved}));
             }
             let request_id = match request_id {
@@ -138,7 +137,7 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
                     format!("verify-{}", cadence::store::model::digest(&serde_json::to_vec(&observed.basis)?))
                 }
             };
-            if let Some(saved) = persistence::replay(&data, &binding, phase, &request_id)? {
+            if let Some(saved) = persistence::replay(&data, phase, &request_id)? {
                 return Ok(json!({"status":"ok","attempt":saved}));
             }
             let request = persistence::prepare(root.into(), &data, phase, request_id)?;
@@ -149,7 +148,7 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 expected_generation: view.snapshot.generation, expected_integrity: view.snapshot.integrity,
                 request: Box::new(request.clone()),
             }).await?;
-            let saved = persistence::replay(&written.snapshot.data, &binding, phase, &request.attempt.request_id)?
+            let saved = persistence::replay(&written.snapshot.data, phase, &request.attempt.request_id)?
                 .ok_or_else(|| Error::Invalid("confirmed verification attempt absent".into()))?;
             inputs::reobserve_external(root, &saved.inputs, &request.documents)?;
             Ok(json!({"status":"ok","attempt":saved}))
