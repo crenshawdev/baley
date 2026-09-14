@@ -531,7 +531,7 @@ pub fn admitted_plans(data: &Value, phase: u32) -> Result<Vec<(PlanIdentity, u64
     Ok(plans)
 }
 
-fn plan_outcomes(data: &Value, phase: u32) -> Result<Vec<super::model::PlanOutcome>> {
+pub(crate) fn plan_outcomes(data: &Value, phase: u32) -> Result<Vec<super::model::PlanOutcome>> {
     Ok(data["execution"]["occurrences"].get(phase.to_string()).and_then(|o| o.get("plans")).cloned()
         .map(serde_json::from_value).transpose()?.unwrap_or_default())
 }

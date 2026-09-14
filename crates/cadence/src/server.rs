@@ -684,7 +684,26 @@ impl ServerHandler for PublicServer {
                 }
                 if raw.as_ref().is_some_and(|v| v["operation"] == "execution-history") {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::ExecutionHistory { phase }) => self.server.service.native_execution_history(&self.root, phase.get()).await,
+                        Ok(QueryArguments::ExecutionHistory { phase }) => {
+                            let phase = phase.get();
+                            let mut history = self.server.service
+                                .native_execution_history(&self.root, phase).await
+                                .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+                            let root = self.root.clone();
+                            let lifecycle = tokio::task::spawn_blocking(move || {
+                                let mut io = cadence::derivation::ArtifactFiles;
+                                cadence::derivation::query(&root, &mut io)
+                                    .map(|checked| checked.answer().clone())
+                            }).await.map_err(|error| ErrorData::internal_error(error.to_string(), None))?
+                                .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+                            let status = lifecycle.phases.iter()
+                                .find(|record| record.id.number() == f64::from(phase))
+                                .ok_or_else(|| ErrorData::internal_error(
+                                    "lifecycle does not contain requested phase", None))?.status;
+                            history["phase_status"] = serde_json::to_value(status)
+                                .expect("lifecycle status is serializable");
+                            Ok(history)
+                        }
                         _ => Ok(serde_json::json!({"status":"refused","rule":"task-history-shape","reason":"positive phase required"})),
                     };
                     return structured_result(answer.map(QueryOutput::NativeExecution));

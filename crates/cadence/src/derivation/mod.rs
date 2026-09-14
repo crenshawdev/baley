@@ -105,9 +105,14 @@ pub fn acceptance_overlay(data: &serde_json::Value) -> Result<AcceptanceOverlay,
                 let events = history::records(data, phase)?;
                 let plan_events = history::plan_records(data, phase)?;
                 let admitted = history::admitted_plans(data, phase)?;
+                let outcomes = history::plan_outcomes(data, phase)?;
                 executed = !admitted.is_empty() && history::phase_complete(data, phase)?;
                 for (identity, _) in &admitted {
                     if !executed { break }
+                    if !outcomes.iter().any(|outcome| outcome.plan == identity.plan
+                        && outcome.disposition == crate::execution::model::PlanDisposition::Complete) {
+                        continue;
+                    }
                     executed = history::plan_project(&plan_events, identity).completed
                         && history::plan_task_views(data, &events, phase, identity.plan)?.iter()
                             .all(|t| t.state.completed && t.state.unknown_runs.is_empty());
