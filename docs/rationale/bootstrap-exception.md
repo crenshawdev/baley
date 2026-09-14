@@ -169,8 +169,9 @@ was the suite at the end that caught it. The gate held because it was kept;
 a plan would have run it at close, and the plan is the thing that could not
 run.
 
-D-158 and D-159 went to phase 36's context on 2026-09-14. The orphan
-suite debt vehicle and the retirement material are still candidates.
+D-158 and D-159 went to phase 36's context on 2026-09-14, and D-161 to
+phase 37's the same day. The orphan suite debt vehicle and the retirement
+material are still candidates.
 
 ## D-160
 
@@ -226,3 +227,58 @@ The first `verify-next 34` on the rebuilt binary opened attempt `00cd1a1c`
 at head `8acb3948`, before this record was written. This commit moves HEAD,
 so that attempt's basis is stale and the next `verify-next` opens another;
 the store keeps the first as history. Nothing here writes a store record.
+
+## D-162
+
+A stored Complete terminal is history once a later extension admits a plan
+with no retained outcome. `execute-next` answers complete only while
+`phase_complete` still holds, and `admit_dispatch` clears the terminal as
+that later plan goes active. A judgment stop still ends the occurrence.
+
+On 2026-09-14 phase 37 (D-161, a rejected check is released like a retired
+one) ran its one task through Codex. Three of the four checks went red then
+green. The fourth, `P37-T4-C`, completes a plan for real, has a patch
+reject its check, publishes and extends a later plan carrying the corrected
+definition, authorizes, and asks `execute-next`. It got
+`{"status":"ok","outcome":"complete","phase":37}`. `execution-plan-complete`
+stores `occurrence.terminal = Complete` when `phase_complete` holds
+(`execution/history.rs:597`); `execution-extend` never clears it;
+`execution_service.rs` answers the stored terminal before native selection,
+and `dispatch::admit_dispatch` refuses `dispatch-terminal` after that. Phase
+34 never met this because its plans were blocked, not complete. Phase 36 is
+complete, so its own gap plan, the reason phase 37 exists, would have met
+it next.
+
+No plan can carry the fix. The lease is admitted and cannot widen; retiring
+the task releases all four checks, and the three that already pass at HEAD
+have no red left to give a new owner. This is D-156 by its first clause:
+the binary could not record its own repair.
+
+10. `2231fa71` test(execution): a plan admitted after the phase completed
+    must dispatch. `tests/execution_terminal_reopen.rs` drives the real
+    binary over stdio: plan 1 completes through red, green, attestation,
+    close, suite, risk and plan completion; the phase answers complete (the
+    control); an artifact-only plan 2 is published, extended at set version
+    2 and authorized; `execute-next` must dispatch plan 2 and plan 1 must
+    still read complete.
+11. `2bacd2a3` fix(execution): a later admission reopens a completed phase.
+    `execute-next` consults `history::phase_complete` before answering a
+    stored Complete terminal; `admit_dispatch` treats a Complete terminal as
+    history for a candidate plan with no retained outcome and clears it as
+    the dispatch goes active. Judgment stops are unchanged.
+
+The two commits sit between the executor's red and its completion by
+rebase: nothing was pushed. The executor's own check-shape correction
+(`698f3e06`) was rebased under them as well, so all four red runs bind to
+that commit and all four green runs to the rebased completion `8e8d5e82`.
+The close checks the lease only on the evidence commits and the completion,
+so the strike between them is what the ancestry rule allows and nothing
+more. The executor's earlier runs at commit ids the branch no longer
+carries stay in history as observed runs.
+
+Phase 37 then blocked twice on its own suite (plan 1: releasing on the
+rejection alone hid the rejection from phase 13; plan 2: eager saved-map
+resolution broke an admission unit fixture) and repaired each through a
+D-120 gap plan; plan 3 completed and the phase derives executed. The suite
+at `f2f9daae` (execution-suite `phase37-plan3-suite`): exit 0, observed by
+the binary at plan completion.
