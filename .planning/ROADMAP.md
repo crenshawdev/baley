@@ -393,7 +393,7 @@ Delivery order after phase 11 is 27, 28, 29, 12, 13, then 14 onward; see
 - [x] **Phase 13: Verification and audit** - `cad-verify`, the merged `cad-review` command surface, `cad-audit`
 - [x] **Phase 34: The blocked path** - an owner retires an unfinished task with a reason and the plan ends blocked the way a failed suite does; the next plan dispatches and a repaired phase derives as executed
 - [x] **Phase 37: What a rejected check leaves behind** - a check that verification rejected is released from the task that owned it, the way a retirement releases it, so a gap plan can republish and own the correction
-- [ ] **Phase 36: What a blocked plan leaves behind** - a blocked plan's unfinished tasks release their checks so the gap plan can carry and own the correction, and verification asks of a phase what phase_complete already asks
+- [x] **Phase 36: What a blocked plan leaves behind** - a blocked plan's unfinished tasks release their checks so the gap plan can carry and own the correction, and verification asks of a phase what phase_complete already asks
 - [ ] **Phase 35: The moved home** - the stored import manifest stays history and the session carries where the layers stand now beside it, so a store whose global config moved still records the owner's answers
 - [ ] **Phase 31: The read layer** - search and slice operations in the binary, ported from excerpt; the model and every worker read through them and never open a file
 - [ ] **Phase 32: Typed authoring and rendering** - context and plan submissions as typed pieces; the binary renders CONTEXT.md and PLAN.md, answers with a digest, and approval binds by digest; nothing echoed, no path on the wire
