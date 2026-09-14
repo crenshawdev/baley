@@ -169,4 +169,60 @@ was the suite at the end that caught it. The gate held because it was kept;
 a plan would have run it at close, and the plan is the thing that could not
 run.
 
-Candidates for D-158, D-159 and D-160 when a phase's context is ready to carry them.
+D-158 and D-159 went to phase 36's context on 2026-09-14. The orphan
+suite debt vehicle and the retirement material are still candidates.
+
+## D-160
+
+The store's own staging files are the binary's, never the user's. A source
+observation that runs while a commit is between `prepare` and its rename
+sees `.planning/.state.json.<pid>.<seq>.tmp` beside the target, and that
+file does not make the tree dirty. Every other untracked path, under any
+other name, anywhere, still does.
+
+On 2026-09-14, with 34 and 36 both derived executed and the resident
+restarted on the rebuilt binary, `verify-next 34` refused
+`evidence-source-dirty` on a tree where `git status --porcelain=v1 -z
+--untracked-files=all` printed nothing. A fresh stdio process said the same.
+strace showed the order: `commit` in `store/transaction.rs` runs
+`validate_all` three times, before `prepare`, after it, and again before
+each rename, and for a verification intent `validate_all` re-observes the
+source through `inputs::reobserve_external`. The second and third passes
+ran with the staging files on disk. `.gitignore` names the store's targets
+and not the names `prepare` gives them, so Git listed three untracked files
+and the binary refused its own write, then unlinked them. Every test fixture
+ignores `.planning/` whole, which is why fifty-two targets never saw it, and
+execution receipts do no clean check, which is why execution ran all day
+and verification failed on its first live call. A project that tracks its
+`.planning` documents, which is the shape the design asks for, could not
+verify at all.
+
+This is a D-156 case by its first clause: the binary could not record its
+own verification, and the plan that would carry the fix needs verification
+to run.
+
+8. `ac929d8b` test(store): a commit in flight must not dirty its own source.
+   `tests/store_staging_clean.rs` drives the real store with a probe at
+   `Stage::Prepared` on a fixture that tracks `.planning` and ignores only
+   the store files; `runner::clean` and `inputs::source` must both read the
+   tree as clean while the staging file exists. Two more tests: the exact
+   names `prepare` writes, by hand, at both places it writes them; and the
+   negative control, a user's untracked file under six names and places,
+   and a modified tracked file, every one still refused.
+9. `8acb3948` fix(store): the store's own staging files never dirty the
+   source. `runner::status` is now the one reader of `git status` for both
+   clean checks and drops an untracked entry under `.planning/` whose name
+   is one `prepare` writes; `filesystem::is_staging_name` owns that shape
+   beside the naming. The same reader serves the evidence run's before and
+   after observation in `verification/runner.rs`.
+
+Clippy is clean on the library and the new target. The four lints in
+`tests/support/phase31_hosts.rs` are commit 5's, still waiting for phase 32.
+
+`cargo test --workspace --no-fail-fast` at `8acb3948` on 2026-09-14:
+exit 0, 54 targets, 950 passed, 0 failed, 1 ignored (the T6 red).
+
+The first `verify-next 34` on the rebuilt binary opened attempt `00cd1a1c`
+at head `8acb3948`, before this record was written. This commit moves HEAD,
+so that attempt's basis is stale and the next `verify-next` opens another;
+the store keeps the first as history. Nothing here writes a store record.
