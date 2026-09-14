@@ -186,7 +186,7 @@ fn complete_task(project: &Path, plan: u32, name: &str, command: &str, check: Va
 
     fs::write(project.join("src/control.py"), green_source).unwrap();
     git(project, &["add", "src/control.py"]);
-    git(project, &["commit", "-S", "-m", &format!("feat(37): {prefix} green")]);
+    git(project, &["commit", "-S", "-m", &format!("feat(37): complete {name} ({prefix})")]);
     let green = git(project, &["rev-parse", "HEAD"]);
     let green_id = format!("{prefix}-green");
     let green_result = run_task(project, plan, name, &green_id, command, check.clone(), "green");
