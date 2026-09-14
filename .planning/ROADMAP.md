@@ -392,6 +392,7 @@ Delivery order after phase 11 is 27, 28, 29, 12, 13, then 14 onward; see
 - [x] **Phase 12: Execution and tasks** - `cad-execute` in full, and `cad-task`
 - [x] **Phase 13: Verification and audit** - `cad-verify`, the merged `cad-review` command surface, `cad-audit`
 - [ ] **Phase 34: The blocked path** - an owner retires an unfinished task with a reason and the plan ends blocked the way a failed suite does; the next plan dispatches and a repaired phase derives as executed
+- [ ] **Phase 36: What a blocked plan leaves behind** - a blocked plan's unfinished tasks release their checks so the gap plan can carry and own the correction, and verification asks of a phase what phase_complete already asks
 - [ ] **Phase 35: The moved home** - the stored import manifest stays history and the session carries where the layers stand now beside it, so a store whose global config moved still records the owner's answers
 - [ ] **Phase 31: The read layer** - search and slice operations in the binary, ported from excerpt; the model and every worker read through them and never open a file
 - [ ] **Phase 32: Typed authoring and rendering** - context and plan submissions as typed pieces; the binary renders CONTEXT.md and PLAN.md, answers with a digest, and approval binds by digest; nothing echoed, no path on the wire
@@ -1491,3 +1492,19 @@ and carries the current layer paths as a separate field; the guard compares
 against the manifest; writers read the current paths. No new records. Runs
 after 34 and before 31 resumes, so the temporary binary is retired the
 moment 31 plan 5 lands.
+
+### Phase 36: What a blocked plan leaves behind
+
+**Goal.** A plan blocked by retirement or a failed suite stays admitted and
+can never be replaced, yet every saved publication joins the current phase
+union whatever its outcome, an extension must keep every allocation entry
+with one owner per check, and verification demands every plan completed and
+every task closed. Only `phase_complete` accepts a blocked plan with a
+later-admitted completed plan. So the D-120 gap plan cannot carry a
+corrected check, cannot own it, and the phase cannot verify. D-158: a task
+that ended without a close releases its checks, the allocation entry stays
+as history but no longer owns, and the check definitions leave the current
+union as superseded; everything else the plan published stays current.
+D-159: verification asks exactly what `phase_complete` asks, and close proof
+is demanded only of closed tasks. No new records. Phase 34 plan 3 is the
+first consumer.
