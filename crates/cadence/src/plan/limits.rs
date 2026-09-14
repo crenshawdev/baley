@@ -109,7 +109,7 @@ pub fn base(contribution: &Contribution, index: usize) -> String {
 
 pub fn content(phase: u32, contributions: &[Contribution]) -> Result<()> {
     for contribution in contributions {
-        for (index, item) in contribution.items.iter().enumerate() {
+        for (index, item) in contribution.current_items() {
             if let Item::Check { spec, .. } = item {
                 let expected = match &spec.expected { Expected::Literal(value) | Expected::Property(value) => value };
                 for (value, rule, field) in [(&spec.command, "check-command", "command"),
@@ -158,7 +158,7 @@ pub fn checks(phase: u32, contributions: &[Contribution]) -> Result<()> {
     type Origins = Vec<(usize, CheckOrigin)>;
     let mut truths = BTreeMap::<(String, u32), BTreeMap<String, Origins>>::new();
     for contribution in contributions {
-        for (index, item) in contribution.items.iter().enumerate() {
+        for (index, item) in contribution.current_items() {
             if !matches!(item, Item::Check { .. }) { continue; }
             for association in item.associations() {
                 let origins = truths.entry((association.truth_id.clone(), association.truth_version))
@@ -194,7 +194,7 @@ pub fn checks(phase: u32, contributions: &[Contribution]) -> Result<()> {
 
 pub fn links(context: &cadence::context::model::ApprovedContext, phase: u32, contributions: &[Contribution]) -> Result<()> {
     for contribution in contributions {
-        for (index, item) in contribution.items.iter().enumerate() {
+        for (index, item) in contribution.current_items() {
             let Item::Link { spec, .. } = item else { continue };
             let value = spec.value.trim_matches(char::is_whitespace);
             for (edge, association) in item.associations().iter().enumerate() {

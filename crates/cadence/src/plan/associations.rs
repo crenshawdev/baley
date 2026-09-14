@@ -3,6 +3,7 @@ use super::{evidence::{Item, Map}, model::{Diagnostic, Submission}, persistence,
 use cadence::store::{Error, Result};
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// Locate a malformed numeric slot before typed decoding loses its JSON path.
 /// Valid numeric values, including zero, are compared to native authority later.
@@ -39,10 +40,48 @@ pub struct Contribution {
     pub items: Vec<Item>,
 }
 
+impl Contribution {
+    pub fn current_items(&self) -> impl Iterator<Item = (usize, &Item)> {
+        self.items.iter().enumerate()
+    }
+}
+
+/// Canonical check revisions released by blocked plans, paired with the
+/// admission version through which their saved definitions stop being current.
+pub fn released_check_revisions(data: &Value, phase: u32) -> Result<BTreeMap<String, u64>> {
+    use crate::execution::{history, model::{PlanDisposition, PlanOutcome}};
+
+    let records = history::records(data, phase)?;
+    let admitted = history::admitted_plans(data, phase)?;
+    let outcomes: Vec<PlanOutcome> = data["execution"]["occurrences"]
+        .get(phase.to_string()).and_then(|occurrence| occurrence.get("plans")).cloned()
+        .map(serde_json::from_value).transpose()?.unwrap_or_default();
+    let mut released = BTreeMap::<String, u64>::new();
+    for (identity, admitted_at) in admitted {
+        if !outcomes.iter().any(|outcome| outcome.plan == identity.plan
+            && outcome.disposition == PlanDisposition::Blocked)
+        {
+            continue;
+        }
+        for task in history::plan_task_views(data, &records, phase, identity.plan)? {
+            if task.state.completed { continue; }
+            for check in task.checks {
+                released.entry(check.item_revision).and_modify(|through| {
+                    *through = (*through).max(admitted_at);
+                }).or_insert(admitted_at);
+            }
+        }
+    }
+    Ok(released)
+}
+
 pub fn candidate(data: &Value, submission: &Submission) -> Result<Vec<Contribution>> {
     let phase = submission.phase.get();
     let mut contributions = Vec::new();
     let history = map_history::saved(data, phase)?;
+    let released = released_check_revisions(data, phase)?;
+    let admitted: BTreeMap<_, _> = crate::execution::history::admitted_plans(data, phase)?
+        .into_iter().map(|(identity, version)| (identity.plan, version)).collect();
     if let Some(saved) = persistence::saved(data, phase)? {
         for publication in saved.publications.values() {
             if submission.plans.iter().any(|entry| entry.target == publication.identity) { continue; }
@@ -54,7 +93,14 @@ pub fn candidate(data: &Value, submission: &Submission) -> Result<Vec<Contributi
             {
                 return Err(Error::Invalid("current map publication binding is inconsistent".into()));
             }
-            contributions.push(Contribution { plan: publication.identity.plan.get(), entry: None, items: event.items.clone() });
+            let plan = publication.identity.plan.get();
+            let items = event.items.iter().filter(|item| {
+                if !matches!(item, Item::Check { .. }) { return true; }
+                let Some(admitted_at) = admitted.get(&plan) else { return true };
+                let Some(revision) = event.item_revisions.get(item.id()) else { return true };
+                !released.get(revision).is_some_and(|through| admitted_at <= through)
+            }).cloned().collect();
+            contributions.push(Contribution { plan, entry: None, items });
         }
     }
     for (index, entry) in submission.plans.iter().enumerate() {
@@ -73,7 +119,7 @@ fn validate_items(truths: &[cadence::context::model::Truth], phase: u32, contrib
     let mut definitions = std::collections::BTreeMap::<String, (Value, u32)>::new();
     for contribution in contributions {
         let mut ids = std::collections::BTreeSet::new();
-        for (index, item) in contribution.items.iter().enumerate() {
+        for (index, item) in contribution.current_items() {
             let base = match contribution.entry {
                 Some(entry) => format!("submission.plans[{entry}].content.evidence_map.items[{index}]"),
                 None => format!("current.plans[{}].evidence_map.items[{index}]", contribution.plan),
@@ -150,7 +196,7 @@ pub fn validate_union(context: &cadence::context::model::ApprovedContext, phase:
 {
     validate_items(&context.truths, phase, contributions)?;
     let uncovered = context.truths.iter().filter(|truth| {
-        !contributions.iter().flat_map(|c| &c.items).flat_map(associations)
+        !contributions.iter().flat_map(|c| c.current_items().map(|(_, item)| item)).flat_map(associations)
             .any(|a| a.truth_id == truth.id && a.truth_version == truth.version)
     }).map(|truth| truth.id.clone()).collect::<Vec<_>>();
     if attached
@@ -164,7 +210,7 @@ pub fn validate_union(context: &cadence::context::model::ApprovedContext, phase:
     // Presence is the lower bound: repeated aliases of a shared check cannot
     // count as extra checks. Phase 29 owns the distinct-check upper bound.
     let without_check = context.truths.iter().filter(|truth| {
-        !contributions.iter().flat_map(|c| &c.items)
+        !contributions.iter().flat_map(|c| c.current_items().map(|(_, item)| item))
             .filter(|item| matches!(item, Item::Check { .. })).flat_map(associations)
             .any(|a| a.truth_id == truth.id && a.truth_version == truth.version)
     }).map(|truth| truth.id.clone()).collect::<Vec<_>>();
