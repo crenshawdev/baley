@@ -46,8 +46,9 @@ impl Contribution {
     }
 }
 
-/// Canonical check revisions released by blocked plans, paired with the
-/// admission version through which their saved definitions stop being current.
+/// Canonical check revisions released by blocked plans or rejected verification,
+/// paired with the admission version through which their saved definitions stop
+/// being current.
 pub fn released_check_revisions(data: &Value, phase: u32) -> Result<BTreeMap<String, u64>> {
     use crate::execution::{history, model::{PlanDisposition, PlanOutcome}};
 
@@ -57,7 +58,7 @@ pub fn released_check_revisions(data: &Value, phase: u32) -> Result<BTreeMap<Str
         .get(phase.to_string()).and_then(|occurrence| occurrence.get("plans")).cloned()
         .map(serde_json::from_value).transpose()?.unwrap_or_default();
     let mut released = BTreeMap::<String, u64>::new();
-    for (identity, admitted_at) in admitted {
+    for (identity, admitted_at) in &admitted {
         if !outcomes.iter().any(|outcome| outcome.plan == identity.plan
             && outcome.disposition == PlanDisposition::Blocked)
         {
@@ -66,6 +67,22 @@ pub fn released_check_revisions(data: &Value, phase: u32) -> Result<BTreeMap<Str
         for task in history::plan_task_views(data, &records, phase, identity.plan)? {
             if task.state.completed { continue; }
             for check in task.checks {
+                released.entry(check.item_revision).and_modify(|through| {
+                    *through = (*through).max(*admitted_at);
+                }).or_insert(*admitted_at);
+            }
+        }
+    }
+    let patches = crate::verification::verdicts::patches(data)?;
+    for (identity, admitted_at) in admitted {
+        for task in history::plan_task_views(data, &records, phase, identity.plan)? {
+            for check in task.checks {
+                let rejected = patches.iter().filter(|patch| patch.basis.phase == phase)
+                    .flat_map(|patch| &patch.items).any(|item| {
+                        item.verdict == crate::verification::model::Verdict::Rejected
+                            && item.id == check.id && item.item_revision == check.item_revision
+                    });
+                if !rejected { continue; }
                 released.entry(check.item_revision).and_modify(|through| {
                     *through = (*through).max(admitted_at);
                 }).or_insert(admitted_at);
