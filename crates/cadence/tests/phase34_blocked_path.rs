@@ -429,7 +429,6 @@ fn phase34_owner_retires_unfinished_task_and_next_plan_dispatches() {
 }
 
 #[test]
-#[ignore = "P34-2-T1 retired; plan 3 corrects the fixture after phase 36"]
 fn phase34_blocked_then_completed_phase_is_derived_executed() {
     let fixture = fixture();
     let project = fixture.path();
