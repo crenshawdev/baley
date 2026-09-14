@@ -100,6 +100,16 @@ and no plan; commit 2 is its scope, and its roadmap row stays unchecked.
 How the store closes these three is a front-door question. Nothing here
 writes a store record for them.
 
+Phase 35's row and section left ROADMAP.md by hand on 2026-09-14. Its
+whole scope had shipped as commit 2 the day before, and the binary has no
+way to close a phase whose scope shipped outside it: a plan for it would
+own a check with no red left, verification refuses a phase with no
+admitted plan, and derivation reads the store, never the box, so a checked
+row would have kept it the current phase forever
+(`crates/cadence/src/derivation/mod.rs:184-190`). Its approved context
+(D-155, T1) stays in the store as history. That missing operation is a
+candidate beside the others.
+
 Phase 34 plan 1 is recorded failed on suite `p34-1-suite-20260913`, exit
 101, on the four targets commits 3 through 6 fix. Commit 3 is plan 1's own
 miss. Phase 34 plan 2 goes through the front door on a green suite.
