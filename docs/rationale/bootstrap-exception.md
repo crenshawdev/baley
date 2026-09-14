@@ -104,6 +104,28 @@ Phase 34 plan 1 is recorded failed on suite `p34-1-suite-20260913`, exit
 101, on the four targets commits 3 through 6 fix. Commit 3 is plan 1's own
 miss. Phase 34 plan 2 goes through the front door on a green suite.
 
+## The seventh
+
+Later the same evening, with phase 34 plan 2 parked on a checkpoint, a new
+Claude Code session died on its first message: "tools.15.custom.input_schema:
+JSON schema is nested too deeply. Tool schemas may nest at most 64 levels".
+Tool 15 was `cadence_apply`. `host_schema` in `server.rs` merged each
+variant's shape of a shared field by wrapping the previous union in a fresh
+`anyOf`, one level per variant, and the `operation` field had reached 65.
+No host session could load the resident, so nothing could reach the front
+door. That is D-156's first clause.
+
+7. `0f925a1a` fix(server): keep every host schema union flat so the API
+   stops refusing the resident. Distinct shapes collect into one `anyOf` per
+   field, 9 levels deep on both tools. The red is
+   `tool_schemas_stay_within_host_nesting_limits` in `tests/mcp.rs`, which
+   refuses any advertised schema past 32 levels so the next variant cannot
+   take a session down. `cargo test --workspace --no-fail-fast` at `0f925a1a`:
+   exit 101, 52 targets, 942 passed, 1 failed, 1 ignored. The one failure is
+   `phase34_blocked_then_completed_phase_is_derived_executed`, plan 2's own
+   committed red at cbe39c4e (`phase_status` null, not `"planned"`), which
+   the seventh commit does not touch.
+
 ## The suite
 
 `cargo test --workspace --no-fail-fast` at `7d60cd9c` on 2026-09-13:
