@@ -185,7 +185,9 @@ fn assemble(data: &Value, phase: u32, inputs: &BTreeMap<String, Input>) -> Resul
             for item in ordered {
                 let item_revision = event.item_revisions.get(item.id())
                     .ok_or_else(|| cadence::store::Error::Invalid("item revision is absent".into()))?;
-                if is_released_check(item, item_revision, admitted.get(&publication.identity.plan).copied(), &released) {
+                if is_released_check(item, item_revision,
+                    admitted.get(&publication.identity.plan.get()).copied(), &released)
+                {
                     continue;
                 }
                 let mut definition = map_history::definition(item)?;
@@ -218,7 +220,7 @@ fn assemble(data: &Value, phase: u32, inputs: &BTreeMap<String, Input>) -> Resul
     let mut history = map_history::view(data, phase)?;
     let released_history: BTreeSet<_> = map_history::saved(data, phase)?.map(|saved| {
         saved.revisions.into_iter().filter(|event| {
-            let admitted_at = admitted.get(&event.identity.plan).copied();
+            let admitted_at = admitted.get(&event.identity.plan.get()).copied();
             event.items.iter().any(|item| event.item_revisions.get(item.id())
                 .is_some_and(|revision| is_released_check(item, revision, admitted_at, &released)))
         }).map(|event| event.revision).collect()
