@@ -501,10 +501,7 @@ fn phase37_fresh_verification_uses_only_reproved_check_definition() {
         "kind":"check","id":"check/rejected","reason":"The replacement check proves the changed definition.",
         "spec":changed["spec"],"item_revision":later_check["item_revision"]
     });
-    assert_eq!(inputs["checks"], json!([{
-        "id":"check/rejected","item_revision":later_check["item_revision"],
-        "command":NEW_COMMAND,"expected":{"kind":"literal","value":"the replacement answer is eight"}
-    }]));
+    assert_eq!(inputs["checks"], json!([expected_check]));
     assert_eq!(inputs["map"]["items"], json!([{
         "kind":"artifact","id":"artifact/remains","reason":"The completed plan's non-check work remains current.",
         "spec":artifact()["spec"],"item_revision":fixture.artifact_revision
