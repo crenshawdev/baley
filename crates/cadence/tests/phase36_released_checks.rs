@@ -256,3 +256,60 @@ fn phase36_evidence_read_retains_released_check_as_superseded() {
     assert_eq!(evidence["coverage"]["checks"],
         json!([{"truth_id":"T1","truth_version":1,"item_ids":[]}]))
 }
+
+#[test]
+fn phase36_extension_reassigns_released_check() {
+    let fixture = fixture();
+    let project = fixture.path();
+    publish_and_block(project);
+    let before = history(project);
+    let old_assignment = before["admissions"][0]["request"]["contract"]["allocation"][0].clone();
+
+    let later_map = map(vec![old_check()]);
+    let mut client = Client::open(project);
+    let allocation = client.read("36", Some(1));
+    assert_eq!(allocation["status"], "ok", "{allocation}");
+    let target = allocation["targets"][0].clone();
+    let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],
+        "request_id":"publish-later-owner","inventory_basis":allocation["inventory"]["basis"],
+        "plans":[{"target":target,"content":{"phase":PHASE,"plan":target["plan"],
+            "requirements":["T1"],"files":["src/control.py"],"directories":[],
+            "execution":{"schema":1,"suite":OLD_COMMAND,
+                "tasks":[{"id":"later-owner","verify":[OLD_COMMAND]}]},
+            "body":body(&later_map),"evidence_map":later_map}}]});
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"36",
+        "submission":submission}));
+    assert_eq!(preview["status"], "ok", "{preview}");
+    let published = client.call("cadence_apply", support::approve(json!({
+        "operation":"plan-submit","submission":preview["submission"]
+    })));
+    assert_eq!(published["persisted"], true, "{published}");
+    client.finish();
+
+    let mut client = Client::open(project);
+    let plans = client.read("36", None);
+    let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
+    client.finish();
+    let check = evidence["items"].as_array().unwrap().iter()
+        .find(|item| item["id"] == "check/released").unwrap();
+    let bindings = plans["native"]["publications"].as_object().unwrap().values().map(|publication| {
+        json!({"plan":publication["identity"]["plan"],
+            "publication_request":publication["publication_request"],
+            "content_revision":publication["revision"],"map_revision":publication["map_revision"]})
+    }).collect::<Vec<_>>();
+    let later_assignment = json!({"plan":2,"task":"later-owner","checks":[{
+        "id":"check/released","item_revision":check["item_revision"]}]});
+    let contract = json!({"phase":PHASE,"occurrence":plans["occurrence"],"plans":bindings,
+        "allocation":[old_assignment.clone(),later_assignment.clone()]});
+    let extended = call(project, "cadence_apply", json!({"operation":"execution-extend","request":{
+        "request_id":"extend-later-owner","expected_set_version":1,"contract":contract.clone()}}));
+
+    assert_eq!(extended["status"], "ok", "{extended}");
+    assert_eq!(extended["set_version"], 2, "{extended}");
+    let after = history(project);
+    assert_eq!(after["admissions"].as_array().unwrap().len(), 2);
+    let retained = &after["admissions"][1]["request"]["contract"];
+    assert_eq!(*retained, contract);
+    assert_eq!(retained["allocation"][0], old_assignment);
+    assert_eq!(retained["allocation"][1], later_assignment);
+}
