@@ -133,7 +133,7 @@ exit 0, 52 targets, 941 passed, 0 failed, 1 ignored (the T6 red).
 
 ## What it taught
 
-Two gaps, both open, neither decided here.
+Three gaps, all open, none decided here.
 
 D-120 repairs a failed suite through a linked gap plan, never a rerun, and
 D-112 says who owns runs. Neither names a vehicle for a closed phase's test
@@ -148,9 +148,25 @@ already committed. P31-3-T1's red is in the tree, and the attribute that
 ignores it is a hand decision. Retirement should say what happens to the
 material.
 
+D-120 says a blocked plan is repaired by a later approved gap identity, and
+the binary enforces the opposite at three sites. On 2026-09-14, phase 34
+plan 2 was retired because its admitted check setup admitted both fixture
+plans at once, which `history::phase_complete` can never count as a later
+repair. Plan 3, published as the gap at `1f32fd7e`, could not carry a
+corrected check: the same id with a changed spec is `evidence-item-conflict`
+and a new id under T2 is `truth-check-limit`, because a retired plan's
+items stay current in the phase union. Its task cannot own the check either:
+an extension must keep every prior allocation entry
+(`execution/admission.rs:98`) and a check has one owner
+(`execution/allocation.rs:52`). And the phase cannot verify at all while
+plan 1 is failed and plan 2 retired, because verification inputs demand
+every admitted plan complete (`verification/inputs.rs:113`). One decision,
+what a retired or failed plan leaves behind in the current union, three
+enforcement sites. Plan 3 stays published and unadmitted until it is made.
+
 A fix written by hand ran its own tests and never the suite, twice, and it
 was the suite at the end that caught it. The gate held because it was kept;
 a plan would have run it at close, and the plan is the thing that could not
 run.
 
-Candidates for D-158 and D-159 when a phase's context is ready to carry them.
+Candidates for D-158, D-159 and D-160 when a phase's context is ready to carry them.
