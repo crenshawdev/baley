@@ -171,7 +171,11 @@ run.
 
 D-158 and D-159 went to phase 36's context on 2026-09-14, and D-161 to
 phase 37's the same day. The orphan suite debt vehicle and the retirement
-material are still candidates.
+material are still candidates, and so is this one, found closing 36 and
+37: a check the verifier rejects for an assertion weaker than its expected
+value, on code that is right, has no red left, so no gap plan can re-own
+it under D-161 and the owner's only exit is a waiver. Both phases closed
+complete-with-waivers for exactly that.
 
 ## D-160
 
