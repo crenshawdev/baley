@@ -53,7 +53,9 @@ fn fixture() -> tempfile::TempDir {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     fs::write(project.join(".planning/ROADMAP.md"),
         "## Phases\n- [ ] **Phase 34: The blocked path**\n- [ ] **Phase 35: Next phase**\n").unwrap();
-    fs::write(project.join(".planning/config.json"), "{}\n").unwrap();
+    fs::write(project.join(".planning/config.json"), serde_json::to_vec(&json!({
+        "review":{"triggers":{"risk_surface":{"surfaces":cadence::rail::risk::CATEGORIES}}}
+    })).unwrap()).unwrap();
     fs::create_dir(project.join("src")).unwrap();
     fs::create_dir(project.join("tests")).unwrap();
     fs::write(project.join(".gitignore"), ".planning/\n.fixture-gnupg/\n__pycache__/\n").unwrap();
