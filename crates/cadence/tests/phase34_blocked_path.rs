@@ -150,7 +150,7 @@ fn publish(project: &Path) {
     client.finish();
 }
 
-fn publish_blocked_repair(project: &Path) {
+fn publish_blocked_plan(project: &Path) {
     let truth = json!({"id":"T2","trigger":"a blocked plan is followed by a later admitted plan that completed",
         "observer":"the owner","verb":"sees","outcome":"the phase derived as executed",
         "kind":"literal","observable":true,"fixed_oracle":true});
@@ -162,17 +162,14 @@ fn publish_blocked_repair(project: &Path) {
     assert_eq!(context["persisted"], true, "{context}");
 
     let mut client = Client::open(project);
-    let allocation = client.read("34", Some(2));
+    let allocation = client.read("34", Some(1));
     assert_eq!(allocation["status"], "ok", "{allocation}");
-    let maps = [map(vec![repair_artifact()]), map(vec![repair_check()])];
-    let plans = maps.iter().enumerate().map(|(index, evidence_map)| {
-        let target = allocation["targets"][index].clone();
-        let task = if index == 0 { "retire" } else { "repair" };
-        json!({"target":target,"content":{"phase":PHASE,"plan":target["plan"],"requirements":["T2"],
-            "files":["src/control.py","tests/control.py"],"directories":[],
-            "execution":{"schema":1,"suite":COMMAND,"tasks":[{"id":task,"verify":[COMMAND]}]},
-            "body":body(evidence_map),"evidence_map":evidence_map}})
-    }).collect::<Vec<_>>();
+    let evidence_map = map(vec![repair_check(), repair_artifact()]);
+    let target = allocation["targets"][0].clone();
+    let plans = vec![json!({"target":target,"content":{"phase":PHASE,"plan":target["plan"],
+        "requirements":["T2"],"files":["src/control.py"],"directories":[],
+        "execution":{"schema":1,"suite":COMMAND,"tasks":[{"id":"retire","verify":[COMMAND]}]},
+        "body":body(&evidence_map),"evidence_map":evidence_map}})];
     let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],
         "request_id":"publish-blocked-repair","inventory_basis":allocation["inventory"]["basis"],
         "plans":plans});
@@ -209,28 +206,19 @@ fn contract(project: &Path) -> Value {
     json!({"phase":PHASE,"occurrence":plans["occurrence"],"plans":bindings,"allocation":allocation})
 }
 
-fn blocked_repair_contract(project: &Path) -> Value {
+fn blocked_plan_contract(project: &Path) -> Value {
     let mut client = Client::open(project);
     let plans = client.read("34", None);
     let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
     client.finish();
     let check = evidence["items"].as_array().unwrap().iter()
         .find(|item| item["id"] == "check/blocked-repair").unwrap();
-    let publications = plans["native"]["publications"].as_object().unwrap();
-    let mut bindings = Vec::new();
-    let mut allocation = Vec::new();
-    for publication in publications.values() {
-        let plan = publication["identity"]["plan"].clone();
-        bindings.push(json!({"plan":plan,"publication_request":publication["publication_request"],
-            "content_revision":publication["revision"],"map_revision":publication["map_revision"]}));
-        for task in publication["tasks"].as_array().unwrap() {
-            let checks = if plan == 2 && task["id"] == "repair" {
-                json!([{"id":"check/blocked-repair","item_revision":check["item_revision"]}])
-            } else { json!([]) };
-            allocation.push(json!({"plan":plan,"task":task["id"],"checks":checks}));
-        }
-    }
-    json!({"phase":PHASE,"occurrence":plans["occurrence"],"plans":bindings,"allocation":allocation})
+    let publication = &plans["native"]["publications"]["1"];
+    json!({"phase":PHASE,"occurrence":plans["occurrence"],"plans":[{
+        "plan":1,"publication_request":publication["publication_request"],
+        "content_revision":publication["revision"],"map_revision":publication["map_revision"]}],
+        "allocation":[{"plan":1,"task":"retire","checks":[{
+            "id":"check/blocked-repair","item_revision":check["item_revision"]}]}]})
 }
 
 fn history(project: &Path) -> Value {
@@ -432,20 +420,21 @@ fn phase34_owner_retires_unfinished_task_and_next_plan_dispatches() {
 fn phase34_blocked_then_completed_phase_is_derived_executed() {
     let fixture = fixture();
     let project = fixture.path();
-    publish_blocked_repair(project);
-    let contract = blocked_repair_contract(project);
+    publish_blocked_plan(project);
+    let contract = blocked_plan_contract(project);
     let admitted = call(project, "cadence_apply", json!({"operation":"execution-admit","request":{
-        "request_id":"admit-blocked-repair","expected_set_version":0,"contract":contract}}));
+        "request_id":"admit-blocked-plan","expected_set_version":0,"contract":contract}}));
     assert_eq!(admitted["status"], "ok", "{admitted}");
     let authorized = call(project, "cadence_apply", json!({"operation":"execution-authorize","phase":PHASE,
-        "request_id":"authorize-blocked-repair","owner":OWNER,"at":AT,
-        "response":"Run the blocked plan and its approved repair."}));
+        "request_id":"authorize-blocked-plan","owner":OWNER,"at":AT,
+        "response":"Run the approved blocked plan."}));
     assert_eq!(authorized["status"], "ok", "{authorized}");
 
     let first = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(first["outcome"], "dispatch", "{first}");
     assert_eq!(first["dispatch"]["plan"], 1);
-    assert_eq!(start(project, 1, "retire", json!([]))["status"], "ok");
+    let old_assignment = contract["allocation"][0].clone();
+    assert_eq!(start(project, 1, "retire", old_assignment["checks"].clone())["status"], "ok");
     let retired = call(project, "cadence_apply",
         retire_request(project, 1, "retire", "retire-blocked-plan", OWNER, AT, REASON));
     assert_eq!(retired["status"], "ok", "{retired}");
@@ -460,11 +449,53 @@ fn phase34_blocked_then_completed_phase_is_derived_executed() {
         .find(|entry| entry["task"]["plan"] == 1 && entry["task"]["task"] == "retire").unwrap();
     assert_eq!(retired_task["state"]["completed"], false);
 
+    let repair_map = map(vec![repair_check()]);
+    let mut client = Client::open(project);
+    let allocation = client.read("34", Some(1));
+    assert_eq!(allocation["status"], "ok", "{allocation}");
+    let target = allocation["targets"][0].clone();
+    let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],
+        "request_id":"publish-later-repair","inventory_basis":allocation["inventory"]["basis"],
+        "plans":[{"target":target,"content":{"phase":PHASE,"plan":target["plan"],
+            "requirements":["T2"],"files":["src/control.py","tests/control.py"],"directories":[],
+            "execution":{"schema":1,"suite":COMMAND,"tasks":[{"id":"repair","verify":[COMMAND]}]},
+            "body":body(&repair_map),"evidence_map":repair_map}}]});
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"34",
+        "submission":submission}));
+    assert_eq!(preview["status"], "ok", "{preview}");
+    let published = client.call("cadence_apply", support::approve(json!({
+        "operation":"plan-submit","submission":preview["submission"]
+    })));
+    assert_eq!(published["persisted"], true, "{published}");
+    client.finish();
+
+    let mut client = Client::open(project);
+    let plans = client.read("34", None);
+    let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
+    client.finish();
+    let check = evidence["items"].as_array().unwrap().iter()
+        .find(|item| item["id"] == "check/blocked-repair").unwrap();
+    let bindings = plans["native"]["publications"].as_object().unwrap().values().map(|publication| {
+        json!({"plan":publication["identity"]["plan"],
+            "publication_request":publication["publication_request"],
+            "content_revision":publication["revision"],"map_revision":publication["map_revision"]})
+    }).collect::<Vec<_>>();
+    let allocated = json!({"id":"check/blocked-repair","item_revision":check["item_revision"]});
+    let later_assignment = json!({"plan":2,"task":"repair","checks":[allocated.clone()]});
+    let extended_contract = json!({"phase":PHASE,"occurrence":plans["occurrence"],"plans":bindings,
+        "allocation":[old_assignment,later_assignment]});
+    let extended = call(project, "cadence_apply", json!({"operation":"execution-extend","request":{
+        "request_id":"extend-later-repair","expected_set_version":1,"contract":extended_contract}}));
+    assert_eq!(extended["status"], "ok", "{extended}");
+    assert_eq!(extended["receipt"]["set_version"], 2, "{extended}");
+    let authorized = call(project, "cadence_apply", json!({"operation":"execution-authorize",
+        "phase":PHASE,"request_id":"authorize-later-repair","owner":OWNER,"at":AT,
+        "response":"Run the approved later repair."}));
+    assert_eq!(authorized["status"], "ok", "{authorized}");
+
     let second = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(second["outcome"], "dispatch", "{second}");
     assert_eq!(second["dispatch"]["plan"], 2);
-    let allocated = contract["allocation"].as_array().unwrap().iter()
-        .find(|entry| entry["plan"] == 2 && entry["task"] == "repair").unwrap()["checks"][0].clone();
     assert_eq!(start(project, 2, "repair", json!([allocated.clone()]))["status"], "ok");
 
     fs::write(project.join("tests/control.py"),
