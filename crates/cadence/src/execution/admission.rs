@@ -218,6 +218,9 @@ pub fn validate(data: &Value, documents: &BTreeMap<String, String>, contract: &C
     let mut plans = Vec::new();
     let mut maps = Vec::new();
     let mut contributions = Vec::new();
+    let released = plan::associations::released_check_revisions(data, phase)?;
+    let admitted: BTreeMap<_, _> = super::history::admitted_plans(data, phase)?
+        .into_iter().map(|(identity, version)| (identity.plan, version)).collect();
     for (number, publication) in &current.publications {
         plan::persistence::validate_retained(data, phase, publication)?;
         let map = plan::map_view::checked_map(data, phase, publication)?;
@@ -228,11 +231,24 @@ pub fn validate(data: &Value, documents: &BTreeMap<String, String>, contract: &C
         }
         let parsed = super::plan::parse_plan(bytes.as_bytes(), phase, *number)
             .map_err(|e| refuse(phase, "execution-structure", &path, &number.to_string(), e.to_string()))?;
-        contributions.push(Contribution { plan: *number, entry: None, items: map.items.clone() });
+        let items = map.items.iter().filter(|item| {
+            let Some(admitted_at) = admitted.get(number) else { return true };
+            if !matches!(item, plan::evidence::Item::Check { .. }) { return true; }
+            let Some(revision) = map.item_revisions.get(item.id()) else { return true; };
+            !released.get(revision).is_some_and(|through| admitted_at <= through)
+        }).cloned().collect();
+        contributions.push(Contribution { plan: *number, entry: None, items });
         maps.push(map);
         plans.push(parsed);
     }
     plan::associations::validate_union(&context, phase, &contributions, true)?;
-    allocation::validate(phase, &plans, &maps, &contract.allocation)?;
+    let historical = contract.allocation.iter().flat_map(|assignment| {
+        assignment.checks.iter().filter_map(|check| {
+            let admitted_at = admitted.get(&assignment.plan)?;
+            released.get(&check.item_revision).is_some_and(|through| admitted_at <= through)
+                .then(|| (assignment.plan, assignment.task.clone(), check.id.clone(), check.item_revision.clone()))
+        })
+    }).collect();
+    allocation::validate(phase, &plans, &maps, &contract.allocation, &historical)?;
     Ok(Validated { plans, maps })
 }

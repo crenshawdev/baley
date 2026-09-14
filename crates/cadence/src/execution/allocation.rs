@@ -20,7 +20,8 @@ pub struct Assignment {
     pub checks: Vec<Check>,
 }
 
-pub fn validate(phase: u32, plans: &[ExecutionPlan], maps: &[Revision], assignments: &[Assignment]) -> Result<()> {
+pub fn validate(phase: u32, plans: &[ExecutionPlan], maps: &[Revision], assignments: &[Assignment],
+    historical: &BTreeSet<(u32, String, String, String)>) -> Result<()> {
     let tasks: BTreeSet<_> = plans.iter().flat_map(|p| p.tasks.iter().map(move |t| (p.plan, t.id.as_str()))).collect();
     let mut items = BTreeMap::new();
     for map in maps {
@@ -39,6 +40,11 @@ pub fn validate(phase: u32, plans: &[ExecutionPlan], maps: &[Revision], assignme
         }
         for (n, check) in assignment.checks.iter().enumerate() {
             let slot = format!("{slot}.checks[{n}]");
+            if historical.iter().any(|row| row.0 == assignment.plan && row.1 == assignment.task
+                && row.2 == check.id && row.3 == check.item_revision)
+            {
+                continue;
+            }
             let Some((item, revision)) = items.get(check.id.as_str()) else {
                 return Err(refuse(phase, "allocation-item", &format!("{slot}.id"), &check.id, "unknown check item"));
             };
