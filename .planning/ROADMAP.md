@@ -392,6 +392,7 @@ Delivery order after phase 11 is 27, 28, 29, 12, 13, then 14 onward; see
 - [x] **Phase 12: Execution and tasks** - `cad-execute` in full, and `cad-task`
 - [x] **Phase 13: Verification and audit** - `cad-verify`, the merged `cad-review` command surface, `cad-audit`
 - [x] **Phase 34: The blocked path** - an owner retires an unfinished task with a reason and the plan ends blocked the way a failed suite does; the next plan dispatches and a repaired phase derives as executed
+- [ ] **Phase 37: What a rejected check leaves behind** - a check that verification rejected is released from the task that owned it, the way a retirement releases it, so a gap plan can republish and own the correction
 - [ ] **Phase 36: What a blocked plan leaves behind** - a blocked plan's unfinished tasks release their checks so the gap plan can carry and own the correction, and verification asks of a phase what phase_complete already asks
 - [ ] **Phase 35: The moved home** - the stored import manifest stays history and the session carries where the layers stand now beside it, so a store whose global config moved still records the owner's answers
 - [ ] **Phase 31: The read layer** - search and slice operations in the binary, ported from excerpt; the model and every worker read through them and never open a file
@@ -1508,3 +1509,20 @@ union as superseded; everything else the plan published stays current.
 D-159: verification asks exactly what `phase_complete` asks, and close proof
 is demanded only of closed tasks. No new records. Phase 34 plan 3 is the
 first consumer.
+
+### Phase 37: What a rejected check leaves behind
+
+**Goal.** A check that verification rejected stays owned and current: the
+release projection releases a check only when its plan is blocked and its
+owning task never closed, and a rejected verdict in a retained accepted
+patch releases nothing. So after phase 36's verification rejected
+`P36-T1-C` on a completed plan, a gap plan republishing the id with a
+changed spec is refused `evidence-item-conflict`, a gap plan claiming it is
+refused `allocation-owner`, replacing the plan is refused `admitted-plan`,
+and a second check id for the truth is refused `truth-check-limit`. The
+design says a rejected item is shown with why so the next planner sees what
+did not count; the next planner cannot act on it. D-161: a rejected verdict
+releases the check the way a retirement does, through the same projection;
+the allocation row stays as history, the definition leaves the current
+union as superseded, and a later plan may republish the id, changed or not,
+and own it. No new records. Phase 36 plan 3 is the first consumer.
