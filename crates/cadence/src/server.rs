@@ -365,18 +365,19 @@ fn host_schema(mut schema: Value) -> Value {
     }
     let mut variants = Vec::new();
     objects(&schema, &schema, &mut variants);
-    let mut properties = serde_json::Map::new();
+    // One flat union per field. Wrapping each new shape around the previous
+    // union nests one level per variant, and hosts cap schema depth.
+    let mut shapes: Vec<(String, Vec<Value>)> = Vec::new();
     let mut required: Option<std::collections::BTreeSet<String>> = None;
     for variant in &variants {
         for (name, field) in variant["properties"].as_object().expect("object variant") {
-            match properties.get_mut(name) {
-                Some(old) if old != field => {
-                    *old = serde_json::json!({"anyOf":[old.clone(), field]})
+            match shapes.iter_mut().find(|(known, _)| known == name) {
+                Some((_, seen)) => {
+                    if !seen.contains(field) {
+                        seen.push(field.clone());
+                    }
                 }
-                Some(_) => {}
-                None => {
-                    properties.insert(name.clone(), field.clone());
-                }
+                None => shapes.push((name.clone(), vec![field.clone()])),
             }
         }
         let fields = variant
@@ -396,6 +397,17 @@ fn host_schema(mut schema: Value) -> Value {
         root.remove(keyword);
     }
     root.insert("type".into(), Value::String("object".into()));
+    let properties = shapes
+        .into_iter()
+        .map(|(name, mut seen)| {
+            let field = if seen.len() == 1 {
+                seen.pop().expect("one shape")
+            } else {
+                serde_json::json!({ "anyOf": seen })
+            };
+            (name, field)
+        })
+        .collect();
     root.insert("properties".into(), Value::Object(properties));
     root.insert(
         "required".into(),

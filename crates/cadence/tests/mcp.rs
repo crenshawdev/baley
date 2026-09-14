@@ -290,6 +290,42 @@ fn tool_schemas_all_inputs_have_properties_without_root_unions() {
     }
 }
 
+/// Claude's API refuses a tool whose schema nests more than 64 levels of
+/// objects and arrays. Every advertised input and output schema stays well
+/// under that so adding a variant never takes the whole host session down.
+#[test]
+fn tool_schemas_stay_within_host_nesting_limits() {
+    const HOST_LIMIT: usize = 64;
+    const HEADROOM: usize = 32;
+    fn depth(node: &Value) -> usize {
+        match node {
+            Value::Object(fields) => 1 + fields.values().map(depth).max().unwrap_or(0),
+            Value::Array(items) => 1 + items.iter().map(depth).max().unwrap_or(0),
+            _ => 0,
+        }
+    }
+    let mut client = Client::spawn();
+    client.handshake();
+    let response = client.tools_list(2);
+    assert!(client.finish().success());
+    let tools = response["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("result.tools is an array; response: {response}"));
+    for tool in tools {
+        for field in ["inputSchema", "outputSchema"] {
+            let schema = tool
+                .get(field)
+                .unwrap_or_else(|| panic!("{} is missing {field}", tool["name"]));
+            let nesting = depth(schema);
+            assert!(
+                nesting <= HOST_LIMIT - HEADROOM,
+                "{}.{field} nests {nesting} levels; the host limit is {HOST_LIMIT}",
+                tool["name"]
+            );
+        }
+    }
+}
+
 #[test]
 fn cadence_version_returns_an_ok_envelope_as_structured_content() {
     let mut client = Client::spawn();
