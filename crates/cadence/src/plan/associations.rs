@@ -79,6 +79,13 @@ fn released_check_revisions_with_submission(data: &Value, phase: u32,
             }
         }
     }
+    let patches = crate::verification::verdicts::patches(data)?;
+    let rejected = patches.iter().filter(|patch| patch.basis.phase == phase)
+        .flat_map(|patch| &patch.items)
+        .filter(|item| item.verdict == crate::verification::model::Verdict::Rejected)
+        .map(|item| (item.id.as_str(), item.item_revision.as_str()))
+        .collect::<std::collections::BTreeSet<_>>();
+    if rejected.is_empty() { return Ok(released); }
     let saved = persistence::saved(data, phase)?;
     let map_history = map_history::saved(data, phase)?;
     let mut current_events = Vec::new();
@@ -103,16 +110,10 @@ fn released_check_revisions_with_submission(data: &Value, phase: u32,
             _ => &[],
         }).filter(|item| matches!(item, Item::Check { .. }))
         .map(Item::id).collect::<std::collections::BTreeSet<_>>();
-    let patches = crate::verification::verdicts::patches(data)?;
     for (identity, admitted_at) in admitted {
         for task in history::plan_task_views(data, &records, phase, identity.plan)? {
             for check in task.checks {
-                let rejected = patches.iter().filter(|patch| patch.basis.phase == phase)
-                    .flat_map(|patch| &patch.items).any(|item| {
-                        item.verdict == crate::verification::model::Verdict::Rejected
-                            && item.id == check.id && item.item_revision == check.item_revision
-                    });
-                if !rejected { continue; }
+                if !rejected.contains(&(check.id.as_str(), check.item_revision.as_str())) { continue; }
                 let owner_position = current_events.iter()
                     .find(|(_, event)| event.identity.plan.get() == identity.plan)
                     .map(|(position, _)| *position);
