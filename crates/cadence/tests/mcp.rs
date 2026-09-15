@@ -995,6 +995,9 @@ fn execution_calls_refuse_noninteger_phases_and_legacy_plans_without_dispatch() 
         assert!(output.status.success());
         let rendered = String::from_utf8(output.stdout).unwrap();
         assert_eq!(rendered, fs::read_to_string(repo.join(skill)).unwrap());
+        assert!(rendered.contains(
+            "Binary-rendered project files in the dispatch lease are implicit material"
+        ), "{skill} must explain the D-166 implicit rendered-file lease");
         for required in ["positive JSON integers", "\"phase\":13", "\"phase\":\"13\"",
             "plan-read", "evidence-read", "approval.submission.request_id", "map_revision",
             "item_revision", "checks:[]", "execution-extend", "expected_set_version",
@@ -1263,7 +1266,8 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
             .unwrap();
         assert!(rendered.status.success(), "{}", String::from_utf8_lossy(&rendered.stderr));
         let installed = fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative)).unwrap();
-        assert_eq!(installed, rendered.stdout, "{relative} is rendered by the binary");
+        assert_eq!(installed, rendered.stdout,
+            "{relative} is binary-rendered implicit lease material and cannot drift from its renderer");
     }
     let (verify, frontdoor) = markdown_parts("skills/cad-verify/SKILL.md");
     let (verifier_contract, verifier) = markdown_parts("skills/cad-verifier-contract/SKILL.md");

@@ -241,7 +241,8 @@ fn phase13_dispatch_carries_current_verification_inputs() {
     assert_eq!(operational["basis"]["source"]["head"], git_value(project, &["rev-parse","HEAD"]));
     assert_eq!(operational["basis"]["source"]["tree"], git_value(project, &["rev-parse","HEAD^{tree}"]));
     for key in ["index_digest", "material_digest"] { assert!(!operational["basis"]["source"][key].as_str().unwrap().is_empty()); }
-    assert!(prompt.contains("**Verifier.** For each evidence item: open it, run it, or trace it. Return a\nverdict per item - accepted, rejected or not seen - with what you observed.\nA summary is not evidence. An item whose check could not have failed is\nrejected, not accepted. You do not set a truth's status; the binary derives\nit from your verdicts."));
+    assert!(prompt.contains(cadence::verification::instructions::VERIFIER),
+        "the prompt receipt must retain the binary's compiled verifier text");
     assert!(prompt.contains("Strict item patch schema"));
     assert!(!prompt.contains("configured-alternative"));
     assert!(!prompt.contains("All imaginary checks passed"));
@@ -1206,7 +1207,8 @@ fn phase13_review_surface_selects_target_and_intent() {
         let rendered = std::process::Command::new(env!("CARGO_BIN_EXE_cadence")).args(&args)
             .current_dir(std::env::temp_dir()).stdin(std::process::Stdio::null()).output().unwrap();
         assert!(rendered.status.success(), "{}", String::from_utf8_lossy(&rendered.stderr));
-        assert_eq!(std::fs::read(repo.join(skill)).unwrap(), rendered.stdout, "{skill} is rendered by the binary");
+        assert_eq!(std::fs::read(repo.join(skill)).unwrap(), rendered.stdout,
+            "{skill} is binary-rendered implicit lease material and cannot drift from its renderer");
         let text = String::from_utf8(rendered.stdout).unwrap();
         assert!(text.contains(&format!("argument-hint: \"{hint}\"")), "{skill}");
         assert!(text.contains("review-select") && text.contains("review-admit") && text.contains("review-next"), "{skill}");

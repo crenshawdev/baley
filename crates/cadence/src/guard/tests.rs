@@ -85,6 +85,32 @@ fn denied(bytes: &[u8]) -> Value {
 }
 
 #[test]
+pub(crate) fn rendered_skill_files_are_protected() {
+    let root = Path::new("/fixture");
+    for relative in [
+        "skills/cad-context/SKILL.md",
+        "skills/cad-plan/SKILL.md",
+        "skills/cad-executor-contract/SKILL.md",
+        "skills/cad-execute/SKILL.md",
+        "skills/cad-verifier-contract/SKILL.md",
+        "skills/cad-verify/SKILL.md",
+        "skills/cad-review/SKILL.md",
+        "skills/cad-decision-review/SKILL.md",
+        "skills/cad-minimalism-review/SKILL.md",
+        "skills/cad-plan-review/SKILL.md",
+        "skills/cad-audit/SKILL.md",
+        "skills/cad-coverage/SKILL.md",
+        "skills/cad-read-contract/SKILL.md",
+    ] {
+        assert!(
+            super::protected_target(&root.join(relative)).unwrap(),
+            "{relative} must be protected as a binary-rendered project file"
+        );
+    }
+    assert!(!super::protected_target(&root.join("skills/authored/SKILL.md")).unwrap());
+}
+
+#[test]
 pub(crate) fn guard_denies_owned_outputs_through_every_path_spelling() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path();

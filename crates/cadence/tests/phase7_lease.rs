@@ -1558,6 +1558,14 @@ fn native_guidance_and_phase_seven_roadmap_match_parser_without_migrating_histor
     let admitted = parse_plan(example.as_bytes(), 7, 1).unwrap();
     assert_eq!(admitted.files, ["Cargo.lock"]);
     assert_eq!(admitted.directories, ["src"]);
+    for rendered in [
+        "skills/cad-context/SKILL.md",
+        "skills/cad-executor-contract/SKILL.md",
+        "skills/cad-review/SKILL.md",
+    ] {
+        assert!(!covers(&admitted.files, &admitted.directories, rendered),
+            "the planner-authored lease must not list binary-rendered project files");
+    }
     assert!(covers(
         &admitted.files,
         &admitted.directories,
