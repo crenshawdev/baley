@@ -627,7 +627,10 @@ fn sample_process_tree(root: u32, found: &mut BTreeMap<u32, String>) {
         if descendant {
             let bytes = fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
             let command = String::from_utf8_lossy(&bytes).replace('\0', " ");
-            found.insert(pid, command);
+            // A child that has already exited reads back an empty command line;
+            // a later sample must not erase the one taken while it was alive.
+            let seen = found.entry(pid).or_default();
+            if seen.is_empty() { *seen = command; }
         }
     }
 }
