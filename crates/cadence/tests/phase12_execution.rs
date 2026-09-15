@@ -1187,7 +1187,7 @@ fn phase12_dispatch_contains_admitted_checks_state_and_instructions() {
     let decisions=reopened(project).decisions;
     let retained:Vec<_>=decisions.iter().filter(|d|serde_json::to_value(&d.decision).unwrap()["boundary"]["subject_id"]==dispatch["dispatch"]["id"]).collect();
     assert_eq!(retained.len(),1);
-    assert_eq!(serde_json::to_value(&retained[0].decision).unwrap()["boundary"]["receipt"]["prompt_digest"],hash(prompt.as_bytes()));
+    assert_eq!(serde_json::to_value(&retained[0].decision).unwrap()["boundary"]["receipt"]["prompt_digest"],model::digest(prompt.as_bytes()));
     // Acknowledged progress yields a fresh linked dispatch, never the old prompt.
     let ack=apply(project,progress_request(project,"progress-B",json!({"kind":"progress","text":"B reads its admitted check","evidence":[fixture.green]})));
     assert_eq!(ack["status"],"ok","{ack}");
