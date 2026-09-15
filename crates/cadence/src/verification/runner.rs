@@ -44,7 +44,7 @@ pub fn acceptable(result: &RunResult) -> bool {
         Observation::ResultsObserved { summary: Summary::Cargo { failed: false } }
         | Observation::ResultsObserved { summary: Summary::Unittest { failed: false, failures: 0, errors: 0 } });
     let nonempty = [&result.stdout, &result.stderr].iter().any(|capture| {
-        String::from_utf8_lossy(&capture.bytes).lines().any(|line| {
+        String::from_utf8_lossy(&capture.bytes).lines().chain(capture.result_lines.iter().map(String::as_str)).any(|line| {
             let words: Vec<_> = line.split_whitespace().collect();
             (words.first() == Some(&"Ran") && words.get(1).is_some_and(|n| n.parse::<u64>().is_ok_and(|n| n > 0)))
                 || (line.starts_with("test result: ok.") && words.get(3).is_some_and(|n| n.parse::<u64>().is_ok_and(|n| n > 0)))
@@ -91,8 +91,9 @@ pub fn contribute(data: &Value, binding: &str, record: &Record) -> Result<Value>
             }).ok_or_else(|| refuse(phase, "verification-run-result", "run_id", "matching launch absent"))?;
             if record.id != format!("{run_id}:result") || result(&history, run_id).is_some() || observed.run_id != *run_id
                 || observed.observed_at < launch.launched_at
-                || [&observed.stdout, &observed.stderr].iter().any(|c| c.bytes.len() > 65536 || c.digest != digest(&c.bytes))
-                || observed.observation != child::classify(&observed.stdout.bytes, &observed.stderr.bytes)
+                || [&observed.stdout, &observed.stderr].iter().any(|c| c.bytes.len() > 65536 || c.digest != digest(&c.bytes)
+                    || c.result_lines.iter().any(|line| !child::valid_result_line(line)))
+                || observed.observation != child::classify(&observed.stdout, &observed.stderr)
                 || (observed.material_unchanged && source_after.as_ref() != Some(&attempt.inputs.basis.source)) {
                 return Err(refuse(phase, "verification-run-result", "result", "result duplicates or differs from observed material and captures"));
             }
@@ -155,7 +156,7 @@ pub async fn launch(store: Store, root: PathBuf, request: Run) -> Result<Record>
         let process = tokio::task::spawn_blocking(move || {
             if inputs::source(&project).ok().as_ref() != Some(&expected) {
                 use crate::execution::receipts::{Capture, Disposition, Observation};
-                let empty = Capture { bytes: vec![], digest: digest(&[]), complete: true };
+                let empty = Capture { bytes: vec![], digest: digest(&[]), complete: true, result_lines: vec![] };
                 return (RunResult { run_id: launch.run_id, disposition: Disposition::LaunchFailed {
                     reason: "verification source changed before process launch".into() },
                     stdout: empty.clone(), stderr: empty, observed_at: child::now(),

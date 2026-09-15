@@ -66,6 +66,7 @@ pub fn build_dispatch(
         expected_execution_version: execution_version,
         phase: plan.phase,
         plan: plan.plan,
+        owner_selection: None,
         plan_fingerprint: plan.fingerprint.clone(),
         plan_set_fingerprint: plan_set_fingerprint.to_owned(),
         requirements: plan.requirements.clone(),

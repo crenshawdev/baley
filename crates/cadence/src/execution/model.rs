@@ -67,6 +67,8 @@ pub struct ActiveDispatch {
     pub expected_execution_version: u64,
     pub phase: u32,
     pub plan: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_selection: Option<OwnerSelection>,
     pub plan_fingerprint: String,
     pub plan_set_fingerprint: String,
     pub requirements: Vec<String>,
@@ -91,6 +93,12 @@ pub struct ActiveDispatch {
     pub prompt_bytes: Option<u64>,
     #[serde(default)]
     pub body: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerSelection {
+    pub plan: std::num::NonZeroU32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

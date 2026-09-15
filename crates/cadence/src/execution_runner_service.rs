@@ -108,6 +108,7 @@ pub async fn read<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root:
     let plans = history::admitted_plans(&view.snapshot.data, phase)?.into_iter()
         .map(|(plan, _)| json!({"state":history::plan_project(&plan_events, &plan),"plan":plan,
             "outcome":outcomes.iter().find(|outcome| outcome.plan == plan.plan)})).collect::<Vec<_>>();
+    let active = view.snapshot.data["execution"]["occurrences"][phase.to_string()]["active"].clone();
     Ok(json!({"status":"ok","schema":"native-task-history-1","events":records,"tasks":tasks,"checkpoint_history":checkpoints,
-        "plan_events":plan_events,"plans":plans}))
+        "plan_events":plan_events,"plans":plans,"active":active}))
 }

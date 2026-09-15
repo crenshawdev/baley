@@ -376,18 +376,40 @@ pub async fn suite_launch(store: Store, project: PathBuf, input: SuiteInput) -> 
     Ok(record)
 }
 
-fn capture(mut reader: impl Read) -> Capture {
+pub(crate) fn capture(mut reader: impl Read) -> Capture {
     let mut bytes = Vec::new();
+    let mut line = Vec::new();
+    let mut result_lines = Vec::new();
     let mut complete = true;
     let mut buffer = [0; 8192];
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => break,
-            Ok(n) => { let retain = n.min(65536 - bytes.len()); bytes.extend_from_slice(&buffer[..retain]); complete &= retain == n; }
+            Ok(n) => {
+                let retain = n.min(65536 - bytes.len());
+                bytes.extend_from_slice(&buffer[..retain]);
+                complete &= retain == n;
+                for byte in &buffer[..n] {
+                    if *byte == b'\n' {
+                        if line.last() == Some(&b'\r') { line.pop(); }
+                        if let Ok(value) = std::str::from_utf8(&line)
+                            && valid_result_line(value) {
+                            result_lines.push(value.to_owned());
+                        }
+                        line.clear();
+                    } else {
+                        line.push(*byte);
+                    }
+                }
+            }
             Err(_) => { complete = false; break; }
         }
     }
-    Capture { digest: digest(&bytes), bytes, complete }
+    if !line.is_empty() && let Ok(value) = std::str::from_utf8(&line)
+        && valid_result_line(value) {
+        result_lines.push(value.to_owned());
+    }
+    Capture { digest: digest(&bytes), bytes, complete, result_lines }
 }
 
 pub fn observe_child(project: &Path, launch: &Launch) -> RunResult {
@@ -424,22 +446,42 @@ pub fn observe_child(project: &Path, launch: &Launch) -> RunResult {
         }
         Err(error) => (Disposition::LaunchFailed { reason: error.to_string() }, capture(&b""[..]), capture(&b""[..])),
     };
-    let observation = classify(&stdout.bytes, &stderr.bytes);
+    let observation = classify(&stdout, &stderr);
     RunResult { run_id: launch.run_id.clone(), disposition, stdout, stderr, observed_at: now(), observation,
         material_unchanged: material(project, &launch.material.command, &launch.material.test_file).is_ok_and(|m| m == launch.material) }
 }
 
-pub fn classify(stdout: &[u8], stderr: &[u8]) -> Observation {
+pub fn valid_result_line(line: &str) -> bool {
+    if line.contains(['\n', '\r']) { return false }
+    if line.starts_with("test result:") || line == "OK" || line.starts_with("OK (")
+        || line.starts_with("Ran ") || line.starts_with("FAILED (")
+        || line.starts_with("FAIL: ") || line.starts_with("ERROR: ") {
+        return true;
+    }
+    line.strip_prefix("test ").and_then(|value| value.rsplit_once(" ... "))
+        .is_some_and(|(name, status)| !name.is_empty()
+            && (matches!(status, "ok" | "FAILED" | "ignored" | "bench" | "FAIL" | "ERROR")
+                || status.starts_with("skipped ")))
+}
+
+fn lines(capture: &Capture) -> Vec<String> {
+    let mut lines = capture.bytes.split_inclusive(|byte| *byte == b'\n').filter_map(|line| {
+        (line.last() == Some(&b'\n')).then(|| std::str::from_utf8(&line[..line.len()-1]).ok()
+            .map(|line| line.trim_end_matches('\r').to_owned())).flatten()
+    }).collect::<Vec<_>>();
+    lines.extend(capture.result_lines.iter().cloned());
+    lines
+}
+
+pub fn classify(stdout: &Capture, stderr: &Capture) -> Observation {
     let ran = regex::Regex::new(r"^Ran [0-9]+ tests?( in .+)?$").expect("fixed grammar");
     let failed = regex::Regex::new(r"^FAILED \(([^()]*)\)$").expect("fixed grammar");
     let counts = regex::Regex::new(r"^(failures|errors|skipped|expected failures|unexpected successes)=([0-9]+)$").expect("fixed grammar");
     let mut python_ran = false;
     let mut python_outcome = None;
-    for bytes in [stdout, stderr] {
-        for line in bytes.split_inclusive(|b| *b == b'\n') {
-            if line.last() != Some(&b'\n') { continue }
-            let Ok(line) = std::str::from_utf8(&line[..line.len()-1]) else { continue };
-            let line = line.trim_end_matches('\r');
+    for capture in [stdout, stderr] {
+        for line in lines(capture) {
+            let line = line.as_str();
             if line.starts_with("test result:") {
                 return Observation::ResultsObserved { summary: Summary::Cargo { failed: line.starts_with("test result: FAILED") } };
             }

@@ -252,8 +252,9 @@ pub fn contribute(data: &Value, root: &str, request: &Request) -> Result<(Value,
             }).ok_or_else(|| refuse("task-result", "result has no matching launch"))?;
             if result.observed_at < launch.launched_at
                 || history.iter().any(|r| matches!(&r.request.event, Event::Result(prior) if prior.run_id == result.run_id))
-                || [&result.stdout, &result.stderr].iter().any(|s| s.bytes.len() > 65536 || digest(&s.bytes) != s.digest)
-                || result.observation != super::runner::classify(&result.stdout.bytes, &result.stderr.bytes) {
+                || [&result.stdout, &result.stderr].iter().any(|s| s.bytes.len() > 65536 || digest(&s.bytes) != s.digest
+                    || s.result_lines.iter().any(|line| !super::runner::valid_result_line(line)))
+                || result.observation != super::runner::classify(&result.stdout, &result.stderr) {
                 return Err(refuse("task-result", "result duplicates a run or has invalid capture/timestamp"));
             }
         }
@@ -534,10 +535,12 @@ pub fn suite_passed(result: &RunResult) -> bool {
 pub fn failing_tests(result: &RunResult) -> Vec<String> {
     let mut names = Vec::new();
     for capture in [&result.stdout, &result.stderr] {
-        for line in capture.bytes.split_inclusive(|byte| *byte == b'\n') {
-            if line.last() != Some(&b'\n') { continue }
-            let Ok(line) = std::str::from_utf8(&line[..line.len() - 1]) else { continue };
-            let line = line.trim_end_matches('\r');
+        let mut retained = capture.bytes.split_inclusive(|byte| *byte == b'\n').filter_map(|line| {
+            (line.last() == Some(&b'\n')).then(|| std::str::from_utf8(&line[..line.len()-1]).ok()
+                .map(|line| line.trim_end_matches('\r').to_owned())).flatten()
+        }).collect::<Vec<_>>();
+        retained.extend(capture.result_lines.iter().cloned());
+        for line in retained {
             let name = line.strip_prefix("test ").and_then(|line| line.strip_suffix(" ... FAILED"))
                 .or_else(|| line.strip_prefix("FAIL: ").and_then(|line| line.split_once(" (").map(|(name, _)| name)))
                 .or_else(|| line.strip_prefix("ERROR: ").and_then(|line| line.split_once(" (").map(|(name, _)| name)));
@@ -765,8 +768,9 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
                 PlanEvent::SuiteLaunch(l) if r.request.plan == *plan && l.run_id == result.run_id => Some(l), _ => None,
             }).ok_or_else(|| refuse("suite-result", "result has no matching suite launch"))?;
             if result.observed_at < launch.launched_at || suite_result(&history, plan, &result.run_id).is_some()
-                || [&result.stdout, &result.stderr].iter().any(|s| s.bytes.len() > 65536 || digest(&s.bytes) != s.digest)
-                || result.observation != super::runner::classify(&result.stdout.bytes, &result.stderr.bytes) {
+                || [&result.stdout, &result.stderr].iter().any(|s| s.bytes.len() > 65536 || digest(&s.bytes) != s.digest
+                    || s.result_lines.iter().any(|line| !super::runner::valid_result_line(line)))
+                || result.observation != super::runner::classify(&result.stdout, &result.stderr) {
                 return Err(refuse("suite-result", "result duplicates a run or has invalid capture/timestamp"));
             }
             if suite_failed(result) {

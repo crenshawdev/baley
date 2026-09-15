@@ -44,7 +44,16 @@ fn execute_next_honors_named_plan() {
     let decoded = serde_json::from_value::<super::QueryArguments>(serde_json::json!({
         "operation":"execute-next","phase":6,"plan":2
     }));
-    assert!(decoded.is_ok(), "execute-next must accept an owner-selected admitted plan");
+    let Ok(super::QueryArguments::ExecuteNext { phase, plan }) = decoded else {
+        panic!("execute-next must accept an owner-selected admitted plan");
+    };
+    assert_eq!(phase.get(), 6);
+    assert_eq!(plan.map(std::num::NonZeroU32::get), Some(2));
+    let selected = std::num::NonZeroU32::new(2);
+    assert_eq!(execution_service::select_ready_plan(&[1,2], &[], selected), Ok(2));
+    assert_eq!(execution_service::select_ready_plan(&[1,2], &[], None), Ok(1));
+    assert_eq!(execution_service::select_ready_plan(&[1], &[], selected), Err("plan-not-admitted"));
+    assert_eq!(execution_service::select_ready_plan(&[1,2], &[2], selected), Err("plan-completed"));
 }
 
 #[test]

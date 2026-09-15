@@ -209,11 +209,23 @@ fn tool_schemas_list_exactly_three_tools_with_output_schemas() {
         query,
         &json!({"operation":"execute-next","phase":6})
     ));
+    assert!(schema_accepts(
+        query,
+        query,
+        &json!({"operation":"execute-next","phase":6,"plan":2})
+    ));
     for phase in [json!(0), json!(-1), json!(1.5), json!("6")] {
         assert!(!schema_accepts(
             query,
             query,
             &json!({"operation":"execute-next","phase":phase})
+        ));
+    }
+    for plan in [json!(0), json!(-1), json!(1.5), json!("2")] {
+        assert!(!schema_accepts(
+            query,
+            query,
+            &json!({"operation":"execute-next","phase":6,"plan":plan})
         ));
     }
     let patch = &tools[2]["inputSchema"];

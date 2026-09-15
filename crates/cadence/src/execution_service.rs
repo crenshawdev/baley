@@ -319,10 +319,21 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
     phase: u32,
     driver: &Driver,
 ) -> Answer {
-    let raw_request = public_request_digest(
-        BoundaryTool::CadenceQuery,
-        Some(&json!({"operation":"execute-next","phase":phase})),
-    );
+    query_selected(factory, selected_root, phase, None, driver).await
+}
+
+pub async fn query_selected<I: ConfigIo + Clone + Sync>(
+    factory: &SessionFactory<I>,
+    selected_root: &Path,
+    phase: u32,
+    selected_plan: Option<std::num::NonZeroU32>,
+    driver: &Driver,
+) -> Answer {
+    let request = match selected_plan {
+        Some(plan) => json!({"operation":"execute-next","phase":phase,"plan":plan}),
+        None => json!({"operation":"execute-next","phase":phase}),
+    };
+    let raw_request = public_request_digest(BoundaryTool::CadenceQuery, Some(&request));
     let (root, session, initial) = begin(factory, selected_root).await?;
     if let Some(answer) = terminal_answer(&session, &initial, &scope(phase)).await? {
         return Ok(answer);
@@ -737,7 +748,7 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
             }
             _ => unreachable!("checked above"),
         };
-        return native_query(&session, &view, &root, phase, &phase_record.plans, &plans, &admissions, continuation_view, &raw_request, driver).await;
+        return native_query(&session, &view, &root, phase, selected_plan, &phase_record.plans, &plans, &admissions, continuation_view, &raw_request, driver).await;
     }
     let execution = match execution_snapshot(&view) {
         Ok(value) => value,
@@ -1059,12 +1070,26 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
 /// Native dispatch is composed from confirmed state after continuation
 /// authority: the admitted plan's unfinished tasks are executable, completed
 /// tasks are history, and the immutable admitted dispatch is never rewritten.
+pub(crate) fn select_ready_plan(admitted: &[u32], outcomes: &[u32],
+    selected: Option<std::num::NonZeroU32>) -> Result<u32, &'static str> {
+    if let Some(selected) = selected {
+        let selected = selected.get();
+        if !admitted.contains(&selected) { return Err("plan-not-admitted") }
+        if outcomes.contains(&selected) { return Err("plan-completed") }
+        return Ok(selected);
+    }
+    admitted.iter().copied().find(|plan| !outcomes.contains(plan)).ok_or_else(|| {
+        if admitted.is_empty() { "empty-plan-set" } else { "suite-failed" }
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn native_query<I: ConfigIo + Clone + Sync>(
     session: &Arc<Session<I>>,
     view: &View,
     root: &Path,
     phase: u32,
+    selected_plan: Option<std::num::NonZeroU32>,
     names: &[String],
     plans: &Plans,
     admissions: &[cadence::execution::admission::Record],
@@ -1102,6 +1127,11 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
     let mut candidate = None;
     let (plan, admitted) = match &occurrence.active {
         Some(active) => {
+            if selected_plan.is_some_and(|selected| selected.get() != active.plan) {
+                return refuse("active-plan-conflict", format!(
+                    "owner selected plan {} while plan {} has the active dispatch",
+                    selected_plan.expect("selected plan").get(), active.plan), Some(active.id.clone())).await;
+            }
             let Some(plan) = plans.values.iter().find(|plan| plan.plan == active.plan) else {
                 return refuse("active-plan-missing", "the active dispatch plan is no longer admitted".into(), Some(active.id.clone())).await;
             };
@@ -1117,12 +1147,16 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
             // The next plan is the first admitted plan without a retained outcome;
             // a failed plan is never rerun, and its repair is a later gap plan.
             let admitted_plans = history::admitted_plans(data, phase).map_err(store_failure)?;
-            let Some(next) = admitted_plans.iter().map(|(identity, _)| identity.plan)
-                .find(|number| !occurrence.plans.iter().any(|outcome| outcome.plan == *number)) else {
-                if admitted_plans.is_empty() {
-                    return refuse("empty-plan-set", "the admitted set names no plan".into(), None).await;
-                }
-                return refuse("suite-failed", "every admitted plan has an outcome and a failed suite has no completed repair; publish and admit an explicitly linked gap plan through a versioned set extension (D-120)".into(), None).await;
+            let admitted_numbers = admitted_plans.iter().map(|(identity, _)| identity.plan).collect::<Vec<_>>();
+            let outcome_numbers = occurrence.plans.iter().map(|outcome| outcome.plan).collect::<Vec<_>>();
+            let next = match select_ready_plan(&admitted_numbers, &outcome_numbers, selected_plan) {
+                Ok(next) => next,
+                Err("plan-not-admitted") => return refuse("plan-not-admitted", format!(
+                    "owner-selected plan {} is not admitted", selected_plan.expect("selected plan").get()), None).await,
+                Err("plan-completed") => return refuse("plan-completed", format!(
+                    "owner-selected plan {} already has an outcome", selected_plan.expect("selected plan").get()), None).await,
+                Err("empty-plan-set") => return refuse("empty-plan-set", "the admitted set names no plan".into(), None).await,
+                Err(_) => return refuse("suite-failed", "every admitted plan has an outcome and a failed suite has no completed repair; publish and admit an explicitly linked gap plan through a versioned set extension (D-120)".into(), None).await,
             };
             let plan = plans.values.iter().find(|plan| plan.plan == next).expect("admitted plans are observed");
             let config = session.config().map_err(store_failure)?;
@@ -1133,10 +1167,11 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
                 Err(error) => return refuse("route-unavailable", error.to_string(), None).await,
             };
             let route = cadence::execution::model::DispatchRoute { choice, inputs: super::config_service::routing_inputs(&config) };
-            let built = match build_routed_dispatch(plan, &plans.fingerprint, occurrence.version, &head, route) {
+            let mut built = match build_routed_dispatch(plan, &plans.fingerprint, occurrence.version, &head, route) {
                 Ok(value) => value,
                 Err(error) => return refuse(error.code, error.detail, None).await,
             };
+            built.owner_selection = selected_plan.map(|plan| cadence::execution::model::OwnerSelection { plan });
             let (_, provisional) = match admit_dispatch(&occurrence, built.clone()) {
                 Ok(value) => value,
                 Err(error) => return refuse(error.code, error.detail, Some(built.id)).await,

@@ -193,6 +193,15 @@ impl CadenceServer {
         self.service.query_execution(root, phase).await
     }
 
+    pub async fn query_selected_execution(
+        &self,
+        root: &std::path::Path,
+        phase: u32,
+        plan: Option<NonZeroU32>,
+    ) -> execution_service::Answer {
+        self.service.query_selected_execution(root, phase, plan).await
+    }
+
     pub async fn apply_executor_patch(
         &self,
         root: &std::path::Path,
@@ -288,7 +297,7 @@ enum QueryArguments {
     #[serde(rename = "detect-surfaces")]
     DetectSurfaces { answered: Option<Vec<String>> },
     #[serde(rename = "execute-next")]
-    ExecuteNext { phase: NonZeroU32 },
+    ExecuteNext { phase: NonZeroU32, plan: Option<NonZeroU32> },
     #[serde(rename = "risk-status")]
     RiskStatus {
         scope: cadence::rail::risk::ScopeSelection,
@@ -892,10 +901,10 @@ impl ServerHandler for PublicServer {
                             ),
                         ))));
                     }
-                    Some(QueryArguments::ExecuteNext { phase }) => {
+                    Some(QueryArguments::ExecuteNext { phase, plan }) => {
                         return execute_next_handler(
                             || self.review_handoff(Some(phase.get()), None),
-                            || self.server.query_execution(&self.root, phase.get()),
+                            || self.server.query_selected_execution(&self.root, phase.get(), plan),
                         )
                         .await;
                     }

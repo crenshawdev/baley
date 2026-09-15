@@ -263,6 +263,7 @@ mod resident {
         ExecutionQuery {
             root: PathBuf,
             phase: u32,
+            plan: Option<std::num::NonZeroU32>,
             reply: oneshot::Sender<execution_service::Answer>,
         },
         NativeExecutionApply {
@@ -522,9 +523,9 @@ mod resident {
                             .await;
                             let _ = reply.send(result);
                         }
-                        Request::ExecutionQuery { root, phase, reply } => {
+                        Request::ExecutionQuery { root, phase, plan, reply } => {
                             let result =
-                                execution_service::query(&factory, &root, phase, &driver).await;
+                                execution_service::query_selected(&factory, &root, phase, plan, &driver).await;
                             let _ = reply.send(result);
                         }
                         Request::NativeExecutionApply {root,raw,reply} => {
@@ -834,12 +835,18 @@ mod resident {
         }
 
         pub async fn query_execution(&self, root: &Path, phase: u32) -> execution_service::Answer {
+            self.query_selected_execution(root, phase, None).await
+        }
+
+        pub async fn query_selected_execution(&self, root: &Path, phase: u32,
+            plan: Option<std::num::NonZeroU32>) -> execution_service::Answer {
             let (reply, completion) = oneshot::channel();
             if self
                 .requests
                 .send(Request::ExecutionQuery {
                     root: root.into(),
                     phase,
+                    plan,
                     reply,
                 })
                 .await

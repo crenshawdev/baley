@@ -14,11 +14,13 @@ use std::{collections::BTreeSet, process::Command};
 
 #[test]
 fn capture_retains_result_lines_past_prefix() {
-    let raw = json!({"bytes":[],"digest":crate::store::model::digest(b""),"complete":false,
-        "result_lines":["test oversized::late ... FAILED",
-            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"]});
-    let decoded = serde_json::from_value::<super::receipts::Capture>(raw);
-    assert!(decoded.is_ok(), "capture must accept separately retained result lines: {decoded:?}");
+    let mut output = vec![b'x'; 65_537];
+    output.extend_from_slice(b"\ntest oversized::late ... FAILED\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n");
+    let capture = super::runner::capture(output.as_slice());
+    assert_eq!(capture.bytes.len(), 65_536);
+    assert!(!capture.complete);
+    assert_eq!(capture.result_lines, vec!["test oversized::late ... FAILED",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"]);
 }
 
 // Constructed unit authority, not a claim of approval through the public API.
@@ -302,8 +304,8 @@ fn native_task_records_replay_confirmed_events() {
             plan: 1, task: "deliver".into() };
         let check = basis.request.contract.allocation[0].checks[0].clone();
         let result = RunResult { run_id: "run-1".into(), disposition: Disposition::Exited { code: 1 },
-            stdout: Capture { bytes: b"answer: expected 7, received 6\n".to_vec(), digest: digest(b"answer: expected 7, received 6\n"), complete: true },
-            stderr: Capture { bytes: vec![], digest: digest(b""), complete: true }, observed_at: 20,
+            stdout: Capture { bytes: b"answer: expected 7, received 6\n".to_vec(), digest: digest(b"answer: expected 7, received 6\n"), complete: true, result_lines: vec![] },
+            stderr: Capture { bytes: vec![], digest: digest(b""), complete: true, result_lines: vec![] }, observed_at: 20,
             observation: Observation::Unknown, material_unchanged: true };
         let inspection = Inspection { check: check.clone(), test_digest: "unit-test-material".into(),
             evidence: vec!["run-1".into()], no_subject_stub: false };
@@ -497,8 +499,8 @@ fn native_owner_statements_bind_exact_inspection() {
         runner::append(&store, request("launch", 1, Event::Launch(Launch { run_id: "inspected-run".into(), check: Some(check.clone()), stage: Stage::Red,
             material: Material { commit: "unit-commit".into(), tree: "unit-tree".into(), test_file: "test.py".into(), test_digest: "inspected-material".into(), command: "custom-delivery-check".into() }, launched_at: 10 }))).await.unwrap();
         runner::append(&store, request("result", 2, Event::Result(RunResult { run_id: "inspected-run".into(), disposition: Disposition::Exited { code: 1 },
-            stdout: Capture { bytes: b"custom failed\n".to_vec(), digest: digest(b"custom failed\n"), complete: true },
-            stderr: Capture { bytes: vec![], digest: digest(b""), complete: true }, observed_at: 20, observation: Observation::Unknown, material_unchanged: true }))).await.unwrap();
+            stdout: Capture { bytes: b"custom failed\n".to_vec(), digest: digest(b"custom failed\n"), complete: true, result_lines: vec![] },
+            stderr: Capture { bytes: vec![], digest: digest(b""), complete: true, result_lines: vec![] }, observed_at: 20, observation: Observation::Unknown, material_unchanged: true }))).await.unwrap();
         let inspection = Inspection { check: check.clone(), test_digest: "inspected-material".into(), evidence: vec!["inspected-run".into()], no_subject_stub: false };
         let negative = OwnerStatement { submission: inspection.clone(), approval: OwnerApproval { approved: true, owner: "Fixture Owner".into(),
             at: "2026-09-10T14:00:00Z".into(), submission: inspection }, supersedes: None };

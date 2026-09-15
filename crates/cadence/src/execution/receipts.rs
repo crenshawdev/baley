@@ -37,6 +37,8 @@ pub struct Capture {
     pub bytes: Vec<u8>,
     pub digest: String,
     pub complete: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub result_lines: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

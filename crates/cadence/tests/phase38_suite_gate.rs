@@ -1191,7 +1191,7 @@ fn phase38_execute_next_dispatches_named_plan_first() {
 
 #[test]
 fn phase38_large_suite_receipt_retains_every_failing_test_name() {
-    let mut suite = String::from("#!/bin/sh\nprintf '%65540s' x\n");
+    let mut suite = String::from("#!/bin/sh\nprintf '%65540s\\n' x\n");
     for name in ["oversized::alpha", "oversized::beta", "oversized::gamma"] {
         suite.push_str(&format!("printf 'test {name} ... FAILED\\n'\n"));
     }
