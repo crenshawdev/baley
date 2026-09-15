@@ -83,6 +83,8 @@ pub struct ActiveDispatch {
     pub prompt: String,
     #[serde(default)]
     pub prompt_digest: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub issue_digest: String,
     // Read only for retained records written before D-165. New records never
     // serialize the historical byte-count identity.
     #[serde(default, skip_serializing)]

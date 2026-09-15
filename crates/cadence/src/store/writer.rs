@@ -37,6 +37,10 @@ pub enum BoundaryChange {
         plan_set_fingerprint: String,
         dispatch: ActiveDispatch,
     },
+    Reissue {
+        issue_dispatch_id: String,
+        dispatch: ActiveDispatch,
+    },
     Patch {
         patch: ExecutorPatch,
         commit_paths: BTreeMap<String, Vec<String>>,
@@ -1128,6 +1132,45 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     None=>super::transaction::IntentKind::ExecutionDispatchV1 {phase,decision_id:id.clone()},
                 }
             }
+            BoundaryChange::Reissue {
+                issue_dispatch_id,
+                dispatch,
+            } => {
+                let phase = dispatch.phase;
+                if decision.scope != (BoundaryScope::Execution { phase })
+                    || decision.tool != BoundaryTool::CadenceQuery
+                    || decision.receipt
+                        != (Receipt::Dispatch {
+                            dispatch_id: issue_dispatch_id.clone(),
+                            prompt_digest: dispatch.prompt_digest.clone(),
+                        })
+                    || dispatch.issue_digest.len() != 64
+                    || !dispatch.issue_digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    || crate::store::model::digest(dispatch.prompt.as_bytes()) != dispatch.prompt_digest
+                {
+                    return Err(Error::Invalid("dispatch re-issue boundary identity mismatch".into()));
+                }
+                let mut execution = execution_snapshot(&next.snapshot.data)?;
+                let active = execution
+                    .occurrences
+                    .get_mut(&phase.to_string())
+                    .and_then(|occurrence| occurrence.active.as_mut())
+                    .ok_or_else(|| Error::Invalid("dispatch re-issue lacks an active dispatch".into()))?;
+                let mut expected = active.clone();
+                expected.prompt = dispatch.prompt.clone();
+                expected.prompt_digest = dispatch.prompt_digest.clone();
+                expected.issue_digest = dispatch.issue_digest.clone();
+                if expected != dispatch {
+                    return Err(Error::Invalid("dispatch re-issue changed admitted identity".into()));
+                }
+                *active = dispatch;
+                install_execution(&mut next.snapshot.data, execution)?;
+                super::transaction::IntentKind::NativeExecutionReissueV1 {
+                    phase,
+                    decision_id: id.clone(),
+                    issue_dispatch_id,
+                }
+            }
             BoundaryChange::Patch {
                 patch,
                 commit_paths,
@@ -1929,9 +1972,8 @@ pub fn require_current_execution(view: &View) -> std::result::Result<(), Failure
                             && value.boundary.scope == (BoundaryScope::Execution { phase: dispatch.phase })
                             && value.boundary.tool == BoundaryTool::CadenceQuery
                             && value.boundary.subject_id.as_ref() == Some(&dispatch.id)
-                            && value.boundary.receipt == (Receipt::Dispatch {
-                                dispatch_id: dispatch.id.clone(), prompt_digest: dispatch.prompt_digest.clone()
-                            }))
+                            && matches!(&value.boundary.receipt, Receipt::Dispatch { dispatch_id, .. }
+                                if dispatch_id == &dispatch.id))
                 }) {
                     return Err(Failure::RoutingEvidence);
                 }

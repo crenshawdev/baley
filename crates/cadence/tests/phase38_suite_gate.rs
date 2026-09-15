@@ -336,9 +336,8 @@ fn phase38_retained_dispatch_prompt_survives_renderer_change() {
         json!({"operation":"execute-next","phase":PHASE}),
     );
     assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
-    let retained_prompt = dispatch["prompt"].as_str().unwrap().to_owned();
-    let admitted_digest = dispatch["dispatch"]["prompt_digest"].clone();
-    let expected_digest = cadence::store::model::digest(retained_prompt.as_bytes());
+    assert_eq!(dispatch["dispatch"]["prompt_digest"],
+        cadence::store::model::digest(dispatch["prompt"].as_str().unwrap().as_bytes()));
 
     let current = task(project);
     let started = call(
@@ -408,6 +407,15 @@ fn phase38_retained_dispatch_prompt_survives_renderer_change() {
         assert!(Instant::now() < deadline, "missing green suite result: {current}");
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    // Retain the current operational issue before changing only the renderer.
+    let current_issue = client.call(
+        "cadence_query",
+        json!({"operation":"execute-next","phase":PHASE}),
+    );
+    assert_eq!(current_issue["outcome"], "dispatch", "{current_issue}");
+    let retained_prompt = current_issue["prompt"].as_str().unwrap().to_owned();
+    let admitted_digest = current_issue["dispatch"]["prompt_digest"].clone();
+    let expected_digest = cadence::store::model::digest(retained_prompt.as_bytes());
     client.finish();
 
     let changed = changed_binary(temp.path());

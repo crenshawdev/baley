@@ -1164,7 +1164,12 @@ fn phase12_dispatch_contains_admitted_checks_state_and_instructions() {
     // Named commands, suite and lease come from retained authority; the
     // configured command is provenance for proposals and never the command.
     assert_eq!(ops["suite"]["command"],"printf suite");
-    assert_eq!(ops["lease"],json!({"files":["src/tiny.py","tests/check.py","src/renamed.py"],"directories":[]}));
+    assert_eq!(&ops["lease"]["files"].as_array().unwrap()[..3],
+        &json!(["src/tiny.py","tests/check.py","src/renamed.py"]).as_array().unwrap()[..]);
+    assert_eq!(&ops["lease"]["files"].as_array().unwrap()[3..],
+        &cadence::execution::render::RENDERED_PROJECT_FILES.iter()
+            .map(|rendered| json!(rendered.path)).collect::<Vec<_>>()[..]);
+    assert_eq!(ops["lease"]["directories"],json!([]));
     assert_eq!(ops["commands"]["precedence"],"admitted");
     assert!(ops["commands"]["configured"].as_array().unwrap().contains(&json!({"key":"workflow.test_command","value":"printf conflicting-global-suite","layer":"global"})),"{}",ops["commands"]);
     assert_eq!(ops["commands"]["language"]["manifest"],Value::Null);

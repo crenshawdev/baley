@@ -48,6 +48,11 @@ pub(crate) enum IntentKind {
         decision_id: String,
         inventory: Observed,
     },
+    NativeExecutionReissueV1 {
+        phase: u32,
+        decision_id: String,
+        issue_dispatch_id: String,
+    },
     NativeAdmissionV1 {
         request: Box<cadence::execution::admission::Request>,
         root_binding: String,
@@ -711,6 +716,7 @@ impl Intent {
             | IntentKind::BoundaryObservationV1 { .. }
             | IntentKind::ExecutionDispatchV1 { .. }
             | IntentKind::NativeExecutionDispatchV1 { .. }
+            | IntentKind::NativeExecutionReissueV1 { .. }
             | IntentKind::ExecutionPatchV1 { .. }
             | IntentKind::Store
             | IntentKind::ExecutionRefusal { .. }
@@ -981,6 +987,11 @@ impl Intent {
                 decision_id,
                 false,
             ),
+            IntentKind::NativeExecutionReissueV1 { phase, decision_id, .. } => (
+                BoundaryScope::Execution { phase: *phase },
+                decision_id,
+                false,
+            ),
             IntentKind::ExecutionFinalizeRiskV1 {
                 phase, decision_id, ..
             } => (
@@ -1081,6 +1092,49 @@ impl Intent {
                         })
                 {
                     return Err(Error::Invalid("dispatch intent receipt mismatch".into()));
+                }
+            }
+            IntentKind::NativeExecutionReissueV1 { phase, issue_dispatch_id, .. } => {
+                let execution = execution_snapshot(snapshot)?;
+                let active = execution
+                    .occurrences
+                    .get(&phase.to_string())
+                    .and_then(|occurrence| occurrence.active.as_ref())
+                    .ok_or_else(|| Error::Invalid("dispatch re-issue intent lacks active dispatch".into()))?;
+                if active.phase != *phase
+                    || active.issue_digest.len() != 64
+                    || !active.issue_digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    || crate::store::model::digest(active.prompt.as_bytes()) != active.prompt_digest
+                    || value.terminal
+                    || value.boundary.receipt
+                        != (Receipt::Dispatch {
+                            dispatch_id: issue_dispatch_id.clone(),
+                            prompt_digest: active.prompt_digest.clone(),
+                        })
+                {
+                    return Err(Error::Invalid("dispatch re-issue intent receipt mismatch".into()));
+                }
+                let previous: Snapshot = serde_json::from_slice(
+                    self.participants
+                        .last()
+                        .and_then(|participant| participant.expected.bytes.as_deref())
+                        .ok_or_else(|| Error::Invalid("dispatch re-issue requires prior snapshot".into()))?,
+                )?;
+                let mut expected_execution = execution_snapshot(&previous)?;
+                let expected_active = expected_execution
+                    .occurrences
+                    .get_mut(&phase.to_string())
+                    .and_then(|occurrence| occurrence.active.as_mut())
+                    .ok_or_else(|| Error::Invalid("dispatch re-issue preimage lacks active dispatch".into()))?;
+                expected_active.prompt = active.prompt.clone();
+                expected_active.prompt_digest = active.prompt_digest.clone();
+                expected_active.issue_digest = active.issue_digest.clone();
+                let mut previous_data = previous.data;
+                let mut current_data = snapshot.data.clone();
+                previous_data.as_object_mut().unwrap().remove("execution");
+                current_data.as_object_mut().unwrap().remove("execution");
+                if expected_execution != execution || previous_data != current_data {
+                    return Err(Error::Invalid("dispatch re-issue changed data outside retained prompt state".into()));
                 }
             }
             IntentKind::ExecutionPatchV1 {

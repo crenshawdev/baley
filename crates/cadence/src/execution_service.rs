@@ -1183,20 +1183,20 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         set_version: latest.set_version, head: &head, tasks, checks, completed, continuation,
         suite: json!({"command": admitted.suite, "state": suite_state}), commands: instructions::command_policy(&configured, &present) };
     let operational = native_operational(&state);
+    let issue_digest = match cadence::execution::boundary::canonical_bytes(&operational) {
+        Ok(bytes) => cadence::store::model::digest(&bytes),
+        Err(_) => return refuse("dispatch-state", "the current dispatch state cannot be encoded".into(), Some(admitted.id.clone())).await,
+    };
     let (mut dispatch, operational) = match native_dispatch(&admitted, operational, executable, candidate.is_some()) {
         Ok(value) => value,
         Err(error) => return refuse(error.code, error.detail, Some(admitted.id.clone())).await,
     };
-    let prompt = if candidate.is_some() {
-        let prompt = render_native_prompt(&operational, Some(&instructions::dispatch_text()), &plan.body);
-        dispatch.prompt_digest = cadence::store::model::digest(prompt.as_bytes());
-        dispatch.prompt = prompt.clone();
-        prompt
-    } else {
-        match retained_prompt(&dispatch) {
-            Ok(prompt) => prompt,
-            Err((code, reason)) => return refuse(code, reason, Some(dispatch.id.clone())).await,
-        }
+    let fresh = candidate.is_some();
+    let (prompt, reissued) = match issue_prompt(&mut dispatch, &issue_digest, fresh, || {
+        render_native_prompt(&operational, Some(&instructions::dispatch_text()), &plan.body)
+    }) {
+        Ok(value) => value,
+        Err((code, reason)) => return refuse(code, reason, Some(dispatch.id.clone())).await,
     };
     let response = Response::Dispatch { dispatch: Box::new(dispatch.clone()), prompt };
     #[cfg(test)]
@@ -1218,7 +1218,18 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         Some(mut candidate) => {
             candidate.prompt = dispatch.prompt.clone();
             candidate.prompt_digest = dispatch.prompt_digest.clone();
+            candidate.issue_digest = dispatch.issue_digest.clone();
             (format!("execution-dispatch:{}", dispatch.id), BoundaryChange::Dispatch { plan_set_fingerprint: plans.fingerprint.clone(), dispatch: candidate })
+        }
+        None if reissued => {
+            let mut retained = admitted;
+            retained.prompt = dispatch.prompt.clone();
+            retained.prompt_digest = dispatch.prompt_digest.clone();
+            retained.issue_digest = dispatch.issue_digest.clone();
+            (format!("execution-reissue:{}", dispatch.id), BoundaryChange::Reissue {
+                issue_dispatch_id: dispatch.id.clone(),
+                dispatch: retained,
+            })
         }
         None => (format!("execution-observation:{}", decision.identity()?), BoundaryChange::Observe),
     };
@@ -1821,6 +1832,45 @@ fn retained_prompt(dispatch: &ActiveDispatch) -> Result<String, (&'static str, S
         ));
     }
     Ok(dispatch.prompt.clone())
+}
+
+fn issue_prompt(
+    dispatch: &mut ActiveDispatch,
+    current_issue_digest: &str,
+    fresh: bool,
+    render: impl FnOnce() -> String,
+) -> Result<(String, bool), (&'static str, String)> {
+    if !fresh && (dispatch.issue_digest.is_empty() || dispatch.issue_digest == current_issue_digest) {
+        return retained_prompt(dispatch).map(|prompt| (prompt, false));
+    }
+    let prompt = render();
+    dispatch.prompt_digest = cadence::store::model::digest(prompt.as_bytes());
+    dispatch.prompt = prompt.clone();
+    dispatch.issue_digest = current_issue_digest.to_owned();
+    Ok((prompt, !fresh))
+}
+
+#[cfg(test)]
+mod issue_prompt_tests {
+    use super::issue_prompt;
+    use cadence::execution::model::ActiveDispatch;
+    use serde_json::json;
+
+    #[test]
+    fn unchanged_dispatch_state_returns_retained_bytes_without_rendering() {
+        let mut dispatch: ActiveDispatch = serde_json::from_value(json!({
+            "schema":1,"id":"d","expected_execution_version":1,"phase":1,"plan":1,
+            "plan_fingerprint":"f","plan_set_fingerprint":"s","requirements":[],"tasks":[],
+            "suite":"suite","files":[],"policy":{"rung":"fixed","branch":"current","reviews":"disabled"},
+            "base_sha":"base","prompt":"retained bytes","prompt_digest":cadence::store::model::digest(b"retained bytes"),
+            "issue_digest":"state","body":""
+        })).unwrap();
+        let (prompt, reissued) = issue_prompt(&mut dispatch, "state", false, || {
+            panic!("an unchanged issue must not invoke the renderer")
+        }).unwrap();
+        assert_eq!(prompt.as_bytes(), b"retained bytes");
+        assert!(!reissued);
+    }
 }
 
 fn render_prompt(dispatch: &ActiveDispatch) -> String {
