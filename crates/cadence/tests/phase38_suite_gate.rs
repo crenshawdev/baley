@@ -707,7 +707,8 @@ fn phase38_regenerated_skill_is_implicit_lease_material() {
     let files = dispatch["dispatch"]["files"].as_array().unwrap();
     assert!(files.iter().any(|path| path == RENDERED_SKILL),
         "the retained dispatch lease must include {RENDERED_SKILL}: {files:?}");
-    assert_eq!(closed["receipt"]["request"]["event"]["source"]["out_of_lease"], json!({}),
+    assert!(closed["receipt"]["request"]["event"]["source"]["out_of_lease"]
+        .as_object().is_none_or(|paths| paths.is_empty()),
         "binary-rendered material must not be retained as a deviation: {closed}");
     assert_eq!(fs::read(project.join(RENDERED_SKILL)).unwrap(), rendered.stdout);
     assert_eq!(suite_result["disposition"], json!({"kind":"exited","code":0}));

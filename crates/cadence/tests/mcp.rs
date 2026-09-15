@@ -1243,23 +1243,11 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
 
     // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
-    for (relative, args) in [
-        ("skills/cad-context/SKILL.md", vec!["context-instructions"]),
-        ("skills/cad-plan/SKILL.md", vec!["plan-instructions"]),
-        ("skills/cad-executor-contract/SKILL.md", vec!["executor-instructions"]),
-        ("skills/cad-execute/SKILL.md", vec!["executor-instructions", "--frontdoor"]),
-        ("skills/cad-verifier-contract/SKILL.md", vec!["verifier-instructions"]),
-        ("skills/cad-verify/SKILL.md", vec!["verifier-instructions", "--frontdoor"]),
-        ("skills/cad-review/SKILL.md", vec!["review-instructions"]),
-        ("skills/cad-decision-review/SKILL.md", vec!["review-instructions", "--alias", "cad-decision-review"]),
-        ("skills/cad-minimalism-review/SKILL.md", vec!["review-instructions", "--alias", "cad-minimalism-review"]),
-        ("skills/cad-plan-review/SKILL.md", vec!["review-instructions", "--alias", "cad-plan-review"]),
-        ("skills/cad-audit/SKILL.md", vec!["audit-instructions"]),
-        ("skills/cad-coverage/SKILL.md", vec!["audit-instructions", "--coverage"]),
-        ("skills/cad-read-contract/SKILL.md", vec!["read-instructions"]),
-    ] {
+    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 13);
+    for target in cadence::execution::render::RENDERED_PROJECT_FILES {
+        let relative = target.path;
         let rendered = Command::new(env!("CARGO_BIN_EXE_cadence"))
-            .args(&args)
+            .args(target.command)
             .current_dir(std::env::temp_dir())
             .stdin(Stdio::null())
             .output()

@@ -282,6 +282,12 @@ fn same_destination(target: &Path, destination: &Path) -> Result<bool, String> {
 }
 
 fn protected_target(target: &Path) -> Result<bool, String> {
+    if cadence::execution::render::RENDERED_PROJECT_FILES
+        .iter()
+        .any(|rendered| target.ends_with(rendered.path))
+    {
+        return Ok(true);
+    }
     let components = target
         .components()
         .filter_map(|component| match component {

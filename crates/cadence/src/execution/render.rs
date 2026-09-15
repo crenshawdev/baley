@@ -10,6 +10,29 @@ use crate::store::{Error, Result};
 
 pub const SUMMARY_RENDER_VERSION: u32 = 1;
 
+/// A project file whose bytes are emitted by one project-free binary command.
+/// These paths are implicit execution lease material and never planner input.
+pub struct RenderedProjectFile {
+    pub path: &'static str,
+    pub command: &'static [&'static str],
+}
+
+pub const RENDERED_PROJECT_FILES: &[RenderedProjectFile] = &[
+    RenderedProjectFile { path: "skills/cad-context/SKILL.md", command: &["context-instructions"] },
+    RenderedProjectFile { path: "skills/cad-plan/SKILL.md", command: &["plan-instructions"] },
+    RenderedProjectFile { path: "skills/cad-executor-contract/SKILL.md", command: &["executor-instructions"] },
+    RenderedProjectFile { path: "skills/cad-execute/SKILL.md", command: &["executor-instructions", "--frontdoor"] },
+    RenderedProjectFile { path: "skills/cad-verifier-contract/SKILL.md", command: &["verifier-instructions"] },
+    RenderedProjectFile { path: "skills/cad-verify/SKILL.md", command: &["verifier-instructions", "--frontdoor"] },
+    RenderedProjectFile { path: "skills/cad-review/SKILL.md", command: &["review-instructions"] },
+    RenderedProjectFile { path: "skills/cad-decision-review/SKILL.md", command: &["review-instructions", "--alias", "cad-decision-review"] },
+    RenderedProjectFile { path: "skills/cad-minimalism-review/SKILL.md", command: &["review-instructions", "--alias", "cad-minimalism-review"] },
+    RenderedProjectFile { path: "skills/cad-plan-review/SKILL.md", command: &["review-instructions", "--alias", "cad-plan-review"] },
+    RenderedProjectFile { path: "skills/cad-audit/SKILL.md", command: &["audit-instructions"] },
+    RenderedProjectFile { path: "skills/cad-coverage/SKILL.md", command: &["audit-instructions", "--coverage"] },
+    RenderedProjectFile { path: "skills/cad-read-contract/SKILL.md", command: &["read-instructions"] },
+];
+
 pub fn render_phase_summary(execution: &ExecutionSnapshot, phase: u32) -> Result<Vec<u8>> {
     if phase == 0 || execution.schema != super::model::EXECUTION_SCHEMA {
         return Err(Error::Invalid("invalid execution summary identity".into()));

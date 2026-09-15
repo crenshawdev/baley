@@ -53,6 +53,13 @@ pub fn build_dispatch(
         &serde_json::to_vec(&identity)
             .map_err(|err| error("dispatch-identity", err.to_string()))?,
     );
+    let mut files = plan.files.clone();
+    files.extend(
+        super::render::RENDERED_PROJECT_FILES
+            .iter()
+            .map(|rendered| rendered.path.to_owned())
+            .filter(|path| !plan.files.contains(path)),
+    );
     Ok(ActiveDispatch {
         schema: EXECUTION_SCHEMA,
         id,
@@ -64,7 +71,7 @@ pub fn build_dispatch(
         requirements: plan.requirements.clone(),
         tasks: plan.tasks.clone(),
         suite: plan.suite.clone(),
-        files: plan.files.clone(),
+        files,
         directories: plan.directories.clone(),
         policy: DispatchPolicy {
             rung: ExecutorRung::Fixed,
