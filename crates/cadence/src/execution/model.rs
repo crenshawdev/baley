@@ -81,15 +81,17 @@ pub struct ActiveDispatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<Box<DispatchRoute>>,
     pub base_sha: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prompt: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prompt_digest: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub issue_digest: String,
-    // Read only for retained records written before D-165. New records never
-    // serialize the historical byte-count identity.
-    #[serde(default, skip_serializing)]
+    // Retained records written before D-165 carry the prompt's byte count and
+    // no prompt. Their close proofs are digested over exactly those bytes, so
+    // the field is written back when it was read and never set for new records
+    // (D-175, second site).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_bytes: Option<u64>,
     #[serde(default)]
     pub body: String,

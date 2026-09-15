@@ -620,6 +620,21 @@ once in a shell: 57 result lines, 971 passed, 0 failed, 0 panics, 2 ignored
 `phase38_suite_gate` 72s for 7. Cargo runs targets one after another; that is
 the next thing to fix, and John agreed to nextest first.
 
+**Second site, found the same evening.** `verify-next 31` refused `task event
+identity mismatch`: every retained close proof embeds the `ActiveDispatch` it
+closed under, and D-165 had made that struct drop `prompt_bytes` and always
+write `prompt` and `prompt_digest`. Nine phase-31 closes no longer hashed to
+their digests. Worse, the snapshot copy of those records had already been
+re-serialized by the day's writes and had lost the byte count outright; the
+append-only decisions log, which stores each event as text, still had it.
+The fix is the same shape on `ActiveDispatch` (`c1b1e9d6` red, the fix
+commit beside it), and the nine snapshot records were restored from the
+log's bytes by a one-off program on the crate's own `Snapshot` parse and
+render, generation 499, every task and plan event across every phase then
+matching its digest (355 checked). Nothing was invented: the log is the
+record of source and the snapshot is its projection. That the binary cannot
+do that restoration itself is GH-262.
+
 ## D-176
 
 The suite took fifteen minutes and was going to take longer. On 2026-09-15,
