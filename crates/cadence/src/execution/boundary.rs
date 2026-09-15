@@ -658,7 +658,7 @@ mod tests {
             ),
             (
                 r##"{"dispatch":{"base_sha":"base","body":"体","expected_execution_version":1,"files":["src/a.rs"],"id":"d1","phase":6,"plan":1,"plan_fingerprint":"f","plan_set_fingerprint":"s","policy":{"branch":"current","reviews":"disabled","rung":"fixed"},"prompt":"体","prompt_digest":"d08d660b7de4e2314def9d953b46d4fec2db3acbfe7344cda4ede7faacc5e177","requirements":["AC1"],"schema":1,"suite":"suite","tasks":[{"id":"T1","verify":["verify"]}]},"outcome":"dispatch","prompt":"体","status":"ok"}"##,
-                "be9b2252281adc092fe110c20ddbc06d6063b987188839ca77c134aaceb7c604",
+                "19ee1c27b6e1549531229b2a0a27c1a84c64e5cfaa3bfb41de64852850840e18",
             ),
         ];
         for (expected, expected_digest) in fixtures {

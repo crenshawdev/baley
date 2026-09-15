@@ -162,7 +162,7 @@ fn dispatch_envelope_has_an_independently_encoded_exact_digest() {
     assert_eq!(
         (answer.response_digest.as_str(), answer.receipt),
         (
-            "281a096470439f1147be2843416cd400f527c633d0b92704b50e4eec81b38b96",
+            "7d30b24b24746184cf00b3a6e33220719a2f12fa95beadaf011dd683e273bea9",
             Receipt::Dispatch {
                 dispatch_id: DISPATCH_ID.into(),
                 prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into()
@@ -828,7 +828,7 @@ const SAVED: [SavedCase; 3] = [
 }"#,
         route: r#"{"choice":{"role":"cad-executor","agent":"cad-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"pinned":false,"reasons":["roles.cad-executor.effort: role from repo; starting rung high","roles.cad-executor.model: role from repo; sonnet"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"26f39647895f5607ad04a8e5cad9e1fa67c304e1014fc5f74708fb7fbb8ad282","stamp":null},"global":null,"global_alias":false}}"#,
         id: "fb5d0571637ee342cdc0b4719132195e477a085c9bc3d1c45d4f4d5f24ba07bd",
-        envelope_digest: "09bef897ac68287f18e233c562e3b194446ed5ffbc8ee639e0de2343235b5d13",
+        envelope_digest: "40e6c9c4aa3127ef6eac86322772b869c2ede7c8fdfc21b8c8ca9310dc52f02f",
     },
     SavedCase {
         model: Some("opus"),
@@ -844,7 +844,7 @@ const SAVED: [SavedCase; 3] = [
 }"#,
         route: r#"{"choice":{"role":"cad-executor","agent":"cad-executor-xhigh","rung":"xhigh","starting_rung":"xhigh","model":"opus","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"xhigh"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"opus"},"attempt":1,"escalated":false,"pinned":false,"reasons":["roles.cad-executor.effort: role from repo; starting rung xhigh","roles.cad-executor.model: role from repo; opus"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"37024e43a0630149ea71e1a283911411fab1287744e69195f688c55bccc023c4","stamp":null},"global":null,"global_alias":false}}"#,
         id: "95bfd239172b542536fdc88fb2cd0ccaf0bb9d6d31e8c67442368e56e2c66cbc",
-        envelope_digest: "79d5d0b86fd5ec3880eeaf90c2bee0261794942c61d0717e2d350c0640cff994",
+        envelope_digest: "82779c2b045cf1134c7dc0b6cc76fd1d6108c45fba377e434eed12c95a228fb9",
     },
     SavedCase {
         model: None,
@@ -860,7 +860,7 @@ const SAVED: [SavedCase; 3] = [
 }"#,
         route: r#"{"choice":{"role":"cad-executor","agent":"cad-executor-xhigh","rung":"xhigh","starting_rung":"xhigh","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"xhigh"},"model_source":{"kind":"reset","key":"roles.cad-executor.model","layer":"repo","stored":null},"attempt":1,"escalated":false,"pinned":false,"reasons":["roles.cad-executor.effort: role from repo; starting rung xhigh","roles.cad-executor.model: reset from repo; omit model; inherit session"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"0a500276235db1450dbb6d6ca088ddd8b7d794d72e91206892b7b89fefc66ba4","stamp":null},"global":null,"global_alias":false}}"#,
         id: "afa483fa5f82bd58b20ef660b53ceac308f2b3fa1fed50e5f1cdde01e4bfcb77",
-        envelope_digest: "ffdb83adb016bd5927a0f563a2e4dcb40341cabc7714e1ef7c9a7aa076357516",
+        envelope_digest: "175756081fdbd9d2b3a5b2fca3cfde6034125b3398444c293f0f18061c0f5a18",
     },
 ];
 

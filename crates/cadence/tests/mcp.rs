@@ -1395,7 +1395,10 @@ fn execute_restart_preserves_dispatch_and_advances_overlapping_signed_plans() {
     assert_eq!(first["status"], "ok");
     assert_eq!(first["outcome"], "dispatch");
     assert_eq!(first["dispatch"]["plan"], 1);
-    assert_eq!(first["dispatch"]["files"], json!(["src/shared.txt"]));
+    let files = first["dispatch"]["files"].as_array().unwrap();
+    assert_eq!(&files[..1], &json!(["src/shared.txt"]).as_array().unwrap()[..]);
+    assert_eq!(&files[1..], &cadence::execution::render::RENDERED_PROJECT_FILES.iter()
+        .map(|rendered| json!(rendered.path)).collect::<Vec<_>>()[..]);
     assert_eq!(
         first["dispatch"]["policy"],
         json!({"rung":"high","branch":"current","reviews":"disabled"})

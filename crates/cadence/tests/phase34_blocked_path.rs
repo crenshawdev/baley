@@ -434,7 +434,10 @@ fn out_of_lease_completion_paths_are_retained_as_deviations() {
     assert_eq!(authorized["status"], "ok", "{authorized}");
     let dispatch = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
-    assert_eq!(dispatch["dispatch"]["files"], json!(["src/control.py","tests/control.py"]), "{dispatch}");
+    let files = dispatch["dispatch"]["files"].as_array().unwrap();
+    assert_eq!(&files[..2], &json!(["src/control.py","tests/control.py"]).as_array().unwrap()[..]);
+    assert_eq!(&files[2..], &cadence::execution::render::RENDERED_PROJECT_FILES.iter()
+        .map(|rendered| json!(rendered.path)).collect::<Vec<_>>()[..]);
 
     let allocated = contract["allocation"].as_array().unwrap().iter()
         .find(|entry| entry["plan"] == 1 && entry["task"] == "control").unwrap()["checks"][0].clone();

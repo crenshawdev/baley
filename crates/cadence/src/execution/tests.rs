@@ -873,7 +873,7 @@ fn executor_never_requests_the_gates_the_orchestrator_owns() {
     let frontdoor = crate::execution::instructions::frontdoor_markdown();
     assert!(executor.contains("The executor never requests `execution-suite` or `execution-plan-complete`"),
         "the compiled executor text must hand the gates to the orchestrator");
-    assert!(!executor.contains("or the close is refused with the path named"),
+    assert!(!executor.contains("Every path in an evidence or completion commit"),
         "D-170: the lease paragraph still promises a refusal");
     assert!(executor.contains("retained as a deviation on the plan record"),
         "D-170: the lease paragraph must name the retained deviation");
