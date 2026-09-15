@@ -842,17 +842,29 @@ fn lease_evidence_extension_preserves_old_preimage_and_validates_full_new_eviden
 
 #[test]
 fn historical_fixed_dispatch_serialization_omits_route_data() {
-    let mut wire = json!({"schema":1,"id":"old-dispatch","expected_execution_version":1,
+    // A dispatch admitted before D-165 carries `prompt_bytes` and no prompt. Every
+    // retained close proof embeds its dispatch and is digested over exactly those
+    // bytes, so the record must write back what it read (D-175, second site).
+    let wire = json!({"schema":1,"id":"old-dispatch","expected_execution_version":1,
         "phase":6,"plan":1,"plan_fingerprint":"plan","plan_set_fingerprint":"plans",
         "requirements":["AC4"],"tasks":[{"id":"T1","verify":["verify-T1"]}],
         "suite":"suite-command","files":["src/a.rs"],
         "policy":{"rung":"fixed","branch":"current","reviews":"disabled"},
-        "base_sha":"1111111111111111111111111111111111111111","body":""});
-    let legacy_key = ["prompt_", "bytes"].concat();
-    wire[&legacy_key] = json!(512);
-    let supplied: cadence::execution::model::ActiveDispatch = serde_json::from_value(wire).unwrap();
+        "base_sha":"1111111111111111111111111111111111111111","prompt_bytes":512,"body":""});
+    let supplied: cadence::execution::model::ActiveDispatch = serde_json::from_value(wire.clone()).unwrap();
     assert!(supplied.prompt.is_empty() && supplied.prompt_digest.is_empty());
-    assert!(serde_json::to_value(&supplied).unwrap().get(&legacy_key).is_none());
+    assert_eq!(supplied.prompt_bytes, Some(512));
+    assert_eq!(serde_json::to_value(&supplied).unwrap(), wire);
+
+    // A dispatch admitted after D-165 carries the prompt and its digest and never the byte count.
+    let prompt = "p".repeat(20);
+    let mut current = wire.clone();
+    current.as_object_mut().unwrap().remove("prompt_bytes");
+    current["prompt"] = json!(prompt);
+    current["prompt_digest"] = json!(model::digest(prompt.as_bytes()));
+    let supplied: cadence::execution::model::ActiveDispatch = serde_json::from_value(current.clone()).unwrap();
+    assert_eq!(supplied.prompt_bytes, None);
+    assert_eq!(serde_json::to_value(&supplied).unwrap(), current);
 }
 
 #[test]
