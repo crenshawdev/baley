@@ -204,7 +204,9 @@ fn inspect_planner_record(project: &Path, session_id: String) -> PlannerRound {
             }
             if record["type"] == "assistant" {
                 let Some(message_id) = record.pointer("/message/id").and_then(Value::as_str) else { continue };
-                let key = (source.clone(), message_id.to_owned());
+                let record_session = record["sessionId"].as_str()
+                    .expect("assistant message has no actual session id").to_owned();
+                let key = (record_session, message_id.to_owned());
                 assistant_messages.insert(key.clone());
                 if record["message"]["stop_reason"].is_null() { continue }
                 let usage = record.pointer("/message/usage")

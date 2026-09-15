@@ -1,6 +1,7 @@
 pub mod document;
 pub mod instructions;
 pub mod location;
+pub mod measurement;
 pub mod model;
 pub mod outline;
 pub mod search;

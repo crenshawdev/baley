@@ -53,6 +53,12 @@ pub enum DocumentIdentity {
         plan: NonZeroU32,
         task: String,
     },
+    PlannerRound {
+        phase: NonZeroU32,
+        session_id: String,
+        first_turn: String,
+        last_turn: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]

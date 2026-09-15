@@ -154,6 +154,19 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
                 }],
             })
         }
+        DocumentIdentity::PlannerRound { .. } => {
+            let report = super::measurement::resolve(root, identity)?;
+            Ok(Resolved {
+                identity: identity.clone(),
+                classification: "claude-planner-round",
+                revision: report.revision,
+                parts: vec![Part {
+                    selector: "report".into(),
+                    title: "Claude planner round measurement".into(),
+                    body: report.body,
+                }],
+            })
+        }
     }
 }
 
