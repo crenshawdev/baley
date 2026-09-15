@@ -280,10 +280,12 @@ fn claude_calls(events: &[Value]) -> Vec<Call> {
                 if block["type"] == "tool_use" && block["name"] == "mcp__cadence__cadence_query" {
                     pending.insert(block["id"].as_str().unwrap().to_owned(), (caller.clone(), block["input"].clone()));
                 }
-                if block["type"] == "tool_result" {
-                    if let Some((caller, arguments)) = block["tool_use_id"].as_str().and_then(|id| pending.remove(id)) {
-                        if let Some(result) = tool_result_value(block) { calls.push(Call { caller, arguments, result }); }
-                    }
+                if block["type"] == "tool_result"
+                    && let Some((caller, arguments)) = block["tool_use_id"].as_str()
+                        .and_then(|id| pending.remove(id))
+                    && let Some(result) = tool_result_value(block)
+                {
+                    calls.push(Call { caller, arguments, result });
                 }
             }
         }
@@ -317,7 +319,7 @@ fn sample_process_tree(root: u32, found: &mut BTreeMap<u32, String>) {
         let Some(ppid) = after_name.split_whitespace().nth(1).and_then(|value| value.parse::<u32>().ok()) else { continue };
         parents.insert(pid, ppid);
     }
-    for (&pid, _) in &parents {
+    for &pid in parents.keys() {
         let mut cursor = pid;
         let mut descendant = pid == root;
         for _ in 0..64 {

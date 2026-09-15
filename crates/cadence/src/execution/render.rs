@@ -176,9 +176,10 @@ pub fn render_dispatch_prompt(
     };
     let operational = prompt_operational(dispatch);
     format!(
-        "Cadence native execution dispatch\n\nOperational input:\n{}\n\nExecutor patch schema:\n{}\n\nInstructions:\nComplete tasks in listed order. Use one distinct signed commit per completed task. Run each task's exact verification commands and the suite. Return exactly one executor patch matching this schema. Stop at the first blocker and mark all later tasks not-run.{}\n\nOpaque plan body ({} UTF-8 bytes):\n{}",
+        "Cadence native execution dispatch\n\nOperational input:\n{}\n\nExecutor patch schema:\n{}\n\nInstructions:\n{}\n\nComplete tasks in listed order. Use one distinct signed commit per completed task. Run each task's exact verification commands and the suite. Return exactly one executor patch matching this schema. Stop at the first blocker and mark all later tasks not-run.{}\n\nOpaque plan body ({} UTF-8 bytes):\n{}",
         serde_json::to_string_pretty(&operational).expect("operational fields serialize"),
         serde_json::to_string_pretty(patch_schema).expect("patch schema serializes"),
+        crate::read::instructions::CONTRACT,
         guidance,
         dispatch.body.len(),
         dispatch.body,

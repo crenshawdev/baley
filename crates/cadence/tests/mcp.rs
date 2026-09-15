@@ -173,6 +173,7 @@ fn initialize_names_the_server_cadence_at_the_crate_version() {
         json!(env!("CARGO_PKG_VERSION")),
         "response: {response}"
     );
+    assert_eq!(response["result"]["instructions"], cadence::read::instructions::CONTRACT);
     assert!(client.finish().success());
 }
 
@@ -1228,13 +1229,31 @@ fn markdown_parts(relative: &str) -> (Value, String) {
 
 #[test]
 fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
-    // The two skills are generated artifacts: their bytes are the binary's own
+    let mut client = Client::spawn();
+    let initialized = client.handshake();
+    assert_eq!(initialized["result"]["instructions"], cadence::read::instructions::CONTRACT);
+    let listed = client.tools_list(2);
+    let query = listed["result"]["tools"].as_array().unwrap().iter()
+        .find(|tool| tool["name"] == "cadence_query").unwrap();
+    assert!(query["description"].as_str().unwrap().starts_with(cadence::read::instructions::CONTRACT));
+    assert!(client.finish().success());
+
+    // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
     for (relative, args) in [
+        ("skills/cad-context/SKILL.md", vec!["context-instructions"]),
+        ("skills/cad-plan/SKILL.md", vec!["plan-instructions"]),
         ("skills/cad-executor-contract/SKILL.md", vec!["executor-instructions"]),
         ("skills/cad-execute/SKILL.md", vec!["executor-instructions", "--frontdoor"]),
         ("skills/cad-verifier-contract/SKILL.md", vec!["verifier-instructions"]),
         ("skills/cad-verify/SKILL.md", vec!["verifier-instructions", "--frontdoor"]),
+        ("skills/cad-review/SKILL.md", vec!["review-instructions"]),
+        ("skills/cad-decision-review/SKILL.md", vec!["review-instructions", "--alias", "cad-decision-review"]),
+        ("skills/cad-minimalism-review/SKILL.md", vec!["review-instructions", "--alias", "cad-minimalism-review"]),
+        ("skills/cad-plan-review/SKILL.md", vec!["review-instructions", "--alias", "cad-plan-review"]),
+        ("skills/cad-audit/SKILL.md", vec!["audit-instructions"]),
+        ("skills/cad-coverage/SKILL.md", vec!["audit-instructions", "--coverage"]),
+        ("skills/cad-read-contract/SKILL.md", vec!["read-instructions"]),
     ] {
         let rendered = Command::new(env!("CARGO_BIN_EXE_cadence"))
             .args(&args)
@@ -1248,6 +1267,10 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     }
     let (verify, frontdoor) = markdown_parts("skills/cad-verify/SKILL.md");
     let (verifier_contract, verifier) = markdown_parts("skills/cad-verifier-contract/SKILL.md");
+    let (read_contract, read_body) = markdown_parts("skills/cad-read-contract/SKILL.md");
+    assert_eq!(read_contract["allowed-tools"], json!(["mcp__cadence__cadence_query"]));
+    assert_eq!(read_contract["user-invocable"], false);
+    assert!(read_body.contains(cadence::read::instructions::CONTRACT));
     assert_eq!(verify["allowed-tools"], json!(["mcp__cadence__cadence_query", "mcp__cadence__cadence_apply", "Task"]));
     assert_eq!(verifier_contract["user-invocable"], false);
     assert!(frontdoor.contains("verify-next") && frontdoor.contains("attempt.prompt"));
@@ -1257,10 +1280,10 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
         let (agent, body) = markdown_parts(&format!("agents/{name}.md"));
         assert_eq!(agent["name"], name);
         assert_eq!(agent["effort"], effort);
-        assert_eq!(agent["skills"], json!(["cad-verifier-contract"]));
+        assert_eq!(agent["skills"], json!(["cad-read-contract", "cad-verifier-contract"]));
+        assert_eq!(agent["mcpServers"], json!(["cadence"]));
         assert_eq!(agent["tools"].as_str().unwrap().split(", ").collect::<Vec<_>>(),
-            ["Read", "Bash", "Grep", "Glob", "mcp__excerpt__excerpt_read", "mcp__excerpt__excerpt_search",
-                "mcp__cadence__cadence_query", "mcp__cadence__cadence_apply"]);
+            ["Bash", "mcp__cadence__cadence_query", "mcp__cadence__cadence_apply"]);
         assert_eq!(agent["disallowedTools"], "Write, Edit, MultiEdit");
         assert!(body.contains("`cad-verifier-contract`"));
         assert!(!body.contains("verification-") && !body.contains("suite"));
@@ -1300,7 +1323,8 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
         let (agent, body) = markdown_parts(path);
         assert_eq!(agent["name"], name);
         assert_eq!(agent["effort"], effort);
-        assert_eq!(agent["skills"], json!(["cad-executor-contract"]));
+        assert_eq!(agent["skills"], json!(["cad-read-contract", "cad-executor-contract"]));
+        assert_eq!(agent["mcpServers"], json!(["cadence"]));
         assert_eq!(
             agent["tools"]
                 .as_str()
@@ -1308,15 +1332,10 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
                 .split(", ")
                 .collect::<Vec<_>>(),
             [
-                "Read",
                 "Write",
                 "Edit",
                 "Bash",
-                "Grep",
-                "Glob",
                 "LSP",
-                "mcp__excerpt__excerpt_read",
-                "mcp__excerpt__excerpt_search",
                 "mcp__cadence__cadence_query",
                 "mcp__cadence__cadence_apply"
             ],
@@ -1325,6 +1344,28 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
         assert!(body.contains("`cad-executor-contract`"), "{path} names its contract by reference");
         assert!(!body.contains("execution-") && !body.contains("suite"), "{path} copies no policy");
         bodies.push(body);
+    }
+    for (prefix, variants, tools, contract_name, disallowed) in [
+        ("cad-assumptions-analyzer", [("", "xhigh"), ("-low", "low"), ("-medium", "medium"), ("-high", "high"), ("-max", "max")],
+            vec!["Bash", "mcp__cadence__cadence_query"], "cad-assumptions-analyzer-contract", true),
+        ("cad-plan-checker", [("", "low"), ("-medium", "medium"), ("-high", "high"), ("-xhigh", "xhigh"), ("-max", "max")],
+            vec!["Bash", "mcp__cadence__cadence_query"], "cad-plan-checker-contract", true),
+        ("cad-planner", [("", "high"), ("-low", "low"), ("-medium", "medium"), ("-xhigh", "xhigh"), ("-max", "max")],
+            vec!["Write", "Edit", "Bash", "mcp__cadence__cadence_query"], "cad-planner-contract", false),
+        ("cad-reviewer", [("", "high"), ("-low", "low"), ("-medium", "medium"), ("-xhigh", "xhigh"), ("-max", "max")],
+            vec!["Bash", "mcp__cadence__cadence_query"], "cad-reviewer-contract", true),
+    ] {
+        for (suffix, effort) in variants {
+            let path = format!("agents/{prefix}{suffix}.md");
+            let (agent, body) = markdown_parts(&path);
+            assert_eq!(agent["effort"], effort, "{path}");
+            assert_eq!(agent["mcpServers"], json!(["cadence"]), "{path}");
+            assert_eq!(agent["skills"], json!(["cad-read-contract", contract_name]), "{path}");
+            assert_eq!(agent["tools"].as_str().unwrap().split(", ").collect::<Vec<_>>(), tools, "{path}");
+            if disallowed { assert_eq!(agent["disallowedTools"], "Write, Edit, MultiEdit", "{path}"); }
+            assert!(body.contains(&format!("`{contract_name}`")), "{path}");
+            bodies.push(body);
+        }
     }
     for text in [&main, &executor, &skill.to_string(), &contract.to_string()]
         .into_iter()

@@ -247,7 +247,7 @@ Handle a grouped review response before any execution response: run the saved re
 
 /// The instructions section of every state-composed native dispatch.
 pub fn dispatch_text() -> String {
-    format!("{EXECUTOR_BLOCK}\n\n{CLASSICAL_DEFAULT}\n\n{PROTOCOL}\n\n{USABILITY}")
+    format!("{}\n\n{EXECUTOR_BLOCK}\n\n{CLASSICAL_DEFAULT}\n\n{PROTOCOL}\n\n{USABILITY}", crate::read::instructions::CONTRACT)
 }
 
 /// `skills/cad-executor-contract/SKILL.md`, a generated artifact.
@@ -257,7 +257,7 @@ pub fn contract_markdown() -> String {
 
 /// `skills/cad-execute/SKILL.md`, a generated artifact.
 pub fn frontdoor_markdown() -> String {
-    format!("{FRONTDOOR}\n{USABILITY}")
+    format!("{FRONTDOOR}\n## Shared read contract\n\n{}\n\n{USABILITY}", crate::read::instructions::CONTRACT)
 }
 
 /// A configured command as the effective configuration reports it, with the

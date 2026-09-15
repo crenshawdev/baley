@@ -450,5 +450,5 @@ The schema below is also returned as the `plan-read` contract.
 pub fn markdown() -> String {
     let schema = serde_json::to_string_pretty(&super::model::contract())
         .expect("compiled plan submission schema");
-    format!("{ROLE}```json\n{schema}\n```\n")
+    format!("{ROLE}\n## Shared read contract\n\n{}\n\n```json\n{schema}\n```\n", crate::read::instructions::CONTRACT)
 }

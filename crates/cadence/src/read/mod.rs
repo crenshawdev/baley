@@ -1,4 +1,5 @@
 pub mod document;
+pub mod instructions;
 pub mod location;
 pub mod model;
 pub mod outline;

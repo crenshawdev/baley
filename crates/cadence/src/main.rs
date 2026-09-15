@@ -32,6 +32,8 @@ enum Command {
     ReviewStop,
     /// Render the compiled context-role skill without opening a project.
     ContextInstructions,
+    /// Render the shared read-contract skill without opening a project.
+    ReadInstructions,
     /// Render the compiled authoring-only planner skill without opening a project.
     PlanInstructions,
     /// Render the compiled executor contract without opening a project.
@@ -120,6 +122,16 @@ fn run_command(command: Command) -> std::process::ExitCode {
             match std::io::stdout()
                 .lock()
                 .write_all(cadence::context::instructions::markdown().as_bytes())
+            {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(_) => std::process::ExitCode::FAILURE,
+            }
+        }
+        Command::ReadInstructions => {
+            use std::io::Write;
+            match std::io::stdout()
+                .lock()
+                .write_all(cadence::read::instructions::markdown().as_bytes())
             {
                 Ok(()) => std::process::ExitCode::SUCCESS,
                 Err(_) => std::process::ExitCode::FAILURE,

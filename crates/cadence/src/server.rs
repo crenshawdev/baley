@@ -15,6 +15,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    borrow::Cow,
     num::NonZeroU32,
     path::{Path, PathBuf},
     sync::Arc,
@@ -506,7 +507,7 @@ impl PublicServer {
 
 fn tool<Output: JsonSchema + 'static>(
     name: &'static str,
-    description: &'static str,
+    description: impl Into<Cow<'static, str>>,
     input: Value,
 ) -> Tool {
     let mut tool = Tool::new(
@@ -601,8 +602,10 @@ where
 
 impl ServerHandler for PublicServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("cadence", env!("CARGO_PKG_VERSION")))
+        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("cadence", env!("CARGO_PKG_VERSION")));
+        info.instructions = Some(cadence::read::instructions::CONTRACT.to_owned());
+        info
     }
 
     async fn list_tools(
@@ -620,7 +623,7 @@ impl ServerHandler for PublicServer {
                 ),
                 tool::<QueryOutput>(
                     "cadence_query",
-                    "Read supported configuration, role routing, native execution, review records, exact material risk status or structural surface evidence in the bound project. plan-read uses phase_address and optional count for non-reserving allocation preview. Supply submission instead of count for complete read-only preview: approve its returned final submission, documents and canonical replacement map section together. Complete preview locates check-command, check-expected, truth-check-limit, link-content, link-value-not-named and link-truth-unresolvable refusals with item/truth ids and exact paths. Check command and explicit literal/property expected value must be nonblank; other check fields retain only typed grammar. One distinct check id per current truth is counted across the post-replacement phase union, with every saved/proposed origin in details. Link value must occur exactly inside one approved slot of every associated truth, with outer whitespace trimmed only for comparison and char::is_alphanumeric() or underscore run boundaries; endpoints need only be nonblank. Unresolved approved slots are a distinct refusal. No command runs or runner/test-selection gate is imposed. Typed evidence_map publishes with that exact plan; use explicit provisional mode for mapless authoring. plan-read includes retained current/superseded map history and the plan-submit contract. evidence-read with numeric phase returns authoritative acceptance-map-view-1: current truths, contributions, items, associations and origins, aliases, retained history, coverage and provisional readiness. Bind to its input_digest only when coherence is consistent; projection byte health is independent of saved authority. Inconsistent inputs or an outstanding intent produce no usable digest; reads never repair or recover. context-intake reads phase scope and truths. review-next returns provider pending promptly: poll the same fire; canceling a poll does not cancel or restart resident provider work. A local dispatch requires the host to run it once, WAIT, and forward actual observations and its unchanged return through cadence_apply before advancing.",
+                    format!("{}\n\nRead supported configuration, role routing, native execution, review records, exact material risk status or structural surface evidence in the bound project. plan-read uses phase_address and optional count for non-reserving allocation preview. Supply submission instead of count for complete read-only preview: approve its returned final submission, documents and canonical replacement map section together. Complete preview locates check-command, check-expected, truth-check-limit, link-content, link-value-not-named and link-truth-unresolvable refusals with item/truth ids and exact paths. Check command and explicit literal/property expected value must be nonblank; other check fields retain only typed grammar. One distinct check id per current truth is counted across the post-replacement phase union, with every saved/proposed origin in details. Link value must occur exactly inside one approved slot of every associated truth, with outer whitespace trimmed only for comparison and char::is_alphanumeric() or underscore run boundaries; endpoints need only be nonblank. Unresolved approved slots are a distinct refusal. No command runs or runner/test-selection gate is imposed. Typed evidence_map publishes with that exact plan; use explicit provisional mode for mapless authoring. plan-read includes retained current/superseded map history and the plan-submit contract. evidence-read with numeric phase returns authoritative acceptance-map-view-1: current truths, contributions, items, associations and origins, aliases, retained history, coverage and provisional readiness. Bind to its input_digest only when coherence is consistent; projection byte health is independent of saved authority. Inconsistent inputs or an outstanding intent produce no usable digest; reads never repair or recover. context-intake reads phase scope and truths. review-next returns provider pending promptly: poll the same fire; canceling a poll does not cancel or restart resident provider work. A local dispatch requires the host to run it once, WAIT, and forward actual observations and its unchanged return through cadence_apply before advancing.", cadence::read::instructions::CONTRACT),
                     query_schema(),
                 ),
                 tool::<ApplyOutput>(

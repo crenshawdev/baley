@@ -41,6 +41,7 @@ const MERGED_HINT: &str = "decision <document> <decision-id> | minimalism <file|
 /// The merged front door or one of its aliases, rendered from this module.
 /// None for a name that is not a review command.
 pub fn frontdoor_markdown(command: &str) -> Option<String> {
+    let read_contract = crate::read::instructions::CONTRACT;
     let (name, description, hint, selection) = match command {
         "cad-review" => (
             "cad-review",
@@ -84,6 +85,10 @@ retains its exact bytes, compiles the kind-specific intent into the dispatch
 and records every delivery event; this front door only relays. Nothing here
 applies a finding: no file is changed, deleted, staged or committed.
 </objective>
+
+<read-contract>
+{read_contract}
+</read-contract>
 
 <process>
 1. Select. Split `$ARGUMENTS` on whitespace and call cadence_query
