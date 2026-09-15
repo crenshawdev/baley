@@ -137,7 +137,7 @@ async fn seed_and_dispatch(store: &Store) -> (View, ActiveDispatch) {
                 Some(candidate.prompt_digest.clone()),
                 "dispatch-6-1",
             ),
-            dispatch: candidate,
+            dispatch: Box::new(candidate),
         })
         .await
         .unwrap();

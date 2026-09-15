@@ -132,7 +132,7 @@ pub enum Operation {
         expected_integrity: String,
         operation_id: String,
         plan_set_fingerprint: String,
-        dispatch: ActiveDispatch,
+        dispatch: Box<ActiveDispatch>,
         decision: BoundaryDecision,
     },
     ApplyExecutionPatch {
@@ -460,7 +460,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 &expected_integrity,
                 &operation_id,
                 &plan_set_fingerprint,
-                dispatch,
+                *dispatch,
                 decision,
             ),
             Operation::ApplyExecutionPatch {
