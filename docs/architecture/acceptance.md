@@ -387,10 +387,14 @@ are written and run.** Five decisions draw it exactly.
    number.** Any number handed to the model becomes a target it hits - "every
    call site" became 187. Cadence's only numbers are about review: seven
    truths, one check each.
-5. **The full suite is an owner-gated plan close.** The planner names the
-   narrowest command that settles each task, never the suite. The executor
-   closes the last task and stops; the orchestrator requests the suite. A
-   first recognized failure raises one owner question and permits exactly one
-   recorded repair and one further launch after approval. A refused repair or
-   a second recognized failure blocks the plan; neither permits another launch.
-   The verifier runs each truth's check, never the suite. CI may run it again.
+5. **The full suite is the plan's close, and the owner holds the gate.** The
+   planner names, in each task's verify, the narrowest command that settles it
+   - one test, one binary, never the suite. The executor runs only what the
+   task names, closes the last task, reports, and stops; the orchestrator asks
+   for the suite. A first red opens one question to the owner, naming the
+   failing tests and the files the executor proposes to touch. The owner's yes
+   buys exactly one repair and one more launch, both on the record. A no, or a
+   second red, blocks the plan; nothing launches a third. The verifier never
+   runs the suite; it runs each truth's one check. CI runs the suite again on
+   push. Targeted while working, once at the close, one repair if the owner
+   says so, once in CI.
