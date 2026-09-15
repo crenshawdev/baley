@@ -13,66 +13,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  node-test:
-    # One job per GROUP, so a red arm names the seam that broke and the arms
-    # run in parallel. The groups are declared in cadence-core/bin/test.mjs;
-    # anything it does not name lands in `other`, which is in this matrix, so a
-    # new test file is never silently unrun.
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ['22', '24']
-        # `prose` is deliberately absent - see D-29 in
-        # .planning/phases/6/CONTEXT.md. It lints the LIVE skills/ tree against
-        # v3 grammar, and the 4.0 rewrite deliberately stopped speaking it, so
-        # it fails on 4.0 skills by design rather than by defect. The sixteen
-        # names are recorded in .planning/phases/6/known-node-failures.txt. The
-        # remaining groups test frozen behavior that has not been ported yet and
-        # stay in force until phase 18 removes cadence-core entirely.
-        group: [routing, git, planning, review, other]
-    steps:
-      # fetch-depth: 0, not the default shallow depth-1. `why-record.test.mjs`
-      # (the `other` group) reads THIS repository's own history as its fixture
-      # corpus - archived SUMMARY tables joined to the commits they name - so a
-      # depth-1 checkout fails 23 of its arms with `invalid object name <sha>^`.
-      # The other jobs below walk no history and keep the shallow default.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ matrix.node }}
-      # Zero-dep repo: no install step, the built-in runner is the framework.
-      - run: node cadence-core/bin/test.mjs ${{ matrix.group }}
-
-  # self-verify is REMOVED, not temporarily disabled - see D-29 in
-  # .planning/phases/6/CONTEXT.md. It was the prose<->code drift linter, and it
-  # checked the LIVE skills/ tree against v3 grammar: its deferred-read register
-  # is a hardcoded table at cadence-core/bin/lib/deferred-reads.mjs:216-223,
-  # inside the frozen tree, requiring skills/cad-executor-contract/SKILL.md to
-  # carry ${CLAUDE_PLUGIN_ROOT} Read sentences for two v3 references. The 4.0
-  # contract dropped both because worktree mode is impossible under
-  # `rung: fixed; branch: current`, so satisfying the linter would mean writing
-  # a false instruction into a shipped user-facing file. The frozen reference is
-  # still guarded, exactly and instantly, by the cargo-test job's
-  # `git diff --exit-code v3.7.12 -- cadence-core/`.
-
-  typecheck:
-    # Honor the @ts-check pragmas. The repo has no package.json; typescript +
-    # @types/node are installed ephemerally for this job only (tsconfig.ci.json).
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22'
-      - run: npm install --no-save --no-package-lock typescript @types/node
-      - run: npx tsc -p tsconfig.ci.json
-
+  # The Node matrix and the typecheck job are gone, not disabled. They ran the
+  # 3.x suite in cadence-core/ against a tree the 4.0 binary renders, and had
+  # been red since 2026-09-13 on a citation a rendered skill stopped carrying
+  # in phase 13. There is no further 3.x work; the 3.x branch is that suite's
+  # home, and cadence-core/ leaves this branch surface by surface as the binary
+  # replaces it. Until it does, the frozen-reference step below is the only
+  # thing that still needs to know it exists.
   cargo-test:
-    # The Rust binary the 4.0.0 rewrite is moving into, built and tested beside
-    # the Node matrix rather than instead of it: both halves ship for now.
+    # The Rust binary is the product. This is the suite.
     runs-on: ubuntu-latest
     steps:
       # fetch-depth: 0 is load-bearing, not tidiness. Sixteen tests read the
@@ -80,8 +29,7 @@ jobs:
       # config/tests.rs and import/tests.rs, and `git archive v3.7.12` for the
       # .planning extraction fixture. A shallow checkout has no tags, so every
       # one of them fails with "fatal: not a valid object name: v3.7.12" while
-      # passing locally. The node-test job already fetches full history for the
-      # same reason.
+      # passing locally.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
