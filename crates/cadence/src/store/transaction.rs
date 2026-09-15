@@ -1088,6 +1088,7 @@ impl Intent {
                     || value.boundary.receipt
                         != (Receipt::Dispatch {
                             dispatch_id: active.id.clone(),
+                            prompt_bytes: None,
                             prompt_digest: active.prompt_digest.clone(),
                         })
                 {
@@ -1109,6 +1110,7 @@ impl Intent {
                     || value.boundary.receipt
                         != (Receipt::Dispatch {
                             dispatch_id: issue_dispatch_id.clone(),
+                            prompt_bytes: None,
                             prompt_digest: active.prompt_digest.clone(),
                         })
                 {

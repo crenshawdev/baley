@@ -243,14 +243,19 @@ pub fn envelope_digest(envelope: &ExecutionEnvelope) -> Result<String, Failure> 
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "receipt", rename_all = "kebab-case")]
+#[serde(tag = "receipt", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Receipt {
     Compact {
         envelope: ExecutionEnvelope,
     },
     Dispatch {
         dispatch_id: String,
-        #[serde(default)]
+        // Retained records written before D-165 carry the prompt's byte count
+        // and nothing else; their identity is the digest of exactly those
+        // bytes, so the field is kept and written back only when it was read.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt_bytes: Option<u64>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         prompt_digest: String,
     },
 }
@@ -292,6 +297,7 @@ impl PreparedAnswer {
                 }
                 Receipt::Dispatch {
                     dispatch_id: dispatch.id.clone(),
+                    prompt_bytes: None,
                     prompt_digest: dispatch.prompt_digest.clone(),
                 }
             }
@@ -550,12 +556,15 @@ impl BoundaryV1 {
         match &self.receipt {
             Receipt::Dispatch {
                 dispatch_id,
+                prompt_bytes,
                 prompt_digest,
             } => {
                 if !matches!(self.scope, BoundaryScope::Execution { .. })
                     || self.tool != BoundaryTool::CadenceQuery
                     || self.outcome != "dispatch"
                     || self.subject_id.as_ref() != Some(dispatch_id)
+                    || *prompt_bytes == Some(0)
+                    || (prompt_bytes.is_some() && !prompt_digest.is_empty())
                     || (!prompt_digest.is_empty()
                         && (prompt_digest.len() != 64
                             || !prompt_digest.bytes().all(|byte| byte.is_ascii_hexdigit())))
@@ -673,9 +682,11 @@ mod tests {
                 Receipt::Compact { envelope } => assert_eq!(envelope, answer.envelope),
                 Receipt::Dispatch {
                     dispatch_id,
+                    prompt_bytes,
                     prompt_digest,
                 } => {
                     assert_eq!(dispatch_id, "d1");
+                    assert_eq!(prompt_bytes, None);
                     assert_eq!(prompt_digest, "d08d660b7de4e2314def9d953b46d4fec2db3acbfe7344cda4ede7faacc5e177");
                 }
             }

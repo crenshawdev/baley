@@ -165,6 +165,7 @@ fn dispatch_envelope_has_an_independently_encoded_exact_digest() {
             "7d30b24b24746184cf00b3a6e33220719a2f12fa95beadaf011dd683e273bea9",
             Receipt::Dispatch {
                 dispatch_id: DISPATCH_ID.into(),
+                prompt_bytes: None,
                 prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into()
             }
         )
@@ -217,6 +218,7 @@ fn writer_admits_the_route_and_routing_record_in_one_persistence_result() {
                 .into(),
             receipt: Receipt::Dispatch {
                 dispatch_id: DISPATCH_ID.into(),
+                prompt_bytes: None,
                 prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into(),
             },
             lease_refusal: None,
@@ -523,6 +525,7 @@ fn admission() -> cadence::store::writer::Operation {
                 .into(),
             receipt: Receipt::Dispatch {
                 dispatch_id: DISPATCH_ID.into(),
+                prompt_bytes: None,
                 prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into(),
             },
             lease_refusal: None,
@@ -1037,6 +1040,7 @@ fn each_new_admission_returns_the_exact_saved_choice_and_missing_host_evidence()
             decision.response_digest = case.envelope_digest.into();
             decision.receipt = Receipt::Dispatch {
                 dispatch_id: case.id.into(),
+                prompt_bytes: None,
                 prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into(),
             };
             **change = BoundaryChange::Dispatch {

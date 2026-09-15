@@ -574,3 +574,41 @@ solved here.
 
 Suite at `28f116ce`, `TMPDIR=/tmp cargo test --workspace --no-fail-fast`, run
 once in a shell: 57 result lines, 0 failed, 0 panics, 2 ignored (D-172).
+
+## D-175
+
+The first query of the live pass refused. On 2026-09-15, with the phase 38
+release installed and the resident restarted, `execution-history` and
+`execute-next` for every phase came back `invalid immutable boundary record`.
+The store had not changed. The binary had.
+
+`a58b9045` (P38-1-T1, item 20 above) replaced `prompt_bytes` on the dispatch
+receipt with `prompt_digest`, gave the new field a serde default and dropped
+`deny_unknown_fields` so the old records would still parse. They parsed. They
+did not re-serialize: a retained receipt `{"dispatch_id":…,"prompt_bytes":63671}`
+came back as `{"dispatch_id":…,"prompt_digest":""}`, and the identity check at
+`store/model.rs:238` digests exactly those bytes. All twenty-three dispatch
+boundaries on this project carry `prompt_bytes`; none yet carry a digest. The
+compat suite in `execution_boundary_compat.rs` pins the pre-envelope
+`boundary` class and had no `boundary_v1` dispatch receipt in it, so the
+"aligned" fixtures in `8501b201` went green over the break.
+
+The rule is the one written above the receipt: omission on older boundaries
+preserves their serialized identity preimages. A retained record is bytes with
+a name, and a schema change that cannot write those bytes back is a schema
+change to the record, which the binary does not get to make. The fix keeps
+`prompt_bytes` as an `Option<u64>` that is written only when it was read,
+skips `prompt_digest` when empty, restores `deny_unknown_fields`, and refuses
+a receipt that carries both. The red test is the generation-11 record from
+`.planning/decisions.jsonl`, verbatim, round-tripped and validated, beside a
+current-shape receipt that must pass and two that must not.
+
+38. `bb1eb347` test(execution): prove a retained dispatch receipt keeps its
+    prompt_bytes identity (red).
+39. `51bb6d5f` fix(execution): write a retained dispatch receipt back as the
+    bytes it was read from.
+
+Hand fix under [[feedback-build-time-is-not-live-time]]'s rule: no plan owned
+it, no front door ran on it, and the probe was the debug binary over stdio
+against this project's store, `execution-history 31` answering before the
+release was rebuilt. The live pass resumes on the rebuilt release.

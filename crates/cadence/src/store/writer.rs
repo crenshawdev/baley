@@ -1103,6 +1103,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     || decision.receipt
                         != (Receipt::Dispatch {
                             dispatch_id: dispatch.id.clone(),
+                            prompt_bytes: None,
                             prompt_digest: dispatch.prompt_digest.clone(),
                         })
                     || plan_set_fingerprint != dispatch.plan_set_fingerprint
@@ -1142,6 +1143,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     || decision.receipt
                         != (Receipt::Dispatch {
                             dispatch_id: issue_dispatch_id.clone(),
+                            prompt_bytes: None,
                             prompt_digest: dispatch.prompt_digest.clone(),
                         })
                     || dispatch.issue_digest.len() != 64
@@ -2016,6 +2018,7 @@ impl ConfirmedBoundary<'_> {
             Receipt::Dispatch {
                 dispatch_id,
                 prompt_digest,
+                ..
             } => {
                 let Some(envelope @ Envelope::Ok(Success::Dispatch { .. })) = dispatch else {
                     return Err(Failure::Confirmation);
