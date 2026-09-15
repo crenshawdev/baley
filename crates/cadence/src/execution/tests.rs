@@ -579,6 +579,8 @@ fn native_material_includes_scoped_evidence_commits() {
         plan.files.extend(["test.py".into(), "src/renamed.rs".into()]);
         let active = build_dispatch(&plan, &digest(b"original-set"), 0, &base, 1).unwrap();
         let material = receipts::observe_source(&project, &active, "deliver", &green, std::slice::from_ref(&red)).unwrap();
+        let in_lease = serde_json::to_value(&material).unwrap();
+        assert!(in_lease["out_of_lease"].is_null() || in_lease["out_of_lease"] == json!({}), "in-lease evidence records no deviation: {in_lease}");
         assert_eq!(material.commit_paths[&red], vec!["test.py"]); assert_eq!(material.commit_paths[&green], vec!["src/delivery.rs"]);
         assert_eq!(material.staged_objects, Vec::<u8>::new()); assert_eq!(material.staged_paths, Vec::<String>::new());
         let native = risk::NativeExecutionBasis::new(&active, task, material.clone(), digest(b"unit-close-material")).unwrap();
@@ -616,11 +618,16 @@ fn native_material_includes_scoped_evidence_commits() {
         git(&["reset", "--hard", &green]);
         std::fs::write(project.join("outside.txt"), "changed outside lease\n").unwrap(); git(&["add", "outside.txt"]); git(&["commit", "-m", "test(12): evidence outside lease"]);
         let outside = git(&["rev-parse", "HEAD"]);
-        assert!(receipts::observe_source(&project, &active, "deliver", &green, &[red.clone(), outside]).unwrap_err().to_string().contains("out-of-lease path: outside.txt"));
+        let widened = receipts::observe_source(&project, &active, "deliver", &green, &[red.clone(), outside.clone()]).unwrap();
+        assert_eq!(serde_json::to_value(&widened).unwrap()["out_of_lease"], json!({outside.clone(): ["outside.txt"]}),
+            "a committed path outside the lease is retained by commit, never refused (D-170)");
+        assert_eq!(widened.commit_paths[&outside], vec!["outside.txt"]);
         git(&["reset", "--hard", &green]); git(&["mv", "outside.txt", "src/renamed.rs"]); git(&["commit", "-m", "test(12): rename evidence"]);
         let rename = git(&["rev-parse", "HEAD"]);
         assert_eq!(receipts::commit_paths(&project, &rename).unwrap(), vec!["outside.txt", "src/renamed.rs"]);
-        assert!(receipts::observe_source(&project, &active, "deliver", &green, &[red, rename]).unwrap_err().to_string().contains("out-of-lease path: outside.txt"));
+        let renamed = receipts::observe_source(&project, &active, "deliver", &green, &[red, rename.clone()]).unwrap();
+        assert_eq!(serde_json::to_value(&renamed).unwrap()["out_of_lease"], json!({rename: ["outside.txt", "src/renamed.rs"]}),
+            "every out-of-lease path in a commit is named, in path order");
         assert_eq!(git(&["show", &format!("{green}:src/delivery.rs")]), "answer seven");
     });
 }

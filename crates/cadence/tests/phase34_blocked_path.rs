@@ -382,6 +382,7 @@ fn phase34_owner_retires_unfinished_task_and_next_plan_dispatches() {
     assert_eq!(retired["outcome"]["tasks"][1], json!({
         "status":"blocked","task_id":"retire","blocker_id":"task-retired:retire"
     }));
+    assert_eq!(retired["outcome"]["deviations"], json!([]), "an in-lease completion records no deviation");
     assert_eq!(retired["outcome"]["transition_id"], retired["receipt"]["request_digest"]);
     assert_eq!(close_receipt["request"]["request_id"], "close-control");
 
@@ -414,6 +415,86 @@ fn phase34_owner_retires_unfinished_task_and_next_plan_dispatches() {
     let final_history = history(project);
     assert_eq!(final_history["events"], after["events"]);
     assert_eq!(model::digest(&serde_json::to_vec(&retired["receipt"]).unwrap()).len(), 64);
+}
+
+#[test]
+fn out_of_lease_completion_paths_are_retained_as_deviations() {
+    // D-170: a planner's file list is not a gate. A completion commit that touches a
+    // path outside the admitted lease closes, and every such path is written on the
+    // plan record as a deviation, named per file, with the commit as its evidence.
+    let fixture = fixture();
+    let project = fixture.path();
+    publish(project);
+    let contract = contract(project);
+    let admitted = call(project, "cadence_apply", json!({"operation":"execution-admit","request":{
+        "request_id":"admit-deviation","expected_set_version":0,"contract":contract}}));
+    assert_eq!(admitted["status"], "ok", "{admitted}");
+    let authorized = call(project, "cadence_apply", json!({"operation":"execution-authorize","phase":PHASE,
+        "request_id":"authorize-deviation","owner":OWNER,"at":AT,"response":"Run the approved plans."}));
+    assert_eq!(authorized["status"], "ok", "{authorized}");
+    let dispatch = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
+    assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
+    assert_eq!(dispatch["dispatch"]["files"], json!(["src/control.py","tests/control.py"]), "{dispatch}");
+
+    let allocated = contract["allocation"].as_array().unwrap().iter()
+        .find(|entry| entry["plan"] == 1 && entry["task"] == "control").unwrap()["checks"][0].clone();
+    assert_eq!(start(project, 1, "control", json!([allocated.clone()]))["status"], "ok");
+    fs::write(project.join("tests/control.py"),
+        "import sys, unittest\nsys.path.insert(0, 'src')\nfrom control import answer\nunittest.runner.time.perf_counter = lambda: 0.0\nclass Check(unittest.TestCase):\n    def test_answer(self):\n        self.assertEqual(answer(), 7)\nif __name__ == '__main__':\n    unittest.main()\n").unwrap();
+    git(project, &["add", "tests/control.py"]);
+    git(project, &["commit", "-S", "-m", "test(34): control task red"]);
+    let red = git(project, &["rev-parse", "HEAD"]);
+    let result = run_task(project, 1, "control", "control-red", allocated.clone(), "red");
+    assert_eq!(result["disposition"], json!({"kind":"exited","code":1}));
+
+    fs::create_dir_all(project.join("docs")).unwrap();
+    fs::write(project.join("src/control.py"), "def answer():\n    return 7\n").unwrap();
+    fs::write(project.join("docs/outside.md"), "written outside the lease\n").unwrap();
+    git(project, &["add", "src/control.py", "docs/outside.md"]);
+    git(project, &["commit", "-S", "-m", "feat(34): control task green"]);
+    let green = git(project, &["rev-parse", "HEAD"]);
+    let result = run_task(project, 1, "control", "control-green", allocated.clone(), "green");
+    assert_eq!(result["disposition"], json!({"kind":"exited","code":0}));
+
+    let events = history(project);
+    let launch = events["events"].as_array().unwrap().iter()
+        .find(|record| record["request"]["event"]["kind"] == "launch"
+            && record["request"]["event"]["run_id"] == "control-red").unwrap();
+    let inspection = json!({"check":allocated,"test_digest":launch["request"]["event"]["material"]["test_digest"],
+        "evidence":["control-red","control-green"],"no_subject_stub":true});
+    let current = task(project, 1, "control");
+    let attested = call(project, "cadence_apply", json!({"operation":"execution-owner-attest","request":{
+        "request_id":"attest-control","task":current["task"],"attempt":"attempt-control",
+        "expected_version":current["state"]["version"],"statement":{"submission":inspection,"supersedes":null,
+        "approval":{"approved":true,"owner":OWNER,"at":AT,"submission":inspection}}}}));
+    assert_eq!(attested["status"], "ok", "{attested}");
+    let pair = json!({"check":allocated,"red_commit":red,"green_commit":green,
+        "red_run":"control-red","green_run":"control-green"});
+    let current = task(project, 1, "control");
+    let closed = call(project, "cadence_apply", json!({"operation":"execution-task-close","request":{
+        "request_id":"close-control","task":current["task"],"attempt":"attempt-control",
+        "expected_version":current["state"]["version"],"completion":green,"checks":[pair],
+        "verification":["control-green"]}}));
+    assert_eq!(closed["status"], "ok", "the out-of-lease path must not refuse the close: {closed}");
+    let source = &closed["receipt"]["request"]["event"]["source"];
+    assert_eq!(source["out_of_lease"], json!({green.clone(): ["docs/outside.md"]}), "{source}");
+    assert_eq!(source["commit_paths"][&green], json!(["docs/outside.md","src/control.py"]), "{source}");
+
+    assert_eq!(start(project, 1, "retire", json!([]))["status"], "ok");
+    let retired = call(project, "cadence_apply",
+        retire_request(project, 1, "retire", "retire-current", OWNER, AT, REASON));
+    assert_eq!(retired["status"], "ok", "{retired}");
+    assert_eq!(retired["outcome"]["disposition"], "blocked");
+    assert_eq!(retired["outcome"]["deviations"], json!([{
+        "id":"out-of-lease:control:docs/outside.md",
+        "text":format!("control committed docs/outside.md outside the admitted lease in {green}"),
+        "evidence":[{"kind":"commit","sha":green}]
+    }]), "{}", retired["outcome"]);
+
+    let snapshot = support::reopened(project).snapshot;
+    let occurrence = &snapshot.data["execution"]["occurrences"][PHASE.to_string()];
+    assert_eq!(occurrence["plans"][0]["deviations"], retired["outcome"]["deviations"], "{occurrence}");
+    assert_eq!(history(project)["plans"][0]["state"]["outcome"], "pending");
 }
 
 #[test]
