@@ -12,6 +12,15 @@ use super::{
 use serde_json::json;
 use std::{collections::BTreeSet, process::Command};
 
+#[test]
+fn capture_retains_result_lines_past_prefix() {
+    let raw = json!({"bytes":[],"digest":crate::store::model::digest(b""),"complete":false,
+        "result_lines":["test oversized::late ... FAILED",
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"]});
+    let decoded = serde_json::from_value::<super::receipts::Capture>(raw);
+    assert!(decoded.is_ok(), "capture must accept separately retained result lines: {decoded:?}");
+}
+
 // Constructed unit authority, not a claim of approval through the public API.
 // The acceptance check separately supplies that boundary with real stdio calls.
 fn native_unit_contract(command: &str) -> (serde_json::Value, std::collections::BTreeMap<String, String>, super::admission::Contract) {

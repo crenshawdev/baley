@@ -40,6 +40,14 @@ use std::{
 const OUTPUT_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[test]
+fn execute_next_honors_named_plan() {
+    let decoded = serde_json::from_value::<super::QueryArguments>(serde_json::json!({
+        "operation":"execute-next","phase":6,"plan":2
+    }));
+    assert!(decoded.is_ok(), "execute-next must accept an owner-selected admitted plan");
+}
+
+#[test]
 fn suite_repair_answer_requires_owner_and_replays() {
     let attributed = serde_json::json!({"operation":"execution-suite-repair-answer","request":{
         "request_id":"answer-1","plan":{"phase":6,"occurrence":"phase-6-execution",

@@ -1002,3 +1002,214 @@ fn phase38_second_red_blocks_and_refuses_third_launch() {
     assert_eq!(outcome["deviations"][0]["evidence"], json!([{"kind":"commit","sha":repair_commit}]));
     assert_eq!(current["events"].as_array().unwrap().len(), episode.task_close_event_count);
 }
+
+fn task_for(project: &Path, plan: u32, id: &str) -> Value {
+    history(project)["tasks"].as_array().unwrap().iter()
+        .find(|entry| entry["task"]["plan"] == plan && entry["task"]["task"] == id)
+        .unwrap().clone()
+}
+
+fn run_for(project: &Path, plan: u32, task_id: &str, attempt: &str,
+    id: &str, stage: &str, check: Value) -> Value {
+    let current = task_for(project, plan, task_id);
+    let mut client = Client::open(project);
+    let launched = client.call("cadence_apply", json!({"operation":"execution-run","request":{
+        "request_id":id,"task":current["task"],"attempt":attempt,
+        "expected_version":current["state"]["version"],"command":COMMAND,
+        "check":check,"stage":stage}}));
+    assert_eq!(launched["status"], "ok", "{launched}");
+    let deadline = Instant::now() + std::time::Duration::from_secs(30);
+    let result = loop {
+        let current = client.call("cadence_query", json!({"operation":"execution-history","phase":PHASE}));
+        if let Some(record) = current["events"].as_array().unwrap().iter().find(|record| {
+            record["request"]["event"]["kind"] == "result"
+                && record["request"]["event"]["run_id"] == id
+        }) { break record["request"]["event"].clone(); }
+        assert!(Instant::now() < deadline, "missing result {id}: {current}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    client.finish();
+    result
+}
+
+fn plan_operation_for(project: &Path, plan_number: u32, operation: &str,
+    request_id: &str, extra: Value) -> Value {
+    let view = plan_view_for(project, plan_number);
+    let mut request = json!({"request_id":request_id,"plan":view["plan"],
+        "expected_version":view["state"]["version"]});
+    for (key, value) in extra.as_object().unwrap() { request[key] = value.clone(); }
+    json!({"operation":operation,"request":request})
+}
+
+fn launch_suite_for(project: &Path, plan: u32, id: &str) -> Value {
+    let request = plan_operation_for(project, plan, "execution-suite", id, json!({"proposed_paths":[]}));
+    let mut client = Client::open(project);
+    let launch = client.call("cadence_apply", request);
+    assert_eq!(launch["status"], "ok", "{launch}");
+    let deadline = Instant::now() + std::time::Duration::from_secs(30);
+    let result = loop {
+        let current = client.call("cadence_query", json!({"operation":"execution-history","phase":PHASE}));
+        if let Some(record) = current["plan_events"].as_array().unwrap().iter().find(|record| {
+            record["request"]["plan"]["plan"] == plan
+                && record["request"]["event"]["kind"] == "suite-result"
+                && record["request"]["event"]["run_id"] == id
+        }) { break record["request"]["event"].clone(); }
+        assert!(Instant::now() < deadline, "missing suite result {id}: {current}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    client.finish();
+    result
+}
+
+#[test]
+fn phase38_execute_next_dispatches_named_plan_first() {
+    let temp = fixture();
+    let project = temp.path();
+    let truth = json!({"id":"T6","trigger":"the owner names the later admitted plan",
+        "observer":"the owner","verb":"gets","outcome":"that plan before an earlier unfinished plan",
+        "kind":"property","observable":true,"fixed_oracle":true});
+    let context = call(project, "cadence_apply", support::approve(json!({"operation":"context-submit",
+        "submission":{"phase":PHASE,"title":"Owner-selected plan","scope":"Two admitted plans.",
+        "durable_decisions":[],"decisions":[],"assumptions":[],"truths":[truth]}})));
+    assert_eq!(context["persisted"], true, "{context}");
+    let evidence_map = repair_map("T6", "P38-T6-C");
+    let mut client = Client::open(project);
+    let allocation = client.read("38", Some(2));
+    assert_eq!(allocation["status"], "ok", "{allocation}");
+    let plans = [
+        (1, "earlier-plan"),
+        (2, "selected-plan"),
+    ].into_iter().enumerate().map(|(index, (plan, task))| json!({
+        "target":allocation["targets"][index],"content":{"phase":PHASE,"plan":plan,
+        "requirements":["T6"],"files":["src/value.py","tests/retained_prompt.py","tests/suite.sh"],
+        "directories":[],"execution":{"schema":1,"suite":SUITE_COMMAND,
+            "tasks":[{"id":task,"verify":[COMMAND]}]},
+        "body":body(&evidence_map),"evidence_map":evidence_map
+    }})).collect::<Vec<_>>();
+    let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],
+        "request_id":"publish-owner-selection","inventory_basis":allocation["inventory"]["basis"],
+        "plans":plans});
+    let preview = client.call("cadence_query",
+        json!({"operation":"plan-read","phase_address":"38","submission":submission}));
+    assert_eq!(preview["status"], "ok", "{preview}");
+    let published = client.call("cadence_apply",
+        support::approve(json!({"operation":"plan-submit","submission":preview["submission"]})));
+    assert_eq!(published["persisted"], true, "{published}");
+    let plans = client.read("38", None);
+    let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
+    client.finish();
+    let check_revision = evidence["items"].as_array().unwrap().iter()
+        .find(|item| item["id"] == "P38-T6-C").unwrap()["item_revision"].clone();
+    let check = json!({"id":"P38-T6-C","item_revision":check_revision});
+    let bindings = [1,2].map(|number| {
+        let publication = &plans["native"]["publications"][number.to_string()];
+        json!({"plan":number,"publication_request":publication["publication_request"],
+            "content_revision":publication["revision"],"map_revision":publication["map_revision"]})
+    });
+    let contract = json!({"phase":PHASE,"occurrence":plans["occurrence"],"plans":bindings,"allocation":[
+        {"plan":1,"task":"earlier-plan","checks":[]},
+        {"plan":2,"task":"selected-plan","checks":[check.clone()]}
+    ]});
+    let admitted = call(project, "cadence_apply", json!({"operation":"execution-admit","request":{
+        "request_id":"admit-owner-selection","expected_set_version":0,"contract":contract}}));
+    assert_eq!(admitted["status"], "ok", "{admitted}");
+    let authorized = call(project, "cadence_apply", json!({"operation":"execution-authorize",
+        "phase":PHASE,"request_id":"authorize-owner-selection","owner":OWNER,"at":AT,
+        "response":"Run plan 2 before plan 1."}));
+    assert_eq!(authorized["status"], "ok", "{authorized}");
+    let dispatch = call(project, "cadence_query",
+        json!({"operation":"execute-next","phase":PHASE,"plan":2}));
+    assert_eq!(dispatch["status"], "ok", "named admitted plan must be accepted: {dispatch}");
+    assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
+    assert_eq!(dispatch["dispatch"]["plan"], 2, "{dispatch}");
+    assert_eq!(dispatch["dispatch"]["owner_selection"], json!({"plan":2}), "{dispatch}");
+    let retained = history(project);
+    assert_eq!(retained["active"]["owner_selection"], json!({"plan":2}), "{retained}");
+    assert_eq!(plan_view_for(project, 1)["outcome"], Value::Null, "{retained}");
+
+    let current = task_for(project, 2, "selected-plan");
+    let started = call(project, "cadence_apply", json!({"operation":"execution-task-start","request":{
+        "request_id":"start-selected-plan","task":current["task"],"attempt":"attempt-selected-plan",
+        "expected_version":current["state"]["version"],"predecessor":null,"checks":[check.clone()]}}));
+    assert_eq!(started["status"], "ok", "{started}");
+    fs::create_dir(project.join("tests")).unwrap();
+    fs::write(project.join("tests/retained_prompt.py"),
+        "import sys, unittest\nsys.path.insert(0, 'src')\nfrom value import answer\nunittest.runner.time.perf_counter = lambda: 0.0\nclass RetainedPrompt(unittest.TestCase):\n    def test_answer(self):\n        self.assertEqual(answer(), 2)\nif __name__ == '__main__':\n    unittest.main()\n").unwrap();
+    fs::write(project.join("tests/suite.sh"), passing_suite()).unwrap();
+    git(project, &["add", "tests/retained_prompt.py", "tests/suite.sh"]);
+    git(project, &["commit", "-S", "-m", "test(38): prove selected-plan red"]);
+    let red_commit = git(project, &["rev-parse", "HEAD"]);
+    let red = run_for(project, 2, "selected-plan", "attempt-selected-plan",
+        "selected-red", "red", check.clone());
+    assert_eq!(red["disposition"], json!({"kind":"exited","code":1}), "{red}");
+    fs::write(project.join("src/value.py"), "def answer():\n    return 2\n").unwrap();
+    git(project, &["add", "src/value.py"]);
+    git(project, &["commit", "-S", "-m", "feat(38): deliver selected-plan"]);
+    let green_commit = git(project, &["rev-parse", "HEAD"]);
+    let green = run_for(project, 2, "selected-plan", "attempt-selected-plan",
+        "selected-green", "green", check.clone());
+    assert_eq!(green["disposition"], json!({"kind":"exited","code":0}), "{green}");
+    let verified = run_for(project, 2, "selected-plan", "attempt-selected-plan",
+        "selected-verify", "verify", Value::Null);
+    assert_eq!(verified["disposition"], json!({"kind":"exited","code":0}), "{verified}");
+    let red_launch = history(project)["events"].as_array().unwrap().iter().find(|record| {
+        record["request"]["event"]["kind"] == "launch"
+            && record["request"]["event"]["run_id"] == "selected-red"
+    }).unwrap().clone();
+    let inspection = json!({"check":check,"test_digest":red_launch["request"]["event"]["material"]["test_digest"],
+        "evidence":["selected-red","selected-green"],"no_subject_stub":true});
+    let current = task_for(project, 2, "selected-plan");
+    let attested = call(project, "cadence_apply", json!({"operation":"execution-owner-attest","request":{
+        "request_id":"attest-selected-plan","task":current["task"],"attempt":"attempt-selected-plan",
+        "expected_version":current["state"]["version"],"statement":{"submission":inspection,
+        "supersedes":null,"approval":{"approved":true,"owner":OWNER,"at":AT,"submission":inspection}}}}));
+    assert_eq!(attested["status"], "ok", "{attested}");
+    let current = task_for(project, 2, "selected-plan");
+    let closed = call(project, "cadence_apply", json!({"operation":"execution-task-close","request":{
+        "request_id":"close-selected-plan","task":current["task"],"attempt":"attempt-selected-plan",
+        "expected_version":current["state"]["version"],"completion":green_commit,
+        "checks":[{"check":check,"red_commit":red_commit,"green_commit":green_commit,
+            "red_run":"selected-red","green_run":"selected-green"}],"verification":["selected-verify"]}}));
+    assert_eq!(closed["status"], "ok", "{closed}");
+    let suite = launch_suite_for(project, 2, "suite-selected-plan");
+    assert_eq!(suite["disposition"], json!({"kind":"exited","code":0}), "{suite}");
+    let risk = call(project, "cadence_apply", json!({"operation":"risk-check",
+        "request_id":"risk-selected-plan","scope":{"phase":PHASE,
+            "occurrence":"phase-38-execution","worker":"2"},
+        "source":{"kind":"execution","plan":2,"dispatch_id":dispatch["dispatch"]["id"]},
+        "surfaces":null}));
+    assert_eq!(risk["status"], "ok", "{risk}");
+    let complete = call(project, "cadence_apply",
+        plan_operation_for(project, 2, "execution-plan-complete", "complete-selected-plan", json!({})));
+    assert_eq!(complete["status"], "ok", "{complete}");
+    let next = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
+    assert_eq!(next["status"], "ok", "{next}");
+    assert_eq!(next["outcome"], "dispatch", "{next}");
+    assert_eq!(next["dispatch"]["plan"], 1, "omission must retain first-ready order: {next}");
+    assert_eq!(next["dispatch"]["owner_selection"], Value::Null, "{next}");
+}
+
+#[test]
+fn phase38_large_suite_receipt_retains_every_failing_test_name() {
+    let mut suite = String::from("#!/bin/sh\nprintf '%65540s' x\n");
+    for name in ["oversized::alpha", "oversized::beta", "oversized::gamma"] {
+        suite.push_str(&format!("printf 'test {name} ... FAILED\\n'\n"));
+    }
+    suite.push_str("printf 'test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out\\n'\nexit 1\n");
+    let episode = prepare_repair_episode("T7", "P38-T7-C", &suite);
+    let project = episode.project();
+    let (_, result) = launch_suite(project, "suite-oversized", &[]);
+    let expected = json!(["test oversized::alpha ... FAILED","test oversized::beta ... FAILED",
+        "test oversized::gamma ... FAILED",
+        "test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out"]);
+    assert!(result["stdout"]["bytes"].as_array().unwrap().len() <= 65_536, "{result}");
+    assert_eq!(result["stdout"]["complete"], false, "{result}");
+    assert_eq!(result["stdout"]["result_lines"], expected, "{result}");
+    assert_eq!(result["observation"],
+        json!({"class":"results-observed","summary":{"runner":"cargo","failed":true}}), "{result}");
+    let retained = history(project)["plan_events"].as_array().unwrap().iter().find(|record| {
+        record["request"]["event"]["kind"] == "suite-result"
+            && record["request"]["event"]["run_id"] == "suite-oversized"
+    }).unwrap().clone();
+    assert_eq!(retained["request"]["event"]["stdout"]["result_lines"], expected, "{retained}");
+}
