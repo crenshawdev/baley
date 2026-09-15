@@ -41,6 +41,11 @@ pub async fn plan_apply<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>,
     let project = root.parent().ok_or_else(|| Error::Invalid("project root missing".into()))?;
     let result = match input {
         runner::PlanApply::Suite { request } => runner::suite_launch(session.review_store().clone(), project.to_path_buf(), request).await,
+        runner::PlanApply::RepairAnswer { request } => match request.plan_request() {
+            Ok(request) => runner::plan_append(session.review_store(), request).await,
+            Err(error) => Err(error),
+        },
+        runner::PlanApply::Repair { request } => runner::suite_repair(session.review_store(), project, request).await,
         runner::PlanApply::Relaunch { request } => runner::plan_append(session.review_store(), PlanRequest { request_id: request.request_id,
             plan: request.plan, expected_version: request.expected_version, event: PlanEvent::SuiteRelaunch(request.statement) }).await,
         runner::PlanApply::Complete { request } => {
@@ -99,8 +104,10 @@ pub async fn read<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root:
         }
     }
     let plan_events = history::plan_records(&view.snapshot.data, phase)?;
+    let outcomes = history::plan_outcomes(&view.snapshot.data, phase)?;
     let plans = history::admitted_plans(&view.snapshot.data, phase)?.into_iter()
-        .map(|(plan, _)| json!({"state":history::plan_project(&plan_events, &plan),"plan":plan})).collect::<Vec<_>>();
+        .map(|(plan, _)| json!({"state":history::plan_project(&plan_events, &plan),"plan":plan,
+            "outcome":outcomes.iter().find(|outcome| outcome.plan == plan.plan)})).collect::<Vec<_>>();
     Ok(json!({"status":"ok","schema":"native-task-history-1","events":records,"tasks":tasks,"checkpoint_history":checkpoints,
         "plan_events":plan_events,"plans":plans}))
 }

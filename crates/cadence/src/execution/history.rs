@@ -389,6 +389,38 @@ pub struct SuiteLaunch {
     pub run_id: String,
     pub material: Material,
     pub launched_at: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proposed_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuiteRepairQuestion {
+    pub id: String,
+    pub failed_run: String,
+    pub failing_tests: Vec<String>,
+    pub proposed_paths: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SuiteRepairDisposition { Approve, Refuse }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuiteRepairAnswer {
+    pub question_id: String,
+    pub owner: String,
+    pub at: String,
+    pub disposition: SuiteRepairDisposition,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuiteRepair {
+    pub question_id: String,
+    pub commits: Vec<String>,
+    pub changed_paths: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// The operator's attestation over a launch's retained bytes that no test
@@ -422,6 +454,9 @@ pub struct Completion {
 pub enum PlanEvent {
     SuiteLaunch(SuiteLaunch),
     SuiteResult(RunResult),
+    SuiteRepairQuestion(SuiteRepairQuestion),
+    SuiteRepairAnswer(SuiteRepairAnswer),
+    SuiteRepair(SuiteRepair),
     SuiteRelaunch(OwnerAbsence),
     Completion(Completion),
 }
@@ -452,7 +487,15 @@ pub struct PlanRecord {
 pub struct PlanProjection {
     pub version: u64,
     pub launches: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub results: Vec<String>,
     pub relaunch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_question: Option<SuiteRepairQuestion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_answer: Option<SuiteRepairAnswer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair: Option<SuiteRepair>,
     pub outcome: String,
     pub completed: bool,
 }
@@ -488,15 +531,39 @@ pub fn suite_passed(result: &RunResult) -> bool {
     matches!(result.observation, Observation::ResultsObserved { .. }) && !suite_failed(result) && result.material_unchanged
 }
 
+pub fn failing_tests(result: &RunResult) -> Vec<String> {
+    let mut names = Vec::new();
+    for capture in [&result.stdout, &result.stderr] {
+        for line in capture.bytes.split_inclusive(|byte| *byte == b'\n') {
+            if line.last() != Some(&b'\n') { continue }
+            let Ok(line) = std::str::from_utf8(&line[..line.len() - 1]) else { continue };
+            let line = line.trim_end_matches('\r');
+            let name = line.strip_prefix("test ").and_then(|line| line.strip_suffix(" ... FAILED"))
+                .or_else(|| line.strip_prefix("FAIL: ").and_then(|line| line.split_once(" (").map(|(name, _)| name)))
+                .or_else(|| line.strip_prefix("ERROR: ").and_then(|line| line.split_once(" (").map(|(name, _)| name)));
+            if let Some(name) = name.filter(|name| !name.is_empty())
+                && !names.iter().any(|prior| prior == name) {
+                names.push(name.to_owned());
+            }
+        }
+    }
+    names
+}
+
 pub fn plan_project(records: &[PlanRecord], plan: &PlanIdentity) -> PlanProjection {
-    let mut projection = PlanProjection { version: 0, launches: vec![], relaunch: None, outcome: "pending".into(), completed: false };
+    let mut projection = PlanProjection { version: 0, launches: vec![], results: vec![], relaunch: None,
+        repair_question: None, repair_answer: None, repair: None, outcome: "pending".into(), completed: false };
     for record in records.iter().filter(|r| r.request.plan == *plan) {
         projection.version = record.version;
         match &record.request.event {
             PlanEvent::SuiteLaunch(launch) => { projection.launches.push(launch.run_id.clone()); projection.outcome = "unknown".into(); }
             PlanEvent::SuiteResult(result) => {
+                projection.results.push(result.run_id.clone());
                 projection.outcome = if suite_passed(result) { "passed" } else if suite_failed(result) { "failed" } else { "unknown" }.into();
             }
+            PlanEvent::SuiteRepairQuestion(question) => projection.repair_question = Some(question.clone()),
+            PlanEvent::SuiteRepairAnswer(answer) => projection.repair_answer = Some(answer.clone()),
+            PlanEvent::SuiteRepair(repair) => projection.repair = Some(repair.clone()),
             PlanEvent::SuiteRelaunch(_) => projection.relaunch = Some(record.request.request_id.clone()),
             PlanEvent::Completion(_) => { projection.completed = true; projection.outcome = "complete".into(); }
         }
@@ -531,7 +598,7 @@ pub fn admitted_plans(data: &Value, phase: u32) -> Result<Vec<(PlanIdentity, u64
     Ok(plans)
 }
 
-pub(crate) fn plan_outcomes(data: &Value, phase: u32) -> Result<Vec<super::model::PlanOutcome>> {
+pub fn plan_outcomes(data: &Value, phase: u32) -> Result<Vec<super::model::PlanOutcome>> {
     Ok(data["execution"]["occurrences"].get(phase.to_string()).and_then(|o| o.get("plans")).cloned()
         .map(serde_json::from_value).transpose()?.unwrap_or_default())
 }
@@ -558,6 +625,7 @@ fn end_dispatch(data: &Value, plan: &PlanIdentity, active: &super::model::Active
     use super::model::{CommandReceipt, Deviation, EvidenceReference, ExecutionSnapshot, PlanOutcome, TaskOutcome, TerminalOutcome, VerificationDisposition, VerificationReceipt};
     let mut tasks = Vec::new();
     let mut deviations = Vec::new();
+    let mut commit_paths = std::collections::BTreeMap::new();
     for spec in &active.tasks {
         let task = Task { phase: plan.phase, occurrence: plan.occurrence.clone(), admission_digest: plan.admission_digest.clone(), plan: plan.plan, task: spec.id.clone() };
         let Some(proof) = records.iter().find_map(|r| match &r.request.event {
@@ -594,11 +662,24 @@ fn end_dispatch(data: &Value, plan: &PlanIdentity, active: &super::model::Active
             }
         }
     }
+    for repair in plan_records(data, plan.phase)?.iter().filter_map(|record| match &record.request.event {
+        PlanEvent::SuiteRepair(repair) if record.request.plan == *plan => Some(repair),
+        _ => None,
+    }) {
+        for (commit, paths) in &repair.changed_paths {
+            commit_paths.insert(commit.clone(), paths.clone());
+            for path in paths.iter().filter(|path| !super::lease::covers(&active.files, &active.directories, path)) {
+                deviations.push(Deviation { id: format!("suite-repair:{path}"),
+                    text: format!("suite repair committed {path} outside the admitted lease in {commit}"),
+                    evidence: vec![EvidenceReference::Commit { sha: commit.clone() }] });
+            }
+        }
+    }
     let mut execution: ExecutionSnapshot = serde_json::from_value(data["execution"].clone())?;
     let occurrence = execution.occurrences.get_mut(&plan.phase.to_string())
         .ok_or_else(|| Error::Invalid("plan outcome lacks its execution occurrence".into()))?;
     occurrence.plans.push(PlanOutcome { dispatch_id: active.id.clone(), phase: plan.phase, plan: plan.plan, disposition, tasks,
-        deviations, blockers, commit_paths: Default::default(), transition_id: transition_id.into() });
+        deviations, blockers, commit_paths, transition_id: transition_id.into() });
     occurrence.active = None;
     let mut next = data.clone();
     next["execution"] = serde_json::to_value(execution)?;
@@ -626,8 +707,8 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
     let projection = plan_project(&history, plan);
     let task_records = records(data, plan.phase)?;
     if projection.completed { return Err(refuse("plan-completed", "plan already has a confirmed native completion")); }
-    if projection.outcome == "failed" && !matches!(request.event, PlanEvent::SuiteRelaunch(_)) {
-        return Err(refuse("suite-failed", "the suite reported a failure and the plan stays incomplete; its repair is a newly approved, explicitly linked gap plan admitted through a versioned set extension (D-120), never a rerun"));
+    if plan_outcomes(data, plan.phase)?.iter().any(|outcome| outcome.plan == plan.plan) {
+        return Err(refuse("suite-failed", "the plan's repair launch reported a failure; its next repair is a newly approved gap plan"));
     }
     if request.expected_version != projection.version { return Err(refuse("plan-version", "expected plan version is stale")); }
     let publication = crate::plan::persistence::saved(data, plan.phase)?.and_then(|o| o.publications.get(&plan.plan).cloned())
@@ -642,6 +723,7 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
     let latest_result = latest.as_deref().and_then(|id| suite_result(&history, plan, id)).cloned();
     let mut proposed = data.clone();
     let record_digest = plan_request_digest(request)?;
+    let mut generated_question = None;
     match &request.event {
         PlanEvent::SuiteLaunch(launch) => {
             let active = active.filter(|a| a.plan == plan.plan && a.phase == plan.phase)
@@ -650,21 +732,31 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
                 return Err(refuse("suite-early", &format!("the suite is available only after the last task is acknowledged; unfinished: {}", unfinished.join(", "))));
             }
             if launch.run_id.trim().is_empty() || launch.material.commit.is_empty() || launch.material.tree.is_empty()
+                || launch.proposed_paths.iter().any(|path| !super::patch::safe_relative_path(path))
+                || launch.proposed_paths.iter().collect::<std::collections::BTreeSet<_>>().len() != launch.proposed_paths.len()
                 || history.iter().any(|r| matches!(&r.request.event, PlanEvent::SuiteLaunch(l) if l.run_id == launch.run_id)) {
-                return Err(refuse("suite-launch", "launch identity and committed material required"));
+                return Err(refuse("suite-launch", "launch identity, committed material and distinct project-relative repair paths required"));
             }
             if launch.material.command != active.suite || launch.material.command != publication.content.execution.suite || !launch.material.test_file.is_empty() {
                 return Err(refuse("suite-command", "the suite runs exactly the admitted suite command"));
             }
             if let Some(latest) = &latest {
                 if latest_result.as_ref().is_some_and(|r| matches!(r.observation, Observation::ResultsObserved { .. })) {
-                    return Err(refuse("suite-once", "the suite runs once per plan and a recognized result exists"));
+                    let approved_repair = latest_result.as_ref().is_some_and(|result| suite_failed(result))
+                        && projection.launches.len() == 1
+                        && projection.repair_answer.as_ref().is_some_and(|answer| answer.disposition == SuiteRepairDisposition::Approve)
+                        && projection.repair.is_some();
+                    if !approved_repair {
+                        return Err(refuse("suite-once", "a recognized suite result permits one further launch only after an approved, retained plan repair"));
+                    }
                 }
-                let confirmed = history.iter().filter(|r| r.request.plan == *plan).rev()
-                    .take_while(|r| !matches!(&r.request.event, PlanEvent::SuiteLaunch(_)))
-                    .any(|r| matches!(&r.request.event, PlanEvent::SuiteRelaunch(a) if a.submission.dead_launch == *latest));
-                if !confirmed || projection.launches.len() >= 2 {
-                    return Err(refuse("suite-once", "the suite runs once per plan; a launch with no recognized result is relaunched only once, after the operator's execution-suite-relaunch attestation"));
+                if latest_result.as_ref().is_none_or(|result| !matches!(result.observation, Observation::ResultsObserved { .. })) {
+                    let confirmed = history.iter().filter(|r| r.request.plan == *plan).rev()
+                        .take_while(|r| !matches!(&r.request.event, PlanEvent::SuiteLaunch(_)))
+                        .any(|r| matches!(&r.request.event, PlanEvent::SuiteRelaunch(a) if a.submission.dead_launch == *latest));
+                    if !confirmed || projection.launches.len() >= 2 {
+                        return Err(refuse("suite-once", "the suite runs once per plan; a launch with no recognized result is relaunched only once, after the operator's execution-suite-relaunch attestation"));
+                    }
                 }
             }
         }
@@ -677,10 +769,53 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
                 || result.observation != super::runner::classify(&result.stdout.bytes, &result.stderr.bytes) {
                 return Err(refuse("suite-result", "result duplicates a run or has invalid capture/timestamp"));
             }
-            if suite_failed(result) && let Some(active) = active.as_ref().filter(|a| a.plan == plan.plan) {
-                let blocker = super::model::Blocker { id: format!("suite-failed:{}", result.run_id),
-                    text: "the plan's suite reported a failure; the plan stays incomplete and its repair is an explicitly linked gap plan (D-120)".into(), evidence: vec![] };
-                proposed = end_dispatch(&proposed, plan, active, &task_records, super::model::PlanDisposition::Blocked, vec![blocker], &record_digest)?;
+            if suite_failed(result) {
+                if projection.repair.is_some() {
+                    if let Some(active) = active.as_ref().filter(|active| active.plan == plan.plan) {
+                        let blocker = super::model::Blocker { id: format!("suite-failed:{}", result.run_id),
+                            text: "the plan's one repair launch reported a failure; further repair requires a gap plan".into(), evidence: vec![] };
+                        proposed = end_dispatch(&proposed, plan, active, &task_records,
+                            super::model::PlanDisposition::Blocked, vec![blocker], &record_digest)?;
+                    }
+                } else {
+                    generated_question = Some(SuiteRepairQuestion { id: format!("suite-repair:{}", result.run_id),
+                        failed_run: result.run_id.clone(), failing_tests: failing_tests(result),
+                        proposed_paths: launch.proposed_paths.clone() });
+                }
+            }
+        }
+        PlanEvent::SuiteRepairQuestion(_) => {
+            return Err(refuse("suite-repair-question", "the suite repair question is generated by the binary"));
+        }
+        PlanEvent::SuiteRepairAnswer(answer) => {
+            let Some(question) = projection.repair_question.as_ref() else {
+                return Err(refuse("suite-repair-answer", "repair answer requires the retained plan question"));
+            };
+            if projection.repair_answer.is_some() || answer.question_id != question.id
+                || answer.owner.trim().is_empty() || answer.at.trim().is_empty() {
+                return Err(refuse("suite-repair-answer", "one answer must name the retained question with nonblank owner attribution and time"));
+            }
+            if answer.disposition == SuiteRepairDisposition::Refuse {
+                let active = active.as_ref().filter(|active| active.plan == plan.plan)
+                    .ok_or_else(|| refuse("plan-active", "repair refusal needs the plan's active dispatch"))?;
+                let blocker = super::model::Blocker { id: format!("suite-repair-refused:{}", question.id),
+                    text: "the owner refused the plan-level suite repair".into(), evidence: vec![] };
+                proposed = end_dispatch(&proposed, plan, active, &task_records,
+                    super::model::PlanDisposition::Blocked, vec![blocker], &record_digest)?;
+            }
+        }
+        PlanEvent::SuiteRepair(repair) => {
+            let Some(question) = projection.repair_question.as_ref() else {
+                return Err(refuse("suite-repair", "repair requires the retained plan question"));
+            };
+            if repair.question_id != question.id || repair.commits.is_empty()
+                || repair.commits.iter().collect::<std::collections::BTreeSet<_>>().len() != repair.commits.len()
+                || repair.commits.iter().any(|commit| !repair.changed_paths.contains_key(commit))
+                || repair.changed_paths.keys().any(|commit| !repair.commits.contains(commit))
+                || projection.repair.is_some()
+                || projection.repair_answer.as_ref().is_none_or(|answer| answer.question_id != question.id
+                    || answer.disposition != SuiteRepairDisposition::Approve) {
+                return Err(refuse("suite-repair", "one Git-observed repair requires the current approved question and exact ordered commits"));
             }
         }
         PlanEvent::SuiteRelaunch(statement) => {
@@ -720,17 +855,26 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
             }
             match &latest_result {
                 None => return Err(refuse("suite-unknown", "the suite launch has no observed result; it is Unknown, neither success nor a completed run")),
-                Some(result) if suite_failed(result) => return Err(refuse("suite-failed", "the suite reported a failure; repair belongs to a linked gap plan (D-120)")),
+                Some(result) if suite_failed(result) && projection.repair.is_none() => {
+                    return Err(refuse("suite-repair-pending", "the first failing suite is waiting on its retained owner-gated repair"));
+                }
+                Some(result) if suite_failed(result) => return Err(refuse("suite-failed", "the repair launch reported a failure; further repair belongs to a gap plan")),
                 Some(result) if !suite_passed(result) => return Err(refuse("suite-unknown", "the suite output carries no recognized passing result; Unknown is neither success nor plan completion")),
                 Some(_) => {}
             }
             let settlement = completion.settlement.as_ref()
                 .ok_or_else(|| refuse("risk-pending", "the plan's exact risk settlement is pending; the suite receipt is retained and completion waits for both"))?;
             let scope = &settlement.boundary.scope;
-            let basis = crate::rail::risk::native_execution_bases(data)?.into_iter().rev().find(|b| b.execution.dispatch_id == active.id)
+            let bases = crate::rail::risk::native_execution_bases(data)?.into_iter()
+                .filter(|basis| basis.task.phase == plan.phase && basis.task.plan == plan.plan).collect::<Vec<_>>();
+            let base = bases.first().map(|basis| basis.execution.base_id.clone())
                 .ok_or_else(|| refuse("risk-pending", "no native risk material is retained for the plan's dispatch"))?;
+            let head = projection.repair.as_ref().and_then(|repair| repair.commits.last()).cloned()
+                .or_else(|| bases.last().map(|basis| basis.source.completion.clone()))
+                .ok_or_else(|| refuse("risk-pending", "no native risk material is retained for the plan's dispatch"))?;
+            let material = crate::rail::risk::MaterialIdentity::Committed { base_id: base, head_id: head };
             if settlement.boundary.run_id != active.id || scope.phase.get() != plan.phase || scope.plan.map(|p| p.get()) != Some(plan.plan)
-                || scope.occurrence != format!("phase-{}-execution", plan.phase) || settlement.material != basis.material()
+                || scope.occurrence != format!("phase-{}-execution", plan.phase) || settlement.material != material
                 || !crate::rail::receipts::assess(settlement, data)?.permits_continuation {
                 return Err(refuse("risk-pending", "the plan's exact risk settlement is pending; the suite receipt is retained and completion waits for both"));
             }
@@ -741,6 +885,14 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
         version: projection.version.checked_add(1).ok_or_else(|| refuse("plan-version", "version exhausted"))?,
         request_digest: record_digest, request: request.clone() };
     history.push(record.clone());
+    if let Some(question) = generated_question {
+        let question_request = PlanRequest { request_id: format!("{}:question", question.id), plan: plan.clone(),
+            expected_version: record.version, event: PlanEvent::SuiteRepairQuestion(question) };
+        let question_record = PlanRecord { schema: "native-plan-event-1".into(), root_binding: root.into(),
+            version: record.version.checked_add(1).ok_or_else(|| refuse("plan-version", "version exhausted"))?,
+            request_digest: plan_request_digest(&question_request)?, request: question_request };
+        history.push(question_record);
+    }
     let namespace = proposed.as_object_mut().ok_or_else(|| refuse("plan-shape", "snapshot must be an object"))?
         .entry(PLAN_NAMESPACE).or_insert_with(|| json!({"schema":"native-plans-1","phases":{}}));
     namespace["phases"][plan.phase.to_string()] = serde_json::to_value(history)?;

@@ -47,6 +47,51 @@ pub struct PlanInput {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct SuiteInput {
+    pub request_id: String,
+    pub plan: history::PlanIdentity,
+    pub expected_version: u64,
+    #[serde(default)]
+    pub proposed_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RepairAnswerInput {
+    pub request_id: String,
+    pub plan: history::PlanIdentity,
+    pub expected_version: u64,
+    pub question_id: String,
+    pub owner: String,
+    pub at: String,
+    pub disposition: history::SuiteRepairDisposition,
+}
+
+impl RepairAnswerInput {
+    pub fn plan_request(self) -> Result<history::PlanRequest> {
+        if self.owner.trim().is_empty() || self.at.trim().is_empty() {
+            return Err(admission::refuse(self.plan.phase, "suite-repair-answer", "owner", &self.question_id,
+                "repair answer requires nonblank owner attribution and time"));
+        }
+        Ok(history::PlanRequest { request_id: self.request_id, plan: self.plan,
+            expected_version: self.expected_version, event: history::PlanEvent::SuiteRepairAnswer(
+                history::SuiteRepairAnswer { question_id: self.question_id, owner: self.owner,
+                    at: self.at, disposition: self.disposition }) })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RepairInput {
+    pub request_id: String,
+    pub plan: history::PlanIdentity,
+    pub expected_version: u64,
+    pub question_id: String,
+    pub commits: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RelaunchInput {
     pub request_id: String,
     pub plan: history::PlanIdentity,
@@ -60,7 +105,11 @@ pub struct RelaunchInput {
 #[serde(tag = "operation", deny_unknown_fields)]
 pub enum PlanApply {
     #[serde(rename = "execution-suite")]
-    Suite { request: PlanInput },
+    Suite { request: SuiteInput },
+    #[serde(rename = "execution-suite-repair-answer")]
+    RepairAnswer { request: RepairAnswerInput },
+    #[serde(rename = "execution-suite-repair")]
+    Repair { request: RepairInput },
     #[serde(rename = "execution-suite-relaunch")]
     Relaunch { request: RelaunchInput },
     #[serde(rename = "execution-plan-complete")]
@@ -235,9 +284,58 @@ pub async fn plan_append(store: &Store, request: history::PlanRequest) -> Result
         .ok_or_else(|| Error::Invalid("confirmed plan receipt missing".into()))
 }
 
+pub async fn suite_repair(store: &Store, project: &Path, input: RepairInput) -> Result<history::PlanRecord> {
+    use history::{PlanEvent, PlanRequest, SuiteRepair};
+    let view = store.request(Operation::ReadVerified).await?;
+    let records = history::plan_records(&view.snapshot.data, input.plan.phase)?;
+    if let Some(prior) = records.iter().find(|record| record.request.request_id == input.request_id) {
+        let PlanEvent::SuiteRepair(repair) = &prior.request.event else {
+            return Err(admission::refuse(input.plan.phase, "plan-request-reuse", "request_id", &input.request_id,
+                "request already names another payload"));
+        };
+        if prior.request.plan != input.plan || prior.request.expected_version != input.expected_version
+            || repair.question_id != input.question_id || repair.commits != input.commits {
+            return Err(admission::refuse(input.plan.phase, "plan-request-reuse", "request_id", &input.request_id,
+                "request already names another payload"));
+        }
+        return Ok(prior.clone());
+    }
+    clean(project)?;
+    let projection = history::plan_project(&records, &input.plan);
+    let question = projection.repair_question.as_ref()
+        .filter(|question| question.id == input.question_id)
+        .ok_or_else(|| admission::refuse(input.plan.phase, "suite-repair", "question_id", &input.question_id,
+            "repair requires the current retained suite question"))?;
+    let failed_commit = records.iter().find_map(|record| match &record.request.event {
+        PlanEvent::SuiteLaunch(launch) if record.request.plan == input.plan && launch.run_id == question.failed_run => {
+            Some(launch.material.commit.clone())
+        }
+        _ => None,
+    }).ok_or_else(|| Error::Invalid("suite repair question lacks its failed launch".into()))?;
+    let head = git_text(project, &["rev-parse", "HEAD"])?;
+    let mut changed_paths = std::collections::BTreeMap::new();
+    let mut predecessor = failed_commit;
+    for commit in &input.commits {
+        if !crate::rail::risk::valid_object_id(commit) || commit == &predecessor {
+            return Err(admission::refuse(input.plan.phase, "suite-repair", "commits", commit,
+                "repair commits require distinct full object ids after the failed launch"));
+        }
+        git(project, &["cat-file", "-e", &format!("{commit}^{{commit}}")])?;
+        git(project, &["merge-base", "--is-ancestor", &predecessor, commit])?;
+        git(project, &["merge-base", "--is-ancestor", commit, &head])?;
+        git(project, &["verify-commit", commit])?;
+        changed_paths.insert(commit.clone(), super::receipts::commit_paths(project, commit)?);
+        predecessor = commit.clone();
+    }
+    plan_append(store, PlanRequest { request_id: input.request_id, plan: input.plan,
+        expected_version: input.expected_version, event: PlanEvent::SuiteRepair(SuiteRepair {
+            question_id: input.question_id, commits: input.commits, changed_paths,
+        }) }).await
+}
+
 /// The suite launch is claimed before the process starts, exactly like a task
 /// command; eligibility and the once-per-plan rule are validated in the store.
-pub async fn suite_launch(store: Store, project: PathBuf, input: PlanInput) -> Result<history::PlanRecord> {
+pub async fn suite_launch(store: Store, project: PathBuf, input: SuiteInput) -> Result<history::PlanRecord> {
     use history::{PlanEvent, PlanRequest, SuiteLaunch};
     let view = store.request(Operation::ReadVerified).await?;
     let history = history::plan_records(&view.snapshot.data, input.plan.phase)?;
@@ -251,7 +349,8 @@ pub async fn suite_launch(store: Store, project: PathBuf, input: PlanInput) -> R
         .and_then(|p| p.publications.get(&input.plan.plan).cloned())
         .ok_or_else(|| Error::Invalid("plan publication missing".into()))?;
     let observed = material(&project, &publication.content.execution.suite, "")?;
-    let launch = SuiteLaunch { run_id: input.request_id.clone(), material: observed, launched_at: now() };
+    let launch = SuiteLaunch { run_id: input.request_id.clone(), material: observed, launched_at: now(),
+        proposed_paths: input.proposed_paths };
     let request = PlanRequest { request_id: input.request_id, plan: input.plan, expected_version: input.expected_version,
         event: PlanEvent::SuiteLaunch(launch.clone()) };
     let record = plan_append(&store, request.clone()).await?;

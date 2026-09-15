@@ -120,7 +120,8 @@ fn disagreement(data: &Value, record: &Record) -> Result<Vec<String>> {
         || admitted != record.basis.publications { fields.push("publications".to_owned()); }
     let events = history::records(data, phase)?;
     let plan_events = history::plan_records(data, phase)?;
-    if digest(&serde_json::to_vec(&json!({"events":events,"plan_events":plan_events}))?) != record.basis.execution_digest { fields.push("execution".to_owned()); }
+    let outcomes = history::plan_outcomes(data, phase)?;
+    if digest(&serde_json::to_vec(&json!({"events":events,"plan_events":plan_events,"outcomes":outcomes}))?) != record.basis.execution_digest { fields.push("execution".to_owned()); }
     if fields.is_empty() { fields.push("native inputs".to_owned()); }
     Ok(fields)
 }

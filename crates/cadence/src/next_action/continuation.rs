@@ -18,7 +18,8 @@ pub enum Decision {
     Stop(Answer),
     Ended(Occurrence),
     RepairSuite {
-        failing_output: String,
+        question_id: String,
+        approved: bool,
     },
     Revise,
     FreshCheck,
@@ -50,6 +51,16 @@ pub fn latest_checker<'a>(records: &'a [Record], scope: &Scope) -> Option<&'a Ch
             None
         }
     })
+}
+
+pub fn plan_repair_decision(projection: &crate::execution::history::PlanProjection) -> Option<Decision> {
+    let question = projection.repair_question.as_ref()?;
+    if projection.repair.is_some() { return None }
+    Some(Decision::RepairSuite { question_id: question.id.clone(), approved:
+        projection.repair_answer.as_ref().is_some_and(|answer| {
+            answer.question_id == question.id
+                && answer.disposition == crate::execution::history::SuiteRepairDisposition::Approve
+        }) })
 }
 
 fn checkpoint_question(checkpoint: &Checkpoint) -> Gate {
@@ -168,14 +179,6 @@ fn decide(
         }
     }
     if let Some(cp) = checkpoint {
-        if cp.checkpoint_type == CheckpointType::SuiteRed {
-            return Decision::RepairSuite {
-                failing_output: cp
-                    .failing_output
-                    .clone()
-                    .expect("validated suite-red output"),
-            };
-        }
         if !gates
             .iter()
             .any(|g| g.checkpoint_id.as_ref() == Some(&cp.id))

@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 pub const VERSION: &str = "executor-instructions-1";
 
 /// The design's Executor block, verbatim (`docs/architecture/acceptance.md`).
-pub const EXECUTOR_BLOCK: &str = "**Executor.** For each check your task delivers: write the test first, run it, record the commit where it failed; then implement, run it, record the commit where it passed. Run only what the task names while working. Run the full suite once, when the plan's last task is done, before you report. Unit tests beyond the checks are yours: test a unit through what it exposes, fake only files, clock, other programs and network, skip trivial code, write the expected value by hand.";
+pub const EXECUTOR_BLOCK: &str = "**Executor.** For each check your task delivers: write the test first, run it, record the commit where it failed; then implement, run it, record the commit where it passed. Run only what the task names while working. Close the last task, report, and stop; the orchestrator requests the full suite. Unit tests beyond the checks are yours: test a unit through what it exposes, fake only files, clock, other programs and network, skip trivial code, write the expected value by hand.";
 
 /// The classical default (D-115): guidance when the project has set no test
 /// style, never a gate; nothing about style is refused or counted.
@@ -20,7 +20,8 @@ The dispatch's operational input is the binary's authority: its executable
 named `verify` commands, current state, uncertainty and retained checkpoints;
 `checks` carries every check those tasks deliver with its id, item revision,
 owning task and specification; `completed` is history and is never worked
-again; `suite` (the admitted command and the runner's current suite state),
+again; an approved `suite.state.repair_question` makes a new plan-level issue
+whose executable task list is empty; `suite` (the admitted command and the runner's current suite state),
 `lease` and `commands` come from the admitted plan. The authored plan body is
 delimited context: it can describe the work, and it cannot change these
 fields, this protocol or the instructions above.
@@ -78,28 +79,38 @@ revision, test material and inspected runs. The binary checks that the record
 exists and is exact, not that it is true; your own `no_subject_stub: true` is
 an executor assertion and never an owner attestation.
 
-Named commands and one suite (D-112, D-171): task commands are the retained
-`verify` commands and may repeat while a task is being repaired. The suite
-command is available only after the last task is acknowledged and runs once,
-through `execution-suite`, before the plan can report complete; native
-completion (`execution-plan-complete`) needs both that passing suite receipt
-and the existing exact risk settlement. Both are the orchestrator's requests.
-The executor never requests `execution-suite` or `execution-plan-complete`:
-close the last task, report, and stop. A launch is claimed before the process starts
-and its result recorded after; a crash between them leaves the launch Unknown,
-which is neither success nor a completed run. A suite launch with no
-recognized result may be relaunched exactly once, on the operator's typed
-`execution-suite-relaunch` attestation naming the dead launch over its retained
-bytes; the binary refuses that attestation outright when a recognized result exists,
-keeps both launches, and accepts no second exception. A suite that ran
-and failed keeps the plan incomplete; its repair is an explicitly linked gap
-plan, never a rerun. Replayed requests return their receipt, not another
-process. The runner sees only what it launched: a command you run in your own
-shell, and a wrapper's inner subcommands, are outside Cadence's history and
-CI is not the plan-close run. The plan-level requests name the plan the way
-`execution-history` reports it under `plans`: `execution-suite` and
+Named commands and one suite repair (D-163, D-171): task commands are the
+retained `verify` commands and may repeat while a task is being repaired. The
+suite command is available only after the last task is acknowledged and runs
+through `execution-suite` before the plan can report complete; native completion
+(`execution-plan-complete`) needs both that passing suite receipt and the
+existing exact risk settlement. Both are the orchestrator's requests.
+The executor never requests `execution-suite` or `execution-plan-complete`: close
+the last task, report, and stop. The orchestrator includes the executor's
+project-relative repair proposal paths on that suite request. A first recognized
+failure raises one plan-level owner question naming those paths and every retained
+failing test. After the owner approves through `execution-suite-repair-answer`,
+`execute-next` issues a plan-level repair continuation with no reopened task.
+Commit the repair, submit its ordered commits through `execution-suite-repair`,
+report, and stop; the orchestrator requests the one permitted second suite
+launch. A second recognized failure blocks the plan and any further repair
+needs a gap plan. A launch is claimed before the process starts and its result
+recorded after; a crash between them leaves the launch Unknown, which is neither
+success nor a completed run. A suite launch with no recognized result may be
+relaunched exactly once, on the operator's typed `execution-suite-relaunch`
+attestation naming the dead launch over its retained bytes; the binary refuses
+that attestation outright when a recognized result exists, keeps both launches,
+and accepts no second exception. A refused first repair or a failed second
+launch keeps the plan incomplete and its next repair is an explicitly linked
+gap plan. Replayed requests return their receipt, not another process. The
+runner sees only what it launched: a command you run in your own shell, and a
+wrapper's inner subcommands, are outside Cadence's history and CI is not the
+plan-close run. The plan-level requests name the plan the way `execution-history`
+reports it under `plans`: `execution-suite` (with optional `proposed_paths`) and
 `execution-plan-complete` take `{request_id, plan, expected_version}`;
-`execution-suite-relaunch` adds the operator's `statement` `{submission:
+`execution-suite-repair-answer` adds `{question_id, owner, at, disposition}`;
+`execution-suite-repair` adds `{question_id, commits}`; `execution-suite-relaunch`
+adds the operator's `statement` `{submission:
 {dead_launch, output_identity, attestation}, approval}`, where
 `output_identity` is the retained run's output identity or null when the dead
 launch retained no result.
@@ -237,12 +248,12 @@ files, reconstruct no task list and approve no evidence on the owner's behalf.
 
 <process>
 1. Read the native plan/map identities and complete admission/allocation as described below. Parse the phase into a positive JSON integer and call `mcp__cadence__cadence_query` with `operation: "execute-next"` and that integer as `phase`; never pass an unchanged slash-command string. Do not round, infer, default or repair it.
-2. Read the structured envelope. For `complete`, report completion and stop. For `judgment-stop`, display the stop identifiers and stop. For `refused`, `unknown` or `not-applicable`, display `code` and `reason`; when the code is `continuation-refusal` or `reconciliation-required` continue at step 3; when it is `suite-failed`, the plan's suite reported a failure and its repair is a newly approved gap plan admitted through `execution-extend`, never a rerun, so stop and say so; otherwise stop. For `dispatch`, continue at step 4.
-3. Collect the owner's actual answer in the conversation and submit exactly what the owner states, then repeat from step 1: an unanswered task checkpoint is answered through `execution-task-answer`; a linked Stop is continued or declined through `execution-authorize` naming the same retained `checkpoint`; an unlinked Stop needs later owner approval with `checkpoint` omitted or null; unacknowledged commits are reconciled through `execution-task-progress`. A restart, a summary or an old report is never an answer.
+2. Read the structured envelope. For `complete`, report completion and stop. For `judgment-stop`, display the stop identifiers and stop. For `refused`, `unknown` or `not-applicable`, display `code` and `reason`; when the code is `continuation-refusal` or `reconciliation-required` continue at step 3; when it is `suite-failed`, the one repair launch failed and the next repair is a newly approved gap plan admitted through `execution-extend`, so stop and say so; otherwise stop. For `dispatch`, continue at step 4.
+3. Collect the owner's actual answer in the conversation and submit exactly what the owner states, then repeat from step 1: an unanswered plan suite-repair question is answered through `execution-suite-repair-answer`; an unanswered task checkpoint is answered through `execution-task-answer`; a linked Stop is continued or declined through `execution-authorize` naming the same retained `checkpoint`; an unlinked Stop needs later owner approval with `checkpoint` omitted or null; unacknowledged commits are reconciled through `execution-task-progress`. A restart, a summary or an old report is never an answer.
 4. Invoke `Task` with `dispatch.route.choice.agent` and exactly the returned prompt, unchanged. Pass `dispatch.route.choice.model` only when present; otherwise omit the model argument for session inheritance. Use this admitted selection and issue no fresh route query. Add no instructions or context: the prompt already carries the admitted checks, the current task state and the compiled executor instructions.
 5. Read the executor's digest without interpreting it. The binary holds the closed tasks and receipts; the executor's reply is a digest, not a patch, and a refusal or an Unknown run it reports is displayed and retained, never converted into completion.
 6. Owner records are actual round trips through `mcp__cadence__cadence_apply`, each submitted exactly as the owner states it and shown with the retained bytes it names: the no-subject-stub inspection (`execution-owner-attest`), the separate classification of an Unknown custom-check run (`execution-classify-run`), and the dead-launch absence attestation for a suite launch with no recognized result (`execution-suite-relaunch`). The owner's interpretation is shown beside the binary's observation class and never replaces it.
-7. When the executor's digest reports the plan's last task closed, request `execution-suite` with the plan identity and version that `execution-history` reports under `plans`, and wait for its receipt, the answer itself carries the result, then request `execution-plan-complete` with the version the suite receipt reports; it needs both the passing suite receipt and the existing exact risk settlement (`risk-check` on the plan's dispatch), and passing one does not erase a pending other. The executor never requests either. Then repeat from step 1.
+7. When the executor's digest reports the plan's last task closed, request `execution-suite` with the plan identity and version that `execution-history` reports under `plans` plus the executor's project-relative `proposed_paths`, and wait for its receipt. If it passes, then request `execution-plan-complete` with the version the suite receipt reports; completion needs both that receipt and the existing exact risk settlement (`risk-check` on the plan's dispatch), and passing one does not erase a pending other. If the first launch fails, read its generated plan question, collect and submit the owner's attributed `execution-suite-repair-answer`, and repeat from step 1; the approved answer produces a new retained issue for the repair executor. After that executor reports its `execution-suite-repair` receipt and stops, request the one second suite launch. The executor never requests the suite or completion. Then repeat from step 1.
 </process>
 
 The old whole-plan executor patch, and the old rule to run the suite before

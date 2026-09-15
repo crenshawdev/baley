@@ -46,14 +46,20 @@ fn suite_repair_answer_requires_owner_and_replays() {
             "admission_digest":"admission","plan":1},"expected_version":3,
         "question_id":"suite-repair:run-1","owner":"Fixture Owner",
         "at":"2026-09-15T18:00:00Z","disposition":"approve"}});
-    assert!(serde_json::from_value::<cadence::execution::runner::PlanApply>(attributed).is_ok(),
-        "the public plan operation must accept an attributed repair answer");
+    let cadence::execution::runner::PlanApply::RepairAnswer { request } =
+        serde_json::from_value::<cadence::execution::runner::PlanApply>(attributed).unwrap() else { unreachable!() };
+    let request = request.plan_request().unwrap();
+    assert_eq!(cadence::execution::history::plan_request_digest(&request).unwrap(),
+        cadence::execution::history::plan_request_digest(&request.clone()).unwrap(),
+        "an exact attributed request must have one replay identity");
     let blank = serde_json::json!({"operation":"execution-suite-repair-answer","request":{
         "request_id":"answer-blank","plan":{"phase":6,"occurrence":"phase-6-execution",
             "admission_digest":"admission","plan":1},"expected_version":3,
         "question_id":"suite-repair:run-1","owner":"","at":"2026-09-15T18:00:00Z",
         "disposition":"approve"}});
-    assert!(serde_json::from_value::<cadence::execution::runner::PlanApply>(blank).is_err(),
+    let cadence::execution::runner::PlanApply::RepairAnswer { request } =
+        serde_json::from_value::<cadence::execution::runner::PlanApply>(blank).unwrap() else { unreachable!() };
+    assert!(request.plan_request().unwrap_err().to_string().contains("suite-repair-answer"),
         "blank owner attribution must be refused at the public boundary");
 }
 

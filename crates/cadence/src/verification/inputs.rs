@@ -101,6 +101,7 @@ pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
     }
     let events = history::records(data, phase)?;
     let plan_events = history::plan_records(data, phase)?;
+    let outcomes = history::plan_outcomes(data, phase)?;
     if data["execution"]["occurrences"][phase.to_string()]["active"].is_object() {
         return Err(refuse(phase, "verification-execution", "execution.active", "execution dispatch remains active"));
     }
@@ -144,7 +145,7 @@ pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
     }
     let checks = map["items"].as_array().ok_or_else(|| refuse(phase, "verification-map", "items", "canonical items absent"))?
         .iter().filter(|i| i["kind"] == "check").cloned().collect();
-    let execution = json!({"events":events,"plan_events":plan_events});
+    let execution = json!({"events":events,"plan_events":plan_events,"outcomes":outcomes});
     let basis = Basis { project: project.to_string_lossy().into_owned(), root_binding: binding,
         phase, occurrence: latest.request.contract.occurrence.clone(),
         context_digest: digest(&serde_json::to_vec(&context)?),

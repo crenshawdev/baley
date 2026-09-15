@@ -345,8 +345,8 @@ write coverage, and do not write a second check for a truth.
 
 **Executor.** For each check your task delivers: write the test first, run
 it, record the commit where it failed; then implement, run it, record the
-commit where it passed. Run only what the task names while working. Run the
-full suite once, when the plan's last task is done, before you report. Unit
+commit where it passed. Run only what the task names while working. Close the
+last task, report, and stop; the orchestrator requests the full suite. Unit
 tests beyond the checks are yours: test a unit through what it exposes, fake
 only files, clock, other programs and network, skip trivial code, write the
 expected value by hand.
@@ -387,11 +387,10 @@ are written and run.** Five decisions draw it exactly.
    number.** Any number handed to the model becomes a target it hits - "every
    call site" became 187. Cadence's only numbers are about review: seven
    truths, one check each.
-5. **The full suite runs once per plan, at the close.** The planner names, in
-   each task's verify, the narrowest command that settles it - one test, one
-   binary, never the suite. The executor runs only what the task names, and
-   runs the full suite once when the plan's last task is done, before
-   reporting. The verifier never runs the suite; it runs each truth's one
-   check. CI runs the suite again on push. That is the rerun problem that
-   started this, answered: targeted while working, once at the end, once in
-   CI.
+5. **The full suite is an owner-gated plan close.** The planner names the
+   narrowest command that settles each task, never the suite. The executor
+   closes the last task and stops; the orchestrator requests the suite. A
+   first recognized failure raises one owner question and permits exactly one
+   recorded repair and one further launch after approval. A refused repair or
+   a second recognized failure blocks the plan; neither permits another launch.
+   The verifier runs each truth's check, never the suite. CI may run it again.

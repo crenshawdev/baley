@@ -115,6 +115,20 @@ pub async fn continuation<I: ConfigIo + Clone + Sync>(
         .map(|p| p.plans.as_slice())
         .unwrap_or_default();
     let mut selected = continuation::select(&records, scope, applicability, plans);
+    if let Ok(phase) = scope.phase.parse::<u32>()
+        && let Some(active) = view.snapshot.data["execution"]["occurrences"][phase.to_string()]["active"].as_object()
+        && let Some(plan) = active.get("plan").and_then(serde_json::Value::as_u64).and_then(|plan| u32::try_from(plan).ok()) {
+        let plan_events = cadence::execution::history::plan_records(&view.snapshot.data, phase)
+            .map_err(store_error)?;
+        let admitted = cadence::execution::history::admitted_plans(&view.snapshot.data, phase)
+            .map_err(store_error)?;
+        if let Some((identity, _)) = admitted.iter().find(|(identity, _)| identity.plan == plan)
+            && let Some(decision) = continuation::plan_repair_decision(
+                &cadence::execution::history::plan_project(&plan_events, identity)) {
+            selected.checkpoint = None;
+            selected.decision = decision;
+        }
+    }
     #[cfg(test)]
     {
         let event = driver.event.clone();

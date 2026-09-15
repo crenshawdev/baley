@@ -194,35 +194,14 @@ fn checkpoint_continuation_persists_question_and_recovers_exact_answers() {
 
 #[test]
 fn suite_repair_continuation_waits_on_plan_question() {
-    runtime().block_on(async {
-        let temp = fixture(&[LifecycleStatus::Executed]);
-        let root = temp.path().join(".planning");
-        let server = CadenceServer::with_factory(factory());
-        let cp = checkpoint(CheckpointType::SuiteRed);
-        submit(
-            &server,
-            &root,
-            "suite",
-            fact(&root, "run", Fact::Checkpoint(cp.clone())),
-        )
-        .await;
-        drop(server);
-        let selected = recover_continuation(&root, "run").await;
-        assert_eq!(selected.checkpoint, None,
-            "suite repair is plan history and must not project a task checkpoint");
-        assert!(matches!(selected.decision, Decision::Wait(_)),
-            "execute-next must wait on the unanswered plan repair question: {selected:?}");
-        let server = CadenceServer::with_factory(factory());
-        assert!(
-            !server
-                .evidence(&root, Command::Read)
-                .await
-                .unwrap()
-                .current
-                .iter()
-                .any(|r| matches!(r.fact, Fact::Gate(_)))
-        );
-    });
+    use cadence::execution::history::{PlanProjection, SuiteRepairQuestion};
+    let question = SuiteRepairQuestion { id: "suite-repair:run-1".into(), failed_run: "run-1".into(),
+        failing_tests: vec!["repair::alpha".into()], proposed_paths: vec!["src/value.rs".into()] };
+    let projection = PlanProjection { version: 3, launches: vec!["run-1".into()], results: vec!["run-1".into()],
+        relaunch: None, repair_question: Some(question.clone()), repair_answer: None, repair: None,
+        outcome: "failed".into(), completed: false };
+    assert_eq!(cadence::next_action::continuation::plan_repair_decision(&projection),
+        Some(Decision::RepairSuite { question_id: question.id, approved: false }));
 }
 
 #[test]

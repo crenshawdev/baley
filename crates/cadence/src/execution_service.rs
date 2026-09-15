@@ -114,7 +114,8 @@ pub async fn native_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root
     if matches!(raw["operation"].as_str(), Some("execution-task-start" | "execution-run")) {
         return super::execution_runner_service::apply(factory, root, raw).await;
     }
-    if matches!(raw["operation"].as_str(), Some("execution-suite" | "execution-suite-relaunch" | "execution-plan-complete")) {
+    if matches!(raw["operation"].as_str(), Some("execution-suite" | "execution-suite-repair-answer" |
+        "execution-suite-repair" | "execution-suite-relaunch" | "execution-plan-complete")) {
         return super::execution_runner_service::plan_apply(factory, root, raw).await;
     }
     use cadence::execution::{admission,boundary::NativeApply};
@@ -687,7 +688,9 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
             .await;
         }
     };
-    if !matches!(continuation.decision, ContinuationDecision::Continue { .. }) {
+    let suite_repair_approved = matches!(continuation.decision,
+        ContinuationDecision::RepairSuite { approved: true, .. });
+    if !matches!(continuation.decision, ContinuationDecision::Continue { .. }) && !suite_repair_approved {
         view = match session.derivation_view().await {
             Ok(latest) => latest,
             Err(error) => return store_refusal(phase, error),
@@ -710,21 +713,29 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
         Err(error) => return store_refusal(phase, error),
     };
     if native {
-        let ContinuationDecision::Continue { answer, rerun_plans, .. } = &continuation.decision else { unreachable!("checked above") };
-        if !rerun_plans.is_empty() {
-            return record_refusal(&session, &view, phase, BoundaryTool::CadenceQuery, "execute-next", &raw_request,
-                "native-rerun", "native execution never reruns an admitted plan; publish and admit a linked gap plan", None).await;
-        }
-        let continuation_view = match answer {
-            Some(answer) => {
-                let checkpoint = cadence::evidence::persistence::read(&view.snapshot.data).map_err(store_failure)?.into_values()
-                    .find_map(|r| match &r.fact {
-                        cadence::evidence::Fact::Gate(gate) if gate.id == answer.question_id => Some(gate.checkpoint_id.clone()),
-                        _ => None,
-                    }).flatten();
-                json!({"question_id":answer.question_id,"authorization_id":answer.authorization_id,"response":answer.actual_response,"checkpoint":checkpoint})
+        let continuation_view = match &continuation.decision {
+            ContinuationDecision::Continue { answer, rerun_plans, .. } => {
+                if !rerun_plans.is_empty() {
+                    return record_refusal(&session, &view, phase, BoundaryTool::CadenceQuery, "execute-next", &raw_request,
+                        "native-rerun", "native execution never reruns an admitted plan; publish and admit a linked gap plan", None).await;
+                }
+                match answer {
+                    Some(answer) => {
+                        let checkpoint = cadence::evidence::persistence::read(&view.snapshot.data).map_err(store_failure)?.into_values()
+                            .find_map(|r| match &r.fact {
+                                cadence::evidence::Fact::Gate(gate) if gate.id == answer.question_id => Some(gate.checkpoint_id.clone()),
+                                _ => None,
+                            }).flatten();
+                        json!({"question_id":answer.question_id,"authorization_id":answer.authorization_id,
+                            "response":answer.actual_response,"checkpoint":checkpoint})
+                    }
+                    None => Value::Null,
+                }
             }
-            None => Value::Null,
+            ContinuationDecision::RepairSuite { question_id, approved: true } => {
+                json!({"suite_repair":{"question_id":question_id,"approved":true}})
+            }
+            _ => unreachable!("checked above"),
         };
         return native_query(&session, &view, &root, phase, &phase_record.plans, &plans, &admissions, continuation_view, &raw_request, driver).await;
     }
@@ -2416,7 +2427,10 @@ fn continuation_next_call(decision: &ContinuationDecision) -> String {
             "question {} is unanswered: record the owner's actual answer to it before retrying",
             gate.id
         ),
-        D::RepairSuite { .. } => "the plan's suite reported a failure: its repair is a newly approved gap plan admitted through cadence_apply execution-extend, never a rerun".into(),
+        D::RepairSuite { question_id, approved: false } => format!(
+            "plan suite repair question {question_id} is unanswered: submit cadence_apply execution-suite-repair-answer with the owner's actual answer, attribution and time"
+        ),
+        D::RepairSuite { approved: true, .. } => "the approved plan suite repair is ready to dispatch".into(),
         D::Ended(_) => "this execution occurrence has ended; no further dispatch is issued for it".into(),
         D::Revise => "the controlling check failed and its revision is unspent: publish the revised plan before retrying".into(),
         D::FreshCheck => "the controlling check is missing or stale: a current check is required before execution continues".into(),
@@ -2687,7 +2701,18 @@ async fn checked_continuation<I: ConfigIo + Clone + Sync>(
         .find(|p| p.id.number() == f64::from(phase))
         .map(|p| p.plans.as_slice())
         .unwrap_or_default();
-    let selected = continuation::select(&records, &scope, applicability, plans);
+    let mut selected = continuation::select(&records, &scope, applicability, plans);
+    if let Some(active) = view.snapshot.data["execution"]["occurrences"][phase.to_string()]["active"].as_object()
+        && let Some(plan) = active.get("plan").and_then(Value::as_u64).and_then(|plan| u32::try_from(plan).ok()) {
+        let plan_events = cadence::execution::history::plan_records(&view.snapshot.data, phase).map_err(fail)?;
+        let admitted = cadence::execution::history::admitted_plans(&view.snapshot.data, phase).map_err(fail)?;
+        if let Some((identity, _)) = admitted.iter().find(|(identity, _)| identity.plan == plan)
+            && let Some(decision) = continuation::plan_repair_decision(
+                &cadence::execution::history::plan_project(&plan_events, identity)) {
+            selected.checkpoint = None;
+            selected.decision = decision;
+        }
+    }
     if session.derivation_view().await.map_err(fail)?.snapshot != view.snapshot
         || session.config().map_err(fail)? != config
     {
@@ -2723,6 +2748,32 @@ pub fn risk_material(
         return Ok(basis.material());
     }
     let execution = execution_snapshot(view)?;
+    let active = execution.occurrences.get(&phase.to_string()).and_then(|occurrence| occurrence.active.as_ref());
+    let plan_bases = native.iter().filter(|basis| basis.task.phase == phase && basis.task.plan == plan).collect::<Vec<_>>();
+    if active.is_some_and(|active| active.id == dispatch_id && active.plan == plan) && !plan_bases.is_empty() {
+        let task_records = cadence::execution::history::records(&view.snapshot.data, phase).map_err(|error| error.to_string())?;
+        if plan_bases.iter().any(|basis| !task_records.iter().any(|record| record.request.task == basis.task
+            && record.request_digest == basis.execution.transition_id
+            && cadence::execution::history::decision(record).is_ok_and(|decision| view.decisions.contains(&decision)))) {
+            return Err("native risk source lacks a confirmed task receipt".into());
+        }
+        let plan_records = cadence::execution::history::plan_records(&view.snapshot.data, phase).map_err(|error| error.to_string())?;
+        let identity = cadence::execution::history::admitted_plans(&view.snapshot.data, phase).map_err(|error| error.to_string())?
+            .into_iter().find(|(identity, _)| identity.plan == plan).map(|(identity, _)| identity)
+            .ok_or("native risk source lacks an admitted plan")?;
+        let projection = cadence::execution::history::plan_project(&plan_records, &identity);
+        if projection.repair.is_some() && !plan_records.iter().any(|record| record.request.plan == identity
+            && matches!(&record.request.event, cadence::execution::history::PlanEvent::SuiteRepair(_))
+            && cadence::execution::history::plan_decision(record).is_ok_and(|decision| view.decisions.contains(&decision))) {
+            return Err("native risk source lacks a confirmed suite repair receipt".into());
+        }
+        let head_id = projection.repair.as_ref().and_then(|repair| repair.commits.last()).cloned()
+            .or_else(|| plan_bases.last().map(|basis| basis.source.completion.clone()))
+            .ok_or("native risk source lacks committed material")?;
+        return Ok(risk::MaterialIdentity::Committed {
+            base_id: plan_bases[0].execution.base_id.clone(), head_id,
+        });
+    }
     let occurrence = execution
         .occurrences
         .get(&phase.to_string())
