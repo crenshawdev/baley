@@ -627,8 +627,8 @@ write `prompt` and `prompt_digest`. Nine phase-31 closes no longer hashed to
 their digests. Worse, the snapshot copy of those records had already been
 re-serialized by the day's writes and had lost the byte count outright; the
 append-only decisions log, which stores each event as text, still had it.
-The fix is the same shape on `ActiveDispatch` (`c1b1e9d6` red, the fix
-commit beside it), and the nine snapshot records were restored from the
+The fix is the same shape on `ActiveDispatch` (`8ae8c8f6` red, `a658ab87`
+fix), and the nine snapshot records were restored from the
 log's bytes by a one-off program on the crate's own `Snapshot` parse and
 render, generation 499, every task and plan event across every phase then
 matching its digest (355 checked). Nothing was invented: the log is the
