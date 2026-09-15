@@ -659,7 +659,7 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
                 &raw_request,
                 &response,
                 Some(active.id.clone()),
-                Some(active.prompt_bytes),
+                Some(active.prompt_digest.clone()),
             )?;
             let confirmed = confirmed_boundary(&view, &decision)?;
             return confirmed.envelope(Some(response.into_envelope()));
@@ -941,7 +941,6 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
         &plans.fingerprint,
         occurrence.version,
         &base_sha,
-        1,
         route,
     ) {
         Ok(value) => value,
@@ -978,9 +977,10 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
         }
     };
     let prompt = render_prompt(&provisional);
-    candidate.prompt_bytes = prompt.len() as u64;
+    candidate.prompt_digest = cadence::store::model::digest(prompt.as_bytes());
+    candidate.prompt = prompt.clone();
     let (_, dispatch) = admit_dispatch(&occurrence, candidate.clone())
-        .expect("prompt byte count does not alter dispatch admission");
+        .expect("retained prompt does not alter dispatch admission");
     let response = Response::Dispatch {
         dispatch: Box::new(dispatch.clone()),
         prompt,
@@ -1027,7 +1027,7 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
         &raw_request,
         &response,
         Some(dispatch.id.clone()),
-        Some(dispatch.prompt_bytes),
+        Some(dispatch.prompt_digest.clone()),
     )?;
     let written = session
         .request(Operation::BoundaryV1 {
@@ -1122,7 +1122,7 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
                 Err(error) => return refuse("route-unavailable", error.to_string(), None).await,
             };
             let route = cadence::execution::model::DispatchRoute { choice, inputs: super::config_service::routing_inputs(&config) };
-            let built = match build_routed_dispatch(plan, &plans.fingerprint, occurrence.version, &head, 1, route) {
+            let built = match build_routed_dispatch(plan, &plans.fingerprint, occurrence.version, &head, route) {
                 Ok(value) => value,
                 Err(error) => return refuse(error.code, error.detail, None).await,
             };
@@ -1187,8 +1187,17 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         Ok(value) => value,
         Err(error) => return refuse(error.code, error.detail, Some(admitted.id.clone())).await,
     };
-    let prompt = render_native_prompt(&operational, Some(&instructions::dispatch_text()), &plan.body);
-    dispatch.prompt_bytes = prompt.len() as u64;
+    let prompt = if candidate.is_some() {
+        let prompt = render_native_prompt(&operational, Some(&instructions::dispatch_text()), &plan.body);
+        dispatch.prompt_digest = cadence::store::model::digest(prompt.as_bytes());
+        dispatch.prompt = prompt.clone();
+        prompt
+    } else {
+        match retained_prompt(&dispatch) {
+            Ok(prompt) => prompt,
+            Err((code, reason)) => return refuse(code, reason, Some(dispatch.id.clone())).await,
+        }
+    };
     let response = Response::Dispatch { dispatch: Box::new(dispatch.clone()), prompt };
     #[cfg(test)]
     {
@@ -1204,10 +1213,11 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
     if let Err(reason) = reobserve(session, view, root, phase, names, plans, Some(&head)).await {
         return refuse("inputs-changed", reason, Some(dispatch.id.clone())).await;
     }
-    let decision = boundary(phase, BoundaryTool::CadenceQuery, "execute-next", raw_request, &response, Some(dispatch.id.clone()), Some(dispatch.prompt_bytes))?;
+    let decision = boundary(phase, BoundaryTool::CadenceQuery, "execute-next", raw_request, &response, Some(dispatch.id.clone()), Some(dispatch.prompt_digest.clone()))?;
     let (operation_id, change) = match candidate {
         Some(mut candidate) => {
-            candidate.prompt_bytes = dispatch.prompt_bytes;
+            candidate.prompt = dispatch.prompt.clone();
+            candidate.prompt_digest = dispatch.prompt_digest.clone();
             (format!("execution-dispatch:{}", dispatch.id), BoundaryChange::Dispatch { plan_set_fingerprint: plans.fingerprint.clone(), dispatch: candidate })
         }
         None => (format!("execution-observation:{}", decision.identity()?), BoundaryChange::Observe),
@@ -1791,34 +1801,33 @@ fn terminal_response(phase: u32, terminal: &TerminalOutcome) -> Response {
 fn dispatch_response(active: &ActiveDispatch, plan: &ExecutionPlan) -> Response {
     let mut dispatch = active.clone();
     dispatch.body = plan.body.clone();
-    let mut prompt = render_prompt(&dispatch);
-    if prompt.len() as u64 != dispatch.prompt_bytes {
-        // Outstanding dispatches retain the exact known historical renderer.
-        // The existing confirmed boundary also verifies its public answer digest.
-        prompt = render_prompt_version(&dispatch, false);
+    match retained_prompt(&dispatch) {
+        Ok(prompt) => Response::Dispatch { dispatch: Box::new(dispatch), prompt },
+        Err((code, reason)) => refused(dispatch.phase, code, reason),
     }
-    if prompt.len() as u64 != dispatch.prompt_bytes {
-        return refused(
-            dispatch.phase,
-            "prompt-mismatch",
-            "the reconstructed prompt byte count differs from the admitted dispatch",
-        );
+}
+
+fn retained_prompt(dispatch: &ActiveDispatch) -> Result<String, (&'static str, String)> {
+    if dispatch.prompt.is_empty() {
+        return Err((
+            "prompt-not-retained",
+            "the admitted dispatch predates retained prompts and cannot be read back".into(),
+        ));
     }
-    Response::Dispatch {
-        dispatch: Box::new(dispatch),
-        prompt,
+    if cadence::store::model::digest(dispatch.prompt.as_bytes()) != dispatch.prompt_digest {
+        return Err((
+            "prompt-integrity",
+            "the retained prompt does not match its admitted digest".into(),
+        ));
     }
+    Ok(dispatch.prompt.clone())
 }
 
 fn render_prompt(dispatch: &ActiveDispatch) -> String {
-    render_prompt_version(dispatch, true)
-}
-
-fn render_prompt_version(dispatch: &ActiveDispatch, lease_instructions: bool) -> String {
     cadence::execution::render::render_dispatch_prompt(
         dispatch,
         &patch_schema(),
-        lease_instructions,
+        true,
     )
 }
 
@@ -2191,7 +2200,7 @@ fn boundary(
     request: &str,
     response: &Response,
     subject_id: Option<String>,
-    _prompt_bytes: Option<u64>,
+    _prompt_digest: Option<String>,
 ) -> Result<BoundaryV1, Failure> {
     let answer = PreparedAnswer::new(response.clone().into_envelope())?;
     Ok(BoundaryV1::new(
@@ -2729,12 +2738,12 @@ mod schema_tests {
             &"a".repeat(64),
             0,
             &"b".repeat(40),
-            1,
         )
         .unwrap();
         let prompt = render_prompt(&dispatch);
-        dispatch.prompt_bytes = prompt.len() as u64;
-        assert_eq!(render_prompt(&dispatch).len() as u64, dispatch.prompt_bytes);
+        dispatch.prompt_digest = cadence::store::model::digest(prompt.as_bytes());
+        dispatch.prompt = prompt.clone();
+        assert_eq!(cadence::store::model::digest(render_prompt(&dispatch).as_bytes()), dispatch.prompt_digest);
         assert!(prompt.ends_with(body));
         assert!(prompt.contains(&format!("Opaque plan body ({} UTF-8 bytes):", body.len())));
         let schema = prompt
@@ -3005,7 +3014,9 @@ mod routing_prompt_tests {
         let supplied: ActiveDispatch = serde_json::from_value(json!({"schema":1,"id":"dispatch-fixture","expected_execution_version":1,
             "phase":8,"plan":1,"plan_fingerprint":"plan","plan_set_fingerprint":"plans","requirements":["AC10"],"tasks":[{"id":"T1","verify":["verify"]}],
             "suite":"verify","files":["src/a.rs"],"policy":{"rung":"xhigh","branch":"current","reviews":"disabled"},
-            "route":route,"base_sha":"base","prompt_bytes":1,"body":"opaque fixture body"})).unwrap();
+            "route":route,"base_sha":"base","prompt":"x",
+            "prompt_digest":"2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+            "body":"opaque fixture body"})).unwrap();
         assert_eq!(
             prompt_operational(&supplied),
             json!({"schema":1,"dispatch_id":"dispatch-fixture","expected_execution_version":1,

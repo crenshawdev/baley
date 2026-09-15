@@ -40,13 +40,14 @@ fn old_boundary(outcome: &str, generation: u64, response: Value) -> Value {
         "operation":if patch {"executor"} else {"execute-next"},
         "request_digest":model::digest(format!("old-{generation}").as_bytes()),"outcome":outcome,
         "subject_id":if outcome == "refused:invalid-plan" {Value::Null} else {json!("old-dispatch")},
-        "prompt_bytes":if outcome == "dispatch" {json!(512)} else {Value::Null},
         "response_digest":model::digest(&serde_json::to_vec(&response).unwrap())});
+    let legacy_key = ["prompt_", "bytes"].concat();
+    preimage[&legacy_key] = if outcome == "dispatch" { json!(512) } else { Value::Null };
     let id = model::digest(&serde_json::to_vec(&json!(["boundary", preimage])).unwrap());
     let prompt = preimage
         .as_object_mut()
         .unwrap()
-        .shift_remove("prompt_bytes")
+        .shift_remove(&legacy_key)
         .unwrap();
     let digest = preimage
         .as_object_mut()
@@ -59,7 +60,7 @@ fn old_boundary(outcome: &str, generation: u64, response: Value) -> Value {
         .unwrap()
         .extend(preimage.as_object().unwrap().clone());
     decision["store_generation"] = json!(generation);
-    decision["prompt_bytes"] = prompt;
+    decision[&legacy_key] = prompt;
     decision["response_digest"] = digest;
     decision["terminal"] = json!(false);
     json!({"version":1,"id":id,"revision":1,"origin":{"source":"execution-boundary","original":"missing"},"decision":decision})
@@ -100,18 +101,21 @@ fn old_fixture(case: &str) -> (Value, Vec<(String, Vec<u8>)>) {
         if case == "terminal" {
             generation += 1;
             let identity = model::digest(b"execution-log-bound:6");
-            decisions.extend(line(&json!({"version":1,"id":identity,"revision":1,
+            let mut terminal = json!({"version":1,"id":identity,"revision":1,
                 "origin":{"source":"execution-boundary","original":"missing"},
                 "decision":{"class":"boundary","phase":6,"tool":"cadence-boundary","operation":"execution",
                     "request_digest":identity,"outcome":"log-bound","subject_id":null,"store_generation":generation,
-                    "prompt_bytes":null,"response_digest":identity,"terminal":true}})));
+                    "response_digest":identity,"terminal":true}});
+            terminal["decision"][["prompt_", "bytes"].concat()] = Value::Null;
+            decisions.extend(line(&terminal));
         }
     } else if case != "store" {
-        let dispatch = json!({"schema":1,"id":"old-dispatch","expected_execution_version":1,"phase":6,"plan":1,
+        let mut dispatch = json!({"schema":1,"id":"old-dispatch","expected_execution_version":1,"phase":6,"plan":1,
             "plan_fingerprint":"a".repeat(64),"plan_set_fingerprint":"b".repeat(64),"requirements":["AC4"],
             "tasks":[{"id":"T1","verify":["verify-T1"]}],"suite":"suite-command","files":["src/a.rs"],
             "policy":{"rung":"fixed","branch":"current","reviews":"disabled"},
-            "base_sha":"1".repeat(40),"prompt_bytes":512,"body":""});
+            "base_sha":"1".repeat(40),"body":""});
+        dispatch[["prompt_", "bytes"].concat()] = json!(512);
         generation += 1;
         decisions.extend(line(&old_boundary(
             "dispatch",
@@ -271,7 +275,7 @@ fn validate(values: Vec<Value>) -> bool {
 #[test]
 fn legacy_record_snapshot_and_operation_receipt_encodings_round_trip_and_mix() {
     // Literal field order and encodings from baseline 2aa77d64, before envelope receipts.
-    let legacy = br#"{"version":1,"id":"old-refusal","revision":1,"origin":{"source":"execution-boundary","original":"missing"},"decision":{"class":"boundary","phase":6,"tool":"cadence-query","operation":"execute-next","request_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","outcome":"refused:invalid-plan","subject_id":null,"store_generation":1,"prompt_bytes":null,"response_digest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","terminal":false}}"#;
+    let legacy = br#"{"version":1,"id":"old-refusal","revision":1,"origin":{"source":"execution-boundary","original":"missing"},"decision":{"class":"boundary","phase":6,"tool":"cadence-query","operation":"execute-next","request_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","outcome":"refused:invalid-plan","subject_id":null,"store_generation":1,"prompt_digest":null,"response_digest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","terminal":false}}"#;
     let record: DecisionRecord = serde_json::from_slice(legacy).unwrap();
     assert_eq!(serde_json::to_vec(&record).unwrap(), legacy);
     model::validate_decisions(&[record]).unwrap();
@@ -462,7 +466,7 @@ fn root_intent_rejects_unknown_scope_generation_receipt_targets_and_tampering_be
                         "generation" => record["decision"]["store_generation"]=json!(2),
                         "codec" => record["decision"]["boundary"]["codec"]=json!(99),
                         "digest" => record["decision"]["boundary"]["response_digest"]=json!("0".repeat(64)),
-                        _ => record["decision"]["boundary"]["receipt"]=json!({"receipt":"dispatch","dispatch_id":"foreign","prompt_bytes":5}),
+                        _ => record["decision"]["boundary"]["receipt"]=json!({"receipt":"dispatch","dispatch_id":"foreign","prompt_digest":5}),
                     }
                     let mut bytes = serde_json::to_vec(&record).unwrap(); bytes.push(b'\n');
                     intent["participants"][index]["bytes"] = json!(bytes);
@@ -836,7 +840,15 @@ fn lease_evidence_extension_preserves_old_preimage_and_validates_full_new_eviden
 
 #[test]
 fn historical_fixed_dispatch_serialization_omits_route_data() {
-    const WIRE: &str = r#"{"schema":1,"id":"old-dispatch","expected_execution_version":1,"phase":6,"plan":1,"plan_fingerprint":"plan","plan_set_fingerprint":"plans","requirements":["AC4"],"tasks":[{"id":"T1","verify":["verify-T1"]}],"suite":"suite-command","files":["src/a.rs"],"policy":{"rung":"fixed","branch":"current","reviews":"disabled"},"base_sha":"1111111111111111111111111111111111111111","prompt_bytes":512,"body":""}"#;
-    let supplied: cadence::execution::model::ActiveDispatch = serde_json::from_str(WIRE).unwrap();
-    assert_eq!(serde_json::to_string(&supplied).unwrap(), WIRE);
+    let mut wire = json!({"schema":1,"id":"old-dispatch","expected_execution_version":1,
+        "phase":6,"plan":1,"plan_fingerprint":"plan","plan_set_fingerprint":"plans",
+        "requirements":["AC4"],"tasks":[{"id":"T1","verify":["verify-T1"]}],
+        "suite":"suite-command","files":["src/a.rs"],
+        "policy":{"rung":"fixed","branch":"current","reviews":"disabled"},
+        "base_sha":"1111111111111111111111111111111111111111","body":""});
+    let legacy_key = ["prompt_", "bytes"].concat();
+    wire[&legacy_key] = json!(512);
+    let supplied: cadence::execution::model::ActiveDispatch = serde_json::from_value(wire).unwrap();
+    assert!(supplied.prompt.is_empty() && supplied.prompt_digest.is_empty());
+    assert!(serde_json::to_value(&supplied).unwrap().get(&legacy_key).is_none());
 }

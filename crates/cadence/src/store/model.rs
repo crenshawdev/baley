@@ -83,7 +83,7 @@ pub enum Decision {
         outcome: String,
         subject_id: Option<String>,
         store_generation: u64,
-        prompt_bytes: Option<u64>,
+        prompt_digest: Option<String>,
         response_digest: String,
         terminal: bool,
     },
@@ -273,7 +273,7 @@ pub fn validate_decisions(records: &[DecisionRecord]) -> Result<()> {
             request_digest,
             outcome,
             subject_id,
-            prompt_bytes,
+            prompt_digest,
             response_digest,
             terminal,
             ..
@@ -287,7 +287,7 @@ pub fn validate_decisions(records: &[DecisionRecord]) -> Result<()> {
                 || subject_id
                     .as_ref()
                     .is_some_and(|value| value.trim().is_empty())
-                || prompt_bytes.is_some_and(|value| value == 0)
+                || prompt_digest.as_ref().is_some_and(|value| !is_digest(value))
                 || *terminal != (outcome == "log-bound"))
         {
             return Err(Error::Invalid("invalid boundary decision".into()));

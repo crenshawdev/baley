@@ -243,14 +243,15 @@ pub fn envelope_digest(envelope: &ExecutionEnvelope) -> Result<String, Failure> 
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "receipt", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(tag = "receipt", rename_all = "kebab-case")]
 pub enum Receipt {
     Compact {
         envelope: ExecutionEnvelope,
     },
     Dispatch {
         dispatch_id: String,
-        prompt_bytes: u64,
+        #[serde(default)]
+        prompt_digest: String,
     },
 }
 
@@ -286,12 +287,12 @@ impl PreparedAnswer {
             Envelope::Ok(Success::Dispatch { dispatch, prompt }) => {
                 super::dispatch::validate_route_choice(dispatch)
                     .map_err(|_| Failure::RoutingEvidence)?;
-                if dispatch.prompt_bytes != prompt.len() as u64 {
+                if dispatch.prompt_digest != crate::store::model::digest(prompt.as_bytes()) {
                     return Err(Failure::Encoding);
                 }
                 Receipt::Dispatch {
                     dispatch_id: dispatch.id.clone(),
-                    prompt_bytes: dispatch.prompt_bytes,
+                    prompt_digest: dispatch.prompt_digest.clone(),
                 }
             }
             _ => Receipt::Compact {
@@ -549,13 +550,15 @@ impl BoundaryV1 {
         match &self.receipt {
             Receipt::Dispatch {
                 dispatch_id,
-                prompt_bytes,
+                prompt_digest,
             } => {
                 if !matches!(self.scope, BoundaryScope::Execution { .. })
                     || self.tool != BoundaryTool::CadenceQuery
                     || self.outcome != "dispatch"
                     || self.subject_id.as_ref() != Some(dispatch_id)
-                    || *prompt_bytes == 0
+                    || (!prompt_digest.is_empty()
+                        && (prompt_digest.len() != 64
+                            || !prompt_digest.bytes().all(|byte| byte.is_ascii_hexdigit())))
                 {
                     return Err(Failure::Encoding);
                 }
@@ -654,7 +657,7 @@ mod tests {
                 "dbf0572cace415f2802f207056eafe427501f99eb793bd9551d6b114477b4ab9",
             ),
             (
-                r##"{"dispatch":{"base_sha":"base","body":"体","expected_execution_version":1,"files":["src/a.rs"],"id":"d1","phase":6,"plan":1,"plan_fingerprint":"f","plan_set_fingerprint":"s","policy":{"branch":"current","reviews":"disabled","rung":"fixed"},"prompt_bytes":3,"requirements":["AC1"],"schema":1,"suite":"suite","tasks":[{"id":"T1","verify":["verify"]}]},"outcome":"dispatch","prompt":"体","status":"ok"}"##,
+                r##"{"dispatch":{"base_sha":"base","body":"体","expected_execution_version":1,"files":["src/a.rs"],"id":"d1","phase":6,"plan":1,"plan_fingerprint":"f","plan_set_fingerprint":"s","policy":{"branch":"current","reviews":"disabled","rung":"fixed"},"prompt":"体","prompt_digest":"d08d660b7de4e2314def9d953b46d4fec2db3acbfe7344cda4ede7faacc5e177","requirements":["AC1"],"schema":1,"suite":"suite","tasks":[{"id":"T1","verify":["verify"]}]},"outcome":"dispatch","prompt":"体","status":"ok"}"##,
                 "be9b2252281adc092fe110c20ddbc06d6063b987188839ca77c134aaceb7c604",
             ),
         ];
@@ -670,10 +673,10 @@ mod tests {
                 Receipt::Compact { envelope } => assert_eq!(envelope, answer.envelope),
                 Receipt::Dispatch {
                     dispatch_id,
-                    prompt_bytes,
+                    prompt_digest,
                 } => {
                     assert_eq!(dispatch_id, "d1");
-                    assert_eq!(prompt_bytes, 3);
+                    assert_eq!(prompt_digest, "d08d660b7de4e2314def9d953b46d4fec2db3acbfe7344cda4ede7faacc5e177");
                 }
             }
         }
@@ -779,7 +782,8 @@ mod tests {
             "phase":6,"plan":1,"plan_fingerprint":"f","plan_set_fingerprint":"s",
             "requirements":[],"tasks":[],"suite":"suite","files":[],
             "policy":{"rung":"fixed","branch":"current","reviews":"disabled"},
-            "base_sha":"base","prompt_bytes":20000,"body":"private body"});
+            "base_sha":"base","prompt":"p".repeat(20000),
+            "prompt_digest":crate::store::model::digest(&vec![b'p'; 20000]),"body":"private body"});
         let dispatch = serde_json::from_value(fixture).unwrap();
         let answer = PreparedAnswer::new(Envelope::Ok(Success::Dispatch {
             dispatch,
@@ -788,7 +792,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             serde_json::to_value(&answer.receipt).unwrap(),
-            json!({"receipt":"dispatch","dispatch_id":"d1","prompt_bytes":20000})
+            json!({"receipt":"dispatch","dispatch_id":"d1",
+                "prompt_digest":crate::store::model::digest(&vec![b'p'; 20000])})
         );
         assert!(!answer.too_large());
     }

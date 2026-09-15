@@ -1038,7 +1038,7 @@ fn phase12_continuation_dispatches_only_unfinished_tasks() {
     let decisions=reopened(project).decisions;
     let retained:Vec<_>=decisions.iter().filter(|d|serde_json::to_value(&d.decision).unwrap()["boundary"]["subject_id"]==dispatch["dispatch"]["id"]).collect();
     assert_eq!(retained.len(),1,"one retained dispatch identity");
-    assert_eq!(serde_json::to_value(&retained[0].decision).unwrap()["boundary"]["receipt"],json!({"receipt":"dispatch","dispatch_id":dispatch["dispatch"]["id"],"prompt_bytes":dispatch["prompt"].as_str().unwrap().len()}));
+    assert_eq!(serde_json::to_value(&retained[0].decision).unwrap()["boundary"]["receipt"],json!({"receipt":"dispatch","dispatch_id":dispatch["dispatch"]["id"],"prompt_digest":dispatch["dispatch"]["prompt_digest"]}));
     // A new-id duplicate close of A is refused and nothing protected changes.
     close_refused(project,fixture.close("duplicate-close-A"),"task-completed",&[]);
     assert_eq!(execute_next(project),dispatch);
@@ -1187,7 +1187,7 @@ fn phase12_dispatch_contains_admitted_checks_state_and_instructions() {
     let decisions=reopened(project).decisions;
     let retained:Vec<_>=decisions.iter().filter(|d|serde_json::to_value(&d.decision).unwrap()["boundary"]["subject_id"]==dispatch["dispatch"]["id"]).collect();
     assert_eq!(retained.len(),1);
-    assert_eq!(serde_json::to_value(&retained[0].decision).unwrap()["boundary"]["receipt"]["prompt_bytes"],prompt.len());
+    assert_eq!(serde_json::to_value(&retained[0].decision).unwrap()["boundary"]["receipt"]["prompt_digest"],hash(prompt.as_bytes()));
     // Acknowledged progress yields a fresh linked dispatch, never the old prompt.
     let ack=apply(project,progress_request(project,"progress-B",json!({"kind":"progress","text":"B reads its admitted check","evidence":[fixture.green]})));
     assert_eq!(ack["status"],"ok","{ack}");

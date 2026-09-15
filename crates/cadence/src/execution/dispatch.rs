@@ -23,7 +23,6 @@ pub fn build_dispatch(
     plan_set_fingerprint: &str,
     execution_version: u64,
     base_sha: &str,
-    prompt_bytes: u64,
 ) -> Result<ActiveDispatch, PlanError> {
     if !full_sha(base_sha) {
         return Err(error(
@@ -39,12 +38,6 @@ pub fn build_dispatch(
         return Err(error(
             "invalid-plan-set",
             "plan-set fingerprint must contain 64 hexadecimal digits",
-        ));
-    }
-    if prompt_bytes == 0 {
-        return Err(error(
-            "invalid-prompt",
-            "prompt byte count must be positive",
         ));
     }
     let identity = DispatchIdentity {
@@ -80,7 +73,9 @@ pub fn build_dispatch(
         },
         route: None,
         base_sha: base_sha.to_owned(),
-        prompt_bytes,
+        prompt: String::new(),
+        prompt_digest: String::new(),
+        legacy_prompt: Default::default(),
         body: plan.body.clone(),
     })
 }
@@ -268,7 +263,6 @@ pub fn build_routed_dispatch(
     plan_set_fingerprint: &str,
     execution_version: u64,
     base_sha: &str,
-    prompt_bytes: u64,
     route: super::model::DispatchRoute,
 ) -> Result<ActiveDispatch, PlanError> {
     let mut dispatch = build_dispatch(
@@ -276,7 +270,6 @@ pub fn build_routed_dispatch(
         plan_set_fingerprint,
         execution_version,
         base_sha,
-        prompt_bytes,
     )?;
     dispatch.policy.rung = routed_rung(&route.choice.rung)?;
     dispatch.route = Some(Box::new(route));

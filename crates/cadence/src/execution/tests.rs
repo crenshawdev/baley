@@ -577,7 +577,7 @@ fn native_material_includes_scoped_evidence_commits() {
         let mut plan = parse_plan(documents["phases/12/PLAN-1.md"].as_bytes(), 12, 1).unwrap();
         // Unit dispatch authority explicitly leases the test and rename target.
         plan.files.extend(["test.py".into(), "src/renamed.rs".into()]);
-        let active = build_dispatch(&plan, &digest(b"original-set"), 0, &base, 1).unwrap();
+        let active = build_dispatch(&plan, &digest(b"original-set"), 0, &base).unwrap();
         let material = receipts::observe_source(&project, &active, "deliver", &green, std::slice::from_ref(&red)).unwrap();
         let in_lease = serde_json::to_value(&material).unwrap();
         assert!(in_lease["out_of_lease"].is_null() || in_lease["out_of_lease"] == json!({}), "in-lease evidence records no deviation: {in_lease}");

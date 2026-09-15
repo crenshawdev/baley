@@ -94,7 +94,7 @@ fn boundary(
     operation: &str,
     outcome: &str,
     subject_id: Option<String>,
-    prompt_bytes: Option<u64>,
+    prompt_digest: Option<String>,
     unique: &str,
 ) -> BoundaryDecision {
     BoundaryDecision {
@@ -104,7 +104,7 @@ fn boundary(
         request_digest: digest(format!("request:{unique}").as_bytes()),
         outcome: outcome.into(),
         subject_id,
-        prompt_bytes,
+        prompt_digest,
         response_digest: digest(format!("response:{unique}").as_bytes()),
     }
 }
@@ -120,7 +120,9 @@ async fn seed_and_dispatch(store: &Store) -> (View, ActiveDispatch) {
         .unwrap();
     let plan = native_plan();
     let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
-    let candidate = build_dispatch(&plan, &set, 0, BASE, 512).unwrap();
+    let mut candidate = build_dispatch(&plan, &set, 0, BASE).unwrap();
+    candidate.prompt = "x".repeat(512);
+    candidate.prompt_digest = digest(candidate.prompt.as_bytes());
     let admitted = store
         .request(Operation::AdmitExecution {
             expected_generation: seeded.snapshot.generation,
@@ -132,7 +134,7 @@ async fn seed_and_dispatch(store: &Store) -> (View, ActiveDispatch) {
                 "execute-next",
                 "dispatch",
                 Some(candidate.id.clone()),
-                Some(candidate.prompt_bytes),
+                Some(candidate.prompt_digest.clone()),
                 "dispatch-6-1",
             ),
             dispatch: candidate,
@@ -961,7 +963,9 @@ async fn scoped_dispatch(store: &Store) -> (View, ActiveDispatch, BoundaryV1) {
         .unwrap();
     let plan = native_plan();
     let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
-    let candidate = build_dispatch(&plan, &set, 0, BASE, 512).unwrap();
+    let mut candidate = build_dispatch(&plan, &set, 0, BASE).unwrap();
+    candidate.prompt = "x".repeat(512);
+    candidate.prompt_digest = digest(candidate.prompt.as_bytes());
     let mut returned = candidate.clone();
     returned.expected_execution_version = 1;
     let decision = scoped_answer(
@@ -1087,7 +1091,9 @@ fn recovery_operation(view: &View, case: &str, patch: Option<&ExecutorPatch>) ->
         "dispatch" => {
             let plan = native_plan();
             let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
-            let candidate = build_dispatch(&plan, &set, 0, BASE, 512).unwrap();
+            let mut candidate = build_dispatch(&plan, &set, 0, BASE).unwrap();
+            candidate.prompt = "x".repeat(512);
+            candidate.prompt_digest = digest(candidate.prompt.as_bytes());
             let mut returned = candidate.clone();
             returned.expected_execution_version = 1;
             (

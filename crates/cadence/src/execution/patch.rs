@@ -569,7 +569,7 @@ mod tests {
     fn fixture() -> (Value, super::super::model::ActiveDispatch) {
         let plan = plan();
         let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
-        let candidate = build_dispatch(&plan, &set, 0, BASE, 100).unwrap();
+        let candidate = build_dispatch(&plan, &set, 0, BASE).unwrap();
         let occurrence = ExecutionOccurrence {
             phase: 6,
             plan_set_fingerprint: set,
@@ -639,8 +639,8 @@ mod tests {
     fn dispatch_is_content_derived_and_only_one_can_be_active() {
         let plan = plan();
         let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
-        let first = build_dispatch(&plan, &set, 0, BASE, 100).unwrap();
-        let second = build_dispatch(&plan, &set, 0, BASE, 200).unwrap();
+        let first = build_dispatch(&plan, &set, 0, BASE).unwrap();
+        let second = build_dispatch(&plan, &set, 0, BASE).unwrap();
         assert_eq!(first.id, second.id);
         let occurrence = ExecutionOccurrence {
             phase: 6,

@@ -34,7 +34,7 @@ fn dispatch() -> ActiveDispatch {
         "plan_fingerprint":"1".repeat(64),"plan_set_fingerprint":"2".repeat(64),"requirements":["AC10"],
         "tasks":[{"id":"T1","verify":["verify"]}],"suite":"verify","files":["src/a.rs"],
         "policy":{"rung":"high","branch":"current","reviews":"disabled"},"route":serde_json::from_str::<Value>(ROUTE).unwrap(),
-        "base_sha":"3".repeat(40),"prompt_bytes":7,"body":"fixture"})).unwrap()
+        "base_sha":"3".repeat(40),"prompt":"fixture","prompt_digest":"f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d","body":"fixture"})).unwrap()
 }
 fn record() -> DecisionRecord {
     DecisionRecord {
@@ -92,7 +92,7 @@ fn routed_builder_binds_the_literal_model_agent_and_config_input_to_identity() {
             route.choice.model_source.kind = "reset".into();
         }
         let answer =
-            build_routed_dispatch(&plan(), &"2".repeat(64), 0, &"3".repeat(40), 7, route).unwrap();
+            build_routed_dispatch(&plan(), &"2".repeat(64), 0, &"3".repeat(40), route).unwrap();
         let choice = &answer.route.as_ref().unwrap().choice;
         assert_eq!(
             (
@@ -165,7 +165,7 @@ fn dispatch_envelope_has_an_independently_encoded_exact_digest() {
             "281a096470439f1147be2843416cd400f527c633d0b92704b50e4eec81b38b96",
             Receipt::Dispatch {
                 dispatch_id: DISPATCH_ID.into(),
-                prompt_bytes: 7
+                prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into()
             }
         )
     );
@@ -217,7 +217,7 @@ fn writer_admits_the_route_and_routing_record_in_one_persistence_result() {
                 .into(),
             receipt: Receipt::Dispatch {
                 dispatch_id: DISPATCH_ID.into(),
-                prompt_bytes: 7,
+                prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into(),
             },
             lease_refusal: None,
         };
@@ -523,7 +523,7 @@ fn admission() -> cadence::store::writer::Operation {
                 .into(),
             receipt: Receipt::Dispatch {
                 dispatch_id: DISPATCH_ID.into(),
-                prompt_bytes: 7,
+                prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into(),
             },
             lease_refusal: None,
         },
@@ -614,7 +614,7 @@ fn canonical_wire(value: &Value) -> Vec<u8> {
 
 fn wire_unit(defect: &str) -> (Vec<u8>, Vec<u8>, String) {
     use cadence::store::model::digest;
-    let boundary = json!({"codec":1,"scope":{"scope":"execution","phase":8},"tool":"cadence-query","operation":"execute-next","request_digest":"4".repeat(64),"outcome":"dispatch","subject_id":DISPATCH_ID,"response_digest":"281a096470439f1147be2843416cd400f527c633d0b92704b50e4eec81b38b96","receipt":{"receipt":"dispatch","dispatch_id":DISPATCH_ID,"prompt_bytes":7}});
+    let boundary = json!({"codec":1,"scope":{"scope":"execution","phase":8},"tool":"cadence-query","operation":"execute-next","request_digest":"4".repeat(64),"outcome":"dispatch","subject_id":DISPATCH_ID,"response_digest":"281a096470439f1147be2843416cd400f527c633d0b92704b50e4eec81b38b96","receipt":{"receipt":"dispatch","dispatch_id":DISPATCH_ID,"prompt_digest":"f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"}});
     let boundary_id = digest(&canonical_wire(&json!(["boundary-envelope-v1", boundary])));
     let mut routing = json!({"version":1,"id":format!("routing:{DISPATCH_ID}"),"revision":1,"origin":{"source":"native-routing","original":"missing"},"decision":{"class":"routing","choice":"{\"agent\":\"cad-executor\",\"rung\":\"high\",\"model\":\"sonnet\"}","config_provenance":{"dispatch_id":{"text":DISPATCH_ID},"route":{"text":ROUTE}},"requested_effort":{"text":"high"},"observed_effort":"missing","receipt":"missing"}});
     match defect {
@@ -634,7 +634,7 @@ fn wire_unit(defect: &str) -> (Vec<u8>, Vec<u8>, String) {
         serde_json::to_string(&routing).unwrap() + "\n"
     };
     records.push_str(&(serde_json::to_string(&json!({"version":1,"id":boundary_id,"revision":1,"origin":{"source":"execution-boundary-v1","original":"missing"},"decision":{"class":"boundary_v1","boundary":boundary,"store_generation":1,"terminal":false}})).unwrap()+"\n"));
-    let active = json!({"schema":1,"id":DISPATCH_ID,"expected_execution_version":1,"phase":8,"plan":1,"plan_fingerprint":"1".repeat(64),"plan_set_fingerprint":"2".repeat(64),"requirements":["AC10"],"tasks":[{"id":"T1","verify":["verify"]}],"suite":"verify","files":["src/a.rs"],"policy":{"rung":"high","branch":"current","reviews":"disabled"},"route":serde_json::from_str::<Value>(ROUTE).unwrap(),"base_sha":"3".repeat(40),"prompt_bytes":7});
+    let active = json!({"schema":1,"id":DISPATCH_ID,"expected_execution_version":1,"phase":8,"plan":1,"plan_fingerprint":"1".repeat(64),"plan_set_fingerprint":"2".repeat(64),"requirements":["AC10"],"tasks":[{"id":"T1","verify":["verify"]}],"suite":"verify","files":["src/a.rs"],"policy":{"rung":"high","branch":"current","reviews":"disabled"},"route":serde_json::from_str::<Value>(ROUTE).unwrap(),"base_sha":"3".repeat(40),"prompt":"fixture","prompt_digest":"f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"});
     let mut state = json!({"version":1,"generation":1,"items_digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","decisions_digest":digest(records.as_bytes()),"data":{"execution":{"schema":1,"occurrences":{"8":{"phase":8,"plan_set_fingerprint":"2".repeat(64),"version":1,"active":active,"plans":[],"terminal":null,"receipts":{}}}}},"operations":{},"integrity":""});
     state["integrity"] = json!(digest(&serde_json::to_vec(&state).unwrap()));
     (
@@ -812,7 +812,6 @@ struct SavedCase {
     route: &'static str,
     id: &'static str,
     envelope_digest: &'static str,
-    prompt_receipts: [(&'static str, usize); 2],
 }
 const SAVED: [SavedCase; 3] = [
     SavedCase {
@@ -830,16 +829,6 @@ const SAVED: [SavedCase; 3] = [
         route: r#"{"choice":{"role":"cad-executor","agent":"cad-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"pinned":false,"reasons":["roles.cad-executor.effort: role from repo; starting rung high","roles.cad-executor.model: role from repo; sonnet"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"26f39647895f5607ad04a8e5cad9e1fa67c304e1014fc5f74708fb7fbb8ad282","stamp":null},"global":null,"global_alias":false}}"#,
         id: "fb5d0571637ee342cdc0b4719132195e477a085c9bc3d1c45d4f4d5f24ba07bd",
         envelope_digest: "09bef897ac68287f18e233c562e3b194446ed5ffbc8ee639e0de2343235b5d13",
-        prompt_receipts: [
-            (
-                "de929ffa6d6d6138a86caa8a9bb65fcf44051dcd236aefe25d889c231b6e7f69",
-                2750,
-            ),
-            (
-                "2800e585c111c8a6f83829f65be01b6302064633046e3488c07b3eac3118bea0",
-                1917,
-            ),
-        ],
     },
     SavedCase {
         model: Some("opus"),
@@ -856,16 +845,6 @@ const SAVED: [SavedCase; 3] = [
         route: r#"{"choice":{"role":"cad-executor","agent":"cad-executor-xhigh","rung":"xhigh","starting_rung":"xhigh","model":"opus","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"xhigh"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"opus"},"attempt":1,"escalated":false,"pinned":false,"reasons":["roles.cad-executor.effort: role from repo; starting rung xhigh","roles.cad-executor.model: role from repo; opus"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"37024e43a0630149ea71e1a283911411fab1287744e69195f688c55bccc023c4","stamp":null},"global":null,"global_alias":false}}"#,
         id: "95bfd239172b542536fdc88fb2cd0ccaf0bb9d6d31e8c67442368e56e2c66cbc",
         envelope_digest: "79d5d0b86fd5ec3880eeaf90c2bee0261794942c61d0717e2d350c0640cff994",
-        prompt_receipts: [
-            (
-                "3eda62c29397301e255bdedaa9d334f02b7db8370ccab5a3618ac0c176e0cb1f",
-                2755,
-            ),
-            (
-                "284f3476d0d8aaf7f796d414df4cf8ad7cbd05ba39a3bba466701b8eb5eb243c",
-                1922,
-            ),
-        ],
     },
     SavedCase {
         model: None,
@@ -882,16 +861,6 @@ const SAVED: [SavedCase; 3] = [
         route: r#"{"choice":{"role":"cad-executor","agent":"cad-executor-xhigh","rung":"xhigh","starting_rung":"xhigh","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"xhigh"},"model_source":{"kind":"reset","key":"roles.cad-executor.model","layer":"repo","stored":null},"attempt":1,"escalated":false,"pinned":false,"reasons":["roles.cad-executor.effort: role from repo; starting rung xhigh","roles.cad-executor.model: reset from repo; omit model; inherit session"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"0a500276235db1450dbb6d6ca088ddd8b7d794d72e91206892b7b89fefc66ba4","stamp":null},"global":null,"global_alias":false}}"#,
         id: "afa483fa5f82bd58b20ef660b53ceac308f2b3fa1fed50e5f1cdde01e4bfcb77",
         envelope_digest: "ffdb83adb016bd5927a0f563a2e4dcb40341cabc7714e1ef7c9a7aa076357516",
-        prompt_receipts: [
-            (
-                "64d42655ef3327ae191aeba744a3b40093add23c177e7cf1f4a9368ed0c2e6f3",
-                2755,
-            ),
-            (
-                "d84d87b60c0c525c6a18d167815d7d349a248aa41282a090da9381e61ac351dd",
-                1922,
-            ),
-        ],
     },
 ];
 
@@ -1023,7 +992,6 @@ fn saved_route_builder_returns_independently_computed_dispatch_identities() {
             &"2".repeat(64),
             0,
             &"3".repeat(40),
-            7,
             serde_json::from_str(case.route).unwrap(),
         )
         .unwrap();
@@ -1069,7 +1037,7 @@ fn each_new_admission_returns_the_exact_saved_choice_and_missing_host_evidence()
             decision.response_digest = case.envelope_digest.into();
             decision.receipt = Receipt::Dispatch {
                 dispatch_id: case.id.into(),
-                prompt_bytes: 7,
+                prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into(),
             };
             **change = BoundaryChange::Dispatch {
                 plan_set_fingerprint: "2".repeat(64),
@@ -1123,24 +1091,19 @@ fn each_new_admission_returns_the_exact_saved_choice_and_missing_host_evidence()
 #[test]
 fn dispatch_renderer_matches_independent_exact_byte_oracles_for_both_renderings() {
     for case in &SAVED {
-        for (lease, (expected_digest, expected_length)) in
-            [true, false].into_iter().zip(case.prompt_receipts)
-        {
+        for lease in [true, false] {
+            let mut dispatch = saved_dispatch(case);
             let prompt = cadence::execution::render::render_dispatch_prompt(
-                &saved_dispatch(case),
+                &dispatch,
                 &json!({"const":"supplied schema"}),
                 lease,
             );
-            let retained = serde_json::to_value(saved_dispatch(case)).unwrap();
+            dispatch.prompt_digest = cadence::store::model::digest(prompt.as_bytes());
+            dispatch.prompt = prompt.clone();
+            let retained = serde_json::to_value(dispatch).unwrap();
             assert_eq!(retained["prompt"], prompt, "the admitted prompt must be retained exactly");
             assert_eq!(retained["prompt_digest"], cadence::store::model::digest(prompt.as_bytes()));
-            assert_eq!(
-                (
-                    cadence::store::model::digest(prompt.as_bytes()),
-                    prompt.len()
-                ),
-                (expected_digest.into(), expected_length)
-            );
+            assert_eq!(retained["prompt"].as_str().unwrap().as_bytes(), prompt.as_bytes());
         }
     }
 }

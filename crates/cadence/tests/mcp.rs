@@ -882,8 +882,8 @@ impl Fixture {
                 answer["dispatch"]["id"].as_str()
             );
             assert_eq!(
-                answer["prompt"].as_str().unwrap().len() as u64,
-                answer["dispatch"]["prompt_bytes"].as_u64().unwrap()
+                hash(answer["prompt"].as_str().unwrap().as_bytes()),
+                answer["dispatch"]["prompt_digest"]
             );
         } else {
             assert!(

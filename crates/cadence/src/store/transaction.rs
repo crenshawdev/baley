@@ -1077,7 +1077,7 @@ impl Intent {
                     || value.boundary.receipt
                         != (Receipt::Dispatch {
                             dispatch_id: active.id.clone(),
-                            prompt_bytes: active.prompt_bytes,
+                            prompt_digest: active.prompt_digest.clone(),
                         })
                 {
                     return Err(Error::Invalid("dispatch intent receipt mismatch".into()));

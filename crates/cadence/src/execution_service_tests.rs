@@ -222,7 +222,8 @@ async fn dispatch(server: &CadenceServer, fixture: &Fixture) -> ActiveDispatch {
     else {
         panic!("expected a dispatch")
     };
-    assert_eq!(prompt.len() as u64, dispatch.prompt_bytes);
+    assert_eq!(cadence::store::model::digest(prompt.as_bytes()), dispatch.prompt_digest);
+    assert_eq!(prompt, dispatch.prompt);
     assert!(prompt.contains(&dispatch.body));
     *dispatch
 }
@@ -916,7 +917,8 @@ fn execution_restart_dispatch_recovery_distinguishes_pre_admission() {
             dispatch.base_sha,
             run(&admitted.project, &["rev-parse", "HEAD"])
         );
-        assert_eq!(prompt.len() as u64, dispatch.prompt_bytes);
+        assert_eq!(cadence::store::model::digest(prompt.as_bytes()), dispatch.prompt_digest);
+        assert_eq!(prompt, dispatch.prompt);
     });
 }
 
@@ -1181,7 +1183,7 @@ fn execution_restart_cross_format_failure_preserves_legacy_bytes_at_every_servic
                         request_digest: "a".repeat(64),
                         outcome: "refused:invalid-plan".into(),
                         subject_id: None,
-                        prompt_bytes: None,
+                        prompt_digest: None,
                         response_digest: "b".repeat(64),
                     },
                 },
@@ -2119,10 +2121,7 @@ fn execution_query_returns_the_saved_executor_selection() {
 // Hand-encoded admitted input and complete prompt; byte count and SHA-256
 // values were computed independently with Python JSON and hashlib.
 const GAP_ROUTE: &str = r###"{"choice":{"role":"cad-executor","agent":"cad-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"pinned":false,"reasons":["fixture selection"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stamp":null},"global":null,"global_alias":false}}"###;
-const GAP_ACTIVE: &str = r###"{"schema":1,"id":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","expected_execution_version":1,"phase":8,"plan":1,"plan_fingerprint":"934e213e5a48ebf56a49125f7bfbabf698bebe138f69c0e723361e5f7d2d4813","plan_set_fingerprint":"42231de71cb569c15e88cd6eca33e3246282eb8d70e5462f10af99fd60ec3cff","requirements":["AC11"],"tasks":[{"id":"T1","verify":["verify"]}],"suite":"verify","files":["src/a.rs"],"policy":{"rung":"high","branch":"current","reviews":"disabled"},"route":{"choice":{"role":"cad-executor","agent":"cad-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"pinned":false,"reasons":["fixture selection"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stamp":null},"global":null,"global_alias":false}},"base_sha":"3333333333333333333333333333333333333333","prompt_bytes":8772,"body":"Task body\n"}"###;
-const GAP_BOUNDARY: &str = r###"{"codec":1,"scope":{"scope":"execution","phase":8},"tool":"cadence-query","operation":"execute-next","request_digest":"4e8d529410aad81b01ee975c73d2933839b3b670e6f341d2496382de0f7ea764","outcome":"dispatch","subject_id":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","response_digest":"d417e9bb4aac25c2ff8e2b83416f8a66a66c48f14fa855d5fb17bb2a59c7c0ba","receipt":{"receipt":"dispatch","dispatch_id":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","prompt_bytes":8772}}"###;
-const GAP_BOUNDARY_ID: &str =
-    r###"f1d977a2435ea923c4380c679f194e5ccdc2e450060467bedbad3c6993830fb5"###;
+const GAP_ACTIVE: &str = r###"{"schema":1,"id":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","expected_execution_version":1,"phase":8,"plan":1,"plan_fingerprint":"934e213e5a48ebf56a49125f7bfbabf698bebe138f69c0e723361e5f7d2d4813","plan_set_fingerprint":"42231de71cb569c15e88cd6eca33e3246282eb8d70e5462f10af99fd60ec3cff","requirements":["AC11"],"tasks":[{"id":"T1","verify":["verify"]}],"suite":"verify","files":["src/a.rs"],"policy":{"rung":"high","branch":"current","reviews":"disabled"},"route":{"choice":{"role":"cad-executor","agent":"cad-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"pinned":false,"reasons":["fixture selection"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stamp":null},"global":null,"global_alias":false}},"base_sha":"3333333333333333333333333333333333333333","body":"Task body\n"}"###;
 const GAP_PLAN_SET: &str =
     r###"42231de71cb569c15e88cd6eca33e3246282eb8d70e5462f10af99fd60ec3cff"###;
 const GAP_ADMITTED_PROMPT: &str = r###"Cadence native execution dispatch
@@ -2510,7 +2509,7 @@ fn gap_hash(bytes: &[u8]) -> String {
 }
 
 fn gap_query_tree(active: bool) -> tempfile::TempDir {
-    use serde_json::{Value, json};
+    use serde_json::json;
     let tree = tempfile::tempdir().unwrap();
     let root = tree.path().join(".planning");
     fs::create_dir_all(root.join("phases/8")).unwrap();
@@ -2538,7 +2537,9 @@ fn gap_query_tree(active: bool) -> tempfile::TempDir {
         "origin":{"source":"cadence.native_evidence.v1","original":"missing"},
         "decision":{"class":"gate","outcome":"cadence.native_evidence.v1","evidence":{"text":serde_json::to_string(&accepted).unwrap()}}}));
     if active {
-        let admitted: Value = serde_json::from_str(GAP_ACTIVE).unwrap();
+        let mut admitted: ActiveDispatch = serde_json::from_str(GAP_ACTIVE).unwrap();
+        admitted.prompt = GAP_ADMITTED_PROMPT.into();
+        admitted.prompt_digest = gap_hash(GAP_ADMITTED_PROMPT.as_bytes());
         data["execution"] = json!({"schema":1,"occurrences":{"8":{"phase":8,"plan_set_fingerprint":GAP_PLAN_SET,
             "version":1,"active":admitted,"plans":[],"terminal":null,"receipts":{}}}});
         records.push(json!({"version":1,"id":"routing:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","revision":1,
@@ -2546,8 +2547,17 @@ fn gap_query_tree(active: bool) -> tempfile::TempDir {
             "decision":{"class":"routing","choice":"{\"agent\":\"cad-executor\",\"rung\":\"high\",\"model\":\"sonnet\"}",
                 "config_provenance":{"dispatch_id":{"text":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"route":{"text":GAP_ROUTE}},
                 "requested_effort":{"text":"high"},"observed_effort":"missing","receipt":"missing"}}));
-        records.push(json!({"version":1,"id":GAP_BOUNDARY_ID,"revision":1,"origin":{"source":"execution-boundary-v1","original":"missing"},
-            "decision":{"class":"boundary_v1","boundary":serde_json::from_str::<Value>(GAP_BOUNDARY).unwrap(),"store_generation":1,"terminal":false}}));
+        let answer = cadence::execution::boundary::PreparedAnswer::new(Envelope::Ok(Success::Dispatch {
+            dispatch: Box::new(admitted.clone()), prompt: GAP_ADMITTED_PROMPT.into(),
+        })).unwrap();
+        let boundary = cadence::execution::boundary::BoundaryV1::new(
+            cadence::execution::boundary::BoundaryScope::Execution { phase: 8 },
+            BoundaryTool::CadenceQuery, "execute-next".into(),
+            "4e8d529410aad81b01ee975c73d2933839b3b670e6f341d2496382de0f7ea764".into(),
+            Some(admitted.id.clone()), &answer,
+        );
+        records.push(json!({"version":1,"id":boundary.identity().unwrap(),"revision":1,"origin":{"source":"execution-boundary-v1","original":"missing"},
+            "decision":{"class":"boundary_v1","boundary":boundary,"store_generation":1,"terminal":false}}));
     }
     let decisions = records
         .into_iter()

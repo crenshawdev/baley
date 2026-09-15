@@ -99,7 +99,7 @@ fn final_intent_preparation_cannot_admit_a_stale_route() {
         Some("44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a".into());
     let dispatch = serde_json::from_value(json!({"schema":1,"id":"d".repeat(64),"expected_execution_version":0,"phase":8,"plan":1,
         "plan_fingerprint":"1".repeat(64),"plan_set_fingerprint":"2".repeat(64),"requirements":["AC10"],"tasks":[{"id":"T1","verify":["verify"]}],"suite":"verify","files":["src/a.rs"],"policy":{"rung":"high","branch":"current","reviews":"disabled"},
-        "route":{"choice":{"role":"cad-executor","agent":"cad-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"pinned":false,"reasons":["fixture selection"],"warnings":[]},"inputs":expected},"base_sha":"3".repeat(40),"prompt_bytes":7,"body":"fixture"})).unwrap();
+        "route":{"choice":{"role":"cad-executor","agent":"cad-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"pinned":false,"reasons":["fixture selection"],"warnings":[]},"inputs":expected},"base_sha":"3".repeat(40),"prompt":"fixture","prompt_digest":"f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d","body":"fixture"})).unwrap();
     let policy = SessionPolicy {
         config: Arc::new(Mutex::new(Reload::new(
             Paths {
@@ -148,7 +148,7 @@ fn final_intent_preparation_cannot_admit_a_stale_route() {
                         response_digest: "5".repeat(64),
                         receipt: Receipt::Dispatch {
                             dispatch_id: "d".repeat(64),
-                            prompt_bytes: 7
+                            prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into()
                         },
                         lease_refusal: None
                     },

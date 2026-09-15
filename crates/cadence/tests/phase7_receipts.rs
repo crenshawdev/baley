@@ -560,7 +560,7 @@ async fn dispatch_fixture(store: &Store) -> (View, ActiveDispatch) {
         .unwrap();
     let plan = parse_plan(b"---\nphase: 7\nplan: 4\nrequirements: [AC10]\nfiles: [auth/login.rs]\nexecution:\n  schema: 1\n  suite: printf suite\n  tasks:\n    - id: T1\n      verify: [printf T1]\n---\nChange auth.\n",7,4).unwrap();
     let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
-    let candidate = build_dispatch(&plan, &set, 0, &"b".repeat(40), 1).unwrap();
+    let candidate = build_dispatch(&plan, &set, 0, &"b".repeat(40)).unwrap();
     let mut dispatch = candidate.clone();
     dispatch.expected_execution_version = 1;
     let decision = boundary(

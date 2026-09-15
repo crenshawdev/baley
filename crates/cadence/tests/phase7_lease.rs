@@ -325,12 +325,16 @@ fn independently_encoded_old_exact_dispatch_keeps_fingerprint_and_reopen_bytes()
     let old = json!({"schema":1,"id":digest(&serde_json::to_vec(&identity).unwrap()),"expected_execution_version":0,
         "phase":7,"plan":1,"plan_fingerprint":digest(old_preimage),"plan_set_fingerprint":digest(&old_set),
         "requirements":["AC3"],"tasks":[{"id":"T1","verify":["printf T1"]}],"suite":"printf suite","files":["src/a.rs"],
-        "policy":{"rung":"fixed","branch":"current","reviews":"disabled"},"base_sha":BASE,"prompt_bytes":512,"body":"Task body\n"});
+        "policy":{"rung":"fixed","branch":"current","reviews":"disabled"},"base_sha":BASE,
+        "prompt":"x","prompt_digest":"2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881","body":"Task body\n"});
     let bytes = serde_json::to_vec(&old).unwrap();
     let decoded: ActiveDispatch = serde_json::from_slice(&bytes).unwrap();
     assert!(decoded.directories.is_empty());
     assert_eq!(serde_json::to_vec(&decoded).unwrap(), bytes);
-    assert_eq!(build_dispatch(&plan, &set, 0, BASE, 512).unwrap(), decoded);
+    let mut built = build_dispatch(&plan, &set, 0, BASE).unwrap();
+    built.prompt = "x".into();
+    built.prompt_digest = digest(b"x");
+    assert_eq!(built, decoded);
     let temp = tempfile::tempdir().unwrap();
     fs::create_dir(temp.path().join(".planning")).unwrap();
     runtime().block_on(async {
@@ -507,7 +511,7 @@ fn writer_input(lease: &str, blocked: bool) -> (Value, cadence::execution::model
     );
     let plan = parse_plan(text.as_bytes(), 7, 1).unwrap();
     let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
-    let candidate = build_dispatch(&plan, &set, 0, BASE, 512).unwrap();
+    let candidate = build_dispatch(&plan, &set, 0, BASE).unwrap();
     let occurrence = ExecutionOccurrence {
         phase: 7,
         plan_set_fingerprint: set,
@@ -596,7 +600,7 @@ fn writer_operation(
                 request_digest: digest(b"writer-patch"),
                 outcome: if blocked { "judgment-stop" } else { "accepted" }.into(),
                 subject_id: Some(patch.dispatch_id.clone()),
-                prompt_bytes: None,
+                prompt_digest: None,
                 response_digest: digest(b"writer-answer"),
             },
             patch,
@@ -643,7 +647,7 @@ fn check_writer(
                     .unwrap();
             let answer = PreparedAnswer::new(Envelope::Ok(Success::Dispatch {
                 dispatch: Box::new(returned.clone()),
-                prompt: "x".repeat(returned.prompt_bytes as usize),
+                prompt: returned.prompt.clone(),
             }))
             .unwrap();
             let decision = BoundaryV1::new(
@@ -1455,7 +1459,7 @@ fn historical_exact_file_prompt_reconstructs_with_original_admitted_answer_diges
     let plan = plan("files: [src/a.rs]");
     let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
     let mut candidate =
-        build_dispatch(&plan, &set, 0, &fixture.git(&["rev-parse", "HEAD"]), 1).unwrap();
+        build_dispatch(&plan, &set, 0, &fixture.git(&["rev-parse", "HEAD"])).unwrap();
     let mut returned = candidate.clone();
     returned.expected_execution_version = 1;
     // Independently spell the pre-lease-instructions operational fields and text.
@@ -1467,8 +1471,10 @@ fn historical_exact_file_prompt_reconstructs_with_original_admitted_answer_diges
         serde_json::to_string_pretty(&operational).unwrap(),
         serde_json::to_string_pretty(&cadence::execution::model::patch_schema()).unwrap()
     );
-    candidate.prompt_bytes = prompt.len() as u64;
-    returned.prompt_bytes = candidate.prompt_bytes;
+    candidate.prompt_digest = digest(prompt.as_bytes());
+    candidate.prompt = prompt.clone();
+    returned.prompt_digest = candidate.prompt_digest.clone();
+    returned.prompt = prompt.clone();
     let answer = PreparedAnswer::new(Envelope::Ok(Success::Dispatch {
         dispatch: Box::new(returned),
         prompt,

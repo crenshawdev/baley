@@ -1099,7 +1099,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     || decision.receipt
                         != (Receipt::Dispatch {
                             dispatch_id: dispatch.id.clone(),
-                            prompt_bytes: dispatch.prompt_bytes,
+                            prompt_digest: dispatch.prompt_digest.clone(),
                         })
                     || plan_set_fingerprint != dispatch.plan_set_fingerprint
                 {
@@ -1253,7 +1253,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         }
         if decision.phase != dispatch.phase
             || decision.subject_id.as_deref() != Some(dispatch.id.as_str())
-            || decision.prompt_bytes != Some(dispatch.prompt_bytes)
+            || decision.prompt_digest.as_ref() != Some(&dispatch.prompt_digest)
             || plan_set_fingerprint != dispatch.plan_set_fingerprint
         {
             return Err(Error::Invalid("dispatch boundary identity mismatch".into()));
@@ -1771,7 +1771,7 @@ fn boundary_record(decision: &BoundaryDecision, store_generation: u64) -> Result
             outcome: decision.outcome.clone(),
             subject_id: decision.subject_id.clone(),
             store_generation,
-            prompt_bytes: decision.prompt_bytes,
+            prompt_digest: decision.prompt_digest.clone(),
             response_digest: decision.response_digest.clone(),
             terminal: false,
         },
@@ -1798,7 +1798,7 @@ fn terminal_record(phase: u32, store_generation: u64) -> Result<DecisionRecord> 
             outcome: "log-bound".into(),
             subject_id: None,
             store_generation,
-            prompt_bytes: None,
+            prompt_digest: None,
             response_digest: identity,
             terminal: true,
         },
@@ -1930,7 +1930,7 @@ pub fn require_current_execution(view: &View) -> std::result::Result<(), Failure
                             && value.boundary.tool == BoundaryTool::CadenceQuery
                             && value.boundary.subject_id.as_ref() == Some(&dispatch.id)
                             && value.boundary.receipt == (Receipt::Dispatch {
-                                dispatch_id: dispatch.id.clone(), prompt_bytes: dispatch.prompt_bytes
+                                dispatch_id: dispatch.id.clone(), prompt_digest: dispatch.prompt_digest.clone()
                             }))
                 }) {
                     return Err(Failure::RoutingEvidence);
@@ -1973,15 +1973,15 @@ impl ConfirmedBoundary<'_> {
             Receipt::Compact { envelope } => envelope.clone(),
             Receipt::Dispatch {
                 dispatch_id,
-                prompt_bytes,
+                prompt_digest,
             } => {
                 let Some(envelope @ Envelope::Ok(Success::Dispatch { .. })) = dispatch else {
                     return Err(Failure::Confirmation);
                 };
                 if let Envelope::Ok(Success::Dispatch { dispatch, prompt }) = &envelope
                     && (&dispatch.id != dispatch_id
-                        || dispatch.prompt_bytes != *prompt_bytes
-                        || prompt.len() as u64 != *prompt_bytes)
+                        || dispatch.prompt_digest != *prompt_digest
+                        || crate::store::model::digest(prompt.as_bytes()) != *prompt_digest)
                 {
                     return Err(Failure::Confirmation);
                 }

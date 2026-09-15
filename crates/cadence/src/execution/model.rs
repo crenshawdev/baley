@@ -59,6 +59,15 @@ pub struct DispatchPolicy {
     pub reviews: ReviewPolicy,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyPrompt {
+    // Read only for retained records written before D-165. New records never
+    // serialize the historical byte-count identity.
+    #[serde(default, skip_serializing)]
+    pub prompt_bytes: Option<u64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ActiveDispatch {
@@ -79,7 +88,12 @@ pub struct ActiveDispatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<Box<DispatchRoute>>,
     pub base_sha: String,
-    pub prompt_bytes: u64,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub prompt_digest: String,
+    #[serde(default, flatten)]
+    pub legacy_prompt: LegacyPrompt,
     #[serde(default)]
     pub body: String,
 }
@@ -264,7 +278,7 @@ pub struct BoundaryDecision {
     pub request_digest: String,
     pub outcome: String,
     pub subject_id: Option<String>,
-    pub prompt_bytes: Option<u64>,
+    pub prompt_digest: Option<String>,
     pub response_digest: String,
 }
 
