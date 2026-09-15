@@ -605,10 +605,17 @@ current-shape receipt that must pass and two that must not.
 
 38. `bb1eb347` test(execution): prove a retained dispatch receipt keeps its
     prompt_bytes identity (red).
-39. `51bb6d5f` fix(execution): write a retained dispatch receipt back as the
+39. `b6dae3ca` fix(execution): write a retained dispatch receipt back as the
     bytes it was read from.
 
 Hand fix under [[feedback-build-time-is-not-live-time]]'s rule: no plan owned
 it, no front door ran on it, and the probe was the debug binary over stdio
 against this project's store, `execution-history 31` answering before the
 release was rebuilt. The live pass resumes on the rebuilt release.
+
+Suite at `b6dae3ca`, `TMPDIR=/tmp cargo test --workspace --no-fail-fast`, run
+once in a shell: 57 result lines, 971 passed, 0 failed, 0 panics, 2 ignored
+(D-172). Four targets hold 76% of the 892 seconds: `execution_store` 296s for
+18 tests, `phase12_execution` 162s for 7, `phase13_verification` 147s for 7,
+`phase38_suite_gate` 72s for 7. Cargo runs targets one after another; that is
+the next thing to fix, and John agreed to nextest first.
