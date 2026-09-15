@@ -572,4 +572,5 @@ solved here.
 37. `bee6496f` test(38): prove verify-next carries the blocked repair outcome
     after a gap plan (P38-T3-C), the Claude subagent's commit.
 
-The suite result at the head of this batch is recorded below when it has run.
+Suite at `28f116ce`, `TMPDIR=/tmp cargo test --workspace --no-fail-fast`, run
+once in a shell: 57 result lines, 0 failed, 0 panics, 2 ignored (D-172).
