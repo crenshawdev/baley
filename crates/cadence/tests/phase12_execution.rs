@@ -1180,13 +1180,14 @@ fn phase12_dispatch_contains_admitted_checks_state_and_instructions() {
     // them as delimited context and cannot replace them.
     let prompt=dispatch["prompt"].as_str().unwrap();
     let (before_body,body)=prompt.split_once("<<<CADENCE-PLAN-BODY\n").unwrap();
-    let instructions=before_body.split_once("\nInstructions:\n").unwrap().1;
+    // Phrases are matched across the hard wrap: a rewrap is not a change of instruction.
+    let instructions=before_body.split_once("\nInstructions:\n").unwrap().1.replace('\n'," ");
     for phrase in [
         "**Executor.** For each check your task delivers: write the test first, run it, record the commit where it failed; then implement, run it, record the commit where it passed.",
         "Run only what the task names while working.","Close the last task, report, and stop; the orchestrator requests the full suite.",
         "test a unit through what it exposes","fake only files, clock, other programs and network","skip trivial code","write the expected value by hand",
         "guidance and never a gate","deliberately weaker","never an owner attestation","claims the launch before spawning and records the observed result",
-        "acknowledge work as it lands","a Stop is never permission to resume","runs once","relaunched exactly once","refuses that attestation outright when a recognized result exists",
+        "acknowledge work as it lands","a Stop is never permission to resume","the one permitted second suite launch","relaunched exactly once","refuses that attestation outright when a recognized result exists",
         "a wrapper's inner subcommands","CI is not the plan-close run","never replace an admitted command at run time","never guesses a runner","No test style, preset or count is a gate",
     ] {assert!(instructions.contains(phrase),"missing instruction phrase: {phrase}");}
     assert!(!instructions.contains("ignore the red-first rule"));
