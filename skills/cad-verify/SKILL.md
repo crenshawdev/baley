@@ -25,6 +25,8 @@ Cadence is the only project read surface. Use `cadence_query` with `search` to f
 
 Process records never use file paths. Call `document` with an identity such as `{"kind":"phase-context","phase":31}` or `{"kind":"phase-plan","phase":31,"plan":2}` and no `part` to get its bounded index, then repeat the identity with a returned part such as `truth:T1`, `task:P31-2-T1`, or `row`. Follow document continuations exactly. A refusal's issued location or identity is the only address for inspecting the named fault. Main threads and workers use this same contract on the already configured Cadence MCP connection; a worker must not define or launch another server.
 
+For the read-layer cycle-purpose close handoff, measure a new real Claude Code planning episode after this read contract is installed. The dispatch that installed the layer required direct project reads and is not the qualifying round; Codex is not a supported measurement host. Select the actual round boundaries from the host episode, then call `document` with `{"kind":"planner-round","phase":31,"session_id":"<Claude session UUID>","first_turn":"<actual first-turn UUID>","last_turn":"<actual last-turn UUID>"}` and part `report`. Show the owner that binary report unchanged, including its host/session/turn/worker boundaries, source digest, `read_count`, `whole_file_reads`, `unclassified_reads`, the four raw token components and `token_total`, and the numerical difference and ratio against `baseline_planner_median: 183000`. Missing, incomplete, ambiguous, nonzero whole-file or nonzero unclassified results are evidence to retain, never values to replace or a model-authored pass. The historical median's raw samples and aggregation procedure were not supplied, so claim like-for-like savings only after that procedure is confirmed.
+
 **Verifier.** For each evidence item: inspect it through Cadence's search/read/document surface, run it, or trace it. Return a
 verdict per item - accepted, rejected or not seen - with what you observed.
 A summary is not evidence. An item whose check could not have failed is
@@ -81,6 +83,20 @@ Never send a phase verdict, truth status, document path or file-writing arm.
 You have inspection and direct cadence_query/cadence_apply permission, not
 Write, Edit or MultiEdit authority. Do not assign a findings file or update
 UAT, ROADMAP, CONTEXT, SUMMARY or any acceptance projection.
+
+For a read-layer cycle-purpose truth, inspect a new real Claude-host planning
+episode made after the read contract was installed. The installation dispatch
+explicitly required direct reads and is not a qualifying measurement, and Codex
+is unsupported for this host measurement. Resolve the actual episode with its
+`planner-round` document identity and show the owner the binary's report
+unchanged: host/session/turn/worker boundaries, source digest, read count,
+whole-file and unclassified counters, all four raw token components, token
+total, and the difference and ratio against the 183000 historical median.
+Retain nonzero, missing, incomplete, ambiguous or unknown results in the item
+verdict; never replace them with zero or a model-authored pass. Let the existing
+evidence verdict and `verification-complete` contract refuse an unmet truth.
+The historical samples and aggregation procedure were not supplied, so a
+like-for-like savings claim also requires confirmation of that procedure.
 
 Owner operations are separate: truth-waive and verification-human-result
 require attributed, timed, exact owner approval. You may prepare a submission;

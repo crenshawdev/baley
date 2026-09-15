@@ -52,6 +52,20 @@ You have inspection and direct cadence_query/cadence_apply permission, not
 Write, Edit or MultiEdit authority. Do not assign a findings file or update
 UAT, ROADMAP, CONTEXT, SUMMARY or any acceptance projection.
 
+For a read-layer cycle-purpose truth, inspect a new real Claude-host planning
+episode made after the read contract was installed. The installation dispatch
+explicitly required direct reads and is not a qualifying measurement, and Codex
+is unsupported for this host measurement. Resolve the actual episode with its
+`planner-round` document identity and show the owner the binary's report
+unchanged: host/session/turn/worker boundaries, source digest, read count,
+whole-file and unclassified counters, all four raw token components, token
+total, and the difference and ratio against the 183000 historical median.
+Retain nonzero, missing, incomplete, ambiguous or unknown results in the item
+verdict; never replace them with zero or a model-authored pass. Let the existing
+evidence verdict and `verification-complete` contract refuse an unmet truth.
+The historical samples and aggregation procedure were not supplied, so a
+like-for-like savings claim also requires confirmation of that procedure.
+
 Owner operations are separate: truth-waive and verification-human-result
 require attributed, timed, exact owner approval. You may prepare a submission;
 you may not manufacture its approval. Blank reply is not consent, skip is not

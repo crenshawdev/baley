@@ -65,6 +65,11 @@ Read-only intake and research may proceed without approved truths. If
 `native_truths_approved` is false, stop publication and lead the owner to
 `/cad-context` (`context-intake` / `context-submit`). Use that phase's locked
 truths exactly; do not invent truths, revise them or repeat their attestations.
+When a later phase continues an approved execution cycle, carry its
+owner-approved cycle-purpose truth in that phase's allowed truth set before
+planning the close work. Copy its actual id and version from native truth
+authority; never manufacture either or force a truth into an already approved
+set.
 
 For `--gaps`, read the unresolved UAT items and prior plans/reports. If there is
 no unresolved work, say so and end. Otherwise author the additional work at a new
@@ -290,6 +295,19 @@ unnamed link blocks that union. Correct every offending contribution together
 in one explicitly approved replacement batch. Nothing rewrites saved payloads,
 drops history or silently grandfathers invalid current content. Provisional
 mapless authoring remains explicit and does not claim a validated attached map.
+
+For the read-layer cycle-purpose close, schedule a new real Claude-host planning
+episode after the read contract is installed and preserve the actual
+planner-round identity in the handoff. The installation dispatch explicitly
+required direct reads and is not that measurement; Codex is unsupported for
+this host measurement. The owner must see the binary's `document` report with
+its source digest, read/whole-file/unclassified counters, raw token components,
+total, and numerical comparison with 183000. The historical median's raw
+samples and aggregation procedure are unavailable, so do not claim like-for-like
+savings without confirming that basis. Keep nonzero or unavailable observations
+as evidence for the existing check and verification flow; do not add another
+truth, observation item, completion operation, synthetic read store or
+model-authored pass field.
 
 ## Read the authoritative acceptance inputs
 

@@ -34,3 +34,26 @@ also reports the owner-approved Cadence 3.7 planner median of 183000, the signed
 difference and the exact ratio. The historical raw samples and aggregation
 procedure were not supplied, so the comparison is numerical; a like-for-like
 savings claim remains contingent on confirmation of that procedure.
+
+## Phase-close handoff
+
+The qualifying close round is a new real Claude Code planning episode after the
+read layer and its shared instructions are installed. The planning dispatch that
+installed them explicitly required direct project reads and cannot be relabeled
+as the measurement. Codex is unsupported for the host integration, so this
+measurement covers Claude only.
+
+The handoff retains the actual `planner-round` document identity, selects its
+real session and first/last turn UUIDs, and shows the owner the binary-rendered
+`report` unchanged. The source digest, read count, whole-file and unclassified
+counters, four raw token components, token total, and 183000 comparison remain
+visible even when the result is nonzero or above the baseline. Missing,
+incomplete, ambiguous and unknown results stay unavailable evidence; neither a
+caller nor a model supplies a replacement value or pass judgment. The existing
+item verdict and `verification-complete` rules refuse an unmet cycle-purpose
+truth without a new completion operation, truth, observation, or read store.
+
+Any later phase context that continues this cycle must carry the owner's
+approved cycle-purpose truth in its allowed truth set. Its id and version come
+from native truth authority; planning must not manufacture them or insert them
+into an already approved set.
