@@ -753,7 +753,6 @@ fn repair_map(truth: &str, check_id: &str) -> Value {
 
 struct RepairEpisode {
     temp: tempfile::TempDir,
-    check: Value,
     task_close_event_count: usize,
 }
 
@@ -827,7 +826,7 @@ fn prepare_repair_episode(truth_id: &str, check_id: &str, suite_body: &str) -> R
     assert_eq!(red["disposition"], json!({"kind":"exited","code":1}), "{red}");
     fs::write(project.join("src/value.py"), "def answer():\n    return 2\n").unwrap();
     git(project, &["add", "src/value.py"]);
-    git(project, &["commit", "-S", "-m", &format!("feat(38): deliver {truth_id} task")]);
+    git(project, &["commit", "-S", "-m", &format!("feat(38): deliver retain-prompt for {truth_id}")]);
     let green_commit = git(project, &["rev-parse", "HEAD"]);
     let green = run(project, &format!("{truth_id}-green"), "green", check.clone());
     assert_eq!(green["disposition"], json!({"kind":"exited","code":0}), "{green}");
@@ -855,7 +854,7 @@ fn prepare_repair_episode(truth_id: &str, check_id: &str, suite_body: &str) -> R
         "verification":[verify_id]}}));
     assert_eq!(closed["status"], "ok", "{closed}");
     let task_close_event_count = history(project)["events"].as_array().unwrap().len();
-    RepairEpisode { temp, check, task_close_event_count }
+    RepairEpisode { temp, task_close_event_count }
 }
 
 fn failing_suite(names: &[&str]) -> String {
