@@ -193,7 +193,7 @@ fn checkpoint_continuation_persists_question_and_recovers_exact_answers() {
 }
 
 #[test]
-fn suite_red_continuation_retains_output_without_creating_question() {
+fn suite_repair_continuation_waits_on_plan_question() {
     runtime().block_on(async {
         let temp = fixture(&[LifecycleStatus::Executed]);
         let root = temp.path().join(".planning");
@@ -208,13 +208,10 @@ fn suite_red_continuation_retains_output_without_creating_question() {
         .await;
         drop(server);
         let selected = recover_continuation(&root, "run").await;
-        assert_eq!(selected.checkpoint, Some(cp));
-        assert_eq!(
-            selected.decision,
-            Decision::RepairSuite {
-                failing_output: "reports/failing-output.txt:17".into()
-            }
-        );
+        assert_eq!(selected.checkpoint, None,
+            "suite repair is plan history and must not project a task checkpoint");
+        assert!(matches!(selected.decision, Decision::Wait(_)),
+            "execute-next must wait on the unanswered plan repair question: {selected:?}");
         let server = CadenceServer::with_factory(factory());
         assert!(
             !server

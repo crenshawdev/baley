@@ -1435,38 +1435,43 @@ fn phase12_runner_retains_task_commands_and_one_suite() {
     assert!(events[0]["request"]["event"].get("observed_at").is_none(),"the dead launch never acquires a result");
 
     // Recognized failures: a cargo failure and a unittest error result both
-    // refuse the absence attestation and completion; the repair is a new
-    // linked gap identity that leaves the original history exact.
+    // refuse the absence attestation and raise one plan-level repair question.
+    // An attributed approval plus a Git-observed repair admits one second
+    // launch; a second recognized failure is terminal.
     for (mode,expected) in [("runner-failed-cargo",json!({"runner":"cargo","failed":true})),("runner-unittest-errors",json!({"runner":"unittest","failed":true,"failures":0,"errors":1}))] {
         let failed=Tiny::new(mode);let project=failed.project();finish_tasks(&failed);
-        let (_,result)=suite_run(project,"fail-1",1);
+        let request=plan_request(project,"execution-suite","fail-1",1,json!({"proposed_paths":["src/tiny.py"]}));
+        let mut client=Client::open(project);let launch=client.call("cadence_apply",request);assert_eq!(launch["status"],"ok","{launch}");
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(20);
+        let result=loop {
+            let history=client.call("cadence_query",json!({"operation":"execution-history","phase":12}));
+            if let Some(record)=history["plan_events"].as_array().unwrap().iter()
+                .find(|e|e["request"]["event"]["kind"]=="suite-result" && e["request"]["event"]["run_id"]=="fail-1") {break record["request"]["event"].clone();}
+            assert!(std::time::Instant::now()<deadline,"suite result timed out: {history}");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };client.finish();
         assert_eq!(result["observation"],json!({"class":"results-observed","summary":expected}));
         assert_eq!(result["disposition"]["code"],if mode=="runner-failed-cargo" {101} else {1});
         plan_refused(project,plan_request(project,"execution-suite-relaunch","relaunch-failed",1,absence("fail-1",json!(output_identity(&result)))),"suite-results-observed");
-        plan_refused(project,plan_request(project,"execution-suite","fail-2",1,json!({})),"suite-failed");
-        let refused=plan_refused(project,plan_request(project,"execution-plan-complete","complete-failed",1,json!({})),"suite-failed");
-        assert!(refused["reason"].as_str().unwrap().contains("gap"),"{refused}");
-        assert_eq!(plan_view(project,1)["state"]["outcome"],"failed");
-        let original_events=suite_events(project,1);let original_tasks=execution_history(project)["events"].clone();
-        let original_admission=serde_json::to_vec(&reopened(project).snapshot.data["native_admissions"]["phases"]["12"][0]).unwrap();
-        if mode!="runner-failed-cargo" {continue;}
-        let mut gap=proposal(project,"gap",&[(None,attached(vec![artifact("artifact/gap",&["truth/A"])]))]);
-        gap["submission"]["plans"][0]["content"]["requirements"]=json!(["suite-failed:fail-1"]);
-        gap["submission"]["plans"][0]["content"]["execution"]["tasks"]=json!([{"id":"G","verify":[MARK_C]}]);
-        publish(project,&gap);
-        let mut extended=contract(project);
-        extended["allocation"][0]["checks"]=json!(&failed.checks[..2]);extended["allocation"][1]["checks"]=json!([failed.checks[2]]);
-        let extension=apply(project,admit_request(extended,"extend-gap",1));assert_eq!(extension["status"],"ok","{extension}");
-        assert_eq!(extension["receipt"]["set_version"],2);
-        let dispatch=execute_next(project);assert_eq!(dispatch["status"],"ok","{dispatch}");assert_eq!(dispatch["outcome"],"dispatch");
-        assert_eq!(dispatch["dispatch"]["plan"],2,"the gap plan has its own identity");
-        let ops=operational(&dispatch);assert_eq!(task_ids(&ops["tasks"]),vec!["G"]);assert_eq!(ops["set_version"],2);
-        assert_eq!(suite_events(project,1),original_events,"original suite failure retained exactly");
-        assert_eq!(execution_history(project)["events"],original_tasks,"original task completions and receipts retained");
-        assert_eq!(serde_json::to_vec(&reopened(project).snapshot.data["native_admissions"]["phases"]["12"][0]).unwrap(),original_admission);
-        assert_eq!(plan_view(project,1)["state"]["outcome"],"failed","the original plan is not made successful");
-        plan_refused(project,plan_request(project,"execution-suite","fail-rerun",1,json!({})),"suite-failed");
-        assert_eq!(suite_markers(project),"suite\n");
+        let question=suite_events(project,1).into_iter().find(|event|event["request"]["event"]["kind"]=="suite-repair-question").unwrap();
+        assert_eq!(question["request"]["event"]["failed_run"],"fail-1");
+        assert_eq!(question["request"]["event"]["proposed_paths"],json!(["src/tiny.py"]));
+        let question_id=question["request"]["event"]["id"].clone();
+        let answered=plan_apply(project,"execution-suite-repair-answer","answer-failed",1,
+            json!({"question_id":question_id,"owner":"Fixture Operator","at":"2026-09-15T18:00:00Z","disposition":"approve"}));
+        assert_eq!(answered["status"],"ok","{answered}");
+        let continuation=execute_next(project);assert_eq!(continuation["status"],"ok","{continuation}");
+        assert_eq!(continuation["dispatch"]["tasks"],json!([]),"completed tasks stay closed");
+        git_value(project,&["commit","--allow-empty","-S","-m","fix(12): attempt suite repair"]);let repair=git_value(project,&["rev-parse","HEAD"]);
+        let repaired=plan_apply(project,"execution-suite-repair","repair-failed",1,json!({"question_id":question_id,"commits":[repair]}));
+        assert_eq!(repaired["status"],"ok","{repaired}");
+        let (_,second)=suite_run(project,"fail-2",1);assert_eq!(second["observation"]["class"],"results-observed");
+        plan_refused(project,plan_request(project,"execution-suite","fail-3",1,json!({"proposed_paths":[]})),"suite-failed");
+        let plan=plan_view(project,1);let outcome=&plan["outcome"];
+        assert_eq!(outcome["disposition"],"blocked");assert_eq!(outcome["blockers"][0]["id"],"suite-failed:fail-2");
+        assert_eq!(suite_events(project,1).iter().map(|event|event["request"]["event"]["kind"].as_str().unwrap()).collect::<Vec<_>>(),
+            vec!["suite-launch","suite-result","suite-repair-question","suite-repair-answer","suite-repair","suite-launch","suite-result"]);
+        assert_eq!(suite_markers(project),"suite\nsuite\n");
     }
 
     // Unknown terminated output: custom failure text is not a binary finding

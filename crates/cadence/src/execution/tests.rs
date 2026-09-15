@@ -882,6 +882,25 @@ fn executor_never_requests_the_gates_the_orchestrator_owns() {
 }
 
 #[test]
+fn suite_repair_is_plan_level_single_use_and_retains_deviations() {
+    let question = json!({"kind":"suite-repair-question","id":"suite-repair:run-1",
+        "failed_run":"run-1","failing_tests":["repair::alpha"],
+        "proposed_paths":["src/delivery.rs","docs/outside.md"]});
+    let event = serde_json::from_value::<super::history::PlanEvent>(question.clone())
+        .expect("the plan history must accept a suite repair question");
+    assert_eq!(serde_json::to_value(event).unwrap(), question);
+    let answer = json!({"kind":"suite-repair-answer","question_id":"suite-repair:run-1",
+        "owner":"Fixture Owner","at":"2026-09-15T18:00:00Z","disposition":"approve"});
+    assert!(serde_json::from_value::<super::history::PlanEvent>(answer).is_ok(),
+        "the owner answer must be a plan event, never a task checkpoint");
+    let repair = json!({"kind":"suite-repair","question_id":"suite-repair:run-1",
+        "commits":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        "changed_paths":{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":["docs/outside.md"]}});
+    assert!(serde_json::from_value::<super::history::PlanEvent>(repair).is_ok(),
+        "the Git-observed repair must be retained at plan level");
+}
+
+#[test]
 fn ac2_strict_plan_and_overlap_selection_are_executable_evidence() {
     let source = |plan, files: &str, body: &str| {
         format!(

@@ -39,6 +39,24 @@ use std::{
 
 const OUTPUT_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+#[test]
+fn suite_repair_answer_requires_owner_and_replays() {
+    let attributed = serde_json::json!({"operation":"execution-suite-repair-answer","request":{
+        "request_id":"answer-1","plan":{"phase":6,"occurrence":"phase-6-execution",
+            "admission_digest":"admission","plan":1},"expected_version":3,
+        "question_id":"suite-repair:run-1","owner":"Fixture Owner",
+        "at":"2026-09-15T18:00:00Z","disposition":"approve"}});
+    assert!(serde_json::from_value::<cadence::execution::runner::PlanApply>(attributed).is_ok(),
+        "the public plan operation must accept an attributed repair answer");
+    let blank = serde_json::json!({"operation":"execution-suite-repair-answer","request":{
+        "request_id":"answer-blank","plan":{"phase":6,"occurrence":"phase-6-execution",
+            "admission_digest":"admission","plan":1},"expected_version":3,
+        "question_id":"suite-repair:run-1","owner":"","at":"2026-09-15T18:00:00Z",
+        "disposition":"approve"}});
+    assert!(serde_json::from_value::<cadence::execution::runner::PlanApply>(blank).is_err(),
+        "blank owner attribution must be refused at the public boundary");
+}
+
 struct Fixture {
     _temp: tempfile::TempDir,
     project: PathBuf,
