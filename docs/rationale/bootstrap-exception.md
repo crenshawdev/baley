@@ -680,3 +680,7 @@ writes 256.
 Suite at `3d41ae30`, `TMPDIR=/tmp cargo nextest run --workspace --no-fail-fast`,
 run once in a shell: 969 passed, 0 failed, 2 skipped (D-172), 261 seconds
 wall. From 892.
+
+Suite at `824bd25a`, `TMPDIR=/tmp cargo nextest run --workspace --no-fail-fast`,
+run once in a shell: 969 passed, 0 failed, 2 skipped (D-172), 259 seconds
+wall.
