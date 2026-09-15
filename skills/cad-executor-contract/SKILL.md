@@ -21,6 +21,8 @@ Cadence is the only project read surface. Use `cadence_query` with `search` to f
 
 Process records never use file paths. Call `document` with an identity such as `{"kind":"phase-context","phase":31}` or `{"kind":"phase-plan","phase":31,"plan":2}` and no `part` to get its bounded index, then repeat the identity with a returned part such as `truth:T1`, `task:P31-2-T1`, or `row`. Follow document continuations exactly. A refusal's issued location or identity is the only address for inspecting the named fault. Main threads and workers use this same contract on the already configured Cadence MCP connection; a worker must not define or launch another server.
 
+For the read-layer cycle-purpose close handoff, measure a new real Claude Code planning episode after this read contract is installed. The dispatch that installed the layer required direct project reads and is not the qualifying round; Codex is not a supported measurement host. Select the actual round boundaries from the host episode, then call `document` with `{"kind":"planner-round","phase":31,"session_id":"<Claude session UUID>","first_turn":"<actual first-turn UUID>","last_turn":"<actual last-turn UUID>"}` and part `report`. Show the owner that binary report unchanged, including its host/session/turn/worker boundaries, source digest, `read_count`, `whole_file_reads`, `unclassified_reads`, the four raw token components and `token_total`, and the numerical difference and ratio against `baseline_planner_median: 183000`. Missing, incomplete, ambiguous, nonzero whole-file or nonzero unclassified results are evidence to retain, never values to replace or a model-authored pass. The historical median's raw samples and aggregation procedure were not supplied, so claim like-for-like savings only after that procedure is confirmed.
+
 **Executor.** For each check your task delivers: write the test first, run it, record the commit where it failed; then implement, run it, record the commit where it passed. Run only what the task names while working. Run the full suite once, when the plan's last task is done, before you report. Unit tests beyond the checks are yours: test a unit through what it exposes, fake only files, clock, other programs and network, skip trivial code, write the expected value by hand.
 
 Classical default, given because the project has set no test style; it is guidance and never a gate, and nothing about style changes task eligibility or adds a count: test a unit through what it exposes, not its insides; fake only files, clock, other programs and network; skip trivial code such as getters, forwarding and constructors that only store; write the expected value by hand.
@@ -90,12 +92,14 @@ revision, test material and inspected runs. The binary checks that the record
 exists and is exact, not that it is true; your own `no_subject_stub: true` is
 an executor assertion and never an owner attestation.
 
-Named commands and one suite (D-112): task commands are the retained `verify`
-commands and may repeat while a task is being repaired. The suite command is
-available only after the last task is acknowledged and runs once, through
-`execution-suite`, before the plan can report complete; native completion
-(`execution-plan-complete`) needs both that passing suite receipt and the
-existing exact risk settlement. A launch is claimed before the process starts
+Named commands and one suite (D-112, D-171): task commands are the retained
+`verify` commands and may repeat while a task is being repaired. The suite
+command is available only after the last task is acknowledged and runs once,
+through `execution-suite`, before the plan can report complete; native
+completion (`execution-plan-complete`) needs both that passing suite receipt
+and the existing exact risk settlement. Both are the orchestrator's requests.
+The executor never requests `execution-suite` or `execution-plan-complete`:
+close the last task, report, and stop. A launch is claimed before the process starts
 and its result recorded after; a crash between them leaves the launch Unknown,
 which is neither success nor a completed run. A suite launch with no
 recognized result may be relaunched exactly once, on the operator's typed
@@ -125,10 +129,14 @@ never replace an admitted command at run time. When the project root carries
 no manifest the binary knows, the dispatch warns and requires those explicit
 commands; it never guesses a runner. No test style, preset or count is a gate.
 
-Source lease: `lease.files` and `lease.directories` have zero exemptions.
-Every path in an evidence or completion commit, both rename endpoints and the
-whole staged set must be covered, or the close is refused with the path named.
-Work on the current branch; do not push, reset, amend, revert or force-push.
+Source lease (D-170): `lease.files` and `lease.directories` are the planner's
+expectation, written before the code existed. A path in an evidence or
+completion commit that falls outside them does not refuse the close; it is
+retained as a deviation on the plan record, named per path with the commit as
+its evidence, for the verifier to read. Stay inside the lease where the work
+allows it, and never widen it to reach another plan's files. The whole staged
+set must still be covered at close, or the close is refused with the path
+named. Work on the current branch; do not push, reset, amend, revert or force-push.
 
 ## Admission, continuation and owner records
 
@@ -195,7 +203,8 @@ The binary already holds every closed task, run and receipt; your reply to the
 coordinator is a short digest, not a patch: the tasks you closed with their
 close request ids, any checkpoint you raised and are waiting on, any refusal
 you could not resolve inside the lease with the binary's rule and reason, and
-whether the suite was requested. Do not restate evidence the history already
+that the last task is closed, so the suite is the coordinator's to request.
+Do not restate evidence the history already
 records, do not write any Cadence state or planning file through any tool,
 and do not invent a result the binary did not observe.
 </instructions>
