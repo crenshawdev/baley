@@ -401,3 +401,43 @@ the sentence moved.
 
 The one test is green. Nothing has run through the front door this way yet;
 the next dispatch is the first that does, and what it records goes here.
+
+## D-172
+
+A check runs only what the repository builds. A test that starts a program
+the repository does not build, the installed `claude` here, is a live probe:
+it stays in the tree, runs on request with `--ignored`, and is never in a
+plan's suite, because its answer depends on a host the plan cannot pin.
+
+On 2026-09-15 the morning suite failed on
+`phase31_worker_hosts_receive_main_thread_answers` at
+`support/phase31_hosts.rs:73`: zero descendants of the launched Claude with
+`cadence serve` in their command line, and most descendants recorded as
+`""`. The record for two days had called that test "needs a running
+authenticated Claude host", taken from its first assertion's message, not
+from any failure. Everything before line 73 had passed: the host launched,
+one worker dispatched, and both threads answered as the stdio oracle did.
+The same test was green under Codex at `4e5d3f8c` the night before. That
+fits a race in the measurement and nothing else: the sampler walks `/proc`
+every 20ms until Claude exits, a child that has already exited reads back
+an empty command line, and `found.insert` let the last sample replace the
+one taken while the child was alive. Keeping the first live command line
+per pid and running the test once settled it: 1 passed, 193s, one
+`cadence serve` shared by main thread and worker. The resident was shared
+all along. The test was lying about the one thing it existed to prove.
+
+Its sibling `phase31_planner_round_reports_reads_and_tokens` starts the
+installed Claude the same way and leaves the suite for the same reason.
+Whether the binary should refuse such a command at `plan-submit` is a
+later phase; today the rule is in the tree as an `#[ignore]` reason.
+
+17. `39b3ee08` fix(tests): keep the command line a sampled child had while
+    it was alive (D-172). `sample_process_tree` fills a pid's entry once and
+    never with an empty read over a non-empty one. No red test: the live
+    probe is the check, and its run is recorded above.
+18. `239b7def` test(31): take the two live-host proofs out of the suite
+    (D-172). Both carry the same `#[ignore]` reason;
+    `--test phase31_read_layer` reports 5 passed, 2 ignored.
+
+Clippy on the touched test binary shows the same two phase 31 warnings as
+before. The full suite is still the one run at the end of this batch.
