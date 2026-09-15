@@ -296,3 +296,64 @@ resolution broke an admission unit fixture) and repaired each through a
 D-120 gap plan; plan 3 completed and the phase derives executed. The suite
 at `f2f9daae` (execution-suite `phase37-plan3-suite`): exit 0, observed by
 the binary at plan completion.
+
+## D-170
+
+A completion commit that touches a path outside the admitted lease closes.
+The binary keeps the difference, by commit and by path, and the plan record
+names each path as a deviation with the commit as its evidence, for the
+verifier D-164 sends to read them. The lease is what the planner expected
+before the code existed. The binary still refuses what it can see for
+itself: a staged path outside the lease at close, and, once D-166 lands, a
+hand edit to a file it renders.
+
+On 2026-09-15 phase 38 plan 1 dispatched its first task to Codex, and Codex
+stopped before writing a line. The task removes `ActiveDispatch.prompt_bytes`,
+and eight files that use it sat outside the lease: `execution/boundary.rs`,
+`store/writer.rs`, `store/model.rs`, `store/transaction.rs`,
+`import/routing_admission_tests.rs` and three test files. The planner had
+listed the files it could think of. Admitted plan bytes cannot change
+(`plan-changed`), no operation widens a lease, and retiring the task
+released its check, so `execute-next` refused `truth-without-check` and
+nothing in the phase could dispatch until a new plan carried the check. One
+wrong file list cost a retire, a gap plan, an extension and a dispatch, and
+the plan it stopped was the one written to end that kind of stop. A guess is
+not a gate.
+
+The count for 2026-09-13 through 15, from the session record: seven
+suite-once blocks, three tasks retired for order or lease, one phase retired
+and one truth waived by hand, against two real bugs fixed by hand (D-160,
+D-162) and one plan blocked by a unit test. Twelve process, three bugs.
+
+D-156's last sentence, "Everything else waits for the front door", is
+withdrawn for the rewrite. John set the line on 2026-09-15: those rules are
+for a live Cadence on a user's project, not for the binary while it is being
+built. While the binary is being built, a defect is fixed the way this file describes, and the front door is
+run on one operation at a time to see what it records, never on its own
+repair. It comes back as the gate on a user's project when the process can
+recover from its own mistake with one owner answer.
+
+12. `d0754518` test(execution): close a commit outside the lease and name it
+    on the plan record (D-170 red). The unit test that asserted the refusal
+    now asserts the retained paths, and a new stdio test in
+    `tests/phase34_blocked_path.rs` closes a task whose completion commit
+    adds `docs/outside.md`, then retires the next task and reads one
+    deviation on the blocked plan's record. The existing retire test gained
+    the negative control: an in-lease completion records none.
+13. `0a647bfa` test(execution): expect only the out-of-lease side of a
+    rename to be named (D-170 red). The fixture lease covers `src/`, so the
+    renamed destination was never outside it.
+14. `27238429` fix(execution): keep a commit outside the lease and name each
+    path on the plan record (D-170). `receipts::observe_source` retains
+    `out_of_lease` by commit instead of refusing; `history::end_dispatch`
+    writes one `Deviation` per path with the commit as evidence.
+    `SourceMaterial.out_of_lease` defaults and is skipped when empty, so
+    every retained record and digest reads as before.
+
+Clippy is clean on the two files touched; the two warnings at
+`tests/support/phase31_hosts.rs:375` and `tests/phase31_read_layer.rs:35`
+are phase 31's. The suite runs once at the end of this batch, after D-171
+and D-172, and its result is recorded here.
+
+The executor-patch boundary in `execution/patch.rs` still refuses
+`undeclared-files`. It is the 3.x surface and goes when that surface goes.
