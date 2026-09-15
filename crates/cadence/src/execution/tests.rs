@@ -865,6 +865,23 @@ fn patch_schema_keeps_structural_and_semantic_admission_separate() {
 }
 
 #[test]
+fn executor_never_requests_the_gates_the_orchestrator_owns() {
+    // D-171: the suite and plan completion are the orchestrator's requests. The
+    // executor closes its last task and reports. D-170: a committed path outside
+    // the lease is retained as a deviation, never refused.
+    let executor = crate::execution::instructions::dispatch_text();
+    let frontdoor = crate::execution::instructions::frontdoor_markdown();
+    assert!(executor.contains("The executor never requests `execution-suite` or `execution-plan-complete`"),
+        "the compiled executor text must hand the gates to the orchestrator");
+    assert!(!executor.contains("or the close is refused with the path named"),
+        "D-170: the lease paragraph still promises a refusal");
+    assert!(executor.contains("retained as a deviation on the plan record"),
+        "D-170: the lease paragraph must name the retained deviation");
+    assert!(frontdoor.contains("request `execution-suite`"), "the front door must request the suite itself");
+    assert!(frontdoor.contains("then request `execution-plan-complete`"), "the front door must complete the plan itself");
+}
+
+#[test]
 fn ac2_strict_plan_and_overlap_selection_are_executable_evidence() {
     let source = |plan, files: &str, body: &str| {
         format!(
