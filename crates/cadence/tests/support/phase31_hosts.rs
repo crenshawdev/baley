@@ -1,11 +1,12 @@
 //! Genuine Claude Code host evidence for the phase 31 read boundary.
 use super::phase31::{Client, ProcessFixture, approve, process_plan_submission};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::Read,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, ExitStatus, Output, Stdio},
 };
 
@@ -71,6 +72,246 @@ pub fn prove_worker_hosts_receive_main_thread_answers() {
         command.contains("cadence serve").then_some(pid)).collect();
     assert_eq!(server_pids.len(), 1,
         "Claude main and named child must share exactly one cadence serve: {:?}", evidence.processes);
+}
+
+#[derive(Debug)]
+pub struct PlannerRound {
+    pub session_id: String,
+    pub first_turn: String,
+    pub last_turn: String,
+    pub worker_ids: Vec<String>,
+    pub source_digest: String,
+    pub read_count: u64,
+    pub whole_file_reads: u64,
+    pub unclassified_reads: u64,
+    pub token_total: u64,
+    pub report: String,
+}
+
+pub struct PlannerRoundFixture {
+    client: Option<Client>,
+    fixture: ProcessFixture,
+}
+
+impl PlannerRoundFixture {
+    pub fn new() -> Self {
+        let fixture = planner_fixture();
+        let client = Client::open(fixture.project());
+        Self { client: Some(client), fixture }
+    }
+
+    pub fn client(&mut self) -> &mut Client { self.client.as_mut().unwrap() }
+
+    pub fn run(&self) -> PlannerRound {
+        let evidence = run_claude_planner(self.fixture.project());
+        assert!(evidence.output.status.success(),
+            "Claude executable, authentication, transport, and planner worker are required; status={}\nstdout:\n{}\nstderr:\n{}",
+            evidence.output.status, bounded_output(&evidence.output.stdout),
+            bounded_output(&evidence.output.stderr));
+        assert!(!evidence.events.is_empty(), "Claude emitted no JSON host evidence for the planner round");
+        let session_ids: BTreeSet<_> = evidence.events.iter().filter_map(|event|
+            event["session_id"].as_str().or_else(|| event["sessionId"].as_str()).map(str::to_owned)
+        ).collect();
+        assert_eq!(session_ids.len(), 1, "the planner host did not expose one actual session id: {}",
+            event_summary(&evidence.events));
+        inspect_planner_record(self.fixture.project(), session_ids.into_iter().next().unwrap())
+    }
+
+    pub fn finish(mut self) { self.client.take().unwrap().finish(); }
+}
+
+#[derive(Default)]
+struct Usage {
+    input: u64,
+    cache_creation: u64,
+    cache_read: u64,
+    output: u64,
+}
+
+fn inspect_planner_record(project: &Path, session_id: String) -> PlannerRound {
+    let project = fs::canonicalize(project).unwrap();
+    let encoded = project.to_string_lossy().replace('/', "-");
+    let host_root = PathBuf::from(std::env::var_os("HOME").expect("Claude HOME is required"))
+        .join(".claude/projects").join(encoded);
+    let main_path = host_root.join(format!("{session_id}.jsonl"));
+    assert!(main_path.is_file(), "Claude did not persist the fixture session record for {session_id}");
+    let main_bytes = fs::read(&main_path).unwrap();
+    let main = json_lines(&main_bytes, "main planner record");
+    let first_turn = main.iter().find(|record| record["type"] == "user")
+        .and_then(|record| record["uuid"].as_str()).expect("planner record has no first user UUID").to_owned();
+    let last_turn = main.iter().rev().find(|record| record["type"] == "assistant")
+        .and_then(|record| record["uuid"].as_str()).expect("planner record has no final assistant UUID").to_owned();
+    let selected = round_chain(&main, &first_turn, &last_turn);
+
+    let subagent_root = host_root.join(&session_id).join("subagents");
+    let mut workers = Vec::new();
+    if subagent_root.is_dir() {
+        for entry in fs::read_dir(&subagent_root).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) == Some("jsonl") {
+                workers.push(path);
+            }
+        }
+    }
+    workers.sort();
+    assert!(!workers.is_empty(), "Claude planner session {session_id} has no persisted child-worker record");
+
+    let mut sources = vec![(format!("main:{session_id}.jsonl"), main_bytes, selected)];
+    let mut worker_ids = Vec::new();
+    for path in workers {
+        let bytes = fs::read(&path).unwrap();
+        let records = json_lines(&bytes, "planner worker record");
+        let file = path.file_stem().and_then(|value| value.to_str()).unwrap().to_owned();
+        let worker = records.iter().find_map(|record| record["agentId"].as_str())
+            .map(str::to_owned).unwrap_or_else(|| file.trim_start_matches("agent-").to_owned());
+        assert!(!worker.trim().is_empty(), "planner worker identity is missing");
+        worker_ids.push(worker.clone());
+        sources.push((format!("worker:{worker}.jsonl"), bytes, records));
+    }
+    worker_ids.sort();
+    worker_ids.dedup();
+
+    let mut hasher = Sha256::new();
+    let mut tool_ids = BTreeSet::new();
+    let mut read_count = 0;
+    let mut whole_file_reads = 0;
+    let mut unclassified_reads = 0;
+    let mut usages = BTreeMap::<(String, String), Value>::new();
+    for (source, bytes, records) in &sources {
+        hasher.update((source.len() as u64).to_be_bytes());
+        hasher.update(source.as_bytes());
+        hasher.update((bytes.len() as u64).to_be_bytes());
+        hasher.update(bytes);
+        for record in records {
+            if let Some(content) = record.pointer("/message/content").and_then(Value::as_array) {
+                for block in content {
+                    if block["type"] != "tool_use" { continue }
+                    let id = block["id"].as_str().expect("actual tool_use has no id");
+                    if !tool_ids.insert(id.to_owned()) { continue }
+                    let name = block["name"].as_str().unwrap_or("");
+                    let input = &block["input"];
+                    let (reads, whole, unclassified) = classify_read(&project, name, input);
+                    read_count += reads;
+                    whole_file_reads += whole;
+                    unclassified_reads += unclassified;
+                }
+            }
+            if record["type"] == "assistant" {
+                let Some(message_id) = record.pointer("/message/id").and_then(Value::as_str) else { continue };
+                let usage = record.pointer("/message/usage")
+                    .unwrap_or_else(|| panic!("assistant message {message_id} has no final usage record"));
+                let key = (source.clone(), message_id.to_owned());
+                if let Some(previous) = usages.insert(key, usage.clone()) {
+                    assert_eq!(previous, *usage, "assistant message {message_id} has inconsistent final usage");
+                }
+            }
+        }
+    }
+    assert!(unclassified_reads == 0,
+        "the planner issued {unclassified_reads} project-read commands whose extent cannot be classified");
+    let mut usage = Usage::default();
+    for value in usages.values() {
+        usage.input += usage_field(value, "input_tokens");
+        usage.cache_creation += usage_field(value, "cache_creation_input_tokens");
+        usage.cache_read += usage_field(value, "cache_read_input_tokens");
+        usage.output += usage_field(value, "output_tokens");
+    }
+    let token_total = usage.input + usage.cache_creation + usage.cache_read + usage.output;
+    let source_digest = format!("{:x}", hasher.finalize());
+    let difference = i128::from(token_total) - 183_000;
+    let ratio = token_total as f64 / 183_000_f64;
+    let report = format!(concat!(
+        "Claude planner round measurement\n",
+        "phase: 31\n",
+        "host: claude-code\n",
+        "session_id: {session_id}\n",
+        "first_turn: {first_turn}\n",
+        "last_turn: {last_turn}\n",
+        "planner_worker_ids: {}\n",
+        "source_digest: {source_digest}\n",
+        "read_count: {read_count}\n",
+        "whole_file_reads: {whole_file_reads}\n",
+        "unclassified_reads: {unclassified_reads}\n",
+        "input_tokens: {}\n",
+        "cache_creation_input_tokens: {}\n",
+        "cache_read_input_tokens: {}\n",
+        "output_tokens: {}\n",
+        "token_total: {token_total}\n",
+        "baseline_planner_median: 183000\n",
+        "difference_from_baseline: {difference}\n",
+        "ratio_to_baseline: {token_total}/183000 = {ratio:.6}\n",
+        "baseline_provenance: owner-approved Cadence 3.7 planner median\n",
+        "comparison_note: like-for-like savings require the historical aggregation procedure\n",
+    ), worker_ids.join(","), usage.input, usage.cache_creation, usage.cache_read, usage.output);
+    PlannerRound { session_id, first_turn, last_turn, worker_ids, source_digest,
+        read_count, whole_file_reads, unclassified_reads, token_total, report }
+}
+
+fn json_lines(bytes: &[u8], label: &str) -> Vec<Value> {
+    String::from_utf8_lossy(bytes).lines().enumerate().map(|(line, value)|
+        serde_json::from_str(value).unwrap_or_else(|error| panic!("invalid {label} line {}: {error}", line + 1))
+    ).collect()
+}
+
+fn round_chain(records: &[Value], first: &str, last: &str) -> Vec<Value> {
+    let by_uuid: BTreeMap<_, _> = records.iter().filter_map(|record|
+        record["uuid"].as_str().map(|uuid| (uuid.to_owned(), record))
+    ).collect();
+    let mut ids = BTreeSet::new();
+    let mut cursor = last;
+    loop {
+        assert!(ids.insert(cursor.to_owned()), "planner round parent chain contains a cycle");
+        if cursor == first { break }
+        let record = by_uuid.get(cursor).unwrap_or_else(|| panic!("planner round UUID {cursor} is absent"));
+        cursor = record["parentUuid"].as_str().expect("planner round parent chain ended before its first turn");
+    }
+    records.iter().filter(|record| record["uuid"].as_str().is_some_and(|uuid| ids.contains(uuid)))
+        .cloned().collect()
+}
+
+fn usage_field(usage: &Value, field: &str) -> u64 {
+    usage[field].as_u64().unwrap_or_else(|| panic!("final usage is missing {field}: {usage}"))
+}
+
+fn classify_read(project: &Path, name: &str, input: &Value) -> (u64, u64, u64) {
+    if name == "mcp__cadence__cadence_query" {
+        return match input["operation"].as_str() {
+            Some("search" | "read" | "document" | "context-intake" | "plan-read" | "evidence-read"
+                | "execution-history" | "verification-read" | "verification-audit" | "review-material"
+                | "review-original" | "review-attempt" | "review-inventory" | "review-deferred"
+                | "review-consumer" | "risk-status") => (1, 0, 0),
+            _ => (0, 0, 0),
+        };
+    }
+    if matches!(name, "Grep" | "Glob") { return (1, 0, 0) }
+    if name == "Read" {
+        let Some(path) = input["file_path"].as_str() else { return (1, 0, 1) };
+        let path = PathBuf::from(path);
+        let path = if path.is_absolute() { path } else { project.join(path) };
+        let Ok(path) = fs::canonicalize(path) else { return (1, 0, 1) };
+        if !path.starts_with(project) { return (1, 0, 1) }
+        let Ok(content) = fs::read_to_string(path) else { return (1, 0, 1) };
+        let total = content.lines().count() as u64;
+        let offset = input["offset"].as_u64().unwrap_or(1).max(1);
+        let Some(limit) = input["limit"].as_u64() else { return (1, 1, 0) };
+        return (1, u64::from(offset == 1 && limit >= total), 0);
+    }
+    if name == "Bash" {
+        let command = input["command"].as_str().unwrap_or("");
+        if ["cargo build", "cargo check", "cargo test", "npm test", "pnpm test", "git status"]
+            .iter().any(|prefix| command.trim_start().starts_with(prefix))
+        {
+            return (0, 0, 0);
+        }
+        return (1, 0, 1);
+    }
+    let lower = name.to_ascii_lowercase();
+    if lower.contains("read") || lower.contains("search") || lower.contains("grep")
+        || lower.contains("glob")
+    {
+        return (1, 0, 1);
+    }
+    (0, 0, 0)
 }
 
 fn stable_hits(answer: &Value) -> Vec<Value> {
@@ -215,6 +456,24 @@ fn run_claude(project: &Path, foreign_location: &str) -> Evidence {
     run_and_capture(command)
 }
 
+fn run_claude_planner(project: &Path) -> Evidence {
+    install_named_claude_planner(project);
+    let config = project.join(".host/claude-planner-mcp.json");
+    fs::write(&config, serde_json::to_vec(&json!({"mcpServers":{"cadence":{
+        "command":env!("CARGO_BIN_EXE_cadence"),"args":["serve","--project-root",project]
+    }}})).unwrap()).unwrap();
+    let settings = project.join(".host/claude-planner-settings.json");
+    fs::write(&settings, b"{}\n").unwrap();
+    let mut command = Command::new("claude");
+    command.args(["--print","--output-format","stream-json","--verbose","--forward-subagent-text",
+        "--strict-mcp-config","--mcp-config",config.to_str().unwrap(),
+        "--settings",settings.to_str().unwrap(),
+        "--tools","Agent,mcp__cadence__cadence_query","--dangerously-skip-permissions",
+        "--permission-mode","bypassPermissions",planner_prompt()])
+        .current_dir(project).stdin(Stdio::null());
+    run_and_capture(command)
+}
+
 fn install_named_claude_worker(project: &Path) {
     let agents = project.join(".claude/agents");
     fs::create_dir_all(&agents).unwrap();
@@ -236,6 +495,23 @@ fn install_named_claude_worker(project: &Path) {
             fs::create_dir_all(&target).unwrap();
             fs::copy(source, target.join("SKILL.md")).unwrap();
         }
+    }
+}
+
+fn install_named_claude_planner(project: &Path) {
+    let agents = project.join(".claude/agents");
+    fs::create_dir_all(&agents).unwrap();
+    let source = include_str!("../../../../agents/cad-planner.md");
+    assert!(source.contains("\nmcpServers:\n  - cadence\n"),
+        "named planner must inherit the parent's cadence server");
+    fs::write(agents.join("cad-planner.md"), source).unwrap();
+
+    let skills = project.join(".claude/skills");
+    let repository_skills = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills");
+    for skill in ["cad-planner-contract", "cad-read-contract"] {
+        let target = skills.join(skill);
+        fs::create_dir_all(&target).unwrap();
+        fs::copy(repository_skills.join(skill).join("SKILL.md"), target.join("SKILL.md")).unwrap();
     }
 }
 
@@ -265,6 +541,10 @@ fn main_prompt(foreign_location: &str) -> String {
 1. On the main thread call cadence_query search for `fn beta` in directory scope `src`, then read its issued location. Call search for `outline_needle` in `src` and read the issued file_reference for its outline. Call search for `first-marker` in `src` and read its issued location for the cut slice. Call document for phase-context 31 part truth:T4. Call read with location `unissued-opaque-token`.
 2. Call the Agent tool with subagent_type `cad-assumptions-analyzer` and a prompt containing the exact beta location from step 1. Wait for that foreground Agent call to return. Tell the named child to first read the exact handed-off beta location, then independently perform the beta search/read, outline, cut, document, unknown-token refusal, and foreign-location refusal through its inherited cadence_query connection. It must follow every cut continuation until complete. The foreign location is `{foreign_location}`.
 3. After the worker returns, on the main thread follow every cut continuation until complete, call read with the foreign location `{foreign_location}`, repeat the `fn beta` search, and then stop. Tool results are the evidence; do not summarize their content."#)
+}
+
+fn planner_prompt() -> &'static str {
+    r#"Launch the project-scoped named `cad-planner` child agent in the foreground. The child must use only the inherited configured cadence MCP server: no filesystem tools, shell commands, web calls, guessed paths, or final-answer reconstruction for project content. Ask it to inspect phase 31's native context and all three existing native plans through context-intake, plan-read, evidence-read, and document identities; inspect the known Rust, JavaScript, Markdown, JSON, and C source units through search and reads at issued locations, including the large Rust outline; then author a small real fourth-plan proposal in its response. It must stop before owner approval or publication and must not call cadence_apply. Wait for the named child to finish, then stop. The actual tool records are the measurement; do not repeat the child's project reads on the main thread."#
 }
 
 // The host parser accepts only actual emitted tool events. It never accepts
@@ -367,6 +647,72 @@ fn host_fixture() -> ProcessFixture {
     let published = client.call("cadence_apply", approve(json!({"operation":"plan-submit",
         "submission":preview["submission"]})));
     assert_eq!(published["persisted"], true, "{published}");
+    client.finish();
+    fixture
+}
+
+fn planner_fixture() -> ProcessFixture {
+    let fixture = ProcessFixture::new();
+    let project = fixture.project();
+    fs::create_dir_all(project.join(".host")).unwrap();
+    fs::write(project.join("src/units.rs"), "fn alpha() {\n    let needle = 1;\n}\n\nfn beta() {\n    let needle = 3;\n}\n").unwrap();
+    fs::write(project.join("src/units.js"), "function javascriptUnit() {\n  const needle = 1;\n}\n").unwrap();
+    fs::write(project.join("docs/units.md"), "# Markdown unit\nneedle\n").unwrap();
+    fs::write(project.join("src/units.json"), "{\n  \"jsonUnit\": \"needle\"\n}\n").unwrap();
+    fs::write(project.join("src/units.c"), "int c_unit(void) {\n  int needle = 1;\n  return needle;\n}\n").unwrap();
+    fs::create_dir_all(project.join("ignored")).unwrap();
+    fs::write(project.join("ignored/sentinel.rs"), "fn ignored() { let needle = 0; }\n").unwrap();
+    fs::write(project.join("outside-sentinel.txt"), "this source is outside the planner scope\n").unwrap();
+    fs::write(project.join(".gitignore"),
+        ".planning/\n.fixture-gnupg/\n.host/\n.claude/\nignored/\noutside-sentinel.txt\n").unwrap();
+    let padding = "// outline padding\n".repeat(2_000);
+    fs::write(project.join("src/outline.rs"), format!(
+        "fn first_unit() {{\n    let outline_needle = 1;\n}}\n{padding}fn second_unit() {{\n    let outline_needle = 2;\n}}\n")).unwrap();
+    assert!(fs::metadata(project.join("src/outline.rs")).unwrap().len() > 24_576);
+
+    let mut client = Client::open(project);
+    let context = client.call("cadence_apply", approve(json!({"operation":"context-submit","submission":{
+        "phase":31,"title":"Measured planner fixture","scope":"Plan a bounded source-unit report.",
+        "durable_decisions":[],"decisions":[],"assumptions":[],"truths":[{
+            "id":"T7","trigger":"the fixture phase closes","observer":"the fixture owner",
+            "verb":"sees","outcome":"the measured planner round", "kind":"property",
+            "observable":true,"fixed_oracle":true}]}})));
+    assert_eq!(context["persisted"], true, "{context}");
+    let allocation = client.call("cadence_query", json!({"operation":"plan-read",
+        "phase_address":"31","count":3}));
+    let mut request = process_plan_submission(&allocation, "MEASURED PLAN TWO TASK\n");
+    request["submission"]["plans"].as_array_mut().unwrap().push(json!({
+        "target":allocation["targets"][2],"content":{"phase":31,"plan":3,"requirements":["T7"],
+        "files":["src/units.rs"],"directories":[],
+        "execution":{"schema":1,"suite":"python3 -B tests/tiny.py","tasks":[{
+            "id":"fixture-three-a","verify":["python3 -B tests/tiny.py"]}]},
+        "body":"# Fixture plan three\n\n## Goal\n\nPLAN THREE GOAL SENTINEL\n\n## Tasks\n\n### Task 1: Third fixture task\n\nPLAN THREE SOURCE UNIT TASK\n",
+        "evidence_map":{"mode":"attached","items":[{
+            "kind":"artifact","id":"fixture/artifact-three",
+            "reason":"The third plan gives the live planner prior native process material.",
+            "spec":{"locators":["src/units.rs"],"substance":"A third binary-rendered fixture plan."},
+            "associations":[{"truth_id":"T7","truth_version":1,
+                "reason":"The planner round follows three already-published plans."}]
+        }]}}
+    }));
+    // The reused helper's check is associated with T4; update those authored
+    // fixture identifiers before the public preview so the native T7 authority
+    // remains the only source of truth.
+    for plan in request["submission"]["plans"].as_array_mut().unwrap() {
+        plan["content"]["requirements"] = json!(["T7"]);
+        for item in plan["content"]["evidence_map"]["items"].as_array_mut().unwrap() {
+            for association in item["associations"].as_array_mut().unwrap() {
+                association["truth_id"] = json!("T7");
+            }
+        }
+    }
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"31",
+        "submission":request["submission"]}));
+    assert_eq!(preview["status"], "ok", "{preview}");
+    let published = client.call("cadence_apply", approve(json!({"operation":"plan-submit",
+        "submission":preview["submission"]})));
+    assert_eq!(published["persisted"], true, "{published}");
+    assert_eq!(published["results"].as_array().unwrap().len(), 3, "{published}");
     client.finish();
     fixture
 }

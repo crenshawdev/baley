@@ -5,11 +5,61 @@ mod phase31_hosts;
 
 use phase31::{Client, Fixture, ProcessFixture, approve, git, process_plan_submission};
 use serde_json::json;
-use std::fs;
+use std::{fs, io::Write};
 
 #[test]
 fn phase31_worker_hosts_receive_main_thread_answers() {
     phase31_hosts::prove_worker_hosts_receive_main_thread_answers();
+}
+
+#[test]
+fn phase31_planner_round_reports_reads_and_tokens() {
+    let mut fixture = phase31_hosts::PlannerRoundFixture::new();
+    let round = fixture.run();
+    assert!(round.read_count > 0, "the real planner round made no project reads: {round:?}");
+    assert_eq!(round.whole_file_reads, 0, "the real planner opened a project file whole: {round:?}");
+    assert_eq!(round.unclassified_reads, 0, "the real planner made an unclassifiable read: {round:?}");
+    assert!(round.token_total > 0, "the real planner round reported no observed tokens: {round:?}");
+    assert!(!round.worker_ids.is_empty(), "the measured round has no actual planner worker: {round:?}");
+
+    let identity = json!({"kind":"planner-round","phase":31,
+        "session_id":round.session_id,"first_turn":round.first_turn,"last_turn":round.last_turn});
+    let index = fixture.client().call("cadence_query", json!({
+        "operation":"document","identity":identity
+    }));
+    assert_eq!(index["status"], "ok", "planner-round document identity is unavailable: {index}; identity={identity}");
+    assert_eq!(index["kind"], "document-index", "{index}");
+    assert_eq!(index["classification"], "claude-planner-round", "{index}");
+    assert_eq!(index["revision"], round.source_digest, "{index}");
+    assert_eq!(index["parts"], json!([{"part":"report","title":"Claude planner round measurement",
+        "bytes":round.report.as_bytes().len()}]), "{index}");
+
+    let report = fixture.client().call("cadence_query", json!({
+        "operation":"document","identity":identity,"part":"report"
+    }));
+    assert_eq!(report["status"], "ok", "{report}");
+    assert_eq!(report["kind"], "document-slice", "{report}");
+    assert_eq!(report["classification"], "claude-planner-round", "{report}");
+    assert_eq!(report["revision"], round.source_digest, "{report}");
+    assert_eq!(report["body"], round.report, "the binary report differs from the independent traversal");
+    assert_eq!(report["truncated"], false, "{report}");
+    assert!(report["continuation"].is_null(), "{report}");
+    assert!(!report.to_string().contains(".claude/projects"), "host storage path leaked: {report}");
+
+    let unavailable = fixture.client().call("cadence_query", json!({
+        "operation":"document","identity":{"kind":"planner-round","phase":31,
+            "session_id":"00000000-0000-4000-8000-000000000000",
+            "first_turn":round.first_turn,"last_turn":round.last_turn}
+    }));
+    assert_eq!(unavailable["status"], "refused", "{unavailable}");
+    assert_eq!(unavailable["code"], "document-not-found", "{unavailable}");
+    assert!(unavailable.get("body").is_none(), "{unavailable}");
+    assert!(!unavailable.to_string().contains(".claude/projects"), "host storage path leaked: {unavailable}");
+
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(report["body"].as_str().unwrap().as_bytes()).unwrap();
+    stdout.flush().unwrap();
+    fixture.finish();
 }
 
 #[test]
