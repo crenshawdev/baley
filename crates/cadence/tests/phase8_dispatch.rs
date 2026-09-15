@@ -1131,6 +1131,9 @@ fn dispatch_renderer_matches_independent_exact_byte_oracles_for_both_renderings(
                 &json!({"const":"supplied schema"}),
                 lease,
             );
+            let retained = serde_json::to_value(saved_dispatch(case)).unwrap();
+            assert_eq!(retained["prompt"], prompt, "the admitted prompt must be retained exactly");
+            assert_eq!(retained["prompt_digest"], cadence::store::model::digest(prompt.as_bytes()));
             assert_eq!(
                 (
                     cadence::store::model::digest(prompt.as_bytes()),

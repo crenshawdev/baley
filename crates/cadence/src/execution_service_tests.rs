@@ -2606,27 +2606,24 @@ fn phase8_gap_active_dispatch_returns_original_choice_under_new_config() {
         let factory = SessionFactory::new(None, Arc::new(crate::config::planning_policy));
         let driver = Driver::default();
         let answer = execution_service::query(&factory, &root, 8, &driver).await;
-        let confirmed = answer.is_ok();
         let Envelope::Ok(Success::Dispatch { dispatch, prompt }) = answer.unwrap() else {
-            panic!("expected confirmed active dispatch");
+            panic!("expected the retained admitted prompt, received a refusal");
         };
         let choice = &dispatch.route.as_ref().unwrap().choice;
         assert_eq!(
             (
-                confirmed,
                 dispatch.id.as_str(),
                 choice.model.as_deref(),
                 choice.agent.as_str(),
                 choice.rung.as_str(),
-                prompt.as_bytes() == GAP_ADMITTED_PROMPT.as_bytes()
+                prompt.as_bytes()
             ),
             (
-                true,
                 "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                 Some("sonnet"),
                 "cad-executor",
                 "high",
-                true
+                GAP_ADMITTED_PROMPT.as_bytes()
             )
         );
     });

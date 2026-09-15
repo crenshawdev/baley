@@ -20,10 +20,14 @@ pub struct Client {
 
 impl Client {
     pub fn open(project: &Path) -> Self {
+        Self::open_with_program(project, Path::new(env!("CARGO_BIN_EXE_cadence")))
+    }
+
+    pub fn open_with_program(project: &Path, program: &Path) -> Self {
         // A fixture that owns a global configuration file names it here; every
         // server for that project then reads the same global layer.
         let global = project.join(".fixture-global/config.json");
-        let mut child = Command::new(env!("CARGO_BIN_EXE_cadence"))
+        let mut child = Command::new(program)
             .args(["serve", "--project-root", project.to_str().unwrap()])
             .env("CADENCE_GLOBAL_CONFIG", if global.exists() { global.as_os_str().to_owned() } else { "".into() })
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

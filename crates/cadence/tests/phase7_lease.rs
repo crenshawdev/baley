@@ -1501,12 +1501,13 @@ fn historical_exact_file_prompt_reconstructs_with_original_admitted_answer_diges
             .unwrap();
     });
     let before = fixture.read();
+    let expected = serde_json::to_value(&answer.envelope).unwrap();
     for _ in 0..2 {
         let mut client = fixture.client();
-        assert_eq!(
-            client.query(),
-            serde_json::to_value(&answer.envelope).unwrap()
-        );
+        let replayed = client.query();
+        assert_eq!(replayed["status"], "ok", "retained prompt was refused: {replayed}");
+        assert_eq!(replayed["prompt"].as_str().unwrap().as_bytes(), expected["prompt"].as_str().unwrap().as_bytes());
+        assert_eq!(replayed, expected);
         client.finish();
         assert_eq!(fixture.read(), before);
     }
