@@ -714,9 +714,14 @@ fn phase12_task_close_requires_red_then_green() {
             let request=control.classify(0,true);let answer=apply(project,request);assert_eq!(answer["status"],"refused","known errors cannot be owner-classified: {answer}");
         }
         if mode=="missing" {assert_eq!(result["observation"],json!({"class":"unknown"}));assert_eq!(result["disposition"]["code"],2);}
-        let rule=if matches!(mode,"outside"|"rename") {"lease"} else {"red-green"};
-        let answer=close_refused(project,control.close("invalid-control"),rule,if rule=="red-green" {&["check/A","check/A2"]}else{&[]});
-        if matches!(mode,"outside"|"rename") {assert!(answer["reason"].as_str().unwrap().contains("outside.txt"));}
+        if matches!(mode,"outside"|"rename") {
+            let answer=apply(project,control.close("invalid-control"));
+            assert_eq!(answer["status"],"ok","an out-of-lease evidence path is retained, not refused: {answer}");
+            assert_eq!(answer["receipt"]["request"]["event"]["source"]["out_of_lease"],
+                json!({control.red.clone():["outside.txt"]}),"only the out-of-lease endpoint is retained: {answer}");
+        } else {
+            close_refused(project,control.close("invalid-control"),"red-green",&["check/A","check/A2"]);
+        }
     }
     let custom=Tiny::new("custom");custom.attest();let project=custom.project();
     let before_classification=execution_history(project);
