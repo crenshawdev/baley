@@ -59,15 +59,6 @@ pub struct DispatchPolicy {
     pub reviews: ReviewPolicy,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct LegacyPrompt {
-    // Read only for retained records written before D-165. New records never
-    // serialize the historical byte-count identity.
-    #[serde(default, skip_serializing)]
-    pub prompt_bytes: Option<u64>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ActiveDispatch {
@@ -92,8 +83,10 @@ pub struct ActiveDispatch {
     pub prompt: String,
     #[serde(default)]
     pub prompt_digest: String,
-    #[serde(default, flatten)]
-    pub legacy_prompt: LegacyPrompt,
+    // Read only for retained records written before D-165. New records never
+    // serialize the historical byte-count identity.
+    #[serde(default, skip_serializing)]
+    pub prompt_bytes: Option<u64>,
     #[serde(default)]
     pub body: String,
 }

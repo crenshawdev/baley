@@ -82,7 +82,7 @@ pub fn build_dispatch(
         base_sha: base_sha.to_owned(),
         prompt: String::new(),
         prompt_digest: String::new(),
-        legacy_prompt: Default::default(),
+        prompt_bytes: None,
         body: plan.body.clone(),
     })
 }

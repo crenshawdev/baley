@@ -334,6 +334,15 @@ fn independently_encoded_old_exact_dispatch_keeps_fingerprint_and_reopen_bytes()
     let mut built = build_dispatch(&plan, &set, 0, BASE).unwrap();
     built.prompt = "x".into();
     built.prompt_digest = digest(b"x");
+    assert_eq!(&built.files[..1], &["src/a.rs"]);
+    assert_eq!(
+        &built.files[1..],
+        cadence::execution::render::RENDERED_PROJECT_FILES
+            .iter()
+            .map(|rendered| rendered.path)
+            .collect::<Vec<_>>()
+    );
+    built.files.truncate(1);
     assert_eq!(built, decoded);
     let temp = tempfile::tempdir().unwrap();
     fs::create_dir(temp.path().join(".planning")).unwrap();
@@ -511,7 +520,9 @@ fn writer_input(lease: &str, blocked: bool) -> (Value, cadence::execution::model
     );
     let plan = parse_plan(text.as_bytes(), 7, 1).unwrap();
     let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
-    let candidate = build_dispatch(&plan, &set, 0, BASE).unwrap();
+    let mut candidate = build_dispatch(&plan, &set, 0, BASE).unwrap();
+    candidate.prompt = "fixture".into();
+    candidate.prompt_digest = digest(candidate.prompt.as_bytes());
     let occurrence = ExecutionOccurrence {
         phase: 7,
         plan_set_fingerprint: set,
