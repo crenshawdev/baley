@@ -852,3 +852,31 @@ fn historical_fixed_dispatch_serialization_omits_route_data() {
     assert!(supplied.prompt.is_empty() && supplied.prompt_digest.is_empty());
     assert!(serde_json::to_value(&supplied).unwrap().get(&legacy_key).is_none());
 }
+
+#[test]
+fn retained_dispatch_receipt_with_prompt_bytes_keeps_its_identity() {
+    // Verbatim from this project's decisions.jsonl (generation 11): every dispatch
+    // boundary written before D-165 carries `prompt_bytes`, and its id is the
+    // digest of exactly those bytes. Loading it must not change what it re-serializes to.
+    let retained = br#"{"version":1,"id":"fd73b34e20f4eea7940d0199b87a8291c52f5d731458f2cde5d3850dee3666f2","revision":1,"origin":{"source":"execution-boundary-v1","original":"missing"},"decision":{"class":"boundary_v1","boundary":{"codec":1,"scope":{"scope":"execution","phase":31},"tool":"cadence-query","operation":"execute-next","request_digest":"42bd9246acd9b54f997d46b23cc1c90ab780ff86d7aaddbae85ee2556c4c32a5","outcome":"dispatch","subject_id":"c68a606535f1f85db58f11a95117f76d404ce79c9f11ba171bc795d17b053c28","response_digest":"547338b6015175af68b49b2ecaed279cccd14b7c55189c5269e5b47defb54835","receipt":{"receipt":"dispatch","dispatch_id":"c68a606535f1f85db58f11a95117f76d404ce79c9f11ba171bc795d17b053c28","prompt_bytes":63671}},"store_generation":11,"terminal":false}}"#;
+    let record: DecisionRecord = serde_json::from_slice(retained).unwrap();
+    assert_eq!(serde_json::to_vec(&record).unwrap(), retained);
+    model::validate_decisions(&[record]).unwrap();
+
+    // A record written after D-165 carries the digest and never the byte count.
+    let mut boundary: Value = serde_json::from_slice(retained).unwrap();
+    let boundary = boundary["decision"]["boundary"].take();
+    let mut current = boundary.clone();
+    current["receipt"] = json!({"receipt":"dispatch",
+        "dispatch_id":"c68a606535f1f85db58f11a95117f76d404ce79c9f11ba171bc795d17b053c28",
+        "prompt_digest":"d08d660b7de4e2314def9d953b46d4fec2db3acbfe7344cda4ede7faacc5e177"});
+    assert!(validate(vec![wire_record(current, 1, false)]));
+
+    // A retained byte count of zero and an unknown receipt field are still refused.
+    let mut zero = boundary.clone();
+    zero["receipt"]["prompt_bytes"] = json!(0);
+    assert!(!validate(vec![wire_record(zero, 1, false)]));
+    let mut unknown = boundary;
+    unknown["receipt"]["prompt_size"] = json!(1);
+    assert!(!validate(vec![wire_record(unknown, 1, false)]));
+}
