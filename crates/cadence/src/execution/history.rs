@@ -745,7 +745,7 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
             }
             if let Some(latest) = &latest {
                 if latest_result.as_ref().is_some_and(|r| matches!(r.observation, Observation::ResultsObserved { .. })) {
-                    let approved_repair = latest_result.as_ref().is_some_and(|result| suite_failed(result))
+                    let approved_repair = latest_result.as_ref().is_some_and(suite_failed)
                         && projection.launches.len() == 1
                         && projection.repair_answer.as_ref().is_some_and(|answer| answer.disposition == SuiteRepairDisposition::Approve)
                         && projection.repair.is_some();

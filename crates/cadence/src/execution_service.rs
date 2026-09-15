@@ -1078,7 +1078,7 @@ pub(crate) fn select_ready_plan(admitted: &[u32], outcomes: &[u32],
         if outcomes.contains(&selected) { return Err("plan-completed") }
         return Ok(selected);
     }
-    admitted.iter().copied().find(|plan| !outcomes.contains(plan)).ok_or_else(|| {
+    admitted.iter().copied().find(|plan| !outcomes.contains(plan)).ok_or({
         if admitted.is_empty() { "empty-plan-set" } else { "suite-failed" }
     })
 }

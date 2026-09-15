@@ -178,13 +178,12 @@ fn decide(
             return Decision::Stop(answer.clone());
         }
     }
-    if let Some(cp) = checkpoint {
-        if !gates
+    if let Some(cp) = checkpoint
+        && !gates
             .iter()
             .any(|g| g.checkpoint_id.as_ref() == Some(&cp.id))
-        {
-            return Decision::NeedQuestion(checkpoint_question(cp));
-        }
+    {
+        return Decision::NeedQuestion(checkpoint_question(cp));
     }
     if let Some(gate) = gates.iter().find(|g| g.state == State::Unanswered) {
         return Decision::Wait((*gate).clone());
