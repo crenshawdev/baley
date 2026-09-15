@@ -626,8 +626,8 @@ fn native_material_includes_scoped_evidence_commits() {
         let rename = git(&["rev-parse", "HEAD"]);
         assert_eq!(receipts::commit_paths(&project, &rename).unwrap(), vec!["outside.txt", "src/renamed.rs"]);
         let renamed = receipts::observe_source(&project, &active, "deliver", &green, &[red, rename.clone()]).unwrap();
-        assert_eq!(serde_json::to_value(&renamed).unwrap()["out_of_lease"], json!({rename: ["outside.txt", "src/renamed.rs"]}),
-            "every out-of-lease path in a commit is named, in path order");
+        assert_eq!(serde_json::to_value(&renamed).unwrap()["out_of_lease"], json!({rename: ["outside.txt"]}),
+            "a rename names its out-of-lease source; its in-lease destination is not a deviation");
         assert_eq!(git(&["show", &format!("{green}:src/delivery.rs")]), "answer seven");
     });
 }
