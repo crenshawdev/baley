@@ -8,11 +8,13 @@ use serde_json::json;
 use std::{fs, io::Write};
 
 #[test]
+#[ignore = "D-172: starts the installed claude, which this repository does not build; run with --ignored as a live probe"]
 fn phase31_worker_hosts_receive_main_thread_answers() {
     phase31_hosts::prove_worker_hosts_receive_main_thread_answers();
 }
 
 #[test]
+#[ignore = "D-172: starts the installed claude, which this repository does not build; run with --ignored as a live probe"]
 fn phase31_planner_round_reports_reads_and_tokens() {
     let mut fixture = phase31_hosts::PlannerRoundFixture::new();
     let round = fixture.run();
