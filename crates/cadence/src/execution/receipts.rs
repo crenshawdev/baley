@@ -183,6 +183,11 @@ pub struct SourceMaterial {
     pub completion: String,
     pub evidence_commits: Vec<String>,
     pub commit_paths: std::collections::BTreeMap<String, Vec<String>>,
+    /// D-170: paths a commit touched outside the admitted lease, by commit. The
+    /// lease is a planner's expectation, so the binary retains the difference
+    /// and never refuses on it; the plan record names each path as a deviation.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub out_of_lease: std::collections::BTreeMap<String, Vec<String>>,
     pub staged_objects: Vec<u8>,
     pub staged_paths: Vec<String>,
 }
@@ -444,6 +449,7 @@ pub fn observe_source(project: &std::path::Path, active: &super::model::ActiveDi
     use crate::{rail::risk::valid_object_id, store::Error};
     let head = git_text(project, &["rev-parse", "HEAD"])?;
     let mut observed = std::collections::BTreeMap::new();
+    let mut out_of_lease = std::collections::BTreeMap::new();
     for commit in evidence.iter().map(String::as_str).chain(std::iter::once(completion)) {
         if !valid_object_id(commit) || commit == active.base_sha {
             return Err(Error::Invalid("evidence commit requires a full object id strictly after the dispatch base".into()));
@@ -452,11 +458,9 @@ pub fn observe_source(project: &std::path::Path, active: &super::model::ActiveDi
         git(project, &["merge-base", "--is-ancestor", &active.base_sha, commit])?;
         git(project, &["merge-base", "--is-ancestor", commit, &head])?;
         let paths = commit_paths(project, commit)?;
-        for path in &paths {
-            if !super::lease::covers(&active.files, &active.directories, path) {
-                return Err(super::admission::refuse(active.phase, "lease", "evidence_commits", commit, format!("out-of-lease path: {path}")));
-            }
-        }
+        let outside: Vec<String> = paths.iter()
+            .filter(|path| !super::lease::covers(&active.files, &active.directories, path)).cloned().collect();
+        if !outside.is_empty() { out_of_lease.insert(commit.to_owned(), outside); }
         observed.insert(commit.to_owned(), paths);
     }
     git(project, &["verify-commit", completion])?;
@@ -468,7 +472,7 @@ pub fn observe_source(project: &std::path::Path, active: &super::model::ActiveDi
             return Err(super::admission::refuse(active.phase, "lease", "staged", path, "out-of-lease staged path"));
         }
     }
-    Ok(SourceMaterial { completion: completion.into(), evidence_commits: evidence.to_vec(), commit_paths: observed, staged_objects, staged_paths })
+    Ok(SourceMaterial { completion: completion.into(), evidence_commits: evidence.to_vec(), commit_paths: observed, out_of_lease, staged_objects, staged_paths })
 }
 
 pub fn reobserve_source(project: &std::path::Path, active: &super::model::ActiveDispatch, task_id: &str, expected: &SourceMaterial) -> crate::store::Result<()> {

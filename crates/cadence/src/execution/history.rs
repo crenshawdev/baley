@@ -555,8 +555,9 @@ pub fn phase_complete(data: &Value, phase: u32) -> Result<bool> {
 /// listed from their close receipts; a failed suite is a visible blocker.
 fn end_dispatch(data: &Value, plan: &PlanIdentity, active: &super::model::ActiveDispatch, records: &[Record],
     disposition: super::model::PlanDisposition, blockers: Vec<super::model::Blocker>, transition_id: &str) -> Result<Value> {
-    use super::model::{CommandReceipt, EvidenceReference, ExecutionSnapshot, PlanOutcome, TaskOutcome, TerminalOutcome, VerificationDisposition, VerificationReceipt};
+    use super::model::{CommandReceipt, Deviation, EvidenceReference, ExecutionSnapshot, PlanOutcome, TaskOutcome, TerminalOutcome, VerificationDisposition, VerificationReceipt};
     let mut tasks = Vec::new();
+    let mut deviations = Vec::new();
     for spec in &active.tasks {
         let task = Task { phase: plan.phase, occurrence: plan.occurrence.clone(), admission_digest: plan.admission_digest.clone(), plan: plan.plan, task: spec.id.clone() };
         let Some(proof) = records.iter().find_map(|r| match &r.request.event {
@@ -584,12 +585,20 @@ fn end_dispatch(data: &Value, plan: &PlanIdentity, active: &super::model::Active
         }
         tasks.push(TaskOutcome::Completed { task_id: spec.id.clone(), commit: proof.submission.completion.clone(),
             verification: VerificationReceipt { disposition: VerificationDisposition::Passed, commands }, evidence });
+        // D-170: the lease is the planner's expectation; the record names what differed.
+        for (commit, paths) in &proof.source.out_of_lease {
+            for path in paths {
+                deviations.push(Deviation { id: format!("out-of-lease:{}:{path}", spec.id),
+                    text: format!("{} committed {path} outside the admitted lease in {commit}", spec.id),
+                    evidence: vec![EvidenceReference::Commit { sha: commit.clone() }] });
+            }
+        }
     }
     let mut execution: ExecutionSnapshot = serde_json::from_value(data["execution"].clone())?;
     let occurrence = execution.occurrences.get_mut(&plan.phase.to_string())
         .ok_or_else(|| Error::Invalid("plan outcome lacks its execution occurrence".into()))?;
     occurrence.plans.push(PlanOutcome { dispatch_id: active.id.clone(), phase: plan.phase, plan: plan.plan, disposition, tasks,
-        deviations: vec![], blockers, commit_paths: Default::default(), transition_id: transition_id.into() });
+        deviations, blockers, commit_paths: Default::default(), transition_id: transition_id.into() });
     occurrence.active = None;
     let mut next = data.clone();
     next["execution"] = serde_json::to_value(execution)?;
