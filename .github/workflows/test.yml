@@ -53,8 +53,17 @@ jobs:
       # --locked on both, because a committed Cargo.lock is the whole of what
       # "builds offline" means here and an unlocked resolve would quietly test
       # a dependency graph no commit records.
+      # nextest runs every test as its own process and every binary at once;
+      # cargo test runs the binaries one after another, and four of them held
+      # three quarters of a fifteen-minute wall clock (D-176). Pinned and
+      # fetched as a prebuilt archive so the job does not build the runner.
+      - name: Install cargo-nextest
+        run: |
+          set -euo pipefail
+          curl -LsSf https://get.nexte.st/0.9.144/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+          cargo nextest --version
       - run: cargo build --locked
-      - run: cargo test --locked
+      - run: cargo nextest run --locked --workspace --no-fail-fast
 
       # The frozen reference guard, and now the ONLY one running in CI: the
       # self-verify job that used to lint the shipped tree was removed under

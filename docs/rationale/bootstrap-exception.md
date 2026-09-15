@@ -619,3 +619,45 @@ once in a shell: 57 result lines, 971 passed, 0 failed, 0 panics, 2 ignored
 18 tests, `phase12_execution` 162s for 7, `phase13_verification` 147s for 7,
 `phase38_suite_gate` 72s for 7. Cargo runs targets one after another; that is
 the next thing to fix, and John agreed to nextest first.
+
+## D-176
+
+The suite took fifteen minutes and was going to take longer. On 2026-09-15,
+with 971 tests across 57 targets, `cargo test --workspace` ran 892 seconds,
+and four targets held three quarters of it: `execution_store` 296s,
+`phase12_execution` 162s, `phase13_verification` 147s, `phase38_suite_gate`
+72s. Cargo runs targets one after another. John: "we have to do something
+about these tests we are not remotely thru and the number of tests are going
+to increase."
+
+Three moves, each measured on the same sixteen-core machine.
+
+**nextest.** Every test its own process, every binary at once. Same 969
+tests, 393 seconds. It is the suite command now, locally and in
+`test.yml`, pinned at 0.9.144 and fetched prebuilt. The repository has no
+doc-tests, so nothing nextest skips was being run.
+
+**The inventory tests.** Four tests named `*_repair_inventory_runs_registered_evidence`
+proved their criterion rows were registered by listing the binary, then ran
+every row again inside themselves, serially. The store one ran six tests
+including the 256-budget test and took 392 seconds, which was the wall clock
+of the whole parallel run. Each row is a test and runs as one; the inventory
+test keeps the listing check and the compile-time binding to the function
+and no longer calls it. 302 seconds.
+
+**The 256-budget test.** `scoped_budgets_admit_256_plus_terminal_and_reopen_never_grows_either_scope`
+ran its two-scope fill in both orders, 2,048 store requests, 223 seconds
+alone. One order stays, the production one: the phase scope fills and binds,
+root refusals keep their own budget after it. 113 seconds alone. The other
+half of that number is the store's: every write re-validates the whole log,
+which is why 512 writes cost 110ms each on tmpfs. That is the product fix,
+filed as GH-261 with the `4.0-blocker` label John asked for, and parked.
+
+What was refused: a test-only smaller budget. The rule is 256, the test
+writes 256.
+
+40. `test.yml`: nextest as the CI suite.
+41. the four inventory tests, `execution_store.rs`, `execution_service_tests.rs`,
+    `execution/tests.rs`, `execution_boundary_compat.rs`: register, do not
+    re-run.
+42. `execution_store.rs`: one fill order.

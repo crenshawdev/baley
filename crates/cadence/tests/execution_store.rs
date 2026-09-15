@@ -1040,14 +1040,18 @@ fn scoped_writer_confirms_dispatch_complete_blocked_and_observation_public_diges
 
 #[test]
 fn scoped_budgets_admit_256_plus_terminal_and_reopen_never_grows_either_scope() {
-    for phase_first in [false, true] {
+    // One fill order, the production one: the phase scope fills and binds first,
+    // root refusals keep their own budget after it. The mirror order was run too
+    // until D-176; every store request here re-validates the whole log, so the
+    // two orders cost the suite five minutes to prove one independence twice.
+    {
         let root = tempfile::tempdir().unwrap();
         prepare_root(root.path());
         runtime().block_on(async {
         let mut store = open(root.path()).await;
         let (mut view, dispatch, original) = scoped_dispatch(&store).await;
         let data = view.snapshot.data.clone();
-        for scope in if phase_first { [BoundaryScope::Execution { phase:6 }, BoundaryScope::RootRefusal] } else { [BoundaryScope::RootRefusal, BoundaryScope::Execution { phase:6 }] } {
+        for scope in [BoundaryScope::Execution { phase:6 }, BoundaryScope::RootRefusal] {
             let existing = if scope == BoundaryScope::RootRefusal { 0 } else { 1 };
             for index in existing..256 {
                 let unique = format!("{scope:?}:{index}");
@@ -1668,12 +1672,14 @@ fn phase_six_store_repair_inventory_runs_registered_evidence() {
         .unwrap();
     assert!(listing.status.success());
     let listing = String::from_utf8(listing.stdout).unwrap();
-    for (criterion, name, run) in rows {
+    // Each row is a test of its own and runs as one; this test proves the row
+    // is registered under the name the criterion cites and bound to a real
+    // function, and does not run it a second time (D-176).
+    for (criterion, name, _bound) in rows {
         assert!(
             listing.lines().any(|line| line == format!("{name}: test")),
             "{criterion} repair evidence is not registered: {name}"
         );
-        run();
-        println!("{criterion} repair evidence passed: {name}");
+        println!("{criterion} repair evidence registered: {name}");
     }
 }

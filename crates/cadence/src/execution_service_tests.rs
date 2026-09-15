@@ -1866,13 +1866,15 @@ fn phase_six_service_repair_inventory_runs_registered_evidence() {
         .unwrap();
     assert!(listing.status.success());
     let listing = String::from_utf8(listing.stdout).unwrap();
-    for (criterion, name, run) in rows {
+    // Each row is a test of its own and runs as one; this test proves the row
+    // is registered under the name the criterion cites and bound to a real
+    // function, and does not run it a second time (D-176).
+    for (criterion, name, _bound) in rows {
         assert!(
             listing.lines().any(|line| line == format!("{name}: test")),
             "{criterion} repair evidence is not registered: {name}"
         );
-        run();
-        println!("{criterion} repair evidence passed: {name}");
+        println!("{criterion} repair evidence registered: {name}");
     }
 }
 
