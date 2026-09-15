@@ -1001,6 +1001,116 @@ fn phase38_second_red_blocks_and_refuses_third_launch() {
         vec!["suite-repair:docs/outside.md"]);
     assert_eq!(outcome["deviations"][0]["evidence"], json!([{"kind":"commit","sha":repair_commit}]));
     assert_eq!(current["events"].as_array().unwrap().len(), episode.task_close_event_count);
+    let blocked_outcome = outcome.clone();
+
+    // A later admitted gap plan, artifact only under the one-check-per-truth
+    // limit, repairs the suite inside its own lease and completes, which makes
+    // the phase's terminal verification inputs available.
+    let gap_map = json!({"mode":"attached","items":[{
+        "kind":"artifact","id":"P38-A-T3-GAP",
+        "reason":"The gap plan leaves the suite passing where the blocked plan could not.",
+        "spec":{"locators":["tests/suite.sh"],
+            "substance":"A committed passing suite script closes the blocked plan's gap."},
+        "associations":[{"truth_id":"T3","truth_version":1,
+            "reason":"The later completed plan is what a blocked plan needs before verification."}]
+    }]});
+    let mut client = Client::open(project);
+    let allocation = client.read("38", Some(1));
+    assert_eq!(allocation["status"], "ok", "{allocation}");
+    let target = allocation["targets"][0].clone();
+    assert_eq!(target["plan"], 2, "{allocation}");
+    let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],
+        "request_id":"publish-gap-plan","inventory_basis":allocation["inventory"]["basis"],
+        "plans":[{"target":target,"content":{"phase":PHASE,"plan":2,"requirements":["T3"],
+            "files":["tests/suite.sh"],"directories":[],
+            "execution":{"schema":1,"suite":SUITE_COMMAND,"tasks":[{"id":"gap-plan","verify":[COMMAND]}]},
+            "body":body(&gap_map),"evidence_map":gap_map}}]});
+    let preview = client.call("cadence_query",
+        json!({"operation":"plan-read","phase_address":"38","submission":submission}));
+    assert_eq!(preview["status"], "ok", "{preview}");
+    let published = client.call("cadence_apply",
+        support::approve(json!({"operation":"plan-submit","submission":preview["submission"]})));
+    assert_eq!(published["persisted"], true, "{published}");
+    let plans = client.read("38", None);
+    let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
+    client.finish();
+    let plan_one_revision = evidence["items"].as_array().unwrap().iter()
+        .find(|item| item["id"] == "P38-T3-C").unwrap()["item_revision"].clone();
+    let plan_one_check = json!({"id":"P38-T3-C","item_revision":plan_one_revision});
+    let bindings = [1, 2].map(|number| {
+        let publication = &plans["native"]["publications"][number.to_string()];
+        json!({"plan":number,"publication_request":publication["publication_request"],
+            "content_revision":publication["revision"],"map_revision":publication["map_revision"]})
+    });
+    let contract = json!({"phase":PHASE,"occurrence":plans["occurrence"],"plans":bindings,"allocation":[
+        {"plan":1,"task":"retain-prompt","checks":[plan_one_check]},
+        {"plan":2,"task":"gap-plan","checks":[]}
+    ]});
+    let extended = call(project, "cadence_apply", json!({"operation":"execution-extend","request":{
+        "request_id":"extend-gap-plan","expected_set_version":1,"contract":contract}}));
+    assert_eq!(extended["status"], "ok", "{extended}");
+    let authorized = call(project, "cadence_apply", json!({"operation":"execution-authorize",
+        "phase":PHASE,"request_id":"authorize-gap-plan","owner":OWNER,"at":AT,
+        "response":"Run the gap plan after the blocked repair."}));
+    assert_eq!(authorized["status"], "ok", "{authorized}");
+    let dispatch = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
+    assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
+    assert_eq!(dispatch["dispatch"]["plan"], 2, "the blocked plan never redispatches: {dispatch}");
+
+    let current = task_for(project, 2, "gap-plan");
+    let started = call(project, "cadence_apply", json!({"operation":"execution-task-start","request":{
+        "request_id":"start-gap-plan","task":current["task"],"attempt":"attempt-gap-plan",
+        "expected_version":current["state"]["version"],"predecessor":null,"checks":[]}}));
+    assert_eq!(started["status"], "ok", "{started}");
+    fs::write(project.join("tests/suite.sh"), passing_suite()).unwrap();
+    git(project, &["add", "tests/suite.sh"]);
+    git(project, &["commit", "-S", "-m", "fix(38): deliver gap-plan suite"]);
+    let gap_commit = git(project, &["rev-parse", "HEAD"]);
+    let verified = run_for(project, 2, "gap-plan", "attempt-gap-plan", "gap-verify", "verify", Value::Null);
+    assert_eq!(verified["disposition"], json!({"kind":"exited","code":0}), "{verified}");
+    let current = task_for(project, 2, "gap-plan");
+    let closed = call(project, "cadence_apply", json!({"operation":"execution-task-close","request":{
+        "request_id":"close-gap-plan","task":current["task"],"attempt":"attempt-gap-plan",
+        "expected_version":current["state"]["version"],"completion":gap_commit,
+        "checks":[],"verification":["gap-verify"]}}));
+    assert_eq!(closed["status"], "ok", "{closed}");
+    let suite = launch_suite_for(project, 2, "suite-gap-plan");
+    assert_eq!(suite["disposition"], json!({"kind":"exited","code":0}), "{suite}");
+    let risk = call(project, "cadence_apply", json!({"operation":"risk-check",
+        "request_id":"risk-gap-plan","scope":{"phase":PHASE,
+            "occurrence":"phase-38-execution","worker":"2"},
+        "source":{"kind":"execution","plan":2,"dispatch_id":dispatch["dispatch"]["id"]},
+        "surfaces":null}));
+    assert_eq!(risk["status"], "ok", "{risk}");
+    let complete = call(project, "cadence_apply",
+        plan_operation_for(project, 2, "execution-plan-complete", "complete-gap-plan", json!({})));
+    assert_eq!(complete["status"], "ok", "{complete}");
+
+    // Fresh verification inputs carry the blocked plan's outcome and the
+    // plan-level repair event's Git-observed paths, unchanged by the gap plan.
+    let verify = call(project, "cadence_query",
+        json!({"operation":"verify-next","phase":PHASE,"request_id":"verify-gap-plan"}));
+    assert_eq!(verify["status"], "ok", "{verify}");
+    let execution = &verify["attempt"]["inputs"]["execution"];
+    let outcomes = execution["outcomes"].as_array().unwrap();
+    let blocked = outcomes.iter().find(|entry| entry["plan"] == 1).unwrap();
+    assert_eq!(*blocked, blocked_outcome, "{execution}");
+    assert_eq!(blocked["disposition"], "blocked", "{blocked}");
+    assert_eq!(blocked["blockers"].as_array().unwrap().iter()
+        .map(|entry| entry["id"].as_str().unwrap()).collect::<Vec<_>>(),
+        vec!["suite-failed:suite-second-failure"]);
+    assert_eq!(blocked["deviations"].as_array().unwrap().iter()
+        .map(|entry| entry["id"].as_str().unwrap()).collect::<Vec<_>>(),
+        vec!["suite-repair:docs/outside.md"]);
+    assert_eq!(blocked["deviations"][0]["evidence"], json!([{"kind":"commit","sha":repair_commit}]));
+    assert_eq!(outcomes.iter().find(|entry| entry["plan"] == 2).unwrap()["disposition"], "complete", "{execution}");
+    let repairs = execution["plan_events"].as_array().unwrap().iter().filter(|record| {
+        record["request"]["plan"]["plan"] == 1 && record["request"]["event"]["kind"] == "suite-repair"
+    }).collect::<Vec<_>>();
+    assert_eq!(repairs.len(), 1, "{execution}");
+    assert_eq!(repairs[0]["request"]["event"]["commits"], json!([repair_commit]));
+    assert_eq!(repairs[0]["request"]["event"]["changed_paths"],
+        json!({repair_commit.clone():["docs/outside.md","tests/suite.sh"]}));
 }
 
 fn task_for(project: &Path, plan: u32, id: &str) -> Value {
