@@ -46,7 +46,14 @@ pub(super) fn task_lease_files(
     if cadence::execution::history::project(&records, &current).completed {
         return Err(refusal("scope", "scope-not-current", "task lease is already completed"));
     }
-    if active.files != publication.content.files || active.directories != publication.content.directories {
+    let mut published_files = publication.content.files.clone();
+    published_files.extend(
+        cadence::execution::render::RENDERED_PROJECT_FILES
+            .iter()
+            .map(|rendered| rendered.path.to_owned())
+            .filter(|path| !publication.content.files.contains(path)),
+    );
+    if active.files != published_files || active.directories != publication.content.directories {
         return Err(refusal("scope", "scope-unavailable", "active lease differs from retained publication"));
     }
     let mut paths = Vec::new();
