@@ -130,7 +130,12 @@ struct Usage {
 
 fn inspect_planner_record(project: &Path, session_id: String) -> PlannerRound {
     let project = fs::canonicalize(project).unwrap();
-    let encoded = project.to_string_lossy().replace('/', "-");
+    let encoded: String = project.to_string_lossy().chars()
+        .map(|character| if character.is_alphanumeric() || matches!(character, '-' | '_') {
+            character
+        } else {
+            '-'
+        }).collect();
     let host_root = PathBuf::from(std::env::var_os("HOME").expect("Claude HOME is required"))
         .join(".claude/projects").join(encoded);
     let main_path = host_root.join(format!("{session_id}.jsonl"));
@@ -176,6 +181,7 @@ fn inspect_planner_record(project: &Path, session_id: String) -> PlannerRound {
     let mut read_count = 0;
     let mut whole_file_reads = 0;
     let mut unclassified_reads = 0;
+    let mut assistant_messages = BTreeSet::new();
     let mut usages = BTreeMap::<(String, String), Value>::new();
     for (source, bytes, records) in &sources {
         hasher.update((source.len() as u64).to_be_bytes());
@@ -198,15 +204,19 @@ fn inspect_planner_record(project: &Path, session_id: String) -> PlannerRound {
             }
             if record["type"] == "assistant" {
                 let Some(message_id) = record.pointer("/message/id").and_then(Value::as_str) else { continue };
+                let key = (source.clone(), message_id.to_owned());
+                assistant_messages.insert(key.clone());
+                if record["message"]["stop_reason"].is_null() { continue }
                 let usage = record.pointer("/message/usage")
                     .unwrap_or_else(|| panic!("assistant message {message_id} has no final usage record"));
-                let key = (source.clone(), message_id.to_owned());
                 if let Some(previous) = usages.insert(key, usage.clone()) {
                     assert_eq!(previous, *usage, "assistant message {message_id} has inconsistent final usage");
                 }
             }
         }
     }
+    assert_eq!(usages.keys().cloned().collect::<BTreeSet<_>>(), assistant_messages,
+        "one or more actual assistant messages has no final usage record");
     assert!(unclassified_reads == 0,
         "the planner issued {unclassified_reads} project-read commands whose extent cannot be classified");
     let mut usage = Usage::default();
