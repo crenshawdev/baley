@@ -357,3 +357,47 @@ and D-172, and its result is recorded here.
 
 The executor-patch boundary in `execution/patch.rs` still refuses
 `undeclared-files`. It is the 3.x surface and goes when that surface goes.
+
+## D-171
+
+The orchestrator requests `execution-suite` and `execution-plan-complete`.
+The executor closes its last task, reports, and stops. The binary ran the
+suite and wrote the receipt before this and it does after; what changed is
+who asks. No model sits between the request and the tests, and the executor
+never holds a gate on its own work.
+
+On 2026-09-15, tracing why the phase 31 live-host test went red under one
+runner and green under another, John asked what decided that the suite ran
+through Codex at all. Nothing in the binary did. `execution-suite` takes a
+plan identity and a version and runs `cargo test --workspace --no-fail-fast`
+itself; anyone with the front door can request it. Codex requested it only
+because the compiled executor text told the executor to, after its last
+close. So every plan's suite since phase 31 ran five layers deep: this
+session driving the binary over MCP, the dispatch handed to Codex, Codex
+talking to its own Cadence server, that server running the suite, and one
+test inside it starting a real Claude with a server and a worker of its own
+(that test is D-172). Two of those layers are the design and stay: the
+binary runs the suite so the binary records the result, and an executor
+exists because something has to write the code. The executor asking for the
+gate was neither. It was one sentence in the executor's instructions, and
+the sentence moved.
+
+15. `7b55857b` test(execution): hand the suite and plan completion to the
+    orchestrator in the compiled text (D-171 red).
+    `executor_never_requests_the_gates_the_orchestrator_owns` reads
+    `dispatch_text()` and `frontdoor_markdown()`: the executor text must say
+    it never requests either operation and must name the D-170 deviation in
+    its lease paragraph; the front door text must request the suite and
+    then plan completion itself.
+16. `a7ecb7e1` feat(execution): let the orchestrator request the suite and
+    plan completion, never the executor (D-171). `execution/instructions.rs`
+    moves both requests into the front door's step 7: when the executor's
+    digest reports the last task closed, request `execution-suite`, wait
+    for its receipt, then request `execution-plan-complete` with the
+    version the receipt reports. The lease paragraph now says what D-170
+    made true. `skills/cad-executor-contract/SKILL.md` and
+    `skills/cad-execute/SKILL.md` are the binary's rendered output, compared
+    byte for byte after the build.
+
+The one test is green. Nothing has run through the front door this way yet;
+the next dispatch is the first that does, and what it records goes here.
