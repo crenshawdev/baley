@@ -372,8 +372,7 @@ fn oracle_round(client: &mut Client) -> Vec<Call> {
     call(client, &mut calls, json!({"operation":"search","pattern":"first-marker","scope":{"kind":"directory","selector":"src"}}));
     let large = calls[4].result["hits"][0]["location"].clone();
     call(client, &mut calls, json!({"operation":"read","location":large}));
-    loop {
-        let Some(continuation) = calls.last().unwrap().result["continuation"].as_str().map(str::to_owned) else { break };
+    while let Some(continuation) = calls.last().unwrap().result["continuation"].as_str().map(str::to_owned) {
         call(client, &mut calls, json!({"operation":"read","location":continuation}));
     }
     call(client, &mut calls, json!({"operation":"document","identity":{"kind":"phase-context","phase":31},"part":"truth:T4"}));

@@ -34,7 +34,7 @@ fn phase31_planner_round_reports_reads_and_tokens() {
     assert_eq!(index["classification"], "claude-planner-round", "{index}");
     assert_eq!(index["revision"], round.source_digest, "{index}");
     assert_eq!(index["parts"], json!([{"part":"report","title":"Claude planner round measurement",
-        "bytes":round.report.as_bytes().len()}]), "{index}");
+        "bytes":round.report.len()}]), "{index}");
 
     let report = fixture.client().call("cadence_query", json!({
         "operation":"document","identity":identity,"part":"report"
