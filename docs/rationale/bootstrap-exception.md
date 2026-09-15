@@ -661,3 +661,7 @@ writes 256.
     `execution/tests.rs`, `execution_boundary_compat.rs`: register, do not
     re-run.
 42. `execution_store.rs`: one fill order.
+
+Suite at `3d41ae30`, `TMPDIR=/tmp cargo nextest run --workspace --no-fail-fast`,
+run once in a shell: 969 passed, 0 failed, 2 skipped (D-172), 261 seconds
+wall. From 892.
