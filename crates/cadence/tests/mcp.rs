@@ -996,7 +996,7 @@ fn execution_calls_refuse_noninteger_phases_and_legacy_plans_without_dispatch() 
         let rendered = String::from_utf8(output.stdout).unwrap();
         assert_eq!(rendered, fs::read_to_string(repo.join(skill)).unwrap());
         assert!(rendered.contains(
-            "Binary-rendered project files in the dispatch lease are implicit material"
+            "Binary-rendered project files in the\ndispatch lease are implicit material"
         ), "{skill} must explain the D-166 implicit rendered-file lease");
         for required in ["positive JSON integers", "\"phase\":13", "\"phase\":\"13\"",
             "plan-read", "evidence-read", "approval.submission.request_id", "map_revision",
