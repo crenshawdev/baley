@@ -483,3 +483,46 @@ pub fn reobserve_source(project: &std::path::Path, active: &super::model::Active
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use crate::{execution::history::{Event, Record, request_digest}, store::model::digest};
+    use serde_json::json;
+
+    // A run result retained on this project on 2026-09-15, from
+    // `.planning/decisions.jsonl`, verbatim: its captures are integer arrays.
+    const RETAINED: &str = r#"{"schema":"native-task-event-1","root_binding":"36:603670;36:396349;36:220748;36:256;","version":3,"request_digest":"f6bc8aa6eaa107484b737076907f3c715229ae5723e66ee6684147e9491f444c","request":{"request_id":"p31-10-t1-verify-1:result","task":{"phase":31,"occurrence":"active-cycle:phase:31","admission_digest":"7be8edb5505ea7f40c044cf6c8f9e4575abd1ae777b40d8b81a815cce02d3deb","plan":10,"task":"P31-10-T1"},"attempt":"p31-10-t1-a1","expected_version":2,"event":{"kind":"result","run_id":"p31-10-t1-verify-1","disposition":{"kind":"exited","code":0},"stdout":{"bytes":[],"digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","complete":true},"stderr":{"bytes":[32,32,32,32,70,105,110,105,115,104,101,100,32,96,100,101,118,96,32,112,114,111,102,105,108,101,32,91,117,110,111,112,116,105,109,105,122,101,100,32,43,32,100,101,98,117,103,105,110,102,111,93,32,116,97,114,103,101,116,40,115,41,32,105,110,32,48,46,48,53,115,10],"digest":"ee1d3fffa2022e962e63e0dbe4d35c9c198450a20c29fc09030f635dbb38bfcd","complete":true},"observed_at":1789509454823,"observation":{"class":"unknown"},"material_unchanged":true}}}"#;
+
+    // GH-263 part 2 under D-175's rule. A capture read as `bytes` is written
+    // back as `bytes`, so a retained record keeps its digest preimage. A new
+    // capture is `text` when its bytes are UTF-8 and `bytes` otherwise, and a
+    // capture read as `text` is written back as `text`. Both forms at once,
+    // neither, or an unknown field is refused.
+    #[test]
+    fn capture_keeps_its_read_form_and_new_captures_are_text() {
+        let record: Record = serde_json::from_str(RETAINED).unwrap();
+        assert_eq!(request_digest(&record.request).unwrap(), record.request_digest);
+        assert_eq!(serde_json::to_value(&record).unwrap(), serde_json::from_str::<serde_json::Value>(RETAINED).unwrap());
+        let Event::Result(result) = &record.request.event else { panic!("{RETAINED}") };
+        assert_eq!(result.stderr.bytes, b"    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s\n");
+
+        let fresh = super::super::runner::capture(&b"test result: ok. 1 passed; 0 failed\n"[..]);
+        let written = serde_json::to_value(&fresh).unwrap();
+        assert_eq!(written, json!({"text":"test result: ok. 1 passed; 0 failed\n","digest":digest(b"test result: ok. 1 passed; 0 failed\n"),
+            "complete":true,"result_lines":["test result: ok. 1 passed; 0 failed"]}));
+        let read: Capture = serde_json::from_value(written.clone()).unwrap();
+        assert_eq!(read, fresh);
+        assert_eq!(read.bytes, fresh.bytes);
+        assert_eq!(serde_json::to_value(&read).unwrap(), written, "a capture read as text is written as text");
+
+        let binary = super::super::runner::capture(&[0xff, 0xfe, b'\n'][..]);
+        assert_eq!(serde_json::to_value(&binary).unwrap(), json!({"bytes":[255,254,10],"digest":digest(&[0xff,0xfe,10]),"complete":true}));
+
+        for bad in [json!({"bytes":[],"text":"","digest":digest(b""),"complete":true}),
+                    json!({"digest":digest(b""),"complete":true}),
+                    json!({"text":"x","digest":digest(b"x"),"complete":true,"extra":1})] {
+            assert!(serde_json::from_value::<Capture>(bad.clone()).is_err(), "{bad}");
+        }
+    }
+}
