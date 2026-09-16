@@ -376,6 +376,46 @@ fn phase13_dispatch_names_history_by_id_per_item() {
     assert_eq!(dispatch["attempt"]["inputs"]["execution"]["events"], execution["events"]);
 }
 
+// GH-262: the log keeps each event as the text it was written as; the
+// snapshot copy is a projection. When a snapshot record no longer matches
+// its digest, the binary restores it from the log at open, says which, and
+// the next write persists the restored copy.
+#[test]
+fn phase13_snapshot_event_is_restored_from_the_log() {
+    let fixture = Completed::new();
+    let project = fixture.project();
+    let root = project.join(".planning");
+    let items = std::fs::read(root.join(cadence::store::model::ITEMS)).unwrap();
+    let decisions = std::fs::read(root.join(cadence::store::model::DECISIONS)).unwrap();
+    let mut damaged = snapshot(project);
+    let zeros = "0".repeat(40);
+    let records = damaged.data["native_tasks"]["phases"]["13"].as_array_mut().unwrap();
+    let launch = records.iter_mut().find(|r| r["request"]["event"]["kind"] == "launch" && r["request"]["event"]["run_id"] == "red-1").unwrap();
+    let digest = launch["request_digest"].as_str().unwrap().to_owned();
+    let tree = launch["request"]["event"]["material"]["tree"].clone();
+    assert_ne!(tree, zeros);
+    launch["request"]["event"]["material"]["tree"] = json!(zeros);
+    let damaged = cadence::store::model::Snapshot::new(damaged.generation, &items, &decisions, damaged.data).unwrap()
+        .with_operations(damaged.operations).unwrap();
+    std::fs::write(root.join(cadence::store::model::STATE), damaged.render().unwrap()).unwrap();
+    let id = format!("native-task:13:{digest}");
+    // Read: the record comes back as the log has it, and the answer names it.
+    let restored = history(project);
+    assert_eq!(restored["repaired"], json!([id]), "{restored}");
+    let record = restored["events"].as_array().unwrap().iter().find(|r| r["request_digest"] == digest).unwrap();
+    assert_eq!(record["request"]["event"]["material"]["tree"], tree);
+    assert_eq!(snapshot(project).data["native_tasks"]["phases"]["13"].as_array().unwrap().iter()
+        .find(|r| r["request_digest"] == digest).unwrap()["request"]["event"]["material"]["tree"], zeros, "a read writes nothing");
+    // Verify: no identity refusal, the same note, and the write persists the restored copy.
+    let dispatch = query(project, json!({"operation":"verify-next","phase":13,"request_id":"verify-restored"}));
+    assert_eq!(dispatch["status"], "ok", "{dispatch}");
+    assert_eq!(dispatch["repaired"], json!([id]), "{dispatch}");
+    assert_eq!(snapshot(project).data["native_tasks"]["phases"]["13"].as_array().unwrap().iter()
+        .find(|r| r["request_digest"] == digest).unwrap()["request"]["event"]["material"]["tree"], tree);
+    let clean = history(project);
+    assert_eq!(clean["repaired"], json!([]), "{clean}");
+}
+
 fn report(project: &std::path::Path) -> Value {
     query(project, json!({"operation":"verification-read","phase":13}))
 }
