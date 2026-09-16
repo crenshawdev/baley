@@ -14,6 +14,11 @@ const BASELINE: u64 = 183_000;
 pub struct Report {
     pub revision: String,
     pub body: String,
+    pub worker_ids: Vec<String>,
+    pub read_count: u64,
+    pub whole_file_reads: u64,
+    pub unclassified_reads: u64,
+    pub token_total: u64,
 }
 
 struct Source {
@@ -346,7 +351,7 @@ fn measure(project: &Path, phase: u32, session_id: &str, first_turn: &str, last_
         input_tokens=usage.input, cache_creation_input_tokens=usage.cache_creation,
         cache_read_input_tokens=usage.cache_read, output_tokens=usage.output,
         token_total=token_total, difference=difference, ratio=ratio);
-    Ok(Report { revision: source_digest, body })
+    Ok(Report { revision: source_digest, body, worker_ids, read_count, whole_file_reads, unclassified_reads, token_total })
 }
 
 fn usage_field(usage: &Value, field: &str) -> Result<u64, Value> {
@@ -360,15 +365,7 @@ fn add(left: u64, right: u64) -> Result<u64, Value> {
 }
 
 fn classify_read(project: &Path, name: &str, input: &Value) -> (u64, u64, u64) {
-    if name == "mcp__cadence__cadence_query" {
-        return match input["operation"].as_str() {
-            Some("search" | "list" | "read" | "document" | "document-search" | "context-intake" | "plan-read" | "evidence-read"
-                | "execution-history" | "verification-read" | "verification-audit" | "review-material"
-                | "review-original" | "review-attempt" | "review-inventory" | "review-deferred"
-                | "review-consumer" | "risk-status") => (1, 0, 0),
-            _ => (0, 0, 0),
-        };
-    }
+    if name == "mcp__cadence__cadence_query" { return (1, 0, 0) }
     if matches!(name, "Grep" | "Glob") { return (1, 0, 0) }
     if name == "Read" {
         let Some(path) = input["file_path"].as_str() else { return (1, 0, 1) };
