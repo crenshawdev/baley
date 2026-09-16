@@ -179,7 +179,11 @@ fn initialize_names_the_server_cadence_at_the_crate_version() {
 
 #[test]
 fn tool_schemas_list_exactly_three_tools_with_output_schemas() {
-    let mut client = Client::spawn();
+    // Refused calls below still open a store, so the server runs in a temp
+    // project rather than the crate directory.
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join(".planning")).unwrap();
+    let mut client = isolated_client(temp.path());
     client.handshake();
     let response = client.tools_list(2);
     let tools = response["result"]["tools"]
@@ -216,34 +220,26 @@ fn tool_schemas_list_exactly_three_tools_with_output_schemas() {
     ));
     // The flattened root unions every operation's shape for a field, and
     // plan-read's phase admits a decimal legacy address, so a wrong-typed
-    // phase is rejected by the strict per-operation schema, not the root.
-    let strict = &query["$defs"]["QueryArguments"];
+    // phase passes the advertised root and is refused by the server, which
+    // deserializes the complete selected variant on every call.
     for phase in [json!(0), json!(-1), json!(1.5), json!("6")] {
-        assert!(!schema_accepts(
-            query,
-            strict,
-            &json!({"operation":"execute-next","phase":phase})
+        let answer = envelope(&client.tools_call(
+            3,
+            "cadence_query",
+            json!({"operation":"execute-next","phase":phase}),
         ));
+        assert_eq!(answer["status"], "refused", "{answer}");
     }
     for plan in [json!(0), json!(-1), json!(1.5), json!("2")] {
-        assert!(!schema_accepts(
-            query,
-            strict,
-            &json!({"operation":"execute-next","phase":6,"plan":plan})
+        let answer = envelope(&client.tools_call(
+            4,
+            "cadence_query",
+            json!({"operation":"execute-next","phase":6,"plan":plan}),
         ));
+        assert_eq!(answer["status"], "refused", "{answer}");
     }
     let patch = &tools[2]["inputSchema"];
-    let sample = schema_fixture();
-    assert!(schema_accepts(patch, patch, &sample));
-    let mut paths = vec![];
-    inspect_schema_objects(
-        patch,
-        &patch["$defs"]["ExecutorPatch"],
-        &sample,
-        "",
-        &mut paths,
-    );
-    assert_eq!(paths.len(), 13);
+    assert!(schema_accepts(patch, patch, &schema_fixture()));
     assert!(client.finish().success());
 }
 
@@ -485,59 +481,21 @@ fn schema_accepts(
     }
 }
 
-fn inspect_schema_objects(
-    root: &serde_json::Value,
-    node: &serde_json::Value,
-    value: &serde_json::Value,
-    path: &str,
-    paths: &mut Vec<String>,
-) {
-    let mut node = resolve_schema(root, node);
-    if let Some(variants) = node.get("oneOf") {
-        node = variants
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|node| schema_accepts(root, node, value))
-            .unwrap();
-    }
-    if let Some(object) = value.as_object() {
-        assert_eq!(node["additionalProperties"], false, "{path}");
-        let actual: BTreeSet<_> = object.keys().map(String::as_str).collect();
-        let properties: BTreeSet<_> = node["properties"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        let required: BTreeSet<_> = node["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|key| key.as_str().unwrap())
-            .collect();
-        assert_eq!(actual, properties, "{path}");
-        assert_eq!(actual, required, "{path}");
-        paths.push(path.to_owned());
-        for (key, value) in object {
-            inspect_schema_objects(
-                root,
-                &node["properties"][key],
-                value,
-                &format!("{path}/{key}"),
-                paths,
-            );
+/// Every JSON pointer to an object inside `value`, the root first.
+fn object_paths(value: &Value, path: &str, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            out.push(path.to_owned());
+            for (key, child) in map {
+                object_paths(child, &format!("{path}/{key}"), out);
+            }
         }
-    } else if let Some(array) = value.as_array() {
-        for (index, value) in array.iter().enumerate() {
-            inspect_schema_objects(
-                root,
-                &node["items"],
-                value,
-                &format!("{path}/{index}"),
-                paths,
-            );
+        Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                object_paths(child, &format!("{path}/{index}"), out);
+            }
         }
+        _ => {}
     }
 }
 
@@ -580,16 +538,11 @@ fn tool_schemas_malformed_objects_reach_cadence_and_protocol_errors_stay_distinc
         assert_eq!(missing["status"], "refused");
         assert!(missing["code"].is_string() && missing["reason"].is_string());
         let schema = &listing["result"]["tools"][index]["inputSchema"];
-        let mut paths = vec![String::new()];
+        assert!(schema_accepts(schema, schema, &sample), "{name} root admits {sample}");
+        let mut paths = vec![];
+        object_paths(&sample, "", &mut paths);
         if index == 2 {
-            paths.clear();
-            inspect_schema_objects(
-                schema,
-                &schema["$defs"]["ExecutorPatch"],
-                &sample,
-                "",
-                &mut paths,
-            );
+            assert_eq!(paths.len(), 13, "the executor patch fixture has 13 objects");
         }
         for path in paths {
             let object = sample.pointer(&path).unwrap().as_object().unwrap();
@@ -611,20 +564,6 @@ fn tool_schemas_malformed_objects_reach_cadence_and_protocol_errors_stay_distinc
             extra.pointer_mut(&path).unwrap()["foreign_state"] = json!(true);
             cases.push(extra);
             for case in cases {
-                assert!(
-                    !schema_accepts(
-                        schema,
-                        if index == 2 {
-                            &schema["$defs"]["ExecutorPatch"]
-                        } else if index == 1 {
-                            &schema["$defs"]["QueryArguments"]
-                        } else {
-                            schema
-                        },
-                        &case
-                    ),
-                    "schema admitted {case}"
-                );
                 let answer = envelope(&client.tools_call(11, name, case));
                 assert_eq!(answer["status"], "refused", "{answer}");
                 assert!(answer["code"].is_string() && answer["reason"].is_string());
@@ -1863,8 +1802,8 @@ fn tool_schemas_carry_no_unreferenced_definitions() {
             if key != "$defs" { refs(value, &mut todo); }
         }
         while let Some(name) = todo.pop() {
-            if reached.insert(name.clone()) {
-                if let Some(def) = defs.get(&name) { refs(def, &mut todo); }
+            if reached.insert(name.clone()) && let Some(def) = defs.get(&name) {
+                refs(def, &mut todo);
             }
         }
         let dead: Vec<_> = defs.keys().filter(|k| !reached.contains(*k)).collect();

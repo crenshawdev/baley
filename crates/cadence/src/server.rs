@@ -383,7 +383,7 @@ struct ApplyOperations {
 }
 
 static APPLY_OPERATIONS: LazyLock<ApplyOperations> = LazyLock::new(|| {
-    let mut schema =
+    let schema =
         serde_json::to_value(schemars::schema_for!(ApplyArguments)).expect("apply schema");
     let groups = schema["anyOf"].as_array().expect("untagged variants").clone();
     assert_eq!(groups.len(), APPLY_GROUPS.len(), "one group per apply variant");
@@ -412,7 +412,6 @@ static APPLY_OPERATIONS: LazyLock<ApplyOperations> = LazyLock::new(|| {
             variants.push(shape);
         }
     }
-    schema["$defs"]["ApplyArguments"] = serde_json::json!({ "oneOf": variants });
     ApplyOperations { names, schema: host_schema(schema) }
 });
 
@@ -468,9 +467,10 @@ enum QueryOutput {
     Receipt(Box<Envelope<rail_service::ReceiptOutput>>),
 }
 
-/// Hosts require object properties at the root. Keep the strict derived variants
-/// in definitions; advertise their field union and common required fields here.
-/// Deserialization still validates the complete selected variant on every call.
+/// Hosts require object properties at the root. Advertise the field union and
+/// common required fields of the derived variants here, and keep only the
+/// definitions a `$ref` still reaches. The strict variants are the Rust types:
+/// deserialization validates the complete selected variant on every call.
 fn host_schema(mut schema: Value) -> Value {
     fn objects(root: &Value, node: &Value, out: &mut Vec<Value>) {
         if let Some(reference) = node.get("$ref").and_then(Value::as_str) {
@@ -539,15 +539,46 @@ fn host_schema(mut schema: Value) -> Value {
         serde_json::to_value(required.unwrap_or_default()).expect("required fields"),
     );
     root.insert("additionalProperties".into(), Value::Bool(false));
+    prune_definitions(&mut schema);
     schema
+}
+
+/// Drop every `$defs` entry no `$ref` reaches from the root. A definition
+/// nothing points at is bytes every host receives and none can use.
+fn prune_definitions(schema: &mut Value) {
+    fn refs(node: &Value, out: &mut Vec<String>) {
+        match node {
+            Value::Object(map) => {
+                if let Some(reference) = map.get("$ref").and_then(Value::as_str) {
+                    out.push(reference.rsplit('/').next().expect("ref name").to_owned());
+                }
+                map.values().for_each(|v| refs(v, out));
+            }
+            Value::Array(items) => items.iter().for_each(|v| refs(v, out)),
+            _ => {}
+        }
+    }
+    let Some(defs) = schema.get("$defs").and_then(Value::as_object).cloned() else { return };
+    let mut reached = std::collections::BTreeSet::new();
+    let mut todo = Vec::new();
+    for (key, value) in schema.as_object().expect("schema object") {
+        if key != "$defs" {
+            refs(value, &mut todo);
+        }
+    }
+    while let Some(name) = todo.pop() {
+        if reached.insert(name.clone()) && let Some(def) = defs.get(&name) {
+            refs(def, &mut todo);
+        }
+    }
+    let kept: serde_json::Map<String, Value> =
+        defs.into_iter().filter(|(name, _)| reached.contains(name)).collect();
+    schema["$defs"] = Value::Object(kept);
 }
 
 fn query_schema() -> Value {
     let mut schema =
         serde_json::to_value(schemars::schema_for!(QueryArguments)).expect("query schema");
-    let mut strict = schema.clone();
-    strict.as_object_mut().unwrap().remove("$defs");
-    schema["$defs"]["QueryArguments"] = strict;
     let review =
         serde_json::to_value(schemars::schema_for!(review_service::Query)).expect("review schema");
     for (name, value) in review

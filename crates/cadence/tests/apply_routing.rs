@@ -87,12 +87,14 @@ fn a_request_without_an_operation_is_still_read_as_an_executor_patch() {
 fn the_apply_schema_lists_one_variant_per_operation() {
     let project = fixture();
     let tool = advertised_apply_tool(project.path());
-    let variants = tool["inputSchema"]["$defs"]["ApplyArguments"]["oneOf"]
+    // The advertised root unions every variant's `operation` constant; the
+    // server refuses a constant claimed by two variants at startup.
+    let variants = tool["inputSchema"]["properties"]["operation"]["anyOf"]
         .as_array()
-        .unwrap_or_else(|| panic!("no $defs.ApplyArguments.oneOf in {}", tool["inputSchema"]));
+        .unwrap_or_else(|| panic!("no properties.operation.anyOf in {}", tool["inputSchema"]));
     let mut names: Vec<&str> = variants
         .iter()
-        .filter_map(|variant| variant["properties"]["operation"]["const"].as_str())
+        .filter_map(|variant| variant["const"].as_str())
         .collect();
     names.sort_unstable();
     let count = names.len();
