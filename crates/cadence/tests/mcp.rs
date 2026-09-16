@@ -1833,3 +1833,42 @@ fn detect_surfaces_public_read_uses_bound_root_and_changes_no_config_or_rail_sta
     );
     assert!(client.finish().success());
 }
+
+/// Every `$defs` entry a tool schema carries is reached by a `$ref` from its
+/// root. A definition nothing points at is bytes every host receives and no
+/// host can use.
+#[test]
+fn tool_schemas_carry_no_unreferenced_definitions() {
+    fn refs(node: &Value, out: &mut Vec<String>) {
+        match node {
+            Value::Object(map) => {
+                if let Some(reference) = map.get("$ref").and_then(Value::as_str) {
+                    out.push(reference.rsplit('/').next().unwrap().to_owned());
+                }
+                map.values().for_each(|v| refs(v, out));
+            }
+            Value::Array(items) => items.iter().for_each(|v| refs(v, out)),
+            _ => {}
+        }
+    }
+    let mut client = Client::spawn();
+    client.handshake();
+    let listed = client.tools_list(2);
+    for tool in listed["result"]["tools"].as_array().unwrap() {
+        let schema = &tool["inputSchema"];
+        let Some(defs) = schema.get("$defs").and_then(Value::as_object) else { continue };
+        let mut reached = BTreeSet::new();
+        let mut todo = Vec::new();
+        for (key, value) in schema.as_object().unwrap() {
+            if key != "$defs" { refs(value, &mut todo); }
+        }
+        while let Some(name) = todo.pop() {
+            if reached.insert(name.clone()) {
+                if let Some(def) = defs.get(&name) { refs(def, &mut todo); }
+            }
+        }
+        let dead: Vec<_> = defs.keys().filter(|k| !reached.contains(*k)).collect();
+        assert!(dead.is_empty(), "{} carries unreferenced $defs: {dead:?}", tool["name"]);
+    }
+    assert!(client.finish().success());
+}
