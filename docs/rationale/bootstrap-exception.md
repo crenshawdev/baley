@@ -712,6 +712,6 @@ retained record is not deleted.
 
 43. `8fe40e82` test(verification): prove the verifier prompt names captured
     output by identity, never bytes (red).
-44. the fix commit that follows: capture elision in the prompt renderer, the
+44. `941e9eae` fix(verification): capture elision in the prompt renderer, the
     contract sentence, the two regenerated skills, and phase 13's dispatch
     test repinned to the elided rendering with the elision asserted.
