@@ -349,12 +349,12 @@ fn phase31_process_identity_returns_rendered_slice() {
     assert_eq!(context["persisted"], true, "{context}");
 
     let allocation = client.call("cadence_query", json!({
-        "operation":"plan-read","phase_address":"31","count":2
+        "operation":"plan-read","phase":"31","count":2
     }));
     let large_task = "LARGE SELECTED TASK PAGE\n".repeat(4_000);
     let preview = client.call("cadence_query", {
         let request = process_plan_submission(&allocation, &large_task);
-        json!({"operation":"plan-read","phase_address":"31","submission":request["submission"]})
+        json!({"operation":"plan-read","phase":"31","submission":request["submission"]})
     });
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", approve(json!({
@@ -446,7 +446,7 @@ fn phase31_process_identity_returns_rendered_slice() {
     assert!(intake["context"]["identity"].is_object(), "{intake}");
     assert!(intake["roadmap"]["identity"].is_object(), "{intake}");
     assert!(intake["context"].get("document").is_none(), "{intake}");
-    let readback = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"31"}));
+    let readback = client.call("cadence_query", json!({"operation":"plan-read","phase":"31"}));
     assert!(readback["plans"].as_array().unwrap().iter().all(|plan| plan.get("document").is_none()
         && plan.get("publication").is_none()), "{readback}");
 

@@ -37,6 +37,6 @@ fn phase_address_is_no_longer_a_field() {
     let project = fixture();
     let answer = query(project.path(), json!({"operation":"plan-read","phase_address":"13"}));
     assert_eq!(answer["status"], "refused", "{answer}");
-    assert_eq!(answer["code"], "read-contract", "{answer}");
+    assert_eq!(answer["code"], "invalid-plan", "{answer}");
     assert!(answer["reason"].as_str().unwrap().contains("phase_address"), "{answer}");
 }

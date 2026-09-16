@@ -34,7 +34,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
         Command::Read { phase, count, submission } => {
             if let Some(submission) = submission {
                 if count.is_some() || submission.phase.to_string() != phase {
-                    return Ok(model::refused("preview-scope", "complete submission must match phase_address and cannot accompany count"));
+                    return Ok(model::refused("preview-scope", "complete submission must match phase and cannot accompany count"));
                 }
                 return match complete_preview(root, &data, *submission) {
                     Ok(answer) => Ok(answer),

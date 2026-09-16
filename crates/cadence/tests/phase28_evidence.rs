@@ -72,7 +72,7 @@ impl Client {
     fn read(&mut self, phase: &str, count: Option<u32>) -> Value {
         self.call(
             "cadence_query",
-            json!({"operation":"plan-read","phase_address":phase,"count":count}),
+            json!({"operation":"plan-read","phase":phase,"count":count}),
         )
     }
     fn finish(mut self) {
@@ -614,7 +614,7 @@ fn proposal(client: &mut Client, id: &str, maps: &[Value], bodies: &[&str]) -> V
 }
 
 fn preview(client: &mut Client, input: &Value) -> Value {
-    client.call("cadence_query", json!({"operation":"plan-read","phase_address":"27",
+    client.call("cadence_query", json!({"operation":"plan-read","phase":"27",
         "submission":input["submission"]}))
 }
 
@@ -1302,9 +1302,9 @@ fn phase28_accepted_map_is_attached_to_published_plan() {
                     } else { body.replace(section, "## Evidence map\nUnapproved prose.\n\n") });
                     preview(&mut client, &candidate)
                 }
-                "count" => client.call("cadence_query", json!({"operation":"plan-read","phase_address":"27","count":1,
+                "count" => client.call("cadence_query", json!({"operation":"plan-read","phase":"27","count":1,
                     "submission":candidate["submission"]})),
-                "scope" => client.call("cadence_query", json!({"operation":"plan-read","phase_address":"28",
+                "scope" => client.call("cadence_query", json!({"operation":"plan-read","phase":"28",
                     "submission":candidate["submission"]})),
                 _ => unreachable!(),
             };

@@ -274,8 +274,9 @@ enum QueryArguments {
     EvidenceRead { phase: NonZeroU32 },
     #[serde(rename = "plan-read")]
     PlanRead {
-        /// Read-only phase address; decimal legacy inputs cannot publish natively.
-        phase_address: String,
+        /// The integer every operation takes, or a decimal legacy address such
+        /// as "27.1"; a legacy address reads and never publishes natively.
+        phase: cadence::plan::inventory::PhaseAddress,
         /// Optional non-reserving preview count (1 through 64); omit for readback.
         count: Option<u32>,
         /// Complete read-only draft preview; mutually exclusive with count.
@@ -746,7 +747,7 @@ impl ServerHandler for PublicServer {
                 ),
                 tool::<QueryOutput>(
                     "cadence_query",
-                    format!("{}\n\nRead supported configuration, role routing, native execution, review records, exact material risk status or structural surface evidence in the bound project. plan-read uses phase_address and optional count for non-reserving allocation preview. Supply submission instead of count for complete read-only preview: approve its returned final submission, documents and canonical replacement map section together. Complete preview locates check-command, check-expected, truth-check-limit, link-content, link-value-not-named and link-truth-unresolvable refusals with item/truth ids and exact paths. Check command and explicit literal/property expected value must be nonblank; other check fields retain only typed grammar. One distinct check id per current truth is counted across the post-replacement phase union, with every saved/proposed origin in details. Link value must occur exactly inside one approved slot of every associated truth, with outer whitespace trimmed only for comparison and char::is_alphanumeric() or underscore run boundaries; endpoints need only be nonblank. Unresolved approved slots are a distinct refusal. No command runs or runner/test-selection gate is imposed. Typed evidence_map publishes with that exact plan; use explicit provisional mode for mapless authoring. plan-read includes retained current/superseded map history and the plan-submit contract. evidence-read with numeric phase returns authoritative acceptance-map-view-1: current truths, contributions, items, associations and origins, aliases, retained history, coverage and provisional readiness. Bind to its input_digest only when coherence is consistent; projection byte health is independent of saved authority. Inconsistent inputs or an outstanding intent produce no usable digest; reads never repair or recover. context-intake reads phase scope and truths. review-next returns provider pending promptly: poll the same fire; canceling a poll does not cancel or restart resident provider work. A local dispatch requires the host to run it once, WAIT, and forward actual observations and its unchanged return through cadence_apply before advancing.", cadence::read::instructions::CONTRACT),
+                    format!("{}\n\nRead supported configuration, role routing, native execution, review records, exact material risk status or structural surface evidence in the bound project. plan-read takes phase, the integer or a decimal legacy address such as `27.1`, and optional count for non-reserving allocation preview. Supply submission instead of count for complete read-only preview: approve its returned final submission, documents and canonical replacement map section together. Complete preview locates check-command, check-expected, truth-check-limit, link-content, link-value-not-named and link-truth-unresolvable refusals with item/truth ids and exact paths. Check command and explicit literal/property expected value must be nonblank; other check fields retain only typed grammar. One distinct check id per current truth is counted across the post-replacement phase union, with every saved/proposed origin in details. Link value must occur exactly inside one approved slot of every associated truth, with outer whitespace trimmed only for comparison and char::is_alphanumeric() or underscore run boundaries; endpoints need only be nonblank. Unresolved approved slots are a distinct refusal. No command runs or runner/test-selection gate is imposed. Typed evidence_map publishes with that exact plan; use explicit provisional mode for mapless authoring. plan-read includes retained current/superseded map history and the plan-submit contract. evidence-read with numeric phase returns authoritative acceptance-map-view-1: current truths, contributions, items, associations and origins, aliases, retained history, coverage and provisional readiness. Bind to its input_digest only when coherence is consistent; projection byte health is independent of saved authority. Inconsistent inputs or an outstanding intent produce no usable digest; reads never repair or recover. context-intake reads phase scope and truths. review-next returns provider pending promptly: poll the same fire; canceling a poll does not cancel or restart resident provider work. A local dispatch requires the host to run it once, WAIT, and forward actual observations and its unchanged return through cadence_apply before advancing.", cadence::read::instructions::CONTRACT),
                     query_schema(),
                 ),
                 tool::<ApplyOutput>(
@@ -872,7 +873,7 @@ impl ServerHandler for PublicServer {
                         Ok(QueryArguments::EvidenceRead { phase }) => self.server.service
                             .plan(&self.root, plan_service::Command::EvidenceRead { phase: phase.get() }).await,
                         Ok(QueryArguments::PlanRead {
-                            phase_address,
+                            phase,
                             count,
                             submission,
                         }) => {
@@ -881,7 +882,7 @@ impl ServerHandler for PublicServer {
                                 .plan(
                                     &self.root,
                                     plan_service::Command::Read {
-                                        phase: phase_address,
+                                        phase: phase.to_string(),
                                         count,
                                         submission,
                                     },

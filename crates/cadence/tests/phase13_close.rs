@@ -124,7 +124,7 @@ fn phase13_adoption_copy_preserves_history_and_recovers() {
     let mut classified = Vec::new();
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for (phase, checked) in &declared {
-        let read = client.call("cadence_query", json!({"operation":"plan-read","phase_address":phase.to_string()}));
+        let read = client.call("cadence_query", json!({"operation":"plan-read","phase":phase.to_string()}));
         assert_eq!(read["status"], "ok", "{read}");
         assert_eq!(read["native_truths_approved"], false, "no native truths exist for phase {phase}");
         assert!(read["native"]["publications"].as_object().is_none_or(|p| p.is_empty()), "no native publication for phase {phase}");
@@ -219,7 +219,7 @@ fn phase13_adoption_copy_preserves_history_and_recovers() {
     fs::remove_dir_all(&copy).unwrap();
     copy_tree(&backup, &copy);
     assert_eq!(identity(&manifest(&copy)), backup_identity);
-    let restored = query(&project, json!({"operation":"plan-read","phase_address":"13"}));
+    let restored = query(&project, json!({"operation":"plan-read","phase":"13"}));
     assert_eq!(restored["status"], "ok", "{restored}");
     assert_eq!(restored["native_truths_approved"], false);
     assert_eq!(manifest(&source_root), source, "the live tree was never touched");

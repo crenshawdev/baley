@@ -86,7 +86,7 @@ impl Client {
     pub fn read(&mut self, phase: &str, count: Option<u32>) -> Value {
         self.call(
             "cadence_query",
-            json!({"operation":"plan-read","phase_address":phase,"count":count}),
+            json!({"operation":"plan-read","phase":phase,"count":count}),
         )
     }
     pub fn finish(mut self) {
@@ -318,7 +318,7 @@ pub fn proposal(project: &Path, id: &str, maps: &[(Option<u32>, Value)]) -> Valu
 }
 
 pub fn preview(client: &mut Client, input: &Value) -> Value {
-    client.call("cadence_query", json!({"operation":"plan-read","phase_address":"13",
+    client.call("cadence_query", json!({"operation":"plan-read","phase":"13",
         "submission":input["submission"]}))
 }
 

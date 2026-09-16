@@ -143,7 +143,7 @@ fn publish(project: &Path) {
     }).collect::<Vec<_>>();
     let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],"request_id":"publish-two-plans",
         "inventory_basis":allocation["inventory"]["basis"],"plans":plans});
-    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"34","submission":submission}));
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"34","submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({"operation":"plan-submit","submission":submission})));
     assert_eq!(published["persisted"], true, "{published}");
@@ -173,7 +173,7 @@ fn publish_blocked_plan(project: &Path) {
     let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],
         "request_id":"publish-blocked-repair","inventory_basis":allocation["inventory"]["basis"],
         "plans":plans});
-    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"34",
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"34",
         "submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({
@@ -544,7 +544,7 @@ fn phase34_blocked_then_completed_phase_is_derived_executed() {
             "requirements":["T2"],"files":["src/control.py","tests/control.py"],"directories":[],
             "execution":{"schema":1,"suite":COMMAND,"tasks":[{"id":"repair","verify":[COMMAND]}]},
             "body":body(&repair_map),"evidence_map":repair_map}}]});
-    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"34",
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"34",
         "submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({

@@ -287,7 +287,7 @@ fn phase38_retained_dispatch_prompt_survives_renderer_change() {
             "body":body(&evidence_map),"evidence_map":evidence_map}}]});
     let preview = client.call(
         "cadence_query",
-        json!({"operation":"plan-read","phase_address":"38","submission":submission}),
+        json!({"operation":"plan-read","phase":"38","submission":submission}),
     );
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call(
@@ -602,7 +602,7 @@ fn phase38_regenerated_skill_is_implicit_lease_material() {
                 "tasks":[{"id":"regenerate-skill","verify":[RENDERED_COMMAND]}]},
             "body":body(&evidence_map),"evidence_map":evidence_map}}]});
     let preview = client.call("cadence_query",
-        json!({"operation":"plan-read","phase_address":"38","submission":submission}));
+        json!({"operation":"plan-read","phase":"38","submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply",
         support::approve(json!({"operation":"plan-submit","submission":preview["submission"]})));
@@ -783,7 +783,7 @@ fn prepare_repair_episode(truth_id: &str, check_id: &str, suite_body: &str) -> R
                 "tasks":[{"id":"retain-prompt","verify":[COMMAND]}]},
             "body":body(&evidence_map),"evidence_map":evidence_map}}]});
     let preview = client.call("cadence_query",
-        json!({"operation":"plan-read","phase_address":"38","submission":submission}));
+        json!({"operation":"plan-read","phase":"38","submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply",
         support::approve(json!({"operation":"plan-submit","submission":preview["submission"]})));
@@ -1026,7 +1026,7 @@ fn phase38_second_red_blocks_and_refuses_third_launch() {
             "execution":{"schema":1,"suite":SUITE_COMMAND,"tasks":[{"id":"gap-plan","verify":[COMMAND]}]},
             "body":body(&gap_map),"evidence_map":gap_map}}]});
     let preview = client.call("cadence_query",
-        json!({"operation":"plan-read","phase_address":"38","submission":submission}));
+        json!({"operation":"plan-read","phase":"38","submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply",
         support::approve(json!({"operation":"plan-submit","submission":preview["submission"]})));
@@ -1200,7 +1200,7 @@ fn phase38_execute_next_dispatches_named_plan_first() {
         "request_id":"publish-owner-selection","inventory_basis":allocation["inventory"]["basis"],
         "plans":plans});
     let preview = client.call("cadence_query",
-        json!({"operation":"plan-read","phase_address":"38","submission":submission}));
+        json!({"operation":"plan-read","phase":"38","submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply",
         support::approve(json!({"operation":"plan-submit","submission":preview["submission"]})));

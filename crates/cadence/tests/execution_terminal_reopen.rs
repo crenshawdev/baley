@@ -264,7 +264,7 @@ fn execute_next_dispatches_a_plan_admitted_after_the_phase_completed() {
             "execution":{"schema":1,"suite":OLD_COMMAND,
                 "tasks":[{"id":"initial-owner","verify":[OLD_COMMAND]}]},
             "body":body(&initial_map),"evidence_map":initial_map}}]});
-    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"37",
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"37",
         "submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({
@@ -314,7 +314,7 @@ fn execute_next_dispatches_a_plan_admitted_after_the_phase_completed() {
             "files":["src/control.py"],"directories":[],
             "execution":{"schema":1,"suite":OLD_COMMAND,"tasks":[{"id":"later-owner","verify":[OLD_COMMAND]}]},
             "body":body(&later_map),"evidence_map":later_map}}]});
-    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"37",
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"37",
         "submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({

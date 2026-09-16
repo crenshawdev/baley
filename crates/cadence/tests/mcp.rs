@@ -214,17 +214,21 @@ fn tool_schemas_list_exactly_three_tools_with_output_schemas() {
         query,
         &json!({"operation":"execute-next","phase":6,"plan":2})
     ));
+    // The flattened root unions every operation's shape for a field, and
+    // plan-read's phase admits a decimal legacy address, so a wrong-typed
+    // phase is rejected by the strict per-operation schema, not the root.
+    let strict = &query["$defs"]["QueryArguments"];
     for phase in [json!(0), json!(-1), json!(1.5), json!("6")] {
         assert!(!schema_accepts(
             query,
-            query,
+            strict,
             &json!({"operation":"execute-next","phase":phase})
         ));
     }
     for plan in [json!(0), json!(-1), json!(1.5), json!("2")] {
         assert!(!schema_accepts(
             query,
-            query,
+            strict,
             &json!({"operation":"execute-next","phase":6,"plan":plan})
         ));
     }

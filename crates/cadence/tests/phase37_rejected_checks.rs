@@ -267,7 +267,7 @@ impl RejectedFixture {
                 "execution":{"schema":1,"suite":OLD_COMMAND,
                     "tasks":[{"id":"initial-owner","verify":[OLD_COMMAND]}]},
                 "body":body(&initial_map),"evidence_map":initial_map}}]});
-        let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"37",
+        let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"37",
             "submission":submission}));
         assert_eq!(preview["status"], "ok", "{preview}");
         let published = client.call("cadence_apply", support::approve(json!({
@@ -340,7 +340,7 @@ fn later_submission(project: &Path, id: &str, item: Value, command: &str, task: 
             "files":["src/control.py",test_file],"directories":[],
             "execution":{"schema":1,"suite":command,"tasks":[{"id":task,"verify":[command]}]},
             "body":body(&later_map),"evidence_map":later_map}}]});
-    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"37",
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"37",
         "submission":submission}));
     client.finish();
     (preview, target)

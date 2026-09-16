@@ -33,7 +33,7 @@ using the actual phase in place of 27:
 ```
 
 ```json
-{"operation":"plan-read","phase_address":"27"}
+{"operation":"plan-read","phase":27}
 ```
 
 Both use `mcp__cadence__cadence_query` against the running project's bound session.
@@ -192,7 +192,7 @@ No bare PLAN.md is created; files land at `.planning/phases/<N>/PLAN-<k>.md`.
 When the complete draft's plan count is known, ask the binary for a fresh preview:
 
 ```json
-{"operation":"plan-read","phase_address":"27","count":2}
+{"operation":"plan-read","phase":27,"count":2}
 ```
 
 `count` is 1 through 64. Omit it for readback. Preview acquires no writer and
@@ -210,7 +210,7 @@ authored body bytes and the order shown to the owner. Before approval, send the
 complete `submission` through `cadence_query`, without a `count`:
 
 ```json
-{"operation":"plan-read","phase_address":"27","submission":<complete submission>}
+{"operation":"plan-read","phase":27,"submission":<complete submission>}
 ```
 
 Keep the returned final `submission` and `documents`, including each document's

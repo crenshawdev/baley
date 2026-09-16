@@ -266,7 +266,7 @@ fn measure(project: &Path, phase: u32, session_id: &str, first_turn: &str, last_
                     let input = &block["input"];
                     if name == "mcp__cadence__cadence_query"
                         && (input["phase"].as_u64() == Some(u64::from(phase))
-                            || input["phase_address"].as_str() == Some(&phase.to_string()))
+                            || input["phase"].as_str() == Some(&phase.to_string()))
                     {
                         phase_seen = true;
                     }

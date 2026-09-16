@@ -659,9 +659,9 @@ fn host_fixture() -> ProcessFixture {
             "verb":"gets","outcome":"HANDWRITTEN HOST PROCESS SLICE","kind":"property",
             "observable":true,"fixed_oracle":true}]}})));
     assert_eq!(context["persisted"], true, "{context}");
-    let allocation = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"31","count":2}));
+    let allocation = client.call("cadence_query", json!({"operation":"plan-read","phase":"31","count":2}));
     let preview_request = process_plan_submission(&allocation, "HOST PLAN SELECTED TASK\n");
-    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"31",
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"31",
         "submission":preview_request["submission"]}));
     let published = client.call("cadence_apply", approve(json!({"operation":"plan-submit",
         "submission":preview["submission"]})));
@@ -698,7 +698,7 @@ fn planner_fixture() -> ProcessFixture {
             "observable":true,"fixed_oracle":true}]}})));
     assert_eq!(context["persisted"], true, "{context}");
     let allocation = client.call("cadence_query", json!({"operation":"plan-read",
-        "phase_address":"31","count":3}));
+        "phase":"31","count":3}));
     let mut request = process_plan_submission(&allocation, "MEASURED PLAN TWO TASK\n");
     request["submission"]["plans"].as_array_mut().unwrap().push(json!({
         "target":allocation["targets"][2],"content":{"phase":31,"plan":3,"requirements":["T7"],
@@ -725,7 +725,7 @@ fn planner_fixture() -> ProcessFixture {
             }
         }
     }
-    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"31",
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"31",
         "submission":request["submission"]}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", approve(json!({"operation":"plan-submit",

@@ -165,7 +165,7 @@ fn publish_and_block(project: &Path) -> (Value, Value) {
             "files":["src/control.py"],"directories":[],"execution":{"schema":1,"suite":OLD_COMMAND,
                 "tasks":[{"id":"blocked-owner","verify":[OLD_COMMAND]}]},
             "body":body(&initial_map),"evidence_map":initial_map}}]});
-    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"36",
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"36",
         "submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({
@@ -229,7 +229,7 @@ fn phase36_blocked_check_can_be_republished_with_changed_spec() {
             "files":["src/control.py"],"directories":[],"execution":{"schema":1,"suite":NEW_COMMAND,
                 "tasks":[{"id":"repair-owner","verify":[NEW_COMMAND]}]},
             "body":body(&later_map),"evidence_map":later_map}}]});
-    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"36",
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"36",
         "submission":submission}));
     client.finish();
 
@@ -305,7 +305,7 @@ fn phase36_extension_reassigns_released_check() {
             "execution":{"schema":1,"suite":OLD_COMMAND,
                 "tasks":[{"id":"later-owner","verify":[OLD_COMMAND]}]},
             "body":body(&later_map),"evidence_map":later_map}}]});
-    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"36",
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"36",
         "submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({
@@ -359,7 +359,7 @@ fn phase36_blocked_then_completed_phase_gets_verification_attempt() {
             "execution":{"schema":1,"suite":OLD_COMMAND,
                 "tasks":[{"id":"later-owner","verify":[OLD_COMMAND]}]},
             "body":body(&later_map),"evidence_map":later_map}}]});
-    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase_address":"36",
+    let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"36",
         "submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({

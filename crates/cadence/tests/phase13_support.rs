@@ -112,7 +112,7 @@ fn phase13_human_results_preserve_first_pass() {
     let uat = project.join(".planning/phases/13/UAT.md");
     // A caller-owned historical UAT with one failure and one pass.
     fs::write(&uat, ORIGINAL).unwrap();
-    let occurrence = query(project, json!({"operation":"plan-read","phase_address":"13"}))["occurrence"].clone();
+    let occurrence = query(project, json!({"operation":"plan-read","phase":"13"}))["occurrence"].clone();
     let read = |project: &std::path::Path| query(project, json!({"operation":"verification-read","phase":13}));
     let before = tree(project);
     // The unretained historical document is classified, never adopted: the

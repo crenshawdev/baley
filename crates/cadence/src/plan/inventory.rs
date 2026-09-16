@@ -1,6 +1,7 @@
 //! Conservative input inventory. Reading a legacy document does not approve it.
 use super::persistence;
 use cadence::store::{Error, Result, model::digest};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -24,6 +25,27 @@ pub fn phase_address(phase: &str) -> bool {
         && phase
             .split('.')
             .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// The phase a `plan-read` names: the integer every other operation takes,
+/// or a dotted-decimal string for a legacy directory such as `phases/27.1`
+/// that only this read can address. Either spelling is carried as the
+/// directory name it is; [`phase_address`] decides at [`read`] whether it is
+/// one.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum PhaseAddress {
+    Number(std::num::NonZeroU32),
+    Address(String),
+}
+
+impl std::fmt::Display for PhaseAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Number(number) => write!(f, "{number}"),
+            Self::Address(address) => f.write_str(address),
+        }
+    }
 }
 
 fn number(name: &str) -> Option<u32> {

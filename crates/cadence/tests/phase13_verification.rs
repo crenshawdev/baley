@@ -830,7 +830,7 @@ fn phase13_incomplete_verification_cannot_complete_phase() {
     refused(completion(&root, "wrong-attempt", &partial["id"], &basis), "verification-attempt", "attempt", HISTORICAL_UAT);
     assert_eq!(reopened(project).snapshot.data["verification"].get("humans"), None);
     // Only the authorized human path resolves it; first pass stays fail.
-    let occurrence = query(project, json!({"operation":"plan-read","phase_address":"13"}))["occurrence"].clone();
+    let occurrence = query(project, json!({"operation":"plan-read","phase":"13"}))["occurrence"].clone();
     let submission = json!({"phase":13,"occurrence":occurrence,"id":"1","reply":"The parcel arrived on the second attempt.",
         "outcome":"passed","owner":"Fixture Owner","at":"2026-09-11T17:00:00Z","supersedes":null});
     let resolved = apply(project, json!({"operation":"verification-human-result","request_id":"resolve-1","submission":submission,
@@ -845,7 +845,7 @@ fn phase13_incomplete_verification_cannot_complete_phase() {
     assert_eq!(read["humans"][0]["first_pass"], "fail");
     assert_eq!(read["humans"][0]["history"][0]["reply"], "The parcel arrived on the second attempt.");
     // Interleaved reads change nothing; a stale caller preimage still refuses.
-    assert_eq!(query(project, json!({"operation":"plan-read","phase_address":"13"}))["status"], "ok");
+    assert_eq!(query(project, json!({"operation":"plan-read","phase":"13"}))["status"], "ok");
     assert_eq!(query(project, json!({"operation":"execute-next","phase":13}))["outcome"], "complete");
     let mut stale = completion(&root, "stale-preimage", &accepted["id"], &basis);
     stale["projections"]["requirements"] = json!(cadence::store::model::digest(REQUIREMENTS_T5.as_bytes()));
@@ -1146,7 +1146,7 @@ fn phase13_review_surface_selects_target_and_intent() {
     let context = std::fs::read(project.join(".planning/phases/13/CONTEXT.md")).unwrap();
     let plan1 = std::fs::read(project.join(".planning/phases/13/PLAN-1.md")).unwrap();
     let plan2 = std::fs::read(project.join(".planning/phases/13/PLAN-2.md")).unwrap();
-    let published = query(project, json!({"operation":"plan-read","phase_address":"13"}));
+    let published = query(project, json!({"operation":"plan-read","phase":"13"}));
     assert_eq!(published["native"]["publications"]["1"]["revision"], sha(&plan1));
     let plan = select(project, "cad-review", &["plan", "13"], "plan-key");
     assert_eq!(plan["status"], "ok", "{plan}");
@@ -1277,7 +1277,7 @@ fn phase13_audit_reports_broken_verification_traces() {
     let seeded = format!("{REQUIREMENTS_T7}| T2 | Phase 13 | Pending |\n");
     assert_eq!(std::fs::read_to_string(root.join("REQUIREMENTS.md")).unwrap(), seeded);
     let roadmap = std::fs::read_to_string(root.join("ROADMAP.md")).unwrap();
-    let publications = query(project, json!({"operation":"plan-read","phase_address":"13"}))["native"]["publications"].clone();
+    let publications = query(project, json!({"operation":"plan-read","phase":"13"}))["native"]["publications"].clone();
     let publication = |plan: u64| json!({"plan":plan,"revision":publications[plan.to_string()]["revision"],
         "map_revision":publications[plan.to_string()]["map_revision"]});
     let origins = |plans: &[u64], row_line: u64, active_line: u64| json!({

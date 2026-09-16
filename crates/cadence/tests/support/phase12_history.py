@@ -145,7 +145,7 @@ def capture():
                 context = client.call("cadence_apply", {"operation": "context-submit", "submission": submission,
                                                        "approval": approve(submission)})
                 assert context["persisted"], context
-                allocation = client.call("cadence_query", {"operation": "plan-read", "phase_address": "12", "count": 2})
+                allocation = client.call("cadence_query", {"operation": "plan-read", "phase": "12", "count": 2})
                 assert allocation["status"] == "ok", allocation
                 entries = []
                 for index, check in enumerate([item("check/historical", "truth/historical", ""),
@@ -161,7 +161,7 @@ def capture():
                     entries.append({"target": target, "content": content})
                 submission = {"phase": 12, "occurrence": allocation["occurrence"], "request_id": "historical-batch",
                               "inventory_basis": allocation["inventory"]["basis"], "plans": entries}
-                preview = client.call("cadence_query", {"operation": "plan-read", "phase_address": "12", "submission": submission})
+                preview = client.call("cadence_query", {"operation": "plan-read", "phase": "12", "submission": submission})
                 assert preview["status"] == "ok", preview
                 assert preview["submission"] == submission, "exact authored map section required"
                 published = client.call("cadence_apply", {"operation": "plan-submit", "submission": submission,

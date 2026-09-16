@@ -155,10 +155,11 @@ const USABILITY: &str = r#"## Admission, continuation and owner records
 Wire phases are positive JSON integers. Parse a canonical digit spelling into
 an integer, preserving its value; refuse decimals, fractions, signs and missing
 input instead of rounding or defaulting. Send `"phase":13`, never `"phase":"13"`.
-The read-only authoring operation instead takes `"phase_address":"13"`.
+The read-only authoring operation `plan-read` takes the same `"phase":13`;
+a decimal legacy address such as `"phase":"27.1"` is its one string form.
 
-Before execute-next, read `plan-read` with the phase_address and `evidence-read`
-with the integer phase. Copy the occurrence and each current publication's
+Before execute-next, read `plan-read` and `evidence-read` with the integer
+phase. Copy the occurrence and each current publication's
 plan number, `approval.submission.request_id`, content `revision` and
 `map_revision`. Copy canonical check ids and `item_revision` from evidence-read.
 Explicitly allocate every ordered task, including tasks delivering no checks
