@@ -291,6 +291,94 @@ fn phase13_dispatch_carries_current_verification_inputs() {
     assert_eq!(tree(missing.path()), before);
 }
 
+// GH-263: the verifier dispatch is bounded the way the executor's is. Its
+// execution view names every run, close and owner record by id under the plan
+// and task it belongs to, indexes them per check item, and carries no event
+// list; a run's output is read by id through execution-history.
+#[test]
+fn phase13_dispatch_names_history_by_id_per_item() {
+    let fixture = Completed::new();
+    let project = fixture.project();
+    let execution = history(project);
+    let events = execution["events"].as_array().unwrap();
+    let event = |kind: &str, run: &str| events.iter()
+        .find(|r| r["request"]["event"]["kind"] == kind && r["request"]["event"]["run_id"] == run).unwrap()["request"]["event"].clone();
+    let dispatch = query(project, json!({"operation":"verify-next","phase":13,"request_id":"verify-bounded"}));
+    assert_eq!(dispatch["status"], "ok", "{dispatch}");
+    let prompt = dispatch["attempt"]["prompt"].as_str().unwrap();
+    let operational: Value = serde_json::from_str(prompt.split("<operational-input>\n").nth(1).unwrap()
+        .split("\n</operational-input>").next().unwrap()).unwrap();
+    let view = &operational["execution"];
+    assert_eq!(view["schema"], "verifier-execution-view-1");
+    assert_eq!(view["digest"], operational["basis"]["execution_digest"]);
+    assert!(view.get("events").is_none() && view.get("plan_events").is_none(), "the phase's event list is pasted: {view}");
+    assert_eq!(view["read"], json!({"operation":"execution-history","phase":13,"run":"<run id>"}));
+    let plans = view["plans"].as_array().unwrap();
+    assert_eq!(plans.len(), 2, "{view}");
+    for (index, plan) in plans.iter().enumerate() {
+        let number = index as u64 + 1;
+        let name = ["a", "b"][index];
+        let retained = execution["plans"].as_array().unwrap().iter().find(|p| p["plan"]["plan"] == number).unwrap();
+        assert_eq!(plan["plan"], retained["plan"]);
+        assert_eq!(plan["suite"], retained["state"]);
+        assert_eq!(plan["outcome"], retained["outcome"]);
+        let suite_runs = plan["suite_runs"].as_array().unwrap();
+        assert_eq!(suite_runs.len(), 1, "{plan}");
+        let launch = execution["plan_events"].as_array().unwrap().iter()
+            .find(|r| r["request"]["event"]["kind"] == "suite-launch" && r["request"]["event"]["run_id"] == format!("suite-{number}")).unwrap()["request"]["event"].clone();
+        let result = execution["plan_events"].as_array().unwrap().iter()
+            .find(|r| r["request"]["event"]["kind"] == "suite-result" && r["request"]["event"]["run_id"] == format!("suite-{number}")).unwrap()["request"]["event"].clone();
+        assert_eq!(suite_runs[0], json!({"run_id":format!("suite-{number}"),"stage":"suite","check":null,
+            "material":launch["material"],"launched_at":launch["launched_at"],
+            "result":{"disposition":result["disposition"],"observation":result["observation"],"observed_at":result["observed_at"],
+                "material_unchanged":true,
+                "stdout":{"digest":result["stdout"]["digest"],"byte_length":result["stdout"]["bytes"].as_array().unwrap().len(),"complete":true},
+                "stderr":{"digest":result["stderr"]["digest"],"byte_length":result["stderr"]["bytes"].as_array().unwrap().len(),"complete":true}}}));
+        let tasks = plan["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 1, "{plan}");
+        let task = &tasks[0];
+        let retained = execution["tasks"].as_array().unwrap().iter().find(|t| t["task"]["plan"] == number).unwrap();
+        assert_eq!(task["task"], retained["task"]);
+        assert_eq!(task["task"]["task"], format!("task-{name}"));
+        assert_eq!(task["state"], retained["state"]);
+        let check = fixture.pairs[index]["check"].clone();
+        let runs = task["runs"].as_array().unwrap();
+        assert_eq!(runs.len(), 2, "{task}");
+        for (run, stage) in runs.iter().zip(["red", "green"]) {
+            let id = format!("{stage}-{number}");
+            let launch = event("launch", &id);
+            let result = event("result", &id);
+            assert_eq!(*run, json!({"run_id":id,"stage":stage,"check":check,"material":launch["material"],"launched_at":launch["launched_at"],
+                "result":{"disposition":result["disposition"],"observation":result["observation"],"observed_at":result["observed_at"],
+                    "material_unchanged":true,
+                    "stdout":{"digest":result["stdout"]["digest"],"byte_length":result["stdout"]["bytes"].as_array().unwrap().len(),"complete":true},
+                    "stderr":{"digest":result["stderr"]["digest"],"byte_length":result["stderr"]["bytes"].as_array().unwrap().len(),"complete":true}}}));
+        }
+        assert_eq!(task["close"], json!({"request_id":format!("close-{number}"),"completion":fixture.pairs[index]["green_commit"],
+            "checks":[fixture.pairs[index]],"verification":[format!("green-{number}")]}));
+        assert_eq!(task["owner_statements"], json!([{"request_id":format!("owner-{number}"),"statement":fixture.statements[index]}]));
+        assert_eq!(task["classifications"], json!([]));
+        assert_eq!(task["checkpoints"], json!([]));
+        assert_eq!(task["events"], json!([{"request_id":format!("start-{number}"),"kind":"attempt"}]));
+    }
+    // Every check item is indexed to the records that bear on it, by id.
+    let mut items = serde_json::Map::new();
+    for (index, id) in ["check/A", "check/B"].into_iter().enumerate() {
+        let number = index + 1;
+        let pair = &fixture.pairs[index];
+        items.insert(id.into(), json!({
+            "pairs":[{"plan":number,"task":format!("task-{}", ["a","b"][index]),"close":format!("close-{number}"),
+                "red_commit":pair["red_commit"],"green_commit":pair["green_commit"],"red_run":pair["red_run"],"green_run":pair["green_run"]}],
+            "owner_statements":[{"plan":number,"task":format!("task-{}", ["a","b"][index]),"request_id":format!("owner-{number}")}],
+            "classifications":[]}));
+    }
+    assert_eq!(view["items"], Value::Object(items));
+    assert!(!prompt.contains("\"bytes\": ["), "capture bytes leaked into the verifier prompt");
+    assert!(!prompt.contains("result_lines"), "recognized lines are read by run id, not pasted");
+    // The retained record is unchanged: the attempt keeps the full history it was digested over.
+    assert_eq!(dispatch["attempt"]["inputs"]["execution"]["events"], execution["events"]);
+}
+
 fn report(project: &std::path::Path) -> Value {
     query(project, json!({"operation":"verification-read","phase":13}))
 }
