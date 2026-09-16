@@ -269,7 +269,11 @@ enum QueryArguments {
     #[serde(rename = "verification-audit")]
     VerificationAudit { phase: NonZeroU32, command: Option<String> },
     #[serde(rename = "execution-history")]
-    ExecutionHistory { phase: NonZeroU32 },
+    ExecutionHistory {
+        phase: NonZeroU32,
+        /// One retained run by its id; omit for the phase's whole history.
+        run: Option<String>,
+    },
     #[serde(rename = "evidence-read")]
     EvidenceRead { phase: NonZeroU32 },
     #[serde(rename = "plan-read")]
@@ -844,11 +848,15 @@ impl ServerHandler for PublicServer {
                 }
                 if raw.as_ref().is_some_and(|v| v["operation"] == "execution-history") {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::ExecutionHistory { phase }) => {
+                        Ok(QueryArguments::ExecutionHistory { phase, run }) => {
                             let phase = phase.get();
+                            let one_run = run.is_some();
                             let mut history = self.server.service
-                                .native_execution_history(&self.root, phase).await
+                                .native_execution_history(&self.root, phase, run).await
                                 .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+                            if one_run {
+                                return structured_result(Ok(QueryOutput::NativeExecution(history)));
+                            }
                             let root = self.root.clone();
                             let lifecycle = tokio::task::spawn_blocking(move || {
                                 let mut io = cadence::derivation::ArtifactFiles;

@@ -46,8 +46,10 @@ placeholder is rejected. Trace each link's named value through the real caller
 and recipient and its consumption. Inspect actual red and green test material,
 commits, captured results and owner statements; a setup failure is not a
 behavioral red. Inspect failed and Unknown history too. A run's captured
-output appears in the dispatch as its digest and byte_length; read the
-bytes through execution-history when the run is what you are inspecting. An owner's attestation
+output appears in the dispatch as its digest and byte_length; when the run is
+what you are inspecting, read it by id through cadence_query
+{"operation":"execution-history","phase":13,"run":"<run id>"}, which answers
+with that run's launch and result and its output as text. An owner's attestation
 is a record to inspect, not a mechanical proof that the check did not stub its
 subject. Never fake the boundary the truth promises.
 

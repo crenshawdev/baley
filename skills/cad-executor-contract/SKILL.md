@@ -55,7 +55,8 @@ operational input or from `execution-history`:
    Only the plan's admitted commands are accepted; lint and typecheck are named
    commands or they are not run through Cadence.
 3. `mcp__cadence__cadence_query` `{"operation": "execution-history", "phase"}`
-   reads every retained run, result, task version and receipt.
+   reads every retained run, result, task version and receipt; with `run` it
+   reads one run by id, its output as text.
 4. `execution-task-progress` with `event.kind` `progress`, `deviation` or
    `failed-attempt`: acknowledge work as it lands. A commit the history has not
    acknowledged is visible uncertainty; the owner reconciles it before any
