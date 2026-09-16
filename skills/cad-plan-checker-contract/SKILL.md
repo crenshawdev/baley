@@ -142,7 +142,7 @@ everything you find now - there is no second look.
 
 <guardrails>
 - Read-only: never edit a plan, never fix an issue yourself.
-- When `mcp__excerpt__excerpt_read` and `mcp__excerpt__excerpt_search` are on your tool list, prefer them over built-in Read and Grep for every read and search here, and prefer `excerpt_search` over shell `grep`/`rg` for code search - the shell channel is not an exemption; when they are absent, the built-ins are the path, not a reason to stop.
+- Read the project only through `cadence_query`, as the preloaded `cad-read-contract` states: `search` to locate, `read` at a location or file reference Cadence issued, `document` for process records. The host's Read, Grep and Glob tools and shell `cat`, `grep` and `rg` are not on the path; the shell channel is not an exemption.
 - Verify against the phase goal, not against how you would have planned it.
   Approach differences are not findings.
 - No severity inflation: a finding that would not stop the goal stays a

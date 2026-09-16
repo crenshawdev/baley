@@ -5,12 +5,9 @@ argument-hint: "[version | next-milestone name]"
 allowed-tools:
   - mcp__cadence__cadence_apply
   - mcp__cadence__cadence_query
-  - Read
   - Write
   - Edit
   - Bash
-  - Grep
-  - Glob
   - Task
   - AskUserQuestion
   - SlashCommand

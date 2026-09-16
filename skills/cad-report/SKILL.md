@@ -5,10 +5,7 @@ argument-hint: "[phase] [--all]"
 allowed-tools:
   - mcp__cadence__cadence_apply
   - mcp__cadence__cadence_query
-  - Read
   - Bash
-  - Grep
-  - Glob
 ---
 
 <objective>

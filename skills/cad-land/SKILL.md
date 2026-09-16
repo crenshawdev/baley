@@ -5,7 +5,6 @@ argument-hint: "[base branch | defaults to git.base_branch]"
 allowed-tools:
   - mcp__cadence__cadence_apply
   - mcp__cadence__cadence_query
-  - Read
   - Bash
   - Task
   - AskUserQuestion

@@ -5,12 +5,9 @@ argument-hint: "[task description] [--plan]"
 allowed-tools:
   - mcp__cadence__cadence_apply
   - mcp__cadence__cadence_query
-  - Read
   - Write
   - Edit
   - Bash
-  - Grep
-  - Glob
   - AskUserQuestion
   - Task
 ---

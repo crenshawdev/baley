@@ -6,12 +6,9 @@ allowed-tools:
   - Task
   - mcp__cadence__cadence_apply
   - mcp__cadence__cadence_query
-  - Read
   - Write
   - Edit
   - Bash
-  - Grep
-  - Glob
   - AskUserQuestion
 ---
 

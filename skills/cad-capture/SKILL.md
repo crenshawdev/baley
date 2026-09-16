@@ -3,7 +3,7 @@ name: cad-capture
 description: "Capture a phase-linked todo, a seed idea for a future milestone, or a note, without losing your place - .planning/CAPTURE.md, or --cadence for friction with Cadence itself"
 argument-hint: "[todo | seed | note] <text> [--phase N] [--cadence]"
 allowed-tools:
-  - Read
+  - mcp__cadence__cadence_query
   - Bash
   - AskUserQuestion
 ---

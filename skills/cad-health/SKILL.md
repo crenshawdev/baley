@@ -3,10 +3,8 @@ name: cad-health
 description: "Planning-health check - .planning's core docs present, the STATE cursor, ROADMAP and REQUIREMENTS parseable and consistent. Not a traceability audit (that is /cad-audit)"
 argument-hint: ""
 allowed-tools:
-  - Read
+  - mcp__cadence__cadence_query
   - Bash
-  - Grep
-  - Glob
   - AskUserQuestion
 ---
 
