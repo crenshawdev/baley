@@ -18,9 +18,13 @@ flowchart LR
   B -- "reads and outlines" --> D
 ```
 
-Three calls. Two come from excerpt. The third is Cadence's own, because
-Cadence knows what a plan or a context is and excerpt never did. John kept
-read and document as separate calls (2026-09-12).
+Three calls, and two narrower ones beside them. Two come from excerpt. The
+third is Cadence's own, because Cadence knows what a plan or a context is and
+excerpt never did. John kept read and document as separate calls (2026-09-12).
+`list` (a scope, no pattern) and `document-search` (a phase and a pattern)
+were split out on 2026-09-16 so that each answers one exact question with one
+shape, instead of riding on `search` as scopes whose hits it could not serve
+the same way.
 
 ## The three calls, plainly
 
@@ -58,11 +62,12 @@ read and document as separate calls (2026-09-12).
 | In excerpt | In Cadence | Why |
 |---|---|---|
 | read takes an absolute path the caller types | read takes a location the binary gave back | Boundary rule 1: nobody tells the binary a path |
-| search scope is a directory or glob relative to the project | Same, plus named scopes the binary knows: this task's lease, this phase's documents | A worker under a lease should not have to spell the lease |
+| search scope is a directory or glob relative to the project | Same, plus one named scope the binary issues: this task's lease. `list` takes the same scope and no pattern | A worker under a lease should not have to spell the lease; a planner should not need a host glob to see what is there |
+| No search over process records | `document-search` takes a phase and a pattern and answers with identities and parts for `document`, never bodies | Its caller always follows the hit into `document`, so a body in the hit only costs the bound |
 | No notion of a plan, a context, a phase | The document call reads process records by identity | Cadence owns those records; only it knows where they are and how they render |
 | Separate MCP server, deferred on main threads, opt-in per agent | Inside the cadence binary, on the one server every caller already has | The usage report showed excerpt only works where a harness names it; cadence is that harness |
 | A steering hook nudges callers off grep and cat | The purpose truth refuses a phase whose recorded reads open a file whole | A truth with a check, not a nudge |
-| Outline threshold 24KB, units per grammar (Rust, JS, Markdown, JSON, C) | Kept as is | Measured on this tree already; no reason to change it |
+| Outline threshold 24KB, units per tree-sitter grammar (Rust, JS, Python, Markdown, JSON) | Kept as is, on excerpt's extractors; a C extractor is added on the grammar Cadence already declared | Measured on this tree already; no reason to change it |
 
 ## What phase 31 measures at close
 
