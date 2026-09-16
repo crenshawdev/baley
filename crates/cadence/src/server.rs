@@ -18,7 +18,7 @@ use std::{
     borrow::Cow,
     num::NonZeroU32,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
 
 use cadence::envelope::{Envelope, Refusal};
@@ -310,8 +310,17 @@ enum QueryArguments {
     },
 }
 
-#[derive(Deserialize, JsonSchema)]
+/// Every request `cadence_apply` accepts, for the schema a host sees and for
+/// nothing else. Routing never parses this enum: it reads the operation name,
+/// finds the group in [`APPLY_OPERATIONS`], and parses with that group's own
+/// `#[serde(tag = "operation")]` type, so a miss names the field that was
+/// wrong instead of reporting that fifteen shapes all failed.
+///
+/// The variant order is the order of [`APPLY_GROUPS`]; the table is built
+/// from this schema, so the two cannot name different groups for a name.
+#[derive(JsonSchema)]
 #[serde(untagged)]
+#[allow(dead_code)]
 enum ApplyArguments {
     Verification(cadence::verification::model::Apply),
     NativeRetirement(cadence::execution::history::RetirementApply),
@@ -328,6 +337,107 @@ enum ApplyArguments {
     Executor(ExecutorPatch),
     Rail(cadence::rail::risk::Apply),
     Receipt(cadence::rail::receipts::Apply),
+}
+
+/// Who parses and answers an apply request. `Executor` is the one group with
+/// no operation name: an executor patch is the request with no `operation`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApplyGroup {
+    Verification,
+    Execution,
+    Plan,
+    Context,
+    Review,
+    Config,
+    Executor,
+    Rail,
+    Receipt,
+}
+
+/// One group per [`ApplyArguments`] variant, in variant order.
+const APPLY_GROUPS: [ApplyGroup; 15] = [
+    ApplyGroup::Verification,
+    ApplyGroup::Execution,
+    ApplyGroup::Execution,
+    ApplyGroup::Execution,
+    ApplyGroup::Execution,
+    ApplyGroup::Execution,
+    ApplyGroup::Execution,
+    ApplyGroup::Execution,
+    ApplyGroup::Plan,
+    ApplyGroup::Context,
+    ApplyGroup::Review,
+    ApplyGroup::Config,
+    ApplyGroup::Executor,
+    ApplyGroup::Rail,
+    ApplyGroup::Receipt,
+];
+
+/// The operation names `cadence_apply` accepts, each with its group, and the
+/// schema that lists one variant per operation. Both come from one walk of
+/// the derived [`ApplyArguments`] schema.
+struct ApplyOperations {
+    names: Vec<(String, ApplyGroup)>,
+    schema: Value,
+}
+
+static APPLY_OPERATIONS: LazyLock<ApplyOperations> = LazyLock::new(|| {
+    let mut schema =
+        serde_json::to_value(schemars::schema_for!(ApplyArguments)).expect("apply schema");
+    let groups = schema["anyOf"].as_array().expect("untagged variants").clone();
+    assert_eq!(groups.len(), APPLY_GROUPS.len(), "one group per apply variant");
+    let mut names = Vec::new();
+    let mut variants = Vec::new();
+    for (entry, group) in groups.iter().zip(APPLY_GROUPS) {
+        let resolved = match entry.get("$ref").and_then(Value::as_str) {
+            Some(reference) => schema
+                .pointer(reference.strip_prefix('#').expect("local schema ref"))
+                .expect("schema definition")
+                .clone(),
+            None => entry.clone(),
+        };
+        let shapes = match resolved.get("oneOf").and_then(Value::as_array) {
+            Some(shapes) => shapes.clone(),
+            None => vec![resolved],
+        };
+        for shape in shapes {
+            if let Some(name) = shape["properties"]["operation"]["const"].as_str() {
+                assert!(
+                    !names.iter().any(|(known, _)| known == name),
+                    "apply operation {name} is claimed twice"
+                );
+                names.push((name.to_owned(), group));
+            }
+            variants.push(shape);
+        }
+    }
+    schema["$defs"]["ApplyArguments"] = serde_json::json!({ "oneOf": variants });
+    ApplyOperations { names, schema: host_schema(schema) }
+});
+
+fn apply_group(operation: &str) -> Option<ApplyGroup> {
+    APPLY_OPERATIONS
+        .names
+        .iter()
+        .find(|(name, _)| name == operation)
+        .map(|(_, group)| *group)
+}
+
+/// The refusal for an operation name no group claims. It lists the names so
+/// the caller corrects the spelling instead of guessing a shape.
+fn unknown_apply_operation(operation: &str) -> Value {
+    let known = APPLY_OPERATIONS
+        .names
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Refusal::new(
+        "unknown-operation",
+        format!("no cadence_apply operation is named `{operation}`; the operations are {known}"),
+    )
+    .slot("operation")
+    .value()
 }
 
 #[derive(Serialize, JsonSchema)]
@@ -457,7 +567,7 @@ fn query_schema() -> Value {
 }
 
 fn apply_schema() -> Value {
-    host_schema(serde_json::to_value(schemars::schema_for!(ApplyArguments)).expect("apply schema"))
+    APPLY_OPERATIONS.schema.clone()
 }
 
 impl CadenceServer {
@@ -956,199 +1066,108 @@ impl ServerHandler for PublicServer {
                 structured_result(Ok(QueryOutput::Execution(envelope)))
             }
             "cadence_apply" => {
-                if raw.as_ref().and_then(|v| v["operation"].as_str()).is_some_and(|op| op.starts_with("verification-") || op == "truth-waive") {
-                    let raw = raw.unwrap();
-                    if raw.to_string().len() > 262144 {
-                        return structured_result(Ok(ApplyOutput::NativeExecution(Refusal::new("invalid-verification", "verification input exceeds 262144 bytes")
-                            .rule("verification-shape").slot("patch").value())));
-                    }
-                    let answer = match serde_json::from_value::<cadence::verification::model::Apply>(raw) {
-                        Ok(operation) => {
-                            return structured_result(self.server.service.verification_apply(&self.root, operation).await.map(ApplyOutput::NativeExecution));
+                let operation = raw.as_ref().and_then(|v| v["operation"].as_str()).map(str::to_owned);
+                let group = match operation.as_deref() {
+                    None => ApplyGroup::Executor,
+                    Some(operation) => match apply_group(operation) {
+                        Some(group) => group,
+                        None => {
+                            return structured_result(Ok(ApplyOutput::NativeExecution(
+                                unknown_apply_operation(operation),
+                            )));
                         }
-                        Err(error) => Refusal::new("invalid-verification", error.to_string().chars().take(2048).collect::<String>()).rule("verification-shape").slot("patch").value(),
-                    };
-                    return structured_result(Ok(ApplyOutput::NativeExecution(answer)));
-                }
-                if raw.as_ref().and_then(|v|v["operation"].as_str()).is_some_and(|op|op.starts_with("execution-")) {
-                    return structured_result(self.server.service.native_execution_apply(&self.root,raw.unwrap()).await.map(ApplyOutput::NativeExecution));
-                }
-                if raw.as_ref().and_then(|v| v["operation"].as_str()) == Some("plan-submit") {
-                    return structured_result(
-                        self.server
-                            .service
-                            .plan(&self.root, plan_service::Command::Apply(raw.unwrap()))
-                            .await
-                            .map(|a| ApplyOutput::Plan(Box::new(a))),
-                    );
-                }
-                if raw.as_ref().and_then(|v| v["operation"].as_str()) == Some("context-submit") {
-                    return structured_result(
-                        self.server
-                            .service
-                            .context(&self.root, context_service::Command::Apply(raw.unwrap()))
-                            .await
-                            .map(|answer| ApplyOutput::Context(Box::new(answer))),
-                    );
-                }
-                if raw
-                    .as_ref()
-                    .and_then(|v| v["operation"].as_str())
-                    .is_some_and(|op| op.starts_with("review-"))
-                {
-                    let answer = match serde_json::from_value::<review_service::Apply>(raw.unwrap())
-                    {
-                        Ok(review_service::Apply::Admit { request })
-                            if request["caller"] == "pause" =>
-                        {
-                            pause_service::modern_admission(
-                                &self.server.service,
-                                &self.root,
-                                request,
-                            )
-                            .await
-                        }
-                        Ok(apply) => {
-                            self.server
-                                .service
-                                .review(&self.root, review_service::Command::Apply(apply))
-                                .await
-                        }
-                        Err(error) => Ok(review_service::refused(error.to_string())),
-                    };
-                    return structured_result(
-                        answer.map(|answer| ApplyOutput::Review(Box::new(answer))),
-                    );
-                }
-                let answer = match raw
-                    .clone()
-                    .and_then(|value| serde_json::from_value::<ApplyArguments>(value).ok())
-                {
-                    Some(ApplyArguments::Review(request)) => {
-                        return structured_result(
-                            self.server
-                                .service
-                                .review(&self.root, review_service::Command::Apply(request))
-                                .await
-                                .map(|answer| ApplyOutput::Review(Box::new(answer))),
-                        );
-                    }
-                    Some(ApplyArguments::Config(request)) => {
-                        return structured_result(
-                            self.server
-                                .service
-                                .config(&self.root, config_service::Command::Apply(request))
-                                .await
-                                .map(|answer| ApplyOutput::Config(Box::new(answer))),
-                        );
-                    }
-                    Some(ApplyArguments::Context(request)) => {
-                        let cadence::context::model::Apply::Submit { .. } = request;
-                        unreachable!("context submission is decoded before execution fallback")
-                    }
-                    Some(ApplyArguments::Plan(request)) => {
-                        let cadence::plan::model::Apply::Submit { .. } = request;
-                        unreachable!("plan submission decoded before execution")
-                    }
-                    Some(ApplyArguments::NativeExecution(request)) => {
-                        return structured_result(self.server.service.native_execution_apply(&self.root,
-                            serde_json::to_value(request).expect("native operation")).await.map(ApplyOutput::NativeExecution));
-                    }
-                    Some(ApplyArguments::NativeRunner(request)) => {
-                        return structured_result(self.server.service.native_execution_apply(&self.root,
-                            serde_json::to_value(request).expect("native runner operation")).await.map(ApplyOutput::NativeExecution));
-                    }
-                    Some(ApplyArguments::NativePlan(request)) => {
-                        return structured_result(self.server.service.native_execution_apply(&self.root,
-                            serde_json::to_value(request).expect("native plan operation")).await.map(ApplyOutput::NativeExecution));
-                    }
-                    Some(ApplyArguments::NativeOwner(request)) => {
-                        return structured_result(self.server.service.native_execution_apply(&self.root,
-                            serde_json::to_value(request).expect("native owner operation")).await.map(ApplyOutput::NativeExecution));
-                    }
-                    Some(ApplyArguments::NativeClose(request)) => {
-                        return structured_result(self.server.service.native_execution_apply(&self.root,
-                            serde_json::to_value(request).expect("native close operation")).await.map(ApplyOutput::NativeExecution));
-                    }
-                    Some(ApplyArguments::NativeProgress(request)) => {
-                        return structured_result(self.server.service.native_execution_apply(&self.root,
-                            serde_json::to_value(request).expect("native progress operation")).await.map(ApplyOutput::NativeExecution));
-                    }
-                    Some(ApplyArguments::NativeRetirement(request)) => {
-                        return structured_result(self.server.service.native_execution_apply(&self.root,
-                            serde_json::to_value(request).expect("native retirement operation")).await.map(ApplyOutput::NativeExecution));
-                    }
-                    None if raw
-                        .as_ref()
-                        .and_then(|v| v["operation"].as_str())
-                        .is_some_and(|operation| {
-                            matches!(operation, "config-apply" | "config-interview-apply")
-                        }) =>
-                    {
-                        return structured_result(Ok(ApplyOutput::Config(Box::new(
-                            config_service::refused(
-                                "invalid-arguments",
-                                format!(
-                                    "{} arguments do not match the strict operation schema",
-                                    raw.as_ref().unwrap()["operation"].as_str().unwrap()
-                                ),
-                            ),
-                        ))));
-                    }
-                    Some(ApplyArguments::Executor(patch)) => {
+                    },
+                };
+                let operation = operation.unwrap_or_default();
+                let refused = |error: serde_json::Error| format!("{operation}: {error}");
+                match group {
+                    ApplyGroup::Executor => {
+                        let patch = raw.clone().and_then(|value| serde_json::from_value::<ExecutorPatch>(value).ok());
+                        let Some(patch) = patch else {
+                            return execution_result(self.refuse_raw(BoundaryTool::CadenceApply, raw).await);
+                        };
                         let dispatch = patch.dispatch_id.clone();
-                        if let Some(review) =
-                            self.review_handoff(None, Some(dispatch.clone())).await?
-                        {
+                        if let Some(review) = self.review_handoff(None, Some(dispatch.clone())).await? {
                             return structured_result(Ok(ApplyOutput::Review(Box::new(review))));
                         }
                         let answer = self.server.apply_executor_patch(&self.root, patch).await;
                         if let Some(review) = self.review_handoff(None, Some(dispatch)).await? {
                             return structured_result(Ok(ApplyOutput::Review(Box::new(review))));
                         }
-                        answer
+                        execution_result(answer)
                     }
-                    Some(ApplyArguments::Rail(request)) => {
-                        return rail_result(
-                            self.server.service.apply_rail(&self.root, request).await,
-                        );
+                    ApplyGroup::Verification => {
+                        let raw = raw.expect("an operation name came from the arguments");
+                        if raw.to_string().len() > 262144 {
+                            return structured_result(Ok(ApplyOutput::NativeExecution(Refusal::new("invalid-verification", "verification input exceeds 262144 bytes")
+                                .rule("verification-shape").slot("patch").value())));
+                        }
+                        let answer = match serde_json::from_value::<cadence::verification::model::Apply>(raw) {
+                            Ok(operation) => {
+                                return structured_result(self.server.service.verification_apply(&self.root, operation).await.map(ApplyOutput::NativeExecution));
+                            }
+                            Err(error) => Refusal::new("invalid-verification", error.to_string().chars().take(2048).collect::<String>()).rule("verification-shape").slot("patch").value(),
+                        };
+                        structured_result(Ok(ApplyOutput::NativeExecution(answer)))
                     }
-                    Some(ApplyArguments::Receipt(request)) => {
-                        return receipt_result(
+                    ApplyGroup::Execution => {
+                        structured_result(self.server.service.native_execution_apply(&self.root, raw.unwrap()).await.map(ApplyOutput::NativeExecution))
+                    }
+                    ApplyGroup::Plan => structured_result(
+                        self.server
+                            .service
+                            .plan(&self.root, plan_service::Command::Apply(raw.unwrap()))
+                            .await
+                            .map(|a| ApplyOutput::Plan(Box::new(a))),
+                    ),
+                    ApplyGroup::Context => structured_result(
+                        self.server
+                            .service
+                            .context(&self.root, context_service::Command::Apply(raw.unwrap()))
+                            .await
+                            .map(|answer| ApplyOutput::Context(Box::new(answer))),
+                    ),
+                    ApplyGroup::Review => {
+                        let answer = match serde_json::from_value::<review_service::Apply>(raw.unwrap()) {
+                            Ok(review_service::Apply::Admit { request }) if request["caller"] == "pause" => {
+                                pause_service::modern_admission(&self.server.service, &self.root, request).await
+                            }
+                            Ok(apply) => {
+                                self.server
+                                    .service
+                                    .review(&self.root, review_service::Command::Apply(apply))
+                                    .await
+                            }
+                            Err(error) => Ok(review_service::refused(refused(error))),
+                        };
+                        structured_result(answer.map(|answer| ApplyOutput::Review(Box::new(answer))))
+                    }
+                    ApplyGroup::Config => {
+                        let answer = match serde_json::from_value::<config_service::Apply>(raw.unwrap()) {
+                            Ok(request) => {
+                                self.server
+                                    .service
+                                    .config(&self.root, config_service::Command::Apply(request))
+                                    .await
+                            }
+                            Err(error) => Ok(config_service::refused("invalid-arguments", refused(error))),
+                        };
+                        structured_result(answer.map(|answer| ApplyOutput::Config(Box::new(answer))))
+                    }
+                    ApplyGroup::Rail => match serde_json::from_value::<cadence::rail::risk::Apply>(raw.unwrap()) {
+                        Ok(request) => rail_result(self.server.service.apply_rail(&self.root, request).await),
+                        Err(error) => rail_result(Ok(rail_service::refused("invalid-arguments", &refused(error)))),
+                    },
+                    ApplyGroup::Receipt => match serde_json::from_value::<cadence::rail::receipts::Apply>(raw.unwrap()) {
+                        Ok(request) => receipt_result(
                             self.server
                                 .service
-                                .rail_receipt(
-                                    &self.root,
-                                    rail_service::ReceiptCommand::Submit(request),
-                                )
+                                .rail_receipt(&self.root, rail_service::ReceiptCommand::Submit(request))
                                 .await,
-                        );
-                    }
-                    None if matches!(
-                        raw.as_ref().and_then(|v| v["operation"].as_str()),
-                        Some("risk-fire" | "risk-consequence")
-                    ) =>
-                    {
-                        return receipt_result(Ok(rail_service::refused(
-                            "invalid-arguments",
-                            "risk receipt arguments do not match the strict operation schema",
-                        )));
-                    }
-                    None if raw
-                        .as_ref()
-                        .and_then(|v| v.get("operation"))
-                        .and_then(Value::as_str)
-                        == Some("risk-check") =>
-                    {
-                        return rail_result(Ok(rail_service::refused(
-                            "invalid-arguments",
-                            "risk-check arguments do not match the strict operation schema",
-                        )));
-                    }
-                    Some(ApplyArguments::Verification(operation)) => unreachable!("verification routed before generic apply: {operation:?}"),
-                    None => self.refuse_raw(BoundaryTool::CadenceApply, raw).await,
-                };
-                execution_result(answer)
+                        ),
+                        Err(error) => receipt_result(Ok(rail_service::refused("invalid-arguments", &refused(error)))),
+                    },
+                }
             }
             _ => Err(ErrorData::invalid_params("unknown tool", None)),
         }

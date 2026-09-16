@@ -97,12 +97,12 @@ fn malformed_config_transport_returns_operation_specific_literal_refusals() {
         (
             "cadence_apply",
             json!({"operation":"config-apply","layer":"elsewhere","updates":[]}),
-            json!({"status":"refused","code":"invalid-arguments","reason":"config-apply arguments do not match the strict operation schema"}),
+            json!({"status":"refused","code":"invalid-arguments","reason":"config-apply: unknown variant `elsewhere`, expected `global` or `repo`"}),
         ),
         (
             "cadence_apply",
             json!({"operation":"config-apply","layer":"repo","updates":[{"key":"roles.cad-executor.model","value":null,"extra":1}]}),
-            json!({"status":"refused","code":"invalid-arguments","reason":"config-apply arguments do not match the strict operation schema"}),
+            json!({"status":"refused","code":"invalid-arguments","reason":"config-apply: unknown field `extra`, expected `key` or `value`"}),
         ),
     ] {
         let project = tempfile::tempdir().unwrap();
