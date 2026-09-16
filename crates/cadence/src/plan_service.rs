@@ -73,7 +73,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 let identity = native.map_or(Value::Null, |phase| {
                     json!({"kind":"phase-plan","phase":phase,"plan":number})
                 });
-                Some(json!({"identity":identity,"phase_address":phase,
+                Some(json!({"identity":identity,
                     "classification":if publication.is_some() {"native-publication"} else {"legacy-input"},
                     "revision":publication.map(|value| value.revision.clone())
                         .unwrap_or_else(|| cadence::store::model::digest(document.as_bytes())),
