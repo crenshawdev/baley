@@ -43,7 +43,7 @@ fn phase31_planner_round_reports_reads_and_tokens() {
     assert_eq!(report["kind"], "document-slice", "{report}");
     assert_eq!(report["classification"], "claude-planner-round", "{report}");
     assert_eq!(report["revision"], round.source_digest, "{report}");
-    assert_eq!(report["body"], round.report, "the binary report differs from the independent traversal");
+    assert_eq!(report["body"], round.report, "the resident returned a different report than the library computed in-process");
     assert_eq!(report["truncated"], false, "{report}");
     assert!(report["continuation"].is_null(), "{report}");
     assert!(!report.to_string().contains(".claude/projects"), "host storage path leaked: {report}");

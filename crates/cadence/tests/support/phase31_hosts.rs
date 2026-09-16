@@ -1,11 +1,12 @@
 //! Genuine Claude Code host evidence for the phase 31 read boundary.
 use super::phase31::{Client, ProcessFixture, approve, process_plan_submission};
+use cadence::read::{measurement, model::DocumentIdentity};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::Read,
+    num::NonZeroU32,
     path::{Path, PathBuf},
     process::{Command, ExitStatus, Output, Stdio},
 };
@@ -120,14 +121,6 @@ impl PlannerRoundFixture {
     pub fn finish(mut self) { self.client.take().unwrap().finish(); }
 }
 
-#[derive(Default)]
-struct Usage {
-    input: u64,
-    cache_creation: u64,
-    cache_read: u64,
-    output: u64,
-}
-
 fn inspect_planner_record(project: &Path, session_id: String) -> PlannerRound {
     let project = fs::canonicalize(project).unwrap();
     let encoded: String = project.to_string_lossy().chars()
@@ -140,195 +133,32 @@ fn inspect_planner_record(project: &Path, session_id: String) -> PlannerRound {
         .join(".claude/projects").join(encoded);
     let main_path = host_root.join(format!("{session_id}.jsonl"));
     assert!(main_path.is_file(), "Claude did not persist the fixture session record for {session_id}");
-    let main_bytes = fs::read(&main_path).unwrap();
-    let main = json_lines(&main_bytes, "main planner record");
+    let main = json_lines(&fs::read(&main_path).unwrap(), "main planner record");
     let first_turn = main.iter().find(|record| record["type"] == "user")
         .and_then(|record| record["uuid"].as_str()).expect("planner record has no first user UUID").to_owned();
     let last_turn = main.iter().rev().find(|record| record["type"] == "assistant")
         .and_then(|record| record["uuid"].as_str()).expect("planner record has no final assistant UUID").to_owned();
-    let selected = round_chain(&main, &first_turn, &last_turn);
 
-    let subagent_root = host_root.join(&session_id).join("subagents");
-    let mut workers = Vec::new();
-    if subagent_root.is_dir() {
-        for entry in fs::read_dir(&subagent_root).unwrap().flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|value| value.to_str()) == Some("jsonl") {
-                workers.push(path);
-            }
-        }
-    }
-    workers.sort();
-    assert!(!workers.is_empty(), "Claude planner session {session_id} has no persisted child-worker record");
-
-    let mut sources = vec![(format!("main:{session_id}.jsonl"), main_bytes, selected)];
-    let mut worker_ids = Vec::new();
-    for path in workers {
-        let bytes = fs::read(&path).unwrap();
-        let records = json_lines(&bytes, "planner worker record");
-        let file = path.file_stem().and_then(|value| value.to_str()).unwrap().to_owned();
-        let worker = records.iter().find_map(|record| record["agentId"].as_str())
-            .map(str::to_owned).unwrap_or_else(|| file.trim_start_matches("agent-").to_owned());
-        assert!(!worker.trim().is_empty(), "planner worker identity is missing");
-        worker_ids.push(worker.clone());
-        sources.push((format!("worker:{worker}.jsonl"), bytes, records));
-    }
-    worker_ids.sort();
-    worker_ids.dedup();
-
-    let mut hasher = Sha256::new();
-    let mut tool_ids = BTreeSet::new();
-    let mut read_count = 0;
-    let mut whole_file_reads = 0;
-    let mut unclassified_reads = 0;
-    let mut assistant_messages = BTreeSet::new();
-    let mut usages = BTreeMap::<(String, String), Value>::new();
-    for (source, bytes, records) in &sources {
-        hasher.update((source.len() as u64).to_be_bytes());
-        hasher.update(source.as_bytes());
-        hasher.update((bytes.len() as u64).to_be_bytes());
-        hasher.update(bytes);
-        for record in records {
-            if let Some(content) = record.pointer("/message/content").and_then(Value::as_array) {
-                for block in content {
-                    if block["type"] != "tool_use" { continue }
-                    let id = block["id"].as_str().expect("actual tool_use has no id");
-                    if !tool_ids.insert(id.to_owned()) { continue }
-                    let name = block["name"].as_str().unwrap_or("");
-                    let input = &block["input"];
-                    let (reads, whole, unclassified) = classify_read(&project, name, input);
-                    read_count += reads;
-                    whole_file_reads += whole;
-                    unclassified_reads += unclassified;
-                }
-            }
-            if record["type"] == "assistant" {
-                let Some(message_id) = record.pointer("/message/id").and_then(Value::as_str) else { continue };
-                let record_session = record["sessionId"].as_str()
-                    .expect("assistant message has no actual session id").to_owned();
-                let key = (record_session, message_id.to_owned());
-                assistant_messages.insert(key.clone());
-                if record["message"]["stop_reason"].is_null() { continue }
-                let usage = record.pointer("/message/usage")
-                    .unwrap_or_else(|| panic!("assistant message {message_id} has no final usage record"));
-                if let Some(previous) = usages.insert(key, usage.clone()) {
-                    assert_eq!(previous, *usage, "assistant message {message_id} has inconsistent final usage");
-                }
-            }
-        }
-    }
-    assert_eq!(usages.keys().cloned().collect::<BTreeSet<_>>(), assistant_messages,
-        "one or more actual assistant messages has no final usage record");
-    assert!(unclassified_reads == 0,
-        "the planner issued {unclassified_reads} project-read commands whose extent cannot be classified");
-    let mut usage = Usage::default();
-    for value in usages.values() {
-        usage.input += usage_field(value, "input_tokens");
-        usage.cache_creation += usage_field(value, "cache_creation_input_tokens");
-        usage.cache_read += usage_field(value, "cache_read_input_tokens");
-        usage.output += usage_field(value, "output_tokens");
-    }
-    let token_total = usage.input + usage.cache_creation + usage.cache_read + usage.output;
-    let source_digest = format!("{:x}", hasher.finalize());
-    let difference = i128::from(token_total) - 183_000;
-    let ratio = token_total as f64 / 183_000_f64;
-    let report = format!(concat!(
-        "Claude planner round measurement\n",
-        "phase: 31\n",
-        "host: claude-code\n",
-        "session_id: {session_id}\n",
-        "first_turn: {first_turn}\n",
-        "last_turn: {last_turn}\n",
-        "planner_worker_ids: {worker_ids}\n",
-        "source_digest: {source_digest}\n",
-        "read_count: {read_count}\n",
-        "whole_file_reads: {whole_file_reads}\n",
-        "unclassified_reads: {unclassified_reads}\n",
-        "input_tokens: {input_tokens}\n",
-        "cache_creation_input_tokens: {cache_creation_input_tokens}\n",
-        "cache_read_input_tokens: {cache_read_input_tokens}\n",
-        "output_tokens: {output_tokens}\n",
-        "token_total: {token_total}\n",
-        "baseline_planner_median: 183000\n",
-        "difference_from_baseline: {difference}\n",
-        "ratio_to_baseline: {token_total}/183000 = {ratio:.6}\n",
-        "baseline_provenance: owner-approved Cadence 3.7 planner median\n",
-        "comparison_note: like-for-like savings require the historical aggregation procedure\n",
-    ), session_id=session_id, first_turn=first_turn, last_turn=last_turn,
-        worker_ids=worker_ids.join(","), source_digest=source_digest, read_count=read_count,
-        whole_file_reads=whole_file_reads, unclassified_reads=unclassified_reads,
-        input_tokens=usage.input, cache_creation_input_tokens=usage.cache_creation,
-        cache_read_input_tokens=usage.cache_read, output_tokens=usage.output,
-        token_total=token_total, difference=difference, ratio=ratio);
-    PlannerRound { session_id, first_turn, last_turn, worker_ids, source_digest,
-        read_count, whole_file_reads, unclassified_reads, token_total, report }
+    // The library computes the report in-process; the test then proves the
+    // resident returns that same report through `document`.
+    let identity = DocumentIdentity::PlannerRound {
+        phase: NonZeroU32::new(31).unwrap(),
+        session_id: session_id.clone(),
+        first_turn: first_turn.clone(),
+        last_turn: last_turn.clone(),
+    };
+    let report = measurement::resolve(&project.join(".planning"), &identity)
+        .unwrap_or_else(|refusal| panic!("the planner round could not be measured: {refusal}"));
+    PlannerRound { session_id, first_turn, last_turn, worker_ids: report.worker_ids,
+        source_digest: report.revision, read_count: report.read_count,
+        whole_file_reads: report.whole_file_reads, unclassified_reads: report.unclassified_reads,
+        token_total: report.token_total, report: report.body }
 }
 
 fn json_lines(bytes: &[u8], label: &str) -> Vec<Value> {
     String::from_utf8_lossy(bytes).lines().enumerate().map(|(line, value)|
         serde_json::from_str(value).unwrap_or_else(|error| panic!("invalid {label} line {}: {error}", line + 1))
     ).collect()
-}
-
-fn round_chain(records: &[Value], first: &str, last: &str) -> Vec<Value> {
-    let by_uuid: BTreeMap<_, _> = records.iter().filter_map(|record|
-        record["uuid"].as_str().map(|uuid| (uuid.to_owned(), record))
-    ).collect();
-    let mut ids = BTreeSet::new();
-    let mut cursor = last;
-    loop {
-        assert!(ids.insert(cursor.to_owned()), "planner round parent chain contains a cycle");
-        if cursor == first { break }
-        let record = by_uuid.get(cursor).unwrap_or_else(|| panic!("planner round UUID {cursor} is absent"));
-        cursor = record["parentUuid"].as_str().expect("planner round parent chain ended before its first turn");
-    }
-    records.iter().filter(|record| record["uuid"].as_str().is_some_and(|uuid| ids.contains(uuid)))
-        .cloned().collect()
-}
-
-fn usage_field(usage: &Value, field: &str) -> u64 {
-    usage[field].as_u64().unwrap_or_else(|| panic!("final usage is missing {field}: {usage}"))
-}
-
-fn classify_read(project: &Path, name: &str, input: &Value) -> (u64, u64, u64) {
-    if name == "mcp__cadence__cadence_query" {
-        return match input["operation"].as_str() {
-            Some("search" | "read" | "document" | "context-intake" | "plan-read" | "evidence-read"
-                | "execution-history" | "verification-read" | "verification-audit" | "review-material"
-                | "review-original" | "review-attempt" | "review-inventory" | "review-deferred"
-                | "review-consumer" | "risk-status") => (1, 0, 0),
-            _ => (0, 0, 0),
-        };
-    }
-    if matches!(name, "Grep" | "Glob") { return (1, 0, 0) }
-    if name == "Read" {
-        let Some(path) = input["file_path"].as_str() else { return (1, 0, 1) };
-        let path = PathBuf::from(path);
-        let path = if path.is_absolute() { path } else { project.join(path) };
-        let Ok(path) = fs::canonicalize(path) else { return (1, 0, 1) };
-        if !path.starts_with(project) { return (1, 0, 1) }
-        let Ok(content) = fs::read_to_string(path) else { return (1, 0, 1) };
-        let total = content.lines().count() as u64;
-        let offset = input["offset"].as_u64().unwrap_or(1).max(1);
-        let Some(limit) = input["limit"].as_u64() else { return (1, 1, 0) };
-        return (1, u64::from(offset == 1 && limit >= total), 0);
-    }
-    if name == "Bash" {
-        let command = input["command"].as_str().unwrap_or("");
-        if ["cargo build", "cargo check", "cargo test", "npm test", "pnpm test", "git status"]
-            .iter().any(|prefix| command.trim_start().starts_with(prefix))
-        {
-            return (0, 0, 0);
-        }
-        return (1, 0, 1);
-    }
-    let lower = name.to_ascii_lowercase();
-    if lower.contains("read") || lower.contains("search") || lower.contains("grep")
-        || lower.contains("glob")
-    {
-        return (1, 0, 1);
-    }
-    (0, 0, 0)
 }
 
 fn stable_hits(answer: &Value) -> Vec<Value> {
