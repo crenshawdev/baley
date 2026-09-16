@@ -13,7 +13,9 @@ Inspect each artifact through Cadence search/read/document and inspect its actua
 placeholder is rejected. Trace each link's named value through the real caller
 and recipient and its consumption. Inspect actual red and green test material,
 commits, captured results and owner statements; a setup failure is not a
-behavioral red. Inspect failed and Unknown history too. An owner's attestation
+behavioral red. Inspect failed and Unknown history too. A run's captured
+output appears in the dispatch as its digest and byte_length; read the
+bytes through execution-history when the run is what you are inspecting. An owner's attestation
 is a record to inspect, not a mechanical proof that the check did not stub its
 subject. Never fake the boundary the truth promises.
 

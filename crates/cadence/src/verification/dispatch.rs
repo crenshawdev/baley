@@ -5,8 +5,34 @@ pub fn prompt(inputs: &Inputs, documents: &std::collections::BTreeMap<String, St
         let path = format!("phases/{}/PLAN-{}.md", inputs.basis.phase, p.plan);
         documents.get(&path).map(|body| (path, body))
     }).collect();
+    let mut rendered = serde_json::to_value(inputs)?;
+    elide_captures(&mut rendered["execution"]);
     Ok(format!("{}\n<operational-input>\n{}\n</operational-input>\n<authored-material>\n{}\n</authored-material>\n",
-        instructions::contract_markdown(), serde_json::to_string_pretty(inputs)?, serde_json::to_string_pretty(&authored)?))
+        instructions::contract_markdown(), serde_json::to_string_pretty(&rendered)?, serde_json::to_string_pretty(&authored)?))
+}
+
+/// D-177: a run's captured output is retained on the record as bytes and is
+/// digested there; the prompt is a rendering of that record, not the record,
+/// and names each capture by its digest and length. The verifier reads the
+/// bytes through `execution-history` when it inspects the run. Without this
+/// a ten-plan phase rendered eleven megabytes, most of it integer arrays.
+fn elide_captures(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let capture = matches!(map.get("bytes"), Some(serde_json::Value::Array(_)))
+                && matches!(map.get("digest"), Some(serde_json::Value::String(_)))
+                && map.contains_key("complete");
+            if capture {
+                let length = map["bytes"].as_array().map_or(0, Vec::len);
+                map.remove("bytes");
+                map.insert("byte_length".into(), serde_json::Value::from(length));
+                return;
+            }
+            for nested in map.values_mut() { elide_captures(nested); }
+        }
+        serde_json::Value::Array(items) => for item in items { elide_captures(item); },
+        _ => {}
+    }
 }
 
 #[cfg(test)]

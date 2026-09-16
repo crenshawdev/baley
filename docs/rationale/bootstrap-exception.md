@@ -684,3 +684,34 @@ wall. From 892.
 Suite at `824bd25a`, `TMPDIR=/tmp cargo nextest run --workspace --no-fail-fast`,
 run once in a shell: 969 passed, 0 failed, 2 skipped (D-172), 259 seconds
 wall.
+
+## D-177
+
+The first `verify-next` of the live pass answered with an eleven-megabyte
+prompt, and the MCP client closed the connection on it. Measured: 164KB of
+contract prose; the rest was phase 31's execution history as pretty-printed
+JSON, 2.8MB compact, of which 2.3MB was fifty-eight captured stdout and
+stderr blobs stored as JSON integer arrays, one integer per line once pretty.
+The executor's dispatch is bounded to its plan and came to 23KB; the
+verifier's was the whole phase with the bytes in it.
+
+A run's captured output is retained on the record as bytes and is digested
+there. The prompt is a rendering of that record, not the record. It now names
+each capture by its digest and `byte_length`, the attempt's retained inputs
+and every basis digest are untouched, and the contract tells the verifier to
+read the bytes through `execution-history` when the run is what it is
+inspecting. The compiled sentence changed, so the two rendered skills were
+regenerated through the binary and committed with the source.
+
+What stays open, filed as GH-263 with the `4.0-blocker` label: the verifier
+input is still the whole phase history. It should be bounded the way the
+executor's is, per item with run ids and history on demand, and captures
+should be stored as text, which is a schema change that waits on GH-262's
+rebuild path. The eleven-megabyte attempt `0cb057de` stays in the store; a
+retained record is not deleted.
+
+43. `8fe40e82` test(verification): prove the verifier prompt names captured
+    output by identity, never bytes (red).
+44. the fix commit that follows: capture elision in the prompt renderer, the
+    contract sentence, the two regenerated skills, and phase 13's dispatch
+    test repinned to the elided rendering with the elision asserted.
