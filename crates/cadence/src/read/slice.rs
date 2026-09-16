@@ -1,11 +1,13 @@
 use super::{Capability, ReadDomain, model::{ReadRequest, Unit}, outline, source};
 use serde_json::{Value, json};
+
+use crate::envelope::Refusal;
 use std::path::{Path, PathBuf};
 
 pub(super) const ANSWER_BOUND: usize = 65_536;
 
 fn refusal(slot: &str, code: &str, reason: impl Into<String>) -> Value {
-    json!({"status":"refused","code":code,"rule":"D-147","slot":slot,"reason":reason.into()})
+    Refusal::new(code, reason).rule("D-147").slot(slot).value()
 }
 
 /// The units a caller can name in `path`, and a note when the outline that

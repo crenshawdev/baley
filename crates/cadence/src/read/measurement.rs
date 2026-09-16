@@ -1,5 +1,7 @@
 use super::model::DocumentIdentity;
-use serde_json::{Value, json};
+use serde_json::Value;
+
+use crate::envelope::Refusal;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -30,7 +32,7 @@ struct Usage {
 }
 
 fn refusal(code: &str, reason: impl Into<String>) -> Value {
-    json!({"status":"refused","code":code,"rule":"D-151","slot":"identity","reason":reason.into()})
+    Refusal::new(code, reason).rule("D-151").slot("identity").value()
 }
 
 pub fn resolve(planning_root: &Path, identity: &DocumentIdentity) -> Result<Report, Value> {

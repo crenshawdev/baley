@@ -3,6 +3,8 @@ use super::{inputs, model::{Patch, Source, Verdict}, persistence, runner};
 use crate::store::{Error, Result, model::{digest, DecisionRecord, Decision, Origin, Evidence}};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use crate::envelope::Refusal;
 use std::{collections::{BTreeMap, BTreeSet}, path::{Path, PathBuf}};
 
 pub const SCHEMA: &str = "verification-claim-1";
@@ -40,8 +42,8 @@ pub fn refusal(rule: &str, slot: &str, id: &str, reason: &str, requested: Value,
         if value.to_string().len() <= 8192 { value }
         else { json!({"digest":digest(value.to_string().as_bytes()),"omitted":"value exceeds diagnostic bound"}) }
     }
-    json!({"status":"refused","rule":rule,"slot":slot,"id":id.chars().take(256).collect::<String>(),
-        "reason":reason,"details":{"requested":bounded(requested),"current":bounded(current)}})
+    Refusal::new("verification-denied", reason).rule(rule).slot(slot).id(id.chars().take(256).collect::<String>())
+        .details(json!({"requested":bounded(requested),"current":bounded(current)})).value()
 }
 
 pub(crate) fn error_answer(error: Error) -> Value {

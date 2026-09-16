@@ -21,7 +21,7 @@ use std::{
     sync::Arc,
 };
 
-use cadence::envelope::Envelope;
+use cadence::envelope::{Envelope, Refusal};
 
 // Internal query surface; public MCP registration belongs to phase 5.
 #[allow(dead_code)]
@@ -682,7 +682,7 @@ impl ServerHandler for PublicServer {
                         Ok(QueryArguments::Read(request)) => cadence::read::Query::Read(request),
                         Ok(QueryArguments::Document(request)) => cadence::read::Query::Document(request),
                         Ok(QueryArguments::DocumentSearch(request)) => cadence::read::Query::DocumentSearch(request),
-                        Err(error) => return structured_result(Ok(QueryOutput::Read(serde_json::json!({"status":"refused","code":"read-contract","rule":"D-147","slot":"arguments","reason":error.to_string()})))),
+                        Err(error) => return structured_result(Ok(QueryOutput::Read(Refusal::new("read-contract", error.to_string()).rule("D-147").slot("arguments").value()))),
                         Ok(_) => unreachable!("read operation selected before generic query"),
                     };
                     return structured_result(Ok(QueryOutput::Read(self.server.service.read(&self.root, query).await)));
@@ -696,7 +696,7 @@ impl ServerHandler for PublicServer {
                         Ok(QueryArguments::VerificationAudit { phase, command }) => self.server.service.verification(&self.root,
                             cadence::verification::model::Query::Audit { phase: phase.get(), command }).await,
                         Ok(_) => unreachable!("selected verification operation"),
-                        Err(error) => Ok(serde_json::json!({"status":"refused","rule":"verification-shape","reason":error.to_string()})),
+                        Err(error) => Ok(Refusal::new("invalid-verification", error.to_string()).rule("verification-shape").slot("arguments").value()),
                     };
                     return structured_result(answer.map(QueryOutput::NativeExecution));
                 }
@@ -722,7 +722,7 @@ impl ServerHandler for PublicServer {
                                 .expect("lifecycle status is serializable");
                             Ok(history)
                         }
-                        _ => Ok(serde_json::json!({"status":"refused","rule":"task-history-shape","reason":"positive phase required"})),
+                        _ => Ok(Refusal::new("invalid-phase", "positive phase required").rule("task-history-shape").slot("phase").value()),
                     };
                     return structured_result(answer.map(QueryOutput::NativeExecution));
                 }
@@ -959,14 +959,14 @@ impl ServerHandler for PublicServer {
                 if raw.as_ref().and_then(|v| v["operation"].as_str()).is_some_and(|op| op.starts_with("verification-") || op == "truth-waive") {
                     let raw = raw.unwrap();
                     if raw.to_string().len() > 262144 {
-                        return structured_result(Ok(ApplyOutput::NativeExecution(serde_json::json!({"status":"refused",
-                            "rule":"verification-shape","slot":"patch","reason":"verification input exceeds 262144 bytes"}))));
+                        return structured_result(Ok(ApplyOutput::NativeExecution(Refusal::new("invalid-verification", "verification input exceeds 262144 bytes")
+                            .rule("verification-shape").slot("patch").value())));
                     }
                     let answer = match serde_json::from_value::<cadence::verification::model::Apply>(raw) {
                         Ok(operation) => {
                             return structured_result(self.server.service.verification_apply(&self.root, operation).await.map(ApplyOutput::NativeExecution));
                         }
-                        Err(error) => serde_json::json!({"status":"refused","rule":"verification-shape","reason":error.to_string().chars().take(2048).collect::<String>()}),
+                        Err(error) => Refusal::new("invalid-verification", error.to_string().chars().take(2048).collect::<String>()).rule("verification-shape").slot("patch").value(),
                     };
                     return structured_result(Ok(ApplyOutput::NativeExecution(answer)));
                 }

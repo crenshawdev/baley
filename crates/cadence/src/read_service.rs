@@ -1,6 +1,8 @@
 //! Resident-facing transport for the read domain; no MCP types enter the domain.
 use cadence::read::{Query, ReadDomain};
-use serde_json::{Value, json};
+use serde_json::Value;
+
+use cadence::envelope::Refusal;
 use std::{collections::BTreeMap, path::{Path, PathBuf}};
 
 pub fn execute(domains: &mut BTreeMap<PathBuf, ReadDomain>, planning_root: &Path, query: Query) -> Value {
@@ -12,5 +14,5 @@ pub fn execute(domains: &mut BTreeMap<PathBuf, ReadDomain>, planning_root: &Path
 }
 
 pub fn unavailable(reason: impl Into<String>) -> Value {
-    json!({"status":"refused","code":"read-unavailable","rule":"D-145","slot":"project","reason":reason.into()})
+    Refusal::new("read-unavailable", reason).rule("D-145").slot("project").value()
 }

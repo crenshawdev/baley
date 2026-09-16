@@ -1,9 +1,11 @@
 use super::{ReadDomain, search::files, source};
 use serde_json::Value;
+
+use crate::envelope::Refusal;
 use std::path::PathBuf;
 
 fn refusal(slot: &str, code: &str, reason: impl Into<String>) -> Value {
-    serde_json::json!({"status":"refused","code":code,"rule":"D-147","slot":slot,"reason":reason.into()})
+    Refusal::new(code, reason).rule("D-147").slot(slot).value()
 }
 
 pub(super) fn task_lease_files(

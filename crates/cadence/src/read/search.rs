@@ -14,6 +14,8 @@ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{Searcher, SearcherBuilder, sinks::UTF8};
 use ignore::WalkBuilder;
 use serde_json::{Value, json};
+
+use crate::envelope::Refusal;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -50,7 +52,7 @@ const BOUNDED_NOTE: &str = "search answer was bounded; repeat the same search wi
 const EXHAUSTED_NOTE: &str = "the cursor is at or past this search's last match; nothing follows";
 
 fn refusal(slot: &str, code: &str, reason: impl Into<String>) -> Value {
-    json!({"status":"refused","code":code,"rule":"D-147","slot":slot,"reason":reason.into()})
+    Refusal::new(code, reason).rule("D-147").slot(slot).value()
 }
 
 fn selector(project: &Path, scope: &Scope) -> Result<(PathBuf, Option<GlobMatcher>), Value> {

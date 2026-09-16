@@ -6,6 +6,8 @@ use super::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
+
+use crate::envelope::Refusal;
 use std::path::Path;
 
 const PART_BOUND: usize = 24_576;
@@ -27,7 +29,7 @@ pub struct Resolved {
 }
 
 fn refusal(slot: &str, code: &str, reason: impl Into<String>) -> Value {
-    json!({"status":"refused","code":code,"rule":"D-148","slot":slot,"reason":reason.into()})
+    Refusal::new(code, reason).rule("D-148").slot(slot).value()
 }
 
 fn snapshot(root: &Path) -> Result<Value, Value> {

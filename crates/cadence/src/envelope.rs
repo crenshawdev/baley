@@ -69,6 +69,104 @@ pub enum Envelope<T> {
     },
 }
 
+/// A refusal built where a typed [`Envelope`] cannot be: the read layer's
+/// `Value` answers, the verification verdicts, native-execution admission and
+/// the server's own argument parsing. Nothing else writes `status: refused`;
+/// the scan in `tests/refusal_shape.rs` keeps it that way.
+///
+/// `code` and `reason` are always present, the same pair the [`Envelope`]
+/// arms carry, so a caller branches on `code` without knowing which subsystem
+/// answered. The rest say where the fault is and appear only when set, so a
+/// refusal with nothing more to say carries nothing more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Refusal {
+    status: Refused,
+    /// Machine token in the operation's kebab-case vocabulary.
+    code: String,
+    /// Why, in words a person reads.
+    reason: String,
+    /// The rule that refused, when the operation names its rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rule: Option<String>,
+    /// The argument or document slot at fault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    slot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phase: Option<u32>,
+    /// Zero-based within the named section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entry: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    /// Structured detail a caller can act on, in the operation's own shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    details: Option<serde_json::Value>,
+}
+
+/// The one value `status` takes on a [`Refusal`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+enum Refused {
+    Refused,
+}
+
+impl Refusal {
+    pub fn new(code: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            status: Refused::Refused,
+            code: code.into(),
+            reason: reason.into(),
+            rule: None,
+            slot: None,
+            phase: None,
+            entry: None,
+            id: None,
+            details: None,
+        }
+    }
+
+    pub fn rule(mut self, rule: impl Into<String>) -> Self {
+        self.rule = Some(rule.into());
+        self
+    }
+
+    pub fn slot(mut self, slot: impl Into<String>) -> Self {
+        self.slot = Some(slot.into());
+        self
+    }
+
+    pub fn phase(mut self, phase: u32) -> Self {
+        self.phase = Some(phase);
+        self
+    }
+
+    pub fn entry(mut self, entry: usize) -> Self {
+        self.entry = Some(entry);
+        self
+    }
+
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
+        self
+    }
+
+    /// The refusal as the JSON a caller receives.
+    pub fn value(self) -> serde_json::Value {
+        serde_json::to_value(self).expect("a refusal serializes")
+    }
+}
+
+impl From<Refusal> for serde_json::Value {
+    fn from(refusal: Refusal) -> Self {
+        refusal.value()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,6 +198,32 @@ mod tests {
             serde_json::to_value(envelope).unwrap(),
             json!({"status": "refused", "code": "no-phase-dir", "reason": "the phase has no CONTEXT.md"})
         );
+    }
+
+    #[test]
+    fn a_refusal_with_only_a_code_and_reason_matches_the_envelope_arm() {
+        let typed: Envelope<Payload> = Envelope::Refused {
+            code: "no-phase-dir".to_string(),
+            reason: "the phase has no CONTEXT.md".to_string(),
+        };
+        assert_eq!(
+            Refusal::new("no-phase-dir", "the phase has no CONTEXT.md").value(),
+            serde_json::to_value(typed).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_refusal_carries_its_location_fields_only_when_set() {
+        let full = Refusal::new("read-contract", "no such unit")
+            .rule("D-147").slot("unit").phase(31).entry(2).id("T1").details(json!({"units": ["a"]}))
+            .value();
+        assert_eq!(
+            full,
+            json!({"status": "refused", "code": "read-contract", "reason": "no such unit", "rule": "D-147",
+                "slot": "unit", "phase": 31, "entry": 2, "id": "T1", "details": {"units": ["a"]}})
+        );
+        let bare = Refusal::new("no-phase-dir", "the phase has no CONTEXT.md").value();
+        assert_eq!(bare.as_object().unwrap().keys().collect::<Vec<_>>(), ["status", "code", "reason"]);
     }
 
     #[test]

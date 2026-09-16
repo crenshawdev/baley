@@ -246,8 +246,8 @@ pub struct CloseProof {
 }
 
 pub fn unsatisfied(task: &super::history::Task, rule: &str, checks: Vec<Check>, reason: &str) -> crate::store::Error {
-    crate::store::Error::Invalid(format!("native-task-refusal:{}", serde_json::json!({"status":"refused","rule":rule,"slot":"checks",
-        "phase":task.phase,"id":task.task,"reason":reason,"details":{"unsatisfied":checks}})))
+    crate::store::Error::Invalid(format!("native-task-refusal:{}", crate::envelope::Refusal::new("task-unsatisfied", reason)
+        .rule(rule).slot("checks").phase(task.phase).id(task.task.clone()).details(serde_json::json!({"unsatisfied":checks})).value()))
 }
 
 pub fn allocated(data: &serde_json::Value, task: &super::history::Task) -> crate::store::Result<Vec<Check>> {

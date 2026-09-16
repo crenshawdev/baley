@@ -8,6 +8,7 @@
 //! before it knew which field to read.
 
 #[path = "support/phase13.rs"]
+#[allow(dead_code)]
 mod phase13;
 use phase13::*;
 use serde_json::{Value, json};

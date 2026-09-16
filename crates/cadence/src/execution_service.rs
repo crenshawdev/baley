@@ -39,7 +39,7 @@ use std::{
     sync::Arc,
 };
 
-use cadence::envelope::Envelope;
+use cadence::envelope::{Envelope, Refusal};
 pub use cadence::execution::boundary::{Answer, Failure, Response};
 use cadence::execution::boundary::{
     BoundaryScope, BoundaryV1, ExecutionEnvelope, PreparedAnswer, Receipt,
@@ -60,7 +60,7 @@ pub(super) fn native_error(error:Error) -> Value {
         && let Some(encoded)=message.strip_prefix("plan-refusal:")
         && let Ok(diagnostic)=serde_json::from_str::<cadence::plan::model::Diagnostic>(encoded)
     {return serde_json::to_value(diagnostic.answer()).expect("diagnostic");}
-    json!({"status":"refused","rule":"native-admission","slot":"request","reason":error.to_string()})
+    Refusal::new("invalid-request", error.to_string()).rule("native-admission").slot("request").value()
 }
 
 pub async fn native_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value) -> cadence::store::Result<Value> {
