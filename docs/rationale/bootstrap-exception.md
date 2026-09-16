@@ -715,3 +715,7 @@ retained record is not deleted.
 44. `941e9eae` fix(verification): capture elision in the prompt renderer, the
     contract sentence, the two regenerated skills, and phase 13's dispatch
     test repinned to the elided rendering with the elision asserted.
+
+Suite at `eb4a1e42`, `TMPDIR=/tmp cargo nextest run --workspace --no-fail-fast`,
+run once in a shell: 970 passed, 0 failed, 2 skipped (D-172), 256 seconds
+wall.
