@@ -201,6 +201,9 @@ fn phase11_unapproved_context_changes_nothing() {
                         "identity":intake["context"]["identity"],"part":"truth:T1"}));
                     assert_eq!(truth["kind"], "document-slice", "{truth}");
                     assert!(truth["body"].as_str().unwrap().contains("the approved decisions"), "{truth}");
+                    assert!(truth.get("truncated").is_none(), "{truth}");
+                    assert!(truth.get("continuation").is_none(), "{truth}");
+                    assert!(truth.get("continue_from_byte").is_none(), "{truth}");
                 }
                 "historical" | "pending" => {
                     assert_eq!(intake["context"], json!({"identity":{"kind":"phase-context","phase":11},

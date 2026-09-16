@@ -55,6 +55,7 @@ pub struct ReadRequest {
 #[serde(deny_unknown_fields)]
 pub struct DocumentRequest {
     pub identity: DocumentIdentity,
+    /// The name of one part returned by the document index.
     pub part: Option<String>,
 }
 

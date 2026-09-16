@@ -44,8 +44,9 @@ fn phase31_planner_round_reports_reads_and_tokens() {
     assert_eq!(report["classification"], "claude-planner-round", "{report}");
     assert_eq!(report["revision"], round.source_digest, "{report}");
     assert_eq!(report["body"], round.report, "the resident returned a different report than the library computed in-process");
-    assert_eq!(report["truncated"], false, "{report}");
-    assert!(report["continuation"].is_null(), "{report}");
+    assert!(report.get("truncated").is_none(), "{report}");
+    assert!(report.get("continuation").is_none(), "{report}");
+    assert!(report.get("continue_from_byte").is_none(), "{report}");
     assert!(!report.to_string().contains(".claude/projects"), "host storage path leaked: {report}");
 
     let unavailable = fixture.client().call("cadence_query", json!({
@@ -351,9 +352,9 @@ fn phase31_process_identity_returns_rendered_slice() {
     let allocation = client.call("cadence_query", json!({
         "operation":"plan-read","phase":"31","count":2
     }));
-    let large_task = "LARGE SELECTED TASK PAGE\n".repeat(4_000);
+    let selected_task = "LARGE SELECTED TASK PAGE\n".repeat(200);
     let preview = client.call("cadence_query", {
-        let request = process_plan_submission(&allocation, &large_task);
+        let request = process_plan_submission(&allocation, &selected_task);
         json!({"operation":"plan-read","phase":"31","submission":request["submission"]})
     });
     assert_eq!(preview["status"], "ok", "{preview}");
@@ -457,18 +458,18 @@ fn phase31_process_identity_returns_rendered_slice() {
     let truth = client.call("cadence_query", json!({"operation":"document",
         "identity":intake["context"]["identity"],"part":"truth:T4"}));
     assert_eq!(truth["body"], "When the caller requests the native truth, the caller gets HANDWRITTEN NATIVE TRUTH SENTENCE.\n");
+    assert!(truth.get("truncated").is_none(), "{truth}");
+    assert!(truth.get("continuation").is_none(), "{truth}");
+    assert!(truth.get("continue_from_byte").is_none(), "{truth}");
 
     let plan_identity = readback["plans"].as_array().unwrap().iter()
         .find(|plan| plan["identity"]["plan"] == 2).unwrap()["identity"].clone();
-    let mut page = client.call("cadence_query", json!({"operation":"document","identity":plan_identity,
+    let task = client.call("cadence_query", json!({"operation":"document","identity":plan_identity,
         "part":"task:fixture-two-a"}));
-    let mut task_body = String::new();
-    loop {
-        task_body.push_str(page["body"].as_str().unwrap());
-        let Some(continuation) = page["continuation"].as_str() else { break };
-        page = client.call("cadence_query", json!({"operation":"document","identity":page["identity"],
-            "part":continuation}));
-    }
+    assert!(task.get("truncated").is_none(), "{task}");
+    assert!(task.get("continuation").is_none(), "{task}");
+    assert!(task.get("continue_from_byte").is_none(), "{task}");
+    let task_body = task["body"].as_str().unwrap();
     assert!(task_body.contains("PLAN TWO TASK ONE UNIQUE"));
     assert!(task_body.contains("LARGE SELECTED TASK PAGE"));
     assert!(!task_body.contains("PLAN ONE"));
@@ -526,7 +527,7 @@ fn phase31_process_identity_returns_rendered_slice() {
         assert!(answer.get("body").is_none(), "{answer}");
         no_process_path(&answer);
     }
-    for answer in [&intake, &readback, &context_index, &truth, &page, &roadmap, &summary, &phase_hits] {
+    for answer in [&intake, &readback, &context_index, &truth, &task, &roadmap, &summary, &phase_hits] {
         no_process_path(answer);
     }
     client.finish();

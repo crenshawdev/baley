@@ -1,6 +1,5 @@
 use super::{
     ReadDomain,
-    location::Capability,
     model::{DocumentIdentity, DocumentRequest, DocumentSearchRequest},
     search,
 };
@@ -216,58 +215,38 @@ pub fn catalog(root: &Path, phase: u32) -> Result<Vec<Resolved>, Value> {
 }
 
 impl ReadDomain {
-    pub(super) fn document(&mut self, request: DocumentRequest) -> Value {
+    pub(super) fn document(&self, request: DocumentRequest) -> Value {
         let resolved = match resolve(&self.planning_root, &request.identity) {
             Ok(value) => value,
             Err(answer) => return answer,
         };
-        let (part, offset) = match request.part.as_deref() {
+        let part = match request.part.as_deref() {
             None => {
                 return json!({"status":"ok","kind":"document-index","bound":PART_BOUND,
                     "identity":resolved.identity,"classification":resolved.classification,"revision":resolved.revision,
                     "parts":resolved.parts.iter().map(|part| json!({"part":part.selector,"title":part.title,
                         "bytes":part.body.len()})).collect::<Vec<_>>()});
             }
-            Some(token) if token.starts_with("doc-") => match self.registry.get(token) {
-                Some(Capability::Document {
-                    identity,
-                    part,
-                    revision,
-                    offset,
-                }) if identity == request.identity && revision == resolved.revision => (part, offset),
-                _ => {
-                    return refusal(
-                        "part",
-                        "document-continuation-not-issued",
-                        "document continuation is stale, expired, or belongs to another identity",
-                    );
-                }
-            },
-            Some(part) => (part.to_owned(), 0),
+            Some(part) => part,
         };
         let Some(selected) = resolved.parts.iter().find(|candidate| candidate.selector == part) else {
             return refusal("part", "document-part-not-found", "the requested part is absent from this identity");
         };
-        if offset > selected.body.len() || !selected.body.is_char_boundary(offset) {
-            return refusal("part", "document-continuation-not-issued", "document continuation offset is invalid");
+        if selected.body.len() > PART_BOUND {
+            return refusal(
+                "part",
+                "document-part-too-large",
+                format!(
+                    "document part `{}` is {} bytes, exceeding the bound of {} bytes",
+                    selected.selector,
+                    selected.body.len(),
+                    PART_BOUND
+                ),
+            );
         }
-        let mut end = (offset + PART_BOUND).min(selected.body.len());
-        while end > offset && !selected.body.is_char_boundary(end) {
-            end -= 1;
-        }
-        let truncated = end < selected.body.len();
-        let continuation = truncated.then(|| {
-            self.registry.document(
-                resolved.identity.clone(),
-                selected.selector.clone(),
-                resolved.revision.clone(),
-                end,
-            )
-        });
         json!({"status":"ok","kind":"document-slice","bound":PART_BOUND,
             "identity":resolved.identity,"classification":resolved.classification,"revision":resolved.revision,
-            "part":selected.selector,"body":&selected.body[offset..end],"truncated":truncated,
-            "continuation":continuation,"continue_from_byte":truncated.then_some(end)})
+            "part":selected.selector,"body":&selected.body})
     }
 }
 

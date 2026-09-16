@@ -1,4 +1,4 @@
-use super::model::{DocumentIdentity, Scope, Unit};
+use super::model::{Scope, Unit};
 use sha2::{Digest, Sha256};
 use std::{collections::{BTreeMap, VecDeque}, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
 
@@ -22,7 +22,6 @@ pub enum Resumes {
 pub enum Capability {
     Unit { path: PathBuf, revision: String, unit: Unit, offset: usize },
     File { path: PathBuf, revision: String },
-    Document { identity: DocumentIdentity, part: String, revision: String, offset: usize },
     /// Where a bounded answer resumes: the first site it did not serve, bound
     /// to the request it was issued for. A list site is a file and line 0.
     Cursor { resumes: Resumes, file: PathBuf, line: usize },
@@ -60,9 +59,6 @@ impl Registry {
     }
     pub fn file(&mut self, path: PathBuf, revision: String) -> String {
         self.issue("file", Capability::File { path, revision })
-    }
-    pub fn document(&mut self, identity: DocumentIdentity, part: String, revision: String, offset: usize) -> String {
-        self.issue("doc", Capability::Document { identity, part, revision, offset })
     }
     pub fn cursor(&mut self, resumes: Resumes, file: PathBuf, line: usize) -> String {
         self.issue("cur", Capability::Cursor { resumes, file, line })
