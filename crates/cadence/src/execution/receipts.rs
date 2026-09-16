@@ -31,14 +31,71 @@ pub struct Launch {
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Disposition { Exited { code: i32 }, Signaled { signal: i32 }, LaunchFailed { reason: String } }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+/// One captured stream of a run: `bytes` is the record and `digest` is over
+/// them. On the wire the bytes are a string under `text` when they are UTF-8
+/// and a JSON integer array under `bytes` otherwise, and a capture is written
+/// back in the form it was read in, so a retained record keeps the preimage
+/// its digest was taken over (D-175; GH-263 part 2). Equality ignores the form.
+#[derive(Clone, Debug)]
 pub struct Capture {
     pub bytes: Vec<u8>,
     pub digest: String,
     pub complete: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub result_lines: Vec<String>,
+    form: Form,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Form { Bytes, Text }
+
+impl Capture {
+    pub fn new(bytes: Vec<u8>, complete: bool, result_lines: Vec<String>) -> Self {
+        let form = if std::str::from_utf8(&bytes).is_ok() { Form::Text } else { Form::Bytes };
+        Self { digest: crate::store::model::digest(&bytes), bytes, complete, result_lines, form }
+    }
+}
+
+impl PartialEq for Capture {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes == other.bytes && self.digest == other.digest && self.complete == other.complete && self.result_lines == other.result_lines
+    }
+}
+impl Eq for Capture {}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaptureWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bytes: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    digest: String,
+    complete: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    result_lines: Vec<String>,
+}
+
+impl Serialize for Capture {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let (bytes, text) = match self.form {
+            Form::Text => (None, Some(String::from_utf8(self.bytes.clone()).map_err(serde::ser::Error::custom)?)),
+            Form::Bytes => (Some(self.bytes.clone()), None),
+        };
+        CaptureWire { bytes, text, digest: self.digest.clone(), complete: self.complete, result_lines: self.result_lines.clone() }
+            .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Capture {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = CaptureWire::deserialize(deserializer)?;
+        let (bytes, form) = match (wire.bytes, wire.text) {
+            (Some(bytes), None) => (bytes, Form::Bytes),
+            (None, Some(text)) => (text.into_bytes(), Form::Text),
+            _ => return Err(serde::de::Error::custom("a capture carries exactly one of bytes or text")),
+        };
+        Ok(Self { bytes, digest: wire.digest, complete: wire.complete, result_lines: wire.result_lines, form })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -55,7 +112,7 @@ pub enum Summary {
     Unittest { failed: bool, failures: u64, errors: u64 },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunResult {
     pub run_id: String,

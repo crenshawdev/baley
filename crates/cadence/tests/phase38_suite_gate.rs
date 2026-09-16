@@ -1312,7 +1312,7 @@ fn phase38_large_suite_receipt_retains_every_failing_test_name() {
     let expected = json!(["test oversized::alpha ... FAILED","test oversized::beta ... FAILED",
         "test oversized::gamma ... FAILED",
         "test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out"]);
-    assert!(result["stdout"]["bytes"].as_array().unwrap().len() <= 65_536, "{result}");
+    assert!(result["stdout"]["text"].as_str().unwrap().len() <= 65_536, "{result}");
     assert_eq!(result["stdout"]["complete"], false, "{result}");
     assert_eq!(result["stdout"]["result_lines"], expected, "{result}");
     assert_eq!(result["observation"],

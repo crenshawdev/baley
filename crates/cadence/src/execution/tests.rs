@@ -286,7 +286,7 @@ fn native_records_outlive_the_directory_identity_they_were_stamped_with() {
 #[test]
 fn native_task_records_replay_confirmed_events() {
     use super::{admission, history::{self, Event, Request, Task}, receipts::*};
-    use crate::store::{filesystem::{Filesystem, Stage as FsStage}, writer::{Store, Operation, PlanningPolicy}, model::digest};
+    use crate::store::{filesystem::{Filesystem, Stage as FsStage}, writer::{Store, Operation, PlanningPolicy}};
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join(".planning");
@@ -304,8 +304,8 @@ fn native_task_records_replay_confirmed_events() {
             plan: 1, task: "deliver".into() };
         let check = basis.request.contract.allocation[0].checks[0].clone();
         let result = RunResult { run_id: "run-1".into(), disposition: Disposition::Exited { code: 1 },
-            stdout: Capture { bytes: b"answer: expected 7, received 6\n".to_vec(), digest: digest(b"answer: expected 7, received 6\n"), complete: true, result_lines: vec![] },
-            stderr: Capture { bytes: vec![], digest: digest(b""), complete: true, result_lines: vec![] }, observed_at: 20,
+            stdout: Capture::new(b"answer: expected 7, received 6\n".to_vec(), true, vec![]),
+            stderr: Capture::new(vec![], true, vec![]), observed_at: 20,
             observation: Observation::Unknown, material_unchanged: true };
         let inspection = Inspection { check: check.clone(), test_digest: "unit-test-material".into(),
             evidence: vec!["run-1".into()], no_subject_stub: false };
@@ -481,7 +481,7 @@ fn native_runner_claims_before_spawn_and_replays_once() {
 #[test]
 fn native_owner_statements_bind_exact_inspection() {
     use super::{admission, history::{self, Event, Task, Request}, receipts::*, runner};
-    use crate::store::{filesystem::Filesystem, writer::{Store, Operation, PlanningPolicy}, model::digest};
+    use crate::store::{filesystem::Filesystem, writer::{Store, Operation, PlanningPolicy}};
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         let temp = tempfile::tempdir().unwrap(); let root = temp.path().join(".planning");
         std::fs::create_dir_all(root.join("phases/12")).unwrap();
@@ -499,8 +499,8 @@ fn native_owner_statements_bind_exact_inspection() {
         runner::append(&store, request("launch", 1, Event::Launch(Launch { run_id: "inspected-run".into(), check: Some(check.clone()), stage: Stage::Red,
             material: Material { commit: "unit-commit".into(), tree: "unit-tree".into(), test_file: "test.py".into(), test_digest: "inspected-material".into(), command: "custom-delivery-check".into() }, launched_at: 10 }))).await.unwrap();
         runner::append(&store, request("result", 2, Event::Result(RunResult { run_id: "inspected-run".into(), disposition: Disposition::Exited { code: 1 },
-            stdout: Capture { bytes: b"custom failed\n".to_vec(), digest: digest(b"custom failed\n"), complete: true, result_lines: vec![] },
-            stderr: Capture { bytes: vec![], digest: digest(b""), complete: true, result_lines: vec![] }, observed_at: 20, observation: Observation::Unknown, material_unchanged: true }))).await.unwrap();
+            stdout: Capture::new(b"custom failed\n".to_vec(), true, vec![]),
+            stderr: Capture::new(vec![], true, vec![]), observed_at: 20, observation: Observation::Unknown, material_unchanged: true }))).await.unwrap();
         let inspection = Inspection { check: check.clone(), test_digest: "inspected-material".into(), evidence: vec!["inspected-run".into()], no_subject_stub: false };
         let negative = OwnerStatement { submission: inspection.clone(), approval: OwnerApproval { approved: true, owner: "Fixture Owner".into(),
             at: "2026-09-10T14:00:00Z".into(), submission: inspection }, supersedes: None };

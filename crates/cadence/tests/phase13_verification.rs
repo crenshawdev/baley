@@ -224,8 +224,8 @@ fn phase13_dispatch_carries_current_verification_inputs() {
     assert_eq!(operational["admissions"], json!([fixture.admission["receipt"]]));
     // D-177 and GH-263: the prompt's execution block is the bounded view; the
     // bytes stay on the record, which the attempt retains in full.
-    assert!(execution["events"].as_array().unwrap().iter().any(|e| e["request"]["event"]["stdout"]["bytes"].is_array()),
-        "the fixture retains at least one run capture");
+    assert!(execution["events"].as_array().unwrap().iter().any(|e| e["request"]["event"]["stdout"]["text"].is_string()),
+        "the fixture retains at least one run capture, as text");
     assert_eq!(attempt["inputs"]["execution"]["events"], execution["events"]);
     assert_eq!(attempt["inputs"]["execution"]["plan_events"], execution["plan_events"]);
     assert_eq!(operational["execution"]["schema"], "verifier-execution-view-1");
@@ -329,8 +329,8 @@ fn phase13_dispatch_names_history_by_id_per_item() {
             "material":launch["material"],"launched_at":launch["launched_at"],
             "result":{"disposition":result["disposition"],"observation":result["observation"],"observed_at":result["observed_at"],
                 "material_unchanged":true,
-                "stdout":{"digest":result["stdout"]["digest"],"byte_length":result["stdout"]["bytes"].as_array().unwrap().len(),"complete":true},
-                "stderr":{"digest":result["stderr"]["digest"],"byte_length":result["stderr"]["bytes"].as_array().unwrap().len(),"complete":true}}}));
+                "stdout":{"digest":result["stdout"]["digest"],"byte_length":result["stdout"]["text"].as_str().unwrap().len(),"complete":true},
+                "stderr":{"digest":result["stderr"]["digest"],"byte_length":result["stderr"]["text"].as_str().unwrap().len(),"complete":true}}}));
         let tasks = plan["tasks"].as_array().unwrap();
         assert_eq!(tasks.len(), 1, "{plan}");
         let task = &tasks[0];
@@ -348,8 +348,8 @@ fn phase13_dispatch_names_history_by_id_per_item() {
             assert_eq!(*run, json!({"run_id":id,"stage":stage,"check":check,"material":launch["material"],"launched_at":launch["launched_at"],
                 "result":{"disposition":result["disposition"],"observation":result["observation"],"observed_at":result["observed_at"],
                     "material_unchanged":true,
-                    "stdout":{"digest":result["stdout"]["digest"],"byte_length":result["stdout"]["bytes"].as_array().unwrap().len(),"complete":true},
-                    "stderr":{"digest":result["stderr"]["digest"],"byte_length":result["stderr"]["bytes"].as_array().unwrap().len(),"complete":true}}}));
+                    "stdout":{"digest":result["stdout"]["digest"],"byte_length":result["stdout"]["text"].as_str().unwrap().len(),"complete":true},
+                    "stderr":{"digest":result["stderr"]["digest"],"byte_length":result["stderr"]["text"].as_str().unwrap().len(),"complete":true}}}));
         }
         assert_eq!(task["close"], json!({"request_id":format!("close-{number}"),"completion":fixture.pairs[index]["green_commit"],
             "checks":[fixture.pairs[index]],"verification":[format!("green-{number}")]}));

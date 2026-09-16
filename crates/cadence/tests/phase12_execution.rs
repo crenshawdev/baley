@@ -465,6 +465,15 @@ fn git_value(project: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim_end().to_owned()
 }
 
+/// A retained capture's bytes: `text` for a run written since GH-263 part 2,
+/// the integer array for one retained before it.
+fn capture_bytes(capture: &Value) -> Vec<u8> {
+    match capture.get("text").and_then(Value::as_str) {
+        Some(text) => text.as_bytes().to_vec(),
+        None => serde_json::from_value(capture["bytes"].clone()).unwrap(),
+    }
+}
+
 fn execution_history(project: &Path) -> Value {
     let mut client = Client::open(project);
     let answer = client.call("cadence_query", json!({"operation":"execution-history","phase":12}));
@@ -591,7 +600,8 @@ impl Tiny {
         assert_eq!(event["material_unchanged"],true,"{event}");
         assert!(event["observed_at"].as_u64().unwrap()>=launch["receipt"]["request"]["event"]["launched_at"].as_u64().unwrap());
         for stream in ["stdout","stderr"] {
-            let bytes:Vec<u8>=serde_json::from_value(event[stream]["bytes"].clone()).unwrap();
+            let bytes=capture_bytes(&event[stream]);
+            assert!(event[stream].get("bytes").is_none(),"a new capture is text: {}",event[stream]);
             assert_eq!(event[stream]["digest"],model::digest(&bytes));
             // Only the oversized control is truncated at the 64 KiB bound.
             assert_eq!(event[stream]["complete"],command!=BIG || stream=="stderr");
@@ -648,8 +658,8 @@ fn phase12_task_close_requires_red_then_green() {
         let event=&history["events"].as_array().unwrap().iter().find(|r|r["request"]["event"]["kind"]=="result" && r["request"]["event"]["run_id"]==id).unwrap()["request"]["event"];
         assert_eq!(event["disposition"],json!({"kind":"exited","code":code}));
         assert_eq!(event["observation"],json!({"class":"results-observed","summary":{"runner":"unittest","failed":failed,"failures":if failed {1}else{0},"errors":0}}));
-        assert_eq!(event["stdout"]["bytes"],json!([]));
-        let stderr=String::from_utf8(serde_json::from_value(event["stderr"]["bytes"].clone()).unwrap()).unwrap();
+        assert_eq!(event["stdout"]["text"],"");
+        let stderr=event["stderr"]["text"].as_str().unwrap().to_owned();
         assert!(stderr.contains("Ran 1 test in 0.000s\n"),"{stderr}");assert!(stderr.contains(needle),"{stderr}");
         if failed {assert!(stderr.ends_with("FAILED (failures=1)\n"));}
         else {assert_eq!(stderr,".\n----------------------------------------------------------------------\nRan 1 test in 0.000s\n\nOK\n");}
@@ -728,7 +738,7 @@ fn phase12_task_close_requires_red_then_green() {
     for (id,expected,code) in [("red-0","answer: expected 7, received 6\n",1),("green-0","answer is seven\n",0)] {
         let result=&before_classification["events"].as_array().unwrap().iter().find(|r|r["request"]["event"]["kind"]=="result" && r["request"]["event"]["run_id"]==id).unwrap()["request"]["event"];
         assert_eq!(result["observation"],json!({"class":"unknown"}));assert_eq!(result["disposition"],json!({"kind":"exited","code":code}));
-        assert_eq!(result["stdout"]["bytes"],json!(expected.as_bytes()));assert_eq!(result["stderr"]["bytes"],json!([]));assert_eq!(result["stdout"]["digest"],model::digest(expected.as_bytes()));
+        assert_eq!(result["stdout"]["text"],expected);assert_eq!(result["stderr"]["text"],"");assert_eq!(result["stdout"]["digest"],model::digest(expected.as_bytes()));
     }
     close_refused(project,custom.close("custom-unclassified"),"red-green",&["check/A","check/A2"]);
     for case in 0..4 {
@@ -1387,8 +1397,8 @@ fn phase12_runner_retains_task_commands_and_one_suite() {
         let result=&history["events"].as_array().unwrap().iter().find(|e|e["request"]["event"]["kind"]=="result" && e["request"]["event"]["run_id"]==run).unwrap()["request"]["event"];
         assert_eq!(result["observation"],json!({"class":"unknown"}),"{run}");
         assert_eq!(result["disposition"],json!({"kind":"exited","code":0}));
-        assert_eq!(result["stdout"]["bytes"],json!(stdout),"{run}");assert_eq!(result["stdout"]["digest"],model::digest(&stdout));
-        assert_eq!(result["stdout"]["complete"],complete_capture,"{run}");assert_eq!(result["stderr"],json!({"bytes":[],"digest":model::digest(b""),"complete":true}));
+        assert_eq!(result["stdout"]["text"],String::from_utf8(stdout.clone()).unwrap(),"{run}");assert_eq!(result["stdout"]["digest"],model::digest(&stdout));
+        assert_eq!(result["stdout"]["complete"],complete_capture,"{run}");assert_eq!(result["stderr"],json!({"text":"","digest":model::digest(b""),"complete":true}));
         assert_eq!(result["material_unchanged"],true);
     }
     assert!(history["events"].as_array().unwrap().iter().any(|e|e["request"]["request_id"]=="close-C"));
@@ -1480,7 +1490,7 @@ fn phase12_runner_retains_task_commands_and_one_suite() {
     let custom=Tiny::new("runner-custom-fail");let project=custom.project();finish_tasks(&custom);
     let (_,result)=suite_run(project,"custom-1",1);
     assert_eq!(result["observation"],json!({"class":"unknown"}));assert_eq!(result["disposition"],json!({"kind":"exited","code":1}));
-    assert_eq!(result["stdout"],json!({"bytes":b"suite failed: 3 assertions did not hold\n".to_vec(),"digest":model::digest(b"suite failed: 3 assertions did not hold\n"),"complete":true}));
+    assert_eq!(result["stdout"],json!({"text":"suite failed: 3 assertions did not hold\n","digest":model::digest(b"suite failed: 3 assertions did not hold\n"),"complete":true}));
     plan_refused(project,plan_request(project,"execution-suite","custom-2",1,json!({})),"suite-once");
     plan_refused(project,plan_request(project,"execution-plan-complete","complete-custom",1,json!({})),"suite-unknown");
     assert_eq!(plan_view(project,1)["state"]["outcome"],"unknown");
@@ -1517,7 +1527,7 @@ fn phase12_execution_history_reads_one_run_by_id() {
     let rendered=|mut record:Value| {
         for stream in ["stdout","stderr"] {
             let capture=&mut record["request"]["event"][stream];
-            let bytes:Vec<u8>=serde_json::from_value(capture["bytes"].take()).unwrap();
+            let bytes=capture_bytes(capture);
             capture.as_object_mut().unwrap().remove("bytes");
             capture["byte_length"]=json!(bytes.len());
             capture["text"]=json!(String::from_utf8_lossy(&bytes));
@@ -1537,6 +1547,7 @@ fn phase12_execution_history_reads_one_run_by_id() {
     assert_eq!(answer["result"]["request"]["event"]["stdout"]["complete"],false,"the oversized control is the cut capture");
     assert_eq!(answer["result"]["request"]["event"]["stdout"]["byte_length"],65536);
     assert!(!serde_json::to_string(&answer).unwrap().contains("\"bytes\":["),"capture bytes leaked as integer arrays: {answer}");
+    assert!(!serde_json::to_string(&whole).unwrap().contains("\"bytes\":["),"a run made now is retained as text, not an integer array");
     // A suite run is read the same way from the plan events.
     let answer=client.call("cadence_query",json!({"operation":"execution-history","phase":12,"run":"suite-1"}));
     assert_eq!(answer["status"],"ok","{answer}");

@@ -113,15 +113,19 @@ pub async fn read_run<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, r
     Ok(json!({"status":"ok","schema":"native-run-history-1","phase":phase,"run_id":run,"launch":launch,"result":result}))
 }
 
-/// A capture's bytes as lossy UTF-8 under `text`, with `byte_length` in place
-/// of the array; digest, completeness and result lines are untouched.
+/// A capture's bytes under `text` with their `byte_length`: a capture retained
+/// as an integer array is rendered as lossy UTF-8, one retained as text is
+/// already there; digest, completeness and result lines are untouched.
 fn captures_as_text(event: &mut Value) {
     for stream in ["stdout", "stderr"] {
         let Some(capture) = event[stream].as_object_mut() else { continue };
-        let Some(bytes) = capture.remove("bytes") else { continue };
-        let bytes: Vec<u8> = serde_json::from_value(bytes).unwrap_or_default();
-        capture.insert("byte_length".into(), json!(bytes.len()));
-        capture.insert("text".into(), json!(String::from_utf8_lossy(&bytes)));
+        if let Some(bytes) = capture.remove("bytes") {
+            let bytes: Vec<u8> = serde_json::from_value(bytes).unwrap_or_default();
+            capture.insert("byte_length".into(), json!(bytes.len()));
+            capture.insert("text".into(), json!(String::from_utf8_lossy(&bytes)));
+        } else if let Some(text) = capture.get("text").and_then(Value::as_str) {
+            capture.insert("byte_length".into(), json!(text.len()));
+        }
     }
 }
 

@@ -156,7 +156,7 @@ pub async fn launch(store: Store, root: PathBuf, request: Run) -> Result<Record>
         let process = tokio::task::spawn_blocking(move || {
             if inputs::source(&project).ok().as_ref() != Some(&expected) {
                 use crate::execution::receipts::{Capture, Disposition, Observation};
-                let empty = Capture { bytes: vec![], digest: digest(&[]), complete: true, result_lines: vec![] };
+                let empty = Capture::new(vec![], true, vec![]);
                 return (RunResult { run_id: launch.run_id, disposition: Disposition::LaunchFailed {
                     reason: "verification source changed before process launch".into() },
                     stdout: empty.clone(), stderr: empty, observed_at: child::now(),

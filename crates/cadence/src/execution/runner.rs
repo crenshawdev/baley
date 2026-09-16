@@ -409,7 +409,7 @@ pub(crate) fn capture(mut reader: impl Read) -> Capture {
         && valid_result_line(value) {
         result_lines.push(value.to_owned());
     }
-    Capture { digest: digest(&bytes), bytes, complete, result_lines }
+    Capture::new(bytes, complete, result_lines)
 }
 
 pub fn observe_child(project: &Path, launch: &Launch) -> RunResult {
