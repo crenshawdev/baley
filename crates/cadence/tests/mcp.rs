@@ -1256,7 +1256,12 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     let listed = client.tools_list(2);
     let query = listed["result"]["tools"].as_array().unwrap().iter()
         .find(|tool| tool["name"] == "cadence_query").unwrap();
-    assert!(query["description"].as_str().unwrap().starts_with(cadence::read::instructions::CONTRACT));
+    // The contract is delivered once, as server instructions. The tool
+    // description carries only the operation rules, never a second copy.
+    let description = query["description"].as_str().unwrap();
+    assert!(!description.contains(cadence::read::instructions::CONTRACT),
+        "cadence_query description repeats CONTRACT already sent as server instructions");
+    assert!(description.starts_with("Read supported configuration"), "description: {description}");
     assert!(client.finish().success());
 
     // These skills are generated artifacts: their bytes are the binary's own
