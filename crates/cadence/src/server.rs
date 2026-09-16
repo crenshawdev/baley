@@ -254,10 +254,14 @@ struct VersionArguments {}
 enum QueryArguments {
     #[serde(rename = "search")]
     Search(cadence::read::model::SearchRequest),
+    #[serde(rename = "list")]
+    List(cadence::read::model::ListRequest),
     #[serde(rename = "read")]
     Read(cadence::read::model::ReadRequest),
     #[serde(rename = "document")]
     Document(cadence::read::model::DocumentRequest),
+    #[serde(rename = "document-search")]
+    DocumentSearch(cadence::read::model::DocumentSearchRequest),
     #[serde(rename = "verify-next")]
     VerifyNext { phase: NonZeroU32, request_id: Option<String> },
     #[serde(rename = "verification-read")]
@@ -671,11 +675,13 @@ impl ServerHandler for PublicServer {
                 .into())
             }
             "cadence_query" => {
-                if raw.as_ref().and_then(|value| value["operation"].as_str()).is_some_and(|operation| matches!(operation, "search" | "read" | "document")) {
+                if raw.as_ref().and_then(|value| value["operation"].as_str()).is_some_and(|operation| matches!(operation, "search" | "list" | "read" | "document" | "document-search")) {
                     let query = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
                         Ok(QueryArguments::Search(request)) => cadence::read::Query::Search(request),
+                        Ok(QueryArguments::List(request)) => cadence::read::Query::List(request),
                         Ok(QueryArguments::Read(request)) => cadence::read::Query::Read(request),
                         Ok(QueryArguments::Document(request)) => cadence::read::Query::Document(request),
+                        Ok(QueryArguments::DocumentSearch(request)) => cadence::read::Query::DocumentSearch(request),
                         Err(error) => return structured_result(Ok(QueryOutput::Read(serde_json::json!({"status":"refused","code":"read-contract","rule":"D-147","slot":"arguments","reason":error.to_string()})))),
                         Ok(_) => unreachable!("read operation selected before generic query"),
                     };
@@ -829,7 +835,7 @@ impl ServerHandler for PublicServer {
                     Some(QueryArguments::ContextIntake { .. }) => {
                         unreachable!("context intake is decoded before execution fallback")
                     }
-                    Some(QueryArguments::Search(_) | QueryArguments::Read(_) | QueryArguments::Document(_)) => unreachable!("read operation routed before generic query"),
+                    Some(QueryArguments::Search(_) | QueryArguments::List(_) | QueryArguments::Read(_) | QueryArguments::Document(_) | QueryArguments::DocumentSearch(_)) => unreachable!("read operation routed before generic query"),
                     Some(QueryArguments::ExecutionHistory { .. }) => unreachable!("native history decoded before execution fallback"),
                     Some(QueryArguments::PlanRead { .. } | QueryArguments::EvidenceRead { .. }) => {
                         unreachable!("plan read decoded before execution")

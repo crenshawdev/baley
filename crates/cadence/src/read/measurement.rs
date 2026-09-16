@@ -360,7 +360,7 @@ fn add(left: u64, right: u64) -> Result<u64, Value> {
 fn classify_read(project: &Path, name: &str, input: &Value) -> (u64, u64, u64) {
     if name == "mcp__cadence__cadence_query" {
         return match input["operation"].as_str() {
-            Some("search" | "read" | "document" | "context-intake" | "plan-read" | "evidence-read"
+            Some("search" | "list" | "read" | "document" | "document-search" | "context-intake" | "plan-read" | "evidence-read"
                 | "execution-history" | "verification-read" | "verification-audit" | "review-material"
                 | "review-original" | "review-attempt" | "review-inventory" | "review-deferred"
                 | "review-consumer" | "risk-status") => (1, 0, 0),

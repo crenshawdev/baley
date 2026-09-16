@@ -1,7 +1,8 @@
 use super::{
     ReadDomain,
     location::Capability,
-    model::{DocumentIdentity, DocumentRequest},
+    model::{DocumentIdentity, DocumentRequest, DocumentSearchRequest},
+    search,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -265,5 +266,46 @@ impl ReadDomain {
             "identity":resolved.identity,"classification":resolved.classification,"revision":resolved.revision,
             "part":selected.selector,"body":&selected.body[offset..end],"truncated":truncated,
             "continuation":continuation,"continue_from_byte":truncated.then_some(end)})
+    }
+}
+
+/// Ceiling on a document-search answer. Hits carry no bodies, so an answer
+/// holds a few hundred of them and an ordinary phase never reaches it.
+const SEARCH_BOUND: usize = super::slice::ANSWER_BOUND;
+
+impl ReadDomain {
+    /// Which parts of one phase's process records mention `pattern`: each
+    /// hit is an identity and a part for `document`, with the matching line
+    /// numbers, and never a body. Hits are in identity-then-part order.
+    pub(super) fn document_search(&self, request: DocumentSearchRequest) -> Value {
+        let matcher = match search::matcher(&request.pattern, request.case_insensitive.unwrap_or(false)) {
+            Ok(matcher) => matcher,
+            Err(answer) => return answer,
+        };
+        let mut searcher = search::searcher();
+        let records = match catalog(&self.planning_root, request.phase.get()) {
+            Ok(records) => records,
+            Err(answer) => return answer,
+        };
+        let mut hits = Vec::new();
+        for record in records {
+            for part in record.parts {
+                let match_lines = search::matching_lines(&mut searcher, &matcher, &part.body);
+                if match_lines.is_empty() { continue; }
+                hits.push(json!({"identity":record.identity,"part":part.selector,"title":part.title,
+                    "classification":record.classification,"revision":record.revision,"match_lines":match_lines}));
+            }
+        }
+        hits.sort_by(|left, right| left["identity"].to_string().cmp(&right["identity"].to_string())
+            .then(left["part"].as_str().cmp(&right["part"].as_str())));
+        let total = hits.len();
+        let mut answer = json!({"status":"ok","kind":"document-search","bound":SEARCH_BOUND,"phase":request.phase,
+            "hits":hits,"total":total,"incomplete":false,"notes":[]});
+        while serde_json::to_vec(&answer).is_ok_and(|bytes| bytes.len() > SEARCH_BOUND) {
+            answer["hits"].as_array_mut().unwrap().pop();
+            answer["incomplete"] = json!(true);
+            answer["notes"] = json!(["document-search answer was bounded; tighten the pattern"]);
+        }
+        answer
     }
 }

@@ -144,7 +144,7 @@ fn phase31_unissued_location_is_refused() {
     other.finish();
     let first = client.call("cadence_query", json!({"operation":"search","pattern":"beta",
         "scope":{"kind":"directory","selector":"src"}}))["hits"][0]["location"].as_str().unwrap().to_owned();
-    for _ in 0..65 {
+    for _ in 0..520 {
         let answer = client.call("cadence_query", json!({"operation":"search","pattern":"alpha",
             "scope":{"kind":"directory","selector":"src"}}));
         assert_eq!(answer["status"], "ok", "{answer}");
@@ -157,8 +157,8 @@ fn phase31_unissued_location_is_refused() {
 #[test]
 fn phase31_read_returns_exact_slice_and_continuation() {
     let fixture = Fixture::new();
-    let long_line = format!("    // first-marker {} last-marker\\n", "é".repeat(40_000));
-    let oversized = format!("fn oversized() {{\\n{long_line}}}\\n");
+    let long_line = format!("    // first-marker {} last-marker\n", "é".repeat(40_000));
+    let oversized = format!("fn oversized() {{\n{long_line}}}\n");
     fs::write(fixture.path("src/oversized.rs"), &oversized).unwrap();
     let mut client = Client::open(fixture.project());
 
@@ -197,7 +197,7 @@ fn phase31_large_file_returns_unit_outline() {
     let fixture = Fixture::new();
     let padding = "// outline padding\n".repeat(2_000);
     let large = format!(
-        "fn first_unit() {{\n    let outline_needle = 1;\n}}\n{padding}fn second_unit() {{\n    let outline_needle = 2;\n}}\n"
+        "fn first_unit() {{\n    let outline_needle = 1;\n}}\n{padding}\nfn second_unit() {{\n    let outline_needle = 2;\n}}\n"
     );
     assert!(large.len() > 24 * 1024);
     fs::write(fixture.path("src/outline.rs"), large).unwrap();
@@ -224,6 +224,105 @@ fn phase31_large_file_returns_unit_outline() {
     assert_eq!(missing["kind"], "outline");
     assert_eq!(missing["reason"], "missing-unit");
     assert_eq!(missing["rows"].as_array().unwrap().len(), 2, "{missing}");
+    assert_eq!(missing["notes"], json!([]), "{missing}");
+
+    let small = client.call("cadence_query", json!({"operation":"search","pattern":"fn beta",
+        "scope":{"kind":"directory","selector":"src"}}))["hits"][0]["file_reference"].as_str().unwrap().to_owned();
+    let whole = client.call("cadence_query", json!({"operation":"read","file":small}));
+    assert_eq!(whole["kind"], "slice", "a file under the outline threshold comes back whole: {whole}");
+    assert_eq!(whole["body"], fs::read_to_string(fixture.path("src/units.rs")).unwrap());
+    assert_eq!(whole["truncated"], false);
+    client.finish();
+}
+
+#[test]
+fn phase31_search_reaches_items_and_windows_the_brace_counters_missed() {
+    let fixture = Fixture::new();
+    let mut client = Client::open(fixture.project());
+
+    let items = client.call("cadence_query", json!({"operation":"search","pattern":"BTreeMap",
+        "scope":{"kind":"directory","selector":"src"}}));
+    assert_eq!(items["status"], "ok", "{items}");
+    let hits = items["hits"].as_array().unwrap();
+    let rows: Vec<_> = hits.iter().map(|hit| (hit["name"].as_str().unwrap(), hit["kind"].as_str().unwrap(), hit["range"].clone())).collect();
+    assert_eq!(rows, vec![
+        ("(no enclosing unit)", "window", json!([1, 3])),
+        ("Registry", "struct", json!([3, 6])),
+    ], "{items}");
+    assert_eq!(hits[0]["match_lines"], json!([1]));
+    assert_eq!(hits[0]["body"], "use std::collections::BTreeMap;\n\n/// Doc for the struct.\n");
+    assert_eq!(hits[1]["body"], "/// Doc for the struct.\npub struct Registry {\n    entries: BTreeMap<String, u32>,\n}\n");
+    assert_eq!(items["matches"], 2);
+    assert_eq!(items["incomplete"], false);
+    assert!(items["cursor"].is_null(), "{items}");
+    let window = client.call("cadence_query", json!({"operation":"read","location":hits[0]["location"]}));
+    assert_eq!(window["kind"], "slice", "{window}");
+    assert_eq!(window["body"], hits[0]["body"]);
+
+    let method = client.call("cadence_query", json!({"operation":"search","pattern":"entries\\.insert",
+        "scope":{"kind":"directory","selector":"src"}}));
+    let hit = &method["hits"][0];
+    assert_eq!((hit["name"].as_str(), hit["kind"].as_str(), hit["range"].clone()), (Some("Registry::insert"), Some("function"), json!([9, 9])), "{method}");
+
+    let variant = client.call("cadence_query", json!({"operation":"search","pattern":"Heading",
+        "scope":{"kind":"directory","selector":"src"}}))["hits"][0].clone();
+    assert_eq!((variant["name"].as_str(), variant["kind"].as_str()), (Some("Kind"), Some("enum")), "{variant}");
+
+    let python = client.call("cadence_query", json!({"operation":"search","pattern":"marker",
+        "scope":{"kind":"directory","selector":"tools"}}))["hits"][0].clone();
+    assert_eq!((python["name"].as_str(), python["kind"].as_str(), python["range"].clone()), (Some("Builder.run"), Some("function"), json!([2, 3])), "{python}");
+
+    let toml = client.call("cadence_query", json!({"operation":"search","pattern":"needle",
+        "scope":{"kind":"directory","selector":"config"}}));
+    let hit = &toml["hits"][0];
+    assert_eq!((hit["name"].as_str(), hit["kind"].as_str(), hit["range"].clone()), (Some("(no enclosing unit)"), Some("window"), json!([3, 5])), "{toml}");
+    assert_eq!(hit["body"], "\n[deps]\nneedle = \"1\"\n");
+    let whole = client.call("cadence_query", json!({"operation":"read","file":hit["file_reference"]}));
+    assert_eq!(whole["kind"], "slice", "a file with no grammar comes back whole: {whole}");
+    assert_eq!(whole["body"], fs::read_to_string(fixture.path("config/settings.toml")).unwrap());
+    client.finish();
+}
+
+#[test]
+fn phase31_bounded_search_pages_with_an_issued_cursor() {
+    let fixture = Fixture::new();
+    let filler = "    // filler line\n".repeat(1_600);
+    for name in ["page_a", "page_b", "page_c"] {
+        fs::write(fixture.path(&format!("src/{name}.rs")), format!("fn {name}() {{\n    let page_needle = 1;\n{filler}}}\n")).unwrap();
+    }
+    let mut client = Client::open(fixture.project());
+    let request = json!({"operation":"search","pattern":"page_needle","scope":{"kind":"directory","selector":"src"}});
+
+    let first = client.call("cadence_query", request.clone());
+    assert_eq!(first["status"], "ok", "{first}");
+    assert_eq!(first["matches"], 3);
+    assert_eq!(first["files"], 3);
+    assert_eq!(first["incomplete"], true, "{first}");
+    let cursor = first["cursor"].as_str().expect("a bounded answer issues a cursor").to_owned();
+    let names = |answer: &serde_json::Value| answer["hits"].as_array().unwrap().iter().map(|hit| hit["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    assert_eq!(names(&first), vec!["page_a", "page_b"], "{}", first["notes"]);
+    assert!(first["hits"].as_array().unwrap().iter().all(|hit| hit["body_truncated"] == false), "{first}");
+    assert!(serde_json::to_vec(&first).unwrap().len() <= 65_536);
+
+    let mut second_request = request.clone();
+    second_request["cursor"] = json!(cursor);
+    let second = client.call("cadence_query", second_request);
+    assert_eq!(second["status"], "ok", "{second}");
+    assert_eq!(names(&second), vec!["page_c"]);
+    assert_eq!(second["incomplete"], false);
+    assert!(second["cursor"].is_null(), "{second}");
+    assert_eq!(second["hits"][0]["body"], fs::read_to_string(fixture.path("src/page_c.rs")).unwrap());
+
+    let mut other = request.clone();
+    other["pattern"] = json!("page_[abc]");
+    other["cursor"] = json!(cursor);
+    let mismatch = client.call("cadence_query", other);
+    assert_eq!(mismatch["status"], "refused", "{mismatch}");
+    assert_eq!(mismatch["code"], "cursor-mismatch");
+    let mut forged = request.clone();
+    forged["cursor"] = json!("cur-0000000000000000-1");
+    let forged = client.call("cadence_query", forged);
+    assert_eq!(forged["code"], "location-not-issued", "{forged}");
     client.finish();
 }
 
@@ -310,6 +409,14 @@ fn phase31_process_identity_returns_rendered_slice() {
     assert!(lease["hits"].as_array().unwrap().iter().all(|hit| hit["file"] != "src/other.rs"));
     assert_eq!(fs::read(project.join(".planning/state.json")).unwrap(), before_lease);
 
+    let listed = client.call("cadence_query", json!({"operation":"list","scope":lease_scope.clone()}));
+    assert_eq!(listed["status"], "ok", "{listed}");
+    assert_eq!(listed["kind"], "list");
+    let names: Vec<_> = listed["files"].as_array().unwrap().iter().map(|entry| entry["file"].as_str().unwrap()).collect();
+    assert!(names.contains(&"src/lease.rs"), "{listed}");
+    assert!(!names.contains(&"src/other.rs"), "a lease list stays inside the lease: {listed}");
+    assert_eq!(fs::read(project.join(".planning/state.json")).unwrap(), before_lease);
+
     fs::write(project.join("src/lease.rs"), "pub fn lease_needle() -> u32 { 310 }\n").unwrap();
     git(project, &["add", "src/lease.rs"]);
     git(project, &["commit", "-S", "-m", "feat(read): complete fixture task (fixture-one-a)"]);
@@ -382,15 +489,29 @@ fn phase31_process_identity_returns_rendered_slice() {
     assert!(summary["body"].as_str().unwrap().contains("fixture-one-a"), "{summary}");
     assert!(summary["body"].as_str().unwrap().contains(&completion), "{summary}");
 
-    let phase_hits = client.call("cadence_query", json!({"operation":"search",
-        "pattern":"HANDWRITTEN NATIVE TRUTH SENTENCE","scope":{"kind":"phase-documents","phase":31}}));
+    let phase_hits = client.call("cadence_query", json!({"operation":"document-search",
+        "phase":31,"pattern":"HANDWRITTEN NATIVE TRUTH SENTENCE"}));
+    assert_eq!(phase_hits["status"], "ok", "{phase_hits}");
+    assert_eq!(phase_hits["kind"], "document-search");
+    assert_eq!(phase_hits["total"], 1, "{phase_hits}");
     assert_eq!(phase_hits["hits"].as_array().unwrap().len(), 1, "{phase_hits}");
     assert!(phase_hits["hits"][0]["identity"].is_object(), "{phase_hits}");
     assert_eq!(phase_hits["hits"][0]["part"], "truth:T4");
+    assert_eq!(phase_hits["hits"][0]["match_lines"], json!([1]));
     assert!(phase_hits["hits"][0].get("file").is_none(), "{phase_hits}");
+    assert!(phase_hits["hits"][0].get("body").is_none(), "a document-search hit carries no body: {phase_hits}");
     let followed = client.call("cadence_query", json!({"operation":"document",
         "identity":phase_hits["hits"][0]["identity"],"part":phase_hits["hits"][0]["part"]}));
     assert_eq!(followed["body"], truth["body"]);
+    let broad = client.call("cadence_query", json!({"operation":"document-search","phase":31,"pattern":"SENTINEL|UNIQUE|TRUTH"}));
+    assert!(broad["total"].as_u64().unwrap() >= 4, "{broad}");
+    assert_eq!(broad["incomplete"], false, "{broad}");
+    let unknown = client.call("cadence_query", json!({"operation":"document-search","phase":31,"pattern":"["}));
+    assert_eq!(unknown["status"], "refused", "{unknown}");
+    assert_eq!(unknown["slot"], "pattern");
+    let removed = client.call("cadence_query", json!({"operation":"search",
+        "pattern":"HANDWRITTEN","scope":{"kind":"phase-documents","phase":31}}));
+    assert_eq!(removed["status"], "refused", "the phase-documents scope is gone from search: {removed}");
 
     for answer in [
         client.call("cadence_query", json!({"operation":"document",
@@ -408,5 +529,59 @@ fn phase31_process_identity_returns_rendered_slice() {
     for answer in [&intake, &readback, &context_index, &truth, &page, &roadmap, &summary, &phase_hits] {
         no_process_path(answer);
     }
+    client.finish();
+}
+
+#[test]
+fn phase31_list_returns_the_files_of_a_scope_with_references() {
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.path("src/many")).unwrap();
+    for index in 0..300 {
+        fs::write(fixture.path(&format!("src/many/f{index:03}.rs")), format!("fn f{index}() {{}}\n")).unwrap();
+    }
+    let mut client = Client::open(fixture.project());
+
+    let listed = client.call("cadence_query", json!({"operation":"list","scope":{"kind":"directory","selector":"src/nested"}}));
+    assert_eq!(listed["status"], "ok", "{listed}");
+    assert_eq!(listed["kind"], "list");
+    assert_eq!(listed["total"], 1);
+    assert_eq!(listed["incomplete"], false);
+    let entry = &listed["files"][0];
+    assert_eq!(entry["file"], "src/nested/mod.rs");
+    assert_eq!(entry["bytes"], fs::metadata(fixture.path("src/nested/mod.rs")).unwrap().len());
+    let read = client.call("cadence_query", json!({"operation":"read","file":entry["file_reference"]}));
+    assert_eq!(read["kind"], "slice", "a listed reference reads: {read}");
+    assert_eq!(read["body"], fs::read_to_string(fixture.path("src/nested/mod.rs")).unwrap());
+
+    let ignored = client.call("cadence_query", json!({"operation":"list","scope":{"kind":"project"}}));
+    let all: Vec<_> = ignored["files"].as_array().unwrap().iter().map(|entry| entry["file"].as_str().unwrap().to_owned()).collect();
+    assert!(!all.iter().any(|file| file.starts_with("ignored/") || file.starts_with(".planning/") || file.starts_with(".git/")), "{all:?}");
+    assert!(all.windows(2).all(|pair| pair[0] < pair[1]), "list is in path order: {all:?}");
+
+    let request = json!({"operation":"list","scope":{"kind":"directory","selector":"src/many"}});
+    let first = client.call("cadence_query", request.clone());
+    assert_eq!(first["total"], 300, "{first}");
+    assert_eq!(first["served"], 256, "{first}");
+    assert_eq!(first["incomplete"], true);
+    let cursor = first["cursor"].as_str().expect("a bounded list issues a cursor").to_owned();
+    let mut second_request = request.clone();
+    second_request["cursor"] = json!(cursor);
+    let second = client.call("cadence_query", second_request);
+    assert_eq!(second["served"], 44, "{second}");
+    assert_eq!(second["incomplete"], false);
+    assert!(second["cursor"].is_null());
+    assert_eq!(second["files"][0]["file"], "src/many/f256.rs");
+    assert_eq!(second["files"][43]["file"], "src/many/f299.rs");
+
+    let mut other = json!({"operation":"list","scope":{"kind":"directory","selector":"src"}});
+    other["cursor"] = json!(cursor);
+    let mismatch = client.call("cadence_query", other);
+    assert_eq!(mismatch["code"], "cursor-mismatch", "{mismatch}");
+    let mut crossed = json!({"operation":"search","pattern":"fn","scope":{"kind":"directory","selector":"src/many"}});
+    crossed["cursor"] = json!(cursor);
+    let crossed = client.call("cadence_query", crossed);
+    assert_eq!(crossed["code"], "cursor-mismatch", "a list cursor does not resume a search: {crossed}");
+    let escape = client.call("cadence_query", json!({"operation":"list","scope":{"kind":"directory","selector":"../"}}));
+    assert_eq!(escape["status"], "refused", "{escape}");
     client.finish();
 }

@@ -28,31 +28,9 @@ pub fn line_for(starts: &[usize], byte: usize) -> usize {
     starts.partition_point(|start| *start <= byte).max(1)
 }
 
-pub fn bytes_for_lines(content: &str, first: usize, last: usize) -> (usize, usize) {
-    let starts = line_starts(content);
-    let start = starts.get(first.saturating_sub(1)).copied().unwrap_or(content.len());
-    let end = starts.get(last).copied().unwrap_or(content.len());
-    (start, end)
-}
-
-pub fn simple_markdown(content: &str) -> Vec<Unit> {
-    let starts = line_starts(content);
-    let headings: Vec<(usize, usize, String)> = content.lines().enumerate().filter_map(|(index, line)| {
-        let trimmed = line.trim_start();
-        let hashes = trimmed.chars().take_while(|character| *character == '#').count();
-        (hashes > 0 && trimmed.as_bytes().get(hashes) == Some(&b' ')).then(|| (index + 1, hashes, line.trim().to_owned()))
-    }).collect();
-    if headings.is_empty() { return Vec::new(); }
-    let total = starts.len();
-    headings.iter().enumerate().map(|(index, (line, level, bare))| {
-        let last = headings[index + 1..].iter().find(|(_, next_level, _)| next_level <= level).map_or(total, |(next, _, _)| next - 1);
-        let (first_byte, last_byte) = bytes_for_lines(content, *line, last);
-        Unit { name: bare.clone(), bare: bare.clone(), kind: "heading".into(), first_line:*line, last_line:last, first_byte, last_byte }
-    }).collect()
-}
-
+/// The whole file as one unit, for a file with no grammar or no units.
 pub fn fallback(path: &Path, content: &str) -> Vec<Unit> {
     let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("source").to_owned();
-    let last_line = line_starts(content).len();
-    vec![Unit { name: name.clone(), bare:name, kind:"source".into(), first_line:1, last_line, first_byte:0, last_byte:content.len() }]
+    let last_line = content.split_inclusive('\n').count().max(1);
+    vec![Unit { name: name.clone(), bare: name, kind: "source", first_line: 1, last_line, first_byte: 0, last_byte: content.len() }]
 }

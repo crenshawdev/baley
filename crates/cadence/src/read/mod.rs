@@ -1,5 +1,6 @@
 pub mod document;
 pub mod instructions;
+pub mod list;
 pub mod location;
 pub mod measurement;
 pub mod model;
@@ -10,14 +11,20 @@ pub mod scope;
 pub mod source;
 
 use location::Registry;
-use model::{DocumentRequest, ReadRequest, SearchRequest, Unit};
+use model::{DocumentRequest, DocumentSearchRequest, ListRequest, ReadRequest, SearchRequest};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 pub use location::Capability;
 
 #[derive(Clone, Debug)]
-pub enum Query { Search(SearchRequest), Read(ReadRequest), Document(DocumentRequest) }
+pub enum Query {
+    Search(SearchRequest),
+    List(ListRequest),
+    Read(ReadRequest),
+    Document(DocumentRequest),
+    DocumentSearch(DocumentSearchRequest),
+}
 
 pub struct ReadDomain {
     pub(super) project: PathBuf,
@@ -34,12 +41,13 @@ impl ReadDomain {
             registry: Registry::default(),
         })
     }
-    fn units(&self, path: &Path, content: &str) -> Vec<Unit> { outline::units(path, content) }
     pub fn query(&mut self, query: Query) -> Value {
         match query {
             Query::Search(request) => self.search(request),
+            Query::List(request) => self.list(request),
             Query::Read(request) => self.read(request),
             Query::Document(request) => self.document(request),
+            Query::DocumentSearch(request) => self.document_search(request),
         }
     }
 }

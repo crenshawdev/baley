@@ -128,6 +128,17 @@ impl Fixture {
         fs::write(project.join("docs/units.md"), "# Markdown unit\nneedle\n").unwrap();
         fs::write(project.join("src/units.json"), "{\n  \"jsonUnit\": \"needle\"\n}\n").unwrap();
         fs::write(project.join("src/units.c"), "int c_unit(void) {\n  int needle = 1;\n  return needle;\n}\n").unwrap();
+        fs::write(project.join("src/items.rs"), concat!(
+            "use std::collections::BTreeMap;\n\n",
+            "/// Doc for the struct.\n",
+            "pub struct Registry {\n    entries: BTreeMap<String, u32>,\n}\n\n",
+            "impl Registry {\n    pub fn insert(&mut self, key: &str) { self.entries.insert(key.into(), 1); }\n}\n\n",
+            "pub enum Kind { Heading, Function }\n",
+        )).unwrap();
+        fs::create_dir_all(project.join("tools")).unwrap();
+        fs::write(project.join("tools/build.py"), "class Builder:\n    def run(self):\n        marker = 1\n").unwrap();
+        fs::create_dir_all(project.join("config")).unwrap();
+        fs::write(project.join("config/settings.toml"), "[package]\nname = \"fixture\"\n\n[deps]\nneedle = \"1\"\n").unwrap();
         Command::new("git").args(["init", "--initial-branch=fixture/read"]).current_dir(project).status().unwrap();
         Command::new("git").args(["add", "."]).current_dir(project).status().unwrap();
         Command::new("git").args(["-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture"]).current_dir(project).status().unwrap();
