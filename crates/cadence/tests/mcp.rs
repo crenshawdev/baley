@@ -1811,3 +1811,51 @@ fn tool_schemas_carry_no_unreferenced_definitions() {
     }
     assert!(client.finish().success());
 }
+
+/// P31-A-CALLER-ADAPTERS, the skill half: no shipped skill or agent grants a
+/// built-in project read, and no body carries the old read recipes. Cadence
+/// is the only project read surface; a prohibition that names a tool is fine.
+#[test]
+fn skills_and_agents_grant_no_direct_project_reads() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(root.join("skills")).unwrap() {
+        let candidate = entry.unwrap().path().join("SKILL.md");
+        if candidate.is_file() { paths.push(candidate); }
+    }
+    for entry in fs::read_dir(root.join("agents")).unwrap() {
+        let candidate = entry.unwrap().path();
+        if candidate.extension().is_some_and(|ext| ext == "md") { paths.push(candidate); }
+    }
+    assert!(paths.len() > 40, "{} surfaces found", paths.len());
+    let mut offending = Vec::new();
+    for path in &paths {
+        let relative = path.strip_prefix(&root).unwrap().display().to_string();
+        let (front, body) = markdown_parts(&relative);
+        let granted: Vec<String> = match front.get("allowed-tools").or_else(|| front.get("tools")) {
+            Some(Value::Array(items)) => items.iter().filter_map(Value::as_str).map(str::to_owned).collect(),
+            Some(Value::String(line)) => line.split(", ").map(str::to_owned).collect(),
+            _ => Vec::new(),
+        };
+        for tool in granted {
+            if matches!(tool.as_str(), "Read" | "Grep" | "Glob") {
+                offending.push(format!("{relative}: grants {tool}"));
+            }
+        }
+        for recipe in [
+            "mcp__excerpt__",
+            "excerpt_search",
+            "excerpt_read",
+            "skim.mjs",
+            "built-in Read",
+            "built-ins are the path",
+            "grep -n",
+            "Glob and grep",
+        ] {
+            if body.contains(recipe) {
+                offending.push(format!("{relative}: body carries `{recipe}`"));
+            }
+        }
+    }
+    assert!(offending.is_empty(), "direct project reads survive:\n{}", offending.join("\n"));
+}
