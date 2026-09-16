@@ -1503,6 +1503,57 @@ fn phase12_runner_retains_task_commands_and_one_suite() {
     assert_eq!(execute_next(project)["outcome"],"complete");
 }
 
+// GH-263: a run is read by its id, not by pasting the phase. The answer is
+// the run's launch and result records; each capture is rendered as text
+// beside its digest, and the record keeps its bytes.
+#[test]
+fn phase12_execution_history_reads_one_run_by_id() {
+    let fixture=Tiny::new("runner");let project=fixture.project();
+    finish_tasks(&fixture);
+    let (_,suite)=suite_run(project,"suite-1",1);
+    let whole=execution_history(project);
+    let find=|events:&str,kind:&str,run:&str| whole[events].as_array().unwrap().iter()
+        .find(|e|e["request"]["event"]["kind"]==kind && e["request"]["event"]["run_id"]==run).cloned().unwrap();
+    let rendered=|mut record:Value| {
+        for stream in ["stdout","stderr"] {
+            let capture=&mut record["request"]["event"][stream];
+            let bytes:Vec<u8>=serde_json::from_value(capture["bytes"].take()).unwrap();
+            capture.as_object_mut().unwrap().remove("bytes");
+            capture["byte_length"]=json!(bytes.len());
+            capture["text"]=json!(String::from_utf8_lossy(&bytes));
+        }
+        record
+    };
+    let mut client=Client::open(project);
+    // A task run, including the one whose stdout was cut at the capture bound.
+    let answer=client.call("cadence_query",json!({"operation":"execution-history","phase":12,"run":"big-C"}));
+    assert_eq!(answer["status"],"ok","{answer}");
+    assert_eq!(answer["schema"],"native-run-history-1");
+    assert_eq!(answer["phase"],12);
+    assert_eq!(answer["run_id"],"big-C");
+    assert!(answer.get("events").is_none() && answer.get("plan_events").is_none(),"one run, not the phase: {answer}");
+    assert_eq!(answer["launch"],find("events","launch","big-C"));
+    assert_eq!(answer["result"],rendered(find("events","result","big-C")));
+    assert_eq!(answer["result"]["request"]["event"]["stdout"]["complete"],false,"the oversized control is the cut capture");
+    assert_eq!(answer["result"]["request"]["event"]["stdout"]["byte_length"],65536);
+    assert!(!serde_json::to_string(&answer).unwrap().contains("\"bytes\":["),"capture bytes leaked as integer arrays: {answer}");
+    // A suite run is read the same way from the plan events.
+    let answer=client.call("cadence_query",json!({"operation":"execution-history","phase":12,"run":"suite-1"}));
+    assert_eq!(answer["status"],"ok","{answer}");
+    assert_eq!(answer["launch"],find("plan_events","suite-launch","suite-1"));
+    assert_eq!(answer["result"],rendered(find("plan_events","suite-result","suite-1")));
+    assert_eq!(answer["result"]["request"]["event"]["stdout"]["digest"],suite["stdout"]["digest"]);
+    // A run the phase never retained is refused, not answered with the phase.
+    let refused=client.call("cadence_query",json!({"operation":"execution-history","phase":12,"run":"never-launched"}));
+    assert_eq!(refused["status"],"refused","{refused}");
+    assert_eq!(refused["code"],"run-not-retained");
+    assert_eq!(refused["slot"],"run");
+    assert!(refused.get("events").is_none(),"{refused}");
+    // The whole-phase read is unchanged.
+    assert_eq!(client.call("cadence_query",json!({"operation":"execution-history","phase":12}))["events"],whole["events"]);
+    client.finish();
+}
+
 struct Historical {root:PathBuf,_lock:fs::File}
 impl Historical {
     fn restore() -> Self {
