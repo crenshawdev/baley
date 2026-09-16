@@ -322,6 +322,46 @@ fn initialized_fixture(phase_directory: bool) -> tempfile::TempDir {
 }
 
 #[test]
+fn phase11_oversized_document_part_is_refused_never_paged() {
+    let temp = initialized_fixture(true);
+    let mut request = submission();
+    request["submission"]["scope"] = json!("x".repeat(30_000));
+
+    let mut client = Client::open(temp.path());
+    let published = client.call("cadence_apply", approve(request));
+    assert_eq!(published["status"], "ok", "{published}");
+    assert_eq!(published["persisted"], true, "{published}");
+
+    let index = client.call(
+        "cadence_query",
+        json!({"operation":"document",
+            "identity":{"kind":"phase-context","phase":11}}),
+    );
+    let scope = index["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|part| part["part"] == "scope")
+        .unwrap();
+    assert_eq!(scope["bytes"], 30_001, "{index}");
+
+    let answer = client.call(
+        "cadence_query",
+        json!({"operation":"document",
+            "identity":{"kind":"phase-context","phase":11},"part":"scope"}),
+    );
+    assert_eq!(answer["status"], "refused", "{answer}");
+    assert_eq!(answer["code"], "document-part-too-large", "{answer}");
+    assert_eq!(answer["slot"], "part", "{answer}");
+    let reason = answer["reason"].as_str().unwrap();
+    assert!(reason.contains("scope"), "{answer}");
+    assert!(reason.contains("30001"), "{answer}");
+    assert!(reason.contains("24576"), "{answer}");
+    assert!(answer.get("continuation").is_none(), "{answer}");
+    client.finish();
+}
+
+#[test]
 fn phase11_approved_context_persists_truths_and_decisions() {
     let examples = [
         (
