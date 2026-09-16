@@ -222,23 +222,20 @@ fn phase13_dispatch_carries_current_verification_inputs() {
     assert_eq!(operational["basis"]["map_digest"], fixture.map["input_digest"]);
     assert_eq!(operational["basis"]["publications"], fixture.admission["receipt"]["request"]["contract"]["plans"]);
     assert_eq!(operational["admissions"], json!([fixture.admission["receipt"]]));
-    // D-177: the prompt carries the history with each captured output named by
-    // digest and byte_length; the bytes stay on the record.
-    let mut expected_events = execution["events"].clone();
-    let mut expected_plan_events = execution["plan_events"].clone();
-    elide_captures(&mut expected_events);
-    elide_captures(&mut expected_plan_events);
-    assert_ne!(expected_events, execution["events"], "the fixture retains at least one run capture");
-    assert_eq!(operational["execution"]["events"], expected_events);
-    assert_eq!(operational["execution"]["plan_events"], expected_plan_events);
+    // D-177 and GH-263: the prompt's execution block is the bounded view; the
+    // bytes stay on the record, which the attempt retains in full.
+    assert!(execution["events"].as_array().unwrap().iter().any(|e| e["request"]["event"]["stdout"]["bytes"].is_array()),
+        "the fixture retains at least one run capture");
+    assert_eq!(attempt["inputs"]["execution"]["events"], execution["events"]);
+    assert_eq!(attempt["inputs"]["execution"]["plan_events"], execution["plan_events"]);
+    assert_eq!(operational["execution"]["schema"], "verifier-execution-view-1");
     assert!(!prompt.contains("\"bytes\": ["), "capture bytes leaked into the verifier prompt");
-    let pairs: Vec<_> = operational["execution"]["events"].as_array().unwrap().iter()
-        .filter(|e| e["request"]["event"]["kind"] == "close")
-        .flat_map(|e| e["request"]["event"]["submission"]["checks"].as_array().unwrap().clone()).collect();
+    let tasks: Vec<_> = operational["execution"]["plans"].as_array().unwrap().iter()
+        .flat_map(|p| p["tasks"].as_array().unwrap().clone()).collect();
+    let pairs: Vec<_> = tasks.iter().flat_map(|t| t["close"]["checks"].as_array().unwrap().clone()).collect();
     assert_eq!(pairs, fixture.pairs);
-    let statements: Vec<_> = operational["execution"]["events"].as_array().unwrap().iter()
-        .filter(|e| e["request"]["event"]["kind"] == "owner-statement")
-        .map(|e| { let mut v = e["request"]["event"].clone(); v.as_object_mut().unwrap().remove("kind"); v }).collect();
+    let statements: Vec<_> = tasks.iter()
+        .flat_map(|t| t["owner_statements"].as_array().unwrap().iter().map(|s| s["statement"].clone()).collect::<Vec<_>>()).collect();
     assert_eq!(statements, fixture.statements);
     let commands: Vec<_> = operational["checks"].as_array().unwrap().iter().map(|c| c["spec"]["command"].as_str().unwrap()).collect();
     assert_eq!(commands, ["python3 -B tests/a.py", "python3 -B tests/b.py"]);
@@ -1584,22 +1581,5 @@ fn phase13_audit_reports_broken_verification_traces() {
         for forbidden in ["Write", "Edit", "generate tests", "coverage.md", "audit.md", "CLAUDE_PLUGIN_ROOT", "PASS/FAIL"] {
             assert!(!text.contains(forbidden), "{skill} must not carry {forbidden}");
         }
-    }
-}
-
-/// The verifier prompt's rendering of a retained capture (D-177).
-fn elide_captures(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            if matches!(map.get("bytes"), Some(Value::Array(_))) && map.get("digest").is_some_and(Value::is_string) && map.contains_key("complete") {
-                let length = map["bytes"].as_array().unwrap().len();
-                map.remove("bytes");
-                map.insert("byte_length".into(), json!(length));
-                return;
-            }
-            for nested in map.values_mut() { elide_captures(nested); }
-        }
-        Value::Array(items) => for item in items { elide_captures(item); },
-        _ => {}
     }
 }
