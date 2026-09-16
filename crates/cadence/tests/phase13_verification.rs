@@ -399,19 +399,30 @@ fn phase13_snapshot_event_is_restored_from_the_log() {
         .with_operations(damaged.operations).unwrap();
     std::fs::write(root.join(cadence::store::model::STATE), damaged.render().unwrap()).unwrap();
     let id = format!("native-task:13:{digest}");
-    // Read: the record comes back as the log has it, and the answer names it.
+    // The bytes at rest, read without the binary's parse.
+    let at_rest = |project: &std::path::Path| -> Value {
+        let raw: Value = serde_json::from_slice(&std::fs::read(project.join(".planning").join(cadence::store::model::STATE)).unwrap()).unwrap();
+        raw["data"]["native_tasks"]["phases"]["13"].as_array().unwrap().iter()
+            .find(|r| r["request_digest"] == digest).unwrap()["request"]["event"]["material"]["tree"].clone()
+    };
+    assert_eq!(at_rest(project), zeros);
+    let generation = snapshot(project).generation;
+    // The first open restores the record from the log, persists it as its
+    // own generation under its own operation, and says which record.
     let restored = history(project);
     assert_eq!(restored["repaired"], json!([id]), "{restored}");
-    let record = restored["events"].as_array().unwrap().iter().find(|r| r["request_digest"] == digest).unwrap();
-    assert_eq!(record["request"]["event"]["material"]["tree"], tree);
-    assert_eq!(snapshot(project).data["native_tasks"]["phases"]["13"].as_array().unwrap().iter()
-        .find(|r| r["request_digest"] == digest).unwrap()["request"]["event"]["material"]["tree"], zeros, "a read writes nothing");
-    // Verify: no identity refusal, the same note, and the write persists the restored copy.
+    assert_eq!(restored["events"].as_array().unwrap().iter().find(|r| r["request_digest"] == digest).unwrap()["request"]["event"]["material"]["tree"], tree);
+    assert_eq!(at_rest(project), tree);
+    let repaired = snapshot(project);
+    assert_eq!(repaired.generation, generation + 1);
+    assert_eq!(repaired.operations.get(&format!("snapshot-repair:{}", generation + 1)),
+        Some(&cadence::store::model::digest(&serde_json::to_vec(&json!([id])).unwrap())), "{:?}", repaired.operations);
+    // Verify: no identity refusal, the record as the log has it, nothing left to say.
     let dispatch = query(project, json!({"operation":"verify-next","phase":13,"request_id":"verify-restored"}));
     assert_eq!(dispatch["status"], "ok", "{dispatch}");
-    assert_eq!(dispatch["repaired"], json!([id]), "{dispatch}");
-    assert_eq!(snapshot(project).data["native_tasks"]["phases"]["13"].as_array().unwrap().iter()
-        .find(|r| r["request_digest"] == digest).unwrap()["request"]["event"]["material"]["tree"], tree);
+    assert!(dispatch.get("repaired").is_none(), "{dispatch}");
+    let events = dispatch["attempt"]["inputs"]["execution"]["events"].as_array().unwrap();
+    assert_eq!(events.iter().find(|r| r["request_digest"] == digest).unwrap()["request"]["event"]["material"]["tree"], tree);
     let clean = history(project);
     assert_eq!(clean["repaired"], json!([]), "{clean}");
 }

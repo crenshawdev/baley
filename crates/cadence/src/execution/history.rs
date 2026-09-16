@@ -145,6 +145,43 @@ pub fn completed_view(records: &[Record], view: &TaskView) -> Option<Value> {
     })
 }
 
+/// GH-262: the decisions log keeps each task and plan event as the text it
+/// was written as; the snapshot copy is a projection, re-serialized through
+/// the current structs on every write to its phase. A snapshot record that no
+/// longer matches its digest is replaced by the log's text when that text
+/// still matches, and the ids restored are returned. A record with no
+/// restoring text is left as it is, for the reader that needs it to refuse by
+/// name. The log is parsed only when something no longer matches.
+pub fn reconcile(data: &mut Value, decisions: &[u8]) -> Result<Vec<String>> {
+    let mut repaired = Vec::new();
+    let mut log: Option<Vec<DecisionRecord>> = None;
+    for (namespace, prefix, matches) in [
+        (NAMESPACE, "native-task", (|value: &Value| Record::deserialize(value)
+            .ok().and_then(|r| request_digest(&r.request).ok().map(|d| d == r.request_digest)).unwrap_or(false)) as fn(&Value) -> bool),
+        (PLAN_NAMESPACE, "native-plan", |value: &Value| PlanRecord::deserialize(value)
+            .ok().and_then(|r| plan_request_digest(&r.request).ok().map(|d| d == r.request_digest)).unwrap_or(false)),
+    ] {
+        let Some(phases) = data.get_mut(namespace).and_then(|n| n.get_mut("phases")).and_then(Value::as_object_mut) else { continue };
+        for (phase, records) in phases.iter_mut() {
+            let Some(records) = records.as_array_mut() else { continue };
+            for record in records.iter_mut() {
+                if matches(record) { continue }
+                let Some(digest) = record["request_digest"].as_str() else { continue };
+                let id = format!("{prefix}:{phase}:{digest}");
+                if log.is_none() { log = Some(crate::store::model::parse_lines(decisions)?); }
+                let text = log.as_deref().unwrap_or_default().iter().find(|d| d.id == id).and_then(|d| match &d.decision {
+                    Decision::Gate { evidence: Evidence::Text(text), .. } => Some(text), _ => None });
+                let Some(restored) = text.and_then(|t| serde_json::from_str::<Value>(t).ok()) else { continue };
+                if matches(&restored) {
+                    *record = restored;
+                    repaired.push(id);
+                }
+            }
+        }
+    }
+    Ok(repaired)
+}
+
 pub fn request_digest(request: &Request) -> Result<String> {
     Ok(digest(&super::boundary::canonical_bytes(request).map_err(|e| Error::Invalid(e.to_string()))?))
 }

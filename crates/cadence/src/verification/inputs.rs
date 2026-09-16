@@ -126,12 +126,14 @@ pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
     }
     for record in &events {
         if record.request_digest != history::request_digest(&record.request)? {
-            return Err(refuse(phase, "verification-execution", "execution.events", "task event identity mismatch"));
+            return Err(refuse(phase, "verification-execution", "execution.events",
+                format!("task event identity mismatch: {} is not the record the log holds", record.request.request_id)));
         }
     }
     for record in &plan_events {
         if record.request_digest != history::plan_request_digest(&record.request)? {
-            return Err(refuse(phase, "verification-execution", "execution.plan_events", "plan event identity mismatch"));
+            return Err(refuse(phase, "verification-execution", "execution.plan_events",
+                format!("plan event identity mismatch: {} is not the record the log holds", record.request.request_id)));
         }
     }
     let source = source(project).map_err(|e| refuse(phase, "verification-source", "source", e.to_string()))?;

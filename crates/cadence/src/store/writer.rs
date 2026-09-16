@@ -318,7 +318,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let _ownership = storage.acquire()?;
         super::transaction::recover(&mut storage, &mut policy)?;
         let (view, observed) = Self::observe(&mut storage)?;
-        Ok(Self {
+        let mut writer = Self {
             storage,
             policy: CheckedPolicy {
                 policy,
@@ -327,7 +327,28 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             observed,
             view,
             failed: None,
-        })
+        };
+        writer.repair_snapshot()?;
+        Ok(writer)
+    }
+
+    /// GH-262: what the parse restored from the decisions log is persisted as
+    /// its own generation, under its own intent, so every later write starts
+    /// from a snapshot that matches its log. The view keeps the ids so the
+    /// answer that opened the store can say so.
+    fn repair_snapshot(&mut self) -> Result<()> {
+        let repaired = self.view.snapshot.repaired.clone();
+        if repaired.is_empty() {
+            return Ok(());
+        }
+        let mut operations = self.view.snapshot.operations.clone();
+        operations.insert(super::transaction::snapshot_repair_operation(self.next_generation()?),
+            model::digest(&serde_json::to_vec(&repaired)?));
+        let next = self.view.clone();
+        self.persist(next, operations, Vec::new(), "snapshot_repair",
+            super::transaction::IntentKind::SnapshotRepairV1 { repaired: repaired.clone() })?;
+        self.view.snapshot.repaired = repaired;
+        Ok(())
     }
 
     fn observe(storage: &mut S) -> Result<(View, BTreeMap<String, Observed>)> {
@@ -400,6 +421,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             }
             self.view = view;
             self.observed = observed;
+            self.repair_snapshot()?;
         }
         match operation {
             Operation::VerificationRunV1 { expected_generation, expected_integrity, record } =>

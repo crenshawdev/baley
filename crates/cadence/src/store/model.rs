@@ -115,6 +115,10 @@ pub struct Snapshot {
     pub data: Value,
     pub operations: BTreeMap<String, String>,
     pub integrity: String,
+    /// Records restored from the decisions log at parse (GH-262); never
+    /// written, so the integrity is the file's.
+    #[serde(skip)]
+    pub repaired: Vec<String>,
 }
 
 pub fn digest(bytes: &[u8]) -> String {
@@ -131,6 +135,7 @@ impl Snapshot {
             data,
             operations: BTreeMap::new(),
             integrity: String::new(),
+            repaired: Vec::new(),
         };
         snapshot.integrity = snapshot.content_digest()?;
         Ok(snapshot)
@@ -162,8 +167,9 @@ impl Snapshot {
     }
 
     pub fn parse(bytes: &[u8], items: &[u8], decisions: &[u8]) -> Result<Self> {
-        let snapshot: Self = serde_json::from_slice(bytes)?;
+        let mut snapshot: Self = serde_json::from_slice(bytes)?;
         snapshot.validate(items, decisions)?;
+        snapshot.repaired = crate::execution::history::reconcile(&mut snapshot.data, decisions)?;
         Ok(snapshot)
     }
 

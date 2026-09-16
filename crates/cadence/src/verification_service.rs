@@ -97,6 +97,7 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
         cadence::plan::persistence::read_snapshot(root)?
     };
     let data = snapshot.as_ref().map(|s| s.data.clone()).unwrap_or_else(|| json!({}));
+    let repaired = snapshot.as_ref().map(|s| s.repaired.clone()).unwrap_or_default();
     match query {
         Query::Audit { phase, command } => audit::report(root, &data, phase, command.as_deref()),
         Query::Read { phase, attempt } => {
@@ -151,7 +152,9 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let saved = persistence::replay(&written.snapshot.data, phase, &request.attempt.request_id)?
                 .ok_or_else(|| Error::Invalid("confirmed verification attempt absent".into()))?;
             inputs::reobserve_external(root, &saved.inputs, &request.documents)?;
-            Ok(json!({"status":"ok","attempt":saved}))
+            let mut answer = json!({"status":"ok","attempt":saved});
+            if !repaired.is_empty() { answer["repaired"] = json!(repaired); }
+            Ok(answer)
         }
     }
 }

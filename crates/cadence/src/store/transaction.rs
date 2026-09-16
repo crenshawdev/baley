@@ -83,6 +83,12 @@ pub(crate) enum IntentKind {
     GuardAudit {
         audit: super::writer::audit::Audit,
     },
+    /// GH-262: task and plan events the parse restored from the decisions
+    /// log, by id. The only change is each named snapshot copy replaced by
+    /// the log's text for it, and the operation that records the repair.
+    SnapshotRepairV1 {
+        repaired: Vec<String>,
+    },
     Store,
     BoundaryObservationV1 {
         scope: BoundaryScope,
@@ -123,6 +129,11 @@ impl IntentKind {
             | IntentKind::VerificationSubmitV1 { .. } | IntentKind::VerificationWaiverV1 { .. }
             | IntentKind::VerificationHumanV1 { .. } | IntentKind::VerificationCompleteV1 { .. })
     }
+}
+
+/// The operation a snapshot repair records under, by the generation it made.
+pub(crate) fn snapshot_repair_operation(generation: u64) -> String {
+    format!("snapshot-repair:{generation}")
 }
 
 fn previous_snapshot(participants: &[Participant], what: &str) -> Result<Snapshot> {
@@ -438,7 +449,7 @@ impl Intent {
                 && previous.data.get(cadence::verification::persistence::NAMESPACE) != snapshot.data.get(cadence::verification::persistence::NAMESPACE) {
                 return Err(Error::Invalid("verification changes require their versioned intent".into()));
             }
-            if !matches!(self.kind, IntentKind::NativeTaskV1 { .. })
+            if !matches!(self.kind, IntentKind::NativeTaskV1 { .. } | IntentKind::SnapshotRepairV1 { .. })
                 && previous.data.get(cadence::execution::history::NAMESPACE) != snapshot.data.get(cadence::execution::history::NAMESPACE)
             {
                 return Err(Error::Invalid("native task changes require their versioned intent".into()));
@@ -448,7 +459,7 @@ impl Intent {
             {
                 return Err(Error::Invalid("native admission changes require their versioned intent".into()));
             }
-            if !matches!(self.kind, IntentKind::NativePlanV1 { .. })
+            if !matches!(self.kind, IntentKind::NativePlanV1 { .. } | IntentKind::SnapshotRepairV1 { .. })
                 && previous.data.get(cadence::execution::history::PLAN_NAMESPACE) != snapshot.data.get(cadence::execution::history::PLAN_NAMESPACE)
             {
                 return Err(Error::Invalid("native plan changes require their versioned intent".into()));
@@ -713,6 +724,7 @@ impl Intent {
             | IntentKind::RailReceipt { .. }
             | IntentKind::RailObservation { .. }
             | IntentKind::GuardAudit { .. }
+            | IntentKind::SnapshotRepairV1 { .. }
             | IntentKind::BoundaryObservationV1 { .. }
             | IntentKind::ExecutionDispatchV1 { .. }
             | IntentKind::NativeExecutionDispatchV1 { .. }
@@ -746,8 +758,41 @@ impl Intent {
         self.validate_risk_finalization(&snapshot)?;
         self.validate_rail_observation(&snapshot)?;
         self.validate_guard_audit(&snapshot)?;
+        self.validate_snapshot_repair(&snapshot)?;
         self.validate_boundary_v1(&snapshot, decisions, summary_phase)?;
         Ok(snapshot)
+    }
+    /// The repair is exactly what the parse restores from the previous log:
+    /// same items, same decisions, the next generation, the repair operation
+    /// added, and no other change to the data.
+    fn validate_snapshot_repair(&self, snapshot: &Snapshot) -> Result<()> {
+        let IntentKind::SnapshotRepairV1 { repaired } = &self.kind else {
+            return Ok(());
+        };
+        if self.participants.len() != 3
+            || self.participants.iter().any(|p| !matches!(p.target.as_str(), ITEMS | DECISIONS | STATE))
+        {
+            return Err(Error::Invalid("snapshot repair cannot change external participants".into()));
+        }
+        let participant = |name| self.participants.iter().find(|p| p.target == name).unwrap();
+        let (items, decisions, state) = (participant(ITEMS), participant(DECISIONS), participant(STATE));
+        let old_decisions = decisions.expected.bytes.as_deref().unwrap_or_default();
+        let mut old: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
+            .ok_or_else(|| Error::Invalid("snapshot repair requires prior snapshot".into()))?)?;
+        let restored = cadence::execution::history::reconcile(&mut old.data, old_decisions)?;
+        let mut operations = old.operations.clone();
+        operations.insert(snapshot_repair_operation(snapshot.generation), model::digest(&serde_json::to_vec(repaired)?));
+        if repaired.is_empty()
+            || restored != *repaired
+            || items.expected.bytes.as_deref().unwrap_or_default() != items.bytes.as_slice()
+            || old_decisions != decisions.bytes.as_slice()
+            || old.generation.checked_add(1) != Some(snapshot.generation)
+            || snapshot.operations != operations
+            || snapshot.data != old.data
+        {
+            return Err(Error::Invalid("snapshot repair changed data outside the log's records".into()));
+        }
+        Ok(())
     }
     fn validate_risk_finalization(&self, snapshot: &Snapshot) -> Result<()> {
         let IntentKind::ExecutionFinalizeRiskV1 {
