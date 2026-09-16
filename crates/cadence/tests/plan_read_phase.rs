@@ -33,6 +33,19 @@ fn plan_read_takes_a_decimal_legacy_address_as_a_string() {
 }
 
 #[test]
+fn a_plan_entry_does_not_echo_the_phase_it_was_asked_for() {
+    let project = fixture();
+    let legacy = project.path().join(".planning/phases/13.1");
+    fs::create_dir_all(&legacy).unwrap();
+    fs::write(legacy.join("PLAN-70.md"), "Decimal legacy\n").unwrap();
+    let answer = query(project.path(), json!({"operation":"plan-read","phase":"13.1"}));
+    let plans = answer["plans"].as_array().unwrap_or_else(|| panic!("{answer}"));
+    assert_eq!(plans.len(), 1, "{answer}");
+    assert!(plans[0].get("phase_address").is_none(), "the caller named the phase: {answer}");
+    assert_eq!(plans[0]["classification"], "legacy-input", "{answer}");
+}
+
+#[test]
 fn phase_address_is_no_longer_a_field() {
     let project = fixture();
     let answer = query(project.path(), json!({"operation":"plan-read","phase_address":"13"}));
