@@ -8,7 +8,7 @@ use serde_json::json;
 use std::{fs, io::Write};
 
 #[test]
-#[ignore = "D-172: starts the installed claude, which this repository does not build; run with --ignored as a live probe"]
+#[ignore = "D-172/D-183: starts the installed claude, which this repository does not build; run with --ignored as a live probe; P32-T6-C (phase32_two_callers_on_one_resident_read_the_same_draft_slice) supplies the non-host evidence"]
 fn phase31_worker_hosts_receive_main_thread_answers() {
     phase31_hosts::prove_worker_hosts_receive_main_thread_answers();
 }
