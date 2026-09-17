@@ -47,6 +47,23 @@ fn classify_reads_nextest_summaries_and_keeps_their_result_lines() {
     assert!(!valid_result_line("error: test run failed"));
 }
 
+// A retained run classified Unknown by an older binary is still the record of
+// what that binary saw. A later classifier that recognizes those bytes may not
+// refuse the record; a retained result that claims more than the bytes say still is.
+#[test]
+fn retained_unknown_observation_stays_valid_when_the_classifier_learns_its_lines() {
+    use super::{receipts::{Observation, Summary}, runner::{capture, observation_consistent}};
+    let empty = capture(&b""[..]);
+    let green = capture(&b"     Summary [   0.062s] 1 test run: 1 passed, 1 skipped\n"[..]);
+    assert!(observation_consistent(&Observation::Unknown, &empty, &green));
+    let observed = Observation::ResultsObserved { summary: Summary::Cargo { failed: false } };
+    assert!(observation_consistent(&observed, &empty, &green));
+    let claimed = Observation::ResultsObserved { summary: Summary::Cargo { failed: true } };
+    assert!(!observation_consistent(&claimed, &empty, &green));
+    let custom = capture(&b"custom output\n"[..]);
+    assert!(!observation_consistent(&observed, &empty, &custom));
+}
+
 // Constructed unit authority, not a claim of approval through the public API.
 // The acceptance check separately supplies that boundary with real stdio calls.
 fn native_unit_contract(command: &str) -> (serde_json::Value, std::collections::BTreeMap<String, String>, super::admission::Contract) {
