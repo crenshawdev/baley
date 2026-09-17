@@ -75,6 +75,46 @@ fn dispatch_id(answer: &Value) -> Value {
     answer.get("dispatch_id").unwrap_or(&answer["dispatch"]["id"]).clone()
 }
 
+#[test]
+fn phase33_execute_next_answers_dispatch_id_and_route() {
+    fn strings(value: &Value) {
+        match value {
+            Value::String(text) => {
+                for sentinel in ["DISPATCH GOAL SENTINEL", "DISPATCH ACTION SENTINEL", "Cadence is the only project read surface."] {
+                    assert!(!text.contains(sentinel), "dispatch leaked {sentinel}");
+                }
+            }
+            Value::Array(values) => values.iter().for_each(strings),
+            Value::Object(values) => values.values().for_each(strings),
+            _ => {}
+        }
+    }
+    let fixture = ProcessFixture::new();
+    let mut client = Client::open(fixture.project());
+    setup(&mut client);
+    let answer = issue(&mut client);
+    assert_eq!(answer.as_object().unwrap().keys().map(String::as_str).collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["status", "outcome", "dispatch_id", "expected_execution_version", "route", "identities"]));
+    assert_eq!(answer["outcome"], "dispatch");
+    let id = answer["dispatch_id"].as_str().unwrap();
+    assert_eq!(id.len(), 64);
+    assert!(id.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert_eq!(answer["expected_execution_version"], 1);
+    assert_eq!(answer["identities"], json!({"dispatch":{"kind":"dispatch","id":id},
+        "plan":{"kind":"phase-plan","phase":PHASE,"plan":1},"context":{"kind":"phase-context","phase":PHASE}}));
+    assert_eq!(answer["route"].as_object().unwrap().keys().map(String::as_str).collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["choice", "inputs"]));
+    assert!(answer["route"]["choice"]["agent"].is_string());
+    let bytes = serde_json::to_vec(&answer).unwrap();
+    assert!(bytes.len() < 8192);
+    strings(&answer);
+    assert_eq!(bytes, serde_json::to_vec(&issue(&mut client)).unwrap());
+    let history = client.call("cadence_query", json!({"operation":"execution-history","phase":PHASE}));
+    assert!(history["active"].get("prompt").is_none());
+    assert!(history["active"].get("prompt_digest").is_none());
+    client.finish();
+}
+
 fn parts(client: &mut Client, identity: Value) -> BTreeMap<String, String> {
     let mut a = Caller::new(0);
     let mut b = Caller::new(1);
