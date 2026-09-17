@@ -238,6 +238,23 @@ fn roadmap(root: &Path, phase: u32) -> Result<Resolved, Value> {
 
 pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Value> {
     match identity {
+        DocumentIdentity::RunOutput { phase, run } => {
+            let data = snapshot(root)?;
+            let view = cadence::execution::history::run_view(&data, phase.get(), run)?;
+            let mut parts = bounded_parts(vec![
+                Part { selector: "launch".into(), title: "launch".into(), body: view.launch.to_string() },
+                Part { selector: "result".into(), title: "result".into(), body: view.result.to_string() },
+            ]);
+            for (stream, text) in ["stdout", "stderr"].into_iter().zip(view.streams) {
+                let chunks = bounded_parts(vec![Part { selector: stream.into(), title: stream.into(), body: text }]);
+                for (index, mut part) in chunks.into_iter().enumerate() {
+                    part.selector = format!("{stream}:{}", index + 1);
+                    parts.push(part);
+                }
+            }
+            let revision = cadence::store::model::digest(parts.iter().flat_map(|p| p.body.bytes()).collect::<Vec<_>>().as_slice());
+            Ok(Resolved { identity: identity.clone(), classification: "run-output", revision, parts })
+        }
         DocumentIdentity::Dispatch { id } => dispatch(root, identity, id),
         DocumentIdentity::PlanDraft { phase, plan, digest } => {
             let drafts = crate::import::drafts(root)
@@ -535,9 +552,19 @@ impl ReadDomain {
                 ),
             );
         }
+        let next = resolved.parts.iter().position(|candidate| candidate.selector == part)
+            .and_then(|index| resolved.parts.get(index + 1))
+            .filter(|following| {
+                let (base, number) = selected.selector.rsplit_once(':')
+                    .and_then(|(base, n)| n.parse::<usize>().ok().map(|n| (base, n)))
+                    .unwrap_or((&selected.selector, 1));
+                matches!(resolved.identity, DocumentIdentity::RunOutput { .. })
+                    || following.selector == format!("{base}:{}", number + 1)
+            })
+            .map(|following| &following.selector);
         json!({"status":"ok","kind":"document-slice","bound":PART_BOUND,
             "identity":resolved.identity,"classification":resolved.classification,"revision":resolved.revision,
-            "part":selected.selector,"body":&selected.body})
+            "part":selected.selector,"body":&selected.body,"next":next})
     }
 }
 

@@ -34,6 +34,69 @@ pub enum Event {
     Retirement { owner: String, at: String, reason: String },
 }
 
+pub struct RunView {
+    pub launch: Value,
+    pub result: Value,
+    pub streams: [String; 2],
+}
+
+/// Resolve all run namespaces before choosing one; a colliding id is never
+/// silently answered from whichever collection happened to be read last.
+pub fn run_view(data: &Value, phase: u32, run: &str) -> std::result::Result<RunView, Value> {
+    use crate::{execution::history, verification::{persistence, runner}};
+    let unavailable = |error: Error| crate::envelope::Refusal::new("document-unavailable", error.to_string())
+        .rule("D-187").slot("identity").phase(phase).value();
+    let mut found = Vec::new();
+    let records = history::records(data, phase).map_err(&unavailable)?;
+    for record in &records {
+        if matches!(&record.request.event, Event::Launch(l) if l.run_id == run) {
+            let result = records.iter().find(|r| matches!(&r.request.event, Event::Result(result) if result.run_id == run));
+            found.push((json!(record), json!(result), false));
+        }
+    }
+    let records = history::plan_records(data, phase).map_err(&unavailable)?;
+    for record in &records {
+        if matches!(&record.request.event, PlanEvent::SuiteLaunch(l) if l.run_id == run) {
+            let result = records.iter().find(|r| matches!(&r.request.event, PlanEvent::SuiteResult(result) if result.run_id == run));
+            found.push((json!(record), json!(result), false));
+        }
+    }
+    let attempts = persistence::attempts(data).map_err(&unavailable)?;
+    let records = runner::records(data).map_err(&unavailable)?;
+    for record in &records {
+        if matches!(&record.event, runner::Event::Launch { launch, .. } if launch.run_id == run)
+            && attempts.iter().any(|a| a.id == record.attempt && a.inputs.basis.phase == phase) {
+            let result = records.iter().find(|r| r.attempt == record.attempt
+                && matches!(&r.event, runner::Event::Result { run_id, .. } if run_id == run));
+            let mut launch = json!(record);
+            launch["event"].as_object_mut().unwrap().remove("documents");
+            launch["event"].as_object_mut().unwrap().remove("request");
+            found.push((launch, json!(result), true));
+        }
+    }
+    if found.len() != 1 {
+        return Err(crate::envelope::Refusal::new(if found.is_empty() { "document-not-found" } else { "document-ambiguous" },
+            format!("phase {phase} retains {} matching launches for run {run}", found.len()))
+            .rule("D-187").slot("identity").phase(phase).value());
+    }
+    let (launch, mut result, verifier) = found.pop().unwrap();
+    let mut streams = [String::new(), String::new()];
+    if !result.is_null() {
+        let event = if verifier { &mut result["event"]["result"] } else { &mut result["request"]["event"] };
+        for (index, stream) in ["stdout", "stderr"].into_iter().enumerate() {
+            let capture = event[stream].as_object_mut().ok_or_else(|| unavailable(Error::Invalid("retained capture absent".into())))?;
+            let bytes = if let Some(bytes) = capture.remove("bytes") {
+                serde_json::from_value::<Vec<u8>>(bytes).map_err(|e| unavailable(e.into()))?
+            } else {
+                capture.remove("text").and_then(|s| s.as_str().map(str::to_owned)).unwrap_or_default().into_bytes()
+            };
+            capture.insert("byte_length".into(), json!(bytes.len()));
+            streams[index] = String::from_utf8_lossy(&bytes).into_owned();
+        }
+    }
+    Ok(RunView { launch, result, streams })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {

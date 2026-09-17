@@ -89,52 +89,19 @@ pub async fn plan_apply<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>,
 }
 
 /// One run by its id (GH-263): the launch and result records that name it,
-/// from the task events or the plan events. Each capture is rendered as text
-/// beside its digest and byte length; the record keeps its bytes. A run the
+/// from task, plan, or independent verifier events. Captures are read by
+/// document identity beside metadata; the record keeps its bytes. A run the
 /// phase never retained is refused, never answered with the phase.
 pub async fn read_run<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, phase: u32, run: &str) -> Result<Value> {
-    use cadence::execution::history::{Event, PlanEvent};
     let session = factory.first_touch(root).await?;
     let view = session.derivation_view().await?;
-    let mut launch = None;
-    let mut result = None;
-    for record in history::records(&view.snapshot.data, phase)? {
-        match &record.request.event {
-            Event::Launch(l) if l.run_id == run => launch = Some(serde_json::to_value(&record)?),
-            Event::Result(r) if r.run_id == run => result = Some(serde_json::to_value(&record)?),
-            _ => {}
-        }
-    }
-    for record in history::plan_records(&view.snapshot.data, phase)? {
-        match &record.request.event {
-            PlanEvent::SuiteLaunch(l) if l.run_id == run => launch = Some(serde_json::to_value(&record)?),
-            PlanEvent::SuiteResult(r) if r.run_id == run => result = Some(serde_json::to_value(&record)?),
-            _ => {}
-        }
-    }
-    let Some(launch) = launch else {
-        return Ok(cadence::envelope::Refusal::new("run-not-retained", format!("phase {phase} retains no run {run}"))
-            .rule("task-history-shape").slot("run").phase(phase).value());
-    };
-    let result = result.map(|mut record| { captures_as_text(&mut record["request"]["event"]); record });
-    Ok(json!({"status":"ok","schema":"native-run-history-1","phase":phase,"run_id":run,"launch":launch,"result":result}))
+    Ok(match history::run_view(&view.snapshot.data, phase, run) {
+        Ok(view) => json!({"status":"ok","schema":"native-run-history-1","phase":phase,"run_id":run,
+            "launch":view.launch,"result":view.result,"identity":{"kind":"run-output","phase":phase,"run":run}}),
+        Err(answer) => answer,
+    })
 }
 
-/// A capture's bytes under `text` with their `byte_length`: a capture retained
-/// as an integer array is rendered as lossy UTF-8, one retained as text is
-/// already there; digest, completeness and result lines are untouched.
-fn captures_as_text(event: &mut Value) {
-    for stream in ["stdout", "stderr"] {
-        let Some(capture) = event[stream].as_object_mut() else { continue };
-        if let Some(bytes) = capture.remove("bytes") {
-            let bytes: Vec<u8> = serde_json::from_value(bytes).unwrap_or_default();
-            capture.insert("byte_length".into(), json!(bytes.len()));
-            capture.insert("text".into(), json!(String::from_utf8_lossy(&bytes)));
-        } else if let Some(text) = capture.get("text").and_then(Value::as_str) {
-            capture.insert("byte_length".into(), json!(text.len()));
-        }
-    }
-}
 
 pub async fn read<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, phase: u32) -> Result<Value> {
     let session = factory.first_touch(root).await?;

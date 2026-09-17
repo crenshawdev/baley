@@ -173,6 +173,7 @@ impl Client {
         }
     }
 
+    #[allow(dead_code)]
     pub fn finish(mut self) {
         drop(self.stdin.take());
         assert!(self.child.wait().unwrap().success());
@@ -189,10 +190,12 @@ impl Drop for Client {
     }
 }
 
+#[allow(dead_code)]
 pub struct Fixture {
     temp: tempfile::TempDir,
 }
 
+#[allow(dead_code)]
 impl Fixture {
     pub fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
