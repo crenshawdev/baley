@@ -218,6 +218,14 @@ an evidence item.** Then, and only then, it asks three things:
 **What the binary refuses at execution.** A task closing whose `check`
 evidence has no red-then-green record. A `check` that stubs its own subject.
 
+**2026-09-17 — D-111, decided by John Crenshaw.** The owner's exact inspection
+is required at plan completion rather than task close. The orchestrator collects
+it for every check delivered by the plan's closed tasks before requesting
+`execution-plan-complete`; an inspection recorded after green and before close
+still counts. The judgment is per check and is the same at either time.
+Per-task stops cost a human round trip per task with no added judgment, while
+task close continues to check the red/green pair, named verify runs and source.
+
 That is all. Granularity, isolation, "one function per test", mocking style -
 the old rules 2, 4, 8 and 9 - are not here. They are the project's test-style
 choices, and the project's CI enforces them or does not.

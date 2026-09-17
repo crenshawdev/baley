@@ -71,9 +71,8 @@ operational input or from `execution-history`:
    completion, checks: [{check, red_commit, green_commit, red_run, green_run}],
    verification}`: one signed conventional completion commit naming the task
    id; for every delivered check a red run at the red commit followed by a
-   green run at a later green commit, both on unchanged test material; the
-   owner's affirmative attestation for that check; and a passing observed run
-   of every named task command at the completion commit. A refusal names each
+   green run at a later green commit, both on unchanged test material; and a
+   passing observed run of every named task command at the completion commit. A refusal names each
    unsatisfied check; nothing is manufactured after the fact.
 
 Red and green (D-109): a run is `results observed` only when its retained
@@ -94,14 +93,19 @@ is refused. What the binary can check is deliberately weaker: an owner's
 attributed, timed `execution-owner-attest` record bound to the exact check
 revision, test material and inspected runs. The binary checks that the record
 exists and is exact, not that it is true; your own `no_subject_stub: true` is
-an executor assertion and never an owner attestation.
+an executor assertion and never an owner attestation. Task close proceeds
+without this inspection. The plan cannot complete until every delivered check
+carries the owner's exact inspection. The orchestrator collects the inspections
+after the last task closes and before requesting `execution-plan-complete`;
+inspections recorded after green and before close remain valid.
 
 Named commands and one suite repair (D-163, D-171): task commands are the
 retained `verify` commands and may repeat while a task is being repaired. The
 suite command is available only after the last task is acknowledged and runs
 through `execution-suite` before the plan can report complete; native completion
-(`execution-plan-complete`) needs both that passing suite receipt and the
-existing exact risk settlement. Both are the orchestrator's requests.
+(`execution-plan-complete`) needs every delivered check's owner inspection,
+that passing suite receipt and the existing exact risk settlement. The suite
+and completion are the orchestrator's requests.
 The executor never requests `execution-suite` or `execution-plan-complete`: close
 the last task, report, and stop. The orchestrator includes the executor's
 project-relative repair proposal paths on that suite request. A first recognized

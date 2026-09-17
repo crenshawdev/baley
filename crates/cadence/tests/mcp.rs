@@ -950,10 +950,20 @@ fn execution_calls_refuse_noninteger_phases_and_legacy_plans_without_dispatch() 
         assert!(output.status.success());
         let rendered = String::from_utf8(output.stdout).unwrap();
         assert_eq!(rendered, fs::read_to_string(repo.join(skill)).unwrap());
+        if skill == "skills/cad-execute/SKILL.md" {
+            assert!(rendered.contains("After the plan's last task closes, the orchestrator collects the owner's exact inspections for every delivered check before requesting `execution-plan-complete`"));
+            assert!(rendered.contains("ensure the orchestrator has collected the inspections for the plan's delivered checks as described in step 6"));
+        }
         if skill == "skills/cad-executor-contract/SKILL.md" {
             assert!(rendered.contains(
                 "Binary-rendered project files in the\ndispatch lease are implicit material"
             ), "{skill} must explain the D-166 implicit rendered-file lease");
+            for required in ["Task close proceeds\nwithout this inspection",
+                "The plan cannot complete until every delivered check",
+                "after the last task closes and before requesting `execution-plan-complete`",
+                "inspections recorded after green and before close remain valid"] {
+                assert!(rendered.contains(required), "{skill}: missing {required}");
+            }
         }
         for required in ["positive JSON integers", "\"phase\":13", "\"phase\":\"13\"",
             "plan-read", "evidence-read", "approval.submission.request_id", "map_revision",
