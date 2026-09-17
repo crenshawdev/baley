@@ -101,7 +101,7 @@ fn the_apply_schema_lists_one_variant_per_operation() {
     names.dedup();
     assert_eq!(names.len(), count, "an operation appears in two variants: {names:?}");
     for expected in ["config-apply", "plan-submit", "context-submit", "review-admit",
-        "risk-check", "risk-fire", "verification-run", "execution-admit", "execution-task-close"] {
+        "risk-check", "risk-fire", "verification-run", "execution-admit", "execution-task-close", "execution-round-record"] {
         assert!(names.contains(&expected), "{expected} missing from {names:?}");
     }
 }
