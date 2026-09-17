@@ -360,6 +360,8 @@ pub fn git(project:&Path,args:&[&str]) {
     assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
 }
 
+// Fresh-server entry point; only some including binaries exercise it directly.
+#[allow(dead_code)]
 pub fn contract(project: &Path) -> Value {
     let mut client = Client::open(project);
     let answer = contract_with(&mut client);
@@ -420,10 +422,14 @@ pub fn git_value(project: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim_end().to_owned()
 }
 
+// Fresh-server entry point; only some including binaries exercise it directly.
+#[allow(dead_code)]
 pub fn history(project: &Path) -> Value {
     query(project, json!({"operation":"execution-history","phase":13}))
 }
 
+// Fresh-server entry point; only some including binaries exercise it directly.
+#[allow(dead_code)]
 pub fn state(project: &Path, plan: u32) -> Value {
     let mut client = Client::open(project);
     let answer = state_with(&mut client, plan);
