@@ -1879,6 +1879,7 @@ mod provenance_tests {
 #[cfg(test)]
 mod intent_encoding_tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     // An intent as the binary wrote it before GH-261: every participant's
     // bytes, old and new, as JSON integer arrays, and no encoding field.
@@ -1891,6 +1892,56 @@ mod intent_encoding_tests {
             Participant { target: DECISIONS.into(), expected: expected(b""),
                 bytes: b"{\"version\":1,\"id\":\"d\",\"revision\":1,\"origin\":{\"source\":\"t\",\"original\":\"missing\"},\"decision\":{\"class\":\"gate\",\"outcome\":\"d\",\"evidence\":null}}\n".to_vec() },
             Participant { target: STATE.into(), expected: expected(b"{\"old\":true}"), bytes: b"{\"new\":true}".to_vec() },
+        ]
+    }
+
+    struct Memory(BTreeMap<String, Observed>);
+    impl Storage for Memory {
+        type Prepared = (String, Vec<u8>);
+        fn read(&mut self, target: &str) -> Result<Observed> {
+            Ok(self.0.get(target).cloned().unwrap_or(Observed {
+                bytes: None, identity: "missing".into(), directory_identity: "1:1;".into(),
+            }))
+        }
+        fn prepare(&mut self, target: &str, bytes: &[u8]) -> Result<Self::Prepared> {
+            Ok((target.into(), bytes.to_vec()))
+        }
+        fn install(&mut self, prepared: &Self::Prepared) -> Result<()> {
+            let observed = self.0.entry(prepared.0.clone()).or_insert(Observed {
+                bytes: None, identity: "missing".into(), directory_identity: "1:1;".into(),
+            });
+            observed.bytes = Some(prepared.1.clone());
+            Ok(())
+        }
+        fn discard(&mut self, _: Self::Prepared) -> Result<()> { Ok(()) }
+        fn confirm(&mut self, target: &str, bytes: &[u8]) -> Result<Observed> {
+            let observed = self.read(target)?;
+            if observed.bytes.as_deref() != Some(bytes) { return Err(Error::Io("not installed".into())); }
+            Ok(observed)
+        }
+        fn resync(&mut self, target: &str, bytes: &[u8]) -> Result<Observed> {
+            self.confirm(target, bytes)
+        }
+        fn remove(&mut self, target: &str) -> Result<()> {
+            self.0.remove(target);
+            Ok(())
+        }
+    }
+    struct Allow;
+    impl Policy for Allow {
+        fn validate(&mut self, _: &MutationContext<'_>) -> Result<()> { Ok(()) }
+    }
+
+    fn state_only_participants() -> Vec<Participant> {
+        let old_state = Snapshot::new(1, b"", b"", serde_json::json!({"value": 1})).unwrap().render().unwrap();
+        let new_state = Snapshot::new(2, b"", b"", serde_json::json!({"value": 2})).unwrap().render().unwrap();
+        let expected = |bytes: Vec<u8>| Observed {
+            bytes: Some(bytes), identity: "1:2:420".into(), directory_identity: "1:1;".into(),
+        };
+        vec![
+            Participant { target: ITEMS.into(), expected: expected(Vec::new()), bytes: Vec::new() },
+            Participant { target: DECISIONS.into(), expected: expected(Vec::new()), bytes: Vec::new() },
+            Participant { target: STATE.into(), expected: expected(old_state), bytes: new_state },
         ]
     }
 
@@ -1932,5 +1983,31 @@ mod intent_encoding_tests {
         let read: Intent = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(read.participants[2].bytes, vec![0xff, 0xfe, b'{']);
         assert_eq!(read.integrity, read.digest().unwrap());
+    }
+
+    // GH-261: a write that changes only the snapshot journals only that
+    // participant, while an older three-participant journal still replays.
+    #[test]
+    fn state_only_intent_carries_one_participant_and_legacy_three_recovers() {
+        let participants = state_only_participants();
+        let mut legacy = Intent {
+            version: VERSION, kind: IntentKind::Store, participants: participants.clone(),
+            integrity: String::new(), encoding: Encoding::Array,
+        };
+        legacy.integrity = legacy.digest().unwrap();
+        let legacy_bytes = serde_json::to_vec(&legacy).unwrap();
+        let mut files = participants.iter().map(|participant|
+            (participant.target.clone(), participant.expected.clone())).collect::<BTreeMap<_, _>>();
+        files.insert(INTENT.into(), Observed {
+            bytes: Some(legacy_bytes), identity: "1:3:420".into(), directory_identity: "1:1;".into(),
+        });
+        let mut storage = Memory(files);
+        recover(&mut storage, &mut Allow).unwrap();
+        assert_eq!(storage.0[STATE].bytes.as_ref(), Some(&participants[2].bytes));
+        assert!(!storage.0.contains_key(INTENT));
+
+        let fresh = Intent::new(IntentKind::Store, participants);
+        assert_eq!(fresh.participants.len(), 1);
+        assert_eq!(fresh.participants[0].target, STATE);
     }
 }
