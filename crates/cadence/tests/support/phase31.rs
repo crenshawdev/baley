@@ -458,14 +458,18 @@ impl ClosedRound {
     }
 
     pub fn close_tasks(&mut self) {
-        self.drive_tasks(true);
+        self.drive_tasks(true, false);
+    }
+
+    pub fn close_tasks_with_output(&mut self) {
+        self.drive_tasks(true, true);
     }
 
     pub fn prepare_last_close(&mut self) -> Value {
-        self.drive_tasks(false).unwrap()
+        self.drive_tasks(false, false).unwrap()
     }
 
-    fn drive_tasks(&mut self, close_last: bool) -> Option<Value> {
+    fn drive_tasks(&mut self, close_last: bool, large_output: bool) -> Option<Value> {
         for (index, name) in ["fixture-one-a", "fixture-one-b"].into_iter().enumerate() {
             let state = self.state(name);
             let checks = if index == 0 { json!([self.check]) } else { json!([]) };
@@ -495,7 +499,8 @@ impl ClosedRound {
                 let green_run = self.run(name, "green", checks[0].clone());
                 pairs.push(json!({"check":checks[0],"red_commit":red,"green_commit":green,"red_run":red_run,"green_run":green_run}));
             } else {
-                fs::write(self.fixture.project().join("src/lease.rs"), "def answer():\n    return 7\n# Second task completed.\n").unwrap();
+                let output = if large_output { "import os\nos.write(1, ('é' * 35000).encode())\nos.write(2, b'\\xff' * 70000)\n" } else { "" };
+                fs::write(self.fixture.project().join("src/lease.rs"), format!("def answer():\n    return 7\n# Second task completed.\n{output}")).unwrap();
                 git(self.fixture.project(), &["add", "src/lease.rs"]);
                 git(self.fixture.project(), &["-c", "commit.gpgsign=false", "commit", "-S", "-m", "feat(round): complete fixture-one-b"]);
                 self.commits.push(git(self.fixture.project(), &["rev-parse", "HEAD"]));
