@@ -2223,4 +2223,23 @@ mod observe_tests {
                 "(snapshot serializations, intent digests, previous parses)");
         });
     }
+
+    // GH-261: the writer already holds the snapshot whose bytes it sealed, so
+    // the write path must not parse those bytes back into the same snapshot.
+    #[test]
+    fn one_write_parses_the_new_state_zero_times() {
+        use super::super::transaction::NEW_STATE_PARSES;
+        let temp = tempfile::tempdir().unwrap();
+        tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
+            let store = Store::open(super::super::filesystem::Filesystem::new(temp.path()).unwrap(), PlanningPolicy).await.unwrap();
+            let view = store.request(Operation::ReadVerified).await.unwrap();
+            let before = NEW_STATE_PARSES.load(Ordering::SeqCst);
+            let written = store.request(Operation::CompareRewriteSnapshot {
+                expected_generation: view.snapshot.generation, expected_integrity: view.snapshot.integrity.clone(),
+                data: serde_json::json!({"value": 1}) }).await.unwrap();
+            assert_eq!(written.snapshot.generation, view.snapshot.generation + 1);
+            assert_eq!(NEW_STATE_PARSES.load(Ordering::SeqCst) - before, 0,
+                "the write path parsed the snapshot it had just sealed");
+        });
+    }
 }

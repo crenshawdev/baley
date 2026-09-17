@@ -137,6 +137,8 @@ impl IntentKind {
 pub static INTENT_DIGESTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 #[cfg(test)]
 pub static PREVIOUS_PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+pub static NEW_STATE_PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// The snapshot a transaction starts from, parsed from the state
 /// participant's expected bytes.
@@ -581,6 +583,8 @@ impl Intent {
         let decisions = bytes(DECISIONS)?;
         model::validate_items(&model::parse_lines(items)?)?;
         model::validate_decisions(&model::parse_lines(decisions)?)?;
+        #[cfg(test)]
+        NEW_STATE_PARSES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let snapshot = Snapshot::parse(bytes(STATE)?, items, decisions)?;
         let verification_intent = self.kind.verification();
         if !verification_intent {
