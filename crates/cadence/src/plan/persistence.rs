@@ -216,7 +216,7 @@ pub fn contribute(
         }
         let retained = approval.submission.as_ref()
             .and_then(|approved| approved.plans.iter().find(|candidate| candidate.target == entry.target))
-            .ok_or_else(|| Error::Invalid("exact-submission-approval: retained plan content is absent"))?;
+            .ok_or_else(|| Error::Invalid("exact-submission-approval: retained plan content is absent".into()))?;
         let bytes = render::document(&retained.content)?;
         cadence::execution::plan::parse_plan(&bytes, phase, number)
             .map_err(|error| Error::Invalid(error.to_string()))?;
