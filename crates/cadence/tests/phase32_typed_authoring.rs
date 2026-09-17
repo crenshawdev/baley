@@ -80,6 +80,60 @@ fn is_digest(value: &Value) -> bool {
 }
 
 #[test]
+fn phase32_draft_read_by_identity_and_approved_by_digest_installs_same_bytes() {
+    let fixture = ProcessFixture::new();
+    let project = fixture.project();
+    let mut client = Client::open(project);
+    native_context(&mut client);
+    let allocation = client.call(
+        "cadence_query",
+        json!({"operation":"plan-read","phase":PHASE,"count":1}),
+    );
+    let draft = client.call(
+        "cadence_apply",
+        json!({"operation":"plan-submit","submission":typed_submission(&allocation)}),
+    );
+    assert_eq!(draft["status"], "ok", "{draft}");
+    let identity = draft["drafts"][0]["identity"].clone();
+    assert_eq!(identity, json!({
+        "kind":"plan-draft","phase":PHASE,"plan":1,
+        "digest":draft["submission_digest"]
+    }), "{draft}");
+    assert_eq!(draft["drafts"][0]["revision"], draft["documents"][0]["revision"]);
+    let index = client.call(
+        "cadence_query",
+        json!({"operation":"document","identity":identity}),
+    );
+    assert_eq!(index["status"], "ok", "{index}");
+    let parts = index["parts"].as_array().unwrap();
+    assert_eq!(parts.iter().map(|part| part["part"].as_str().unwrap()).collect::<Vec<_>>(),
+        vec!["frontmatter", "goal", "truths", "context", "evidence-map",
+            "tasks-heading", "task:typed-plan", "notes"]);
+    let mut rendered = String::new();
+    for part in parts {
+        let slice = client.call(
+            "cadence_query",
+            json!({"operation":"document","identity":identity,"part":part["part"]}),
+        );
+        assert_eq!(slice["status"], "ok", "{slice}");
+        assert_eq!(slice["revision"], draft["documents"][0]["revision"]);
+        rendered.push_str(slice["body"].as_str().unwrap());
+    }
+    let published = client.call(
+        "cadence_apply",
+        json!({"operation":"plan-submit","phase":PHASE,"approval":{
+            "approved":true,"owner":"Fixture Owner","at":"2026-09-17T12:00:00Z",
+            "submission_digest":draft["submission_digest"]
+        }}),
+    );
+    assert_eq!(published["persisted"], true, "{published}");
+    let installed = fs::read(project.join(".planning/phases/31/PLAN-1.md")).unwrap();
+    assert_eq!(installed, rendered.as_bytes());
+    assert_eq!(format!("{:x}", Sha256::digest(&installed)), draft["documents"][0]["revision"]);
+    client.finish();
+}
+
+#[test]
 fn phase32_typed_context_answers_digest_and_no_document() {
     let fixture = ProcessFixture::new();
     let project = fixture.project();
