@@ -965,6 +965,18 @@ fn phase38_approved_plan_repair_accepts_one_second_launch() {
     assert_eq!(repair["receipt"]["request"]["event"]["commits"], json!([repair_commit]));
     assert_eq!(repair["receipt"]["request"]["event"]["changed_paths"][&repair_commit],
         json!(["tests/suite.sh"]));
+    // The repaired plan settles risk over material that ends at the repair
+    // commit and completes. Phase 32 plan 3 passed its second launch and could
+    // not complete: the risk resolver answered the last task's completion as
+    // the head while completion demanded the repair commit.
+    let dispatch_id = current["active"]["id"].as_str().unwrap().to_owned();
+    let risk = call(project, "cadence_apply", json!({"operation":"risk-check","request_id":"risk-repaired-plan",
+        "scope":{"phase":PHASE,"occurrence":format!("phase-{PHASE}-execution"),"worker":"1"},
+        "source":{"kind":"execution","plan":1,"dispatch_id":dispatch_id},"surfaces":null}));
+    assert_eq!(risk["status"], "ok", "{risk}");
+    assert_eq!(risk["observation"]["resolution"]["head_id"], json!(repair_commit), "risk material ends at the repair commit: {risk}");
+    let complete = call(project, "cadence_apply", plan_operation(project, "execution-plan-complete", "complete-repaired-plan", json!({})));
+    assert_eq!(complete["status"], "ok", "a repaired plan completes on its settlement: {complete}");
 }
 
 #[test]
