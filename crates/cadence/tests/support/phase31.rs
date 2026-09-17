@@ -472,6 +472,39 @@ impl ClosedRound {
         self.drive_tasks(false, false).unwrap()
     }
 
+    pub fn complete(&mut self) {
+        let red = self.client.call("cadence_query", json!({"operation":"execution-history","phase":31,"run":"fixture-one-a-red"}));
+        let state = self.state("fixture-one-a");
+        let inspection = json!({"check":self.check,"test_digest":red["launch"]["request"]["event"]["material"]["test_digest"],
+            "evidence":["fixture-one-a-red","fixture-one-a-green"],"no_subject_stub":true});
+        let attested = self.client.call("cadence_apply", json!({"operation":"execution-owner-attest","request":{
+            "request_id":"round-inspection","task":state["task"],"attempt":"fixture-one-a","expected_version":state["state"]["version"],
+            "statement":{"submission":inspection,"approval":{"approved":true,"owner":"Fixture Owner","at":"2026-09-17T12:00:00Z","submission":inspection}}}}));
+        assert_eq!(attested["status"], "ok", "{attested}");
+        let history = self.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
+        let suite = self.client.call("cadence_apply", json!({"operation":"execution-suite","request":{
+            "request_id":"round-suite","plan":self.plan,"expected_version":history["plans"][0]["state"]["version"]}}));
+        assert_eq!(suite["status"], "ok", "{suite}");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let run = self.client.call("cadence_query", json!({"operation":"execution-history","phase":31,"run":"round-suite"}));
+            if !run["result"].is_null() {
+                assert_eq!(run["result"]["request"]["event"]["disposition"]["code"], 0, "{run}");
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{run}");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let risk = self.client.call("cadence_apply", json!({"operation":"risk-check","request_id":"round-risk",
+            "scope":{"phase":31,"occurrence":self.plan["occurrence"],"worker":"1"},
+            "source":{"kind":"execution","plan":1,"dispatch_id":self.dispatch["dispatch_id"]},"surfaces":null}));
+        assert_eq!(risk["status"], "ok", "{risk}");
+        let history = self.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
+        let completed = self.client.call("cadence_apply", json!({"operation":"execution-plan-complete","request":{
+            "request_id":"round-complete","plan":self.plan,"expected_version":history["plans"][0]["state"]["version"]}}));
+        assert_eq!(completed["status"], "ok", "{completed}");
+    }
+
     fn drive_tasks(&mut self, close_last: bool, large_output: bool) -> Option<Value> {
         for (index, name) in ["fixture-one-a", "fixture-one-b"].into_iter().enumerate() {
             let state = self.state(name);
