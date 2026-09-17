@@ -1340,12 +1340,12 @@ fn phase_six_binary_acceptance_inventory_runs_registered_evidence() {
         .unwrap();
     assert!(listing.status.success());
     let listing = String::from_utf8(listing.stdout).unwrap();
-    for (criterion, name, run) in rows {
+    for (criterion, name, _run) in rows {
         assert!(
             listing.lines().any(|line| line == format!("{name}: test")),
             "{criterion} evidence is not registered: {name}"
         );
-        run();
+        // The bound test runs independently under the test harness.
     }
 }
 
@@ -1689,10 +1689,10 @@ fn execution_service_semantic_failures_confirm_but_log_config_and_queue_failures
     });
 }
 
-async fn saturate(server: &CadenceServer, root: &Path, scope: BoundaryScope) -> View {
+async fn fill_budget(server: &CadenceServer, root: &Path, scope: BoundaryScope, count: usize) -> View {
     let mut view = server.store(root, Operation::ReadVerified).await.unwrap();
-    let count=view.decisions.iter().filter(|record|matches!(&record.decision,Decision::BoundaryV1(value) if value.boundary.scope==scope)).count();
-    for index in count..=256 {
+    let existing=view.decisions.iter().filter(|record|matches!(&record.decision,Decision::BoundaryV1(value) if value.boundary.scope==scope)).count();
+    for index in existing..count {
         let decision = BoundaryV1::new(
             scope.clone(),
             BoundaryTool::CadenceQuery,
@@ -1722,12 +1722,40 @@ async fn saturate(server: &CadenceServer, root: &Path, scope: BoundaryScope) -> 
     view
 }
 
+// Restore bytes at the same root: import configuration and continuation scopes
+// bind absolute paths, so relocating a saturated store would change the case.
+fn copy_budget_fixture(source: &Path, target: &Path) {
+    fs::create_dir_all(target).unwrap();
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let destination = target.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_budget_fixture(&entry.path(), &destination);
+        } else {
+            fs::copy(entry.path(), destination).unwrap();
+        }
+    }
+}
+
 #[test]
 fn execution_service_terminal_precedes_observation_dispatch_and_new_or_replayed_patch() {
     runtime().block_on(async {
+        let fixture=fixture(&[(&["src/a.rs", "work/T1.txt"],&["T1"],"body\n")]);
+        let server=CadenceServer::with_factory(factory());
+        accept(&server,&fixture).await;
+        let templates = tempfile::tempdir().unwrap();
+        copy_budget_fixture(&fixture.project, &templates.path().join("empty"));
+        // Leave room for the real dispatch and applied patch. The final fill
+        // still crosses 256 -> terminal separately in every state.
+        let prefix = fill_budget(&server, &fixture.root, BoundaryScope::Execution { phase:6 }, 254).await;
+        assert_eq!(prefix.decisions.iter().filter(|record| matches!(&record.decision,
+            Decision::BoundaryV1(value) if matches!(value.boundary.scope, BoundaryScope::Execution { phase: 6 }))).count(), 254);
+        drop(server);
+        copy_budget_fixture(&fixture.project, &templates.path().join("phase"));
         for state in ["root","new-dispatch","active","applied"] {
-            let fixture=fixture(&[(&["src/a.rs", "work/T1.txt"],&["T1"],"body\n")]);
-            let server=CadenceServer::with_factory(factory()); accept(&server,&fixture).await;
+            fs::remove_dir_all(&fixture.project).unwrap();
+            copy_budget_fixture(&templates.path().join(if state == "root" { "empty" } else { "phase" }), &fixture.project);
+            let server=CadenceServer::with_factory(factory());
             let phase=if state=="root"{0}else{6};
             let patch=if state=="new-dispatch" || state=="root"{None}else{
                 let active=dispatch(&server,&fixture).await;
@@ -1736,7 +1764,7 @@ fn execution_service_terminal_precedes_observation_dispatch_and_new_or_replayed_
                 if state=="applied"{server.apply_executor_patch(&fixture.root,patch.clone()).await.unwrap();}
                 Some(patch)
             };
-            let terminal=saturate(&server,&fixture.root,if phase==0{BoundaryScope::RootRefusal}else{BoundaryScope::Execution{phase}}).await;
+            let terminal=fill_budget(&server,&fixture.root,if phase==0{BoundaryScope::RootRefusal}else{BoundaryScope::Execution{phase}},257).await;
             let bytes=["decisions.jsonl","state.json"].map(|name|fs::read(fixture.root.join(name)).unwrap());
             fs::write(fixture.root.join("ROADMAP.md"),"unreadable lifecycle meaning\n").unwrap();
             fs::remove_file(fixture.root.join("phases/6/PLAN-1.md")).unwrap();
