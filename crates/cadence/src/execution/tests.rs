@@ -200,6 +200,26 @@ fn native_admission_validates_authority_and_allocation() {
 }
 
 #[test]
+fn native_admission_refuses_check_command_outside_task_verify() {
+    use super::admission::validate;
+    let command = "custom-delivery-check";
+    let (data, documents, mut contract) = native_unit_contract(command);
+    validate(&data, &documents, &contract).unwrap();
+    // The document task names only `printf documented`; delivery's command
+    // exists on another task, but cannot launch under this closing owner.
+    contract.allocation[1].checks = std::mem::take(&mut contract.allocation[0].checks);
+    let error = validate(&data, &documents, &contract).unwrap_err();
+    let crate::store::Error::Invalid(message) = error else { panic!("expected located invalid: {error}") };
+    let diagnostic: crate::plan::model::Diagnostic = serde_json::from_str(message.strip_prefix("plan-refusal:").unwrap()).unwrap();
+    assert_eq!(diagnostic.rule, "check-command-verify");
+    assert_eq!(diagnostic.slot, "contract.allocation");
+    assert_eq!(diagnostic.phase, Some(12));
+    assert_eq!(diagnostic.id.as_deref(), Some("document"));
+    assert!(diagnostic.reason.contains("check/shared"), "{}", diagnostic.reason);
+    assert!(diagnostic.reason.contains(command), "{}", diagnostic.reason);
+}
+
+#[test]
 fn native_admission_commits_versioned_extensions() {
     use crate::store::{Storage,filesystem::Filesystem,writer::{Store,Operation,PlanningPolicy},transaction::{Transaction,ExternalChange}};
     use super::admission;
