@@ -846,12 +846,39 @@ fn phase12_task_close_requires_red_then_green() {
     assert_eq!(task_state(project,"A")["state"]["completed"],true);
 }
 
+fn owner_completion_refused(project:&Path,id:&str,missing:&[(&str,&str)]) {
+    let answer=plan_refused(project,plan_request(project,"execution-plan-complete",id,1,json!({})),"owner-attestation");
+    let reason=answer["reason"].as_str().unwrap();
+    for (task,check) in missing {
+        assert!(reason.contains(&format!("{check} (task {task})")),"missing {check} for task {task}: {answer}");
+    }
+}
+
+fn complete_owner_plan(project:&Path) {
+    suite_run(project,"owner-suite",1);
+    settle(project,"owner-settlement",1);
+    let complete=plan_apply(project,"execution-plan-complete","owner-complete",1,json!({}));
+    assert_eq!(complete["status"],"ok","{complete}");
+}
+
 #[test]
-fn phase12_task_close_requires_owner_no_stub_attestation() {
-    let fixture=Tiny::new("unittest");let project=fixture.project();
-    close_refused(project,fixture.close("missing-owner"),"owner-attestation",&["check/A","check/A2"]);
+fn phase12_plan_accepts_owner_inspections_recorded_before_close() {
+    let fixture=Tiny::new("runner");let project=fixture.project();
+    finish_tasks(&fixture);
+    let before=execution_history(project)["events"].clone();
+    complete_owner_plan(project);
+    assert_eq!(execution_history(project)["events"],before,"completion needs no extra owner record");
+}
+
+#[test]
+fn phase12_plan_completion_requires_owner_no_stub_attestation() {
+    let fixture=Tiny::new("runner");let project=fixture.project();
+    finish_tasks_without_attestation(&fixture);
+    // Owner collection precedes even the suite gate, across every closed task.
+    owner_completion_refused(project,"missing-owner",&[("A","check/A"),("A","check/A2"),("B","check/B")]);
+    let answer=apply(project,fixture.owner(2,"owner-B",true));assert_eq!(answer["status"],"ok","{answer}");
     for i in 0..2 {let answer=apply(project,fixture.owner(i,&format!("false-{i}"),false));assert_eq!(answer["status"],"ok","{answer}");}
-    close_refused(project,fixture.close("false-owner"),"owner-attestation",&["check/A","check/A2"]);
+    owner_completion_refused(project,"false-owner",&[("A","check/A"),("A","check/A2")]);
     for case in 0..4 {
         let mut request=fixture.owner(0,&format!("stale-owner-{case}"),true);
         match case {
@@ -862,54 +889,47 @@ fn phase12_task_close_requires_owner_no_stub_attestation() {
         }
         if case<3 {request["request"]["statement"]["approval"]["submission"]=request["request"]["statement"]["submission"].clone();}
         let before=tree(project);let prior=reopened(project).snapshot;let answer=apply(project,request);assert_eq!(answer["status"],"refused","{answer}");unchanged(project,&before,&prior);
-        close_refused(project,fixture.close(&format!("close-stale-owner-{case}")),"owner-attestation",&["check/A","check/A2"]);
+        owner_completion_refused(project,&format!("complete-stale-owner-{case}"),&[("A","check/A"),("A","check/A2")]);
     }
     let mut first=fixture.owner(0,"affirmative-0",true);first["request"]["statement"]["supersedes"]=json!("false-0");
     let answer=apply(project,first.clone());assert_eq!(answer["status"],"ok","{answer}");
     assert_eq!(answer["receipt"]["request"]["event"]["approval"],first["request"]["statement"]["approval"]);
     let before=tree(project);let prior=reopened(project).snapshot;assert_eq!(apply(project,first)["receipt"],answer["receipt"]);unchanged(project,&before,&prior);
-    close_refused(project,fixture.close("only-one-owner"),"owner-attestation",&["check/A2"]);
+    owner_completion_refused(project,"only-one-owner",&[("A","check/A2")]);
     // An affirmative statement inspecting only the red run is retained honestly,
     // but does not attest the exact pair offered at close.
     let mut partial=fixture.owner(1,"partial-inspection",true);partial["request"]["statement"]["submission"]["evidence"]=json!(["red-1"]);
     partial["request"]["statement"]["approval"]["submission"]=partial["request"]["statement"]["submission"].clone();
     let answer=apply(project,partial);assert_eq!(answer["status"],"ok","{answer}");
-    close_refused(project,fixture.close("different-inspection"),"owner-attestation",&["check/A2"]);
+    owner_completion_refused(project,"different-inspection",&[("A","check/A2")]);
     let second=fixture.owner(1,"affirmative-1",true);let answer=apply(project,second.clone());assert_eq!(answer["status"],"ok","{answer}");
     assert_eq!(answer["receipt"]["request"]["event"]["submission"],second["request"]["statement"]["submission"]);
-    let close=fixture.close("owner-complete");let answer=apply(project,close.clone());assert_eq!(answer["status"],"ok","{answer}");
-    let before=tree(project);let prior=reopened(project).snapshot;assert_eq!(apply(project,close)["receipt"],answer["receipt"]);unchanged(project,&before,&prior);
     close_refused(project,fixture.close("owner-duplicate"),"task-completed",&[]);
-    // No-check task requires no invented owner statement.
-    git_value(project,&["commit","--allow-empty","-S","-m","feat(12): complete empty owner allocation C"]);
-    let completion=git_value(project,&["rev-parse","HEAD"]);fixture.run("C","owner-empty-verify",None,"verify");let state=task_state(project,"C");
-    let answer=apply(project,json!({"operation":"execution-task-close","request":{"request_id":"owner-empty-close","task":state["task"],"attempt":"attempt-C",
-        "expected_version":state["state"]["version"],"completion":completion,"checks":[],"verification":["owner-empty-verify"]}}));assert_eq!(answer["status"],"ok","{answer}");
+    complete_owner_plan(project);
 
     // Previously valid owner records become stale when the actual test material
     // and inspected runs change, even though the current real pair is valid.
-    let mut stale=Tiny::new("unittest");stale.attest();
+    let mut stale=Tiny::new("runner");stale.attest();
     let old_history=execution_history(stale.project());
     let old_test=fs::read(stale.project().join("tests/check.py")).unwrap();
     fs::write(stale.project().join("tests/check.py"),[old_test.as_slice(),b"\n# New inspected material\n"].concat()).unwrap();
     fs::write(stale.project().join("src/tiny.py"),"def answer():\n    return 6\n").unwrap();
     git_value(stale.project(),&["add","tests/check.py","src/tiny.py"]);git_value(stale.project(),&["commit","-m","test(12): fresh owner evidence A"]);
     let red=git_value(stale.project(),&["rev-parse","HEAD"]);
-    for i in 0..2 {stale.run("A",&format!("new-red-{i}"),Some(i),"red");}
+    for i in 0..3 {stale.run(if i<2 {"A"} else {"B"},&format!("new-red-{i}"),Some(i),"red");}
     fs::write(stale.project().join("src/tiny.py"),"def answer():\n    return 7\n").unwrap();git_value(stale.project(),&["add","src/tiny.py"]);
     git_value(stale.project(),&["commit","-S","-m","feat(12): fresh passing owner evidence A"]);stale.green=git_value(stale.project(),&["rev-parse","HEAD"]);
-    for i in 0..2 {stale.run("A",&format!("new-green-{i}"),Some(i),"green");stale.pairs[i]=json!({"check":stale.checks[i],"red_commit":red,"green_commit":stale.green,"red_run":format!("new-red-{i}"),"green_run":format!("new-green-{i}")});}
-    let mut stale_close=stale.close("material-stale-owner");stale_close["request"]["verification"]=json!(["new-green-0"]);
-    close_refused(stale.project(),stale_close,"owner-attestation",&["check/A","check/A2"]);
-    for i in 0..2 {
+    for i in 0..3 {stale.run(if i<2 {"A"} else {"B"},&format!("new-green-{i}"),Some(i),"green");stale.pairs[i]=json!({"check":stale.checks[i],"red_commit":red,"green_commit":stale.green,"red_run":format!("new-red-{i}"),"green_run":format!("new-green-{i}")});}
+    finish_tasks_without_attestation(&stale);
+    owner_completion_refused(stale.project(),"material-stale-owner",&[("A","check/A"),("A","check/A2"),("B","check/B")]);
+    for i in 0..3 {
         let mut request=stale.owner(i,&format!("new-owner-{i}"),true);
         request["request"]["statement"]["submission"]["test_digest"]=json!(model::digest(&fs::read(stale.project().join("tests/check.py")).unwrap()));
         request["request"]["statement"]["submission"]["evidence"]=json!([format!("new-red-{i}"),format!("new-green-{i}")]);
         request["request"]["statement"]["approval"]["submission"]=request["request"]["statement"]["submission"].clone();
         let answer=apply(stale.project(),request);assert_eq!(answer["status"],"ok","{answer}");
     }
-    let mut close=stale.close("fresh-owner-close");close["request"]["verification"]=json!(["new-green-0"]);
-    let answer=apply(stale.project(),close);assert_eq!(answer["status"],"ok","{answer}");
+    complete_owner_plan(stale.project());
     let after=execution_history(stale.project());for event in old_history["events"].as_array().unwrap() {assert!(after["events"].as_array().unwrap().contains(event));}
 }
 
@@ -1405,11 +1425,17 @@ fn settle(project:&Path,id:&str,plan:u32) -> Value {
 // Closes A, B and C with real signed completions, red/green pairs, owner
 // records and task-named marker runs; returns the handwritten launch order.
 fn finish_tasks(fixture:&Tiny) -> Vec<String> {
+    fixture.attest();
+    finish_tasks_without_attestation(fixture)
+}
+
+// The executor closes every task, including the empty allocation C, without
+// collecting human judgments between tasks.
+fn finish_tasks_without_attestation(fixture:&Tiny) -> Vec<String> {
     let project=fixture.project();
     let mut client = Client::open(project);
-    fixture.attest_with(&mut client);
     fixture.run_named_with(&mut client,"A","mark-A-1",MARK_A,None,"verify");fixture.run_named_with(&mut client,"A","mark-A-2",MARK_A,None,"verify");
-    let mut close=fixture.close_with(&mut client,"close-A");close["request"]["verification"]=json!(["green-0","mark-A-2"]);
+    let mut close=fixture.close_with(&mut client,"close-A");close["request"]["verification"]=json!([fixture.pairs[0]["green_run"],"mark-A-2"]);
     let answer=client.call("cadence_apply",close);assert_eq!(answer["status"],"ok","{answer}");
     git_value(project,&["commit","--allow-empty","-S","-m","feat(12): finish B"]);let completion_b=git_value(project,&["rev-parse","HEAD"]);
     fixture.run_with(&mut client,"B","verify-B",None,"verify");fixture.run_named_with(&mut client,"B","mark-B",MARK_B,None,"verify");
