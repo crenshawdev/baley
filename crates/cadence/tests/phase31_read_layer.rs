@@ -353,13 +353,12 @@ fn phase31_process_identity_returns_rendered_slice() {
         "operation":"plan-read","phase":"31","count":2
     }));
     let selected_task = "LARGE SELECTED TASK PAGE\n".repeat(200);
-    let preview = client.call("cadence_query", {
-        let request = process_plan_submission(&allocation, &selected_task);
-        json!({"operation":"plan-read","phase":"31","submission":request["submission"]})
-    });
+    let request = process_plan_submission(&allocation, &selected_task);
+    let preview = client.call("cadence_query",
+        json!({"operation":"plan-read","phase":"31","submission":request["submission"]}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", approve(json!({
-        "operation":"plan-submit","submission":preview["submission"]
+        "operation":"plan-submit","submission":request["submission"]
     })));
     assert_eq!(published["persisted"], true, "{published}");
     let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":31}));

@@ -128,13 +128,6 @@ fn map() -> Value {
     }]})
 }
 
-fn body(map: &Value) -> String {
-    format!(
-        "# Fixture plan\n\n## Evidence map\n\n```json\n{}\n```\n\n",
-        support::section_json(map, 0)
-    )
-}
-
 fn history(project: &Path) -> Value {
     let answer = call(
         project,
@@ -282,9 +275,11 @@ fn phase38_retained_dispatch_prompt_survives_renderer_change() {
         "request_id":"publish-retained-prompt","inventory_basis":allocation["inventory"]["basis"],
         "plans":[{"target":target,"content":{"phase":PHASE,"plan":1,"requirements":["T4"],
             "files":["src/value.py","tests/retained_prompt.py"],"directories":[],
-            "execution":{"schema":1,"suite":COMMAND,
-                "tasks":[{"id":"retain-prompt","verify":[COMMAND]}]},
-            "body":body(&evidence_map),"evidence_map":evidence_map}}]});
+            "goal":"Fixture plan","context":"Retained-prompt fixture.","notes":"",
+            "tasks":[{"id":"retain-prompt","title":"Retain dispatch prompt",
+                "files":["src/value.py","tests/retained_prompt.py"],
+                "action":"Exercise the retained prompt.","verify":[COMMAND]}],
+            "suite":COMMAND,"evidence_map":evidence_map}}]});
     let preview = client.call(
         "cadence_query",
         json!({"operation":"plan-read","phase":"38","submission":submission}),
@@ -292,7 +287,7 @@ fn phase38_retained_dispatch_prompt_survives_renderer_change() {
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call(
         "cadence_apply",
-        support::approve(json!({"operation":"plan-submit","submission":preview["submission"]})),
+        support::approve(json!({"operation":"plan-submit","submission":submission})),
     );
     assert_eq!(published["persisted"], true, "{published}");
     let plans = client.read("38", None);
@@ -598,14 +593,16 @@ fn phase38_regenerated_skill_is_implicit_lease_material() {
         "plans":[{"target":allocation["targets"][0],"content":{"phase":PHASE,"plan":1,
             "requirements":["T5"],
             "files":["crates/cadence/src/execution/instructions.rs","tests/rendered_skill.py"],
-            "directories":[],"execution":{"schema":1,"suite":RENDERED_COMMAND,
-                "tasks":[{"id":"regenerate-skill","verify":[RENDERED_COMMAND]}]},
-            "body":body(&evidence_map),"evidence_map":evidence_map}}]});
+            "directories":[],"goal":"Fixture plan","context":"Rendered-skill fixture.","notes":"",
+            "tasks":[{"id":"regenerate-skill","title":"Regenerate skill",
+                "files":["crates/cadence/src/execution/instructions.rs","tests/rendered_skill.py"],
+                "action":"Regenerate the binary-owned skill.","verify":[RENDERED_COMMAND]}],
+            "suite":RENDERED_COMMAND,"evidence_map":evidence_map}}]});
     let preview = client.call("cadence_query",
         json!({"operation":"plan-read","phase":"38","submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply",
-        support::approve(json!({"operation":"plan-submit","submission":preview["submission"]})));
+        support::approve(json!({"operation":"plan-submit","submission":submission})));
     assert_eq!(published["persisted"], true, "{published}");
     let plans = client.read("38", None);
     let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
@@ -779,14 +776,16 @@ fn prepare_repair_episode(truth_id: &str, check_id: &str, suite_body: &str) -> R
         "request_id":format!("publish-{truth_id}"),"inventory_basis":allocation["inventory"]["basis"],
         "plans":[{"target":allocation["targets"][0],"content":{"phase":PHASE,"plan":1,
             "requirements":[truth_id],"files":["src/value.py","tests/retained_prompt.py","tests/suite.sh"],
-            "directories":[],"execution":{"schema":1,"suite":SUITE_COMMAND,
-                "tasks":[{"id":"retain-prompt","verify":[COMMAND]}]},
-            "body":body(&evidence_map),"evidence_map":evidence_map}}]});
+            "directories":[],"goal":"Fixture plan","context":"Suite-repair fixture.","notes":"",
+            "tasks":[{"id":"retain-prompt","title":"Retain repair prompt",
+                "files":["src/value.py","tests/retained_prompt.py","tests/suite.sh"],
+                "action":"Exercise the suite repair.","verify":[COMMAND]}],
+            "suite":SUITE_COMMAND,"evidence_map":evidence_map}}]});
     let preview = client.call("cadence_query",
         json!({"operation":"plan-read","phase":"38","submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply",
-        support::approve(json!({"operation":"plan-submit","submission":preview["submission"]})));
+        support::approve(json!({"operation":"plan-submit","submission":submission})));
     assert_eq!(published["persisted"], true, "{published}");
     let plans = client.read("38", None);
     let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
@@ -1023,13 +1022,15 @@ fn phase38_second_red_blocks_and_refuses_third_launch() {
         "request_id":"publish-gap-plan","inventory_basis":allocation["inventory"]["basis"],
         "plans":[{"target":target,"content":{"phase":PHASE,"plan":2,"requirements":["T3"],
             "files":["tests/suite.sh"],"directories":[],
-            "execution":{"schema":1,"suite":SUITE_COMMAND,"tasks":[{"id":"gap-plan","verify":[COMMAND]}]},
-            "body":body(&gap_map),"evidence_map":gap_map}}]});
+            "goal":"Fixture plan","context":"Gap-plan fixture.","notes":"",
+            "tasks":[{"id":"gap-plan","title":"Repair suite gap","files":["tests/suite.sh"],
+                "action":"Leave the suite passing.","verify":[COMMAND]}],
+            "suite":SUITE_COMMAND,"evidence_map":gap_map}}]});
     let preview = client.call("cadence_query",
         json!({"operation":"plan-read","phase":"38","submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply",
-        support::approve(json!({"operation":"plan-submit","submission":preview["submission"]})));
+        support::approve(json!({"operation":"plan-submit","submission":submission})));
     assert_eq!(published["persisted"], true, "{published}");
     let plans = client.read("38", None);
     let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
@@ -1192,9 +1193,11 @@ fn phase38_execute_next_dispatches_named_plan_first() {
     ].into_iter().enumerate().map(|(index, (plan, task))| json!({
         "target":allocation["targets"][index],"content":{"phase":PHASE,"plan":plan,
         "requirements":["T6"],"files":["src/value.py","tests/retained_prompt.py","tests/suite.sh"],
-        "directories":[],"execution":{"schema":1,"suite":SUITE_COMMAND,
-            "tasks":[{"id":task,"verify":[COMMAND]}]},
-        "body":body(&evidence_map),"evidence_map":evidence_map
+        "directories":[],"goal":"Fixture plan","context":"Owner-selection fixture.","notes":"",
+        "tasks":[{"id":task,"title":"Run selected plan",
+            "files":["src/value.py","tests/retained_prompt.py","tests/suite.sh"],
+            "action":"Exercise owner-selected dispatch.","verify":[COMMAND]}],
+        "suite":SUITE_COMMAND,"evidence_map":evidence_map
     }})).collect::<Vec<_>>();
     let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],
         "request_id":"publish-owner-selection","inventory_basis":allocation["inventory"]["basis"],
@@ -1203,7 +1206,7 @@ fn phase38_execute_next_dispatches_named_plan_first() {
         json!({"operation":"plan-read","phase":"38","submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply",
-        support::approve(json!({"operation":"plan-submit","submission":preview["submission"]})));
+        support::approve(json!({"operation":"plan-submit","submission":submission})));
     assert_eq!(published["persisted"], true, "{published}");
     let plans = client.read("38", None);
     let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":PHASE}));

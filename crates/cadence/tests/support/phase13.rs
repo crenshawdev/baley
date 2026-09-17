@@ -166,8 +166,12 @@ pub fn request(preview: &Value, phase: u32, id: &str, bodies: &[&str]) -> Value 
             "target":preview["targets"][i],"content":{
                 "phase":phase,"plan":preview["targets"][i]["plan"],
                 "requirements":["T1"],"files":["src/shared.txt"],"directories":["src/extra"],
-                "execution":{"schema":1,"suite":"printf suite","tasks":[{"id":"task-1","verify":["printf verified"]},{"id":"task-2","verify":["printf documented"]}]},
-                "body":body,"evidence_map":{"mode":"provisional"}}})).collect::<Vec<_>>()}})
+                "goal":body,"context":"Fixture context.","notes":"Fixture notes.",
+                "tasks":[{"id":"task-1","title":"Verify fixture","files":["src/shared.txt"],
+                    "action":"Exercise the fixture.","verify":["printf verified"]},
+                    {"id":"task-2","title":"Document fixture","files":["src/shared.txt"],
+                    "action":"Document the fixture.","verify":["printf documented"]}],
+                "suite":"printf suite","evidence_map":{"mode":"provisional"}}})).collect::<Vec<_>>()}})
 }
 
 pub fn snapshot(project: &Path) -> Snapshot {
@@ -287,10 +291,6 @@ pub fn section_json(value: &Value, depth: usize) -> String {
     }
 }
 
-pub fn body(map: &Value) -> String {
-    format!("# Limits invoice pronoun\n## Evidence map\n\n```json\n{}\n```\n\n", section_json(map, 0))
-}
-
 // Some(number) replaces a current contribution; None allocates a new one.
 pub fn proposal(project: &Path, id: &str, maps: &[(Option<u32>, Value)]) -> Value {
     let mut client = Client::open(project);
@@ -304,7 +304,7 @@ pub fn proposal(project: &Path, id: &str, maps: &[(Option<u32>, Value)]) -> Valu
         entry["target"]["plan"] = json!(plan);
         entry["content"]["plan"] = json!(plan);
         entry["content"]["evidence_map"] = map.clone();
-        entry["content"]["body"] = json!(body(map));
+        entry["content"]["goal"] = json!("Limits invoice pronoun");
         if number.is_some() {
             let old = &allocation["native"]["publications"][plan.to_string()];
             assert!(old.is_object());
@@ -333,7 +333,8 @@ pub fn publish(project: &Path, input: &Value) -> Value {
     let mut client = Client::open(project);
     let complete = preview(&mut client, input);
     assert_eq!(complete["status"], "ok", "complete control preview: {complete}");
-    assert_eq!(complete["submission"], input["submission"], "handwritten canonical section");
+    assert_eq!(complete["documents"].as_array().unwrap().len(), input["submission"]["plans"].as_array().unwrap().len());
+    assert!(complete.get("submission").is_none(), "preview must not echo the submission: {complete}");
     let approved = approve(input.clone());
     let answer = client.call("cadence_apply", approved.clone());
     assert_eq!(answer["persisted"], true, "control publication: {answer}");
@@ -344,7 +345,8 @@ pub fn publish(project: &Path, input: &Value) -> Value {
     assert_eq!(occurrence["receipts"][input["submission"]["request_id"].as_str().unwrap()]["results"], answer["results"]);
     for (entry, result) in input["submission"]["plans"].as_array().unwrap().iter().zip(answer["results"].as_array().unwrap()) {
         assert_eq!(result["identity"], entry["target"]);
-        assert_eq!(result["content"], entry["content"]);
+        assert_eq!(result["content"]["goal"], entry["content"]["goal"]);
+        assert_eq!(result["content"]["tasks"], entry["content"]["tasks"]);
         assert_eq!(result["approval"], approved["approval"]);
         assert_eq!(occurrence["publications"][result["identity"]["plan"].as_u64().unwrap().to_string()], *result);
         let retained = prior.data["acceptance_maps"]["phases"]["13"]["revisions"].as_array().unwrap().iter()
@@ -353,7 +355,7 @@ pub fn publish(project: &Path, input: &Value) -> Value {
         assert_eq!(retained["identity"], entry["target"]);
         assert_eq!(retained["content_revision"], result["revision"]);
         let document = fs::read_to_string(project.join(format!(".planning/phases/13/PLAN-{}.md", entry["target"]["plan"]))).unwrap();
-        assert!(document.ends_with(entry["content"]["body"].as_str().unwrap()));
+        assert!(document.contains(entry["content"]["goal"].as_str().unwrap()));
     }
     let mut client = Client::open(project);
     let read = client.call("cadence_query", json!({"operation":"evidence-read","phase":13}));

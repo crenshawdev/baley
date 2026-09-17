@@ -110,11 +110,6 @@ fn artifact() -> Value {
         "associations":association()})
 }
 
-fn body(map: &Value) -> String {
-    format!("# Fixture plan\n\n## Evidence map\n\n```json\n{}\n```\n\n",
-        support::section_json(map, 0))
-}
-
 fn publish(project: &Path) {
     let truth = json!({"id":"T1","trigger":"the owner retires unfinished work",
         "observer":"the executor","verb":"gets","outcome":"the next admitted plan",
@@ -132,14 +127,18 @@ fn publish(project: &Path) {
     let plans = maps.iter().enumerate().map(|(index, evidence_map)| {
         let target = allocation["targets"][index].clone();
         let tasks = if index == 0 {
-            json!([{"id":"control","verify":[COMMAND]},{"id":"retire","verify":[COMMAND]}])
+            json!([{"id":"control","title":"Control task","files":["src/control.py","tests/control.py"],
+                "action":"Exercise the control path.","verify":[COMMAND]},
+                {"id":"retire","title":"Retire task","files":["src/control.py","tests/control.py"],
+                "action":"Exercise the retirement path.","verify":[COMMAND]}])
         } else {
-            json!([{"id":"repair","verify":[COMMAND]}])
+            json!([{"id":"repair","title":"Repair task","files":["src/control.py","tests/control.py"],
+                "action":"Exercise the repair path.","verify":[COMMAND]}])
         };
         json!({"target":target,"content":{"phase":PHASE,"plan":target["plan"],"requirements":["T1"],
             "files":["src/control.py","tests/control.py"],"directories":[],
-            "execution":{"schema":1,"suite":COMMAND,"tasks":tasks},"body":body(evidence_map),
-            "evidence_map":evidence_map}})
+            "goal":"Fixture plan","context":"Blocked-path fixture.","notes":"",
+            "tasks":tasks,"suite":COMMAND,"evidence_map":evidence_map}})
     }).collect::<Vec<_>>();
     let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],"request_id":"publish-two-plans",
         "inventory_basis":allocation["inventory"]["basis"],"plans":plans});
@@ -168,8 +167,10 @@ fn publish_blocked_plan(project: &Path) {
     let target = allocation["targets"][0].clone();
     let plans = vec![json!({"target":target,"content":{"phase":PHASE,"plan":target["plan"],
         "requirements":["T2"],"files":["src/control.py"],"directories":[],
-        "execution":{"schema":1,"suite":COMMAND,"tasks":[{"id":"retire","verify":[COMMAND]}]},
-        "body":body(&evidence_map),"evidence_map":evidence_map}})];
+        "goal":"Fixture plan","context":"Blocked repair fixture.","notes":"",
+        "tasks":[{"id":"retire","title":"Retire blocked work","files":["src/control.py"],
+            "action":"Exercise the blocked retirement.","verify":[COMMAND]}],
+        "suite":COMMAND,"evidence_map":evidence_map}})];
     let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],
         "request_id":"publish-blocked-repair","inventory_basis":allocation["inventory"]["basis"],
         "plans":plans});
@@ -542,13 +543,15 @@ fn phase34_blocked_then_completed_phase_is_derived_executed() {
         "request_id":"publish-later-repair","inventory_basis":allocation["inventory"]["basis"],
         "plans":[{"target":target,"content":{"phase":PHASE,"plan":target["plan"],
             "requirements":["T2"],"files":["src/control.py","tests/control.py"],"directories":[],
-            "execution":{"schema":1,"suite":COMMAND,"tasks":[{"id":"repair","verify":[COMMAND]}]},
-            "body":body(&repair_map),"evidence_map":repair_map}}]});
+            "goal":"Fixture plan","context":"Later repair fixture.","notes":"",
+            "tasks":[{"id":"repair","title":"Complete repair","files":["src/control.py","tests/control.py"],
+                "action":"Exercise the completed repair.","verify":[COMMAND]}],
+            "suite":COMMAND,"evidence_map":repair_map}}]});
     let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"34",
         "submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({
-        "operation":"plan-submit","submission":preview["submission"]
+        "operation":"plan-submit","submission":submission
     })));
     assert_eq!(published["persisted"], true, "{published}");
     client.finish();

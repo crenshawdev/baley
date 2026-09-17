@@ -98,10 +98,6 @@ fn artifact() -> Value {
 
 fn map(items: Vec<Value>) -> Value { json!({"mode":"attached","items":items}) }
 
-fn body(map: &Value) -> String {
-    format!("# Fixture plan\n\n## Evidence map\n\n```json\n{}\n```\n\n", support::section_json(map, 0))
-}
-
 fn history(project: &Path) -> Value {
     let answer = call(project, "cadence_query", json!({"operation":"execution-history","phase":PHASE}));
     assert_eq!(answer["status"], "ok", "{answer}");
@@ -264,14 +260,15 @@ impl RejectedFixture {
             "request_id":"publish-initial-plan","inventory_basis":allocation["inventory"]["basis"],
             "plans":[{"target":target,"content":{"phase":PHASE,"plan":target["plan"],
                 "requirements":["T1"],"files":["src/control.py","tests/old_control.py"],"directories":[],
-                "execution":{"schema":1,"suite":OLD_COMMAND,
-                    "tasks":[{"id":"initial-owner","verify":[OLD_COMMAND]}]},
-                "body":body(&initial_map),"evidence_map":initial_map}}]});
+                "goal":"Fixture plan","context":"Rejected-check fixture.","notes":"",
+                "tasks":[{"id":"initial-owner","title":"Complete initial proof",
+                    "files":["src/control.py","tests/old_control.py"],"action":"Exercise the initial proof.",
+                    "verify":[OLD_COMMAND]}],"suite":OLD_COMMAND,"evidence_map":initial_map}}]});
         let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"37",
             "submission":submission}));
         assert_eq!(preview["status"], "ok", "{preview}");
         let published = client.call("cadence_apply", support::approve(json!({
-            "operation":"plan-submit","submission":preview["submission"]
+            "operation":"plan-submit","submission":submission
         })));
         assert_eq!(published["persisted"], true, "{published}");
         let old_map_revision = published["results"][0]["map_revision"].clone();
@@ -327,7 +324,7 @@ impl RejectedFixture {
 }
 
 fn later_submission(project: &Path, id: &str, item: Value, command: &str, task: &str,
-    test_file: &str) -> (Value, Value)
+    test_file: &str) -> (Value, Value, Value)
 {
     let later_map = map(vec![item]);
     let mut client = Client::open(project);
@@ -337,19 +334,21 @@ fn later_submission(project: &Path, id: &str, item: Value, command: &str, task: 
     let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],
         "request_id":id,"inventory_basis":allocation["inventory"]["basis"],"plans":[{
             "target":target,"content":{"phase":PHASE,"plan":target["plan"],"requirements":["T1"],
-            "files":["src/control.py",test_file],"directories":[],
-            "execution":{"schema":1,"suite":command,"tasks":[{"id":task,"verify":[command]}]},
-            "body":body(&later_map),"evidence_map":later_map}}]});
+            "files":["src/control.py",test_file],"directories":[],"goal":"Fixture plan",
+            "context":"Later rejected-check fixture.","notes":"",
+            "tasks":[{"id":task,"title":"Complete replacement proof","files":["src/control.py",test_file],
+                "action":"Exercise the replacement proof.","verify":[command]}],
+            "suite":command,"evidence_map":later_map}}]});
     let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"37",
         "submission":submission}));
     client.finish();
-    (preview, target)
+    (preview, target, submission)
 }
 
-fn publish_preview(project: &Path, preview: &Value) -> Value {
+fn publish_preview(project: &Path, preview: &Value, submission: &Value) -> Value {
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = call(project, "cadence_apply", support::approve(json!({
-        "operation":"plan-submit","submission":preview["submission"]
+        "operation":"plan-submit","submission":submission
     })));
     assert_eq!(published["persisted"], true, "{published}");
     published
@@ -380,14 +379,14 @@ fn phase37_rejected_check_can_be_republished_with_changed_spec() {
     let fixture = RejectedFixture::new();
     let project = fixture.project();
     let changed = changed_check();
-    let (preview, _) = later_submission(project, "publish-changed-check", changed.clone(),
+    let (preview, _, submission) = later_submission(project, "publish-changed-check", changed.clone(),
         NEW_COMMAND, "replacement-owner", "tests/new_control.py");
 
     assert_eq!(preview["status"], "ok", "{preview}");
-    assert_eq!(preview["submission"]["plans"][0]["content"]["evidence_map"]["items"], json!([changed]));
+    assert_eq!(submission["plans"][0]["content"]["evidence_map"]["items"], json!([changed]));
     assert_eq!(preview["coverage"]["uncovered"], json!([]));
     assert_eq!(preview["coverage"]["without_check"], json!([]));
-    publish_preview(project, &preview);
+    publish_preview(project, &preview, &submission);
 
     let evidence = call(project, "cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
     assert_eq!(evidence["schema"], "acceptance-map-view-1");
@@ -411,9 +410,9 @@ fn phase37_rejected_check_can_be_republished_with_changed_spec() {
 fn phase37_extension_reassigns_rejected_check() {
     let fixture = RejectedFixture::new();
     let project = fixture.project();
-    let (preview, _) = later_submission(project, "publish-later-owner", old_check(),
+    let (preview, _, submission) = later_submission(project, "publish-later-owner", old_check(),
         OLD_COMMAND, "later-owner", "tests/old_control.py");
-    publish_preview(project, &preview);
+    publish_preview(project, &preview, &submission);
     let (contract, current_check) = extended_contract(&fixture, "later-owner");
     let old_assignment = fixture.old_contract["allocation"][0].clone();
     let later_assignment = json!({"plan":2,"task":"later-owner","checks":[{
@@ -434,9 +433,9 @@ fn phase37_evidence_read_retains_rejected_check_as_superseded() {
     let fixture = RejectedFixture::new();
     let project = fixture.project();
     let changed = changed_check();
-    let (preview, _) = later_submission(project, "publish-evidence-successor", changed.clone(),
+    let (preview, _, submission) = later_submission(project, "publish-evidence-successor", changed.clone(),
         NEW_COMMAND, "replacement-owner", "tests/new_control.py");
-    let published = publish_preview(project, &preview);
+    let published = publish_preview(project, &preview, &submission);
     let later_map_revision = published["results"][0]["map_revision"].clone();
     let evidence = call(project, "cadence_query", json!({"operation":"evidence-read","phase":PHASE}));
     let changed_check_revision = evidence["history"][1]["publication"]["item_revisions"]
@@ -496,9 +495,9 @@ fn phase37_fresh_verification_uses_only_reproved_check_definition() {
     let fixture = RejectedFixture::new();
     let project = fixture.project();
     let changed = changed_check();
-    let (preview, _) = later_submission(project, "publish-reproved-check", changed.clone(),
+    let (preview, _, submission) = later_submission(project, "publish-reproved-check", changed.clone(),
         NEW_COMMAND, "replacement-owner", "tests/new_control.py");
-    publish_preview(project, &preview);
+    publish_preview(project, &preview, &submission);
     let (contract, later_check) = extended_contract(&fixture, "replacement-owner");
     let later_assignment = contract["allocation"][1].clone();
     let extended = call(project, "cadence_apply", json!({"operation":"execution-extend","request":{

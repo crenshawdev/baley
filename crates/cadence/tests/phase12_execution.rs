@@ -157,8 +157,12 @@ fn request(preview: &Value, phase: u32, id: &str, bodies: &[&str]) -> Value {
             "target":preview["targets"][i],"content":{
                 "phase":phase,"plan":preview["targets"][i]["plan"],
                 "requirements":["T1"],"files":["src/shared.txt"],"directories":["src/extra"],
-                "execution":{"schema":1,"suite":"printf suite","tasks":[{"id":"task-1","verify":["printf verified"]},{"id":"task-2","verify":["printf documented"]}]},
-                "body":body,"evidence_map":{"mode":"provisional"}}})).collect::<Vec<_>>()}})
+                "goal":body,"context":"Fixture context.","notes":"Fixture notes.",
+                "tasks":[{"id":"task-1","title":"Verify fixture","files":["src/shared.txt"],
+                    "action":"Exercise the fixture.","verify":["printf verified"]},
+                    {"id":"task-2","title":"Document fixture","files":["src/shared.txt"],
+                    "action":"Document the fixture.","verify":["printf documented"]}],
+                "suite":"printf suite","evidence_map":{"mode":"provisional"}}})).collect::<Vec<_>>()}})
 }
 
 fn snapshot(project: &Path) -> Snapshot {
@@ -268,10 +272,6 @@ fn section_json(value: &Value, depth: usize) -> String {
     }
 }
 
-fn body(map: &Value) -> String {
-    format!("# Limits invoice pronoun\n## Evidence map\n\n```json\n{}\n```\n\n", section_json(map, 0))
-}
-
 // Some(number) replaces a current contribution; None allocates a new one.
 fn proposal(project: &Path, id: &str, maps: &[(Option<u32>, Value)]) -> Value {
     let mut client = Client::open(project);
@@ -285,7 +285,7 @@ fn proposal(project: &Path, id: &str, maps: &[(Option<u32>, Value)]) -> Value {
         entry["target"]["plan"] = json!(plan);
         entry["content"]["plan"] = json!(plan);
         entry["content"]["evidence_map"] = map.clone();
-        entry["content"]["body"] = json!(body(map));
+        entry["content"]["goal"] = json!("Limits invoice pronoun");
         if number.is_some() {
             let old = &allocation["native"]["publications"][plan.to_string()];
             assert!(old.is_object());
@@ -314,7 +314,9 @@ fn publish(project: &Path, input: &Value) -> Value {
     let mut client = Client::open(project);
     let complete = preview(&mut client, input);
     assert_eq!(complete["status"], "ok", "complete control preview: {complete}");
-    assert_eq!(complete["submission"], input["submission"], "handwritten canonical section");
+    assert_eq!(complete["documents"].as_array().unwrap().len(),
+        input["submission"]["plans"].as_array().unwrap().len());
+    assert!(complete.get("submission").is_none(), "preview must not echo the submission: {complete}");
     let approved = approve(input.clone());
     let answer = client.call("cadence_apply", approved.clone());
     assert_eq!(answer["persisted"], true, "control publication: {answer}");
@@ -325,7 +327,8 @@ fn publish(project: &Path, input: &Value) -> Value {
     assert_eq!(occurrence["receipts"][input["submission"]["request_id"].as_str().unwrap()]["results"], answer["results"]);
     for (entry, result) in input["submission"]["plans"].as_array().unwrap().iter().zip(answer["results"].as_array().unwrap()) {
         assert_eq!(result["identity"], entry["target"]);
-        assert_eq!(result["content"], entry["content"]);
+        assert_eq!(result["content"]["goal"], entry["content"]["goal"]);
+        assert_eq!(result["content"]["tasks"], entry["content"]["tasks"]);
         assert_eq!(result["approval"], approved["approval"]);
         assert_eq!(occurrence["publications"][result["identity"]["plan"].as_u64().unwrap().to_string()], *result);
         let retained = prior.data["acceptance_maps"]["phases"]["12"]["revisions"].as_array().unwrap().iter()
@@ -334,7 +337,7 @@ fn publish(project: &Path, input: &Value) -> Value {
         assert_eq!(retained["identity"], entry["target"]);
         assert_eq!(retained["content_revision"], result["revision"]);
         let document = fs::read_to_string(project.join(format!(".planning/phases/12/PLAN-{}.md", entry["target"]["plan"]))).unwrap();
-        assert!(document.ends_with(entry["content"]["body"].as_str().unwrap()));
+        assert!(document.contains(entry["content"]["goal"].as_str().unwrap()));
     }
     let mut client = Client::open(project);
     let read = client.call("cadence_query", json!({"operation":"evidence-read","phase":12}));
@@ -526,13 +529,21 @@ impl Tiny {
         for entry in input["submission"]["plans"].as_array_mut().unwrap() {
             entry["content"]["files"] = json!(["src/tiny.py","tests/check.py","src/renamed.py"]);
             entry["content"]["directories"] = json!([]);
-            entry["content"]["execution"]["tasks"] = json!([{"id":"A","verify":[command]},{"id":"B","verify":[command]},{"id":"C","verify":[command]}]);
+            entry["content"]["tasks"] = json!([
+                {"id":"A","title":"Task A","files":["src/tiny.py","tests/check.py"],
+                    "action":"Exercise check A.","verify":[command]},
+                {"id":"B","title":"Task B","files":["src/tiny.py","tests/check.py"],
+                    "action":"Exercise check B.","verify":[command]},
+                {"id":"C","title":"Task C","files":["src/tiny.py","tests/check.py"],
+                    "action":"Exercise check C.","verify":[command]}]);
             if runner {
-                entry["content"]["execution"]["suite"] = json!(suite_command(mode));
-                entry["content"]["execution"]["tasks"] = json!([{"id":"A","verify":[command,MARK_A]},{"id":"B","verify":[command,MARK_B]},{"id":"C","verify":[MARK_C,PARTIAL,BIG]}]);
+                entry["content"]["suite"] = json!(suite_command(mode));
+                entry["content"]["tasks"][0]["verify"] = json!([command,MARK_A]);
+                entry["content"]["tasks"][1]["verify"] = json!([command,MARK_B]);
+                entry["content"]["tasks"][2]["verify"] = json!([MARK_C,PARTIAL,BIG]);
             }
-            if mode=="progress" {entry["content"]["execution"]["tasks"][1]["verify"]=json!([command,PROGRESS_WAIT,PROGRESS_FAIL]);}
-            if mode=="dispatch" {entry["content"]["body"]=json!(format!("{}## Tasks\n\n{BODY_OVERRIDE}",entry["content"]["body"].as_str().unwrap()));}
+            if mode=="progress" {entry["content"]["tasks"][1]["verify"]=json!([command,PROGRESS_WAIT,PROGRESS_FAIL]);}
+            if mode=="dispatch" {entry["content"]["tasks"][0]["action"]=json!(BODY_OVERRIDE);}
         }
         publish(project,&input);
         let mut allocation = contract(project);

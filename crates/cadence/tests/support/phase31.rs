@@ -267,30 +267,29 @@ pub fn process_plan_submission(allocation: &Value, large_task: &str) -> Value {
         "spec":{"locators":["read-layer"],"substance":"Identity-owned process rendering."},
         "associations":[{"truth_id":"T4","truth_version":1,"reason":"This owns the rendered identity."}]
     });
-    let plan_one = concat!(
-        "# Fixture plan one\n\n## Goal\n\nPLAN ONE GOAL SENTINEL\n\n## Tasks\n\n",
-        "### Task 1: Completed fixture task\n\nPLAN ONE TASK ONE SENTINEL\n\n",
-        "### Task 2: Deferred fixture task\n\nPLAN ONE TASK TWO SENTINEL\n",
-    );
-    let plan_two = format!(concat!(
-        "# Fixture plan two\n\n## Goal\n\nPLAN TWO GOAL SENTINEL\n\n## Tasks\n\n",
-        "### Task 1: Requested fixture task\n\nPLAN TWO TASK ONE UNIQUE\n{}\n",
-        "### Task 2: Neighbor fixture task\n\nPLAN TWO TASK TWO SENTINEL\n",
-    ), large_task);
+    let plan_two_action = format!("PLAN TWO TASK ONE UNIQUE\n{large_task}");
     json!({"operation":"plan-submit","submission":{
         "phase":31,"occurrence":allocation["occurrence"],"request_id":"fixture-two-plans",
         "inventory_basis":allocation["inventory"]["basis"],"plans":[
             {"target":allocation["targets"][0],"content":{"phase":31,"plan":1,"requirements":["T4"],
                 "files":["src/lease.rs","tests/tiny.py"],"directories":[],
-                "execution":{"schema":1,"suite":"python3 -B tests/tiny.py","tasks":[
-                    {"id":"fixture-one-a","verify":["python3 -B tests/tiny.py"]},
-                    {"id":"fixture-one-b","verify":["python3 -B tests/tiny.py"]}]},
-                "body":plan_one,"evidence_map":{"mode":"attached","items":[check, artifact("fixture/artifact-one")]}}},
+                "goal":"PLAN ONE GOAL SENTINEL","context":"Plan one fixture context.","notes":"Plan one fixture notes.",
+                "tasks":[
+                    {"id":"fixture-one-a","title":"Completed fixture task","files":["src/lease.rs","tests/tiny.py"],
+                        "action":"PLAN ONE TASK ONE SENTINEL","verify":["python3 -B tests/tiny.py"]},
+                    {"id":"fixture-one-b","title":"Deferred fixture task","files":["src/lease.rs","tests/tiny.py"],
+                        "action":"PLAN ONE TASK TWO SENTINEL","verify":["python3 -B tests/tiny.py"]}],
+                "suite":"python3 -B tests/tiny.py",
+                "evidence_map":{"mode":"attached","items":[check, artifact("fixture/artifact-one")]}}},
             {"target":allocation["targets"][1],"content":{"phase":31,"plan":2,"requirements":["T4"],
                 "files":["src/lease.rs"],"directories":[],
-                "execution":{"schema":1,"suite":"python3 -B tests/tiny.py","tasks":[
-                    {"id":"fixture-two-a","verify":["python3 -B tests/tiny.py"]},
-                    {"id":"fixture-two-b","verify":["python3 -B tests/tiny.py"]}]},
-                "body":plan_two,"evidence_map":{"mode":"attached","items":[artifact("fixture/artifact-two")]}}}
+                "goal":"PLAN TWO GOAL SENTINEL","context":"Plan two fixture context.","notes":"Plan two fixture notes.",
+                "tasks":[
+                    {"id":"fixture-two-a","title":"Requested fixture task","files":["src/lease.rs"],
+                        "action":plan_two_action,"verify":["python3 -B tests/tiny.py"]},
+                    {"id":"fixture-two-b","title":"Neighbor fixture task","files":["src/lease.rs"],
+                        "action":"PLAN TWO TASK TWO SENTINEL","verify":["python3 -B tests/tiny.py"]}],
+                "suite":"python3 -B tests/tiny.py",
+                "evidence_map":{"mode":"attached","items":[artifact("fixture/artifact-two")]}}}
         ]}})
 }

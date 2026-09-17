@@ -12,7 +12,7 @@ pub struct Identity {
     pub plan: NonZeroU32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Execution {
     pub schema: u32,
@@ -23,12 +23,6 @@ pub struct Execution {
 impl Execution {
     pub fn is_empty(&self) -> bool {
         self.schema == 0 && self.suite.is_empty() && self.tasks.is_empty()
-    }
-}
-
-impl Default for Execution {
-    fn default() -> Self {
-        Self { schema: 0, suite: String::new(), tasks: Vec::new() }
     }
 }
 

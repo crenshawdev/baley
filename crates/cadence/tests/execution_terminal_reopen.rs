@@ -89,10 +89,6 @@ fn artifact() -> Value {
 
 fn map(items: Vec<Value>) -> Value { json!({"mode":"attached","items":items}) }
 
-fn body(map: &Value) -> String {
-    format!("# Fixture plan\n\n## Evidence map\n\n```json\n{}\n```\n\n", support::section_json(map, 0))
-}
-
 fn history(project: &Path) -> Value {
     let answer = call(project, "cadence_query", json!({"operation":"execution-history","phase":PHASE}));
     assert_eq!(answer["status"], "ok", "{answer}");
@@ -261,14 +257,15 @@ fn execute_next_dispatches_a_plan_admitted_after_the_phase_completed() {
         "request_id":"publish-initial-plan","inventory_basis":allocation["inventory"]["basis"],
         "plans":[{"target":target,"content":{"phase":PHASE,"plan":target["plan"],
             "requirements":["T1"],"files":["src/control.py","tests/old_control.py"],"directories":[],
-            "execution":{"schema":1,"suite":OLD_COMMAND,
-                "tasks":[{"id":"initial-owner","verify":[OLD_COMMAND]}]},
-            "body":body(&initial_map),"evidence_map":initial_map}}]});
+            "goal":"Fixture plan","context":"Initial terminal fixture.","notes":"",
+            "tasks":[{"id":"initial-owner","title":"Complete initial work",
+                "files":["src/control.py","tests/old_control.py"],"action":"Exercise the initial owner.",
+                "verify":[OLD_COMMAND]}],"suite":OLD_COMMAND,"evidence_map":initial_map}}]});
     let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"37",
         "submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({
-        "operation":"plan-submit","submission":preview["submission"]})));
+        "operation":"plan-submit","submission":submission})));
     assert_eq!(published["persisted"], true, "{published}");
     client.finish();
 
@@ -312,13 +309,15 @@ fn execute_next_dispatches_a_plan_admitted_after_the_phase_completed() {
         "request_id":"publish-later-plan","inventory_basis":allocation["inventory"]["basis"],
         "plans":[{"target":target,"content":{"phase":PHASE,"plan":2,"requirements":["T1"],
             "files":["src/control.py"],"directories":[],
-            "execution":{"schema":1,"suite":OLD_COMMAND,"tasks":[{"id":"later-owner","verify":[OLD_COMMAND]}]},
-            "body":body(&later_map),"evidence_map":later_map}}]});
+            "goal":"Fixture plan","context":"Later terminal fixture.","notes":"",
+            "tasks":[{"id":"later-owner","title":"Complete later work","files":["src/control.py"],
+                "action":"Exercise the later owner.","verify":[OLD_COMMAND]}],
+            "suite":OLD_COMMAND,"evidence_map":later_map}}]});
     let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"37",
         "submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({
-        "operation":"plan-submit","submission":preview["submission"]})));
+        "operation":"plan-submit","submission":submission})));
     assert_eq!(published["persisted"], true, "{published}");
     let plans = client.read("37", None);
     client.finish();

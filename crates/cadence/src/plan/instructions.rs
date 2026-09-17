@@ -159,34 +159,34 @@ its kind/spec/item reason must agree; associations retain their separate origins
 Changing its definition requires replacing all conflicting current contributions
 together. A changed spec under the same id retains the old item revision.
 
-The binary renders the canonical `## Evidence map` section from the typed map
-at complete preview, preserving surrounding authored body bytes. Leave that
-section for the binary to insert, or submit the exact canonical section. Duplicate
-sections and disagreement with typed data are refused, never silently adopted.
-An existing opaque phase-27 section is not native map authority; replace the plan
-with an explicitly approved new body and typed map. Inspect the preview's old
-section and proposed canonical section before approval.
+The binary renders the complete canonical PLAN document from the typed content,
+including the `## Evidence map` section. Never author or submit a Markdown
+`body`; that field is retained only in saved historical publications. An
+existing opaque phase-27 section is not native map authority; replace the plan
+with explicitly approved typed content and a typed map.
 
 For deliberately mapless authoring, explicitly send `{"mode":"provisional"}`.
 Missing map fields are preserved only in historical receipts and cannot authorize
 a new publication. Provisional maps show missing coverage honestly and contribute
-no evidence, even if their body repeats old map text.
+no evidence.
 
 All publication remains `provisional-authoring`: readable and addressable, with a
 mechanical `execute-next` gate. Phase 12 still owns execution activation and its
 acceptance contract; phase 13 owns verdicts, phase 30 owns review handoff. No
 red/green receipt, execution or verdict API is added by typed-map authoring.
 
-Prepare `content` with numeric `phase` and `plan`, `requirements` IDs, project-relative
-`files`, optional `directories`, `execution`, the exact Markdown `body`, and
-the explicit `evidence_map` mode above.
-`execution` has `schema: 1`, the project's nonblank full-suite command in `suite`,
-and `tasks`, each with a stable unique `id` and nonempty `verify` command array.
-These fields describe authored commands. Planning neither runs them nor certifies
-acceptance readiness. Keep task verification narrow; the executor runs the suite
-once at plan close. The binary round-trips the canonical frontmatter through its
-strict native reader. No approval, revision or map metadata goes in frontmatter.
-No bare PLAN.md is created; files land at `.planning/phases/<N>/PLAN-<k>.md`.
+Prepare `content` with numeric `phase` and `plan`, `requirements` IDs,
+project-relative `files`, optional `directories`, the prose strings `goal`,
+`context` and `notes`, typed `tasks`, the nonblank full-suite command `suite`,
+and the explicit `evidence_map` mode above. Each task is
+`{id, title, files, action, verify}`: use a stable unique id, project-relative
+task files that are also present in content.files, prose title and action, and
+a nonempty narrow verify command array. Planning neither runs these commands
+nor certifies acceptance readiness; the executor runs the suite once at plan
+close. The binary derives retained execution metadata and renders every Markdown
+section and canonical frontmatter. Do not send `body` or `execution`. No approval,
+revision or map metadata goes in frontmatter. No bare PLAN.md is created; files
+land at `.planning/phases/<N>/PLAN-<k>.md`.
 
 ## Preview, show the exact proposal, and obtain approval
 
@@ -207,19 +207,19 @@ contains `phase`, returned `occurrence`, a fresh durable caller `request_id`,
 `inventory_basis` copied from `inventory.basis`, and ordered `plans`. Each entry
 contains its exact returned `target: {phase, plan}` and matching `content` as above.
 There is no caller-controlled path and no separate gap operation. Preserve all
-authored body bytes and the order shown to the owner. Before approval, send the
+typed content and the order shown to the owner. Before approval, send the
 complete `submission` through `cadence_query`, without a `count`:
 
 ```json
 {"operation":"plan-read","phase":27,"submission":<complete submission>}
 ```
 
-Keep the returned final `submission` and `documents`, including each document's
-`revision`, `document`, `old_section` and `section`. This preview validates the
-whole candidate union without a writer, normalizes the map section and updates
-the matching replacement content. The preview and every draft `plan-submit`
-answer also report `submission_digest`, the binary's fingerprint of that exact
-final submission; approval binds to it.
+Keep the submitted proposal yourself and retain the answer's `documents`, each
+containing only the plan `identity` and rendered document `revision`. The binary
+does not echo the submission or any document bytes. This preview validates the
+whole candidate union and renders it without a writer. The preview and every
+draft `plan-submit` answer also report `submission_digest`, the binary's
+fingerprint of that exact submission; approval binds to it.
 
 Show the entire proposed submission, including every ordered target and the full
 content of every plan. Obtain the identified owner's explicit approval of that
@@ -261,8 +261,8 @@ fresh approval. The binary retains prior publications/approvals and does not
 replace an identity admitted to execution, even after its active dispatch ends.
 Legacy aliases remain read-only even when the canonical filename is absent.
 
-Explicitly resubmit and revalidate the map with every replacement. A changed
-non-map body is a new publication even when the map's bytes are identical.
+Explicitly resubmit and revalidate the map with every replacement. Changed typed
+content is a new publication even when the map's bytes are identical.
 Old immutable map/item payloads and original receipt results remain readable;
 `plan-read.map_history` marks retired contributions `superseded` with their
 `superseded_by` publication binding. Only the newly approved map may be current.
@@ -390,8 +390,9 @@ location slots (`slot`, `phase`, `entry`, `id`), plus optional structured
 - `evidence-item-conflict`: retain the shared definition or replace all current
   conflicting contributions together in a newly previewed and approved batch.
 - `evidence-map-mode`: choose attached evidence or explicit provisional authoring.
-- `evidence-map-section`: remove duplicate sections or submit the exact canonical
-  section in a corrected full preview; never infer items from authored prose.
+- `typed-content`: remove the named `body` or `execution` field, or correct a
+  task file that is absent from content.files; the binary renders Markdown and
+  derives execution metadata from `suite` and typed tasks.
 - `preview-scope` or `batch-size`: match the bound phase and use submission or
   count, not both; allocation previews accept 1 through 64 plans.
 - `identity-mismatch` or `path-confinement`: correct the proposal and obtain its

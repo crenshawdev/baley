@@ -99,10 +99,6 @@ fn artifact() -> Value {
 
 fn map(items: Vec<Value>) -> Value { json!({"mode":"attached","items":items}) }
 
-fn body(map: &Value) -> String {
-    format!("# Fixture plan\n\n## Evidence map\n\n```json\n{}\n```\n\n", support::section_json(map, 0))
-}
-
 fn history(project: &Path) -> Value {
     let answer = call(project, "cadence_query", json!({"operation":"execution-history","phase":PHASE}));
     assert_eq!(answer["status"], "ok", "{answer}");
@@ -162,14 +158,16 @@ fn publish_and_block(project: &Path) -> (Value, Value) {
     let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],
         "request_id":"publish-blocked-plan","inventory_basis":allocation["inventory"]["basis"],"plans":[{
             "target":target,"content":{"phase":PHASE,"plan":target["plan"],"requirements":["T1"],
-            "files":["src/control.py"],"directories":[],"execution":{"schema":1,"suite":OLD_COMMAND,
-                "tasks":[{"id":"blocked-owner","verify":[OLD_COMMAND]}]},
-            "body":body(&initial_map),"evidence_map":initial_map}}]});
+            "files":["src/control.py"],"directories":[],"goal":"Fixture plan",
+            "context":"Released-check fixture.","notes":"",
+            "tasks":[{"id":"blocked-owner","title":"Block initial owner","files":["src/control.py"],
+                "action":"Exercise the blocked owner.","verify":[OLD_COMMAND]}],
+            "suite":OLD_COMMAND,"evidence_map":initial_map}}]});
     let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"36",
         "submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({
-        "operation":"plan-submit","submission":preview["submission"]
+        "operation":"plan-submit","submission":submission
     })));
     assert_eq!(published["persisted"], true, "{published}");
     let old_revision = published["results"][0]["map_revision"].clone();
@@ -226,16 +224,18 @@ fn phase36_blocked_check_can_be_republished_with_changed_spec() {
     let submission = json!({"phase":PHASE,"occurrence":allocation["occurrence"],
         "request_id":"preview-changed-check","inventory_basis":allocation["inventory"]["basis"],"plans":[{
             "target":target,"content":{"phase":PHASE,"plan":target["plan"],"requirements":["T1"],
-            "files":["src/control.py"],"directories":[],"execution":{"schema":1,"suite":NEW_COMMAND,
-                "tasks":[{"id":"repair-owner","verify":[NEW_COMMAND]}]},
-            "body":body(&later_map),"evidence_map":later_map}}]});
+            "files":["src/control.py"],"directories":[],"goal":"Fixture plan",
+            "context":"Changed-check fixture.","notes":"",
+            "tasks":[{"id":"repair-owner","title":"Repair changed check","files":["src/control.py"],
+                "action":"Exercise the changed check.","verify":[NEW_COMMAND]}],
+            "suite":NEW_COMMAND,"evidence_map":later_map}}]});
     let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"36",
         "submission":submission}));
     client.finish();
 
     assert_eq!(preview["status"], "ok", "{preview}");
     assert_eq!(preview["persisted"], false);
-    assert_eq!(preview["submission"]["plans"][0]["content"]["evidence_map"]["items"], json!([changed]));
+    assert_eq!(submission["plans"][0]["content"]["evidence_map"]["items"], json!([changed]));
     assert_eq!(preview["coverage"]["uncovered"], json!([]));
     assert_eq!(preview["coverage"]["without_check"], json!([]));
 }
@@ -302,14 +302,15 @@ fn phase36_extension_reassigns_released_check() {
         "request_id":"publish-later-owner","inventory_basis":allocation["inventory"]["basis"],
         "plans":[{"target":target,"content":{"phase":PHASE,"plan":target["plan"],
             "requirements":["T1"],"files":["src/control.py"],"directories":[],
-            "execution":{"schema":1,"suite":OLD_COMMAND,
-                "tasks":[{"id":"later-owner","verify":[OLD_COMMAND]}]},
-            "body":body(&later_map),"evidence_map":later_map}}]});
+            "goal":"Fixture plan","context":"Later-owner fixture.","notes":"",
+            "tasks":[{"id":"later-owner","title":"Own released check","files":["src/control.py"],
+                "action":"Exercise the later owner.","verify":[OLD_COMMAND]}],
+            "suite":OLD_COMMAND,"evidence_map":later_map}}]});
     let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"36",
         "submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({
-        "operation":"plan-submit","submission":preview["submission"]
+        "operation":"plan-submit","submission":submission
     })));
     assert_eq!(published["persisted"], true, "{published}");
     client.finish();
@@ -356,14 +357,15 @@ fn phase36_blocked_then_completed_phase_gets_verification_attempt() {
         "request_id":"publish-verification-repair","inventory_basis":allocation["inventory"]["basis"],
         "plans":[{"target":target,"content":{"phase":PHASE,"plan":target["plan"],
             "requirements":["T1"],"files":["src/control.py","tests/old_control.py"],"directories":[],
-            "execution":{"schema":1,"suite":OLD_COMMAND,
-                "tasks":[{"id":"later-owner","verify":[OLD_COMMAND]}]},
-            "body":body(&later_map),"evidence_map":later_map}}]});
+            "goal":"Fixture plan","context":"Verification-repair fixture.","notes":"",
+            "tasks":[{"id":"later-owner","title":"Verify repair",
+                "files":["src/control.py","tests/old_control.py"],"action":"Exercise the verification repair.",
+                "verify":[OLD_COMMAND]}],"suite":OLD_COMMAND,"evidence_map":later_map}}]});
     let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":"36",
         "submission":submission}));
     assert_eq!(preview["status"], "ok", "{preview}");
     let published = client.call("cadence_apply", support::approve(json!({
-        "operation":"plan-submit","submission":preview["submission"]
+        "operation":"plan-submit","submission":submission
     })));
     assert_eq!(published["persisted"], true, "{published}");
     client.finish();

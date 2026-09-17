@@ -1,4 +1,5 @@
 #[path = "support/phase31.rs"]
+#[allow(dead_code)]
 mod phase31;
 
 use serde_json::{Value, json};

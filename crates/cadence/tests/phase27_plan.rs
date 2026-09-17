@@ -129,8 +129,10 @@ fn request(preview: &Value, phase: u32, id: &str, bodies: &[&str]) -> Value {
             "target":preview["targets"][i],"content":{
                 "phase":phase,"plan":preview["targets"][i]["plan"],
                 "requirements":["T1"],"files":["src/shared.txt"],"directories":["src/extra"],
-                "execution":{"schema":1,"suite":"printf suite","tasks":[{"id":"task-1","verify":["printf verified"]}]},
-                "body":body,"evidence_map":{"mode":"provisional"}}})).collect::<Vec<_>>()}})
+                "goal":body,"context":"Fixture context.","notes":"Fixture notes.",
+                "tasks":[{"id":"task-1","title":"Exercise fixture","files":["src/shared.txt"],
+                    "action":"Run the fixture verification.","verify":["printf verified"]}],
+                "suite":"printf suite","evidence_map":{"mode":"provisional"}}})).collect::<Vec<_>>()}})
 }
 
 fn snapshot(project: &Path) -> Snapshot {
@@ -287,7 +289,7 @@ fn phase27_approved_plan_is_published_at_returned_identity() {
         }
         let approved = approve(draft.clone());
         let mut changed = approved.clone();
-        changed["submission"]["plans"][0]["content"]["body"] = json!("Unapproved edit");
+        changed["submission"]["plans"][0]["content"]["goal"] = json!("Unapproved edit");
         let answer = client.call("cadence_apply", changed);
         assert_eq!(answer["rule"], "exact-submission-approval", "{answer}");
         assert_eq!(tree(project), before);
@@ -298,7 +300,7 @@ fn phase27_approved_plan_is_published_at_returned_identity() {
         let digest = unsigned["submission_digest"].as_str().unwrap().to_owned();
         assert_eq!(digest.len(), 64, "{unsigned}");
         let mut stale = draft.clone();
-        stale["submission"]["plans"][0]["content"]["body"] = json!("Unapproved edit");
+        stale["submission"]["plans"][0]["content"]["goal"] = json!("Unapproved edit");
         stale["approval"] = json!({"approved":true,"owner":"John Crenshaw",
             "at":"2026-09-10T14:00:00Z","submission_digest":digest});
         let answer = client.call("cadence_apply", stale);
@@ -323,12 +325,12 @@ fn phase27_approved_plan_is_published_at_returned_identity() {
         assert_eq!(publication["identity"], json!({"kind":"phase-plan","phase":27,"plan":1}));
         assert_eq!(publication["revision"], answer["results"][0]["revision"]);
         assert_eq!(publication["publication_request"], "first-publication");
-        assert_eq!(publication["tasks"], approved["submission"]["plans"][0]["content"]["execution"]["tasks"]);
+        assert_eq!(publication["tasks"], json!([{"id":"task-1","verify":["printf verified"]}]));
         assert!(publication.get("content").is_none(), "{publication}");
         let document = client.call("cadence_query", json!({"operation":"document",
             "identity":publication["identity"]}));
-        assert_eq!(document["status"], "refused", "historical body has no unambiguous task part: {document}");
-        assert_eq!(document["code"], "document-ambiguous", "{document}");
+        assert_eq!(document["status"], "ok", "typed tasks are directly addressable: {document}");
+        assert_eq!(document["parts"][0]["part"], "task:task-1", "{document}");
         assert_eq!(readback["readiness"], "provisional-authoring");
         let execution = client.call(
             "cadence_query",
@@ -346,7 +348,7 @@ fn phase27_approved_plan_is_published_at_returned_identity() {
         client.finish();
         let bytes = fs::read(project.join(".planning/phases/27/PLAN-1.md")).unwrap();
         let parsed = cadence::execution::plan::parse_plan(&bytes, 27, 1).unwrap();
-        assert_eq!(parsed.body.as_bytes(), body.as_bytes());
+        assert!(parsed.body.contains(body), "typed goal was not rendered: {}", parsed.body);
         assert_eq!(parsed.requirements, ["T1"]);
         assert_eq!(parsed.files, ["src/shared.txt"]);
         assert_eq!(parsed.directories, ["src/extra"]);
@@ -357,11 +359,11 @@ fn phase27_approved_plan_is_published_at_returned_identity() {
         let view = reopened(project);
         let occurrence = &view.snapshot.data["plan_publications"]["phases"]["27"];
         let saved = &occurrence["publications"]["1"];
-        assert_eq!(saved["approval"], approved["approval"]);
-        assert_eq!(
-            saved["content"],
-            approved["submission"]["plans"][0]["content"]
-        );
+        assert_eq!(saved["approval"]["owner"], approved["approval"]["owner"]);
+        assert_eq!(saved["approval"]["at"], approved["approval"]["at"]);
+        assert_eq!(saved["content"]["goal"], body);
+        assert_eq!(saved["content"]["body"], parsed.body);
+        assert_eq!(saved["content"]["execution"]["suite"], "printf suite");
         assert_eq!(saved["occurrence"], preview["occurrence"]);
         assert_eq!(saved["revision"], answer["results"][0]["revision"]);
         assert_eq!(saved["revision"].as_str().unwrap().len(), 64);
@@ -526,20 +528,15 @@ fn phase27_identity_mismatch_is_refused() {
     );
     client.finish();
     let view = reopened(project);
-    assert_eq!(
-        view.snapshot.data["plan_publications"]["phases"]["27"]["publications"]["1"]["content"]["body"],
-        "# Keep the winner\n"
-    );
-    assert_eq!(
-        cadence::execution::plan::parse_plan(
+    assert!(view.snapshot.data["plan_publications"]["phases"]["27"]["publications"]["1"]
+        ["content"]["body"].as_str().unwrap().contains("# Keep the winner\n"));
+    assert!(cadence::execution::plan::parse_plan(
             &fs::read(project.join(".planning/phases/27/PLAN-2.md")).unwrap(),
             27,
             2
         )
         .unwrap()
-        .body,
-        "# Matching approval\n"
-    );
+        .body.contains("# Matching approval\n"));
 }
 
 #[test]
@@ -753,7 +750,7 @@ fn phase27_acknowledged_allocation_replays_original_identity() {
         }
         let mut client = Client::open(project);
         let mut changed = input.clone();
-        changed["submission"]["plans"][0]["content"]["body"] = json!("# Different payload\n");
+        changed["submission"]["plans"][0]["content"]["goal"] = json!("# Different payload\n");
         let refused = client.call("cadence_apply", approve(changed));
         assert_eq!(refused["rule"], "request-id-reuse", "{refused}");
         let reason = refused["reason"].as_str().unwrap();
@@ -769,11 +766,13 @@ fn phase27_acknowledged_allocation_replays_original_identity() {
         assert_eq!(plan_names(project), if state == "missing" { vec!["PLAN-2.md", "PLAN-3.md"] } else { vec!["PLAN-1.md", "PLAN-2.md", "PLAN-3.md"] });
         if state == "drifted" { assert_eq!(fs::read_to_string(path).unwrap(), "External drift, not approved\n"); }
         else if state != "missing" {
-            assert_eq!(cadence::execution::plan::parse_plan(&fs::read(path).unwrap(),27,1).unwrap().body,
-                if state == "newer-authorized" { "# Newer authorized one\n" } else { "# Original one\n" });
+            assert!(cadence::execution::plan::parse_plan(&fs::read(path).unwrap(),27,1).unwrap().body
+                .contains(if state == "newer-authorized" { "# Newer authorized one\n" } else { "# Original one\n" }));
         }
-        assert_eq!(cadence::execution::plan::parse_plan(&fs::read(project.join(".planning/phases/27/PLAN-2.md")).unwrap(),27,2).unwrap().body, "# Original two\n");
-        assert_eq!(cadence::execution::plan::parse_plan(&fs::read(project.join(".planning/phases/27/PLAN-3.md")).unwrap(),27,3).unwrap().body, "# Intervening three\n");
+        assert!(cadence::execution::plan::parse_plan(&fs::read(project.join(".planning/phases/27/PLAN-2.md")).unwrap(),27,2)
+            .unwrap().body.contains("# Original two\n"));
+        assert!(cadence::execution::plan::parse_plan(&fs::read(project.join(".planning/phases/27/PLAN-3.md")).unwrap(),27,3)
+            .unwrap().body.contains("# Intervening three\n"));
     }
 }
 
@@ -803,7 +802,7 @@ fn phase27_unauthorized_replacement_is_refused() {
             "wrong-target" => replacement["target"]["plan"] = json!(2),
             "stale-revision" => replacement["old_revision"] = json!("stale-revision"),
             "stale-bytes" => replacement["old_document"] = json!("Stale old bytes\n"),
-            "different-new-content" => replacement["content"]["body"] = json!("Different approved proposal\n"),
+            "different-new-content" => replacement["content"]["goal"] = json!("Different approved proposal\n"),
             "no-owner" => replacement["owner"] = Value::Null,
             "no-time" => replacement["at"] = Value::Null,
             _ => {}
@@ -840,7 +839,8 @@ fn phase27_unauthorized_replacement_is_refused() {
     client.finish();
     assert_eq!(tree(project), installed);
     assert_eq!(plan_names(project), ["PLAN-1.md"]);
-    assert_eq!(cadence::execution::plan::parse_plan(&fs::read(&path).unwrap(),27,1).unwrap().body, "# Authorized new content\n");
+    assert!(cadence::execution::plan::parse_plan(&fs::read(&path).unwrap(),27,1)
+        .unwrap().body.contains("# Authorized new content\n"));
     let saved = reopened(project).snapshot;
     let occurrence = &saved.data["plan_publications"]["phases"]["27"];
     assert_eq!(occurrence["id"], "active-cycle:phase:27");
@@ -934,7 +934,8 @@ fn phase27_gap_plan_uses_previously_unused_identity() {
     assert_eq!(occurrence["id"], "active-cycle:phase:27");
     assert_eq!(occurrence["publications"]["9"], prior.data["plan_publications"]["phases"]["27"]["publications"]["9"]);
     assert_eq!(occurrence["receipts"]["nine"], prior.data["plan_publications"]["phases"]["27"]["receipts"]["nine"]);
-    assert_eq!(cadence::execution::plan::parse_plan(&fs::read(phase.join("PLAN-10.md")).unwrap(),27,10).unwrap().body, "# Additional gap work\n");
+    assert!(cadence::execution::plan::parse_plan(&fs::read(phase.join("PLAN-10.md")).unwrap(),27,10)
+        .unwrap().body.contains("# Additional gap work\n"));
     for key in ["context", "execution", "evidence", "import", "source_evidence"] { assert_eq!(saved.data.get(key), prior.data.get(key)); }
     let mut client = Client::open(project);
     fs::remove_file(phase.join("reports/plan-8.md")).unwrap();
@@ -1095,15 +1096,12 @@ fn phase27_multiple_plans_have_distinct_numeric_order() {
     for (number, body) in [(9, bodies[0]), (10, bodies[1]), (11, bodies[2])] {
         let document =
             fs::read(project.join(format!(".planning/phases/27/PLAN-{number}.md"))).unwrap();
-        assert_eq!(
-            cadence::execution::plan::parse_plan(&document, 27, number)
-                .unwrap()
-                .body,
-            body
-        );
+        let rendered = cadence::execution::plan::parse_plan(&document, 27, number)
+            .unwrap().body;
+        assert!(rendered.contains(body), "typed goal was not rendered: {rendered}");
         assert_eq!(
             occurrence["publications"][number.to_string()]["content"]["body"],
-            body
+            rendered
         );
     }
     assert_eq!(
