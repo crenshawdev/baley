@@ -113,23 +113,28 @@ not publication.
 
 ## Present the exact set and obtain approval
 
-Show the owner the entire final submission: scope, all decisions in order,
-assumptions, every rendered truth with its kind and full ID, and both attestations
-for every truth. Ask for explicit approval of this exact complete set. Record the
+Compose `{kind: "context-draft", phase: <the draft's phase>,
+digest: <submission_digest>}` from the draft response. Call `document` with that
+identity and no `part`, then read every returned part in index order. The parts
+partition the complete rendered context; concatenating them gives exactly the
+bytes publication installs. Show the owner those rendered parts, along with
+every truth's kind, full ID and both attestations from the final submission.
+Ask for explicit approval of this exact complete set. Record the
 approving owner's identity and the observed approval time (an ISO 8601 timestamp);
 do not invent either. Any content change needs renewed approval of the changed set.
 
-Only after that approval, resubmit `context-submit` with the identical `submission`
-and an `approval` object containing `approved: true`, `owner`, `at`, and
-`submission_digest`: the exact digest reported by the draft response for this
-approved set. Any content change needs a fresh draft response and renewed owner
-approval before using its digest. The digest binds the set; it does not supply
-the owner's approval.
+Only after that approval, send:
 
-A full `submission` copy inside `approval` is also accepted, but sends the entire
-set twice. That copy must include every decision, prose, truth slot and
-attestation. Approval of a subset, a mismatched binding, an empty owner or a
-missing time is insufficient. There is no draft token.
+```json
+{"operation":"context-submit","phase":11,"approval":{"approved":true,"owner":"<owner>","at":"<approval time>","submission_digest":"<the digest the draft reported>"}}
+```
+
+Omit `submission` both at the top level and inside `approval`: the resident
+publishes the held submission bound to that digest. Any content change needs a
+fresh draft, reading and showing its parts, and renewed owner approval before
+using its digest. The digest binds the set; it does not supply the owner's approval.
+Approval of a subset, a mismatched binding, an empty owner or a missing time is
+insufficient.
 
 If approval is missing, stop without submitting an approved request. An explicit
 decline can be represented by `approval: {"approved": false}` and also ends
@@ -148,10 +153,17 @@ the binary; do not submit truth-status changes.
 
 A refusal is a successful MCP response with `status: refused`, `code`, `reason`,
 `rule`, `slot`, `phase`, `entry` (zero-based within the named section), and `id`.
+The compact draft refusals below carry `identity` instead of those location slots.
 Set-level refusals have no affected entry. Explain the named fault and ask for the
 owner's correction; keep their unaffected promises intact. Resubmit through the
 same binary operation. Never work around a refusal by editing a file directly.
 
+- `stale-draft`: read the returned newest draft `identity` and changed `part`,
+  then read and show the complete newest draft and obtain fresh owner approval
+  of its digest. Never silently substitute the newer digest.
+- `unknown-draft`: the returned identity is `phase-context`. Drafts are held only
+  in memory and restart loses them. Create a fresh draft, read its parts and
+  obtain approval again before publishing.
 - `required-slot`, `one-trigger`, `one-observer`, `allowed-verb`, `allowed-kind`:
   correct the named sentence slot or identity.
 - `unobservable` / `observable` and `prose-oracle` / `fixed_oracle`: revisit the

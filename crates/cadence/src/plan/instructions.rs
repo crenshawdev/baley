@@ -221,21 +221,33 @@ whole candidate union and renders it without a writer. The preview and every
 draft `plan-submit` answer also report `submission_digest`, the binary's
 fingerprint of that exact submission; approval binds to it.
 
-Show the entire proposed submission, including every ordered target and the full
-content of every plan. Obtain the identified owner's explicit approval of that
-exact proposal and their reported approval time; do not invent either. Add
-`approval: {approved: true, owner: <identity>, at: <reported time>,
-submission_digest: <the digest the preview reported>}` and send the submission
-once. Never compute the digest yourself and never send a second copy of the
-submission in the approval; a full `submission` copy inside `approval` is
-accepted but costs the whole plan set twice. Submit only that approved request.
+For each returned `documents[i]`, compose the draft identity
+`{kind: "plan-draft", phase: documents[i].identity.phase,
+plan: documents[i].identity.plan, digest: submission_digest}`. The answer supplies
+these values, not an additional draft-identity key. Call `document` with that
+identity and no `part`, then read every returned part in index order. These parts
+partition the complete rendered plan, including frontmatter and notes; their
+concatenation is exactly what publication installs. Show the owner the parts you
+read for every ordered target, along with the exact submission they bind.
+
+Obtain the identified owner's explicit approval of that exact proposal and their
+reported approval time; do not invent either. Then send only:
+
+```json
+{"operation":"plan-submit","phase":27,"approval":{"approved":true,"owner":"<owner>","at":"<approval time>","submission_digest":"<the digest the preview reported>"}}
+```
+
+Omit `submission` both at the top level and inside `approval`: the resident
+publishes the held submission bound to that digest. Never compute the digest
+yourself. Submit only that approved request.
 Keep a missing or declined approval as a conversation draft; never publish to
 save progress. Any content or allocation change requires fresh approval.
 
 Wait for `status: ok`, `operation: plan-submit`, `persisted: true` before reporting
 that the transaction was acknowledged. Its ordered `results` contain stable
-identity, original content revision, approval, `map_revision` for an attached map,
-and provisional readiness. Use `plan-read` for the published identity,
+identity, original content revision, `map_revision` for an attached map,
+content digests and provisional readiness, with no content or approval bodies.
+Use `plan-read` for the published identity,
 `document` for its selected parts and `evidence-read` for the authoritative phase map. Do not infer
 publication from a preview, draft response, storage error or uncertain transport.
 
@@ -349,7 +361,15 @@ own expected set from Markdown or a summary.
 
 Refusals carry `status: refused`, `code`, `rule`, `reason` and the standard
 location slots (`slot`, `phase`, `entry`, `id`), plus optional structured
-`details`. Explain the named identity/path and correct the complete request:
+`details`, except the compact draft refusals below. Explain the named identity/path
+and correct the complete request:
+
+- `stale-draft` carries the newest draft `identity` and first differing `part`.
+  Read that part, then read and show the complete newest draft before obtaining
+  fresh owner approval of its digest. Never silently substitute the newer digest.
+- `unknown-draft` carries the `phase-plan` identity. Drafts are memory-only and
+  restart loses them; prepare a fresh preview, read its parts and obtain approval
+  again before publishing.
 
 - `check-command` and `check-expected`: supply the nonblank command or explicit
   literal/property value. The full item id and exact JSON path identify the

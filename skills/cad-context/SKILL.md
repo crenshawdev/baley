@@ -110,23 +110,28 @@ not publication.
 
 ## Present the exact set and obtain approval
 
-Show the owner the entire final submission: scope, all decisions in order,
-assumptions, every rendered truth with its kind and full ID, and both attestations
-for every truth. Ask for explicit approval of this exact complete set. Record the
+Compose `{kind: "context-draft", phase: <the draft's phase>,
+digest: <submission_digest>}` from the draft response. Call `document` with that
+identity and no `part`, then read every returned part in index order. The parts
+partition the complete rendered context; concatenating them gives exactly the
+bytes publication installs. Show the owner those rendered parts, along with
+every truth's kind, full ID and both attestations from the final submission.
+Ask for explicit approval of this exact complete set. Record the
 approving owner's identity and the observed approval time (an ISO 8601 timestamp);
 do not invent either. Any content change needs renewed approval of the changed set.
 
-Only after that approval, resubmit `context-submit` with the identical `submission`
-and an `approval` object containing `approved: true`, `owner`, `at`, and
-`submission_digest`: the exact digest reported by the draft response for this
-approved set. Any content change needs a fresh draft response and renewed owner
-approval before using its digest. The digest binds the set; it does not supply
-the owner's approval.
+Only after that approval, send:
 
-A full `submission` copy inside `approval` is also accepted, but sends the entire
-set twice. That copy must include every decision, prose, truth slot and
-attestation. Approval of a subset, a mismatched binding, an empty owner or a
-missing time is insufficient. There is no draft token.
+```json
+{"operation":"context-submit","phase":11,"approval":{"approved":true,"owner":"<owner>","at":"<approval time>","submission_digest":"<the digest the draft reported>"}}
+```
+
+Omit `submission` both at the top level and inside `approval`: the resident
+publishes the held submission bound to that digest. Any content change needs a
+fresh draft, reading and showing its parts, and renewed owner approval before
+using its digest. The digest binds the set; it does not supply the owner's approval.
+Approval of a subset, a mismatched binding, an empty owner or a missing time is
+insufficient.
 
 If approval is missing, stop without submitting an approved request. An explicit
 decline can be represented by `approval: {"approved": false}` and also ends
@@ -145,10 +150,17 @@ the binary; do not submit truth-status changes.
 
 A refusal is a successful MCP response with `status: refused`, `code`, `reason`,
 `rule`, `slot`, `phase`, `entry` (zero-based within the named section), and `id`.
+The compact draft refusals below carry `identity` instead of those location slots.
 Set-level refusals have no affected entry. Explain the named fault and ask for the
 owner's correction; keep their unaffected promises intact. Resubmit through the
 same binary operation. Never work around a refusal by editing a file directly.
 
+- `stale-draft`: read the returned newest draft `identity` and changed `part`,
+  then read and show the complete newest draft and obtain fresh owner approval
+  of its digest. Never silently substitute the newer digest.
+- `unknown-draft`: the returned identity is `phase-context`. Drafts are held only
+  in memory and restart loses them. Create a fresh draft, read its parts and
+  obtain approval again before publishing.
 - `required-slot`, `one-trigger`, `one-observer`, `allowed-verb`, `allowed-kind`:
   correct the named sentence slot or identity.
 - `unobservable` / `observable` and `prose-oracle` / `fixed_oracle`: revisit the
@@ -191,6 +203,8 @@ Cadence is the only project read surface. Use `cadence_query` with `search` to f
 
 Process records never use file paths. Call `document` with an identity such as `{"kind":"phase-context","phase":31}` or `{"kind":"phase-plan","phase":31,"plan":2}` and no `part` to get its bounded index, then repeat the identity with a returned part such as `truth:T1`, `task:P31-2-T1`, or `row`. `document-search` takes a `phase` and a `pattern` and returns which parts of that phase's records match, as identities and parts for `document`, without bodies. A refusal's issued location or identity is the only address for inspecting the named fault. Main threads and workers use this same contract on the already configured Cadence MCP connection; a worker must not define or launch another server.
 
+Drafts use `{"kind":"plan-draft","phase":N,"plan":k,"digest":"<submission_digest>"}` or `{"kind":"context-draft","phase":N,"digest":"<submission_digest>"}`. Compose each plan identity from the draft answer's `documents[i].identity.phase`, `documents[i].identity.plan` and `submission_digest`; compose a context identity from its phase and `submission_digest`. No extra draft-identity field is returned. Call `document` without `part`, then read every returned part in index order and show those rendered parts to the owner before approval. Draft parts concatenate byte for byte to the rendered document. After explicit approval, send `plan-submit` or `context-submit` with `phase` and `approval: {approved: true, owner, at, submission_digest}`, with no `submission`. Drafts live only in the resident's memory and are lost on restart. A `stale-draft` refusal names the newest draft `identity` and changed `part`; read that location and obtain fresh approval of the complete newest draft. An `unknown-draft` refusal names the phase identity; create and read a fresh draft before requesting approval again.
+
 For the read-layer cycle-purpose close handoff, measure a new real Claude Code planning episode after this read contract is installed. The dispatch that installed the layer required direct project reads and is not the qualifying round; Codex is not a supported measurement host. Select the actual round boundaries from the host episode, then call `document` with `{"kind":"planner-round","phase":31,"session_id":"<Claude session UUID>","first_turn":"<actual first-turn UUID>","last_turn":"<actual last-turn UUID>"}` and part `report`. Show the owner that binary report unchanged, including its host/session/turn/worker boundaries, source digest, `read_count`, `whole_file_reads`, `unclassified_reads`, the four raw token components and `token_total`, and the numerical difference and ratio against `baseline_planner_median: 183000`. Missing, incomplete, ambiguous, nonzero whole-file or nonzero unclassified results are evidence to retain, never values to replace or a model-authored pass. The historical median's raw samples and aggregation procedure were not supplied, so claim like-for-like savings only after that procedure is confirmed.
 
 ```json
@@ -201,8 +215,23 @@ For the read-layer cycle-purpose close handoff, measure a new real Claude Code p
     {
       "type": "object",
       "properties": {
+        "phase": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1
+        },
         "submission": {
-          "$ref": "#/$defs/Submission"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Submission"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "approval": {
           "anyOf": [
@@ -221,8 +250,7 @@ For the read-layer cycle-purpose close handoff, measure a new real Claude Code p
       },
       "additionalProperties": false,
       "required": [
-        "operation",
-        "submission"
+        "operation"
       ]
     }
   ],
