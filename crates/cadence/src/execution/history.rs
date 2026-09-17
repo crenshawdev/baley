@@ -810,11 +810,9 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
     match &request.event {
         PlanEvent::RoundRecord(statement) => {
             if !unfinished.is_empty() {
-                return Err(Error::Invalid(format!("native-task-refusal:{}", json!({
-                    "status":"refused","code":"round-open","rule":"round-open","slot":"plan",
-                    "phase":plan.phase,"id":plan.plan.to_string(),
-                    "reason":"the executor round remains open until the plan's last task closes"
-                }))));
+                return Err(Error::Invalid(format!("native-task-refusal:{}", crate::envelope::Refusal::new(
+                    "round-open", "the executor round remains open until the plan's last task closes")
+                    .rule("round-open").slot("plan").phase(plan.phase).id(plan.plan.to_string()).value())));
             }
             let round = &statement.submission;
             if round.host.trim().is_empty() || !validate_approval(round, &statement.approval) {
