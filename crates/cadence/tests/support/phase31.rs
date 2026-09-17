@@ -1,6 +1,7 @@
 //! Real-binary fixtures for the phase 31 read-layer acceptance checks.
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -221,6 +222,36 @@ impl ProcessFixture {
     }
 
     pub fn project(&self) -> &Path { self.temp.path() }
+}
+
+pub fn tree(project: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+    fn visit(base: &Path, path: &Path, found: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
+        let metadata = fs::symlink_metadata(path).unwrap();
+        let relative = path.strip_prefix(base).unwrap().to_path_buf();
+        if metadata.file_type().is_symlink() {
+            found.insert(
+                relative,
+                Some(
+                    fs::read_link(path)
+                        .unwrap()
+                        .as_os_str()
+                        .as_encoded_bytes()
+                        .to_vec(),
+                ),
+            );
+        } else if metadata.is_dir() {
+            found.insert(relative, None);
+            for entry in fs::read_dir(path).unwrap() {
+                visit(base, &entry.unwrap().path(), found);
+            }
+        } else {
+            found.insert(relative, Some(fs::read(path).unwrap()));
+        }
+    }
+
+    let mut found = BTreeMap::new();
+    visit(project, &project.join(".planning"), &mut found);
+    found
 }
 
 pub fn process_plan_submission(allocation: &Value, large_task: &str) -> Value {
