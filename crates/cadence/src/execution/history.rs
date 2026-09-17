@@ -578,11 +578,27 @@ pub fn failing_tests(result: &RunResult) -> Vec<String> {
         }).collect::<Vec<_>>();
         retained.extend(capture.result_lines.iter().cloned());
         for line in retained {
+            // nextest indents every line and names a failure as
+            // `FAIL [ time ] (n/m) crate::binary test`; cargo's own
+            // `test x ... FAILED` line follows it indented, so a cargo-form
+            // name that is the last word of a nextest name is the same test.
+            let line = line.trim_start();
+            if let Some(rest) = line.strip_prefix("FAIL [") {
+                let name = rest.split_once(") ").map(|(_, name)| name)
+                    .map(|name| name.split_once("::").map_or(name, |(_, name)| name).trim())
+                    .filter(|name| !name.is_empty());
+                if let Some(name) = name && !names.iter().any(|prior| prior == name) {
+                    let last = name.rsplit(' ').next().unwrap_or(name).to_owned();
+                    names.retain(|prior: &String| prior.contains(' ') || *prior != last);
+                    names.push(name.to_owned());
+                }
+                continue;
+            }
             let name = line.strip_prefix("test ").and_then(|line| line.strip_suffix(" ... FAILED"))
                 .or_else(|| line.strip_prefix("FAIL: ").and_then(|line| line.split_once(" (").map(|(name, _)| name)))
                 .or_else(|| line.strip_prefix("ERROR: ").and_then(|line| line.split_once(" (").map(|(name, _)| name)));
             if let Some(name) = name.filter(|name| !name.is_empty())
-                && !names.iter().any(|prior| prior == name) {
+                && !names.iter().any(|prior: &String| prior == name || prior.ends_with(&format!(" {name}"))) {
                 names.push(name.to_owned());
             }
         }
