@@ -1454,6 +1454,7 @@ async fn session_config_reads_thirteen_independently_persisted_reopened_values()
     };
     let session = Session {
         root: root.into(),
+        drafts: Default::default(),
         store: Store::open(Filesystem::new(root).unwrap(), Allow)
             .await
             .unwrap(),
@@ -1718,6 +1719,7 @@ async fn snapshot_session() -> Session<SuppliedConfig> {
     );
     Session {
         root: "/fixture/project/.planning".into(),
+        drafts: Default::default(),
         store: Store::open(memory, Allow).await.unwrap(),
         config: Arc::new(Mutex::new(Reload::new(
             active.clone(),
