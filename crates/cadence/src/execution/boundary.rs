@@ -65,7 +65,7 @@ pub enum Success {
         dispatch_id: String,
         expected_execution_version: u64,
         route: Option<Box<super::model::DispatchRoute>>,
-        identities: DispatchIdentities,
+        identities: Box<DispatchIdentities>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt_digest: Option<String>,
     },
@@ -100,12 +100,12 @@ impl Success {
             dispatch_id: active.id.clone(),
             expected_execution_version: active.expected_execution_version,
             route: active.route.clone(),
-            identities: DispatchIdentities {
+            identities: Box::new(DispatchIdentities {
                 dispatch: DocumentIdentity::Dispatch { id: active.id.clone() },
                 plan: DocumentIdentity::PhasePlan { phase: std::num::NonZeroU32::new(active.phase).expect("admitted phase"),
                     plan: std::num::NonZeroU32::new(active.plan).expect("admitted plan") },
                 context: DocumentIdentity::PhaseContext { phase: std::num::NonZeroU32::new(active.phase).expect("admitted phase") },
-            },
+            }),
             prompt_digest: (!active.prompt_digest.is_empty()).then(|| active.prompt_digest.clone()),
         }
     }
