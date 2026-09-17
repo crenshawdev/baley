@@ -83,7 +83,10 @@ pub fn admitted(data: &serde_json::Value, phase: u32, plan: u32) -> cadence::sto
     }))
 }
 
-pub fn arguments(raw: &serde_json::Value) -> Option<Answer> {
+/// The typed-content rule on the raw request (D-178): no body, no execution,
+/// every task path declared. It runs after replay has had its chance, so a
+/// request acknowledged before phase 32 still answers its receipt.
+pub fn typed_content(raw: &serde_json::Value) -> Option<Answer> {
     let phase = raw["submission"]["phase"].as_u64().and_then(|value| u32::try_from(value).ok());
     if let Some(plans) = raw["submission"]["plans"].as_array() {
         for (entry, plan) in plans.iter().enumerate() {
@@ -119,6 +122,12 @@ pub fn arguments(raw: &serde_json::Value) -> Option<Answer> {
             }
         }
     }
+    None
+}
+
+/// Forbidden destination fields on the raw request, refused before the parse
+/// so a malformed request gets the located refusal, not a serde message.
+pub fn arguments(raw: &serde_json::Value) -> Option<Answer> {
     // Inspect only destination-bearing contract positions, never authored body
     // text or the plan's source lease. These are forbidden fields, not an API.
     let mut objects = vec![raw, &raw["submission"]];

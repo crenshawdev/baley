@@ -246,6 +246,15 @@ fn proposal(project: &Path, id: &str, maps: &[(Option<u32>, Value)]) -> Value {
         entry["target"]["plan"] = json!(plan);
         entry["content"]["plan"] = json!(plan);
         entry["content"]["evidence_map"] = map.clone();
+        // Phase 32: requirements name approved truths; take them from the map.
+        entry["content"]["requirements"] = if map["mode"] == "attached" {
+            json!(map["items"].as_array().into_iter().flatten()
+                .flat_map(|item| item["associations"].as_array().into_iter().flatten())
+                .filter_map(|association| association["truth_id"].as_str())
+                .collect::<std::collections::BTreeSet<_>>())
+        } else {
+            json!([])
+        };
         entry["content"]["goal"] = json!("Limits invoice pronoun");
         if number.is_some() {
             let old = &allocation["native"]["publications"][plan.to_string()];
@@ -285,11 +294,18 @@ fn publish(project: &Path, input: &Value) -> Value {
     let prior = reopened(project).snapshot;
     let occurrence = &prior.data["plan_publications"]["phases"]["27"];
     assert_eq!(occurrence["receipts"][input["submission"]["request_id"].as_str().unwrap()]["results"], answer["results"]);
+    // The retained approval carries the copy the binary filled: each plan's
+    // content with its rendered body and derived execution (D-179, D-182).
+    let mut retained_approval = approved["approval"].clone();
+    for (plan, result) in retained_approval["submission"]["plans"].as_array_mut().unwrap().iter_mut().zip(answer["results"].as_array().unwrap()) {
+        plan["content"] = result["content"].clone();
+        if plan["replacement"].is_object() { plan["replacement"]["content"] = result["content"].clone(); }
+    }
     for (entry, result) in input["submission"]["plans"].as_array().unwrap().iter().zip(answer["results"].as_array().unwrap()) {
         assert_eq!(result["identity"], entry["target"]);
         assert_eq!(result["content"]["goal"], entry["content"]["goal"]);
         assert_eq!(result["content"]["tasks"], entry["content"]["tasks"]);
-        assert_eq!(result["approval"], approved["approval"]);
+        assert_eq!(result["approval"], retained_approval);
         assert_eq!(occurrence["publications"][result["identity"]["plan"].as_u64().unwrap().to_string()], *result);
         let retained = prior.data["acceptance_maps"]["phases"]["27"]["revisions"].as_array().unwrap().iter()
             .find(|r| r["revision"] == result["map_revision"]).unwrap();
@@ -383,8 +399,8 @@ fn phase29_check_without_command_is_refused() {
     let prior = snapshot(project);
     let mut client = Client::open(project);
     let draft = client.call("cadence_apply", input);
-    assert_eq!(draft["persisted"], false);
-    assert_eq!(draft["validation"], "draft");
+    assert_eq!(draft["persisted"], false, "{draft}");
+    assert_eq!(draft["validation"], "draft", "{draft}");
     assert_eq!(client.read("27", Some(2))["persisted"], false);
     client.finish();
     unchanged(project, &before, &prior);
@@ -565,7 +581,8 @@ fn phase29_distinct_checks_across_plans_are_refused() {
     native_context(root, &[(truth, "the sender sends the parcel", "the recipient", "a receipt")]);
     let provisional = proposal(root, "provisional", &[(None, json!({"mode":"provisional"}))]);
     let mut client = Client::open(root);
-    assert_eq!(preview(&mut client, &provisional)["status"], "ok");
+    let provisional_preview = preview(&mut client, &provisional);
+    assert_eq!(provisional_preview["status"], "ok", "{provisional_preview}");
     assert_eq!(client.call("cadence_apply", approve(provisional))["persisted"], true);
     client.finish();
     let input = proposal(root, "first-attached-batch", &[(None, attached(vec![check("check/a", &[truth])])),

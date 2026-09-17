@@ -118,7 +118,13 @@ pub fn bound(data: &Value, submission: &Submission, approval: Approval) -> Resul
     }
     let mut retained = submission.clone();
     for entry in &mut retained.plans {
-        entry.content = rendered_content(data, &entry.content)?;
+        // A content that cannot render yet, because the phase has no approved
+        // truths or a requirement names none, stays the wire copy here; the
+        // publication path refuses it with the located rule, not a render error.
+        let Ok(content) = rendered_content(data, &entry.content) else {
+            return Ok(Approval { submission: Some(submission.clone()), submission_digest: None, ..approval });
+        };
+        entry.content = content;
         if let Some(replacement) = &mut entry.replacement {
             replacement.content = entry.content.clone();
         }

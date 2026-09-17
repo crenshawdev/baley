@@ -131,9 +131,18 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             ))
         }
         Command::Apply(raw) => {
-            let argument_refusal = cadence::plan::validation::arguments(&raw);
-            let version_refusal = cadence::plan::associations::malformed_version(&raw);
-            let limit_refusal = cadence::plan::limits::malformed(&raw);
+            if let Some(refusal) = cadence::plan::validation::arguments(&raw) {
+                return Ok(refusal);
+            }
+            if let Some(refusal) = cadence::plan::associations::malformed_version(&raw) {
+                return Ok(refusal.answer());
+            }
+            if let Some(refusal) = cadence::plan::limits::malformed(&raw) {
+                return Ok(refusal.answer());
+            }
+            // The typed-content rule waits for the replay check below: a request
+            // acknowledged before phase 32 carries a body and answers its receipt.
+            let typed_refusal = cadence::plan::validation::typed_content(&raw);
             let Apply::Submit {
                 submission,
                 approval,
@@ -150,14 +159,8 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 Ok(None) => {}
                 Err(error) => return path_error(error),
             }
-            if let Some(refusal) = argument_refusal {
+            if let Some(refusal) = typed_refusal {
                 return Ok(refusal);
-            }
-            if let Some(refusal) = version_refusal {
-                return Ok(refusal.answer());
-            }
-            if let Some(refusal) = limit_refusal {
-                return Ok(refusal.answer());
             }
             if approval.as_ref().is_some_and(|a| a.approved) {
                 if let Some(refusal) = cadence::plan::validation::identities(&submission) {
@@ -177,9 +180,8 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 return path_error(error);
             }
             let Some(approval) = approval.filter(|a| a.approved) else {
-                if let Err(error) = persistence::validate_candidate(&data, &submission, &inventory) {
-                    return path_error(error);
-                }
+                // A draft is a digest, not a validated candidate: the complete
+                // preview and the approved publication validate the union.
                 return Ok(model::ok(
                     "plan-submit",
                     json!({"persisted":false,"validation":"draft",
