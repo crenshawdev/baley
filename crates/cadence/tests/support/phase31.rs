@@ -12,6 +12,7 @@ pub struct Client {
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<std::process::ChildStdout>,
+    pending: BTreeMap<u64, Value>,
 }
 
 pub struct Caller {
@@ -49,6 +50,7 @@ impl Client {
         let mut client = Self {
             stdin: child.stdin.take(),
             stdout: BufReader::new(child.stdout.take().unwrap()),
+            pending: BTreeMap::new(),
             child,
         };
         client.send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
@@ -86,7 +88,18 @@ impl Client {
     }
 
     pub fn receive_call(&mut self, id: u64) -> Value {
-        let response = self.recv();
+        let response = loop {
+            if let Some(response) = self.pending.remove(&id) {
+                break response;
+            }
+            let response = self.recv();
+            if response.get("id").is_none() {
+                assert!(response["method"].is_string(), "invalid notification: {response}");
+                continue;
+            }
+            let response_id = response["id"].as_u64().expect("numeric request id");
+            assert!(self.pending.insert(response_id, response).is_none(), "duplicate response id");
+        };
         assert_eq!(response["id"], id, "reply must match its caller's request");
         assert!(response.get("error").is_none(), "{response}");
         assert_ne!(response["result"]["isError"], true, "{response}");
