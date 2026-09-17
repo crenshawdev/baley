@@ -1,9 +1,10 @@
-mod support;
+#[path = "support/phase31.rs"]
+mod phase31;
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, fs};
-use support::phase31::{Client, ProcessFixture, approve, tree};
+use phase31::{Client, ProcessFixture, approve, tree};
 
 const PHASE: u32 = 31;
 
