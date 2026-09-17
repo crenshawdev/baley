@@ -498,7 +498,7 @@ impl ClosedRound {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let risk = self.client.call("cadence_apply", json!({"operation":"risk-check","request_id":"round-risk",
-            "scope":{"phase":31,"occurrence":self.plan["occurrence"],"worker":"1"},
+            "scope":{"phase":31,"occurrence":"phase-31-execution","worker":"1"},
             "source":{"kind":"execution","plan":1,"dispatch_id":self.dispatch["dispatch_id"]},"surfaces":null}));
         assert_eq!(risk["status"], "ok", "{risk}");
         let history = self.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
