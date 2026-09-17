@@ -148,6 +148,8 @@ impl Snapshot {
     }
 
     fn content_digest(&self) -> Result<String> {
+        #[cfg(test)]
+        SNAPSHOT_SERIALIZATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let mut content = self.clone();
         content.integrity.clear();
         Ok(digest(&serde_json::to_vec(&content)?))
@@ -174,9 +176,16 @@ impl Snapshot {
     }
 
     pub fn render(&self) -> Result<Vec<u8>> {
+        #[cfg(test)]
+        SNAPSHOT_SERIALIZATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(serde_json::to_vec(self)?)
     }
 }
+
+/// Test-only count of whole-snapshot serializations, so a test can pin how
+/// many times a write walks the snapshot (GH-261).
+#[cfg(test)]
+pub static SNAPSHOT_SERIALIZATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 pub fn parse_lines<T: DeserializeOwned>(bytes: &[u8]) -> Result<Vec<T>> {
     if !bytes.is_empty() && !bytes.ends_with(b"\n") {

@@ -2199,4 +2199,29 @@ mod observe_tests {
             assert_eq!(PARSES.load(Ordering::SeqCst) - before, 1);
         });
     }
+
+    // GH-261: the work one write does, pinned by count. The new snapshot is
+    // walked twice (once to seal it, once when the transaction re-checks the
+    // bytes it is about to install), the intent is digested once, and the
+    // previous snapshot is parsed once.
+    #[test]
+    fn one_write_walks_the_snapshot_twice_digests_the_intent_once_and_parses_the_previous_once() {
+        use super::super::transaction::{INTENT_DIGESTS, PREVIOUS_PARSES};
+        let temp = tempfile::tempdir().unwrap();
+        tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
+            let store = Store::open(super::super::filesystem::Filesystem::new(temp.path()).unwrap(), PlanningPolicy).await.unwrap();
+            let view = store.request(Operation::ReadVerified).await.unwrap();
+            let first = store.request(Operation::CompareRewriteSnapshot {
+                expected_generation: view.snapshot.generation, expected_integrity: view.snapshot.integrity.clone(),
+                data: serde_json::json!({"value": 1}) }).await.unwrap();
+            let before = (model::SNAPSHOT_SERIALIZATIONS.load(Ordering::SeqCst), INTENT_DIGESTS.load(Ordering::SeqCst), PREVIOUS_PARSES.load(Ordering::SeqCst));
+            let second = store.request(Operation::CompareRewriteSnapshot {
+                expected_generation: first.snapshot.generation, expected_integrity: first.snapshot.integrity.clone(),
+                data: serde_json::json!({"value": 2}) }).await.unwrap();
+            assert_eq!(second.snapshot.generation, first.snapshot.generation + 1);
+            let after = (model::SNAPSHOT_SERIALIZATIONS.load(Ordering::SeqCst), INTENT_DIGESTS.load(Ordering::SeqCst), PREVIOUS_PARSES.load(Ordering::SeqCst));
+            assert_eq!((after.0 - before.0, after.1 - before.1, after.2 - before.2), (2, 1, 1),
+                "(snapshot serializations, intent digests, previous parses)");
+        });
+    }
 }

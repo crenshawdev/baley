@@ -131,6 +131,21 @@ impl IntentKind {
     }
 }
 
+/// Test-only counts of intent digests and previous-snapshot parses in a
+/// commit, so a test can pin the work a write does (GH-261).
+#[cfg(test)]
+pub static INTENT_DIGESTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+pub static PREVIOUS_PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The snapshot a transaction starts from, parsed from the state
+/// participant's expected bytes.
+fn parse_previous(bytes: &[u8]) -> Result<Snapshot> {
+    #[cfg(test)]
+    PREVIOUS_PARSES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    Ok(serde_json::from_slice(bytes)?)
+}
+
 /// The operation a snapshot repair records under, by the generation it made.
 pub(crate) fn snapshot_repair_operation(generation: u64) -> String {
     format!("snapshot-repair:{generation}")
@@ -397,6 +412,8 @@ impl Intent {
     }
 
     fn digest(&self) -> Result<String> {
+        #[cfg(test)]
+        INTENT_DIGESTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(model::digest(&serde_json::to_vec(&(
             self.version,
             &self.kind,
@@ -577,7 +594,7 @@ impl Intent {
         // completes the import and by nothing else: the binary computed it
         // from the documents, and no later write may add, drop or edit one.
         let before = self.participants.last().and_then(|p| p.expected.bytes.as_deref())
-            .map(serde_json::from_slice::<Snapshot>).transpose()?;
+            .map(parse_previous).transpose()?;
         let completes_import = before.as_ref().is_none_or(|p| p.data.get("import").is_none())
             && snapshot.data.get("import").is_some();
         if !completes_import
@@ -593,7 +610,7 @@ impl Intent {
             .last()
             .and_then(|p| p.expected.bytes.as_deref())
         {
-            let previous: Snapshot = serde_json::from_slice(previous)?;
+            let previous: Snapshot = parse_previous(previous)?;
             self.kind
                 .validate_provenance(&previous.data, &snapshot.data)?;
             if !verification_intent
