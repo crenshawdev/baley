@@ -364,11 +364,12 @@ fn phase31_process_identity_returns_rendered_slice() {
     let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":31}));
     let check_revision = evidence["items"].as_array().unwrap().iter()
         .find(|item| item["id"] == "fixture/T4").unwrap()["item_revision"].clone();
-    let plans = published["results"].as_array().unwrap();
-    let contract = json!({"phase":31,"occurrence":allocation["occurrence"],
-        "plans":plans.iter().map(|publication| json!({
+    let readback = client.call("cadence_query", json!({"operation":"plan-read","phase":31}));
+    let plans = readback["native"]["publications"].as_object().unwrap();
+    let contract = json!({"phase":31,"occurrence":readback["occurrence"],
+        "plans":plans.values().map(|publication| json!({
             "plan":publication["identity"]["plan"],
-            "publication_request":publication["approval"]["submission"]["request_id"],
+            "publication_request":publication["publication_request"],
             "content_revision":publication["revision"],"map_revision":publication["map_revision"]
         })).collect::<Vec<_>>(),
         "allocation":[

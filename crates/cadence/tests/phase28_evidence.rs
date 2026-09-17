@@ -97,8 +97,21 @@ fn retained_request(request: &Value, project: &Path) -> Value {
         let number = plan["target"]["plan"].as_u64().unwrap() as u32;
         let bytes = fs::read(project.join(format!(".planning/phases/{phase}/PLAN-{number}.md"))).unwrap();
         let parsed = cadence::execution::plan::parse_plan(&bytes, phase, number).unwrap();
-        plan["content"]["body"] = json!(parsed.body);
-        plan["content"]["execution"] = json!({"schema":parsed.schema,"suite":parsed.suite,"tasks":parsed.tasks});
+        let content = &plan["content"];
+        let mut map = content["evidence_map"].clone();
+        if map["mode"] == "attached" {
+            map["items"] = json!(authored_items(map["items"].as_array().unwrap()));
+        }
+        // Payload digests hash retained serialization, including field order.
+        // Write that shape explicitly instead of appending derived fields to
+        // the wire object or asking the production serializer for the oracle.
+        plan["content"] = json!({"phase":phase,"plan":number,
+            "requirements":content["requirements"],"files":content["files"],
+            "directories":content["directories"],
+            "execution":{"schema":parsed.schema,"suite":parsed.suite,"tasks":parsed.tasks},
+            "body":parsed.body,"evidence_map":map,"goal":content["goal"],
+            "context":content["context"],"notes":content["notes"],
+            "tasks":content["tasks"],"suite":content["suite"]});
         if plan["replacement"].is_object() {
             plan["replacement"]["content"] = plan["content"].clone();
         }
@@ -1118,6 +1131,10 @@ fn phase28_readback_returns_authoritative_map_with_input_digest() {
     assert_eq!(complete["documents"][1]["revision"], independent_hash(&second_bytes));
     let saved = reopened(project).snapshot;
     let retained = retained_request(&approved, project);
+    for number in ["1", "2"] {
+        assert_eq!(saved.data["plan_publications"]["phases"]["27"]["publications"][number]["approval"],
+            retained["approval"], "copy approval keeps the filled retained submission");
+    }
     let mut events = vec![expected_event(&retained, 1, &first_bytes, &first_items),
         expected_event(&retained, 2, &second_bytes, &second_items)];
     assert_eq!(saved.data["acceptance_maps"]["phases"]["27"]["revisions"], json!(events));
