@@ -957,7 +957,8 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let mut next = self.view.clone();
         next.snapshot.data = data;
         next.decisions.extend(history::decisions(&record)?);
-        self.persist(next, self.view.snapshot.operations.clone(), Vec::new(), "native_task",
+        let participants = self.native_summary_participants(&next, request.task.phase)?;
+        self.persist(next, self.view.snapshot.operations.clone(), participants, "native_task",
             super::transaction::IntentKind::NativeTaskV1 { request: Box::new(request), root_binding })
     }
 
@@ -975,8 +976,19 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let mut next = self.view.clone();
         next.snapshot.data = data;
         next.decisions.push(history::plan_decision(&record)?);
-        self.persist(next, self.view.snapshot.operations.clone(), Vec::new(), "native_plan",
+        let participants = self.native_summary_participants(&next, request.plan.phase)?;
+        self.persist(next, self.view.snapshot.operations.clone(), participants, "native_plan",
             super::transaction::IntentKind::NativePlanV1 { request: Box::new(request), root_binding })
+    }
+
+    fn native_summary_participants(&mut self, next: &View, phase: u32) -> Result<Vec<super::transaction::Participant>> {
+        let key = cadence::execution::render::NATIVE_SUMMARIES;
+        let name = phase.to_string();
+        if next.snapshot.data[key]["phases"][&name] == self.view.snapshot.data[key]["phases"][&name] { return Ok(vec![]); }
+        let bytes = next.snapshot.data[key]["phases"][&name].as_str()
+            .ok_or_else(|| Error::Invalid("native summary is absent".into()))?.as_bytes().to_vec();
+        let target = format!("phase-summary:{phase}");
+        Ok(vec![super::transaction::Participant { expected: self.storage.read(&target)?, target, bytes }])
     }
 
     fn native_admission(&mut self, generation:u64, integrity:&str, request:cadence::execution::admission::Request) -> Result<View> {

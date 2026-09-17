@@ -10,6 +10,100 @@ use crate::store::{Error, Result};
 
 pub const SUMMARY_RENDER_VERSION: u32 = 1;
 
+pub const NATIVE_SUMMARIES: &str = "native_execution_summaries";
+
+/// Bytes confirmed by the same transaction as the native event that rendered them.
+pub fn installed_summaries(data: &Value) -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
+    let mut installed = std::collections::BTreeMap::new();
+    if let Some(summaries) = data[NATIVE_SUMMARIES]["phases"].as_object() {
+        for (phase, summary) in summaries {
+            let number: u32 = phase.parse().map_err(|_| Error::Invalid("invalid summary phase".into()))?;
+            if number == 0 || number.to_string() != *phase { return Err(Error::Invalid("invalid summary phase".into())); }
+            let bytes = summary.as_str().ok_or_else(|| Error::Invalid("invalid installed summary".into()))?;
+            installed.insert(format!(".planning/phases/{phase}/SUMMARY.md"), bytes.as_bytes().to_vec());
+        }
+    }
+    Ok(installed)
+}
+
+pub fn project_native_summary(data: &mut Value, phase: u32, receipt: &str) -> Result<()> {
+    let rendered = render_native_phase_summary(
+        &super::history::records(data, phase)?, &super::history::plan_records(data, phase)?,
+        &super::admission::records(data, phase)?, phase)?;
+    data[NATIVE_SUMMARIES]["receipts"][receipt] = json!({"revision":crate::store::model::digest(&rendered)});
+    data[NATIVE_SUMMARIES]["phases"][phase.to_string()] = Value::String(String::from_utf8(rendered).expect("rendered UTF-8"));
+    Ok(())
+}
+
+pub fn render_native_phase_summary(
+    records: &[super::history::Record], plan_records: &[super::history::PlanRecord],
+    admissions: &[super::admission::Record], phase: u32,
+) -> Result<Vec<u8>> {
+    use super::history::{self, Event};
+    let mut plans = std::collections::BTreeMap::new();
+    for admission in admissions {
+        for binding in &admission.request.contract.plans {
+            plans.entry(binding.plan).or_insert_with(|| history::PlanIdentity {
+                phase, occurrence: admission.request.contract.occurrence.clone(),
+                admission_digest: admission.request_digest.clone(), plan: binding.plan,
+            });
+        }
+    }
+    let retired = records.iter().any(|r| matches!(r.request.event, Event::Retirement { .. }));
+    let complete = !plans.is_empty() && plans.values().all(|p| history::plan_project(plan_records, p).completed);
+    let blocked = retired || plans.values().any(|p| {
+        let state = history::plan_project(plan_records, p);
+        state.outcome == "failed" && state.repair.is_some()
+            || state.repair_answer.is_some_and(|a| a.disposition == history::SuiteRepairDisposition::Refuse)
+    });
+    let status = if complete { "complete" } else if blocked { "blocked" } else { "executing" };
+    let mut rendered = format!("# Phase {phase} Execution Summary\n\nStatus: {status}\n");
+    for (number, plan) in plans {
+        let state = history::plan_project(plan_records, &plan);
+        writeln!(rendered, "\n## Plan {number}\n\nState: {}; version: {}\n", state.outcome, state.version).unwrap();
+        writeln!(rendered, "| Plan | Task | Status | Commit | Verification |\n|---|---|---|---|---|").unwrap();
+        for record in records.iter().filter(|r| r.request.task.plan == number) {
+            let task = &record.request.task;
+            match &record.request.event {
+                Event::Close(proof) => {
+                    writeln!(rendered, "| {number} | {} | completed | {} | passed |", task.task, proof.submission.completion).unwrap();
+                }
+                Event::Retirement { owner, at, reason } => {
+                    writeln!(rendered, "Retired task {}: {reason} (owner {owner}, at {at})", task.task).unwrap();
+                }
+                _ => {}
+            }
+        }
+        for record in records.iter().filter(|r| r.request.task.plan == number) {
+            let event = &record.request.event;
+            if matches!(event, Event::Deviation { .. } | Event::FailedAttempt { .. } | Event::Checkpoint { .. }) {
+                writeln!(rendered, "Task record {}: {}", record.request.request_id, serde_json::to_string(event)?).unwrap();
+            }
+            if let Event::Close(proof) = event {
+                for (commit, paths) in &proof.source.out_of_lease {
+                    for path in paths {
+                        writeln!(rendered, "Deviation out-of-lease:{}:{path}: commit {commit}", record.request.task.task).unwrap();
+                    }
+                }
+            }
+        }
+        for record in plan_records.iter().filter(|r| r.request.plan == plan) {
+            match &record.request.event {
+                history::PlanEvent::SuiteLaunch(launch) => {
+                    writeln!(rendered, "Suite launch {}: command {}; commit {}", launch.run_id, launch.material.command, launch.material.commit).unwrap();
+                }
+                history::PlanEvent::SuiteResult(result) => {
+                    writeln!(rendered, "Suite result {}: {}; output {}", result.run_id,
+                        if history::suite_passed(result) { "passed" } else if history::suite_failed(result) { "failed" } else { "unknown" },
+                        result.output_identity()).unwrap();
+                }
+                event => writeln!(rendered, "Plan record {}: {}", record.request.request_id, serde_json::to_string(event)?).unwrap(),
+            }
+        }
+    }
+    Ok(rendered.into_bytes())
+}
+
 /// A project file whose bytes are emitted by one project-free binary command.
 /// These paths are implicit execution lease material and never planner input.
 pub struct RenderedProjectFile {

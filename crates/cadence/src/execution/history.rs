@@ -338,6 +338,12 @@ pub fn contribute(data: &Value, root: &str, request: &Request) -> Result<(Value,
         proposed = end_dispatch(&proposed, &plan, &active, &history,
             super::model::PlanDisposition::Blocked, vec![blocker], &record.request_digest)?;
     }
+    if matches!(request.event, Event::Retirement { .. })
+        || matches!(request.event, Event::Close(_))
+            && plan_task_views(&proposed, &history, task.phase, task.plan)?.iter().all(|t| t.state.completed)
+    {
+        super::render::project_native_summary(&mut proposed, task.phase, &record.request_digest)?;
+    }
     Ok((proposed, record))
 }
 
@@ -968,6 +974,7 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
     let namespace = proposed.as_object_mut().ok_or_else(|| refuse("plan-shape", "snapshot must be an object"))?
         .entry(PLAN_NAMESPACE).or_insert_with(|| json!({"schema":"native-plans-1","phases":{}}));
     namespace["phases"][plan.phase.to_string()] = serde_json::to_value(history)?;
+    super::render::project_native_summary(&mut proposed, plan.phase, &record.request_digest)?;
     Ok((proposed, record))
 }
 

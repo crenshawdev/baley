@@ -16,6 +16,132 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+#[path = "support/phase31.rs"]
+#[allow(dead_code)]
+mod round_support;
+
+#[test]
+fn native_summary_accounts_for_exact_untracked_and_modified_bytes() {
+    let mut round = round_support::ClosedRound::admitted();
+    round.close_tasks();
+    let project = round.fixture.project();
+    let name = ".planning/phases/31/SUMMARY.md";
+    let installed = std::fs::read(project.join(name)).unwrap();
+    assert!(runner::status(project).unwrap().contains(&("?? ".into(), name.into())));
+    assert!(inputs::source(project).is_ok());
+    assert!(runner::material(project, "python3 -B tests/tiny.py", "tests/tiny.py").is_ok());
+    std::fs::write(project.join(name), b"owner edit\n").unwrap();
+    assert!(inputs::source(project).is_err());
+    assert!(runner::material(project, "python3 -B tests/tiny.py", "tests/tiny.py").is_err());
+    round_support::git(project, &["add", name]);
+    round_support::git(project, &["-c", "commit.gpgsign=false", "commit", "-m", "test(round): track prior summary"]);
+    std::fs::write(project.join(name), &installed).unwrap();
+    assert!(runner::status(project).unwrap().contains(&(" M ".into(), name.into())));
+    assert!(inputs::source(project).is_ok());
+    assert!(runner::material(project, "python3 -B tests/tiny.py", "tests/tiny.py").is_ok());
+    std::fs::write(project.join("src/other.rs"), "owner edit").unwrap();
+    assert!(inputs::source(project).is_err());
+    assert!(runner::material(project, "python3 -B tests/tiny.py", "tests/tiny.py").is_err());
+}
+
+#[test]
+fn native_plan_summary_recovers_after_install_before_snapshot() {
+    use cadence::execution::history::{PlanEvent, PlanIdentity, PlanRequest, SuiteLaunch};
+    let mut round = round_support::ClosedRound::admitted();
+    round.close_tasks();
+    let project = round.fixture.project().to_path_buf();
+    let plan: PlanIdentity = serde_json::from_value(round.plan.clone()).unwrap();
+    round.client.finish();
+    let root = project.join(".planning");
+    let request = PlanRequest { request_id: "recovery-suite".into(), plan, expected_version: 0,
+        event: PlanEvent::SuiteLaunch(SuiteLaunch { run_id: "recovery-suite".into(),
+            material: runner::material(&project, "python3 -B tests/tiny.py", "").unwrap(),
+            launched_at: 1, proposed_paths: vec![] }) };
+    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let probe = fired.clone();
+    let filesystem = Filesystem::new(&root).unwrap().with_probe(move |stage, target| {
+        if stage == Stage::Renamed && target.file_name().is_some_and(|n| n == "SUMMARY.md") {
+            probe.store(true, std::sync::atomic::Ordering::SeqCst);
+            return Err(cadence::store::Error::Invalid("fixture process loss".into()));
+        }
+        Ok(())
+    });
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let store = Store::open(filesystem, Allow).await.unwrap();
+        let view = store.request(Operation::ReadVerified).await.unwrap();
+        assert!(store.request(Operation::NativePlanV1 { expected_generation: view.snapshot.generation,
+            expected_integrity: view.snapshot.integrity, request: Box::new(request.clone()) }).await.is_err());
+    });
+    assert!(fired.load(std::sync::atomic::Ordering::SeqCst));
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let store = Store::open(Filesystem::new(&root).unwrap(), Allow).await.unwrap();
+        let view = store.request(Operation::ReadVerified).await.unwrap();
+        let events = cadence::execution::history::plan_records(&view.snapshot.data, 31).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].request, request);
+        let installed = cadence::execution::render::installed_summaries(&view.snapshot.data).unwrap();
+        assert_eq!(std::fs::read(project.join(".planning/phases/31/SUMMARY.md")).unwrap(), installed[".planning/phases/31/SUMMARY.md"]);
+        assert!(inputs::source(&project).is_ok());
+    });
+}
+
+#[test]
+fn native_last_close_recovers_its_summary_and_receipt() {
+    use cadence::execution::{history, receipts};
+    let Ok(project) = std::env::var("CADENCE_SUMMARY_RECOVERY_PROJECT") else {
+        let mut round = round_support::ClosedRound::admitted();
+        let close = round.prepare_last_close();
+        let history = round.client.call("cadence_query", serde_json::json!({"operation":"execution-history","phase":31}));
+        let project = round.fixture.project().to_path_buf();
+        round.client.finish();
+        let result = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "native_last_close_recovers_its_summary_and_receipt", "--nocapture"])
+            .env("CADENCE_SUMMARY_RECOVERY_PROJECT", &project)
+            .env("CADENCE_SUMMARY_RECOVERY_CLOSE", close.to_string())
+            .env("CADENCE_SUMMARY_RECOVERY_DISPATCH", history["active"].to_string())
+            .env("GNUPGHOME", project.join(".fixture-gnupg"))
+            .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1")
+            .output().unwrap();
+        assert!(result.status.success(), "{}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+        return;
+    };
+    let project = std::path::PathBuf::from(project);
+    let close: serde_json::Value = serde_json::from_str(&std::env::var("CADENCE_SUMMARY_RECOVERY_CLOSE").unwrap()).unwrap();
+    let submission: receipts::Close = serde_json::from_value(close["request"].clone()).unwrap();
+    let dispatch = serde_json::from_str(&std::env::var("CADENCE_SUMMARY_RECOVERY_DISPATCH").unwrap()).unwrap();
+    let root = project.join(".planning");
+    let source = receipts::observe_source(&project, &dispatch, &submission.task.task, &submission.completion, &[]).unwrap();
+    let request = history::Request { request_id: submission.request_id.clone(), task: submission.task.clone(),
+        attempt: submission.attempt.clone(), expected_version: submission.expected_version,
+        event: history::Event::Close(Box::new(receipts::CloseProof { submission, project: project.clone(),
+            planning_root: root.clone(), dispatch, source })) };
+    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let probe = fired.clone();
+    let filesystem = Filesystem::new(&root).unwrap().with_probe(move |stage, target| {
+        if stage == Stage::Renamed && target.file_name().is_some_and(|n| n == "SUMMARY.md") {
+            probe.store(true, std::sync::atomic::Ordering::SeqCst);
+            return Err(cadence::store::Error::Invalid("fixture process loss".into()));
+        }
+        Ok(())
+    });
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let store = Store::open(filesystem, Allow).await.unwrap();
+        let view = store.request(Operation::ReadVerified).await.unwrap();
+        assert!(store.request(Operation::NativeTaskV1 { expected_generation: view.snapshot.generation,
+            expected_integrity: view.snapshot.integrity, request: Box::new(request.clone()) }).await.is_err());
+    });
+    assert!(fired.load(std::sync::atomic::Ordering::SeqCst));
+    let mut client = round_support::Client::open(&project);
+    let replay = client.call("cadence_apply", close.clone());
+    assert_eq!(replay["status"], "ok", "{replay}");
+    let summary = std::fs::read(project.join(".planning/phases/31/SUMMARY.md")).unwrap();
+    assert_eq!(replay["summary"]["revision"], cadence::store::model::digest(&summary));
+    let before = round_support::tree(&project);
+    assert_eq!(client.call("cadence_apply", close), replay);
+    assert_eq!(round_support::tree(&project), before);
+    client.finish();
+}
+
 struct Allow;
 impl Policy for Allow {
     fn validate(&mut self, _: &MutationContext<'_>) -> Result<()> {

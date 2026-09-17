@@ -455,6 +455,27 @@ impl<'de> Deserialize<'de> for Intent {
 }
 
 impl Intent {
+    fn validate_native_summary(&self, previous: &Snapshot, snapshot: &Snapshot, phase: u32) -> Result<()> {
+        use cadence::execution::render::{NATIVE_SUMMARIES, render_native_phase_summary};
+        let name = phase.to_string();
+        let changed = previous.data[NATIVE_SUMMARIES]["phases"][&name] != snapshot.data[NATIVE_SUMMARIES]["phases"][&name];
+        if self.participants.len() != 3 + usize::from(changed) {
+            return Err(Error::Invalid("native event changes only its phase summary participant".into()));
+        }
+        if changed {
+            let participant = self.participants.iter().find(|p| p.target == format!("phase-summary:{phase}"))
+                .ok_or_else(|| Error::Invalid("native event lacks its phase summary".into()))?;
+            let rendered = render_native_phase_summary(
+                &cadence::execution::history::records(&snapshot.data, phase)?,
+                &cadence::execution::history::plan_records(&snapshot.data, phase)?,
+                &cadence::execution::admission::records(&snapshot.data, phase)?, phase)?;
+            if participant.bytes != rendered || snapshot.data[NATIVE_SUMMARIES]["phases"][&name].as_str().map(str::as_bytes) != Some(rendered.as_slice()) {
+                return Err(Error::Invalid("native phase summary differs from prospective record".into()));
+            }
+        }
+        Ok(())
+    }
+
     fn unfiltered(kind: IntentKind, participants: Vec<Participant>) -> Self {
         Self { version: VERSION, kind, participants, integrity: String::new(), encoding: Encoding::Digest }
     }
@@ -704,6 +725,10 @@ impl Intent {
             cadence::plan::persistence::require_legacy_execution(&snapshot.data,*phase)?;
         }
         if let Some(previous) = before {
+            if !matches!(self.kind, IntentKind::NativeTaskV1 { .. } | IntentKind::NativePlanV1 { .. })
+                && previous.data.get(cadence::execution::render::NATIVE_SUMMARIES) != snapshot.data.get(cadence::execution::render::NATIVE_SUMMARIES) {
+                return Err(Error::Invalid("native summary changes require their owning intent".into()));
+            }
             self.kind
                 .validate_provenance(&previous.data, &snapshot.data)?;
             if !verification_intent
@@ -817,7 +842,6 @@ impl Intent {
             }
             IntentKind::NativePlanV1 { request, root_binding } => {
                 use cadence::execution::history;
-                if names.len() != 3 { return Err(Error::Invalid("native plan event cannot change external participants".into())); }
                 let state = self.participants.last().expect("state participant");
                 if state.expected.directory_identity != root_binding {
                     return Err(Error::Invalid("native plan root binding changed".into()));
@@ -825,6 +849,7 @@ impl Intent {
                 let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
                     .ok_or_else(|| Error::Invalid("native plan requires prior snapshot".into()))?)?;
                 let (expected, record) = history::plan_contribute(&previous.data, &root_binding, &request)?;
+                self.validate_native_summary(&previous, snapshot, request.plan.phase)?;
                 let old_items = self.participants.iter().find(|p| p.target == ITEMS).unwrap().expected.bytes.as_deref();
                 let old_decisions = self.participants.iter().find(|p| p.target == DECISIONS).unwrap().expected.bytes.as_deref()
                     .ok_or_else(|| Error::Invalid("native plan requires previous decisions".into()))?;
@@ -838,7 +863,6 @@ impl Intent {
             }
             IntentKind::NativeTaskV1 { request, root_binding } => {
                 use cadence::execution::history;
-                if names.len() != 3 { return Err(Error::Invalid("native task event cannot change external participants".into())); }
                 let state = self.participants.last().expect("state participant");
                 if state.expected.directory_identity != root_binding {
                     return Err(Error::Invalid("native task root binding changed".into()));
@@ -846,6 +870,7 @@ impl Intent {
                 let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
                     .ok_or_else(|| Error::Invalid("native task requires prior snapshot".into()))?)?;
                 let (expected, record) = history::contribute(&previous.data, &root_binding, &request)?;
+                self.validate_native_summary(&previous, snapshot, request.task.phase)?;
                 let old_items = self.participants.iter().find(|p| p.target == ITEMS).unwrap().expected.bytes.as_deref();
                 let old_decisions = self.participants.iter().find(|p| p.target == DECISIONS).unwrap().expected.bytes.as_deref()
                     .ok_or_else(|| Error::Invalid("native task requires previous decisions".into()))?;

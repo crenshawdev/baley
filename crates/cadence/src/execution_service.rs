@@ -212,7 +212,7 @@ async fn native_close_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,ro
             let records=history::records(&view.snapshot.data,request.task.phase)?;
             if let Some(prior)=records.iter().find(|r|r.request.request_id==request.request_id) {
                 return Ok(match &prior.request.event {
-                    Event::Close(proof) if proof.submission==request=>json!({"status":"ok","receipt":prior}),
+                    Event::Close(proof) if proof.submission==request=>native_close_answer(&view.snapshot.data, prior),
                     _=>native_error(cadence::execution::admission::refuse(request.task.phase,"task-request-reuse","request_id",&request.request_id,"request already names another close payload")),
                 });
             }
@@ -237,7 +237,18 @@ async fn native_close_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,ro
                 expected_version:request.expected_version,event}).await
         }
     };
-    Ok(match result {Ok(receipt)=>json!({"status":"ok","receipt":receipt}),Err(error)=>native_error(error)})
+    Ok(match result {
+        Ok(receipt) => native_close_answer(&session.derivation_view().await?.snapshot.data, &receipt),
+        Err(error) => native_error(error),
+    })
+}
+
+fn native_close_answer(data: &Value, receipt: &cadence::execution::history::Record) -> Value {
+    let mut answer = json!({"status":"ok","receipt":receipt});
+    if let Some(summary) = data[cadence::execution::render::NATIVE_SUMMARIES]["receipts"].get(&receipt.request_digest) {
+        answer["summary"] = summary.clone();
+    }
+    answer
 }
 
 async fn native_progress_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value) -> cadence::store::Result<Value> {

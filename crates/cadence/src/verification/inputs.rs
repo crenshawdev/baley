@@ -33,7 +33,12 @@ pub fn root_binding(root: &Path) -> Result<String> {
 /// Observe actual tracked bytes too: Git's index flags cannot hide modified
 /// files. Symlinks contribute their own text, never their destination's bytes.
 pub fn source(project: &Path) -> Result<Source> {
-    source_accounting(project, &BTreeMap::new())
+    source_accounting(project, &confirmed_summaries(project)?)
+}
+
+pub fn confirmed_summaries(project: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
+    let Some(snapshot) = plan::persistence::read_snapshot(&project.join(".planning"))? else { return Ok(BTreeMap::new()); };
+    crate::execution::render::installed_summaries(&snapshot.data)
 }
 
 /// The same observation, where a tracked file whose working bytes are exactly
@@ -73,13 +78,14 @@ pub fn source_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>) 
     Ok(Source { head, tree, index_digest: digest(&index), material_digest: digest(&serde_json::to_vec(&material)?) })
 }
 
-/// A clean tree, except that a tracked file modified in the working tree to
-/// exactly the installed projection bytes is accounted for. Untracked, staged,
-/// renamed, deleted and otherwise modified paths stay dirty.
-fn clean_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+/// Exact installed projection bytes are accounted for whether tracked or new.
+/// Staged, renamed, deleted and otherwise modified paths stay dirty.
+pub fn clean_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     if installed.is_empty() { return runner::clean(project); }
     for (code, name) in runner::status(project)? {
-        let accounted = code == " M " && installed.get(&name).is_some_and(|expected| std::fs::read(project.join(&name)).is_ok_and(|bytes| bytes == *expected));
+        let accounted = matches!(code.as_str(), " M " | "?? ")
+            && std::fs::symlink_metadata(project.join(&name)).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
+            && installed.get(&name).is_some_and(|expected| std::fs::read(project.join(&name)).is_ok_and(|bytes| bytes == *expected));
         if !accounted {
             return Err(Error::Invalid("evidence-source-dirty: commit source before requesting an evidence run".into()));
         }
@@ -136,7 +142,8 @@ pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
                 format!("plan event identity mismatch: {} is not the record the log holds", record.request.request_id)));
         }
     }
-    let source = source(project).map_err(|e| refuse(phase, "verification-source", "source", e.to_string()))?;
+    let source = source_accounting(project, &crate::execution::render::installed_summaries(data)?)
+        .map_err(|e| refuse(phase, "verification-source", "source", e.to_string()))?;
     let map = serde_json::to_value(plan::map_view::read(root, phase)?)?;
     if map["coherence"] != "consistent" {
         return Err(refuse(phase, "verification-map", "map", "complete coherent evidence map required"));
@@ -162,7 +169,7 @@ pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
 /// Transaction replay checks the captured authority against its preimage, and
 /// reobserves external material without asking readback to ignore a live intent.
 pub fn reobserve_external(root: &Path, inputs: &Inputs, documents: &BTreeMap<String, String>) -> Result<()> {
-    reobserve_external_accounting(root, inputs, documents, &BTreeMap::new())
+    reobserve_external_accounting(root, inputs, documents, &confirmed_summaries(Path::new(&inputs.basis.project))?)
 }
 
 /// The same reobservation for a transaction that installs its own confirmed
@@ -173,7 +180,9 @@ pub fn reobserve_external_accounting(root: &Path, inputs: &Inputs, documents: &B
     if root.parent().map(|p| p.to_string_lossy().into_owned()).as_ref() != Some(&inputs.basis.project) {
         return Err(refuse(phase, "verification-root", "basis", "bound project changed"));
     }
-    if source_accounting(Path::new(&inputs.basis.project), installed).map_err(|e| refuse(phase, "verification-source", "source", e.to_string()))? != inputs.basis.source {
+    let mut accounted = confirmed_summaries(Path::new(&inputs.basis.project))?;
+    accounted.extend(installed.clone());
+    if source_accounting(Path::new(&inputs.basis.project), &accounted).map_err(|e| refuse(phase, "verification-source", "source", e.to_string()))? != inputs.basis.source {
         return Err(refuse(phase, "verification-source", "source", "committed source, index or material changed"));
     }
     let observed = plan::inventory::read(root, &phase.to_string(), &json!({}))?;

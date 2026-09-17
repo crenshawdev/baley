@@ -143,7 +143,8 @@ pub fn uncertainty(project: &Path, records: &[Record], view: &history::TaskView)
         commits = git_text(project, &["rev-list", "--reverse", &format!("{baseline}..HEAD")])?.lines().map(str::to_owned).collect();
     }
     let mut uncertainty = serde_json::json!({"requires_reconciliation":!commits.is_empty(),"commits":commits});
-    if !view.state.completed && view.state.attempt.is_some() && clean(project).is_err() {
+    if !view.state.completed && view.state.attempt.is_some()
+        && crate::verification::inputs::clean_accounting(project, &crate::verification::inputs::confirmed_summaries(project)?).is_err() {
         uncertainty["requires_reconciliation"] = serde_json::json!(true);
         uncertainty["dirty_source"] = serde_json::json!(true);
     }
@@ -183,7 +184,7 @@ pub fn clean(project: &Path) -> Result<()> {
 }
 
 pub fn material(project: &Path, command: &str, test_file: &str) -> Result<Material> {
-    clean(project)?;
+    crate::verification::inputs::clean_accounting(project, &crate::verification::inputs::confirmed_summaries(project)?)?;
     let commit = git_text(project, &["rev-parse", "HEAD"])?;
     let tree = git_text(project, &["rev-parse", "HEAD^{tree}"])?;
     let test = if test_file.is_empty() { vec![] } else { git(project, &["show", &format!("{commit}:{test_file}")])? };

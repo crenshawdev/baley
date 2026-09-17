@@ -458,6 +458,14 @@ impl ClosedRound {
     }
 
     pub fn close_tasks(&mut self) {
+        self.drive_tasks(true);
+    }
+
+    pub fn prepare_last_close(&mut self) -> Value {
+        self.drive_tasks(false).unwrap()
+    }
+
+    fn drive_tasks(&mut self, close_last: bool) -> Option<Value> {
         for (index, name) in ["fixture-one-a", "fixture-one-b"].into_iter().enumerate() {
             let state = self.state(name);
             let checks = if index == 0 { json!([self.check]) } else { json!([]) };
@@ -494,11 +502,14 @@ impl ClosedRound {
             }
             let verification = self.run(name, "verify", Value::Null);
             let state = self.state(name);
-            let closed = self.client.call("cadence_apply", json!({"operation":"execution-task-close","request":{
+            let request = json!({"operation":"execution-task-close","request":{
                 "request_id":format!("{name}-close"),"task":state["task"],"attempt":name,"expected_version":state["state"]["version"],
-                "completion":self.commits.last().unwrap(),"checks":pairs,"verification":[verification]}}));
+                "completion":self.commits.last().unwrap(),"checks":pairs,"verification":[verification]}});
+            if index == 1 && !close_last { return Some(request); }
+            let closed = self.client.call("cadence_apply", request);
             assert_eq!(closed["status"], "ok", "{closed}");
             self.closes.push(closed);
         }
+        None
     }
 }
