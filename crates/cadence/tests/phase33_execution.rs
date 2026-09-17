@@ -114,7 +114,14 @@ fn phase33_dispatch_reads_by_id_as_bounded_parts() {
     assert_eq!(dispatch_id(&first), dispatch_id(&repeat));
     let found = parts(&mut client, json!({"kind":"dispatch","id":dispatch_id(&first)}));
     for slot in ["goal", "context"] { assert_eq!(found[slot], content[slot].as_str().unwrap()); }
-    assert_eq!(format!("{}{}", found["notes"], found["notes:2"]), content["notes"].as_str().unwrap());
+    let mut notes = found["notes"].clone();
+    let mut continuation = 2;
+    while let Some(body) = found.get(&format!("notes:{continuation}")) {
+        notes.push_str(body);
+        continuation += 1;
+    }
+    assert!(continuation > 2);
+    assert_eq!(notes, content["notes"].as_str().unwrap());
     for slot in ["identity", "completed", "continuation", "suite", "lease", "commands", "policy", "route"] {
         assert!(found.contains_key(slot), "missing {slot}");
     }
