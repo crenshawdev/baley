@@ -392,7 +392,9 @@ pub fn reobserve(data: &Value, claim: &Claim) -> Result<()> {
     }
     let attempt = persistence::attempts(data)?.into_iter().find(|a| a.id == claim.request.attempt)
         .ok_or_else(|| Error::Invalid("completion attempt absent".into()))?;
-    inputs::reobserve_external_accounting(&claim.root, &attempt.inputs, &claim.documents, &accounted(claim)?)
+    let mut installed = crate::execution::render::installed_summaries(data)?;
+    installed.extend(accounted(claim)?);
+    inputs::reobserve_external_accounting(&claim.root, &attempt.inputs, &claim.documents, &installed)
 }
 
 #[cfg(test)]

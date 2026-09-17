@@ -222,6 +222,19 @@ owner and at are nonblank, and supersedes is an optional prior statement id.
 Only the owner's actual attributed, timed approval supplies this record.
 A prepared payload and the executor's no_subject_stub assertion are not approval.
 
+After the plan's last task closes, the orchestrator records the host's reported
+token count through `execution-round-record` with the owner's actual approval,
+before `execution-plan-complete`. The request is
+`{request_id, plan, expected_version, statement: {submission: {dispatch_id,
+host, tokens, wire_bytes}, approval: {approved, owner, at, submission}}}`.
+Use the plan identity and current version from `execution-history`; the approval
+must echo the exact submission. `tokens` is a positive integer reported by the
+host for the real executor round, `host` is nonblank, and `wire_bytes` is optional.
+The operation refuses `round-open` before the last task closes and also accepts
+a report after plan completion. The binary renders that attributed report beside
+the fixed 3.7 median; a mechanism test's literal is never the live measurement.
+If the host report is unavailable, retain that absence rather than invent a count.
+
 A malformed wire request reports a bounded supplied field/value; a lifecycle
 state-conflict retains source, field, declared and derived. Display the exact
 located reason. A JSON-RPC transport error is not an acknowledged domain
@@ -229,6 +242,11 @@ refusal; neither result repairs state, and a replay keeps its original receipt.
 
 
 ## Return
+
+The binary renders SUMMARY.md from the retained record at the plan's last
+task close and updates it for later plan events. The executor writes no summary.
+When a close installs the summary, its answer carries `summary: {revision}`,
+the SHA-256 of the installed bytes; it carries no summary document identity.
 
 The binary already holds every closed task, run and receipt; your reply to the
 coordinator is a short digest, not a patch: the tasks you closed with their

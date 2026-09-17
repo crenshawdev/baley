@@ -1672,10 +1672,10 @@ fn validate_all<S: Storage>(
         cadence::verification::runner::reobserve_launch(&previous.data, record)?;
     }
     if let IntentKind::VerificationV1 { request, root_binding } = kind
-        && previous_on_disk(storage, participants, replay, root_binding,
-            "verification store binding changed", "verification preimage absent")?.is_some()
+        && let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
+            "verification store binding changed", "verification preimage absent")?
     {
-        cadence::verification::inputs::reobserve_external(&request.root, &request.attempt.inputs, &request.documents)?;
+        cadence::verification::inputs::reobserve_external(&request.root, &previous.data, &request.attempt.inputs, &request.documents)?;
     }
     if let IntentKind::NativeTaskV1 {request,root_binding}=kind
         && let cadence::execution::history::Event::Checkpoint {records,..}=&request.event

@@ -955,10 +955,15 @@ fn execution_calls_refuse_noninteger_phases_and_legacy_plans_without_dispatch() 
         let rendered = String::from_utf8(output.stdout).unwrap();
         assert_eq!(rendered, fs::read_to_string(repo.join(skill)).unwrap());
         if skill == "skills/cad-execute/SKILL.md" {
+            assert!(rendered.contains("execution-round-record"));
+            assert!(rendered.contains("host's reported"));
+            assert!(rendered.contains("owner's actual approval"));
             assert!(rendered.contains("After the plan's last task closes, the orchestrator collects the owner's exact inspections for every delivered check before requesting `execution-plan-complete`"));
             assert!(rendered.contains("ensure the orchestrator has collected the inspections for the plan's delivered checks as described in step 6"));
         }
         if skill == "skills/cad-executor-contract/SKILL.md" {
+            assert!(rendered.contains("The binary renders SUMMARY.md from the retained record"));
+            assert!(rendered.contains("The executor writes no summary."));
             assert!(rendered.contains(
                 "Binary-rendered project files in the\ndispatch lease are implicit material"
             ), "{skill} must explain the D-166 implicit rendered-file lease");
@@ -1346,7 +1351,6 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
             "node ",
             "reports/",
             "STATE.md",
-            "SUMMARY.md",
             "cadence serve",
             "cadence query",
             "cadence apply",

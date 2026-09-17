@@ -151,7 +151,7 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
             }).await?;
             let saved = persistence::replay(&written.snapshot.data, phase, &request.attempt.request_id)?
                 .ok_or_else(|| Error::Invalid("confirmed verification attempt absent".into()))?;
-            inputs::reobserve_external(root, &saved.inputs, &request.documents)?;
+            inputs::reobserve_external(root, &written.snapshot.data, &saved.inputs, &request.documents)?;
             let mut answer = json!({"status":"ok","attempt":saved});
             if !repaired.is_empty() { answer["repaired"] = json!(repaired); }
             Ok(answer)

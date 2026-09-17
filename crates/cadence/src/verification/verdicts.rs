@@ -203,7 +203,7 @@ pub fn reobserve(data: &Value, claim: &Claim) -> Result<()> {
     if claim.answer["status"] == "ok" {
         let attempt = persistence::attempts(data)?.into_iter().find(|a| a.id == claim.patch.attempt)
             .ok_or_else(|| Error::Invalid("claim attempt absent".into()))?;
-        inputs::reobserve_external(&claim.root, &attempt.inputs, &claim.documents)?;
+        inputs::reobserve_external(&claim.root, data, &attempt.inputs, &claim.documents)?;
     }
     Ok(())
 }

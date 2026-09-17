@@ -221,7 +221,7 @@ pub fn reobserve(data: &Value, claim: &Claim) -> Result<()> {
     }
     let attempt = persistence::attempts(data)?.into_iter().find(|a| a.id == claim.answer["receipt"]["record"]["reviewed"]["attempt"])
         .ok_or_else(|| Error::Invalid("waiver reviewed attempt absent".into()))?;
-    inputs::reobserve_external(&claim.root, &attempt.inputs, &claim.documents)
+    inputs::reobserve_external(&claim.root, data, &attempt.inputs, &claim.documents)
 }
 
 /// One row per retained event, with whether it is effective against the

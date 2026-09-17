@@ -168,8 +168,8 @@ pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
 
 /// Transaction replay checks the captured authority against its preimage, and
 /// reobserves external material without asking readback to ignore a live intent.
-pub fn reobserve_external(root: &Path, inputs: &Inputs, documents: &BTreeMap<String, String>) -> Result<()> {
-    reobserve_external_accounting(root, inputs, documents, &confirmed_summaries(Path::new(&inputs.basis.project))?)
+pub fn reobserve_external(root: &Path, data: &Value, inputs: &Inputs, documents: &BTreeMap<String, String>) -> Result<()> {
+    reobserve_external_accounting(root, inputs, documents, &crate::execution::render::installed_summaries(data)?)
 }
 
 /// The same reobservation for a transaction that installs its own confirmed
@@ -180,9 +180,7 @@ pub fn reobserve_external_accounting(root: &Path, inputs: &Inputs, documents: &B
     if root.parent().map(|p| p.to_string_lossy().into_owned()).as_ref() != Some(&inputs.basis.project) {
         return Err(refuse(phase, "verification-root", "basis", "bound project changed"));
     }
-    let mut accounted = confirmed_summaries(Path::new(&inputs.basis.project))?;
-    accounted.extend(installed.clone());
-    if source_accounting(Path::new(&inputs.basis.project), &accounted).map_err(|e| refuse(phase, "verification-source", "source", e.to_string()))? != inputs.basis.source {
+    if source_accounting(Path::new(&inputs.basis.project), installed).map_err(|e| refuse(phase, "verification-source", "source", e.to_string()))? != inputs.basis.source {
         return Err(refuse(phase, "verification-source", "source", "committed source, index or material changed"));
     }
     let observed = plan::inventory::read(root, &phase.to_string(), &json!({}))?;

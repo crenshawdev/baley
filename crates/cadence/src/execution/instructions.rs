@@ -154,6 +154,11 @@ do not push, reset, amend, revert or force-push."#;
 
 const RETURN: &str = r#"## Return
 
+The binary renders SUMMARY.md from the retained record at the plan's last
+task close and updates it for later plan events. The executor writes no summary.
+When a close installs the summary, its answer carries `summary: {revision}`,
+the SHA-256 of the installed bytes; it carries no summary document identity.
+
 The binary already holds every closed task, run and receipt; your reply to the
 coordinator is a short digest, not a patch: the tasks you closed with their
 close request ids, any checkpoint you raised and are waiting on, any refusal
@@ -217,6 +222,19 @@ owner and at are nonblank, and supersedes is an optional prior statement id.
 Only the owner's actual attributed, timed approval supplies this record.
 A prepared payload and the executor's no_subject_stub assertion are not approval.
 
+After the plan's last task closes, the orchestrator records the host's reported
+token count through `execution-round-record` with the owner's actual approval,
+before `execution-plan-complete`. The request is
+`{request_id, plan, expected_version, statement: {submission: {dispatch_id,
+host, tokens, wire_bytes}, approval: {approved, owner, at, submission}}}`.
+Use the plan identity and current version from `execution-history`; the approval
+must echo the exact submission. `tokens` is a positive integer reported by the
+host for the real executor round, `host` is nonblank, and `wire_bytes` is optional.
+The operation refuses `round-open` before the last task closes and also accepts
+a report after plan completion. The binary renders that attributed report beside
+the fixed 3.7 median; a mechanism test's literal is never the live measurement.
+If the host report is unavailable, retain that absence rather than invent a count.
+
 A malformed wire request reports a bounded supplied field/value; a lifecycle
 state-conflict retains source, field, declared and derived. Display the exact
 located reason. A JSON-RPC transport error is not an acknowledged domain
@@ -266,7 +284,7 @@ files, reconstruct no task list and approve no evidence on the owner's behalf.
 3. Collect the owner's actual answer in the conversation and submit exactly what the owner states, then repeat from step 1: an unanswered plan suite-repair question is answered through `execution-suite-repair-answer`; an unanswered task checkpoint is answered through `execution-task-answer`; a linked Stop is continued or declined through `execution-authorize` naming the same retained `checkpoint`; an unlinked Stop needs later owner approval with `checkpoint` omitted or null; unacknowledged commits are reconciled through `execution-task-progress`. A restart, a summary or an old report is never an answer.
 4. Invoke `Task` with `route.choice.agent` and the one-line prompt `Cadence dispatch <dispatch_id>`, substituting only the returned id. Pass `route.choice.model` only when present; otherwise omit the model argument for session inheritance. Use this admitted selection and issue no fresh route query. The agent's own contract supplies its instructions; it reads the dispatch parts through `document`.
 5. Read the executor's digest without interpreting it. The binary holds the closed tasks and receipts; the executor's reply is a digest, not a patch, and a refusal or an Unknown run it reports is displayed and retained, never converted into completion.
-6. After the plan's last task closes, the orchestrator collects the owner's exact inspections for every delivered check before requesting `execution-plan-complete`; an exact inspection already recorded after green needs no extra record. Owner records are actual round trips through `mcp__cadence__cadence_apply`, each submitted exactly as the owner states it and shown with the retained bytes it names: the no-subject-stub inspection (`execution-owner-attest`), the separate classification of an Unknown custom-check run (`execution-classify-run`), and the dead-launch absence attestation for a suite launch with no recognized result (`execution-suite-relaunch`). The owner's interpretation is shown beside the binary's observation class and never replaces it.
+6. After the plan's last task closes, the orchestrator collects the owner's exact inspections for every delivered check before requesting `execution-plan-complete`; an exact inspection already recorded after green needs no extra record. Record the host's reported token count for this round through `execution-round-record` with the owner's actual approval before plan completion, using the request described below. Owner records are actual round trips through `mcp__cadence__cadence_apply`, each submitted exactly as the owner states it and shown with the retained bytes it names: the no-subject-stub inspection (`execution-owner-attest`), the separate classification of an Unknown custom-check run (`execution-classify-run`), and the dead-launch absence attestation for a suite launch with no recognized result (`execution-suite-relaunch`). The owner's interpretation is shown beside the binary's observation class and never replaces it.
 7. When the executor's digest reports the plan's last task closed, request `execution-suite` with the plan identity and version that `execution-history` reports under `plans` plus the executor's project-relative `proposed_paths`, and wait for its receipt. If it passes, ensure the orchestrator has collected the inspections for the plan's delivered checks as described in step 6, then request `execution-plan-complete` with the version the suite receipt reports; completion needs every delivered check's owner inspection, that passing suite receipt and the existing exact risk settlement (`risk-check` on the plan's dispatch), and passing one gate does not erase another pending gate. If the first launch fails, read its generated plan question, collect and submit the owner's attributed `execution-suite-repair-answer`, and repeat from step 1; the approved answer produces a new retained issue for the repair executor. After that executor reports its `execution-suite-repair` receipt and stops, request the one second suite launch. The executor never requests the suite or completion. Then repeat from step 1.
 </process>
 

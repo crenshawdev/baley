@@ -896,6 +896,10 @@ fn prepare_repair_episode(truth_id: &str, check_id: &str, suite_body: &str) -> R
         "verification":[verify_id]}}));
     assert_eq!(closed["status"], "ok", "{closed}");
     let task_close_event_count = history(project)["events"].as_array().unwrap().len();
+    let summary = fs::read(project.join(".planning/phases/38/SUMMARY.md")).unwrap();
+    assert_eq!(closed["summary"], json!({"revision":cadence::store::model::digest(&summary)}));
+    assert!(String::from_utf8(summary).unwrap().contains(&format!(
+        "| 1 | retain-prompt | completed | {green_commit} | passed |")));
     RepairEpisode { temp, task_close_event_count }
 }
 
@@ -1020,6 +1024,19 @@ fn phase38_approved_plan_repair_accepts_one_second_launch() {
     assert_eq!(risk["observation"]["resolution"]["head_id"], json!(repair_commit), "risk material ends at the repair commit: {risk}");
     let complete = call(project, "cadence_apply", plan_operation(project, "execution-plan-complete", "complete-repaired-plan", json!({})));
     assert_eq!(complete["status"], "ok", "a repaired plan completes on its settlement: {complete}");
+    let summary = fs::read_to_string(project.join(".planning/phases/38/SUMMARY.md")).unwrap();
+    assert!(summary.contains("Status: complete"));
+    assert!(summary.contains("Suite result suite-after-repair: passed"));
+    assert!(summary.contains(&repair_commit));
+    // The host can deliver its owner-approved count after completion too.
+    let submission = json!({"dispatch_id":dispatch_id,"host":"fixture host","tokens":17,"wire_bytes":42});
+    let recorded = call(project, "cadence_apply", plan_operation(project, "execution-round-record", "round-after-completion",
+        json!({"statement":{"submission":submission,"approval":{"approved":true,"owner":OWNER,"at":AT,"submission":submission}}})));
+    assert_eq!(recorded["status"], "ok", "{recorded}");
+    let summary = fs::read_to_string(project.join(".planning/phases/38/SUMMARY.md")).unwrap();
+    assert!(summary.contains("Status: complete"));
+    assert!(summary.contains("Executor round tokens: 17 (host fixture host, reported by the host)"));
+    assert!(summary.contains("wire bytes 42"));
 }
 
 #[test]

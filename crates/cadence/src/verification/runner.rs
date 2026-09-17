@@ -109,7 +109,7 @@ pub fn reobserve_launch(data: &Value, record: &Record) -> Result<()> {
     if let Event::Launch { documents, .. } = &record.event {
         let attempt = persistence::attempts(data)?.into_iter().find(|a| a.id == record.attempt)
             .ok_or_else(|| Error::Invalid("verification attempt absent".into()))?;
-        inputs::reobserve_external(&record.root, &attempt.inputs, documents)?;
+        inputs::reobserve_external(&record.root, data, &attempt.inputs, documents)?;
     }
     Ok(())
 }
