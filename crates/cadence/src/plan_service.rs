@@ -131,15 +131,9 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             ))
         }
         Command::Apply(raw) => {
-            if let Some(refusal) = cadence::plan::validation::arguments(&raw) {
-                return Ok(refusal);
-            }
-            if let Some(refusal) = cadence::plan::associations::malformed_version(&raw) {
-                return Ok(refusal.answer());
-            }
-            if let Some(refusal) = cadence::plan::limits::malformed(&raw) {
-                return Ok(refusal.answer());
-            }
+            let argument_refusal = cadence::plan::validation::arguments(&raw);
+            let version_refusal = cadence::plan::associations::malformed_version(&raw);
+            let limit_refusal = cadence::plan::limits::malformed(&raw);
             let Apply::Submit {
                 submission,
                 approval,
@@ -155,6 +149,15 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 Ok(Some(receipt)) => return replay_answer(root, &data, receipt),
                 Ok(None) => {}
                 Err(error) => return path_error(error),
+            }
+            if let Some(refusal) = argument_refusal {
+                return Ok(refusal);
+            }
+            if let Some(refusal) = version_refusal {
+                return Ok(refusal.answer());
+            }
+            if let Some(refusal) = limit_refusal {
+                return Ok(refusal.answer());
             }
             if approval.as_ref().is_some_and(|a| a.approved) {
                 if let Some(refusal) = cadence::plan::validation::identities(&submission) {

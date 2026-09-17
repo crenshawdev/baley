@@ -217,10 +217,16 @@ fn phase13_human_results_preserve_first_pass() {
 
 const REQUIREMENTS: &str = "# Requirements\n\n## Active\n\n- **T1**: the first parcel is delivered\n- **T2**: the second parcel is delivered\n- **T3**: receipts are signed\n\n## Deferred\n\n- **T9**: not this cycle\n\n## Traceability\n\n| Requirement | Phase | Status |\n|-------------|-------|--------|\n| T3 | Phase 13 | Complete |\n\n## Shipped\n\n| Requirement | Phase | Status | Milestone |\n|---|---|---|---|\n| OLD-01 | 1 | Complete | v1.0.0 |\n";
 
-// The first publication carries the truth's one check; later ones add artifacts.
+// The first publication carries one check for every approved truth; later ones add artifacts.
 fn declaring(project: &std::path::Path, id: &str, requirements: &[&str]) -> Value {
-    let item = if id == "seed-one" { check("check/A", &["truth/A"]) } else { artifact(&format!("artifact/{id}"), &["truth/A"]) };
-    let mut input = proposal(project, id, &[(None, attached(vec![item]))]);
+    let items = if id == "seed-one" {
+        ["T1", "T2", "T3", "T4", "T9"].into_iter()
+            .map(|truth| check(&format!("check/{truth}"), &[truth]))
+            .collect()
+    } else {
+        vec![artifact(&format!("artifact/{id}"), &["T1"])]
+    };
+    let mut input = proposal(project, id, &[(None, attached(items))]);
     input["submission"]["plans"][0]["content"]["requirements"] = json!(requirements);
     input
 }
@@ -229,7 +235,13 @@ fn declaring(project: &std::path::Path, id: &str, requirements: &[&str]) -> Valu
 fn phase13_publication_seeds_only_missing_trace_rows() {
     let temp = fixture();
     let project = temp.path();
-    native_context(project, &[("truth/A", "a parcel arrives", "the recipient", "the parcel")]);
+    native_context(project, &[
+        ("T1", "a parcel arrives", "the recipient", "the parcel"),
+        ("T2", "a second parcel arrives", "the recipient", "the second parcel"),
+        ("T3", "a receipt arrives", "the recipient", "the receipt"),
+        ("T4", "a fourth parcel arrives", "the recipient", "the fourth parcel"),
+        ("T9", "a deferred parcel arrives", "the recipient", "the deferred parcel"),
+    ]);
     let requirements = project.join(".planning/REQUIREMENTS.md");
     fs::write(&requirements, REQUIREMENTS).unwrap();
     // A new plan declares one existing row, one missing active id and one id
@@ -370,8 +382,8 @@ fn phase13_completion_projection_transaction_recovers() {
     assert_eq!(record["projections"]["roadmap"]["preimage"], roadmap_digest);
     assert_eq!(record["projections"]["roadmap"]["line"], 2);
     assert_eq!(record["projections"]["requirements"]["rows"], json!(["T1"]));
-    assert_eq!(record["truths"], json!([{"id":"truth/A","version":1,"status":"met","derived":"met","waiver":null},
-        {"id":"truth/B","version":1,"status":"met","derived":"met","waiver":null}]));
+    assert_eq!(record["truths"], json!([{"id":"T1","version":1,"status":"met","derived":"met","waiver":null},
+        {"id":"T2","version":1,"status":"met","derived":"met","waiver":null}]));
     assert_eq!(fs::read_to_string(&roadmap).unwrap(), "## Phases\n- [x] **Phase 13: Plan publication**\n- [ ] **Phase 28: Next phase**\n");
     assert_eq!(fs::read_to_string(&requirements).unwrap(), TRACED.replace("| T1 | Phase 13 | Pending |", "| T1 | Phase 13 | Complete |"));
     assert_eq!(fs::read_to_string(&uat).unwrap(), PASSED_UAT, "completion leaves human material untouched");

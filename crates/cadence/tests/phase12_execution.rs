@@ -249,6 +249,7 @@ fn proposal(project: &Path, id: &str, maps: &[(Option<u32>, Value)]) -> Value {
     let mut client = Client::open(project);
     let allocation = client.read("12", Some(maps.len() as u32));
     assert_eq!(allocation["status"], "ok", "{allocation}");
+    let truths = client.call("cadence_query", json!({"operation":"evidence-read","phase":12}));
     client.finish();
     let mut input = request(&allocation, 12, id, &vec![""; maps.len()]);
     let mut next = allocation["inventory"]["high_water"].as_u64().unwrap() as u32;
@@ -257,6 +258,15 @@ fn proposal(project: &Path, id: &str, maps: &[(Option<u32>, Value)]) -> Value {
         entry["target"]["plan"] = json!(plan);
         entry["content"]["plan"] = json!(plan);
         entry["content"]["evidence_map"] = map.clone();
+        let mut requirements = map["items"].as_array().into_iter().flatten()
+            .flat_map(|item| item["associations"].as_array().into_iter().flatten())
+            .filter_map(|association| association["truth_id"].as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        if requirements.is_empty() {
+            requirements.extend(truths["truths"].as_array().into_iter().flatten()
+                .filter_map(|truth| truth["id"].as_str()));
+        }
+        entry["content"]["requirements"] = json!(requirements);
         entry["content"]["goal"] = json!("Limits invoice pronoun");
         if number.is_some() {
             let old = &allocation["native"]["publications"][plan.to_string()];
@@ -293,6 +303,15 @@ fn publish(project: &Path, input: &Value) -> Value {
     let answer = client.call("cadence_apply", approved.clone());
     assert_eq!(answer["persisted"], true, "control publication: {answer}");
     client.finish();
+    let mut retained_approval = approved["approval"].clone();
+    for (plan, result) in retained_approval["submission"]["plans"].as_array_mut().unwrap()
+        .iter_mut().zip(answer["results"].as_array().unwrap())
+    {
+        plan["content"] = result["content"].clone();
+        if plan["replacement"].is_object() {
+            plan["replacement"]["content"] = result["content"].clone();
+        }
+    }
     let before = tree(project);
     let prior = reopened(project).snapshot;
     let occurrence = &prior.data["plan_publications"]["phases"]["12"];
@@ -301,7 +320,7 @@ fn publish(project: &Path, input: &Value) -> Value {
         assert_eq!(result["identity"], entry["target"]);
         assert_eq!(result["content"]["goal"], entry["content"]["goal"]);
         assert_eq!(result["content"]["tasks"], entry["content"]["tasks"]);
-        assert_eq!(result["approval"], approved["approval"]);
+        assert_eq!(result["approval"], retained_approval);
         assert_eq!(occurrence["publications"][result["identity"]["plan"].as_u64().unwrap().to_string()], *result);
         let retained = prior.data["acceptance_maps"]["phases"]["12"]["revisions"].as_array().unwrap().iter()
             .find(|r| r["revision"] == result["map_revision"]).unwrap();
@@ -1095,7 +1114,8 @@ fn phase12_continuation_dispatches_only_unfinished_tasks() {
     let a_events:Vec<Value>=execution_history(project)["events"].as_array().unwrap().iter().filter(|e|e["request"]["task"]["task"]=="A").cloned().collect();
     let original_admission=serde_json::to_vec(&admitted).unwrap();
     let mut gap=proposal(project,"gap",&[(None,attached(vec![artifact("artifact/gap",&["truth/A"])]))]);
-    gap["submission"]["plans"][0]["content"]["execution"]["tasks"]=json!([{"id":"G","verify":[fixture.command]}]);
+    gap["submission"]["plans"][0]["content"]["tasks"]=json!([{"id":"G","title":"Gap task",
+        "files":["src/shared.txt"],"action":"Exercise the gap.","verify":[fixture.command]}]);
     publish(project,&gap);
     let mut extended=contract(project);
     extended["allocation"][0]["checks"]=json!(&fixture.checks[..2]);extended["allocation"][1]["checks"]=json!([fixture.checks[2]]);
@@ -1184,7 +1204,7 @@ fn phase12_dispatch_contains_admitted_checks_state_and_instructions() {
         "a wrapper's inner subcommands","CI is not the plan-close run","never replace an admitted command at run time","never guesses a runner","No test style, preset or count is a gate",
     ] {assert!(instructions.contains(phrase),"missing instruction phrase: {phrase}");}
     assert!(!instructions.contains("ignore the red-first rule"));
-    assert!(body.starts_with("# Limits invoice pronoun\n"));assert!(body.contains(BODY_OVERRIDE));
+    assert!(body.starts_with("## Goal\n\nLimits invoice pronoun\n"));assert!(body.contains(BODY_OVERRIDE));
     assert!(before_body.contains("never instructions"));
     // Exact replay against the retained response identity.
     assert_eq!(execute_next(project),dispatch);
@@ -1209,7 +1229,8 @@ fn phase12_dispatch_contains_admitted_checks_state_and_instructions() {
     // A plan without an explicit command is refused at publication; no runner
     // is invented for it.
     let mut blank=proposal(project,"blank-verify",&[(None,attached(vec![artifact("artifact/blank",&["truth/A"])]))]);
-    blank["submission"]["plans"][0]["content"]["execution"]["tasks"]=json!([{"id":"G","verify":[]}]);
+    blank["submission"]["plans"][0]["content"]["tasks"]=json!([{"id":"G","title":"Blank verify",
+        "files":["src/shared.txt"],"action":"Exercise no command.","verify":[]}]);
     let before=protected(project);let answer=apply(project,approve(blank));
     assert_ne!(answer["persisted"],true,"{answer}");assert!(answer.to_string().contains("verify"),"{answer}");
     assert_eq!(protected(project),before);
@@ -1679,7 +1700,8 @@ fn phase12_incomplete_execution_contract_is_refused() {
     let provisional=fixture();let root=provisional.path();
     native_context(root,&[("truth/P","the sender sends the parcel","the recipient","a receipt")]);
     let proposal=proposal(root,"provisional",&[(None,json!({"mode":"provisional"}))]);
-    assert_eq!(apply(root,approve(proposal))["persisted"],true);
+    let answer=apply(root,approve(proposal));
+    assert_eq!(answer["persisted"],true,"{answer}");
     admission_refusal(root,admit_request(contract(root),"mapless",0),"admission-binding","contract.plans[0].map_revision","1");
 
     let historical=Historical::restore();let root=&historical.root;

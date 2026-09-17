@@ -274,6 +274,10 @@ pub fn proposal(project: &Path, id: &str, maps: &[(Option<u32>, Value)]) -> Valu
         entry["target"]["plan"] = json!(plan);
         entry["content"]["plan"] = json!(plan);
         entry["content"]["evidence_map"] = map.clone();
+        entry["content"]["requirements"] = json!(map["items"].as_array().into_iter().flatten()
+            .flat_map(|item| item["associations"].as_array().into_iter().flatten())
+            .filter_map(|association| association["truth_id"].as_str())
+            .collect::<std::collections::BTreeSet<_>>());
         entry["content"]["goal"] = json!("Limits invoice pronoun");
         if number.is_some() {
             let old = &allocation["native"]["publications"][plan.to_string()];
@@ -309,6 +313,15 @@ pub fn publish(project: &Path, input: &Value) -> Value {
     let answer = client.call("cadence_apply", approved.clone());
     assert_eq!(answer["persisted"], true, "control publication: {answer}");
     client.finish();
+    let mut retained_approval = approved["approval"].clone();
+    for (plan, result) in retained_approval["submission"]["plans"].as_array_mut().unwrap()
+        .iter_mut().zip(answer["results"].as_array().unwrap())
+    {
+        plan["content"] = result["content"].clone();
+        if plan["replacement"].is_object() {
+            plan["replacement"]["content"] = result["content"].clone();
+        }
+    }
     let before = tree(project);
     let prior = reopened(project).snapshot;
     let occurrence = &prior.data["plan_publications"]["phases"]["13"];
@@ -317,7 +330,7 @@ pub fn publish(project: &Path, input: &Value) -> Value {
         assert_eq!(result["identity"], entry["target"]);
         assert_eq!(result["content"]["goal"], entry["content"]["goal"]);
         assert_eq!(result["content"]["tasks"], entry["content"]["tasks"]);
-        assert_eq!(result["approval"], approved["approval"]);
+        assert_eq!(result["approval"], retained_approval);
         assert_eq!(occurrence["publications"][result["identity"]["plan"].as_u64().unwrap().to_string()], *result);
         let retained = prior.data["acceptance_maps"]["phases"]["13"]["revisions"].as_array().unwrap().iter()
             .find(|r| r["revision"] == result["map_revision"]).unwrap();
@@ -507,13 +520,13 @@ impl Completed {
         }
         git_value(project, &["add", "src"]);
         git_value(project, &["commit", "-m", "Fixture subjects"]);
-        native_context(project, &[("truth/A", "a parcel arrives", "the recipient", "the parcel"),
-            ("truth/B", "a second parcel arrives", "the recipient", "the parcel")]);
-        let shared = artifact("artifact/shared", &["truth/A", "truth/B"]);
+        native_context(project, &[("T1", "a parcel arrives", "the recipient", "the parcel"),
+            ("T2", "a second parcel arrives", "the recipient", "the parcel")]);
+        let shared = artifact("artifact/shared", &["T1", "T2"]);
         let link = json!({"kind":"link","id":"link/parcel","reason":"Missing delivery loses the parcel.",
-            "spec":{"caller":"sender","callee":"recipient","value":"parcel"},"associations":edges(&["truth/A"])});
+            "spec":{"caller":"sender","callee":"recipient","value":"parcel"},"associations":edges(&["T1"])});
         let mut maps = Vec::new();
-        for (name, truth, id) in [("a", "truth/A", "check/A"), ("b", "truth/B", "check/B")] {
+        for (name, truth, id) in [("a", "T1", "check/A"), ("b", "T2", "check/B")] {
             let mut item = check(id, &[truth]);
             item["spec"] = json!({"command":format!("python3 -B tests/{name}.py"),
                 "expected":{"kind":"property","value":"answer is seven"},
@@ -521,16 +534,20 @@ impl Completed {
                 "setup":"the subject starts at six","call":"answer()","boundary":"real Python subject","fakes":[]});
             let mut items = vec![item, shared.clone()];
             if name == "a" { items.push(link.clone()); }
-            if name == "b" && observed { items.push(observation("observation/host", &["truth/B"])); }
+            if name == "b" && observed { items.push(observation("observation/host", &["T2"])); }
             maps.push((None, attached(items)));
         }
         let mut input = proposal(project, "two-plans", &maps);
         for (index, entry) in input["submission"]["plans"].as_array_mut().unwrap().iter_mut().enumerate() {
             let name = if index == 0 { "a" } else { "b" };
+            let command = format!("python3 -B tests/{name}.py");
+            entry["content"]["requirements"] = json!(["T1"]);
             entry["content"]["files"] = json!([format!("src/{name}.py"), format!("tests/{name}.py")]);
             entry["content"]["directories"] = json!([]);
-            entry["content"]["execution"] = json!({"schema":1,"suite":format!("python3 -B tests/{name}.py"),
-                "tasks":[{"id":format!("task-{name}"),"verify":[format!("python3 -B tests/{name}.py")]}]});
+            entry["content"]["suite"] = json!(command);
+            entry["content"]["tasks"] = json!([{"id":format!("task-{name}"),"title":"Verify fixture",
+                "files":[format!("src/{name}.py"),format!("tests/{name}.py")],
+                "action":"Exercise the fixture.","verify":[command]}]);
             shape(index, entry);
         }
         publish(project, &input);

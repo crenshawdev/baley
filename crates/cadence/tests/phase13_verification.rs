@@ -171,7 +171,7 @@ fn phase13_mismatched_verdict_patch_is_refused() {
     assert_eq!(acceptance_bytes(project), before);
     let (_, current) = inspected_patch(project, "current-source");
     // Actual approved union extension; an admitted plan is never replaced.
-    let gap = proposal(project, "new-map", &[(None, attached(vec![artifact("artifact/gap", &["truth/A"])]))]);
+    let gap = proposal(project, "new-map", &[(None, attached(vec![artifact("artifact/gap", &["T1"])]))]);
     publish(project, &gap);
     let map = query(project, json!({"operation":"evidence-read","phase":13}));
     let before = acceptance_bytes(project);
@@ -204,21 +204,21 @@ fn phase13_dispatch_carries_current_verification_inputs() {
         .split("\n</operational-input>").next().unwrap()).unwrap();
     assert_eq!(operational["map"], fixture.map);
     assert_eq!(operational["map"]["truths"], json!([
-        {"id":"truth/A","version":1,"text":"When a parcel arrives, the recipient gets the parcel.","kind":"property"},
-        {"id":"truth/B","version":1,"text":"When a second parcel arrives, the recipient gets the parcel.","kind":"property"}
+        {"id":"T1","version":1,"text":"When a parcel arrives, the recipient gets the parcel.","kind":"property"},
+        {"id":"T2","version":1,"text":"When a second parcel arrives, the recipient gets the parcel.","kind":"property"}
     ]));
     let ids: Vec<_> = operational["map"]["items"].as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap()).collect();
     assert_eq!(ids, ["artifact/shared", "check/A", "check/B", "link/parcel"]);
     let associations: Vec<_> = operational["map"]["associations"].as_array().unwrap().iter()
         .map(|a| (a["origin"]["plan"].as_u64().unwrap(), a["origin"]["item_id"].as_str().unwrap(), a["truth_id"].as_str().unwrap(), a["reason"].as_str().unwrap())).collect();
     assert_eq!(associations, [
-        (1,"artifact/shared","truth/A","This causes the promised delivery."),
-        (1,"artifact/shared","truth/B","This causes the promised delivery."),
-        (1,"check/A","truth/A","This causes the promised delivery."),
-        (1,"link/parcel","truth/A","This causes the promised delivery."),
-        (2,"artifact/shared","truth/A","This causes the promised delivery."),
-        (2,"artifact/shared","truth/B","This causes the promised delivery."),
-        (2,"check/B","truth/B","This causes the promised delivery.")]);
+        (1,"artifact/shared","T1","This causes the promised delivery."),
+        (1,"artifact/shared","T2","This causes the promised delivery."),
+        (1,"check/A","T1","This causes the promised delivery."),
+        (1,"link/parcel","T1","This causes the promised delivery."),
+        (2,"artifact/shared","T1","This causes the promised delivery."),
+        (2,"artifact/shared","T2","This causes the promised delivery."),
+        (2,"check/B","T2","This causes the promised delivery.")]);
     assert_eq!(operational["basis"]["map_digest"], fixture.map["input_digest"]);
     assert_eq!(operational["basis"]["publications"], fixture.admission["receipt"]["request"]["contract"]["plans"]);
     assert_eq!(operational["admissions"], json!([fixture.admission["receipt"]]));
@@ -477,12 +477,12 @@ fn phase13_report_derives_truth_status_from_every_item() {
     assert_eq!(read["current"]["attempt"], Value::Null);
     assert_eq!(read["current"]["verified_at"], Value::Null);
     assert_eq!(read["current"]["observed"]["source"]["head"], git_value(project, &["rev-parse", "HEAD"]));
-    assert_eq!(read["truths"], json!([pending("truth/A", A), pending("truth/B", B)]));
+    assert_eq!(read["truths"], json!([pending("T1", A), pending("T2", B)]));
     assert_eq!(read["history"], json!([]));
     assert_eq!(read["legacy"], json!({"summary_document":true,"uat_document":false,"authority":LEGACY}));
     let text = read["report"].as_str().unwrap();
     assert!(text.contains("Current: none - no verification attempt"), "{text}");
-    assert!(text.contains("| truth/A | pending | - |"), "{text}");
+    assert!(text.contains("| T1 | pending | - |"), "{text}");
     assert!(text.contains("Legacy: SUMMARY present, UAT absent - historical classification only, never native evidence."), "{text}");
     assert_eq!(tree(project), before, "readback writes nothing");
     // An open attempt with finished runs is still not a verification.
@@ -490,7 +490,7 @@ fn phase13_report_derives_truth_status_from_every_item() {
     let read = report(project);
     assert_eq!(read["current"]["applicable"], false);
     assert_eq!(read["current"]["reason"], "no complete verification on the current basis");
-    assert_eq!(read["truths"], json!([pending("truth/A", A), pending("truth/B", B)]));
+    assert_eq!(read["truths"], json!([pending("T1", A), pending("T2", B)]));
     assert_eq!(read["history"][0]["attempt"], first["id"]);
     assert_eq!(read["history"][0]["applicability"], "open");
     assert_eq!(read["history"][0]["reason"], "attempt has no complete patch");
@@ -505,9 +505,9 @@ fn phase13_report_derives_truth_status_from_every_item() {
     assert_eq!(read["current"]["verified_at"]["source"]["head"], git_value(project, &["rev-parse", "HEAD"]));
     assert_eq!(read["current"]["verified_at"]["source"]["tree"], git_value(project, &["rev-parse", "HEAD^{tree}"]));
     assert_eq!(read["current"]["verified_at"]["publications"], fixture.admission["receipt"]["request"]["contract"]["plans"]);
-    let met_a = row(map, "all-accepted", "truth/A", A, "met", MET, &[
+    let met_a = row(map, "all-accepted", "T1", A, "met", MET, &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]);
-    let met_b = row(map, "all-accepted", "truth/B", B, "met", MET, &[
+    let met_b = row(map, "all-accepted", "T2", B, "met", MET, &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "accepted", SEEN)]);
     assert_eq!(read["truths"], json!([met_a, met_b]));
     assert_eq!(read["history"][0]["applicability"], "current");
@@ -516,8 +516,8 @@ fn phase13_report_derives_truth_status_from_every_item() {
     assert_eq!(read["history"][0]["truths"], read["truths"]);
     let text = read["report"].as_str().unwrap();
     assert!(text.contains(&format!("Current: attempt {}, patch all-accepted-patch", first["id"].as_str().unwrap())), "{text}");
-    assert!(text.contains("| truth/A | met | artifact/shared accepted; check/A accepted; link/parcel accepted |"), "{text}");
-    assert!(text.contains("| truth/B | met | artifact/shared accepted; check/B accepted |"), "{text}");
+    assert!(text.contains("| T1 | met | artifact/shared accepted; check/A accepted; link/parcel accepted |"), "{text}");
+    assert!(text.contains("| T2 | met | artifact/shared accepted; check/B accepted |"), "{text}");
     // Restart: the store is reopened and a fresh server derives the same rows.
     let stored = reopened(project).snapshot;
     assert_eq!(report(project), read);
@@ -528,10 +528,10 @@ fn phase13_report_derives_truth_status_from_every_item() {
     let (second, _) = submitted(project, "rejected-artifact", &[("artifact/shared", "rejected", "The destination is an empty placeholder directory.")]);
     let read = report(project);
     assert_eq!(read["current"]["attempt"], second["id"]);
-    let unmet_a = row(map, "rejected-artifact", "truth/A", A, "unmet", "rejected or not seen: artifact/shared", &[
+    let unmet_a = row(map, "rejected-artifact", "T1", A, "unmet", "rejected or not seen: artifact/shared", &[
         ("artifact/shared", "artifact", "rejected", "The destination is an empty placeholder directory."),
         ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]);
-    let unmet_b = row(map, "rejected-artifact", "truth/B", B, "unmet", "rejected or not seen: artifact/shared", &[
+    let unmet_b = row(map, "rejected-artifact", "T2", B, "unmet", "rejected or not seen: artifact/shared", &[
         ("artifact/shared", "artifact", "rejected", "The destination is an empty placeholder directory."),
         ("check/B", "check", "accepted", SEEN)]);
     assert_eq!(read["truths"], json!([unmet_a, unmet_b]));
@@ -540,27 +540,27 @@ fn phase13_report_derives_truth_status_from_every_item() {
     assert_eq!(read["history"][0]["truths"], json!([met_a, met_b]), "historical judgments keep their rows");
     assert_eq!(read["history"][1]["applicability"], "current");
     let text = read["report"].as_str().unwrap();
-    assert!(text.contains("| truth/A | unmet | artifact/shared rejected; check/A accepted; link/parcel accepted |"), "{text}");
-    assert!(text.contains("| truth/B | unmet | artifact/shared rejected; check/B accepted |"), "{text}");
-    assert!(text.contains(&format!("- attempt {}: historical - superseded by attempt {}; truth/A met; truth/B met",
+    assert!(text.contains("| T1 | unmet | artifact/shared rejected; check/A accepted; link/parcel accepted |"), "{text}");
+    assert!(text.contains("| T2 | unmet | artifact/shared rejected; check/B accepted |"), "{text}");
+    assert!(text.contains(&format!("- attempt {}: historical - superseded by attempt {}; T1 met; T2 met",
         first["id"].as_str().unwrap(), second["id"].as_str().unwrap())), "{text}");
     // A rejected link named by one truth leaves the other truth met.
     let (third, _) = submitted(project, "rejected-link", &[("link/parcel", "rejected", "The sender never hands the recipient a parcel.")]);
     let read = report(project);
     assert_eq!(read["current"]["attempt"], third["id"]);
     assert_eq!(read["truths"], json!([
-        row(map, "rejected-link", "truth/A", A, "unmet", "rejected or not seen: link/parcel", &[
+        row(map, "rejected-link", "T1", A, "unmet", "rejected or not seen: link/parcel", &[
             ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN),
             ("link/parcel", "link", "rejected", "The sender never hands the recipient a parcel.")]),
-        row(map, "rejected-link", "truth/B", B, "met", MET, &[
+        row(map, "rejected-link", "T2", B, "met", MET, &[
             ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "accepted", SEEN)])]));
     // Explicit not_seen is complete and negative.
     let (fourth, _) = submitted(project, "not-seen", &[("check/B", "not_seen", "tests/b.py could not be opened during inspection.")]);
     let read = report(project);
     assert_eq!(read["current"]["attempt"], fourth["id"]);
-    let not_seen_a = row(map, "not-seen", "truth/A", A, "met", MET, &[
+    let not_seen_a = row(map, "not-seen", "T1", A, "met", MET, &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]);
-    let not_seen_b = row(map, "not-seen", "truth/B", B, "unmet", "rejected or not seen: check/B", &[
+    let not_seen_b = row(map, "not-seen", "T2", B, "unmet", "rejected or not seen: check/B", &[
         ("artifact/shared", "artifact", "accepted", SEEN),
         ("check/B", "check", "not_seen", "tests/b.py could not be opened during inspection.")]);
     assert_eq!(read["truths"], json!([not_seen_a, not_seen_b]));
@@ -581,7 +581,7 @@ fn phase13_report_derives_truth_status_from_every_item() {
     assert_eq!(read["current"]["attempt"], Value::Null);
     assert_eq!(read["current"]["reason"], "no complete verification on the current basis");
     assert_eq!(read["current"]["observed"]["source"]["head"], new_head);
-    assert_eq!(read["truths"], json!([pending("truth/A", A), pending("truth/B", B)]));
+    assert_eq!(read["truths"], json!([pending("T1", A), pending("T2", B)]));
     for (index, attempt) in [&first, &second, &third, &fourth].into_iter().enumerate() {
         assert_eq!(read["history"][index]["attempt"], attempt["id"]);
         assert_eq!(read["history"][index]["applicability"], "historical");
@@ -601,7 +601,7 @@ fn phase13_report_derives_truth_status_from_every_item() {
     assert_eq!(read["current"]["reason"], "current verification inputs unavailable");
     assert_eq!(read["current"]["unavailable"]["rule"], "verification-source");
     assert_eq!(read["current"]["observed"], Value::Null);
-    assert_eq!(read["truths"], json!([pending("truth/A", A), pending("truth/B", B)]));
+    assert_eq!(read["truths"], json!([pending("T1", A), pending("T2", B)]));
     assert_eq!(read["history"][3]["reason"], "current verification inputs unavailable");
     std::fs::write(project.join("src/a.py"), "def answer():\n    return 7\n").unwrap();
     // A fresh applicable attempt restores the current rows; the rejected
@@ -611,9 +611,9 @@ fn phase13_report_derives_truth_status_from_every_item() {
     assert_eq!(read["current"]["attempt"], fifth["id"]);
     assert_eq!(read["current"]["verified_at"]["source"]["head"], new_head);
     assert_eq!(read["truths"], json!([
-        row(map, "fresh", "truth/A", A, "met", MET, &[
+        row(map, "fresh", "T1", A, "met", MET, &[
             ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]),
-        row(map, "fresh", "truth/B", B, "met", MET, &[
+        row(map, "fresh", "T2", B, "met", MET, &[
             ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "accepted", SEEN)])]));
     assert_eq!(read["history"].as_array().unwrap().len(), 5);
     assert_eq!(read["history"][3]["applicability"], "historical");
@@ -631,21 +631,21 @@ fn phase13_report_derives_truth_status_from_every_item() {
     let generic = Completed::with_observation();
     let host = generic.project();
     let map = &generic.map;
-    let observed = |observed: &str| row(map, "seen", "truth/B", B, "concerns", CONCERNS, &[
+    let observed = |observed: &str| row(map, "seen", "T2", B, "concerns", CONCERNS, &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "accepted", SEEN),
         ("observation/host", "observation", "accepted", observed)]);
     submitted(host, "seen", &[("observation/host", "accepted", "Seen by Fixture Owner on 2026-09-11 on the real host.")]);
     let read = report(host);
     assert_eq!(read["truths"], json!([
-        row(map, "seen", "truth/A", A, "met", MET, &[
+        row(map, "seen", "T1", A, "met", MET, &[
             ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]),
         observed("Seen by Fixture Owner on 2026-09-11 on the real host.")]));
     let text = read["report"].as_str().unwrap();
-    assert!(text.contains("| truth/B | concerns | artifact/shared accepted; check/B accepted; observation/host accepted |"), "{text}");
+    assert!(text.contains("| T2 | concerns | artifact/shared accepted; check/B accepted; observation/host accepted |"), "{text}");
     submitted(host, "unseen", &[("observation/host", "not_seen", "No host episode was available to the inspector.")]);
     let read = report(host);
     assert_eq!(read["truths"][0]["status"], "met");
-    assert_eq!(read["truths"][1], row(map, "unseen", "truth/B", B, "unmet", "rejected or not seen: observation/host", &[
+    assert_eq!(read["truths"][1], row(map, "unseen", "T2", B, "unmet", "rejected or not seen: observation/host", &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "accepted", SEEN),
         ("observation/host", "observation", "not_seen", "No host episode was available to the inspector.")]));
     submitted(host, "refuted", &[("observation/host", "rejected", "The host showed no delivery.")]);
@@ -679,15 +679,15 @@ fn phase13_owner_waiver_is_distinct_from_met() {
     let rejected = "tests/b.py asserts nothing about the second parcel.";
     let (reviewed, _) = submitted(project, "reviewed", &[("check/B", "rejected", rejected)]);
     let basis = reviewed["inputs"]["basis"].clone();
-    let met_a = row(map, "reviewed", "truth/A", A, "met", MET, &[
+    let met_a = row(map, "reviewed", "T1", A, "met", MET, &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]);
-    let unmet_b = row(map, "reviewed", "truth/B", B, "unmet", "rejected or not seen: check/B", &[
+    let unmet_b = row(map, "reviewed", "T2", B, "unmet", "rejected or not seen: check/B", &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "rejected", rejected)]);
     let read = report(project);
     assert_eq!(read["truths"], json!([met_a, unmet_b]));
     assert_eq!(read["counts"], json!({"met":1,"concerns":0,"unmet":1,"pending":0,"waived":0}));
     assert_eq!(read["waivers"], json!([]));
-    let valid = waiver(&basis, "truth/B", 1, "The second parcel ships in phase 14.");
+    let valid = waiver(&basis, "T2", 1, "The second parcel ships in phase 14.");
     let before = tree(project);
     let stored = reopened(project).snapshot;
     // Only exact owner approval waives. Each variant is refused with the
@@ -710,9 +710,9 @@ fn phase13_owner_waiver_is_distinct_from_met() {
         blank[field] = json!("  ");
         variants.push((waive(&format!("blank-{field}"), &blank), "verification-waiver", slot));
     }
-    variants.push((waive("stale-version", &waiver(&basis, "truth/B", 2, "Version two never existed.")), "verification-truth", "submission.truth"));
+    variants.push((waive("stale-version", &waiver(&basis, "T2", 2, "Version two never existed.")), "verification-truth", "submission.truth"));
     variants.push((waive("unknown-truth", &waiver(&basis, "truth/C", 1, "No such promise.")), "verification-truth", "submission.truth"));
-    variants.push((waive("met-truth", &waiver(&basis, "truth/A", 1, "Already met; nothing to waive.")), "verification-truth", "submission.truth"));
+    variants.push((waive("met-truth", &waiver(&basis, "T1", 1, "Already met; nothing to waive.")), "verification-truth", "submission.truth"));
     let mut stale = valid.clone();
     stale["basis"]["source"]["head"] = json!("0000000000000000000000000000000000000000");
     variants.push((waive("stale-source", &stale), "verification-basis", "basis.source"));
@@ -768,13 +768,13 @@ fn phase13_owner_waiver_is_distinct_from_met() {
     assert_eq!(read["waivers"].as_array().unwrap().len(), 1);
     assert_eq!(read["waivers"][0]["id"], record["id"]);
     assert_eq!(read["waivers"][0]["effective"], true);
-    assert_eq!(read["waivers"][0]["truth"], json!({"id":"truth/B","version":1}));
+    assert_eq!(read["waivers"][0]["truth"], json!({"id":"T2","version":1}));
     assert_eq!(read["advice"], Value::Null);
     assert_eq!(read["history"][0]["truths"], json!([met_a, unmet_b]), "the derived judgment is kept as derived");
     let text = read["report"].as_str().unwrap();
-    assert!(text.contains("| truth/A | met | artifact/shared accepted; check/A accepted; link/parcel accepted |"), "{text}");
-    assert!(text.contains("| truth/B | waived (derived unmet) | artifact/shared accepted; check/B rejected |"), "{text}");
-    assert!(text.contains("Waived: truth/B by Fixture Owner at 2026-09-11T15:00:00Z - The second parcel ships in phase 14."), "{text}");
+    assert!(text.contains("| T1 | met | artifact/shared accepted; check/A accepted; link/parcel accepted |"), "{text}");
+    assert!(text.contains("| T2 | waived (derived unmet) | artifact/shared accepted; check/B rejected |"), "{text}");
+    assert!(text.contains("Waived: T2 by Fixture Owner at 2026-09-11T15:00:00Z - The second parcel ships in phase 14."), "{text}");
     assert!(text.contains("Counts: met 1, concerns 0, unmet 0, pending 0, waived 1"), "{text}");
     // Restart and replay: one immutable record, the same answer, no new bytes.
     let saved = reopened(project).snapshot;
@@ -798,9 +798,9 @@ fn phase13_owner_waiver_is_distinct_from_met() {
     // the new judgment is derived from its own verdicts and the retained
     // waiver needs explicit owner reaffirmation against the new evidence.
     let (again, _) = submitted(project, "again", &[("check/B", "rejected", rejected)]);
-    let unmet_b_again = row(map, "again", "truth/B", B, "unmet", "rejected or not seen: check/B", &[
+    let unmet_b_again = row(map, "again", "T2", B, "unmet", "rejected or not seen: check/B", &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "rejected", rejected)]);
-    let met_a_again = row(map, "again", "truth/A", A, "met", MET, &[
+    let met_a_again = row(map, "again", "T1", A, "met", MET, &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]);
     let read = report(project);
     assert_eq!(read["current"]["attempt"], again["id"]);
@@ -811,7 +811,7 @@ fn phase13_owner_waiver_is_distinct_from_met() {
     assert_eq!(read["waivers"][0]["reason"], format!("reviewed attempt {} is not the current attempt {}", reviewed["id"].as_str().unwrap(), again["id"].as_str().unwrap()));
     assert_eq!(reopened(project).snapshot.data["verification"]["waivers"], json!([record]));
     // Reaffirmation is a separate owner event naming the retained waiver.
-    let mut reaffirm = waiver(&again["inputs"]["basis"], "truth/B", 1, "Still shipping in phase 14.");
+    let mut reaffirm = waiver(&again["inputs"]["basis"], "T2", 1, "Still shipping in phase 14.");
     reaffirm["supersedes"] = record["id"].clone();
     let reaffirmed = apply(project, waive("reaffirm-b", &reaffirm));
     assert_eq!(reaffirmed["status"], "ok", "{reaffirmed}");
@@ -844,7 +844,7 @@ fn phase13_owner_waiver_is_distinct_from_met() {
     let (both, _) = submitted(project, "both", &[("check/A", "rejected", "tests/a.py asserts nothing."), ("check/B", "rejected", rejected)]);
     let read = report(project);
     assert_eq!(read["counts"], json!({"met":0,"concerns":0,"unmet":2,"pending":0,"waived":0}));
-    for (id, truth) in [("waive-a-both", "truth/A"), ("waive-b-both", "truth/B")] {
+    for (id, truth) in [("waive-a-both", "T1"), ("waive-b-both", "T2")] {
         let answer = apply(project, waive(id, &waiver(&both["inputs"]["basis"], truth, 1, "Deferred to phase 14.")));
         assert_eq!(answer["status"], "ok", "{answer}");
     }
@@ -934,9 +934,9 @@ fn phase13_incomplete_verification_cannot_complete_phase() {
     // imported human failure that is also unfinished.
     let (partial, _) = verify(project, "partial", &[("check/B", "rejected", "tests/b.py proves nothing about the second parcel.")]);
     let answer = refused(completion(&root, "partial", &partial["id"], &basis), "verification-incomplete", "truths", HISTORICAL_UAT);
-    assert_eq!(answer["id"], "truth/B");
+    assert_eq!(answer["id"], "T2");
     assert_eq!(answer["details"]["requested"]["unfinished"], json!([
-        {"kind":"truth","id":"truth/B","version":1,"status":"unmet","reason":"rejected or not seen: check/B","items":[{"id":"check/B","verdict":"rejected"}]},
+        {"kind":"truth","id":"T2","version":1,"status":"unmet","reason":"rejected or not seen: check/B","items":[{"id":"check/B","verdict":"rejected"}]},
         {"kind":"human","id":"1","status":"fail","source":"imported","first_pass":"fail"}]));
     assert_eq!(answer["details"]["current"]["counts"], json!({"met":1,"concerns":0,"unmet":1,"pending":0,"waived":0}));
     // A real repair commit makes that verification historical.
@@ -994,8 +994,8 @@ fn phase13_incomplete_verification_cannot_complete_phase() {
     assert_eq!(record["label"], "complete");
     assert_eq!(record["attempt"], accepted["id"]);
     assert_eq!(record["basis"], basis);
-    assert_eq!(record["truths"], json!([{"id":"truth/A","version":1,"status":"met","derived":"met","waiver":null},
-        {"id":"truth/B","version":1,"status":"met","derived":"met","waiver":null}]));
+    assert_eq!(record["truths"], json!([{"id":"T1","version":1,"status":"met","derived":"met","waiver":null},
+        {"id":"T2","version":1,"status":"met","derived":"met","waiver":null}]));
     assert_eq!(record["humans"], json!([{"id":"1","status":"pass","first_pass":"fail","source":"native"},
         {"id":"2","status":"pass","first_pass":"pass","source":"imported"}]));
     assert_eq!(record["projections"]["requirements"]["rows"], json!(["T1"]));
@@ -1036,7 +1036,7 @@ fn phase13_incomplete_verification_cannot_complete_phase() {
     // A later publication changes the native inputs: the completion is no
     // longer applicable, the report says which input, and the lifecycle
     // names the exact disagreement with the checked box.
-    let gap = proposal(project, "gap", &[(None, attached(vec![artifact("artifact/gap", &["truth/A"])]))]);
+    let gap = proposal(project, "gap", &[(None, attached(vec![artifact("artifact/gap", &["T1"])]))]);
     publish(project, &gap);
     let read = report(project);
     assert_eq!(read["completion"]["status"], "incomplete");
@@ -1364,8 +1364,8 @@ fn phase13_review_surface_selects_target_and_intent() {
 // Actual requirement inputs for the audit: T1 and T3 are assigned to phase 13,
 // T5 to a phase the roadmap never declares, T6 to another declared phase; T2
 // and T4 are active without a row (publication seeds T2 because plan 2 names
-// it, T4 stays an orphan); T7 exists only in plan 2's requirements.
-const REQUIREMENTS_T7: &str = "# Requirements\n\n## Active\n\n- **T1**: the first parcel is delivered\n- **T2**: the second parcel is delivered\n- **T3**: the recipient signs\n- **T4**: the sender is notified\n- **T5**: the parcel is insured\n- **T6**: the depot is staffed\n\n## Traceability\n\n| Requirement | Phase | Status |\n|-------------|-------|--------|\n| T1 | Phase 13 | Pending |\n| T3 | Phase 13 | Pending |\n| T5 | Phase 42 | Pending |\n| T6 | Phase 28 | Pending |\n";
+// it, while T4 stays an orphan).
+const REQUIREMENTS_AUDIT: &str = "# Requirements\n\n## Active\n\n- **T1**: the first parcel is delivered\n- **T2**: the second parcel is delivered\n- **T3**: the recipient signs\n- **T4**: the sender is notified\n- **T5**: the parcel is insured\n- **T6**: the depot is staffed\n\n## Traceability\n\n| Requirement | Phase | Status |\n|-------------|-------|--------|\n| T1 | Phase 13 | Pending |\n| T3 | Phase 13 | Pending |\n| T5 | Phase 42 | Pending |\n| T6 | Phase 28 | Pending |\n";
 const ASSOCIATION: &str = "a requirement assigned to phase 13 is joined to every current truth of phase 13 through the phase's typed map; no direct requirement-to-truth edge is authored or inferred";
 const NO_VERDICT: &str = "no complete verification on the current basis";
 const VERIFY_NEXT: &str = "run the verifier for phase 13 and submit one complete item patch";
@@ -1402,15 +1402,15 @@ fn audited(row: Value, origins: &[(&str, &[u64])]) -> Value {
 #[test]
 fn phase13_audit_reports_broken_verification_traces() {
     let mut fixture = Completed::published_shaped(false, |project| {
-        std::fs::write(project.join(".planning/REQUIREMENTS.md"), REQUIREMENTS_T7).unwrap();
+        std::fs::write(project.join(".planning/REQUIREMENTS.md"), REQUIREMENTS_AUDIT).unwrap();
     }, |index, entry| {
-        entry["content"]["requirements"] = if index == 0 { json!(["T1"]) } else { json!(["T2", "T7"]) };
+        entry["content"]["requirements"] = if index == 0 { json!(["T1"]) } else { json!(["T2"]) };
     });
     fixture.execute();
     let project = fixture.project();
     let root = project.join(".planning");
     let map = &fixture.map;
-    let seeded = format!("{REQUIREMENTS_T7}| T2 | Phase 13 | Pending |\n");
+    let seeded = format!("{REQUIREMENTS_AUDIT}| T2 | Phase 13 | Pending |\n");
     assert_eq!(std::fs::read_to_string(root.join("REQUIREMENTS.md")).unwrap(), seeded);
     let roadmap = std::fs::read_to_string(root.join("ROADMAP.md")).unwrap();
     let publications = query(project, json!({"operation":"plan-read","phase":"13"}))["native"]["publications"].clone();
@@ -1425,7 +1425,7 @@ fn phase13_audit_reports_broken_verification_traces() {
         edge("requirement->phase", "present", json!("Phase 13")),
         edge("phase->roadmap", "present", json!("ROADMAP.md:2")),
         edge("phase->plan", "present", json!(plans)),
-        json!({"edge":"plan->truths","state":"present","scope":"phase-scoped","value":["truth/A","truth/B"]}),
+        json!({"edge":"plan->truths","state":"present","scope":"phase-scoped","value":["T1","T2"]}),
         edge("truth->evidence", "present", json!(["artifact/shared","check/A","check/B","link/parcel"]))];
     let t3 = json!({"requirement":"T3","scope":"phase",
         "origins":{"active":{"path":"REQUIREMENTS.md","line":7},"row":{"path":"REQUIREMENTS.md","line":17,"phase":"Phase 13","status":"Pending"},
@@ -1442,11 +1442,6 @@ fn phase13_audit_reports_broken_verification_traces() {
         "origins":{"active":{"path":"REQUIREMENTS.md","line":9},"row":{"path":"REQUIREMENTS.md","line":18,"phase":"Phase 42","status":"Pending"},"roadmap":null,"plans":[]},
         "edges":[edge("requirement->phase","present",json!("Phase 42")),edge("phase->roadmap","missing",Value::Null)],
         "truths":[],"breaks":[broken("phase->roadmap","ROADMAP.md declares no phase 42","declare Phase 42 in ROADMAP.md, or reassign T5's trace row")],
-        "outcome":"broken"});
-    let t7 = json!({"requirement":"T7","scope":"phase",
-        "origins":{"active":null,"row":null,"roadmap":{"path":"ROADMAP.md","line":2,"checked":false},"plans":[publication(2)]},
-        "edges":[edge("plan->requirement","missing",json!([2]))],
-        "truths":[],"breaks":[broken("plan->requirement","plan 2 names T7, which REQUIREMENTS.md does not declare under ## Active","declare T7 under ## Active in REQUIREMENTS.md, or remove it from plan 2")],
         "outcome":"broken"});
     let out_of_scope = json!([{"requirement":"T6","phase":"Phase 28","line":19,"reason":"assigned to another declared phase; audit that phase"}]);
     // Execution is complete and nothing is verified: the structural edges
@@ -1468,14 +1463,14 @@ fn phase13_audit_reports_broken_verification_traces() {
         {"line":20,"id":"T2","phase":"Phase 13","status":"Pending"}]));
     assert_eq!(read["sources"]["roadmap"], json!({"path":"ROADMAP.md","available":true,"digest":cadence::store::model::digest(roadmap.as_bytes()),
         "phases":[{"phase":"13","line":2,"checked":false},{"phase":"28","line":3,"checked":false}]}));
-    assert_eq!(read["sources"]["context"], json!({"available":true,"truths":[{"id":"truth/A","version":1},{"id":"truth/B","version":1}]}));
+    assert_eq!(read["sources"]["context"], json!({"available":true,"truths":[{"id":"T1","version":1},{"id":"T2","version":1}]}));
     assert_eq!(read["sources"]["publications"], json!([
         {"plan":1,"revision":publications["1"]["revision"],"map_revision":publications["1"]["map_revision"],"requirements":["T1"]},
-        {"plan":2,"revision":publications["2"]["revision"],"map_revision":publications["2"]["map_revision"],"requirements":["T2","T7"]}]));
+        {"plan":2,"revision":publications["2"]["revision"],"map_revision":publications["2"]["map_revision"],"requirements":["T2"]}]));
     assert_eq!(read["sources"]["map"], json!({"coherence":"consistent","input_digest":map["input_digest"],"superseded":[]}));
     assert_eq!(read["sources"]["verification"], json!({"applicable":false,"attempt":null,"patch":null,"reason":"no verification attempt","unavailable":null,"waivers":[],"history":[]}));
-    let pending_a = pending("truth/A", A);
-    let pending_b = pending("truth/B", B);
+    let pending_a = pending("T1", A);
+    let pending_b = pending("T2", B);
     let mut edges = structural(vec![1]);
     edges.push(edge("evidence->verdict", "missing", Value::Null));
     let t1 = json!({"requirement":"T1","scope":"phase","origins":origins(&[1], 16, 5),"edges":edges,
@@ -1484,9 +1479,9 @@ fn phase13_audit_reports_broken_verification_traces() {
     t2["requirement"] = json!("T2");
     t2["origins"] = origins(&[2], 20, 6);
     t2["edges"][2]["value"] = json!([2]);
-    assert_eq!(read["traces"], json!([t1, t2, t3, t4, t5, t7]));
+    assert_eq!(read["traces"], json!([t1, t2, t3, t4, t5]));
     assert_eq!(read["out_of_scope"], out_of_scope);
-    assert_eq!(read["counts"], json!({"met":0,"waived":0,"concerns":0,"unmet":0,"pending":2,"broken":4,"out_of_scope":1}));
+    assert_eq!(read["counts"], json!({"met":0,"waived":0,"concerns":0,"unmet":0,"pending":2,"broken":3,"out_of_scope":1}));
     let limits = read["limits"].as_array().unwrap();
     assert!(limits.iter().any(|l| l == "phase-scoped: the requirement-to-truth association is the phase's whole truth set, never a semantic edge"), "{limits:?}");
     assert!(limits.iter().any(|l| l == "read-only: no status, map, UAT or store record is written or repaired"), "{limits:?}");
@@ -1518,9 +1513,9 @@ fn phase13_audit_reports_broken_verification_traces() {
     assert_eq!(read["sources"]["verification"]["attempt"], judged["id"]);
     assert_eq!(read["sources"]["verification"]["patch"], "audit-rejected-patch");
     let shared: &[(&str, &[u64])] = &[("artifact/shared", &[1, 2]), ("check/A", &[1]), ("check/B", &[2]), ("link/parcel", &[1])];
-    let unmet_a = audited(row(map, "audit-rejected", "truth/A", A, "unmet", "rejected or not seen: check/A", &[
+    let unmet_a = audited(row(map, "audit-rejected", "T1", A, "unmet", "rejected or not seen: check/A", &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "rejected", rejected), ("link/parcel", "link", "accepted", SEEN)]), shared);
-    let met_b = audited(row(map, "audit-rejected", "truth/B", B, "met", MET, &[
+    let met_b = audited(row(map, "audit-rejected", "T2", B, "met", MET, &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "accepted", SEEN)]), shared);
     let mut edges = structural(vec![1]);
     edges.push(edge("evidence->verdict", "present", judged["id"].clone()));
@@ -1530,16 +1525,16 @@ fn phase13_audit_reports_broken_verification_traces() {
     t2["requirement"] = json!("T2");
     t2["origins"] = origins(&[2], 20, 6);
     t2["edges"][2]["value"] = json!([2]);
-    assert_eq!(read["traces"], json!([t1, t2, t3, t4, t5, t7]));
-    assert_eq!(read["counts"], json!({"met":0,"waived":0,"concerns":0,"unmet":2,"pending":0,"broken":4,"out_of_scope":1}));
-    assert!(read["report"].as_str().unwrap().contains("| T1 | unmet | - | truth/A unmet (check/A rejected); truth/B met |"), "{}", read["report"]);
+    assert_eq!(read["traces"], json!([t1, t2, t3, t4, t5]));
+    assert_eq!(read["counts"], json!({"met":0,"waived":0,"concerns":0,"unmet":2,"pending":0,"broken":3,"out_of_scope":1}));
+    assert!(read["report"].as_str().unwrap().contains("| T1 | unmet | - | T1 unmet (check/A rejected); T2 met |"), "{}", read["report"]);
     // An owner waiver shows beside the derived unmet judgment, never as met.
-    let waiver_a = waiver(&judged["inputs"]["basis"], "truth/A", 1, "The first parcel ships in phase 14.");
+    let waiver_a = waiver(&judged["inputs"]["basis"], "T1", 1, "The first parcel ships in phase 14.");
     let waived = apply(project, waive("audit-waive", &waiver_a));
     assert_eq!(waived["status"], "ok", "{waived}");
     let record = waived["receipt"]["record"].clone();
     let read = audit(project, None);
-    assert_eq!(read["sources"]["verification"]["waivers"], json!([{"id":record["id"],"truth":{"id":"truth/A","version":1},"effective":true,"reason":"effective against the current judgment"}]));
+    assert_eq!(read["sources"]["verification"]["waivers"], json!([{"id":record["id"],"truth":{"id":"T1","version":1},"effective":true,"reason":"effective against the current judgment"}]));
     let waived_a = {
         let mut row = read["traces"][0]["truths"][0].clone();
         assert_eq!(row["status"], "waived");
@@ -1551,33 +1546,33 @@ fn phase13_audit_reports_broken_verification_traces() {
     };
     assert_eq!(read["traces"][0]["outcome"], "waived");
     assert_eq!(read["traces"][1]["outcome"], "waived");
-    assert_eq!(read["counts"], json!({"met":0,"waived":2,"concerns":0,"unmet":0,"pending":0,"broken":4,"out_of_scope":1}));
+    assert_eq!(read["counts"], json!({"met":0,"waived":2,"concerns":0,"unmet":0,"pending":0,"broken":3,"out_of_scope":1}));
     assert_eq!(waived_a["status"], "waived");
-    assert!(read["report"].as_str().unwrap().contains("| T1 | waived | - | truth/A waived (derived unmet: check/A rejected); truth/B met |"), "{}", read["report"]);
+    assert!(read["report"].as_str().unwrap().contains("| T1 | waived | - | T1 waived (derived unmet: check/A rejected); T2 met |"), "{}", read["report"]);
     // The met control: a fresh complete verification on independent runs.
     let (accepted, _) = submitted(project, "audit-met", &[]);
     let read = audit(project, None);
     assert_eq!(read["sources"]["verification"]["attempt"], accepted["id"]);
     assert_eq!(read["sources"]["verification"]["waivers"][0]["effective"], false);
-    let met_a = audited(row(map, "audit-met", "truth/A", A, "met", MET, &[
+    let met_a = audited(row(map, "audit-met", "T1", A, "met", MET, &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]), shared);
-    let met_b = audited(row(map, "audit-met", "truth/B", B, "met", MET, &[
+    let met_b = audited(row(map, "audit-met", "T2", B, "met", MET, &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/B", "check", "accepted", SEEN)]), shared);
     assert_eq!(read["traces"][0]["truths"], json!([met_a, met_b]));
     assert_eq!(read["traces"][0]["outcome"], "met");
     assert_eq!(read["traces"][1]["outcome"], "met");
     assert_eq!(read["traces"][0]["edges"][5], edge("evidence->verdict", "present", accepted["id"].clone()));
-    assert_eq!(read["counts"], json!({"met":2,"waived":0,"concerns":0,"unmet":0,"pending":0,"broken":4,"out_of_scope":1}));
-    assert_eq!(&read["traces"].as_array().unwrap()[2..], &[t3.clone(), t4.clone(), t5.clone(), t7.clone()], "breaks never disappear behind a met phase");
+    assert_eq!(read["counts"], json!({"met":2,"waived":0,"concerns":0,"unmet":0,"pending":0,"broken":3,"out_of_scope":1}));
+    assert_eq!(&read["traces"].as_array().unwrap()[2..], &[t3.clone(), t4.clone(), t5.clone()], "breaks never disappear behind a met phase");
     assert_eq!(read["sources"]["verification"]["history"], json!([
         {"attempt":judged["id"],"applicability":"historical","reason":format!("superseded by attempt {}", accepted["id"].as_str().unwrap())},
         {"attempt":accepted["id"],"applicability":"current","reason":"complete patch on the current basis"}]));
     // A superseded map: plan 3 is published with one map and replaced with
     // another. The old revision is visible as superseded, the met judgment is
     // historical against the changed inputs, and nothing counts as current met.
-    let gap = proposal(project, "gap-old", &[(None, attached(vec![artifact("artifact/gap-old", &["truth/A"])]))]);
+    let gap = proposal(project, "gap-old", &[(None, attached(vec![artifact("artifact/gap-old", &["T1"])]))]);
     publish(project, &gap);
-    let replaced = proposal(project, "gap-new", &[(Some(3), attached(vec![artifact("artifact/gap-new", &["truth/A"])]))]);
+    let replaced = proposal(project, "gap-new", &[(Some(3), attached(vec![artifact("artifact/gap-new", &["T1"])]))]);
     publish(project, &replaced);
     let current = query(project, json!({"operation":"evidence-read","phase":13}));
     let superseded = current["history"].as_array().unwrap().iter().find(|h| h["status"] == "superseded").unwrap();
@@ -1597,10 +1592,10 @@ fn phase13_audit_reports_broken_verification_traces() {
     assert_eq!(t1["edges"][2], edge("phase->plan", "present", json!([1, 3])));
     assert_eq!(t1["edges"][4], edge("truth->evidence", "present", json!(["artifact/gap-new","artifact/shared","check/A","check/B","link/parcel"])));
     assert_eq!(t1["edges"][5], edge("evidence->verdict", "missing", Value::Null));
-    assert_eq!(t1["truths"], json!([pending("truth/A", A), pending("truth/B", B)]));
+    assert_eq!(t1["truths"], json!([pending("T1", A), pending("T2", B)]));
     assert_eq!(t1["breaks"], json!([broken("evidence->verdict", "current verification inputs unavailable: admission-plan-set", "admit the current plan set (execution-extend) and verify phase 13 again")]));
     assert_eq!(t1["outcome"], "pending");
-    assert_eq!(read["counts"], json!({"met":0,"waived":0,"concerns":0,"unmet":0,"pending":2,"broken":4,"out_of_scope":1}));
+    assert_eq!(read["counts"], json!({"met":0,"waived":0,"concerns":0,"unmet":0,"pending":2,"broken":3,"out_of_scope":1}));
     assert!(!serde_json::to_string(&read["traces"]).unwrap().contains("gap-old"), "a superseded item is not current evidence");
     // Nothing was written by any audit: the documents the owner authored are
     // byte-identical, no UAT.md appeared, and the store holds only what the
