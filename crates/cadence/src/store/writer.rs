@@ -352,10 +352,22 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     }
 
     fn observe(storage: &mut S) -> Result<(View, BTreeMap<String, Observed>)> {
+        let observed = Self::read_files(storage)?;
+        let view = Self::parse(&observed)?;
+        Ok((view, observed))
+    }
+
+    fn read_files(storage: &mut S) -> Result<BTreeMap<String, Observed>> {
         let mut observed = BTreeMap::new();
         for name in [ITEMS, DECISIONS, STATE] {
             observed.insert(name.to_string(), storage.read(name)?);
         }
+        Ok(observed)
+    }
+
+    /// The view of the bytes read. Parsing is the cost of an operation on a
+    /// large store (GH-261), so `execute` parses only bytes it has not seen.
+    fn parse(observed: &BTreeMap<String, Observed>) -> Result<View> {
         #[cfg(test)]
         PARSES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let items_bytes = observed[ITEMS].bytes.as_deref().unwrap_or_default();
@@ -382,14 +394,11 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 "boundary generation exceeds snapshot".into(),
             ));
         }
-        Ok((
-            View {
-                items,
-                decisions,
-                snapshot,
-            },
-            observed,
-        ))
+        Ok(View {
+            items,
+            decisions,
+            snapshot,
+        })
     }
 
     fn execute(&mut self, operation: Operation) -> Result<View> {
@@ -408,8 +417,9 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             self.failed = Some(error.clone());
             return Err(error);
         }
-        let (view, observed) = Self::observe(&mut self.storage)?;
+        let observed = Self::read_files(&mut self.storage)?;
         if observed != self.observed {
+            let view = Self::parse(&observed)?;
             if view.snapshot.generation <= self.view.snapshot.generation
                 || !view.items.starts_with(&self.view.items)
                 || !view.decisions.starts_with(&self.view.decisions)
@@ -2183,8 +2193,9 @@ mod observe_tests {
             assert_eq!(store.request(Operation::ReadVerified).await.unwrap(), again);
             assert_eq!(PARSES.load(Ordering::SeqCst) - before, 0, "the writer re-parsed bytes it had already read");
             // Bytes changed under the writer: the next operation parses once.
-            std::fs::write(temp.path().join(model::ITEMS), b"").unwrap();
-            let _ = store.request(Operation::ReadVerified).await;
+            std::fs::write(temp.path().join(model::DECISIONS), b"{\"not\":\"a decision\"}\n").unwrap();
+            let changed = store.request(Operation::ReadVerified).await;
+            assert!(changed.is_err(), "{changed:?}");
             assert_eq!(PARSES.load(Ordering::SeqCst) - before, 1);
         });
     }
