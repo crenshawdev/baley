@@ -1599,47 +1599,41 @@ fn validate_all<S: Storage>(
     kind: &IntentKind,
     encoding: Encoding,
 ) -> Result<()> {
-    if let IntentKind::VerificationSubmitV1 { claim, root_binding } = kind {
-        if let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
+    if let IntentKind::VerificationSubmitV1 { claim, root_binding } = kind
+        && let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
             "verification claim store binding changed", "verification claim preimage absent")?
-        {
-            cadence::verification::verdicts::reobserve(&previous.data, claim)?;
-        }
+    {
+        cadence::verification::verdicts::reobserve(&previous.data, claim)?;
     }
-    if let IntentKind::VerificationWaiverV1 { claim, root_binding } = kind {
-        if let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
+    if let IntentKind::VerificationWaiverV1 { claim, root_binding } = kind
+        && let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
             "waiver claim store binding changed", "waiver claim preimage absent")?
-        {
-            cadence::verification::waivers::reobserve(&previous.data, claim)?;
-        }
+    {
+        cadence::verification::waivers::reobserve(&previous.data, claim)?;
     }
-    if let IntentKind::VerificationHumanV1 { claim, root_binding } = kind {
-        if previous_on_disk(storage, participants, replay, root_binding,
+    if let IntentKind::VerificationHumanV1 { claim, root_binding } = kind
+        && previous_on_disk(storage, participants, replay, root_binding,
             "human result store binding changed", "human result preimage absent")?.is_some()
-        {
-            cadence::verification::human::reobserve(claim)?;
-        }
+    {
+        cadence::verification::human::reobserve(claim)?;
     }
-    if let IntentKind::VerificationCompleteV1 { claim, root_binding } = kind {
-        if let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
+    if let IntentKind::VerificationCompleteV1 { claim, root_binding } = kind
+        && let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
             "completion store binding changed", "completion preimage absent")?
-        {
-            cadence::verification::completion::reobserve(&previous.data, claim)?;
-        }
+    {
+        cadence::verification::completion::reobserve(&previous.data, claim)?;
     }
-    if let IntentKind::VerificationRunV1 { record, root_binding } = kind {
-        if let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
+    if let IntentKind::VerificationRunV1 { record, root_binding } = kind
+        && let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
             "verification run store binding changed", "verification run preimage absent")?
-        {
-            cadence::verification::runner::reobserve_launch(&previous.data, record)?;
-        }
+    {
+        cadence::verification::runner::reobserve_launch(&previous.data, record)?;
     }
-    if let IntentKind::VerificationV1 { request, root_binding } = kind {
-        if previous_on_disk(storage, participants, replay, root_binding,
+    if let IntentKind::VerificationV1 { request, root_binding } = kind
+        && previous_on_disk(storage, participants, replay, root_binding,
             "verification store binding changed", "verification preimage absent")?.is_some()
-        {
-            cadence::verification::inputs::reobserve_external(&request.root, &request.attempt.inputs, &request.documents)?;
-        }
+    {
+        cadence::verification::inputs::reobserve_external(&request.root, &request.attempt.inputs, &request.documents)?;
     }
     if let IntentKind::NativeTaskV1 {request,root_binding}=kind
         && let cadence::execution::history::Event::Checkpoint {records,..}=&request.event
