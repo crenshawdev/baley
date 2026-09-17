@@ -2043,4 +2043,35 @@ mod intent_encoding_tests {
         assert_eq!(fresh.participants.len(), 1);
         assert_eq!(fresh.participants[0].target, STATE);
     }
+
+    // GH-261: a new journal identifies the prior file by digest rather than
+    // carrying its bytes, while the full-byte wire shape remains recoverable.
+    #[test]
+    fn intent_expected_carries_a_digest_without_bytes_and_legacy_bytes_recover() {
+        let participants = state_only_participants();
+        let old_state = participants[2].expected.bytes.as_deref().unwrap();
+        let mut fresh = Intent::unfiltered(IntentKind::Store, participants.clone());
+        fresh.omit_unchanged();
+        fresh.integrity = fresh.digest().unwrap();
+        let value = serde_json::to_value(&fresh).unwrap();
+        let expected = value["participants"][0]["expected"].as_object().unwrap();
+        assert!(!expected.contains_key("bytes"), "fresh intent retained its preimage: {value}");
+        assert_eq!(expected["digest"], model::digest(old_state));
+
+        let mut legacy = Intent {
+            version: VERSION, kind: IntentKind::Store, participants: participants.clone(),
+            integrity: String::new(), encoding: Encoding::Array,
+        };
+        legacy.integrity = legacy.digest().unwrap();
+        let legacy_bytes = serde_json::to_vec(&legacy).unwrap();
+        let mut files = participants.iter().map(|participant|
+            (participant.target.clone(), participant.expected.clone())).collect::<BTreeMap<_, _>>();
+        files.insert(INTENT.into(), Observed {
+            bytes: Some(legacy_bytes), identity: "1:3:420".into(), directory_identity: "1:1;".into(),
+        });
+        let mut storage = Memory(files);
+        recover(&mut storage, &mut Allow).unwrap();
+        assert_eq!(storage.0[STATE].bytes.as_ref(), Some(&participants[2].bytes));
+        assert!(!storage.0.contains_key(INTENT));
+    }
 }
