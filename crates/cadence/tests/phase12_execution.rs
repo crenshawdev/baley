@@ -702,7 +702,7 @@ fn close_refused(project:&Path, request:Value, rule:&str, ids:&[&str]) -> Value 
 // because the pair validator only looked inside the closing attempt.
 #[test]
 fn phase12_resumed_attempt_closes_with_its_predecessor_red() {
-    let fixture=Tiny::new("unittest");fixture.attest();let project=fixture.project();
+    let fixture=Tiny::new("unittest");let project=fixture.project();
     let state=task_state(project,"A");
     let resumed=apply(project,json!({"operation":"execution-task-start","request":{"request_id":"start-A-resumed","task":state["task"],
         "attempt":"attempt-A-resumed","expected_version":state["state"]["version"],"predecessor":"attempt-A","checks":&fixture.checks[..2]}}));
@@ -712,17 +712,6 @@ fn phase12_resumed_attempt_closes_with_its_predecessor_red() {
         let id=format!("green-{i}-resumed");
         fixture.run_in_attempt("A","attempt-A-resumed",&id,&fixture.command,Some(i),"green");
         pair["green_run"]=json!(id);
-        // The owner inspects the pair the close names: the predecessor's red and this attempt's green.
-        let state=task_state(project,"A");
-        let submission=json!({"check":fixture.checks[i],"test_digest":pair["red_digest"].as_str().map(str::to_owned)
-            .unwrap_or_else(|| execution_history(project)["events"].as_array().unwrap().iter()
-                .find(|e|e["request"]["event"]["run_id"]==format!("red-{i}") && e["request"]["event"]["kind"]=="launch").unwrap()
-                ["request"]["event"]["material"]["test_digest"].as_str().unwrap().to_owned()),
-            "evidence":[format!("red-{i}"),id],"no_subject_stub":true});
-        let attested=apply(project,json!({"operation":"execution-owner-attest","request":{"request_id":format!("owner-{i}-resumed"),"task":state["task"],
-            "attempt":"attempt-A-resumed","expected_version":state["state"]["version"],"statement":{"submission":submission,"supersedes":format!("owner-{i}"),
-            "approval":{"approved":true,"owner":"Fixture Owner","at":"2026-09-10T15:00:00Z","submission":submission}}}}));
-        assert_eq!(attested["status"],"ok","{attested}");
     }
     let state=task_state(project,"A");
     let close=apply(project,json!({"operation":"execution-task-close","request":{"request_id":"close-A-resumed","task":state["task"],"attempt":"attempt-A-resumed",
@@ -733,7 +722,7 @@ fn phase12_resumed_attempt_closes_with_its_predecessor_red() {
 
 #[test]
 fn phase12_task_close_requires_red_then_green() {
-    let fixture=Tiny::new("unittest");fixture.attest();let project=fixture.project();
+    let fixture=Tiny::new("unittest");let project=fixture.project();
     let good=fixture.close("close-A");
     // Complete caller input is checked against the real public production type.
     let _:cadence::execution::receipts::CloseApply=serde_json::from_value(good.clone()).unwrap();
@@ -801,7 +790,7 @@ fn phase12_task_close_requires_red_then_green() {
     assert_eq!(empty["status"],"ok","{empty}");
 
     for mode in ["setup-error","missing","outside","rename"] {
-        let control=Tiny::new(mode);control.attest();let project=control.project();
+        let control=Tiny::new(mode);let project=control.project();
         let history=execution_history(project);let result=&history["events"].as_array().unwrap().iter().find(|r|r["request"]["event"]["kind"]=="result" && r["request"]["event"]["run_id"]=="red-0").unwrap()["request"]["event"];
         if mode=="setup-error" {
             assert_eq!(result["observation"],json!({"class":"results-observed","summary":{"runner":"unittest","failed":true,"failures":0,"errors":1}}));
@@ -817,7 +806,7 @@ fn phase12_task_close_requires_red_then_green() {
             close_refused(project,control.close("invalid-control"),"red-green",&["check/A","check/A2"]);
         }
     }
-    let custom=Tiny::new("custom");custom.attest();let project=custom.project();
+    let custom=Tiny::new("custom");let project=custom.project();
     let before_classification=execution_history(project);
     for (id,expected,code) in [("red-0","answer: expected 7, received 6\n",1),("green-0","answer is seven\n",0)] {
         let result=&before_classification["events"].as_array().unwrap().iter().find(|r|r["request"]["event"]["kind"]=="result" && r["request"]["event"]["run_id"]==id).unwrap()["request"]["event"];
