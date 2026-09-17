@@ -192,6 +192,44 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
+// Reuse only dependency artifacts from the binary under test. Every fixture
+// still compiles its own Cadence sources in a private target directory; no
+// Cadence fingerprint, object, executable or incremental state is shared.
+fn seed_dependency_artifacts(target: &Path) {
+    fn copy_cached(from: &Path, to: &Path) {
+        let metadata = fs::metadata(from).unwrap();
+        if metadata.is_dir() {
+            fs::create_dir_all(to).unwrap();
+            for entry in fs::read_dir(from).unwrap() {
+                let entry = entry.unwrap();
+                copy_cached(&entry.path(), &to.join(entry.file_name()));
+            }
+        } else {
+            fs::copy(from, to).unwrap();
+        }
+        // Cargo uses mtimes alongside fingerprints. Preserve them while
+        // copying independent inodes, so fixture rebuilds cannot alter ours.
+        fs::File::open(to).unwrap().set_times(
+            fs::FileTimes::new().set_modified(metadata.modified().unwrap())
+        ).unwrap();
+    }
+    let profile = target.join("debug");
+    if profile.exists() { return; }
+    let built = Path::new(env!("CARGO_BIN_EXE_cadence")).parent().unwrap();
+    for directory in [".fingerprint", "build", "deps"] {
+        let destination = profile.join(directory);
+        fs::create_dir_all(&destination).unwrap();
+        for entry in fs::read_dir(built.join(directory)).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name();
+            let name = name.to_str().unwrap();
+            if name.starts_with("cadence-") || name.starts_with("libcadence") { continue; }
+            if directory == "deps" && !name.starts_with("lib") && !name.ends_with(".d") { continue; }
+            copy_cached(&entry.path(), &destination.join(name));
+        }
+    }
+}
+
 fn changed_binary(temp: &Path) -> PathBuf {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source = temp.join("changed-source");
@@ -231,9 +269,10 @@ fn changed_binary(temp: &Path) -> PathBuf {
     )
     .unwrap();
     let target = temp.join("changed-target");
+    seed_dependency_artifacts(&target);
     let started = Instant::now();
     let output = Command::new("cargo")
-        .args(["build", "--locked", "-p", "cadence", "--bin", "cadence"])
+        .args(["build", "--locked", "--jobs", "8", "-p", "cadence", "--bin", "cadence"])
         .current_dir(&source)
         .env("CARGO_TARGET_DIR", &target)
         .env("RUSTC_WRAPPER", "")
@@ -531,9 +570,10 @@ fn prepare_rendered_source(project: &Path) {
 }
 
 fn build_rendered_binary(project: &Path) -> PathBuf {
+    seed_dependency_artifacts(&project.join("target"));
     let started = Instant::now();
     let output = Command::new("cargo")
-        .args(["build", "--locked", "-p", "cadence", "--bin", "cadence"])
+        .args(["build", "--locked", "--jobs", "8", "-p", "cadence", "--bin", "cadence"])
         .current_dir(project)
         .env("CARGO_TARGET_DIR", project.join("target"))
         .env("RUSTC_WRAPPER", "")
