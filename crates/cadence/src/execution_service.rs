@@ -2758,6 +2758,22 @@ async fn checked_continuation<I: ConfigIo + Clone + Sync>(
 
 /// An explicit assessment consumes accepted execution evidence, never report prose
 /// or a fresh HEAD. The base was retained atomically before completion cleared active.
+/// The last commit of the plan's confirmed suite repair, when it has one.
+fn confirmed_repair_head(view: &View, phase: u32, plan: u32) -> Result<Option<String>, String> {
+    let plan_records = cadence::execution::history::plan_records(&view.snapshot.data, phase).map_err(|error| error.to_string())?;
+    let Some((identity, _)) = cadence::execution::history::admitted_plans(&view.snapshot.data, phase).map_err(|error| error.to_string())?
+        .into_iter().find(|(identity, _)| identity.plan == plan) else { return Ok(None) };
+    let projection = cadence::execution::history::plan_project(&plan_records, &identity);
+    let Some(repair) = projection.repair.as_ref() else { return Ok(None) };
+    let confirmed = plan_records.iter().any(|record| record.request.plan == identity
+        && matches!(&record.request.event, cadence::execution::history::PlanEvent::SuiteRepair(_))
+        && cadence::execution::history::plan_decision(record).is_ok_and(|decision| view.decisions.contains(&decision)));
+    if !confirmed {
+        return Err("native risk source lacks a confirmed suite repair receipt".into());
+    }
+    Ok(repair.commits.last().cloned())
+}
+
 pub fn risk_material(
     view: &View,
     root: &Path,
@@ -2780,7 +2796,13 @@ pub fn risk_material(
         if basis.task.phase != phase || basis.task.plan != plan || !confirmed {
             return Err("native risk source lacks a confirmed task receipt".into());
         }
-        return Ok(basis.material());
+        // A plan that used its one repair (D-163) ends at the repair commit,
+        // not at the last task's completion; completion demands that head.
+        let material = match confirmed_repair_head(view, phase, plan)? {
+            Some(head_id) => cadence::rail::risk::MaterialIdentity::Committed { base_id: basis.execution.base_id.clone(), head_id },
+            None => basis.material(),
+        };
+        return Ok(material);
     }
     let execution = execution_snapshot(view)?;
     let active = execution.occurrences.get(&phase.to_string()).and_then(|occurrence| occurrence.active.as_ref());
