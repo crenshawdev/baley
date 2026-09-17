@@ -216,7 +216,8 @@ pub fn contribute(data: &Value, root: &str, request: &Request) -> Result<(Value,
     }
     let mut history = records(data, task.phase)?;
     let projection = project(&history, task);
-    if projection.completed {
+    // The orchestrator may collect inspections after every task has closed.
+    if projection.completed && !matches!(&request.event, Event::OwnerStatement(_)) {
         return Err(refuse("task-completed", "task already has a confirmed completion"));
     }
     if request.expected_version != projection.version {
@@ -906,6 +907,20 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
                 .ok_or_else(|| refuse("plan-active", "completion needs the plan's active dispatch"))?;
             if !unfinished.is_empty() {
                 return Err(refuse("tasks-unfinished", &format!("every task must close before the plan completes; unfinished: {}", unfinished.join(", "))));
+            }
+            let mut missing = Vec::new();
+            for spec in &active.tasks {
+                let task = Task { phase: plan.phase, occurrence: plan.occurrence.clone(),
+                    admission_digest: plan.admission_digest.clone(), plan: plan.plan, task: spec.id.clone() };
+                if let Some(proof) = task_records.iter().find_map(|r| match &r.request.event {
+                    Event::Close(proof) if r.request.task == task && proof.dispatch.id == active.id => Some(proof), _ => None,
+                }) {
+                    missing.extend(super::receipts::missing_owner_inspections(data, &task_records, &proof.submission)?
+                        .into_iter().map(|check| format!("{} (task {})", check.id, task.task)));
+                }
+            }
+            if !missing.is_empty() {
+                return Err(refuse("owner-attestation", &format!("every delivered check requires an affirmative exact owner inspection before plan completion; missing: {}", missing.join(", "))));
             }
             if latest.as_deref() != Some(completion.suite_run.as_str()) {
                 return Err(refuse("suite-required", "native completion needs the plan's one passing suite receipt; no suite launch is retained"));

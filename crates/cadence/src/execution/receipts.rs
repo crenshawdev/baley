@@ -416,7 +416,6 @@ pub fn validate_pairs(data: &serde_json::Value, records: &[super::history::Recor
 pub fn validate_close(data: &serde_json::Value, records: &[super::history::Record], proof: &CloseProof) -> crate::store::Result<()> {
     let input=&proof.submission;
     validate_pairs(data,records,input,&proof.project)?;
-    validate_close_owner(data, records, input)?;
     let active=&data["execution"]["occurrences"][input.task.phase.to_string()]["active"];
     if serde_json::from_value::<super::model::ActiveDispatch>(active.clone())?!=proof.dispatch || proof.dispatch.plan!=input.task.plan {
         return Err(super::admission::refuse(input.task.phase,"task-dispatch","task",&input.task.task,"task close requires its exact active dispatch"));
@@ -438,6 +437,14 @@ pub fn validate_close(data: &serde_json::Value, records: &[super::history::Recor
 }
 
 pub fn validate_close_owner(data: &serde_json::Value, records: &[super::history::Record], input: &Close) -> crate::store::Result<()> {
+    let missing=missing_owner_inspections(data,records,input)?;
+    if !missing.is_empty() {return Err(unsatisfied(&input.task,"owner-attestation",missing,"each admitted check requires an affirmative exact owner inspection; executor assertions do not satisfy this record gate"));}
+    Ok(())
+}
+
+/// Shared by plan completion and the retained per-task verification gate.
+/// Match the latest inspection against the exact pair named by the close.
+pub(super) fn missing_owner_inspections(data: &serde_json::Value, records: &[super::history::Record], input: &Close) -> crate::store::Result<Vec<Check>> {
     use super::history::Event;
     let mut missing=Vec::new();
     for check in allocated(data,&input.task)? {
@@ -454,8 +461,7 @@ pub fn validate_close_owner(data: &serde_json::Value, records: &[super::history:
         });
         if !exact {missing.push(check);}
     }
-    if !missing.is_empty() {return Err(unsatisfied(&input.task,"owner-attestation",missing,"each admitted check requires an affirmative exact owner inspection; executor assertions do not satisfy this record gate"));}
-    Ok(())
+    Ok(missing)
 }
 
 /// Git's NUL protocol preserves both rename endpoints and rejects lossy paths.
