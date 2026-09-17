@@ -667,6 +667,8 @@ fn phase38_regenerated_skill_is_implicit_lease_material() {
     let dispatch = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
 
+    // Closing the task supersedes this dispatch, so retain its issued lease now.
+    let parts = support::dispatch_parts(project, &dispatch);
     let current = rendered_task(project);
     let started = call(project, "cadence_apply", json!({"operation":"execution-task-start","request":{
         "request_id":"start-regenerated-skill","task":current["task"],
@@ -750,7 +752,6 @@ fn phase38_regenerated_skill_is_implicit_lease_material() {
     client.finish();
     let guarded = guard_rendered_skill(project, &changed_binary);
 
-    let parts = support::dispatch_parts(project, &dispatch);
     let files = parts["lease"]["files"].as_array().unwrap();
     assert!(files.iter().any(|path| path == RENDERED_SKILL),
         "the retained dispatch lease must include {RENDERED_SKILL}: {files:?}");
