@@ -53,9 +53,12 @@ fn phase33_verify_next_answers_attempt_id_and_identities() {
         assert_eq!(launched["status"], "ok", "{launched}");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
-            let data = cadence::context::persistence::read_snapshot(&root).unwrap().unwrap().data;
-            let records = cadence::verification::runner::records(&data).unwrap();
-            if cadence::verification::runner::result(&records, run).is_some() { break; }
+            // The writer installs the log and snapshot separately. A read
+            // racing that transaction has no coherent snapshot yet.
+            if let Ok(Some(snapshot)) = cadence::context::persistence::read_snapshot(&root) {
+                let records = cadence::verification::runner::records(&snapshot.data).unwrap();
+                if cadence::verification::runner::result(&records, run).is_some() { break; }
+            }
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
