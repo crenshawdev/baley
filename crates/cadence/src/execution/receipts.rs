@@ -350,9 +350,27 @@ fn run_eligible(records: &[super::history::Record], task: &super::history::Task,
     }
 }
 
+/// The closing attempt and every predecessor it names, oldest last.
+fn attempt_lineage(records: &[super::history::Record], task: &super::history::Task, attempt: &str) -> Vec<String> {
+    let mut lineage=vec![attempt.to_owned()];
+    let mut current=attempt.to_owned();
+    while let Some(predecessor)=records.iter().find_map(|r|match &r.request.event {
+        super::history::Event::Attempt {predecessor: Some(predecessor), ..} if r.request.task==*task && r.request.attempt==current=>Some(predecessor.clone()), _=>None,
+    }) {
+        if lineage.contains(&predecessor) {break}
+        lineage.push(predecessor.clone());
+        current=predecessor;
+    }
+    lineage
+}
+
 pub fn validate_pairs(data: &serde_json::Value, records: &[super::history::Record], input: &Close, project: &std::path::Path) -> crate::store::Result<()> {
     use super::{history::Event, runner::{git,git_text}};
     let checks=allocated(data,&input.task)?;
+    // A task that stopped at a checkpoint resumes in a successor attempt that
+    // names its predecessor. Its red runs stay where they were recorded, so a
+    // pair may take its red from any attempt in the closing attempt's lineage.
+    let lineage=attempt_lineage(records,&input.task,&input.attempt);
     let mut invalid=Vec::new();
     for check in &checks {
         let matching:Vec<_>=input.checks.iter().filter(|p|p.check==*check).collect();
@@ -361,11 +379,11 @@ pub fn validate_pairs(data: &serde_json::Value, records: &[super::history::Recor
             if pair.red_commit==pair.green_commit || !crate::rail::risk::valid_object_id(&pair.red_commit)
                 || !crate::rail::risk::valid_object_id(&pair.green_commit) {return None}
             let get=|id:&str,red:bool| {
-                let (position,record)=records.iter().enumerate().find(|(_,r)|r.request.task==input.task && r.request.attempt==input.attempt
+                let (position,record)=records.iter().enumerate().find(|(_,r)|r.request.task==input.task && lineage.contains(&r.request.attempt)
                     && matches!(&r.request.event,Event::Launch(l) if l.run_id==id))?;
                 let Event::Launch(launch)=&record.request.event else {return None};
                 let result=records.iter().find_map(|r|match &r.request.event {
-                    Event::Result(result) if r.request.task==input.task && r.request.attempt==input.attempt && result.run_id==id=>Some(result), _=>None,
+                    Event::Result(result) if r.request.task==input.task && r.request.attempt==record.request.attempt && result.run_id==id=>Some(result), _=>None,
                 })?;
                 if launch.check.as_ref()!=Some(check) || launch.stage!=if red {Stage::Red}else{Stage::Green}
                     || !run_eligible(records,&input.task,result,check,red) {return None}

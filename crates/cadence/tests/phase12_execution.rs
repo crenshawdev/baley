@@ -661,6 +661,17 @@ fn phase12_resumed_attempt_closes_with_its_predecessor_red() {
         let id=format!("green-{i}-resumed");
         fixture.run_in_attempt("A","attempt-A-resumed",&id,&fixture.command,Some(i),"green");
         pair["green_run"]=json!(id);
+        // The owner inspects the pair the close names: the predecessor's red and this attempt's green.
+        let state=task_state(project,"A");
+        let submission=json!({"check":fixture.checks[i],"test_digest":pair["red_digest"].as_str().map(str::to_owned)
+            .unwrap_or_else(|| execution_history(project)["events"].as_array().unwrap().iter()
+                .find(|e|e["request"]["event"]["run_id"]==format!("red-{i}") && e["request"]["event"]["kind"]=="launch").unwrap()
+                ["request"]["event"]["material"]["test_digest"].as_str().unwrap().to_owned()),
+            "evidence":[format!("red-{i}"),id],"no_subject_stub":true});
+        let attested=apply(project,json!({"operation":"execution-owner-attest","request":{"request_id":format!("owner-{i}-resumed"),"task":state["task"],
+            "attempt":"attempt-A-resumed","expected_version":state["state"]["version"],"statement":{"submission":submission,"supersedes":format!("owner-{i}"),
+            "approval":{"approved":true,"owner":"Fixture Owner","at":"2026-09-10T15:00:00Z","submission":submission}}}}));
+        assert_eq!(attested["status"],"ok","{attested}");
     }
     let state=task_state(project,"A");
     let close=apply(project,json!({"operation":"execution-task-close","request":{"request_id":"close-A-resumed","task":state["task"],"attempt":"attempt-A-resumed",
