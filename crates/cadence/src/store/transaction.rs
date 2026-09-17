@@ -421,10 +421,18 @@ impl Intent {
         ))?))
     }
 
+    /// An intent read back from the journal: its integrity first, then what
+    /// it means.
     fn validate(&self) -> Result<Snapshot> {
         if self.version != VERSION || self.integrity != self.digest()? {
             return Err(Error::Conflict("invalid operation intent integrity".into()));
         }
+        self.validate_sealed()
+    }
+
+    /// What the intent means, for an intent this process has just sealed and
+    /// so need not digest a second time.
+    fn validate_sealed(&self) -> Result<Snapshot> {
         let mut names = BTreeSet::new();
         let mut summary_phase = None;
         let mut context_phase = None;
@@ -605,12 +613,7 @@ impl Intent {
         if let IntentKind::ExecutionPatch {phase,..}|IntentKind::ExecutionPatchV1 {phase,..}=&self.kind {
             cadence::plan::persistence::require_legacy_execution(&snapshot.data,*phase)?;
         }
-        if let Some(previous) = self
-            .participants
-            .last()
-            .and_then(|p| p.expected.bytes.as_deref())
-        {
-            let previous: Snapshot = parse_previous(previous)?;
+        if let Some(previous) = before {
             self.kind
                 .validate_provenance(&previous.data, &snapshot.data)?;
             if !verification_intent
@@ -1615,7 +1618,7 @@ pub(crate) fn commit<S: Storage, P: Policy>(
     }
     let mut intent = Intent::new(kind, participants);
     intent.integrity = intent.digest()?;
-    let prospective = intent.validate()?;
+    let prospective = intent.validate_sealed()?;
     let route = match &intent.kind {
         IntentKind::ExecutionDispatchV1 { phase, .. }
         | IntentKind::NativeExecutionDispatchV1 { phase, .. } => execution_snapshot(&prospective)?

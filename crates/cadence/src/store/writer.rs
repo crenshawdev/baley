@@ -1739,9 +1739,8 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let items = model::render_lines(&next.items)?;
         let decisions = model::render_lines(&next.decisions)?;
         let generation = self.next_generation()?;
-        next.snapshot = Snapshot::new(generation, &items, &decisions, next.snapshot.data)?
-            .with_operations(operations)?;
-        let state = next.snapshot.render()?;
+        let (snapshot, state) = Snapshot::sealed(generation, &items, &decisions, next.snapshot.data, operations)?;
+        next.snapshot = snapshot;
         for (name, bytes) in [(ITEMS, items), (DECISIONS, decisions), (STATE, state)] {
             participants.push(super::transaction::Participant {
                 target: name.into(),

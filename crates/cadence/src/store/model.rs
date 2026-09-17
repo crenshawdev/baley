@@ -147,6 +147,33 @@ impl Snapshot {
         Ok(self)
     }
 
+    /// The snapshot a write installs, with its rendered bytes, from one walk:
+    /// the content is serialized once with an empty integrity, digested, and
+    /// the digest is written into that same rendering. `integrity` is the
+    /// last field, so the rendering ends with it (GH-261).
+    pub fn sealed(generation: u64, items: &[u8], decisions: &[u8], data: Value, operations: BTreeMap<String, String>) -> Result<(Self, Vec<u8>)> {
+        let mut snapshot = Self {
+            version: VERSION,
+            generation,
+            items_digest: digest(items),
+            decisions_digest: digest(decisions),
+            data,
+            operations,
+            integrity: String::new(),
+            repaired: Vec::new(),
+        };
+        let mut rendered = snapshot.render()?;
+        const TAIL: &[u8] = b",\"integrity\":\"\"}";
+        if !rendered.ends_with(TAIL) {
+            return Err(Error::Invalid("snapshot rendering does not end with its integrity".into()));
+        }
+        snapshot.integrity = digest(&rendered);
+        rendered.truncate(rendered.len() - 2);
+        rendered.extend_from_slice(snapshot.integrity.as_bytes());
+        rendered.extend_from_slice(b"\"}");
+        Ok((snapshot, rendered))
+    }
+
     fn content_digest(&self) -> Result<String> {
         #[cfg(test)]
         SNAPSHOT_SERIALIZATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -376,6 +403,20 @@ mod tests {
             Snapshot::parse(&snapshot.render().unwrap(), &bytes, &decision_bytes).unwrap(),
             snapshot
         );
+    }
+
+    // GH-261: the sealed rendering is byte for byte what new, with_operations
+    // and render produce, and it parses back with its integrity intact.
+    #[test]
+    fn sealed_snapshot_matches_the_three_step_rendering() {
+        let mut operations = BTreeMap::new();
+        operations.insert("op".to_owned(), "f".repeat(64));
+        let data = serde_json::json!({"phase": {"integrity": ""}, "text": "\"integrity\":\"\"}"});
+        let (sealed, rendered) = Snapshot::sealed(7, b"items\n", b"decisions\n", data.clone(), operations.clone()).unwrap();
+        let stepped = Snapshot::new(7, b"items\n", b"decisions\n", data).unwrap().with_operations(operations).unwrap();
+        assert_eq!(sealed, stepped);
+        assert_eq!(rendered, stepped.render().unwrap());
+        assert_eq!(Snapshot::parse(&rendered, b"items\n", b"decisions\n").unwrap(), sealed);
     }
 
     #[test]
