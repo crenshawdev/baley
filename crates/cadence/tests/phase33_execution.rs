@@ -29,7 +29,7 @@ fn setup(client: &mut Client) -> (Value, Value) {
     let content = json!({"phase":PHASE,"plan":1,"requirements":["T1"],
         "files":["src/lease.rs","tests/tiny.py"],"directories":[],
         "goal":"DISPATCH GOAL SENTINEL\n## Tasks\nThis is typed prose.",
-        "context":"DISPATCH CONTEXT SENTINEL","notes":"é bounded notes\n".repeat(3000),
+        "context":"DISPATCH CONTEXT SENTINEL","notes":"é bounded notes\n".repeat(3000).trim_end(),
         "tasks":[
             {"id":"dispatch-a","title":"First task","files":["src/lease.rs","tests/tiny.py"],
                 "action":"DISPATCH ACTION SENTINEL A","verify":[COMMAND]},
