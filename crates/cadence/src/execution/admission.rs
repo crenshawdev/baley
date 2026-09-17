@@ -250,5 +250,24 @@ pub fn validate(data: &Value, documents: &BTreeMap<String, String>, contract: &C
         })
     }).collect();
     allocation::validate(phase, &plans, &maps, &contract.allocation, &historical)?;
+    let commands: BTreeMap<_, _> = maps.iter().flat_map(|map| map.items.iter().filter_map(move |item| {
+        if let plan::evidence::Item::Check { id, spec, .. } = item {
+            Some(((id.as_str(), map.item_revisions[id].as_str()), &spec.command))
+        } else { None }
+    })).collect();
+    for assignment in &contract.allocation {
+        let task = plans.iter().find(|p| p.plan == assignment.plan)
+            .and_then(|p| p.tasks.iter().find(|t| t.id == assignment.task))
+            .expect("allocation validated task identity");
+        for check in &assignment.checks {
+            // Released historical revisions need not exist in the current map.
+            if let Some(command) = commands.get(&(check.id.as_str(), check.item_revision.as_str()))
+                && !task.verify.contains(command)
+            {
+                return Err(refuse(phase, "check-command-verify", "contract.allocation", &assignment.task,
+                    format!("check {} command {command:?} is not in the task's verify commands", check.id)));
+            }
+        }
+    }
     Ok(Validated { plans, maps })
 }
