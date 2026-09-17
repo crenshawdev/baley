@@ -1684,6 +1684,7 @@ fn phase12_incomplete_execution_contract_is_refused() {
     native_context(project,&[(truths[0],"the sender sends the parcel","the recipient","a receipt"),
         (truths[1],"the courier arrives","the customer","a receipt")]);
     let mut shared=check("check/shared",&truths);
+    shared["spec"]["command"]=json!("printf verified");
     shared["spec"]["test"]=json!({"file":"tests/not_yet_written.rs","function":"delivery"});
     let map=attached(vec![shared.clone(),artifact("artifact/delivery",&truths)]);
     publish(project,&proposal(project,"native",&[(None,map.clone()),(None,attached(vec![shared.clone()]))]));
@@ -1739,8 +1740,14 @@ fn phase12_incomplete_execution_contract_is_refused() {
     // A competing approved replacement invalidates an observed admission basis.
     let old=valid.clone();
     let mut changed=shared.clone();changed["spec"]["command"]=json!("revised-custom-check");
-    publish(project,&proposal(project,"replacement",&[(Some(1),attached(vec![changed.clone(),artifact("artifact/delivery",&truths)])),
-        (Some(2),attached(vec![changed]))]));
+    let mut replacement=proposal(project,"replacement",&[(Some(1),attached(vec![changed.clone(),artifact("artifact/delivery",&truths)])),
+        (Some(2),attached(vec![changed]))]);
+    // Admission requires the check command in its owning task's verify list.
+    for entry in replacement["submission"]["plans"].as_array_mut().unwrap() {
+        entry["content"]["tasks"][0]["verify"]=json!(["printf verified","revised-custom-check"]);
+        entry["replacement"]["content"]=entry["content"].clone();
+    }
+    publish(project,&replacement);
     admission_refusal(project,old,"admission-binding","contract.plans[0].publication_request","1");
     let valid=admit_request(contract(project),"valid-current",0);
     let accepted=apply(project,valid.clone());
@@ -1759,13 +1766,16 @@ fn phase12_incomplete_execution_contract_is_refused() {
     client.finish();
     assert_eq!(dispatch["status"],"ok","valid native dispatch: {dispatch}");
     assert_eq!(dispatch["outcome"],"dispatch");assert_eq!(dispatch["dispatch"]["plan"],1);
-    assert_eq!(dispatch["dispatch"]["tasks"],json!([{"id":"task-1","verify":["printf verified"]},{"id":"task-2","verify":["printf documented"]}]));
+    assert_eq!(dispatch["dispatch"]["tasks"],json!([{"id":"task-1","verify":["printf verified","revised-custom-check"]},{"id":"task-2","verify":["printf documented"]}]));
     assert!(!project.join("tests/not_yet_written.rs").exists());
     let original_record=serde_json::to_vec(&prior.data["native_admissions"]["phases"]["12"][0]).unwrap();
     let original_execution=snapshot(project).data["execution"].clone();
     let replacement=proposal(project,"admitted-replacement",&[(Some(2),map)]);
     admission_refusal(project,approve(replacement),"admitted-plan","submission","");
-    publish(project,&proposal(project,"gap",&[(None,attached(vec![artifact("artifact/gap",&truths)]))]));
+    let mut gap=proposal(project,"gap",&[(None,attached(vec![artifact("artifact/gap",&truths)]))]);
+    // Keep the moved check runnable so the refusal isolates reassignment.
+    gap["submission"]["plans"][0]["content"]["tasks"][0]["verify"]=json!(["printf verified","revised-custom-check"]);
+    publish(project,&gap);
     let extended=contract(project);
     admission_refusal(project,admit_request(extended.clone(),"implicit",0),"admission-set-version","expected_set_version","implicit");
     let mut moved=extended.clone();moved["allocation"][4]["checks"]=moved["allocation"][0]["checks"].clone();moved["allocation"][0]["checks"]=json!([]);
