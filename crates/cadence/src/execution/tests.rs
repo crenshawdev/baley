@@ -64,6 +64,21 @@ fn retained_unknown_observation_stays_valid_when_the_classifier_learns_its_lines
     assert!(!observation_consistent(&observed, &empty, &custom));
 }
 
+// D-168: a suite receipt always carries every failing test's name. nextest
+// names a failure as `FAIL [ time ] (n/m) crate::binary test`, indented, and
+// repeats the name in its final list; the repair question for suite-p32-1
+// carried no names from nineteen failures.
+#[test]
+fn failing_tests_reads_nextest_fail_lines_once_each() {
+    use super::{history::failing_tests, receipts::{Disposition, Observation, RunResult}, runner::capture};
+    let stderr = capture(&b"        FAIL [   0.299s] ( 351/1065) cadence::phase12_execution phase12_acknowledged_progress_survives_restart\n    test phase12_acknowledged_progress_survives_restart ... FAILED\n        FAIL [   0.268s] ( 362/1065) cadence::phase13_close phase13_rules_gate_retirement_rehearsal\n     Summary [ 120.000s] 1065 tests run: 1046 passed, 19 failed, 2 skipped\n        FAIL [   0.299s] ( 351/1065) cadence::phase12_execution phase12_acknowledged_progress_survives_restart\n        FAIL [   0.268s] ( 362/1065) cadence::phase13_close phase13_rules_gate_retirement_rehearsal\nerror: test run failed\n"[..]);
+    let result = RunResult { run_id: "suite".into(), disposition: Disposition::Exited { code: 100 }, stdout: capture(&b""[..]),
+        stderr, observed_at: 1, observation: Observation::Unknown, material_unchanged: true };
+    assert_eq!(failing_tests(&result), vec![
+        "phase12_execution phase12_acknowledged_progress_survives_restart".to_owned(),
+        "phase13_close phase13_rules_gate_retirement_rehearsal".to_owned()]);
+}
+
 // Constructed unit authority, not a claim of approval through the public API.
 // The acceptance check separately supplies that boundary with real stdio calls.
 fn native_unit_contract(command: &str) -> (serde_json::Value, std::collections::BTreeMap<String, String>, super::admission::Contract) {
