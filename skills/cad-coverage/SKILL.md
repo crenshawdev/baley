@@ -25,6 +25,10 @@ evidence, a historical judgment never counts as current, and a waived truth
 is shown beside the met ones, never among them. A refused answer names the
 input it could not use; report it and stop.
 
+verification-read is a bounded index of current rows and attempt identities.
+Read complete reports and observations through the verification-attempt
+document identity; observed previews over 2048 bytes are marked truncated.
+
 ## Shared read contract
 
 Cadence is the only project read surface. Use `cadence_query` with `search` to find source, `read` only with a location or file reference Cadence issued (or a named unit under that reference), and `document` with a process identity to inspect contexts, plans, roadmap rows and task summaries. Never open a project file with a host file tool, shell command, standalone excerpt server, or a path/range invented by the caller.

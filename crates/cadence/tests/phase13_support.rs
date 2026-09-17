@@ -14,11 +14,12 @@ fn phase13_runner_retains_independent_receipts() {
     let project = fixture.project();
     assert_eq!((fixture.pairs.len(), fixture.statements.len(), fixture.dispatches.len()), (2, 2, 2));
     assert_eq!(fixture.admission["status"], "ok");
-    let attempt = query(project, json!({"operation":"verify-next","phase":13,"request_id":"runner-attempt"}))["attempt"].clone();
-    assert_eq!(attempt["inputs"]["map"], fixture.map);
+    let dispatch = query(project, json!({"operation":"verify-next","phase":13,"request_id":"runner-attempt"}));
+    let attempt = phase13::attempt_view(project, &dispatch);
+    assert_eq!(attempt["map"], fixture.map);
     let item = &fixture.pairs[0]["check"];
     let request = json!({"operation":"verification-run","request":{"request_id":"independent-a",
-        "attempt":attempt["id"],"basis":attempt["inputs"]["basis"],"item":item}});
+        "attempt":attempt["id"],"basis":attempt["basis"],"item":item}});
     let before = fs::read_to_string(project.join(".run/a-runs")).unwrap();
     assert_eq!(before, "run\nrun\nrun\n");
     let native_before = reopened(project).snapshot;
@@ -26,21 +27,15 @@ fn phase13_runner_retains_independent_receipts() {
     let launch = client.call("cadence_apply", request.clone());
     assert_eq!(launch["status"], "ok", "{launch}");
     assert_eq!(launch["receipt"]["event"]["launch"]["material"]["command"], "python3 -B tests/a.py");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let result = loop {
-        let report = client.call("cadence_query", json!({"operation":"verification-read","phase":13,"attempt":attempt["id"]}));
-        assert_eq!(report["status"], "ok", "{report}");
-        if let Some(record) = report["runs"].as_array().unwrap().iter().find(|r| r["event"]["kind"] == "result") { break record.clone(); }
-        assert!(Instant::now() < deadline, "{report}");
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    phase13::independent_result(&mut client, 13, "independent-a");
+    let result = client.call("cadence_query", json!({"operation":"execution-history","phase":13,"run":"independent-a"}))["result"].clone();
     assert_eq!(result["event"]["result"]["disposition"], json!({"kind":"exited","code":0}));
     assert_eq!(result["event"]["result"]["material_unchanged"], true);
-    assert_eq!(result["event"]["source_after"], attempt["inputs"]["basis"]["source"]);
+    assert_eq!(result["event"]["source_after"], attempt["basis"]["source"]);
     client.finish();
     let after = tree(project);
     assert_eq!(apply(project, request.clone())["receipt"], launch["receipt"]);
-    assert_eq!(read(project, &attempt)["runs"], json!([launch["receipt"], result]));
+    assert_eq!(read(project, &attempt)["runs"], json!([{"id":"independent-a","identity":{"kind":"run-output","phase":13,"run":"independent-a"}}]));
     assert_eq!(read(project, &attempt)["unknown_runs"], json!([]));
     assert_eq!(fs::read_to_string(project.join(".run/a-runs")).unwrap(), "run\nrun\nrun\nrun\n");
     let reopened = phase13::reopened(project).snapshot;
@@ -161,7 +156,7 @@ fn phase13_human_results_preserve_first_pass() {
     let foreign = apply(project, human("foreign", &result(&json!("another-occurrence"), "1", "It arrived.", "passed", Some(&first["id"]))));
     assert_eq!(foreign["slot"], "submission.occurrence", "{foreign}");
     let attempt = query(project, json!({"operation":"verify-next","phase":13,"request_id":"human-attempt"}))["attempt"].clone();
-    let patch = json!({"request_id":"overwrite","attempt":attempt["id"],"basis":attempt["inputs"]["basis"],
+    let patch = json!({"request_id":"overwrite","attempt":attempt["id"],"basis":attempt["basis"],
         "items":[],"humans":[{"id":"1","outcome":"passed"}]});
     let overwrite = apply(project, json!({"operation":"verification-submit","patch":patch}));
     assert_eq!(overwrite["rule"], "verification-shape", "{overwrite}");
@@ -315,7 +310,7 @@ const PASSED_UAT: &str = "---\nstatus: complete\nphase: 13\n---\n\n## Items\n\n#
 const TRACED: &str = "# Requirements\n\n## Active\n\n- **T1**: the first parcel is delivered\n- **T7**: a later parcel\n\n## Traceability\n\n| Requirement | Phase | Status |\n|-------------|-------|--------|\n| T1 | Phase 13 | Pending |\n| T7 | Phase 14 | Pending |\n";
 
 fn complete(attempt: &Value, id: &str, roadmap: &str, requirements: Option<&str>) -> Value {
-    json!({"operation":"verification-complete","request_id":id,"attempt":attempt["id"],"basis":attempt["inputs"]["basis"],
+    json!({"operation":"verification-complete","request_id":id,"attempt":attempt["id"],"basis":attempt["basis"],
         "projections":{"roadmap":roadmap,"requirements":requirements}})
 }
 
@@ -378,7 +373,7 @@ fn phase13_completion_projection_transaction_recovers() {
     assert_eq!(record["label"], "complete");
     assert_eq!(record["phase"], 13);
     assert_eq!(record["attempt"], attempt["id"]);
-    assert_eq!(record["basis"], attempt["inputs"]["basis"]);
+    assert_eq!(record["basis"], attempt["basis"]);
     assert_eq!(record["projections"]["roadmap"]["preimage"], roadmap_digest);
     assert_eq!(record["projections"]["roadmap"]["line"], 2);
     assert_eq!(record["projections"]["requirements"]["rows"], json!(["T1"]));

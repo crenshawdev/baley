@@ -23,6 +23,101 @@ mod signing;
 
 #[path = "support/phase13.rs"]
 pub mod phase13;
+#[path = "support/phase31.rs"]
+#[allow(dead_code)]
+mod phase31;
+
+#[test]
+fn execution_index_continues_before_exceeding_its_byte_budget() {
+    let mut round = phase31::ClosedRound::admitted_with_tasks(64);
+    let mut request = json!({"operation":"execution-history","phase":31});
+    let mut task_ids = std::collections::BTreeSet::new();
+    let mut pages = 0;
+    loop {
+        let page = round.client.call("cadence_query", request.clone());
+        assert_eq!(page["status"], "ok", "{page}");
+        assert!(page.to_string().len() <= 65536);
+        assert!(page.get("events").is_none() && page.get("plan_events").is_none());
+        for task in page["tasks"].as_array().unwrap() {
+            assert!(task_ids.insert(task["task"]["task"].as_str().unwrap().to_owned()));
+            assert_eq!(task["state"]["version"], 0);
+            assert_eq!(task["runs"], json!([]));
+        }
+        pages += 1;
+        assert!(pages < 20);
+        if page["incomplete"] == false { break; }
+        assert!(page["continue"]["task"].is_string());
+        request["plan"] = page["continue"]["plan"].clone();
+        request["task"] = page["continue"]["task"].clone();
+    }
+    assert!(pages > 1);
+    assert_eq!(task_ids.len(), 64);
+    round.client.finish();
+}
+
+#[test]
+fn execution_index_counts_omitted_run_ids() {
+    let mut round = phase31::ClosedRound::admitted();
+    let history = round.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
+    let task = history["tasks"][0]["task"].clone();
+    let started = round.client.call("cadence_apply", json!({"operation":"execution-task-start","request":{
+        "request_id":"index-start","task":task,"attempt":"index-attempt","expected_version":0,
+        "predecessor":null,"checks":[round.check]}}));
+    assert_eq!(started["status"], "ok", "{started}");
+    for number in 0..7 {
+        let history = round.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
+        let id = format!("index-run-{number}-{}", "r".repeat(3000));
+        let launch = round.client.call("cadence_apply", json!({"operation":"execution-run","request":{
+            "request_id":id,"task":task,"attempt":"index-attempt","expected_version":history["tasks"][0]["state"]["version"],
+            "command":"python3 -B tests/tiny.py","check":null,"stage":"verify"}}));
+        assert_eq!(launch["status"], "ok", "{launch}");
+        round.client.wait_for_event(31, &id);
+    }
+    let index = round.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
+    assert!(index.to_string().len() <= 65536);
+    assert_eq!(index["tasks"][0]["runs"].as_array().unwrap().len(), 2);
+    assert_eq!(index["tasks"][0]["runs_omitted"], 5);
+    assert_eq!(index["incomplete"], false);
+    round.client.finish();
+}
+
+#[test]
+fn verification_index_bounds_observations_and_preserves_attempt_parts() {
+    let fixture = phase13::Completed::new();
+    let project = fixture.project();
+    let (attempt, mut patch) = phase13::inspect(project, "bounded-observation", &[]);
+    let observation = "é".repeat(7_500);
+    for item in patch["items"].as_array_mut().unwrap() {
+        item["observed"] = json!(observation);
+    }
+    let accepted = phase13::apply(project, json!({"operation":"verification-submit","patch":patch}));
+    assert_eq!(accepted["status"], "ok", "{accepted}");
+    let mut client = phase13::Client::open(project);
+    let index = client.call("cadence_query", json!({"operation":"verification-read","phase":13}));
+    assert!(index.to_string().len() <= 65536);
+    assert!(index.get("report").is_none());
+    assert!(index["attempt"].get("inputs").is_none());
+    assert!(index["history"][0].get("truths").is_none());
+    for truth in index["truths"].as_array().unwrap() {
+        for item in truth["items"].as_array().unwrap() {
+            assert_eq!(item["observed"], "é".repeat(1024));
+            assert_eq!(item["truncated"], true);
+            assert_eq!(item["identity"]["attempt"], attempt["id"]);
+        }
+    }
+    let identity = &index["identity"];
+    let full: Value = serde_json::from_str(&phase13::document_part(&mut client, identity, "claim:bounded-observation-patch")).unwrap();
+    assert_eq!(full["patch"]["items"][0]["observed"], observation);
+    let history = client.call("cadence_query", json!({"operation":"execution-history","phase":13,"plan":1}));
+    assert!(history.to_string().len() <= 65536);
+    assert!(history.get("events").is_none() && history.get("plan_events").is_none());
+    assert!(history["plans"].as_array().unwrap().iter().all(|p| p["plan"]["plan"] == 1));
+    assert!(history["tasks"].as_array().unwrap().iter().all(|t| t["task"]["plan"] == 1 && t["close"].is_string()));
+    let empty = client.call("cadence_query", json!({"operation":"execution-history","phase":13,"plan":999}));
+    assert_eq!(empty["plans"], json!([]));
+    assert_eq!(empty["tasks"], json!([]));
+    client.finish();
+}
 
 /// A tiny JSON-RPC-over-stdio client for the spawned `cadence serve` process.
 struct Client {
@@ -1248,7 +1343,8 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     assert!(read_body.contains(cadence::read::instructions::CONTRACT));
     assert_eq!(verify["allowed-tools"], json!(["mcp__cadence__cadence_query", "mcp__cadence__cadence_apply", "Task"]));
     assert_eq!(verifier_contract["user-invocable"], false);
-    assert!(frontdoor.contains("verify-next") && frontdoor.contains("attempt.prompt"));
+    assert!(frontdoor.contains("verify-next") && frontdoor.contains("`identities`"));
+    assert!(frontdoor.contains("route.choice") && !frontdoor.contains("attempt.prompt"));
     assert!(verifier.contains("verification-run") && verifier.contains("verification-submit"));
     for (name, effort) in [("cad-verifier", "high"), ("cad-verifier-low", "low"),
         ("cad-verifier-medium", "medium"), ("cad-verifier-xhigh", "xhigh"), ("cad-verifier-max", "max")] {

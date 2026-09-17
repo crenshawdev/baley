@@ -366,7 +366,8 @@ fn phase13_rules_gate_retirement_rehearsal() {
     }
     let verify = client.call("cadence_query", json!({"operation":"verify-next","phase":13,"request_id":"close-prerequisite"}));
     assert_eq!(verify["status"], "ok", "{verify}");
-    assert!(verify["attempt"]["prompt"].as_str().unwrap().contains("**Verifier.**"));
+    assert_eq!(verify["identities"]["attempt"]["kind"], "verification-attempt");
+    assert!(verify["attempt"].get("prompt").is_none());
     client.finish();
     let baseline = tree(project);
     reopened(project);
@@ -376,7 +377,7 @@ fn phase13_rules_gate_retirement_rehearsal() {
     writeln!(output, "CLOSE_PREREQUISITE {}", json!({
         "planner":"plan-instructions plus real stdio native plan-read/plan-submit",
         "planner_bytes_sha256":sha(planner.as_bytes()),"executor_dispatches":fixture.dispatches.iter().map(|d| &d["dispatch_id"]).collect::<Vec<_>>(),
-        "verifier_attempt":verify["attempt"]["id"],"prompt_digest":verify["attempt"]["prompt_digest"]})).unwrap();
+        "verifier_attempt":verify["attempt"]["id"],"identity":verify["identities"]["attempt"]})).unwrap();
     drop(output);
 
     let disposable = tempfile::tempdir().unwrap();

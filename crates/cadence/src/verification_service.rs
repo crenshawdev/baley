@@ -1,5 +1,5 @@
 //! Resident adapter; all writes use the existing session's single store queue.
-use cadence::{store::{Error, Result, Storage, writer::Operation}, verification::{audit, completion, human, inputs, model::{Query, Apply}, persistence, render, runner, status, verdicts, waivers}};
+use cadence::{store::{Error, Result, Storage, writer::Operation}, verification::{audit, completion, human, inputs, model::{Query, Apply}, persistence, runner, status, verdicts, waivers}};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -130,11 +130,23 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let unknown: Vec<_> = runs.iter().filter(|r| matches!(r.event, runner::Event::Launch { .. }) && runner::result(&runs, &r.id).is_none()).map(|r| r.id.clone()).collect();
             let claims: Vec<_> = verdicts::claims(&data)?.into_iter().filter(|c| saved.as_ref().is_some_and(|a| c.patch.attempt == a.id))
                 .map(|c| json!({"request_id":c.patch.request_id,"answer":c.answer})).collect();
-            answer["attempt"] = json!(saved);
-            answer["runs"] = json!(runs);
+            answer["attempt"] = json!(saved.as_ref().map(|a| json!({"schema":a.schema,"id":a.id,"request_id":a.request_id,
+                "identity":{"kind":"verification-attempt","phase":phase,"attempt":a.id}})));
+            answer["runs"] = json!(runs.iter().filter(|r| matches!(r.event, runner::Event::Launch { .. })).map(|r|
+                json!({"id":r.id,"identity":{"kind":"run-output","phase":phase,"run":r.id}})).collect::<Vec<_>>());
             answer["unknown_runs"] = json!(unknown);
             answer["claims"] = json!(claims);
-            answer["report"] = json!(render::text(&answer));
+            for entry in answer["history"].as_array_mut().into_iter().flatten() {
+                let id = entry["attempt"].clone();
+                entry.as_object_mut().unwrap().remove("basis");
+                entry.as_object_mut().unwrap().remove("truths");
+                entry["identity"] = json!({"kind":"verification-attempt","phase":phase,"attempt":id});
+            }
+            let identity = answer["current"]["attempt"].as_str().or_else(|| saved.as_ref().map(|a| a.id.as_str()))
+                .map(|id| json!({"kind":"verification-attempt","phase":phase,"attempt":id}));
+            answer["identity"] = json!(identity);
+            truncate_observed(&mut answer["truths"], identity.as_ref());
+            bound_index(&mut answer);
             Ok(answer)
         }
         Query::Next { phase, request_id } => {
@@ -177,6 +189,52 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
             inputs::reobserve_external(root, &written.snapshot.data, &saved.inputs, &request.documents)?;
             next_answer(factory, root, &saved).await
         }
+    }
+}
+
+fn truncate_observed(value: &mut Value, identity: Option<&Value>) {
+    match value {
+        Value::Array(values) => values.iter_mut().for_each(|v| truncate_observed(v, identity)),
+        Value::Object(fields) => {
+            if let Some(text) = fields.get("observed").and_then(Value::as_str).filter(|s| s.len() > 2048) {
+                let mut end = 2048;
+                while !text.is_char_boundary(end) { end -= 1; }
+                fields.insert("observed".into(), json!(&text[..end]));
+                fields.insert("truncated".into(), json!(true));
+                fields.insert("identity".into(), json!(identity));
+            }
+            fields.values_mut().for_each(|v| truncate_observed(v, identity));
+        }
+        _ => {}
+    }
+}
+
+fn bound_index(answer: &mut Value) {
+    answer["bound"] = json!(65536);
+    answer["incomplete"] = json!(false);
+    // Detailed receipts and complete rows are retained under the attempt
+    // identity. Keep the largest possible prefix of each index within budget.
+    for key in ["claims", "history", "runs", "unknown_runs", "truths", "waivers", "humans"] {
+        let mut omitted = 0;
+        while answer.to_string().len() > 64512 {
+            let Some(rows) = answer[key].as_array_mut().filter(|rows| !rows.is_empty()) else { break; };
+            rows.pop();
+            omitted += 1;
+        }
+        if omitted > 0 {
+            answer[format!("{key}_omitted")] = json!(omitted);
+            answer["incomplete"] = json!(true);
+        }
+    }
+    if answer.to_string().len() > 64512 {
+        for key in ["current", "completion"] {
+            answer[key] = json!({"truncated":true,"identity":answer["identity"]});
+        }
+        answer["incomplete"] = json!(true);
+    }
+    if answer.to_string().len() > 64512 {
+        *answer = json!({"status":"ok","schema":"verification-report-1","phase":answer["phase"],
+            "bound":65536,"incomplete":true,"identity":answer["identity"],"truncated":true});
     }
 }
 

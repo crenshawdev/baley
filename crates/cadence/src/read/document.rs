@@ -241,18 +241,19 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
         DocumentIdentity::VerificationAttempt { phase, attempt } => {
             let data = snapshot(root)?;
             let unavailable = |error: cadence::store::Error| refusal("identity", "document-unavailable", error.to_string());
-            let saved = cadence::verification::persistence::attempts(&data).map_err(&unavailable)?
+            let saved = cadence::verification::persistence::attempts(&data).map_err(unavailable)?
                 .into_iter().find(|a| a.id == *attempt && a.inputs.basis.phase == phase.get())
                 .ok_or_else(|| refusal("identity", "document-not-found", "retained verification attempt absent"))?;
             let part = |selector: &str, value: Value| Part { selector: selector.into(), title: selector.into(), body: value.to_string() };
             let mut parts = vec![
                 part("basis", json!(saved.inputs.basis)),
+                part("map", saved.inputs.map.clone()),
                 part("truths", saved.inputs.map["truths"].clone()),
                 part("publications", json!(saved.inputs.basis.publications)),
                 part("admissions", json!(saved.inputs.admissions.iter().map(|a| json!({"request_id":a.request.request_id,
                     "request_digest":a.request_digest,"set_version":a.set_version})).collect::<Vec<_>>())),
             ];
-            let mut execution = cadence::verification::dispatch::execution_view(&saved.inputs).map_err(&unavailable)?;
+            let mut execution = cadence::verification::dispatch::execution_view(&saved.inputs).map_err(unavailable)?;
             for plan in execution["plans"].as_array_mut().into_iter().flatten() {
                 for run in plan["suite_runs"].as_array_mut().into_iter().flatten() {
                     run["identity"] = json!({"kind":"run-output","phase":phase,"run":run["run_id"]});
@@ -278,12 +279,13 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
             for plan in execution["plans"].as_array().into_iter().flatten() {
                 parts.push(part(&format!("plan:{}", plan["plan"]["plan"]), plan.clone()));
             }
-            let mut report = cadence::verification::status::report(root, &data, phase.get()).map_err(&unavailable)?;
+            let mut report = cadence::verification::status::report(root, &data, phase.get()).map_err(unavailable)?;
             report["history"].as_array_mut().into_iter().for_each(|rows| rows.retain(|r| r["attempt"] == *attempt));
+            parts.push(part("judgment", report.clone()));
             parts.push(Part { selector: "report".into(), title: "report".into(), body: cadence::verification::render::text(&report) });
             // Full caller observations remain available at this identity even
             // when verification-read truncates their current row previews.
-            let claims = cadence::verification::verdicts::claims(&data).map_err(&unavailable)?;
+            let claims = cadence::verification::verdicts::claims(&data).map_err(unavailable)?;
             for claim in claims.iter().filter(|c| c.patch.attempt == *attempt) {
                 parts.push(part(&format!("claim:{}", claim.patch.request_id), json!({"patch":claim.patch,"answer":claim.answer})));
             }
@@ -611,7 +613,8 @@ impl ReadDomain {
                     .and_then(|(base, n)| n.parse::<usize>().ok().map(|n| (base, n)))
                     .unwrap_or((&selected.selector, 1));
                 matches!(resolved.identity, DocumentIdentity::RunOutput { .. })
-                    || following.selector == format!("{base}:{}", number + 1)
+                    || (following.title == selected.title && (following.selector == format!("{}:2", selected.selector)
+                        || following.selector == format!("{base}:{}", number + 1)))
             })
             .map(|following| &following.selector);
         json!({"status":"ok","kind":"document-slice","bound":PART_BOUND,

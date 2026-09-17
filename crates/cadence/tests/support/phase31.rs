@@ -160,13 +160,10 @@ impl Client {
         loop {
             let history = self.call(
                 "cadence_query",
-                json!({"operation":"execution-history","phase":phase}),
+                json!({"operation":"execution-history","phase":phase,"run":run_id}),
             );
-            if let Some(event) = history["events"].as_array().unwrap().iter().find_map(|record| {
-                let event = &record["request"]["event"];
-                (event["kind"] == "result" && event["run_id"] == run_id).then(|| event.clone())
-            }) {
-                return event;
+            if history["result"]["request"]["event"].is_object() {
+                return history["result"]["request"]["event"].clone();
             }
             assert!(std::time::Instant::now() < deadline, "missing run {run_id}: {history}");
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -396,6 +393,10 @@ pub struct ClosedRound {
 #[allow(dead_code)]
 impl ClosedRound {
     pub fn admitted() -> Self {
+        Self::admitted_with_tasks(2)
+    }
+
+    pub fn admitted_with_tasks(task_count: usize) -> Self {
         let fixture = ProcessFixture::new();
         let project = fixture.project();
         fs::write(project.join(".planning/config.json"), serde_json::to_vec(&json!({"review":{"triggers":{
@@ -414,6 +415,14 @@ impl ClosedRound {
         let allocation = client.call("cadence_query", json!({"operation":"plan-read","phase":31,"count":1}));
         let mut proposal = process_plan_submission(&allocation, "");
         proposal["submission"]["plans"].as_array_mut().unwrap().truncate(1);
+        let tasks = proposal["submission"]["plans"][0]["content"]["tasks"].as_array_mut().unwrap();
+        for index in 2..task_count {
+            let mut task = tasks[1].clone();
+            task["id"] = json!(format!("fixture-task-{index}-{}", "bounded".repeat(60)));
+            tasks.push(task);
+        }
+        let allocation_rows: Vec<_> = tasks.iter().enumerate().map(|(index, task)|
+            json!({"plan":1,"task":task["id"],"first":index == 0})).collect();
         let published = client.call("cadence_apply", approve(proposal));
         assert_eq!(published["persisted"], true, "{published}");
         let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":31}));
@@ -424,8 +433,8 @@ impl ClosedRound {
         let contract = json!({"phase":31,"occurrence":readback["occurrence"],
             "plans":publications.values().map(|p| json!({"plan":p["identity"]["plan"],
                 "publication_request":p["publication_request"],"content_revision":p["revision"],"map_revision":p["map_revision"]})).collect::<Vec<_>>(),
-            "allocation":[{"plan":1,"task":"fixture-one-a","checks":[check]},
-                {"plan":1,"task":"fixture-one-b","checks":[]}]});
+            "allocation":allocation_rows.iter().map(|row| json!({"plan":1,"task":row["task"],
+                "checks":if row["first"] == true {json!([check])} else {json!([])}})).collect::<Vec<_>>()});
         let admitted = client.call("cadence_apply", json!({"operation":"execution-admit","request":{
             "request_id":"round-admit","expected_set_version":0,"contract":contract}}));
         assert_eq!(admitted["status"], "ok", "{admitted}");

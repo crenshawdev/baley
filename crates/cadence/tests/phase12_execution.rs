@@ -4,6 +4,9 @@ use cadence::store::{
     writer::{Operation, Store},
 };
 use serde_json::{Value, json};
+#[path = "support/phase13.rs"]
+#[allow(dead_code)]
+mod phase13;
 use std::{
     collections::BTreeMap,
     fs,
@@ -468,8 +471,15 @@ fn capture_bytes(capture: &Value) -> Vec<u8> {
 
 fn execution_history(project: &Path) -> Value {
     let mut client = Client::open(project);
-    let answer = history_with(&mut client);
+    let mut answer = history_with(&mut client);
     client.finish();
+    // Inspect retention separately; the operational wire answer is an index.
+    let retained = phase13::retained_history(project,12);
+    answer["events"] = retained["events"].clone();
+    answer["plan_events"] = retained["plan_events"].clone();
+    answer["checkpoint_history"] = json!(answer["events"].as_array().unwrap().iter()
+        .flat_map(|r| r["request"]["event"]["records"].as_array().into_iter().flatten())
+        .cloned().collect::<Vec<_>>());
     answer
 }
 
@@ -616,13 +626,7 @@ impl Tiny {
         let request = json!({"operation":"execution-run","request":{"request_id":id,"task":state["task"],"attempt":attempt,
             "expected_version":state["state"]["version"],"command":command,"check":check.map(|i|self.checks[i].clone()),"stage":stage}});
         let launch = client.call("cadence_apply",request.clone()); assert_eq!(launch["status"],"ok","{launch}");
-        let deadline = std::time::Instant::now()+std::time::Duration::from_secs(20);
-        let result = loop {
-            let history = client.call("cadence_query",json!({"operation":"execution-history","phase":12}));
-            if let Some(record) = history["events"].as_array().unwrap().iter().find(|e| e["request"]["event"]["kind"] == "result" && e["request"]["event"]["run_id"] == id) { break record.clone(); }
-            assert!(std::time::Instant::now()<deadline,"runner result timed out: {history}");
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        };
+        let result = phase13::native_result_with(|request| client.call("cadence_query",request),12,id);
         assert_eq!(client.call("cadence_apply",request)["receipt"],launch["receipt"],"launch replay");
         let event = &result["request"]["event"];
         assert_eq!(event["material_unchanged"],true,"{event}");
@@ -644,8 +648,8 @@ impl Tiny {
     }
     fn owner_with(&self, client: &mut Client, i: usize, id: &str, affirmative: bool) -> Value {
         let task = if i<2 {"A"} else {"B"}; let state=task_state_with(client,task);
-        let history=history_with(client);
-        let launch=history["events"].as_array().unwrap().iter().find(|e|e["request"]["event"]["run_id"]==format!("red-{i}") && e["request"]["event"]["kind"]=="launch").unwrap();
+        let history=client.call("cadence_query",json!({"operation":"execution-history","phase":12,"run":format!("red-{i}")}));
+        let launch=&history["launch"];
         let submission=json!({"check":self.checks[i],"test_digest":launch["request"]["event"]["material"]["test_digest"],
             "evidence":[format!("red-{i}"),format!("green-{i}")],"no_subject_stub":affirmative});
         json!({"operation":"execution-owner-attest","request":{"request_id":id,"task":state["task"],"attempt":format!("attempt-{task}"),
@@ -678,8 +682,8 @@ impl Tiny {
     fn classify(&self, index: usize, red: bool) -> Value {
         let task=if index<2 {"A"} else {"B"};let state=task_state(self.project(),task);
         let run=format!("{}-{index}",if red {"red"} else {"green"});
-        let history=execution_history(self.project());
-        let result=&history["events"].as_array().unwrap().iter().find(|r|r["request"]["event"]["kind"]=="result" && r["request"]["event"]["run_id"]==run).unwrap()["request"]["event"];
+        let history=phase13::query(self.project(),json!({"operation":"execution-history","phase":12,"run":run}));
+        let result=&history["result"]["request"]["event"];
         let identity=model::digest(format!("{}\n{}",result["stdout"]["digest"].as_str().unwrap(),result["stderr"]["digest"].as_str().unwrap()).as_bytes());
         let submission=json!({"run_id":run,"output_identity":identity,"check":self.checks[index],"interpretation":if red {"red-eligible"} else {"green-eligible"}});
         json!({"operation":"execution-classify-run","request":{"request_id":format!("classify-{run}"),"task":state["task"],"attempt":format!("attempt-{task}"),
@@ -942,14 +946,9 @@ fn phase12_acknowledged_progress_survives_restart() {
     let mut client=Client::open(project);let b=task_state(project,"B");
     let failed=client.call("cadence_apply",json!({"operation":"execution-run","request":{"request_id":"failed-B","task":b["task"],"attempt":"attempt-B",
         "expected_version":b["state"]["version"],"command":PROGRESS_FAIL,"check":null,"stage":"verify"}}));assert_eq!(failed["status"],"ok","{failed}");
-    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
-    loop {
-        let read=client.call("cadence_query",json!({"operation":"execution-history","phase":12}));
-        if let Some(record)=read["events"].as_array().unwrap().iter().find(|r|r["request"]["event"]["kind"]=="result" && r["request"]["event"]["run_id"]=="failed-B") {
-            assert_eq!(record["request"]["event"]["disposition"],json!({"kind":"exited","code":1}));assert_eq!(record["request"]["event"]["observation"],json!({"class":"unknown"}));break;
-        }
-        assert!(std::time::Instant::now()<deadline);std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let record=phase13::native_result_with(|request| client.call("cadence_query",request),12,"failed-B");
+    assert_eq!(record["request"]["event"]["disposition"],json!({"kind":"exited","code":1}));
+    assert_eq!(record["request"]["event"]["observation"],json!({"class":"unknown"}));
     client.finish();
     let progress=progress_request(project,"partial-B",json!({"kind":"progress","text":"B has one repaired branch","evidence":[fixture.green]}));
     let acknowledged=apply(project,progress.clone());assert_eq!(acknowledged["status"],"ok","{acknowledged}");
@@ -1379,7 +1378,7 @@ fn plan_refused(project:&Path,request:Value,rule:&str) -> Value {
 }
 
 fn suite_events(project:&Path,plan:u32) -> Vec<Value> {
-    execution_history(project)["plan_events"].as_array().unwrap().iter().filter(|e|e["request"]["plan"]["plan"]==plan).cloned().collect()
+    phase13::retained_history(project,12)["plan_events"].as_array().unwrap().iter().filter(|e|e["request"]["plan"]["plan"]==plan).cloned().collect()
 }
 
 // The launching server owns the suite child, so the same server reads the
@@ -1389,14 +1388,7 @@ fn suite_run(project:&Path,id:&str,plan:u32) -> (Value,Value) {
     let mut client=Client::open(project);
     let launch=client.call("cadence_apply",request);
     assert_eq!(launch["status"],"ok","the suite must be available after the last task is acknowledged: {launch}");
-    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(20);
-    let result=loop {
-        let history=client.call("cadence_query",json!({"operation":"execution-history","phase":12}));
-        if let Some(record)=history["plan_events"].as_array().unwrap().iter()
-            .find(|e|e["request"]["event"]["kind"]=="suite-result" && e["request"]["event"]["run_id"]==id) {break record["request"]["event"].clone();}
-        assert!(std::time::Instant::now()<deadline,"suite result timed out: {history}");
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
+    let result=phase13::native_result_with(|request| client.call("cadence_query",request),12,id)["request"]["event"].clone();
     client.finish();
     (launch,result)
 }
@@ -1641,7 +1633,7 @@ fn phase12_execution_history_reads_one_run_by_id() {
             let bytes=capture_bytes(capture);
             capture.as_object_mut().unwrap().remove("bytes");
             capture["byte_length"]=json!(bytes.len());
-            capture["text"]=json!(String::from_utf8_lossy(&bytes));
+            capture.as_object_mut().unwrap().remove("text");
         }
         record
     };
@@ -1668,11 +1660,15 @@ fn phase12_execution_history_reads_one_run_by_id() {
     // A run the phase never retained is refused, not answered with the phase.
     let refused=client.call("cadence_query",json!({"operation":"execution-history","phase":12,"run":"never-launched"}));
     assert_eq!(refused["status"],"refused","{refused}");
-    assert_eq!(refused["code"],"run-not-retained");
-    assert_eq!(refused["slot"],"run");
+    assert_eq!(refused["code"],"document-not-found");
+    assert_eq!(refused["slot"],"identity");
     assert!(refused.get("events").is_none(),"{refused}");
-    // The whole-phase read is unchanged.
-    assert_eq!(client.call("cadence_query",json!({"operation":"execution-history","phase":12}))["events"],whole["events"]);
+    let captured=phase13::native_result_with(|request| client.call("cadence_query",request),12,"big-C");
+    assert_eq!(captured["request"]["event"]["stdout"]["text"],String::from_utf8_lossy(&capture_bytes(&find("events","result","big-C")["request"]["event"]["stdout"])).as_ref());
+    let index=client.call("cadence_query",json!({"operation":"execution-history","phase":12}));
+    assert!(index.get("events").is_none() && index.get("plan_events").is_none());
+    assert!(index.to_string().len() <= 65536);
+    assert_eq!(phase13::retained_history(project,12)["events"],whole["events"]);
     client.finish();
 }
 

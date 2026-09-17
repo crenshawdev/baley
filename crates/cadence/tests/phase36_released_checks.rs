@@ -100,8 +100,12 @@ fn artifact() -> Value {
 fn map(items: Vec<Value>) -> Value { json!({"mode":"attached","items":items}) }
 
 fn history(project: &Path) -> Value {
-    let answer = call(project, "cadence_query", json!({"operation":"execution-history","phase":PHASE}));
+    let mut answer = call(project, "cadence_query", json!({"operation":"execution-history","phase":PHASE}));
     assert_eq!(answer["status"], "ok", "{answer}");
+    // Retention assertions read stored records separately from the wire index.
+    let retained = support::retained_history(project, PHASE);
+    answer["events"] = retained["events"].clone();
+    answer["plan_events"] = retained["plan_events"].clone();
     answer
 }
 
@@ -124,18 +128,7 @@ fn run_task(project: &Path, plan: u32, name: &str, id: &str, check: Value, stage
     let mut client = Client::open(project);
     let launched = client.call("cadence_apply", request);
     assert_eq!(launched["status"], "ok", "{launched}");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let result = loop {
-        let current = client.call("cadence_query",
-            json!({"operation":"execution-history","phase":PHASE}));
-        if let Some(record) = current["events"].as_array().unwrap().iter()
-            .find(|record| record["request"]["event"]["kind"] == "result"
-                && record["request"]["event"]["run_id"] == id) {
-            break record["request"]["event"].clone();
-        }
-        assert!(std::time::Instant::now() < deadline, "missing result {id}: {current}");
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
+    let result = support::native_result(&mut client, PHASE, id)["request"]["event"].clone();
     client.finish();
     result
 }
@@ -454,20 +447,8 @@ fn phase36_blocked_then_completed_phase_gets_verification_attempt() {
         "request_id":"suite-verification-repair","plan":plan["plan"],
         "expected_version":plan["state"]["version"]}}));
     assert_eq!(suite["status"], "ok", "{suite}");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let current = client.call("cadence_query",
-            json!({"operation":"execution-history","phase":PHASE}));
-        if let Some(result) = current["plan_events"].as_array().unwrap().iter()
-            .find(|record| record["request"]["event"]["kind"] == "suite-result"
-                && record["request"]["event"]["run_id"] == "suite-verification-repair") {
-            assert_eq!(result["request"]["event"]["disposition"],
-                json!({"kind":"exited","code":0}));
-            break;
-        }
-        assert!(std::time::Instant::now() < deadline, "missing suite result: {current}");
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let result = support::native_result(&mut client, PHASE, "suite-verification-repair");
+    assert_eq!(result["request"]["event"]["disposition"], json!({"kind":"exited","code":0}));
     client.finish();
 
     let active = support::reopened(project).snapshot.data["execution"]["occurrences"]["36"]
@@ -503,10 +484,12 @@ fn phase36_blocked_then_completed_phase_gets_verification_attempt() {
     let verification = call(project, "cadence_query", json!({"operation":"verify-next",
         "phase":PHASE,"request_id":"verify-blocked-then-completed"}));
     assert_eq!(verification["status"], "ok", "{verification}");
-    let inputs = &verification["attempt"]["inputs"];
+    let inputs = support::attempt_view(project, &verification);
     assert_eq!(inputs["basis"]["phase"], PHASE);
     assert_eq!(inputs["admissions"].as_array().unwrap().len(), 2);
     assert_eq!(inputs["checks"].as_array().unwrap().len(), 1);
-    assert_eq!(inputs["execution"]["events"], final_history["events"]);
-    assert_eq!(inputs["execution"]["plan_events"], final_history["plan_events"]);
+    let saved = support::reopened(project).snapshot;
+    let retained = saved.data["verification"]["attempts"].as_array().unwrap().iter().find(|a| a["id"] == inputs["id"]).unwrap();
+    assert_eq!(retained["inputs"]["execution"]["events"], final_history["events"]);
+    assert_eq!(retained["inputs"]["execution"]["plan_events"], final_history["plan_events"]);
 }

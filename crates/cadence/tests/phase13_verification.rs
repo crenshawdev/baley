@@ -13,28 +13,19 @@ fn inspected_with(project: &std::path::Path, id: &str, verdicts: &[(&str, &str, 
     let mut client = Client::open(project);
     let dispatch = client.call("cadence_query", json!({"operation":"verify-next","phase":13,"request_id":id}));
     assert_eq!(dispatch["status"], "ok", "{dispatch}");
-    let attempt = dispatch["attempt"].clone();
+    let attempt = attempt_with(&mut client, &dispatch);
     let mut items = Vec::new();
-    for item in attempt["inputs"]["map"]["items"].as_array().unwrap() {
+    for item in attempt["map"]["items"].as_array().unwrap() {
         let mut runs = Vec::new();
         if item["kind"] == "check" {
             let run = format!("{id}-{}", item["id"].as_str().unwrap());
             let launched = client.call("cadence_apply", json!({"operation":"verification-run","request":{
-                "request_id":run,"attempt":attempt["id"],"basis":attempt["inputs"]["basis"],
+                "request_id":run,"attempt":attempt["id"],"basis":attempt["basis"],
                 "item":{"id":item["id"],"item_revision":item["item_revision"]}}}));
             assert_eq!(launched["status"], "ok", "{launched}");
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-            loop {
-                let read = client.call("cadence_query", json!({"operation":"verification-read","phase":13,"attempt":attempt["id"]}));
-                if let Some(result) = read["runs"].as_array().unwrap().iter()
-                    .find(|r| r["event"]["kind"] == "result" && r["event"]["run_id"] == run) {
-                    assert_eq!(result["event"]["result"]["disposition"], json!({"kind":"exited","code":0}));
-                    assert_eq!(result["event"]["result"]["material_unchanged"], true);
-                    break;
-                }
-                assert!(std::time::Instant::now() < deadline, "{read}");
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
+            let result = independent_result(&mut client, 13, &run);
+            assert_eq!(result["disposition"], json!({"kind":"exited","code":0}));
+            assert_eq!(result["material_unchanged"], true);
             runs.push(run);
         }
         let (verdict, observed) = verdicts.iter().find(|(name, _, _)| item["id"] == *name)
@@ -44,7 +35,7 @@ fn inspected_with(project: &std::path::Path, id: &str, verdicts: &[(&str, &str, 
     }
     client.finish();
     let patch = json!({"request_id":format!("{id}-patch"),"attempt":attempt["id"],
-        "basis":attempt["inputs"]["basis"],"items":items});
+        "items":items});
     (attempt, patch)
 }
 
@@ -80,7 +71,7 @@ fn phase13_mismatched_verdict_patch_is_refused() {
     let mut revision = valid.clone();
     revision["items"][0]["item_revision"] = json!("wrong-revision");
     variants.push((revision, "verification-item", "items[0].item_revision", "artifact/shared"));
-    for (pointer, slot, replacement) in [
+    for (pointer, _slot, replacement) in [
         ("/basis/map_digest", "basis.map_digest", json!("stale-map")),
         ("/basis/truths/0/version", "basis.truths", json!(2)),
         ("/basis/publications/0/content_revision", "basis.publications", json!("wrong-content")),
@@ -96,8 +87,9 @@ fn phase13_mismatched_verdict_patch_is_refused() {
         ("/basis/source/material_digest", "basis.source", json!("foreign-material")),
     ] {
         let mut patch = valid.clone();
+        patch["basis"] = attempt["basis"].clone();
         *patch.pointer_mut(pointer).unwrap() = replacement;
-        variants.push((patch, "verification-basis", slot, ""));
+        variants.push((patch, "typed-content", "patch.basis", ""));
     }
     let mut no_run = valid.clone();
     no_run["items"][1]["runs"] = json!([]);
@@ -117,9 +109,15 @@ fn phase13_mismatched_verdict_patch_is_refused() {
             assert!(response["details"].get("current").is_some(), "{response}");
         }
         assert_eq!(acceptance_bytes(project), baseline);
+        if rule == "typed-content" {
+            assert_eq!(apply(project, json!({"operation":"verification-submit","patch":patch})), response);
+            continue;
+        }
         let claims = reopened(project).snapshot.data["verification"]["claims"].clone();
         let retained = claims.as_array().unwrap().iter().find(|c| c["patch"]["request_id"] == patch["request_id"]).unwrap();
-        assert_eq!(retained["patch"], patch);
+        let mut resolved = patch.clone();
+        resolved["basis"] = attempt["basis"].clone();
+        assert_eq!(retained["patch"], resolved);
         assert_eq!(retained["answer"]["rule"], rule);
         let before_replay = tree(project);
         assert_eq!(apply(project, json!({"operation":"verification-submit","patch":patch})), response);
@@ -139,9 +137,11 @@ fn phase13_mismatched_verdict_patch_is_refused() {
     }
     let accepted = apply(project, json!({"operation":"verification-submit","patch":valid}));
     assert_eq!(accepted["status"], "ok", "valid complete control: {accepted}");
-    assert_eq!(accepted["receipt"]["patch"], valid);
+    let mut retained_valid = valid.clone();
+    retained_valid["basis"] = attempt["basis"].clone();
+    assert_eq!(accepted["receipt"]["patch"], retained_valid);
     assert_eq!(accepted["receipt"]["application"], "accepted");
-    assert_eq!(reopened(project).snapshot.data["verification"]["patches"], json!([valid]));
+    assert_eq!(reopened(project).snapshot.data["verification"]["patches"], json!([retained_valid]));
     let accepted_bytes = acceptance_bytes(project);
     let before = tree(project);
     assert_eq!(apply(project, json!({"operation":"verification-submit","patch":valid})), accepted);
@@ -166,10 +166,10 @@ fn phase13_mismatched_verdict_patch_is_refused() {
     let response = apply(project, json!({"operation":"verification-submit","patch":stale}));
     assert_eq!(response["rule"], "verification-basis", "{response}");
     assert_eq!(response["slot"], "basis.source");
-    assert_eq!(response["details"]["requested"], attempt["inputs"]["basis"]["source"]);
+    assert_eq!(response["details"]["requested"], attempt["basis"]["source"]);
     assert_eq!(response["details"]["current"]["head"], git_value(project, &["rev-parse", "HEAD"]));
     assert_eq!(acceptance_bytes(project), before);
-    let (_, current) = inspected_patch(project, "current-source");
+    let (current_attempt, current) = inspected_patch(project, "current-source");
     // Actual approved union extension; an admitted plan is never replaced.
     let gap = proposal(project, "new-map", &[(None, attached(vec![artifact("artifact/gap", &["T1"])]))]);
     publish(project, &gap);
@@ -178,7 +178,7 @@ fn phase13_mismatched_verdict_patch_is_refused() {
     let response = apply(project, json!({"operation":"verification-submit","patch":current}));
     assert_eq!(response["rule"], "verification-basis", "{response}");
     assert_eq!(response["slot"], "basis.map_digest");
-    assert_eq!(response["details"]["requested"], current["basis"]["map_digest"]);
+    assert_eq!(response["details"]["requested"], current_attempt["basis"]["map_digest"]);
     assert_eq!(response["details"]["current"], map["input_digest"]);
     assert_eq!(acceptance_bytes(project), before);
     assert_eq!(apply(project, json!({"operation":"verification-submit","patch":valid})), accepted);
@@ -192,50 +192,24 @@ fn phase13_mismatched_verdict_patch_is_refused() {
 fn phase13_dispatch_carries_current_verification_inputs() {
     let fixture = Completed::new();
     let project = fixture.project();
-    assert_eq!(fixture.dispatches.len(), 2);
     let execution = history(project);
     assert!(execution["tasks"].as_array().unwrap().iter().all(|t| t["state"]["completed"] == true));
     let request = json!({"operation":"verify-next","phase":13,"request_id":"verify-first"});
     let dispatch = query(project, request.clone());
-    assert_eq!(dispatch["status"], "ok", "verifier dispatch must be retained: {dispatch}");
+    assert_eq!(dispatch["status"], "ok", "{dispatch}");
     let attempt = &dispatch["attempt"];
-    let prompt = attempt["prompt"].as_str().expect("retained verifier prompt");
-    let operational: Value = serde_json::from_str(prompt.split("<operational-input>\n").nth(1).unwrap()
-        .split("\n</operational-input>").next().unwrap()).unwrap();
+    assert!(attempt.get("inputs").is_none() && attempt.get("prompt").is_none());
+    let operational = attempt_view(project, &dispatch);
     assert_eq!(operational["map"], fixture.map);
-    assert_eq!(operational["map"]["truths"], json!([
-        {"id":"T1","version":1,"text":"When a parcel arrives, the recipient gets the parcel.","kind":"property"},
-        {"id":"T2","version":1,"text":"When a second parcel arrives, the recipient gets the parcel.","kind":"property"}
-    ]));
-    let ids: Vec<_> = operational["map"]["items"].as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["artifact/shared", "check/A", "check/B", "link/parcel"]);
-    let associations: Vec<_> = operational["map"]["associations"].as_array().unwrap().iter()
-        .map(|a| (a["origin"]["plan"].as_u64().unwrap(), a["origin"]["item_id"].as_str().unwrap(), a["truth_id"].as_str().unwrap(), a["reason"].as_str().unwrap())).collect();
-    assert_eq!(associations, [
-        (1,"artifact/shared","T1","This causes the promised delivery."),
-        (1,"artifact/shared","T2","This causes the promised delivery."),
-        (1,"check/A","T1","This causes the promised delivery."),
-        (1,"link/parcel","T1","This causes the promised delivery."),
-        (2,"artifact/shared","T1","This causes the promised delivery."),
-        (2,"artifact/shared","T2","This causes the promised delivery."),
-        (2,"check/B","T2","This causes the promised delivery.")]);
     assert_eq!(operational["basis"]["map_digest"], fixture.map["input_digest"]);
     assert_eq!(operational["basis"]["publications"], fixture.admission["receipt"]["request"]["contract"]["plans"]);
-    assert_eq!(operational["admissions"], json!([fixture.admission["receipt"]]));
-    // D-177 and GH-263: the prompt's execution block is the bounded view; the
-    // bytes stay on the record, which the attempt retains in full.
-    assert!(execution["events"].as_array().unwrap().iter().any(|e| e["request"]["event"]["stdout"]["text"].is_string()),
-        "the fixture retains at least one run capture, as text");
-    assert_eq!(attempt["inputs"]["execution"]["events"], execution["events"]);
-    assert_eq!(attempt["inputs"]["execution"]["plan_events"], execution["plan_events"]);
-    assert_eq!(operational["execution"]["schema"], "verifier-execution-view-1");
-    assert!(!prompt.contains("\"bytes\": ["), "capture bytes leaked into the verifier prompt");
+    assert_eq!(operational["admissions"][0]["request_digest"], fixture.admission["receipt"]["request_digest"]);
     let tasks: Vec<_> = operational["execution"]["plans"].as_array().unwrap().iter()
         .flat_map(|p| p["tasks"].as_array().unwrap().clone()).collect();
     let pairs: Vec<_> = tasks.iter().flat_map(|t| t["close"]["checks"].as_array().unwrap().clone()).collect();
     assert_eq!(pairs, fixture.pairs);
-    let statements: Vec<_> = tasks.iter()
-        .flat_map(|t| t["owner_statements"].as_array().unwrap().iter().map(|s| s["statement"].clone()).collect::<Vec<_>>()).collect();
+    let statements: Vec<_> = tasks.iter().flat_map(|t| t["owner_statements"].as_array().unwrap().iter()
+        .map(|s| s["statement"].clone()).collect::<Vec<_>>()).collect();
     assert_eq!(statements, fixture.statements);
     let commands: Vec<_> = operational["checks"].as_array().unwrap().iter().map(|c| c["spec"]["command"].as_str().unwrap()).collect();
     assert_eq!(commands, ["python3 -B tests/a.py", "python3 -B tests/b.py"]);
@@ -245,18 +219,15 @@ fn phase13_dispatch_carries_current_verification_inputs() {
     }
     assert_eq!(operational["basis"]["source"]["head"], git_value(project, &["rev-parse","HEAD"]));
     assert_eq!(operational["basis"]["source"]["tree"], git_value(project, &["rev-parse","HEAD^{tree}"]));
-    for key in ["index_digest", "material_digest"] { assert!(!operational["basis"]["source"][key].as_str().unwrap().is_empty()); }
-    assert!(prompt.contains(cadence::verification::instructions::VERIFIER),
-        "the prompt receipt must retain the binary's compiled verifier text");
-    assert!(prompt.contains("Strict item patch schema"));
-    assert!(!prompt.contains("configured-alternative"));
-    assert!(!prompt.contains("All imaginary checks passed"));
-    assert!(!prompt.contains("findings_file"));
+    let retained = reopened(project).snapshot.data["verification"]["attempts"][0].clone();
+    assert_eq!(retained["inputs"]["map"], fixture.map);
+    assert_eq!(retained["inputs"]["execution"]["events"], retained_history(project, 13)["events"]);
+    assert_eq!(retained["prompt"], "");
     let before = tree(project);
     let stored = reopened(project).snapshot;
     assert_eq!(tree(project), before);
     assert_eq!(query(project, request.clone())["attempt"], *attempt);
-    assert_eq!(query(project, json!({"operation":"verification-read","phase":13,"attempt":attempt["id"]}))["attempt"], *attempt);
+    assert_eq!(query(project, json!({"operation":"verification-read","phase":13,"attempt":attempt["id"]}))["attempt"]["id"], attempt["id"]);
     assert_eq!(tree(project), before);
     assert_eq!(reopened(project).snapshot, stored);
     // A historical replay is stable even when current source changes.
@@ -288,92 +259,41 @@ fn phase13_dispatch_carries_current_verification_inputs() {
     assert_eq!(tree(missing.path()), before);
 }
 
-// GH-263: the verifier dispatch is bounded the way the executor's is. Its
-// execution view names every run, close and owner record by id under the plan
-// and task it belongs to, indexes them per check item, and carries no event
-// list; a run's output is read by id through execution-history.
 #[test]
 fn phase13_dispatch_names_history_by_id_per_item() {
     let fixture = Completed::new();
     let project = fixture.project();
-    let execution = history(project);
-    let events = execution["events"].as_array().unwrap();
-    let event = |kind: &str, run: &str| events.iter()
-        .find(|r| r["request"]["event"]["kind"] == kind && r["request"]["event"]["run_id"] == run).unwrap()["request"]["event"].clone();
+    let index = history(project);
+    assert!(index.get("events").is_none() && index.get("plan_events").is_none());
+    assert!(serde_json::to_vec(&index).unwrap().len() < 65536);
     let dispatch = query(project, json!({"operation":"verify-next","phase":13,"request_id":"verify-bounded"}));
-    assert_eq!(dispatch["status"], "ok", "{dispatch}");
-    let prompt = dispatch["attempt"]["prompt"].as_str().unwrap();
-    let operational: Value = serde_json::from_str(prompt.split("<operational-input>\n").nth(1).unwrap()
-        .split("\n</operational-input>").next().unwrap()).unwrap();
-    let view = &operational["execution"];
-    assert_eq!(view["schema"], "verifier-execution-view-1");
-    assert_eq!(view["digest"], operational["basis"]["execution_digest"]);
-    assert!(view.get("events").is_none() && view.get("plan_events").is_none(), "the phase's event list is pasted: {view}");
-    assert_eq!(view["read"], json!({"operation":"execution-history","phase":13,"run":"<run id>"}));
-    let plans = view["plans"].as_array().unwrap();
-    assert_eq!(plans.len(), 2, "{view}");
-    for (index, plan) in plans.iter().enumerate() {
-        let number = index as u64 + 1;
-        let name = ["a", "b"][index];
-        let retained = execution["plans"].as_array().unwrap().iter().find(|p| p["plan"]["plan"] == number).unwrap();
-        assert_eq!(plan["plan"], retained["plan"]);
-        assert_eq!(plan["suite"], retained["state"]);
-        assert_eq!(plan["outcome"], retained["outcome"]);
-        let suite_runs = plan["suite_runs"].as_array().unwrap();
-        assert_eq!(suite_runs.len(), 1, "{plan}");
-        let launch = execution["plan_events"].as_array().unwrap().iter()
-            .find(|r| r["request"]["event"]["kind"] == "suite-launch" && r["request"]["event"]["run_id"] == format!("suite-{number}")).unwrap()["request"]["event"].clone();
-        let result = execution["plan_events"].as_array().unwrap().iter()
-            .find(|r| r["request"]["event"]["kind"] == "suite-result" && r["request"]["event"]["run_id"] == format!("suite-{number}")).unwrap()["request"]["event"].clone();
-        assert_eq!(suite_runs[0], json!({"run_id":format!("suite-{number}"),"stage":"suite","check":null,
-            "material":launch["material"],"launched_at":launch["launched_at"],
-            "result":{"disposition":result["disposition"],"observation":result["observation"],"observed_at":result["observed_at"],
-                "material_unchanged":true,
-                "stdout":{"digest":result["stdout"]["digest"],"byte_length":result["stdout"]["text"].as_str().unwrap().len(),"complete":true},
-                "stderr":{"digest":result["stderr"]["digest"],"byte_length":result["stderr"]["text"].as_str().unwrap().len(),"complete":true}}}));
-        let tasks = plan["tasks"].as_array().unwrap();
-        assert_eq!(tasks.len(), 1, "{plan}");
-        let task = &tasks[0];
-        let retained = execution["tasks"].as_array().unwrap().iter().find(|t| t["task"]["plan"] == number).unwrap();
-        assert_eq!(task["task"], retained["task"]);
-        assert_eq!(task["task"]["task"], format!("task-{name}"));
-        assert_eq!(task["state"], retained["state"]);
-        let check = fixture.pairs[index]["check"].clone();
-        let runs = task["runs"].as_array().unwrap();
-        assert_eq!(runs.len(), 2, "{task}");
-        for (run, stage) in runs.iter().zip(["red", "green"]) {
-            let id = format!("{stage}-{number}");
-            let launch = event("launch", &id);
-            let result = event("result", &id);
-            assert_eq!(*run, json!({"run_id":id,"stage":stage,"check":check,"material":launch["material"],"launched_at":launch["launched_at"],
-                "result":{"disposition":result["disposition"],"observation":result["observation"],"observed_at":result["observed_at"],
-                    "material_unchanged":true,
-                    "stdout":{"digest":result["stdout"]["digest"],"byte_length":result["stdout"]["text"].as_str().unwrap().len(),"complete":true},
-                    "stderr":{"digest":result["stderr"]["digest"],"byte_length":result["stderr"]["text"].as_str().unwrap().len(),"complete":true}}}));
+    let attempt = attempt_view(project, &dispatch);
+    for (position, plan) in attempt["execution"]["plans"].as_array().unwrap().iter().enumerate() {
+        let number = position + 1;
+        assert_eq!(plan["plan"], index["plans"][position]["plan"]);
+        let task = &plan["tasks"][0];
+        assert_eq!(task["close"]["checks"], json!([fixture.pairs[position]]));
+        assert_eq!(task["owner_statements"][0]["statement"], fixture.statements[position]);
+        for run in task["runs"].as_array().unwrap().iter().chain(plan["suite_runs"].as_array().unwrap()) {
+            let id = run["run_id"].as_str().unwrap();
+            assert_eq!(run["identity"], json!({"kind":"run-output","phase":13,"run":id}));
+            let read = query(project, json!({"operation":"execution-history","phase":13,"run":id}));
+            assert_eq!(read["identity"], run["identity"]);
+            let launch = &read["launch"]["request"]["event"];
+            let result = &read["result"]["request"]["event"];
+            assert_eq!(run["material"], launch["material"]);
+            assert_eq!(run["result"]["disposition"], result["disposition"]);
+            for stream in ["stdout", "stderr"] {
+                assert_eq!(run["result"][stream]["digest"], result[stream]["digest"]);
+                assert_eq!(run["result"][stream]["byte_length"], result[stream]["byte_length"]);
+                assert!(result[stream].get("text").is_none() && result[stream].get("bytes").is_none());
+            }
         }
-        assert_eq!(task["close"], json!({"request_id":format!("close-{number}"),"completion":fixture.pairs[index]["green_commit"],
-            "checks":[fixture.pairs[index]],"verification":[format!("green-{number}")]}));
-        assert_eq!(task["owner_statements"], json!([{"request_id":format!("owner-{number}"),"statement":fixture.statements[index]}]));
-        assert_eq!(task["classifications"], json!([]));
-        assert_eq!(task["checkpoints"], json!([]));
-        assert_eq!(task["events"], json!([{"request_id":format!("start-{number}"),"kind":"attempt"}]));
+        let check = &attempt["checks"][position]["evidence"];
+        assert_eq!(check["pairs"][0]["plan"], number);
+        assert_eq!(check["pairs"][0]["red_run"], fixture.pairs[position]["red_run"]);
+        assert_eq!(check["owner_statements"][0]["statement"], fixture.statements[position]);
     }
-    // Every check item is indexed to the records that bear on it, by id.
-    let mut items = serde_json::Map::new();
-    for (index, id) in ["check/A", "check/B"].into_iter().enumerate() {
-        let number = index + 1;
-        let pair = &fixture.pairs[index];
-        items.insert(id.into(), json!({
-            "pairs":[{"plan":number,"task":format!("task-{}", ["a","b"][index]),"close":format!("close-{number}"),
-                "red_commit":pair["red_commit"],"green_commit":pair["green_commit"],"red_run":pair["red_run"],"green_run":pair["green_run"]}],
-            "owner_statements":[{"plan":number,"task":format!("task-{}", ["a","b"][index]),"request_id":format!("owner-{number}")}],
-            "classifications":[]}));
-    }
-    assert_eq!(view["items"], Value::Object(items));
-    assert!(!prompt.contains("\"bytes\": ["), "capture bytes leaked into the verifier prompt");
-    assert!(!prompt.contains("result_lines"), "recognized lines are read by run id, not pasted");
-    // The retained record is unchanged: the attempt keeps the full history it was digested over.
-    assert_eq!(dispatch["attempt"]["inputs"]["execution"]["events"], execution["events"]);
 }
 
 // GH-262: the log keeps each event as the text it was written as; the
@@ -411,7 +331,7 @@ fn phase13_snapshot_event_is_restored_from_the_log() {
     // own generation under its own operation, and says which record.
     let restored = history(project);
     assert_eq!(restored["repaired"], json!([id]), "{restored}");
-    assert_eq!(restored["events"].as_array().unwrap().iter().find(|r| r["request_digest"] == digest).unwrap()["request"]["event"]["material"]["tree"], tree);
+    assert_eq!(phase13::retained_history(project, 13)["events"].as_array().unwrap().iter().find(|r| r["request_digest"] == digest).unwrap()["request"]["event"]["material"]["tree"], tree);
     assert_eq!(at_rest(project), tree);
     let repaired = snapshot(project);
     assert_eq!(repaired.generation, generation + 1);
@@ -421,14 +341,25 @@ fn phase13_snapshot_event_is_restored_from_the_log() {
     let dispatch = query(project, json!({"operation":"verify-next","phase":13,"request_id":"verify-restored"}));
     assert_eq!(dispatch["status"], "ok", "{dispatch}");
     assert!(dispatch.get("repaired").is_none(), "{dispatch}");
-    let events = dispatch["attempt"]["inputs"]["execution"]["events"].as_array().unwrap();
+    let retained = phase13::retained_history(project, 13);
+    let events = retained["events"].as_array().unwrap();
     assert_eq!(events.iter().find(|r| r["request_digest"] == digest).unwrap()["request"]["event"]["material"]["tree"], tree);
     let clean = history(project);
     assert_eq!(clean["repaired"], json!([]), "{clean}");
 }
 
 fn report(project: &std::path::Path) -> Value {
-    query(project, json!({"operation":"verification-read","phase":13}))
+    let mut client = Client::open(project);
+    let mut index = client.call("cadence_query", json!({"operation":"verification-read","phase":13}));
+    for row in index["history"].as_array_mut().into_iter().flatten() {
+        let identity = row["identity"].clone();
+        let detail: Value = serde_json::from_str(&phase13::document_part(&mut client, &identity, "judgment")).unwrap();
+        row["basis"] = detail["history"][0]["basis"].clone();
+        row["truths"] = detail["history"][0]["truths"].clone();
+    }
+    index["report"] = json!(cadence::verification::render::text(&index));
+    client.finish();
+    index
 }
 
 fn submitted(project: &std::path::Path, id: &str, verdicts: &[(&str, &str, &str)]) -> (Value, Value) {
@@ -499,8 +430,8 @@ fn phase13_report_derives_truth_status_from_every_item() {
     assert_eq!(answer["status"], "ok", "{answer}");
     let read = report(project);
     assert_eq!(read["current"], json!({"applicable":true,"attempt":first["id"],"patch":"all-accepted-patch",
-        "reason":"complete patch on the current basis","verified_at":first["inputs"]["basis"],
-        "observed":first["inputs"]["basis"],"unavailable":null}));
+        "reason":"complete patch on the current basis","verified_at":first["basis"],
+        "observed":first["basis"],"unavailable":null}));
     assert_eq!(read["current"]["verified_at"]["map_digest"], map["input_digest"]);
     assert_eq!(read["current"]["verified_at"]["source"]["head"], git_value(project, &["rev-parse", "HEAD"]));
     assert_eq!(read["current"]["verified_at"]["source"]["tree"], git_value(project, &["rev-parse", "HEAD^{tree}"]));
@@ -585,7 +516,7 @@ fn phase13_report_derives_truth_status_from_every_item() {
     for (index, attempt) in [&first, &second, &third, &fourth].into_iter().enumerate() {
         assert_eq!(read["history"][index]["attempt"], attempt["id"]);
         assert_eq!(read["history"][index]["applicability"], "historical");
-        assert_eq!(read["history"][index]["basis"], attempt["inputs"]["basis"]);
+        assert_eq!(read["history"][index]["basis"], attempt["basis"]);
         assert_eq!(read["history"][index]["basis"]["source"]["head"], old_head);
         assert_eq!(read["history"][index]["differs"], json!(["basis.source"]));
     }
@@ -678,7 +609,7 @@ fn phase13_owner_waiver_is_distinct_from_met() {
     // One met and one unmet truth, with the rejection retained.
     let rejected = "tests/b.py asserts nothing about the second parcel.";
     let (reviewed, _) = submitted(project, "reviewed", &[("check/B", "rejected", rejected)]);
-    let basis = reviewed["inputs"]["basis"].clone();
+    let basis = reviewed["basis"].clone();
     let met_a = row(map, "reviewed", "T1", A, "met", MET, &[
         ("artifact/shared", "artifact", "accepted", SEEN), ("check/A", "check", "accepted", SEEN), ("link/parcel", "link", "accepted", SEEN)]);
     let unmet_b = row(map, "reviewed", "T2", B, "unmet", "rejected or not seen: check/B", &[
@@ -811,7 +742,7 @@ fn phase13_owner_waiver_is_distinct_from_met() {
     assert_eq!(read["waivers"][0]["reason"], format!("reviewed attempt {} is not the current attempt {}", reviewed["id"].as_str().unwrap(), again["id"].as_str().unwrap()));
     assert_eq!(reopened(project).snapshot.data["verification"]["waivers"], json!([record]));
     // Reaffirmation is a separate owner event naming the retained waiver.
-    let mut reaffirm = waiver(&again["inputs"]["basis"], "T2", 1, "Still shipping in phase 14.");
+    let mut reaffirm = waiver(&again["basis"], "T2", 1, "Still shipping in phase 14.");
     reaffirm["supersedes"] = record["id"].clone();
     let reaffirmed = apply(project, waive("reaffirm-b", &reaffirm));
     assert_eq!(reaffirmed["status"], "ok", "{reaffirmed}");
@@ -845,7 +776,7 @@ fn phase13_owner_waiver_is_distinct_from_met() {
     let read = report(project);
     assert_eq!(read["counts"], json!({"met":0,"concerns":0,"unmet":2,"pending":0,"waived":0}));
     for (id, truth) in [("waive-a-both", "T1"), ("waive-b-both", "T2")] {
-        let answer = apply(project, waive(id, &waiver(&both["inputs"]["basis"], truth, 1, "Deferred to phase 14.")));
+        let answer = apply(project, waive(id, &waiver(&both["basis"], truth, 1, "Deferred to phase 14.")));
         assert_eq!(answer["status"], "ok", "{answer}");
     }
     let read = report(project);
@@ -1256,7 +1187,7 @@ fn phase13_review_surface_selects_target_and_intent() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entry_bytes(&entries, "src/a.py"), subject.as_slice());
     assert_eq!(entry_bytes(&entries, "src/b.py"), std::fs::read(project.join("src/b.py")).unwrap().as_slice());
-    let execution = history(project);
+    let execution = phase13::retained_history(project, 13);
     let base = execution["events"].as_array().unwrap().iter()
         .find(|e| e["request"]["event"]["kind"] == "attempt").unwrap()["request"]["event"]["base_commit"].clone();
     let head = fixture.pairs[1]["green_commit"].clone();
@@ -1529,7 +1460,7 @@ fn phase13_audit_reports_broken_verification_traces() {
     assert_eq!(read["counts"], json!({"met":0,"waived":0,"concerns":0,"unmet":2,"pending":0,"broken":3,"out_of_scope":1}));
     assert!(read["report"].as_str().unwrap().contains("| T1 | unmet | - | T1 unmet (check/A rejected); T2 met |"), "{}", read["report"]);
     // An owner waiver shows beside the derived unmet judgment, never as met.
-    let waiver_a = waiver(&judged["inputs"]["basis"], "T1", 1, "The first parcel ships in phase 14.");
+    let waiver_a = waiver(&judged["basis"], "T1", 1, "The first parcel ships in phase 14.");
     let waived = apply(project, waive("audit-waive", &waiver_a));
     assert_eq!(waived["status"], "ok", "{waived}");
     let record = waived["receipt"]["record"].clone();

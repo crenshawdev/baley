@@ -271,8 +271,10 @@ enum QueryArguments {
     #[serde(rename = "execution-history")]
     ExecutionHistory {
         phase: NonZeroU32,
-        /// One retained run by its id; omit for the phase's whole history.
+        /// One retained run by its id; omit for the bounded phase index.
         run: Option<String>,
+        plan: Option<NonZeroU32>,
+        task: Option<String>,
     },
     #[serde(rename = "evidence-read")]
     EvidenceRead { phase: NonZeroU32 },
@@ -848,11 +850,11 @@ impl ServerHandler for PublicServer {
                 }
                 if raw.as_ref().is_some_and(|v| v["operation"] == "execution-history") {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::ExecutionHistory { phase, run }) => {
+                        Ok(QueryArguments::ExecutionHistory { phase, run, plan, task }) => {
                             let phase = phase.get();
                             let one_run = run.is_some();
                             let mut history = self.server.service
-                                .native_execution_history(&self.root, phase, run).await
+                                .native_execution_history(&self.root, phase, run, plan.map(NonZeroU32::get), task).await
                                 .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
                             if one_run {
                                 return structured_result(Ok(QueryOutput::NativeExecution(history)));
@@ -1138,6 +1140,13 @@ impl ServerHandler for PublicServer {
                     }
                     ApplyGroup::Verification => {
                         let raw = raw.expect("an operation name came from the arguments");
+                        if raw["operation"] == "verification-submit"
+                            && let Some(fields) = raw["patch"].as_object()
+                            && let Some(field) = fields.keys().find(|field| !["request_id", "attempt", "items", "basis"].contains(&field.as_str())) {
+                            return structured_result(Ok(ApplyOutput::NativeExecution(Refusal::new("invalid-verification",
+                                format!("unknown field `{}` in patch", field.chars().take(256).collect::<String>()))
+                                .rule("verification-shape").slot("patch").value())));
+                        }
                         if raw.to_string().len() > 262144 {
                             return structured_result(Ok(ApplyOutput::NativeExecution(Refusal::new("invalid-verification", "verification input exceeds 262144 bytes")
                                 .rule("verification-shape").slot("patch").value())));

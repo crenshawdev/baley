@@ -489,6 +489,100 @@ fn history_with(client: &mut Client) -> Value {
     client.call("cadence_query", json!({"operation":"execution-history","phase":13}))
 }
 
+#[allow(dead_code)]
+pub fn document_part(client: &mut Client, identity: &Value, part: &str) -> String {
+    let mut selector = part.to_owned();
+    let mut text = String::new();
+    loop {
+        let answer = client.call("cadence_query", json!({"operation":"document","identity":identity,"part":selector}));
+        assert_eq!(answer["status"], "ok", "{answer}");
+        text.push_str(answer["body"].as_str().unwrap());
+        match answer["next"].as_str() {
+            Some(next) if next.starts_with(&format!("{part}:")) => selector = next.into(),
+            _ => return text,
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn attempt_with(client: &mut Client, dispatch: &Value) -> Value {
+    let identity = &dispatch["identities"]["attempt"];
+    let index = client.call("cadence_query", json!({"operation":"document","identity":identity}));
+    assert_eq!(index["status"], "ok", "{index}");
+    let mut attempt = dispatch["attempt"].clone();
+    for name in ["basis", "map", "admissions"] {
+        attempt[name] = serde_json::from_str(&document_part(client, identity, name)).unwrap();
+    }
+    let mut plans = Vec::new();
+    for binding in attempt["basis"]["publications"].as_array().unwrap() {
+        plans.push(serde_json::from_str::<Value>(&document_part(client, identity, &format!("plan:{}", binding["plan"]))).unwrap());
+    }
+    let mut checks = Vec::new();
+    for item in attempt["map"]["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "check") {
+        checks.push(serde_json::from_str::<Value>(&document_part(client, identity, &format!("check:{}", item["id"].as_str().unwrap()))).unwrap());
+    }
+    attempt["checks"] = json!(checks);
+    attempt["execution"] = json!({"plans":plans});
+    attempt
+}
+
+#[allow(dead_code)]
+pub fn attempt_view(project: &Path, dispatch: &Value) -> Value {
+    let mut client = Client::open(project);
+    attempt_with(&mut client, dispatch)
+}
+
+#[allow(dead_code)]
+pub fn independent_result(client: &mut Client, phase: u32, run: &str) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let answer = client.call("cadence_query", json!({"operation":"execution-history","phase":phase,"run":run}));
+        if answer["result"]["event"]["result"].is_object() { return answer["result"]["event"]["result"].clone(); }
+        assert!(std::time::Instant::now() < deadline, "{answer}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Await metadata, then read capture text through the issued run identity.
+#[allow(dead_code)]
+pub fn native_result(client: &mut Client, phase: u32, run: &str) -> Value {
+    native_result_with(|request| client.call("cadence_query", request), phase, run)
+}
+
+#[allow(dead_code)]
+pub fn native_result_with(mut query: impl FnMut(Value) -> Value, phase: u32, run: &str) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let answer = query(json!({"operation":"execution-history","phase":phase,"run":run}));
+        if answer["result"].is_object() {
+            let mut result = answer["result"].clone();
+            let identity = &answer["identity"];
+            for stream in ["stdout", "stderr"] {
+                let index = query(json!({"operation":"document","identity":identity}));
+                let mut text = String::new();
+                for part in index["parts"].as_array().unwrap().iter().filter(|p| p["part"].as_str().unwrap().starts_with(&format!("{stream}:"))) {
+                    let slice = query(json!({"operation":"document","identity":identity,"part":part["part"]}));
+                    text.push_str(slice["body"].as_str().unwrap());
+                }
+                result["request"]["event"][stream]["text"] = json!(text);
+                result["request"]["event"][stream].as_object_mut().unwrap().remove("byte_length");
+            }
+            return result;
+        }
+        assert!(std::time::Instant::now() < deadline, "{answer}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Storage assertions inspect a coherent retained snapshot, independently of
+/// the bounded operational index. This never launches or recovers a writer.
+#[allow(dead_code)]
+pub fn retained_history(project: &Path, phase: u32) -> Value {
+    let snapshot = cadence::context::persistence::read_snapshot(&project.join(".planning")).unwrap().unwrap();
+    json!({"events":cadence::execution::history::records(&snapshot.data, phase).unwrap(),
+        "plan_events":cadence::execution::history::plan_records(&snapshot.data, phase).unwrap()})
+}
+
 fn state_with(client: &mut Client, plan: u32) -> Value {
     history_with(client)["tasks"].as_array().unwrap().iter()
         .find(|t| t["task"]["plan"] == plan).unwrap().clone()
@@ -506,13 +600,12 @@ fn run(client: &mut Client, plan: u32, id: &str, check: Option<Value>, stage: &s
     result
 }
 
-fn wait_result(client: &mut Client, id: &str, events: &str, kind: &str) -> Value {
+fn wait_result(client: &mut Client, id: &str, _events: &str, kind: &str) -> Value {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        let history = client.call("cadence_query", json!({"operation":"execution-history","phase":13}));
-        if let Some(record) = history[events].as_array().unwrap().iter()
-            .find(|r| r["request"]["event"]["kind"] == kind && r["request"]["event"]["run_id"] == id) {
-            return record["request"]["event"].clone();
+        let history = client.call("cadence_query", json!({"operation":"execution-history","phase":13,"run":id}));
+        if history["result"]["request"]["event"]["kind"] == kind {
+            return history["result"]["request"]["event"].clone();
         }
         assert!(std::time::Instant::now() < deadline, "missing {id}: {history}");
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -663,9 +756,8 @@ impl Completed {
             let green_run = format!("green-{plan}");
             let result = run(&mut client, plan, &green_run, Some(check.clone()), "green", &command);
             assert_eq!(result["disposition"], json!({"kind":"exited","code":0}));
-            let events = history_with(&mut client);
-            let launch = events["events"].as_array().unwrap().iter()
-                .find(|r| r["request"]["event"]["kind"] == "launch" && r["request"]["event"]["run_id"] == red_run).unwrap();
+            let run = client.call("cadence_query", json!({"operation":"execution-history","phase":13,"run":red_run}));
+            let launch = &run["launch"];
             let submission = json!({"check":check,"test_digest":launch["request"]["event"]["material"]["test_digest"],
                 "evidence":[red_run,green_run],"no_subject_stub":true});
             let statement = json!({"submission":submission,"supersedes":null,
@@ -721,28 +813,19 @@ pub fn inspect(project: &Path, id: &str, verdicts: &[(&str, &str, &str)]) -> (Va
     let mut client = Client::open(project);
     let dispatch = client.call("cadence_query", json!({"operation":"verify-next","phase":13,"request_id":id}));
     assert_eq!(dispatch["status"], "ok", "{dispatch}");
-    let attempt = dispatch["attempt"].clone();
+    let attempt = attempt_with(&mut client, &dispatch);
     let mut items = Vec::new();
-    for item in attempt["inputs"]["map"]["items"].as_array().unwrap() {
+    for item in attempt["map"]["items"].as_array().unwrap() {
         let mut runs = Vec::new();
         if item["kind"] == "check" {
             let run = format!("{id}-{}", item["id"].as_str().unwrap());
             let launched = client.call("cadence_apply", json!({"operation":"verification-run","request":{
-                "request_id":run,"attempt":attempt["id"],"basis":attempt["inputs"]["basis"],
+                "request_id":run,"attempt":attempt["id"],"basis":attempt["basis"],
                 "item":{"id":item["id"],"item_revision":item["item_revision"]}}}));
             assert_eq!(launched["status"], "ok", "{launched}");
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-            loop {
-                let read = client.call("cadence_query", json!({"operation":"verification-read","phase":13,"attempt":attempt["id"]}));
-                if let Some(result) = read["runs"].as_array().unwrap().iter()
-                    .find(|r| r["event"]["kind"] == "result" && r["event"]["run_id"] == run) {
-                    assert_eq!(result["event"]["result"]["disposition"], json!({"kind":"exited","code":0}), "{result}");
-                    assert_eq!(result["event"]["result"]["material_unchanged"], true);
-                    break;
-                }
-                assert!(std::time::Instant::now() < deadline, "{read}");
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
+            let result = independent_result(&mut client, 13, &run);
+            assert_eq!(result["disposition"], json!({"kind":"exited","code":0}));
+            assert_eq!(result["material_unchanged"], true);
             runs.push(run);
         }
         let (verdict, observed) = verdicts.iter().find(|(name, _, _)| item["id"] == *name)
@@ -750,7 +833,7 @@ pub fn inspect(project: &Path, id: &str, verdicts: &[(&str, &str, &str)]) -> (Va
         items.push(json!({"id":item["id"],"item_revision":item["item_revision"],"verdict":verdict,"observed":observed,"runs":runs}));
     }
     client.finish();
-    let patch = json!({"request_id":format!("{id}-patch"),"attempt":attempt["id"],"basis":attempt["inputs"]["basis"],"items":items});
+    let patch = json!({"request_id":format!("{id}-patch"),"attempt":attempt["id"],"items":items});
     (attempt, patch)
 }
 

@@ -47,22 +47,22 @@ pub fn run_view(data: &Value, phase: u32, run: &str) -> std::result::Result<RunV
     let unavailable = |error: Error| crate::envelope::Refusal::new("document-unavailable", error.to_string())
         .rule("D-187").slot("identity").phase(phase).value();
     let mut found = Vec::new();
-    let records = history::records(data, phase).map_err(&unavailable)?;
+    let records = history::records(data, phase).map_err(unavailable)?;
     for record in &records {
         if matches!(&record.request.event, Event::Launch(l) if l.run_id == run) {
             let result = records.iter().find(|r| matches!(&r.request.event, Event::Result(result) if result.run_id == run));
             found.push((json!(record), json!(result), false));
         }
     }
-    let records = history::plan_records(data, phase).map_err(&unavailable)?;
+    let records = history::plan_records(data, phase).map_err(unavailable)?;
     for record in &records {
         if matches!(&record.request.event, PlanEvent::SuiteLaunch(l) if l.run_id == run) {
             let result = records.iter().find(|r| matches!(&r.request.event, PlanEvent::SuiteResult(result) if result.run_id == run));
             found.push((json!(record), json!(result), false));
         }
     }
-    let attempts = persistence::attempts(data).map_err(&unavailable)?;
-    let records = runner::records(data).map_err(&unavailable)?;
+    let attempts = persistence::attempts(data).map_err(unavailable)?;
+    let records = runner::records(data).map_err(unavailable)?;
     for record in &records {
         if matches!(&record.event, runner::Event::Launch { launch, .. } if launch.run_id == run)
             && attempts.iter().any(|a| a.id == record.attempt && a.inputs.basis.phase == phase) {

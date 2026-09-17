@@ -275,6 +275,8 @@ mod resident {
             root: PathBuf,
             phase: u32,
             run: Option<String>,
+            plan: Option<u32>,
+            task: Option<String>,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
         Read {
@@ -532,10 +534,10 @@ mod resident {
                         Request::NativeExecutionApply {root,raw,reply} => {
                             let _=reply.send(execution_service::native_apply(&factory,&root,raw).await);
                         }
-                        Request::NativeExecutionHistory { root, phase, run, reply } => {
+                        Request::NativeExecutionHistory { root, phase, run, plan, task, reply } => {
                             let _ = reply.send(match run {
                                 Some(run) => crate::server::execution_runner_service::read_run(&factory, &root, phase, &run).await,
-                                None => crate::server::execution_runner_service::read(&factory, &root, phase).await,
+                                None => crate::server::execution_runner_service::read(&factory, &root, phase, plan, task).await,
                             });
                         }
                         Request::ExecutionApply { root, patch, reply } => {
@@ -867,9 +869,9 @@ mod resident {
             result.await.map_err(|_|Error::Closed)?
         }
 
-        pub async fn native_execution_history(&self, root: &Path, phase: u32, run: Option<String>) -> Result<serde_json::Value> {
+        pub async fn native_execution_history(&self, root: &Path, phase: u32, run: Option<String>, plan: Option<u32>, task: Option<String>) -> Result<serde_json::Value> {
             let (reply, result) = oneshot::channel();
-            self.requests.send(Request::NativeExecutionHistory { root: root.to_path_buf(), phase, run, reply }).await.map_err(|_| Error::Closed)?;
+            self.requests.send(Request::NativeExecutionHistory { root: root.to_path_buf(), phase, run, plan, task, reply }).await.map_err(|_| Error::Closed)?;
             result.await.map_err(|_| Error::Closed)?
         }
 

@@ -223,8 +223,12 @@ fn blocked_plan_contract(project: &Path) -> Value {
 }
 
 fn history(project: &Path) -> Value {
-    let value = call(project, "cadence_query", json!({"operation":"execution-history","phase":PHASE}));
+    let mut value = call(project, "cadence_query", json!({"operation":"execution-history","phase":PHASE}));
     assert_eq!(value["status"], "ok", "{value}");
+    // Retention assertions read stored records separately from the wire index.
+    let retained = support::retained_history(project, PHASE);
+    value["events"] = retained["events"].clone();
+    value["plan_events"] = retained["plan_events"].clone();
     value
 }
 
@@ -249,17 +253,7 @@ fn run_task(project: &Path, plan: u32, name: &str, id: &str, check: Value, stage
     let mut client = Client::open(project);
     let launched = client.call("cadence_apply", request);
     assert_eq!(launched["status"], "ok", "{launched}");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let result = loop {
-        let current = client.call("cadence_query", json!({"operation":"execution-history","phase":PHASE}));
-        if let Some(record) = current["events"].as_array().unwrap().iter()
-            .find(|record| record["request"]["event"]["kind"] == "result"
-                && record["request"]["event"]["run_id"] == id) {
-            break record["request"]["event"].clone();
-        }
-        assert!(std::time::Instant::now() < deadline, "missing result {id}: {current}");
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
+    let result = support::native_result(&mut client, PHASE, id)["request"]["event"].clone();
     client.finish();
     result
 }
@@ -281,10 +275,8 @@ fn close_control(project: &Path, allocated: Value) -> (String, String, Value) {
     let result = run_task(project, 1, "control", "control-green", allocated.clone(), "green");
     assert_eq!(result["disposition"], json!({"kind":"exited","code":0}));
 
-    let events = history(project);
-    let launch = events["events"].as_array().unwrap().iter()
-        .find(|record| record["request"]["event"]["kind"] == "launch"
-            && record["request"]["event"]["run_id"] == "control-red").unwrap();
+    let run = call(project, "cadence_query", json!({"operation":"execution-history","phase":PHASE,"run":"control-red"}));
+    let launch = &run["launch"];
     let inspection = json!({"check":allocated,"test_digest":launch["request"]["event"]["material"]["test_digest"],
         "evidence":["control-red","control-green"],"no_subject_stub":true});
     let current = task(project, 1, "control");
@@ -633,18 +625,8 @@ fn phase34_blocked_then_completed_phase_is_derived_executed() {
     let suite = client.call("cadence_apply", json!({"operation":"execution-suite","request":{
         "request_id":"suite-repair","plan":plan["plan"],"expected_version":plan["state"]["version"]}}));
     assert_eq!(suite["status"], "ok", "{suite}");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let current = client.call("cadence_query", json!({"operation":"execution-history","phase":PHASE}));
-        if let Some(result) = current["plan_events"].as_array().unwrap().iter()
-            .find(|record| record["request"]["event"]["kind"] == "suite-result"
-                && record["request"]["event"]["run_id"] == "suite-repair") {
-            assert_eq!(result["request"]["event"]["disposition"], json!({"kind":"exited","code":0}));
-            break;
-        }
-        assert!(std::time::Instant::now() < deadline, "missing suite result: {current}");
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let result = support::native_result(&mut client, PHASE, "suite-repair");
+    assert_eq!(result["request"]["event"]["disposition"], json!({"kind":"exited","code":0}));
     client.finish();
 
     let active = support::reopened(project).snapshot.data["execution"]["occurrences"]["34"]["active"]["id"].clone();

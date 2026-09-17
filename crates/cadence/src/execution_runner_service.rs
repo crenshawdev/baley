@@ -103,34 +103,80 @@ pub async fn read_run<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, r
 }
 
 
-pub async fn read<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, phase: u32) -> Result<Value> {
+pub async fn read<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, phase: u32,
+    selected_plan: Option<u32>, selected_task: Option<String>) -> Result<Value> {
     let session = factory.first_touch(root).await?;
     let view = session.derivation_view().await?;
     let records = history::records(&view.snapshot.data, phase)?;
     let project = root.parent().ok_or_else(|| Error::Invalid("project root missing".into()))?;
-    let mut tasks = Vec::new();
-    for basis in &cadence::execution::admission::records(&view.snapshot.data, phase)? {
-        for binding in &basis.request.contract.plans {
-            if tasks.iter().any(|value: &Value| value["task"]["plan"] == binding.plan) { continue }
-            for task in history::plan_task_views(&view.snapshot.data, &records, phase, binding.plan)? {
-                let uncertainty = runner::uncertainty(project, &records, &task)?;
-                tasks.push(json!({"task":task.task,"state":task.state,"uncertainty":uncertainty}));
-            }
-        }
-    }
-    let mut checkpoints=Vec::new();
-    for decision in &view.decisions {
-        if let Some(record)=cadence::evidence::persistence::decode_history(decision)?
-            && record.scope.phase==phase.to_string() && record.scope.planning_root==root.to_string_lossy() {
-            checkpoints.push(record);
-        }
-    }
     let plan_events = history::plan_records(&view.snapshot.data, phase)?;
     let outcomes = history::plan_outcomes(&view.snapshot.data, phase)?;
-    let plans = history::admitted_plans(&view.snapshot.data, phase)?.into_iter()
-        .map(|(plan, _)| json!({"state":history::plan_project(&plan_events, &plan),"plan":plan,
-            "outcome":outcomes.iter().find(|outcome| outcome.plan == plan.plan)})).collect::<Vec<_>>();
-    let active = view.snapshot.data["execution"]["occurrences"][phase.to_string()]["active"].clone();
-    Ok(json!({"status":"ok","schema":"native-task-history-1","events":records,"tasks":tasks,"checkpoint_history":checkpoints,
-        "plan_events":plan_events,"plans":plans,"active":active,"repaired":view.snapshot.repaired}))
+    let active = &view.snapshot.data["execution"]["occurrences"][phase.to_string()]["active"];
+    let mut answer = json!({"status":"ok","schema":"native-task-history-1","phase":phase,"bound":65536,
+        "plans":[],"tasks":[],"active":active["id"].as_str().map(|id| json!({"id":id,"identity":{"kind":"dispatch","id":id}})),
+        "repaired":view.snapshot.repaired,"incomplete":false,"continue":null});
+    trim_ids(&mut answer, "repaired", 64);
+    let mut started = selected_task.is_none();
+    for (plan, _) in history::admitted_plans(&view.snapshot.data, phase)? {
+        if selected_plan.is_some_and(|number| number != plan.plan) { continue; }
+        let mut state = json!(history::plan_project(&plan_events, &plan));
+        for key in ["launches", "results"] { trim_ids(&mut state, key, 64); }
+        if state.to_string().len() > 8192 {
+            state = json!({"version":state["version"],"outcome":state["outcome"],"completed":state["completed"],"truncated":true});
+        }
+        let mut outcome = json!(outcomes.iter().find(|o| o.plan == plan.plan));
+        if outcome.to_string().len() > 8192 {
+            outcome = json!({"disposition":outcome["disposition"],"truncated":true});
+        }
+        let row = json!({"state":state,"plan":plan,"outcome":outcome,
+            "identity":{"kind":"phase-plan","phase":phase,"plan":plan.plan}});
+        if !append_index(&mut answer, "plans", row, json!({"plan":plan.plan,"task":null})) { break; }
+        for task in history::plan_task_views(&view.snapshot.data, &records, phase, plan.plan)? {
+            if !started { started = selected_task.as_deref() == Some(&task.task.task); }
+            if !started { continue; }
+            let own: Vec<_> = records.iter().filter(|r| r.request.task == task.task).collect();
+            let runs: Vec<_> = own.iter().filter_map(|r| match &r.request.event {
+                history::Event::Launch(l) => Some(&l.run_id), _ => None,
+            }).collect();
+            let close = own.iter().find(|r| matches!(r.request.event, history::Event::Close(_))).map(|r| &r.request.request_id);
+            let checkpoints = history::task_checkpoints(&records, &task.task).into_iter().map(|c| c["id"].clone()).collect::<Vec<_>>();
+            let mut row = json!({"task":task.task,"state":task.state,"runs":runs,"close":close,"checkpoints":checkpoints,
+                "uncertainty":runner::uncertainty(project, &records, &task)?,
+                "identity":{"kind":"task-summary","phase":phase,"occurrence":task.task.occurrence,"plan":plan.plan,"task":task.task.task}});
+            for key in ["runs", "checkpoints"] { trim_ids(&mut row, key, 64); }
+            for key in ["progress", "unknown_runs"] { trim_ids(&mut row["state"], key, 16); }
+            trim_ids(&mut row["uncertainty"], "commits", 16);
+            if row.to_string().len() > 24576 {
+                row["state"] = json!({"version":row["state"]["version"],"completed":row["state"]["completed"],
+                    "outcome":row["state"]["outcome"],"truncated":true});
+                row["uncertainty"] = json!({"truncated":true});
+            }
+            if !append_index(&mut answer, "tasks", row, json!({"plan":plan.plan,"task":task.task.task})) { return Ok(answer); }
+        }
+    }
+    Ok(answer)
+}
+
+fn trim_ids(value: &mut Value, key: &str, limit: usize) {
+    if let Some(ids) = value[key].as_array_mut() {
+        let before = ids.len();
+        ids.truncate(limit);
+        while !ids.is_empty() && serde_json::to_vec(ids).expect("JSON values serialize").len() > 8192 {
+            ids.pop();
+        }
+        let omitted = before - ids.len();
+        if omitted > 0 { value[format!("{key}_omitted")] = json!(omitted); }
+    }
+}
+
+fn append_index(answer: &mut Value, key: &str, row: Value, continuation: Value) -> bool {
+    // Reserve space for continuation and the server's phase_status field.
+    if answer.to_string().len() + row.to_string().len() + continuation.to_string().len() + 1024 > 65536 {
+        answer["incomplete"] = json!(true);
+        answer["continue"] = continuation;
+        false
+    } else {
+        answer[key].as_array_mut().unwrap().push(row);
+        true
+    }
 }
