@@ -497,7 +497,7 @@ impl ClosedRound {
         }
         let risk = self.client.call("cadence_apply", json!({"operation":"risk-check","request_id":"round-risk",
             "scope":{"phase":31,"occurrence":self.plan["occurrence"],"worker":"1"},
-            "source":{"kind":"execution","plan":1,"dispatch_id":self.dispatch["dispatch_id"]},"surfaces":null}));
+            "source":{"kind":"execution","plan":1,"dispatch_id":self.dispatch["dispatch_id"]},"surfaces":[]}));
         assert_eq!(risk["status"], "ok", "{risk}");
         let history = self.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
         let completed = self.client.call("cadence_apply", json!({"operation":"execution-plan-complete","request":{
