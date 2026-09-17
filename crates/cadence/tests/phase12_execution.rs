@@ -303,25 +303,18 @@ fn publish(project: &Path, input: &Value) -> Value {
     let answer = client.call("cadence_apply", approved.clone());
     assert_eq!(answer["persisted"], true, "control publication: {answer}");
     client.finish();
-    let mut retained_approval = approved["approval"].clone();
-    for (plan, result) in retained_approval["submission"]["plans"].as_array_mut().unwrap()
-        .iter_mut().zip(answer["results"].as_array().unwrap())
-    {
-        plan["content"] = result["content"].clone();
-        if plan["replacement"].is_object() {
-            plan["replacement"]["content"] = result["content"].clone();
-        }
-    }
+    let retained_approval = retained_request(&approved, project)["approval"].clone();
     let before = tree(project);
     let prior = reopened(project).snapshot;
     let occurrence = &prior.data["plan_publications"]["phases"]["12"];
-    assert_eq!(occurrence["receipts"][input["submission"]["request_id"].as_str().unwrap()]["results"], answer["results"]);
+    assert_publications(&occurrence["receipts"][input["submission"]["request_id"].as_str().unwrap()]["results"], &answer["results"]);
     for (entry, result) in input["submission"]["plans"].as_array().unwrap().iter().zip(answer["results"].as_array().unwrap()) {
         assert_eq!(result["identity"], entry["target"]);
-        assert_eq!(result["content"]["goal"], entry["content"]["goal"]);
-        assert_eq!(result["content"]["tasks"], entry["content"]["tasks"]);
-        assert_eq!(result["approval"], retained_approval);
-        assert_eq!(occurrence["publications"][result["identity"]["plan"].as_u64().unwrap().to_string()], *result);
+        let saved = &occurrence["publications"][result["identity"]["plan"].as_u64().unwrap().to_string()];
+        assert_eq!(saved["content"]["goal"], entry["content"]["goal"]);
+        assert_eq!(saved["content"]["tasks"], entry["content"]["tasks"]);
+        assert_eq!(saved["approval"], retained_approval);
+        assert_publication(saved, result);
         let retained = prior.data["acceptance_maps"]["phases"]["12"]["revisions"].as_array().unwrap().iter()
             .find(|r| r["revision"] == result["map_revision"]).unwrap();
         assert_eq!(retained["items"], entry["content"]["evidence_map"]["items"]);
@@ -334,10 +327,10 @@ fn publish(project: &Path, input: &Value) -> Value {
     let read = client.call("cadence_query", json!({"operation":"evidence-read","phase":12}));
     assert_eq!(read["schema"], "acceptance-map-view-1");
     assert_eq!(read["coherence"], "consistent");
-    for result in answer["results"].as_array().unwrap() {
+    for (entry, result) in input["submission"]["plans"].as_array().unwrap().iter().zip(answer["results"].as_array().unwrap()) {
         assert!(read["contributions"].as_array().unwrap().iter().any(|c|
             c["identity"] == result["identity"] && c["map_revision"] == result["map_revision"]));
-        for expected in result["content"]["evidence_map"]["items"].as_array().unwrap() {
+        for expected in entry["content"]["evidence_map"]["items"].as_array().unwrap() {
             let actual = read["items"].as_array().unwrap().iter().find(|i| i["id"] == expected["id"]).unwrap();
             assert_eq!(actual["spec"], expected["spec"]);
         }
@@ -584,8 +577,11 @@ impl Tiny {
         self.run_named(task, id, &self.command, check, stage)
     }
     fn run_named(&self, task: &str, id: &str, command: &str, check: Option<usize>, stage: &str) -> Value {
+        self.run_in_attempt(task, &format!("attempt-{task}"), id, command, check, stage)
+    }
+    fn run_in_attempt(&self, task: &str, attempt: &str, id: &str, command: &str, check: Option<usize>, stage: &str) -> Value {
         let state = task_state(self.project(),task);
-        let request = json!({"operation":"execution-run","request":{"request_id":id,"task":state["task"],"attempt":format!("attempt-{task}"),
+        let request = json!({"operation":"execution-run","request":{"request_id":id,"task":state["task"],"attempt":attempt,
             "expected_version":state["state"]["version"],"command":command,"check":check.map(|i|self.checks[i].clone()),"stage":stage}});
         let mut client = Client::open(self.project());
         let launch = client.call("cadence_apply",request.clone()); assert_eq!(launch["status"],"ok","{launch}");
@@ -647,6 +643,30 @@ fn close_refused(project:&Path, request:Value, rule:&str, ids:&[&str]) -> Value 
     assert_eq!(answer["rule"],rule,"{answer}");
     for id in ids {assert!(answer["details"]["unsatisfied"].as_array().unwrap().iter().any(|c|c["id"]==*id),"missing {id}: {answer}");}
     unchanged(project,&before,&prior);answer
+}
+
+// A task that stops at a checkpoint resumes in a successor attempt that names
+// its predecessor. Its red runs stay where they were recorded; the close pairs
+// them with greens from the successor. Phase 32 plan 3 task 2 could not close
+// because the pair validator only looked inside the closing attempt.
+#[test]
+fn phase12_resumed_attempt_closes_with_its_predecessor_red() {
+    let fixture=Tiny::new("unittest");fixture.attest();let project=fixture.project();
+    let state=task_state(project,"A");
+    let resumed=apply(project,json!({"operation":"execution-task-start","request":{"request_id":"start-A-resumed","task":state["task"],
+        "attempt":"attempt-A-resumed","expected_version":state["state"]["version"],"predecessor":"attempt-A","checks":&fixture.checks[..2]}}));
+    assert_eq!(resumed["status"],"ok","{resumed}");
+    let mut pairs=fixture.pairs[..2].to_vec();
+    for (i,pair) in pairs.iter_mut().enumerate() {
+        let id=format!("green-{i}-resumed");
+        fixture.run_in_attempt("A","attempt-A-resumed",&id,&fixture.command,Some(i),"green");
+        pair["green_run"]=json!(id);
+    }
+    let state=task_state(project,"A");
+    let close=apply(project,json!({"operation":"execution-task-close","request":{"request_id":"close-A-resumed","task":state["task"],"attempt":"attempt-A-resumed",
+        "expected_version":state["state"]["version"],"completion":fixture.green,"checks":pairs,"verification":["green-0-resumed"]}}));
+    assert_eq!(close["status"],"ok","a resumed attempt closes on its predecessor's red: {close}");
+    assert_eq!(task_state(project,"A")["state"]["completed"],true);
 }
 
 #[test]
@@ -1720,4 +1740,39 @@ fn phase12_incomplete_execution_contract_is_refused() {
     assert_eq!(historical_contract["plans"][0]["plan"],2);
     admission_refusal(root,admit_request(historical_contract,"historical",0),"check-command",
         "current.plans[1].evidence_map.items[0].spec.command","check/historical");
+}
+
+fn assert_publication(saved: &Value, answer: &Value) {
+    assert!(answer.get("content").is_none(), "{answer}");
+    assert!(answer.get("approval").is_none(), "{answer}");
+    for field in ["identity", "revision", "map_revision", "readiness"] {
+        assert_eq!(saved[field], answer[field], "{field}");
+    }
+    assert_eq!(answer["content_digest"].as_str().unwrap().len(), 64);
+}
+
+fn assert_publications(saved: &Value, answer: &Value) {
+    let saved = saved.as_array().unwrap();
+    let answer = answer.as_array().unwrap();
+    assert_eq!(saved.len(), answer.len());
+    for (saved, answer) in saved.iter().zip(answer) {
+        assert_publication(saved, answer);
+    }
+}
+
+/// The retained approval binds the submitted slots to the installed document.
+fn retained_request(request: &Value, project: &Path) -> Value {
+    let mut retained = request.clone();
+    for plan in retained["approval"]["submission"]["plans"].as_array_mut().unwrap() {
+        let phase = plan["target"]["phase"].as_u64().unwrap() as u32;
+        let number = plan["target"]["plan"].as_u64().unwrap() as u32;
+        let bytes = fs::read(project.join(format!(".planning/phases/{phase}/PLAN-{number}.md"))).unwrap();
+        let parsed = cadence::execution::plan::parse_plan(&bytes, phase, number).unwrap();
+        plan["content"]["body"] = json!(parsed.body);
+        plan["content"]["execution"] = json!({"schema":parsed.schema,"suite":parsed.suite,"tasks":parsed.tasks});
+        if plan["replacement"].is_object() {
+            plan["replacement"]["content"] = plan["content"].clone();
+        }
+    }
+    retained
 }
