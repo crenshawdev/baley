@@ -453,9 +453,12 @@ pub fn observe_child(project: &Path, launch: &Launch) -> RunResult {
 
 pub fn valid_result_line(line: &str) -> bool {
     if line.contains(['\n', '\r']) { return false }
+    // nextest indents every line it writes and cargo's own lines under it.
+    let line = line.trim_start();
     if line.starts_with("test result:") || line == "OK" || line.starts_with("OK (")
         || line.starts_with("Ran ") || line.starts_with("FAILED (")
-        || line.starts_with("FAIL: ") || line.starts_with("ERROR: ") {
+        || line.starts_with("FAIL: ") || line.starts_with("ERROR: ")
+        || line.starts_with("Summary [") || line.starts_with("PASS [") || line.starts_with("FAIL [") {
         return true;
     }
     line.strip_prefix("test ").and_then(|value| value.rsplit_once(" ... "))
@@ -473,17 +476,32 @@ fn lines(capture: &Capture) -> Vec<String> {
     lines
 }
 
+/// A retained observation is what the binary that recorded it saw. Unknown is
+/// the weaker claim and needs an owner classification either way, so a later
+/// classifier that recognizes the bytes does not make the record invalid; a
+/// retained result that says more than the bytes say still does.
+pub fn observation_consistent(stored: &Observation, stdout: &Capture, stderr: &Capture) -> bool {
+    *stored == Observation::Unknown || *stored == classify(stdout, stderr)
+}
+
 pub fn classify(stdout: &Capture, stderr: &Capture) -> Observation {
     let ran = regex::Regex::new(r"^Ran [0-9]+ tests?( in .+)?$").expect("fixed grammar");
     let failed = regex::Regex::new(r"^FAILED \(([^()]*)\)$").expect("fixed grammar");
     let counts = regex::Regex::new(r"^(failures|errors|skipped|expected failures|unexpected successes)=([0-9]+)$").expect("fixed grammar");
+    let nextest = regex::Regex::new(r"^Summary \[[^\]]*\] [0-9]+ tests? run: [0-9]+ passed(, ([0-9]+) failed)?").expect("fixed grammar");
     let mut python_ran = false;
     let mut python_outcome = None;
     for capture in [stdout, stderr] {
         for line in lines(capture) {
-            let line = line.as_str();
+            let line = line.trim_start();
             if line.starts_with("test result:") {
                 return Observation::ResultsObserved { summary: Summary::Cargo { failed: line.starts_with("test result: FAILED") } };
+            }
+            // nextest runs cargo's test binaries and writes one Summary line;
+            // it repeats cargo's `test result:` only under a failure.
+            if let Some(found) = nextest.captures(line) {
+                let failed = found.get(2).is_some_and(|count| count.as_str() != "0");
+                return Observation::ResultsObserved { summary: Summary::Cargo { failed } };
             }
             if ran.is_match(line) { python_ran = true; }
             if line == "OK" { python_outcome = Some(Summary::Unittest { failed: false, failures: 0, errors: 0 }); }

@@ -93,7 +93,7 @@ pub fn contribute(data: &Value, binding: &str, record: &Record) -> Result<Value>
                 || observed.observed_at < launch.launched_at
                 || [&observed.stdout, &observed.stderr].iter().any(|c| c.bytes.len() > 65536 || c.digest != digest(&c.bytes)
                     || c.result_lines.iter().any(|line| !child::valid_result_line(line)))
-                || observed.observation != child::classify(&observed.stdout, &observed.stderr)
+                || !child::observation_consistent(&observed.observation, &observed.stdout, &observed.stderr)
                 || (observed.material_unchanged && source_after.as_ref() != Some(&attempt.inputs.basis.source)) {
                 return Err(refuse(phase, "verification-run-result", "result", "result duplicates or differs from observed material and captures"));
             }

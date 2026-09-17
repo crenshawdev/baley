@@ -291,7 +291,7 @@ pub fn contribute(data: &Value, root: &str, request: &Request) -> Result<(Value,
                 || history.iter().any(|r| matches!(&r.request.event, Event::Result(prior) if prior.run_id == result.run_id))
                 || [&result.stdout, &result.stderr].iter().any(|s| s.bytes.len() > 65536 || digest(&s.bytes) != s.digest
                     || s.result_lines.iter().any(|line| !super::runner::valid_result_line(line)))
-                || result.observation != super::runner::classify(&result.stdout, &result.stderr) {
+                || !super::runner::observation_consistent(&result.observation, &result.stdout, &result.stderr) {
                 return Err(refuse("task-result", "result duplicates a run or has invalid capture/timestamp"));
             }
         }
@@ -807,7 +807,7 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
             if result.observed_at < launch.launched_at || suite_result(&history, plan, &result.run_id).is_some()
                 || [&result.stdout, &result.stderr].iter().any(|s| s.bytes.len() > 65536 || digest(&s.bytes) != s.digest
                     || s.result_lines.iter().any(|line| !super::runner::valid_result_line(line)))
-                || result.observation != super::runner::classify(&result.stdout, &result.stderr) {
+                || !super::runner::observation_consistent(&result.observation, &result.stdout, &result.stderr) {
                 return Err(refuse("suite-result", "result duplicates a run or has invalid capture/timestamp"));
             }
             if suite_failed(result) {
