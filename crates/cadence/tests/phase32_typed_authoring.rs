@@ -9,6 +9,62 @@ use phase31::{Client, ProcessFixture, approve, tree};
 
 const PHASE: u32 = 31;
 
+#[test]
+fn phase32_two_callers_on_one_resident_read_the_same_draft_slice() {
+    let fixture = ProcessFixture::new();
+    let mut client = Client::open(fixture.project());
+    let mut caller_a = phase31::Caller::new(0);
+    let mut caller_b = phase31::Caller::new(1);
+    native_context(&mut client);
+    let allocation = client.call(
+        "cadence_query",
+        json!({"operation":"plan-read","phase":PHASE,"count":1}),
+    );
+    let request = client.send_call(
+        &mut caller_a, "cadence_apply",
+        json!({"operation":"plan-submit","submission":typed_submission(&allocation)}),
+    );
+    let draft = client.receive_call(request);
+    assert_eq!(draft["status"], "ok", "{draft}");
+    let identity = json!({
+        "kind":"plan-draft","phase":draft["documents"][0]["identity"]["phase"],
+        "plan":draft["documents"][0]["identity"]["plan"],"digest":draft["submission_digest"]
+    });
+    let request = client.send_call(
+        &mut caller_a, "cadence_query",
+        json!({"operation":"document","identity":identity}),
+    );
+    let index = client.receive_call(request);
+    assert_eq!(index["status"], "ok", "{index}");
+    let parts = index["parts"].as_array().unwrap();
+    assert_eq!(parts.iter().map(|part| part["part"].as_str().unwrap()).collect::<Vec<_>>(),
+        vec!["frontmatter", "goal", "truths", "context", "evidence-map",
+            "tasks-heading", "task:typed-plan", "notes"]);
+    let resident = client.serve_processes();
+    assert_eq!(resident.len(), 1);
+    let mut rendered = Vec::new();
+    for part in parts {
+        let arguments = json!({"operation":"document","identity":identity,"part":part["part"]});
+        let request_a = client.send_call(&mut caller_a, "cadence_query", arguments.clone());
+        let request_b = client.send_call(&mut caller_b, "cadence_query", arguments);
+        assert_ne!(request_a, request_b);
+        // Receive B first so correlation cannot rely on the order of reads.
+        let slice_b = client.receive_call(request_b);
+        let slice_a = client.receive_call(request_a);
+        assert_eq!(slice_a["status"], "ok", "{slice_a}");
+        assert_eq!(slice_b["status"], "ok", "{slice_b}");
+        assert_eq!(slice_a["revision"], draft["documents"][0]["revision"]);
+        assert_eq!(slice_b["revision"], draft["documents"][0]["revision"]);
+        let bytes_a = slice_a["body"].as_str().unwrap().as_bytes();
+        let bytes_b = slice_b["body"].as_str().unwrap().as_bytes();
+        assert_eq!(bytes_a, bytes_b, "part {}", part["part"]);
+        rendered.extend_from_slice(bytes_a);
+        assert_eq!(client.serve_processes(), resident);
+    }
+    assert_eq!(format!("{:x}", Sha256::digest(&rendered)), draft["documents"][0]["revision"]);
+    client.finish();
+}
+
 fn native_context(client: &mut Client) {
     let answer = client.call(
         "cadence_apply",

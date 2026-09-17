@@ -14,6 +14,18 @@ pub struct Client {
     stdout: BufReader<std::process::ChildStdout>,
 }
 
+pub struct Caller {
+    next_id: u64,
+    end_id: u64,
+}
+
+impl Caller {
+    pub fn new(slot: u32) -> Self {
+        let start = (u64::from(slot) + 1) * 1_000_000;
+        Self { next_id: start, end_id: start + 1_000_000 }
+    }
+}
+
 impl Client {
     pub fn open(project: &Path) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_cadence"))
@@ -61,7 +73,21 @@ impl Client {
     pub fn call(&mut self, tool: &str, arguments: Value) -> Value {
         self.send(json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
             "params":{"name":tool,"arguments":arguments}}));
+        self.receive_call(2)
+    }
+
+    pub fn send_call(&mut self, caller: &mut Caller, tool: &str, arguments: Value) -> u64 {
+        assert!(caller.next_id < caller.end_id, "caller exhausted its request id range");
+        let id = caller.next_id;
+        caller.next_id += 1;
+        self.send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
+            "params":{"name":tool,"arguments":arguments}}));
+        id
+    }
+
+    pub fn receive_call(&mut self, id: u64) -> Value {
         let response = self.recv();
+        assert_eq!(response["id"], id, "reply must match its caller's request");
         assert!(response.get("error").is_none(), "{response}");
         assert_ne!(response["result"]["isError"], true, "{response}");
         let structured = response["result"]["structuredContent"].clone();
@@ -71,6 +97,34 @@ impl Client {
             .collect();
         assert_eq!(structured, serde_json::from_str::<Value>(&text).unwrap());
         structured
+    }
+
+    pub fn serve_processes(&self) -> Vec<u32> {
+        let output = Command::new("ps").args(["-eo", "pid=,ppid=,args="]).output().unwrap();
+        assert!(output.status.success());
+        let listing = String::from_utf8(output.stdout).unwrap();
+        let rows: Vec<_> = listing.lines().map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next().unwrap().parse::<u32>().unwrap();
+            let parent = fields.next().unwrap().parse::<u32>().unwrap();
+            let command: Vec<_> = fields.collect();
+            (pid, parent, command)
+        }).collect();
+        let mut descendants = std::collections::BTreeSet::from([self.child.id()]);
+        loop {
+            let before = descendants.len();
+            for (pid, parent, _) in &rows {
+                if descendants.contains(parent) {
+                    descendants.insert(*pid);
+                }
+            }
+            if descendants.len() == before { break; }
+        }
+        rows.iter().filter(|(pid, _, command)| {
+            descendants.contains(pid)
+                && command.first().is_some_and(|name| Path::new(name).file_name().is_some_and(|name| name == "cadence"))
+                && command.get(1) == Some(&"serve")
+        }).map(|(pid, _, _)| *pid).collect()
     }
 
     pub fn wait_for_event(&mut self, phase: u32, run_id: &str) -> Value {
