@@ -4,9 +4,7 @@ use cadence::store::{
     writer::{Operation, Store},
 };
 use serde_json::{Value, json};
-#[path = "support/phase13.rs"]
-#[allow(dead_code)]
-mod phase13;
+use dispatch_support as phase13;
 use std::{
     collections::BTreeMap,
     fs,
