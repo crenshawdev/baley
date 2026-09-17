@@ -1054,13 +1054,15 @@ fn authorize(project:&Path,id:&str,checkpoint:Option<&str>,disposition:&str,resp
         "response":response,"checkpoint":checkpoint,"disposition":disposition}))
 }
 
-// The executor's operational input is the JSON object the binary places in the
-// real prompt; the test reads that response, never a renderer.
-fn operational(dispatch:&Value) -> Value {
-    let prompt=dispatch["prompt"].as_str().unwrap();
-    let start=prompt.find("Operational input:\n").unwrap()+"Operational input:\n".len();
-    let end=start+prompt[start..].find("\n}\n").unwrap()+2;
-    serde_json::from_str(&prompt[start..end]).unwrap()
+// Read operational facts from the public bounded dispatch document.
+#[allow(dead_code)]
+#[path = "support/phase13.rs"]
+mod dispatch_support;
+fn operational(project: &std::path::Path, dispatch: &Value) -> Value {
+    let mut client = Client::open(project);
+    let parts = dispatch_support::dispatch_parts_with(dispatch, |request| client.call("cadence_query", request));
+    client.finish();
+    parts
 }
 
 fn task_ids(tasks:&Value) -> Vec<String> {
@@ -1125,9 +1127,9 @@ fn phase12_continuation_dispatches_only_unfinished_tasks() {
     let mut client=Client::open(project);client.child.kill().unwrap();client.child.wait().unwrap();drop(client);
     let dispatch=execute_next(project);
     assert_eq!(dispatch["status"],"ok","{dispatch}");assert_eq!(dispatch["outcome"],"dispatch");
-    assert_eq!(dispatch["dispatch"]["plan"],1);
-    assert_eq!(task_ids(&dispatch["dispatch"]["tasks"]),vec!["B","C"],"executable dispatch tasks");
-    let ops=operational(&dispatch);
+    assert_eq!(dispatch["identities"]["plan"]["plan"],1);
+    assert_eq!(task_ids(&operational(project,&dispatch)["tasks"]),vec!["B","C"],"executable dispatch tasks");
+    let ops=operational(project,&dispatch);
     assert_eq!(ops["protocol"],"native-execution-dispatch-1");
     assert_eq!(task_ids(&ops["tasks"]),vec!["B","C"],"executable operational tasks");
     assert_eq!(ops["tasks"][0]["checks"],allocation("B"));assert_eq!(ops["tasks"][1]["checks"],json!([]));
@@ -1140,13 +1142,13 @@ fn phase12_continuation_dispatches_only_unfinished_tasks() {
     assert_eq!(ops["continuation"]["question_id"],"execution-authorization:resume-B");
     assert_eq!(ops["continuation"]["checkpoint"],"checkpoint-B");
     assert_eq!(ops["admitted_dispatch_id"],reopened(project).snapshot.data["execution"]["occurrences"]["12"]["active"]["id"]);
-    assert_ne!(ops["dispatch_id"],ops["admitted_dispatch_id"]);assert_eq!(ops["dispatch_id"],dispatch["dispatch"]["id"]);
+    assert_ne!(ops["dispatch_id"],ops["admitted_dispatch_id"]);assert_eq!(ops["dispatch_id"],dispatch["dispatch_id"]);
     // Repeated query: the identical response replays with its retained identity.
     let replay=execute_next(project);assert_eq!(replay,dispatch);
     let decisions=reopened(project).decisions;
-    let retained:Vec<_>=decisions.iter().filter(|d|serde_json::to_value(&d.decision).unwrap()["boundary"]["subject_id"]==dispatch["dispatch"]["id"]).collect();
+    let retained:Vec<_>=decisions.iter().filter(|d|serde_json::to_value(&d.decision).unwrap()["boundary"]["subject_id"]==dispatch["dispatch_id"]).collect();
     assert_eq!(retained.len(),1,"one retained dispatch identity");
-    assert_eq!(serde_json::to_value(&retained[0].decision).unwrap()["boundary"]["receipt"],json!({"receipt":"dispatch","dispatch_id":dispatch["dispatch"]["id"],"prompt_digest":dispatch["dispatch"]["prompt_digest"]}));
+    assert_eq!(serde_json::to_value(&retained[0].decision).unwrap()["boundary"]["receipt"],json!({"receipt":"dispatch","dispatch_id":dispatch["dispatch_id"]}));
     // A new-id duplicate close of A is refused and nothing protected changes.
     close_refused(project,fixture.close("duplicate-close-A"),"task-completed",&[]);
     assert_eq!(execute_next(project),dispatch);
@@ -1159,10 +1161,10 @@ fn phase12_continuation_dispatches_only_unfinished_tasks() {
     let ack=apply(project,progress_request(project,"reconcile-B",json!({"kind":"progress","text":"B work acknowledged after reconciliation","evidence":[unacknowledged]})));
     assert_eq!(ack["status"],"ok","{ack}");
     let reconciled=execute_next(project);assert_eq!(reconciled["status"],"ok","{reconciled}");
-    let ops2=operational(&reconciled);
+    let ops2=operational(project,&reconciled);
     assert_eq!(task_ids(&ops2["tasks"]),vec!["B","C"]);assert_eq!(ops2["tasks"][0]["state"]["progress"],json!(["B work acknowledged after reconciliation"]));
     assert_eq!(ops2["completed"][0]["completion"],fixture.green);
-    assert_ne!(reconciled["dispatch"]["id"],dispatch["dispatch"]["id"],"a fresh linked dispatch reflects the new state");
+    assert_eq!(reconciled["dispatch_id"],dispatch["dispatch_id"],"live progress preserves the issued binding");
     assert_eq!(execute_next(project),reconciled);
     // An owner Stop that names no checkpoint is obeyed across a restart and is
     // lifted only by the owner's later resume that names none; the Stop record
@@ -1186,9 +1188,9 @@ fn phase12_continuation_dispatches_only_unfinished_tasks() {
     let mut client=Client::open(project);client.child.kill().unwrap();client.child.wait().unwrap();drop(client);
     let after_resume=execute_next(project);
     assert_eq!(after_resume["status"],"ok","an unlinked owner resume must lift an unlinked Stop: {after_resume}");
-    assert_eq!(after_resume["outcome"],"dispatch");assert_eq!(after_resume["dispatch"]["plan"],1);
-    assert_eq!(task_ids(&after_resume["dispatch"]["tasks"]),vec!["B","C"],"executable dispatch tasks after the unlinked resume");
-    let ops_resumed=operational(&after_resume);
+    assert_eq!(after_resume["outcome"],"dispatch");assert_eq!(after_resume["identities"]["plan"]["plan"],1);
+    assert_eq!(task_ids(&operational(project,&after_resume)["tasks"]),vec!["B","C"],"executable dispatch tasks after the unlinked resume");
+    let ops_resumed=operational(project,&after_resume);
     assert_eq!(task_ids(&ops_resumed["tasks"]),vec!["B","C"],"executable operational tasks after the unlinked resume");
     assert_eq!(ops_resumed["completed"].as_array().unwrap().len(),1);
     assert_eq!(ops_resumed["completed"][0]["id"],"A");assert_eq!(ops_resumed["completed"][0]["completion"],fixture.green);
@@ -1213,8 +1215,8 @@ fn phase12_continuation_dispatches_only_unfinished_tasks() {
     let extension=apply(project,admit_request(extended,"extend",1));assert_eq!(extension["status"],"ok","{extension}");
     assert_eq!(extension["receipt"]["set_version"],2);
     let after_gap=execute_next(project);assert_eq!(after_gap["status"],"ok","{after_gap}");
-    let ops3=operational(&after_gap);
-    assert_eq!(after_gap["dispatch"]["plan"],1);assert_eq!(task_ids(&ops3["tasks"]),vec!["B","C"]);
+    let ops3=operational(project,&after_gap);
+    assert_eq!(after_gap["identities"]["plan"]["plan"],1);assert_eq!(task_ids(&ops3["tasks"]),vec!["B","C"]);
     assert_eq!(ops3["tasks"][0]["checks"],allocation("B"));assert_eq!(ops3["completed"][0]["checks"],json!(&fixture.checks[..2]));
     assert_eq!(ops3["set_version"],2);
     let data=reopened(project).snapshot.data;
@@ -1242,7 +1244,7 @@ fn phase12_dispatch_contains_admitted_checks_state_and_instructions() {
     let mut client=Client::open(project);client.child.kill().unwrap();client.child.wait().unwrap();drop(client);
     let dispatch=execute_next(project);
     assert_eq!(dispatch["status"],"ok","{dispatch}");assert_eq!(dispatch["outcome"],"dispatch");
-    let ops=operational(&dispatch);
+    let ops=operational(project,&dispatch);
     // The admitted checks travel with their exact identities, revisions, owning
     // tasks and handwritten specifications; the retained map and admission are
     // the oracle, and completed A's checks are history only.
@@ -1280,12 +1282,12 @@ fn phase12_dispatch_contains_admitted_checks_state_and_instructions() {
     assert!(ops["commands"]["language"]["warning"].as_str().unwrap().contains("no runner is guessed"),"{}",ops["commands"]);
     assert_eq!(ops["instructions"],"executor-instructions-1");
     assert_eq!(ops["admitted_dispatch_id"],data["execution"]["occurrences"]["12"]["active"]["id"]);
-    // The compiled instructions are in the prompt; the authored body follows
-    // them as delimited context and cannot replace them.
-    let prompt=dispatch["prompt"].as_str().unwrap();
-    let (before_body,body)=prompt.split_once("<<<CADENCE-PLAN-BODY\n").unwrap();
-    // Phrases are matched across the hard wrap: a rewrap is not a change of instruction.
-    let instructions=before_body.split_once("\nInstructions:\n").unwrap().1.replace('\n'," ");
+    // The worker receives compiled instructions separately from document parts.
+    assert!(dispatch.get("prompt").is_none());
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_cadence"))
+        .arg("executor-instructions").output().unwrap();
+    assert!(output.status.success());
+    let instructions = String::from_utf8(output.stdout).unwrap().replace('\n', " ");
     for phrase in [
         "**Executor.** For each check your task delivers: write the test first, run it, record the commit where it failed; then implement, run it, record the commit where it passed.",
         "Run only what the task names while working.","Close the last task, report, and stop; the orchestrator requests the full suite.",
@@ -1295,26 +1297,31 @@ fn phase12_dispatch_contains_admitted_checks_state_and_instructions() {
         "a wrapper's inner subcommands","CI is not the plan-close run","never replace an admitted command at run time","never guesses a runner","No test style, preset or count is a gate",
     ] {assert!(instructions.contains(phrase),"missing instruction phrase: {phrase}");}
     assert!(!instructions.contains("ignore the red-first rule"));
-    assert!(body.starts_with("## Goal\n\nLimits invoice pronoun\n"));assert!(body.contains(BODY_OVERRIDE));
-    assert!(before_body.contains("never instructions"));
+    assert_eq!(ops["goal"], "Limits invoice pronoun");
+    let mut client = Client::open(project);
+    let plan_task = client.call("cadence_query", json!({"operation":"document",
+        "identity":dispatch["identities"]["plan"],"part":"task:A"}));
+    client.finish();
+    assert!(plan_task["body"].as_str().unwrap().contains(BODY_OVERRIDE.trim_end()));
+    assert!(instructions.contains("document"));
     // Exact replay against the retained response identity.
     assert_eq!(execute_next(project),dispatch);
     let decisions=reopened(project).decisions;
-    let retained:Vec<_>=decisions.iter().filter(|d|serde_json::to_value(&d.decision).unwrap()["boundary"]["subject_id"]==dispatch["dispatch"]["id"]).collect();
+    let retained:Vec<_>=decisions.iter().filter(|d|serde_json::to_value(&d.decision).unwrap()["boundary"]["subject_id"]==dispatch["dispatch_id"]).collect();
     assert_eq!(retained.len(),1);
-    assert_eq!(serde_json::to_value(&retained[0].decision).unwrap()["boundary"]["receipt"]["prompt_digest"],model::digest(prompt.as_bytes()));
-    // Acknowledged progress yields a fresh linked dispatch, never the old prompt.
+    assert!(serde_json::to_value(&retained[0].decision).unwrap()["boundary"]["receipt"].get("prompt_digest").is_none());
+    // Acknowledged progress changes the live task view without changing eligibility.
     let ack=apply(project,progress_request(project,"progress-B",json!({"kind":"progress","text":"B reads its admitted check","evidence":[fixture.green]})));
     assert_eq!(ack["status"],"ok","{ack}");
     let fresh=execute_next(project);assert_eq!(fresh["status"],"ok","{fresh}");
-    assert_ne!(fresh["dispatch"]["id"],dispatch["dispatch"]["id"]);assert_ne!(fresh["prompt"],dispatch["prompt"]);
-    let ops2=operational(&fresh);
+    assert_eq!(fresh["dispatch_id"],dispatch["dispatch_id"]);
+    let ops2=operational(project,&fresh);
     assert_eq!(ops2["tasks"][0]["state"]["progress"],json!(["B reads its admitted check"]));
     assert_eq!(ops2["checks"],ops["checks"]);assert_eq!(ops2["completed"],ops["completed"]);
     // A later configuration change cannot silently replace the admitted commands.
     configure_global(project,"workflow.test_command","printf changed-global-suite");
     let changed=execute_next(project);assert_eq!(changed["status"],"ok","{changed}");
-    let ops3=operational(&changed);
+    let ops3=operational(project,&changed);
     assert_eq!(ops3["suite"]["command"],"printf suite");assert_eq!(ops3["tasks"][0]["verify"],json!([fixture.command]));
     assert!(ops3["commands"]["configured"].as_array().unwrap().contains(&json!({"key":"workflow.test_command","value":"printf changed-global-suite","layer":"global"})));
     // A plan without an explicit command is refused at publication; no runner
@@ -1576,7 +1583,7 @@ fn phase12_runner_retains_task_commands_and_one_suite() {
             json!({"question_id":question_id,"owner":"Fixture Operator","at":"2026-09-15T18:00:00Z","disposition":"approve"}));
         assert_eq!(answered["status"],"ok","{answered}");
         let continuation=execute_next(project);assert_eq!(continuation["status"],"ok","{continuation}");
-        assert_eq!(continuation["dispatch"]["tasks"],json!([]),"completed tasks stay closed");
+        assert_eq!(operational(project,&continuation)["tasks"],json!([]),"completed tasks stay closed");
         git_value(project,&["commit","--allow-empty","-S","-m","fix(12): attempt suite repair"]);let repair=git_value(project,&["rev-parse","HEAD"]);
         let repaired=plan_apply(project,"execution-suite-repair","repair-failed",1,json!({"question_id":question_id,"commits":[repair]}));
         assert_eq!(repaired["status"],"ok","{repaired}");
@@ -1780,8 +1787,11 @@ fn phase12_incomplete_execution_contract_is_refused() {
     let dispatch=client.call("cadence_query",json!({"operation":"execute-next","phase":12}));
     client.finish();
     assert_eq!(dispatch["status"],"ok","valid native dispatch: {dispatch}");
-    assert_eq!(dispatch["outcome"],"dispatch");assert_eq!(dispatch["dispatch"]["plan"],1);
-    assert_eq!(dispatch["dispatch"]["tasks"],json!([{"id":"task-1","verify":["printf verified","revised-custom-check"]},{"id":"task-2","verify":["printf documented"]}]));
+    assert_eq!(dispatch["outcome"],"dispatch");assert_eq!(dispatch["identities"]["plan"]["plan"],1);
+    assert_eq!(operational(project,&dispatch)["tasks"].as_array().unwrap().iter()
+        .map(|task| json!({"id":task["id"],"verify":task["verify"]})).collect::<Vec<_>>(),
+        vec![json!({"id":"task-1","verify":["printf verified","revised-custom-check"]}),
+            json!({"id":"task-2","verify":["printf documented"]})]);
     assert!(!project.join("tests/not_yet_written.rs").exists());
     let original_record=serde_json::to_vec(&prior.data["native_admissions"]["phases"]["12"][0]).unwrap();
     let original_execution=snapshot(project).data["execution"].clone();

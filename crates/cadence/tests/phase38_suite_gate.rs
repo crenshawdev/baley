@@ -370,8 +370,9 @@ fn phase38_retained_dispatch_prompt_survives_renderer_change() {
         json!({"operation":"execute-next","phase":PHASE}),
     );
     assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
-    assert_eq!(dispatch["dispatch"]["prompt_digest"],
-        cadence::store::model::digest(dispatch["prompt"].as_str().unwrap().as_bytes()));
+    assert!(dispatch.get("prompt").is_none());
+    assert!(history(project)["active"].get("prompt").is_none());
+    assert!(history(project)["active"].get("prompt_digest").is_none());
 
     let current = task(project);
     let started = call(
@@ -447,9 +448,9 @@ fn phase38_retained_dispatch_prompt_survives_renderer_change() {
         json!({"operation":"execute-next","phase":PHASE}),
     );
     assert_eq!(current_issue["outcome"], "dispatch", "{current_issue}");
-    let retained_prompt = current_issue["prompt"].as_str().unwrap().to_owned();
-    let admitted_digest = current_issue["dispatch"]["prompt_digest"].clone();
-    let expected_digest = cadence::store::model::digest(retained_prompt.as_bytes());
+    let retained = client.call("cadence_query", json!({"operation":"execution-history","phase":PHASE}))["active"].clone();
+    assert!(retained.get("prompt").is_none());
+    assert!(retained.get("prompt_digest").is_none());
     client.finish();
 
     let changed = changed_binary(temp.path());
@@ -461,9 +462,9 @@ fn phase38_retained_dispatch_prompt_survives_renderer_change() {
     replacement.finish();
     assert_eq!(reopened["status"], "ok", "retained prompt was refused: {reopened}");
     assert_eq!(reopened["outcome"], "dispatch", "{reopened}");
-    assert_eq!(reopened["prompt"].as_str().unwrap().as_bytes(), retained_prompt.as_bytes());
-    assert_eq!(admitted_digest, expected_digest);
-    assert_eq!(reopened["dispatch"]["prompt_digest"], expected_digest);
+    assert_eq!(reopened, current_issue);
+    assert_eq!(history(project)["active"], retained);
+    assert!(reopened.get("prompt").is_none());
 }
 
 const RENDERED_COMMAND: &str = "python3 -B tests/rendered_skill.py";
@@ -749,7 +750,8 @@ fn phase38_regenerated_skill_is_implicit_lease_material() {
     client.finish();
     let guarded = guard_rendered_skill(project, &changed_binary);
 
-    let files = dispatch["dispatch"]["files"].as_array().unwrap();
+    let parts = support::dispatch_parts(project, &dispatch);
+    let files = parts["lease"]["files"].as_array().unwrap();
     assert!(files.iter().any(|path| path == RENDERED_SKILL),
         "the retained dispatch lease must include {RENDERED_SKILL}: {files:?}");
     assert!(closed["receipt"]["request"]["event"]["source"]["out_of_lease"]
@@ -983,7 +985,7 @@ fn phase38_approved_plan_repair_accepts_one_second_launch() {
     assert_eq!(call(project, "cadence_apply", answer_request)["receipt"], answer["receipt"]);
     let continuation = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(continuation["outcome"], "dispatch", "{continuation}");
-    assert_eq!(continuation["dispatch"]["tasks"], json!([]), "completed tasks never reopen: {continuation}");
+    assert_eq!(support::dispatch_parts(project, &continuation)["tasks"], json!([]), "completed tasks never reopen: {continuation}");
     fs::write(project.join("tests/suite.sh"), passing_suite()).unwrap();
     git(project, &["add", "tests/suite.sh"]);
     git(project, &["commit", "-S", "-m", "fix(38): repair T2 suite"]);
@@ -1108,7 +1110,7 @@ fn phase38_second_red_blocks_and_refuses_third_launch() {
     assert_eq!(authorized["status"], "ok", "{authorized}");
     let dispatch = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
-    assert_eq!(dispatch["dispatch"]["plan"], 2, "the blocked plan never redispatches: {dispatch}");
+    assert_eq!(dispatch["identities"]["plan"]["plan"], 2, "the blocked plan never redispatches: {dispatch}");
 
     let current = task_for(project, 2, "gap-plan");
     let started = call(project, "cadence_apply", json!({"operation":"execution-task-start","request":{
@@ -1132,7 +1134,7 @@ fn phase38_second_red_blocks_and_refuses_third_launch() {
     let risk = call(project, "cadence_apply", json!({"operation":"risk-check",
         "request_id":"risk-gap-plan","scope":{"phase":PHASE,
             "occurrence":"phase-38-execution","worker":"2"},
-        "source":{"kind":"execution","plan":2,"dispatch_id":dispatch["dispatch"]["id"]},
+        "source":{"kind":"execution","plan":2,"dispatch_id":dispatch["dispatch_id"]},
         "surfaces":null}));
     assert_eq!(risk["status"], "ok", "{risk}");
     let complete = call(project, "cadence_apply",
@@ -1286,8 +1288,8 @@ fn phase38_execute_next_dispatches_named_plan_first() {
         json!({"operation":"execute-next","phase":PHASE,"plan":2}));
     assert_eq!(dispatch["status"], "ok", "named admitted plan must be accepted: {dispatch}");
     assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
-    assert_eq!(dispatch["dispatch"]["plan"], 2, "{dispatch}");
-    assert_eq!(dispatch["dispatch"]["owner_selection"], json!({"plan":2}), "{dispatch}");
+    assert_eq!(dispatch["identities"]["plan"]["plan"], 2, "{dispatch}");
+    assert_eq!(history(project)["active"]["owner_selection"], json!({"plan":2}), "{dispatch}");
     let retained = history(project);
     assert_eq!(retained["active"]["owner_selection"], json!({"plan":2}), "{retained}");
     assert_eq!(plan_view_for(project, 1)["outcome"], Value::Null, "{retained}");
@@ -1341,7 +1343,7 @@ fn phase38_execute_next_dispatches_named_plan_first() {
     let risk = call(project, "cadence_apply", json!({"operation":"risk-check",
         "request_id":"risk-selected-plan","scope":{"phase":PHASE,
             "occurrence":"phase-38-execution","worker":"2"},
-        "source":{"kind":"execution","plan":2,"dispatch_id":dispatch["dispatch"]["id"]},
+        "source":{"kind":"execution","plan":2,"dispatch_id":dispatch["dispatch_id"]},
         "surfaces":null}));
     assert_eq!(risk["status"], "ok", "{risk}");
     let complete = call(project, "cadence_apply",
@@ -1350,8 +1352,8 @@ fn phase38_execute_next_dispatches_named_plan_first() {
     let next = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(next["status"], "ok", "{next}");
     assert_eq!(next["outcome"], "dispatch", "{next}");
-    assert_eq!(next["dispatch"]["plan"], 1, "omission must retain first-ready order: {next}");
-    assert_eq!(next["dispatch"]["owner_selection"], Value::Null, "{next}");
+    assert_eq!(next["identities"]["plan"]["plan"], 1, "omission must retain first-ready order: {next}");
+    assert_eq!(history(project)["active"]["owner_selection"], Value::Null, "{next}");
 }
 
 #[test]

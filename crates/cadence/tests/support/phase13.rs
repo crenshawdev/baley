@@ -414,6 +414,54 @@ pub fn query(project: &Path, request: Value) -> Value {
     answer
 }
 
+#[allow(dead_code)]
+pub fn dispatch_parts(project: &Path, answer: &Value) -> Value {
+    let mut client = Client::open(project);
+    let parts = dispatch_parts_with(answer, |request| client.call("cadence_query", request));
+    client.finish();
+    parts
+}
+
+#[allow(dead_code)]
+pub fn dispatch_parts_with(answer: &Value, mut query: impl FnMut(Value) -> Value) -> Value {
+    assert!(answer.get("prompt").is_none(), "{answer}");
+    let identity = &answer["identities"]["dispatch"];
+    let index = query(json!({"operation":"document","identity":identity}));
+    assert_eq!(index["kind"], "document-index", "{index}");
+    let mut bodies: Vec<(String, String)> = Vec::new();
+    for part in index["parts"].as_array().unwrap() {
+        let selector = part["part"].as_str().unwrap();
+        let slice = query(json!({"operation":"document","identity":identity,"part":selector}));
+        assert_eq!(slice["kind"], "document-slice", "{slice}");
+        let body = slice["body"].as_str().unwrap();
+        assert!(body.len() <= 24_576);
+        if let Some((name, previous)) = bodies.last_mut()
+            && selector.strip_prefix(&format!("{name}:")).is_some_and(|suffix| suffix.parse::<usize>().is_ok()) {
+            previous.push_str(body);
+        } else {
+            bodies.push((selector.into(), body.into()));
+        }
+    }
+    let mut result = json!({"tasks":[],"checks":[]});
+    for (name, body) in bodies {
+        if ["goal", "context", "notes"].contains(&name.as_str()) {
+            result[&name] = json!(body);
+            continue;
+        }
+        let value: Value = serde_json::from_str(&body).unwrap();
+        if name == "identity" {
+            result.as_object_mut().unwrap().extend(value.as_object().unwrap().clone());
+        } else if name.starts_with("task:") {
+            result["tasks"].as_array_mut().unwrap().push(value);
+        } else if name.starts_with("check:") {
+            result["checks"].as_array_mut().unwrap().push(value);
+        } else {
+            result[&name] = value;
+        }
+    }
+    result
+}
+
 pub fn git_value(project: &Path, args: &[&str]) -> String {
     let output = Command::new("git").args(["-c", "commit.gpgsign=false", "-c", "user.name=Cadence-Phase13", "-c", "user.email=phase13@example.invalid"])
         .args(args).current_dir(project).env("GNUPGHOME", project.join(".fixture-gnupg"))

@@ -257,16 +257,18 @@ async fn accept(server: &CadenceServer, fixture: &Fixture) {
         .unwrap();
 }
 
+fn retained_dispatch(root: &Path, phase: u32) -> ActiveDispatch {
+    let snapshot: Value = serde_json::from_slice(&fs::read(root.join("state.json")).unwrap()).unwrap();
+    serde_json::from_value(snapshot["data"]["execution"]["occurrences"][phase.to_string()]["active"].clone()).unwrap()
+}
+
 async fn dispatch(server: &CadenceServer, fixture: &Fixture) -> ActiveDispatch {
-    let Envelope::Ok(Success::Dispatch { dispatch, prompt }) =
-        server.query_execution(&fixture.root, 6).await.unwrap()
-    else {
-        panic!("expected a dispatch")
-    };
-    assert_eq!(cadence::store::model::digest(prompt.as_bytes()), dispatch.prompt_digest);
-    assert_eq!(prompt, dispatch.prompt);
-    assert!(prompt.contains(&dispatch.body));
-    *dispatch
+    let answer = server.query_execution(&fixture.root, 6).await.unwrap();
+    let retained = retained_dispatch(&fixture.root, 6);
+    assert_eq!(answer, Envelope::Ok(Success::dispatch(&retained)));
+    assert!(retained.prompt.contains(&retained.body));
+    assert_eq!(cadence::store::model::digest(retained.prompt.as_bytes()), retained.prompt_digest);
+    retained
 }
 
 fn commit(fixture: &Fixture, name: &str, subject: &str, signed: bool) -> String {
@@ -930,12 +932,12 @@ fn execution_restart_dispatch_recovery_distinguishes_pre_admission() {
             None,
         );
         assert_eq!(boundary_count(&not_admitted.root), 0);
-        let Envelope::Ok(Success::Dispatch { dispatch, .. }) =
+        let Envelope::Ok(Success::Dispatch { expected_execution_version, .. }) =
             execution_child_result(&not_admitted.root, "read-query", None)
         else {
             panic!("fresh process did not admit the first dispatch")
         };
-        assert_eq!(dispatch.expected_execution_version, 1);
+        assert_eq!(expected_execution_version, 1);
         assert_eq!(boundary_count(&not_admitted.root), 1);
 
         let admitted = fixture(&[(&["src/a.rs"], &["T1"], "persisted body 日本語\n")]);
@@ -944,22 +946,25 @@ fn execution_restart_dispatch_recovery_distinguishes_pre_admission() {
         drop(server);
         kill_execution_child(&admitted.root, "dispatch-lost", "dispatch-confirmed", None);
         assert_eq!(boundary_count(&admitted.root), 1);
-        let Envelope::Ok(Success::Dispatch { dispatch, prompt }) =
+        let Envelope::Ok(Success::Dispatch { expected_execution_version, dispatch_id, prompt_digest, .. }) =
             execution_child_result(&admitted.root, "read-query", None)
         else {
             panic!("fresh process did not recover the dispatch")
         };
         assert_eq!(boundary_count(&admitted.root), 1);
-        assert_eq!(dispatch.expected_execution_version, 1);
+        assert_eq!(expected_execution_version, 1);
+        let dispatch = retained_dispatch(&admitted.root, 6);
+        assert_eq!(dispatch.id, dispatch_id);
+        assert_eq!(prompt_digest.as_deref(), Some(dispatch.prompt_digest.as_str()));
         assert_eq!(dispatch.plan, 1);
         assert_eq!(dispatch.tasks[0].id, "T1");
-        assert_eq!(dispatch.body, "persisted body 日本語\n");
+        assert!(dispatch.body.is_empty());
+        assert!(dispatch.prompt.contains("persisted body 日本語\n"));
         assert_eq!(
             dispatch.base_sha,
             run(&admitted.project, &["rev-parse", "HEAD"])
         );
-        assert_eq!(cadence::store::model::digest(prompt.as_bytes()), dispatch.prompt_digest);
-        assert_eq!(prompt, dispatch.prompt);
+        assert_eq!(cadence::store::model::digest(dispatch.prompt.as_bytes()), dispatch.prompt_digest);
     });
 }
 
@@ -1008,7 +1013,7 @@ fn execution_restart_lost_apply_replays_one_immutable_transition() {
             drop(server);
             if plan_count == 2 {
                 let later = execution_child_result(&fixture.root, "read-query", None);
-                assert!(matches!(later, Envelope::Ok(Success::Dispatch { ref dispatch, .. }) if dispatch.plan == 2));
+                assert!(matches!(later, Envelope::Ok(Success::Dispatch { ref identities, .. }) if identities.plan == cadence::read::model::DocumentIdentity::PhasePlan { phase: 6.try_into().unwrap(), plan: 2.try_into().unwrap() }));
                 let before = ["state.json", "decisions.jsonl"].map(|name| fs::read(fixture.root.join(name)).unwrap());
                 assert_eq!(execution_child_result(&fixture.root, "read-apply", Some(&patch)), response);
                 assert_eq!(["state.json", "decisions.jsonl"].map(|name| fs::read(fixture.root.join(name)).unwrap()), before);
@@ -2165,10 +2170,10 @@ fn execution_query_returns_the_saved_executor_selection() {
             });
             fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
             let answer = server.query_execution(&fixture.root, 6).await.unwrap();
-            let Envelope::Ok(Success::Dispatch { dispatch, .. }) = answer else {
+            let Envelope::Ok(Success::Dispatch { route, .. }) = answer else {
                 panic!("expected dispatch, received {answer:?}");
             };
-            let choice = &dispatch.route.as_ref().unwrap().choice;
+            let choice = &route.as_ref().unwrap().choice;
             assert_eq!(
                 (
                     choice.agent.as_str(),
@@ -2618,9 +2623,7 @@ fn gap_query_tree(active: bool) -> tempfile::TempDir {
             "decision":{"class":"routing","choice":"{\"agent\":\"cad-executor\",\"rung\":\"high\",\"model\":\"sonnet\"}",
                 "config_provenance":{"dispatch_id":{"text":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"route":{"text":GAP_ROUTE}},
                 "requested_effort":{"text":"high"},"observed_effort":"missing","receipt":"missing"}}));
-        let answer = cadence::execution::boundary::PreparedAnswer::new(Envelope::Ok(Success::Dispatch {
-            dispatch: Box::new(admitted.clone()), prompt: GAP_ADMITTED_PROMPT.into(),
-        })).unwrap();
+        let answer = cadence::execution::boundary::PreparedAnswer::new(Envelope::Ok(Success::dispatch(&admitted))).unwrap();
         let boundary = cadence::execution::boundary::BoundaryV1::new(
             cadence::execution::boundary::BoundaryScope::Execution { phase: 8 },
             BoundaryTool::CadenceQuery, "execute-next".into(),
@@ -2687,26 +2690,27 @@ fn phase8_gap_active_dispatch_returns_original_choice_under_new_config() {
         let factory = SessionFactory::new(None, Arc::new(crate::config::planning_policy));
         let driver = Driver::default();
         let answer = execution_service::query(&factory, &root, 8, &driver).await;
-        let Envelope::Ok(Success::Dispatch { dispatch, prompt }) = answer.unwrap() else {
+        let Envelope::Ok(Success::Dispatch { dispatch_id, route, prompt_digest, .. }) = answer.unwrap() else {
             panic!("expected the retained admitted prompt, received a refusal");
         };
-        let choice = &dispatch.route.as_ref().unwrap().choice;
+        let choice = &route.as_ref().unwrap().choice;
         assert_eq!(
             (
-                dispatch.id.as_str(),
+                dispatch_id.as_str(),
                 choice.model.as_deref(),
                 choice.agent.as_str(),
                 choice.rung.as_str(),
-                prompt.as_bytes()
+                prompt_digest.as_deref()
             ),
             (
                 "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                 Some("sonnet"),
                 "cad-executor",
                 "high",
-                GAP_ADMITTED_PROMPT.as_bytes()
+                Some(gap_hash(GAP_ADMITTED_PROMPT.as_bytes()).as_str())
             )
         );
+        assert_eq!(retained_dispatch(&root, 8).prompt, GAP_ADMITTED_PROMPT);
     });
 }
 
@@ -2724,10 +2728,10 @@ fn phase8_gap_new_dispatch_returns_newer_choice() {
         let driver = Driver::default();
         let answer = execution_service::query(&factory, &root, 8, &driver).await;
         let confirmed = answer.is_ok();
-        let Envelope::Ok(Success::Dispatch { dispatch, .. }) = answer.unwrap() else {
+        let Envelope::Ok(Success::Dispatch { route, .. }) = answer.unwrap() else {
             panic!("expected confirmed new dispatch");
         };
-        let choice = &dispatch.route.as_ref().unwrap().choice;
+        let choice = &route.as_ref().unwrap().choice;
         assert_eq!(
             (
                 confirmed,

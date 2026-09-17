@@ -960,7 +960,10 @@ impl Repo {
         client.finish();
         let answer = &raw["result"]["structuredContent"];
         assert_eq!(answer["outcome"], "dispatch", "{raw}");
-        answer["dispatch"].clone()
+        let retained = self.view().snapshot.data["execution"]["occurrences"]["7"]["active"].clone();
+        assert_eq!(answer["dispatch_id"], retained["id"]);
+        assert!(answer.get("prompt").is_none());
+        retained
     }
     fn complete_execution(&self, dispatch: &Value) -> Vec<String> {
         let mut tasks = Vec::new();

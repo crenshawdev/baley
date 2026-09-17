@@ -569,10 +569,7 @@ async fn dispatch_fixture(store: &Store) -> (View, ActiveDispatch) {
         BoundaryTool::CadenceQuery,
         "dispatch",
         Some(candidate.id.clone()),
-        Envelope::Ok(Success::Dispatch {
-            dispatch: Box::new(dispatch.clone()),
-            prompt: "x".into(),
-        }),
+        Envelope::Ok(Success::dispatch(&dispatch)),
     );
     let view = store
         .request(operation(

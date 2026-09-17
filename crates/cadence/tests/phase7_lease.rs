@@ -382,12 +382,14 @@ fn public_prompt_carries_directory_lease_and_reopens_exactly() {
         let mut client = fixture.client();
         let first = client.query();
         assert_eq!(first["outcome"], "dispatch", "{first}");
-        let prompt = first["prompt"].as_str().unwrap();
+        assert!(first.get("prompt").is_none());
+        let retained = fixture.read().snapshot.data["execution"]["occurrences"]["7"]["active"].clone();
+        let prompt = retained["prompt"].as_str().unwrap();
         if lease.contains("directories") {
-            assert_eq!(first["dispatch"]["directories"], json!(["src"]));
+            assert_eq!(retained["directories"], json!(["src"]));
             assert!(prompt.contains("\"directories\": [\n    \"src\"\n  ]"));
         } else {
-            assert!(first["dispatch"].get("directories").is_none());
+            assert!(retained.get("directories").is_none());
             assert!(!prompt.contains("\"directories\""));
         }
         client.finish();
@@ -657,10 +659,7 @@ fn check_writer(
             let returned: ActiveDispatch =
                 serde_json::from_value(data["execution"]["occurrences"]["7"]["active"].clone())
                     .unwrap();
-            let answer = PreparedAnswer::new(Envelope::Ok(Success::Dispatch {
-                dispatch: Box::new(returned.clone()),
-                prompt: returned.prompt.clone(),
-            }))
+            let answer = PreparedAnswer::new(Envelope::Ok(Success::dispatch(&returned)))
             .unwrap();
             let decision = BoundaryV1::new(
                 BoundaryScope::Execution { phase: 7 },
@@ -913,7 +912,10 @@ fn wire_dispatch(fixture: &Fixture) -> Value {
     let answer = client.query();
     assert_eq!(answer["outcome"], "dispatch", "{answer}");
     client.finish();
-    answer["dispatch"].clone()
+    let retained = fixture.read().snapshot.data["execution"]["occurrences"]["7"]["active"].clone();
+    assert_eq!(answer["dispatch_id"], retained["id"]);
+    assert!(answer.get("prompt").is_none());
+    retained
 }
 
 fn settle_wire(client: &mut Client, dispatch: &Value) {
@@ -1366,14 +1368,14 @@ fn public_corrected_signed_full_patch_recovers_same_dispatch_after_operator_hist
     let refusal = fixture.read().decisions.last().unwrap().clone();
     let mut client = fixture.client();
     let query = client.query();
-    assert_eq!(query["dispatch"], dispatch);
+    assert_eq!(query["dispatch_id"], dispatch["id"]);
     for text in [
         "zero exemptions",
         "operator-controlled repair",
         "same dispatch ID and execution version",
         "unchanged lease",
     ] {
-        assert!(query["prompt"].as_str().unwrap().contains(text));
+        assert!(dispatch["prompt"].as_str().unwrap().contains(text));
     }
     let plan = fixture.root.join(".planning/phases/7/PLAN-1.md");
     let original = fs::read_to_string(&plan).unwrap();
@@ -1401,7 +1403,7 @@ fn public_corrected_signed_full_patch_recovers_same_dispatch_after_operator_hist
     fixture.git(&["verify-commit", &corrected]);
     fixture.git(&["cat-file", "-e", &rejected]);
     let mut client = fixture.client();
-    assert_eq!(client.query()["dispatch"], dispatch);
+    assert_eq!(client.query()["dispatch_id"], dispatch["id"]);
     assert_eq!(
         client.call("cadence_apply", wire_patch(&dispatch, &rejected))["code"],
         "git-order"
@@ -1445,7 +1447,7 @@ fn public_staged_only_operator_repair_accepts_original_in_lease_commit() {
     let refusal = fixture.read().decisions.last().unwrap().clone();
     fixture.git(&["restore", "--staged", "Cargo.lock"]);
     let mut client = fixture.client();
-    assert_eq!(client.query()["dispatch"], dispatch);
+    assert_eq!(client.query()["dispatch_id"], dispatch["id"]);
     let accepted = client.call("cadence_apply", wire_patch(&dispatch, &sha));
     assert_eq!(accepted["code"], "risk-pending", "{accepted}");
     settle_wire(&mut client, &dispatch);
@@ -1488,10 +1490,7 @@ fn historical_exact_file_prompt_reconstructs_with_original_admitted_answer_diges
     candidate.prompt = prompt.clone();
     returned.prompt_digest = candidate.prompt_digest.clone();
     returned.prompt = prompt.clone();
-    let answer = PreparedAnswer::new(Envelope::Ok(Success::Dispatch {
-        dispatch: Box::new(returned),
-        prompt,
-    }))
+    let answer = PreparedAnswer::new(Envelope::Ok(Success::dispatch(&returned)))
     .unwrap();
     let request = digest(&serde_json::to_vec(&json!(["execution-request-v1","cadence-query","execute-next",{"operation":"execute-next","phase":7}])).unwrap());
     let decision = BoundaryV1::new(
@@ -1525,7 +1524,8 @@ fn historical_exact_file_prompt_reconstructs_with_original_admitted_answer_diges
         let mut client = fixture.client();
         let replayed = client.query();
         assert_eq!(replayed["status"], "ok", "retained prompt was refused: {replayed}");
-        assert_eq!(replayed["prompt"].as_str().unwrap().as_bytes(), expected["prompt"].as_str().unwrap().as_bytes());
+        assert!(replayed.get("prompt").is_none());
+        assert_eq!(fixture.read().snapshot.data["execution"]["occurrences"]["7"]["active"]["prompt"], returned.prompt);
         assert_eq!(replayed, expected);
         client.finish();
         assert_eq!(fixture.read(), before);

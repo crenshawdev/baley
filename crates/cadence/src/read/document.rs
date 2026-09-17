@@ -80,10 +80,48 @@ fn dispatch(root: &Path, identity: &DocumentIdentity, id: &str) -> Result<Resolv
     if !head.status.success() { return Err(refusal("head", "document-unavailable", "cannot observe project head")); }
     operational["head"] = json!(String::from_utf8_lossy(&head.stdout).trim());
     operational["dispatch_id"] = json!(id);
+    operational["admitted_dispatch_id"] = json!(active.id);
+    // The issue pins eligibility; continuation and command provenance are views.
+    let mut current = cadence::evidence::persistence::read(&data).map_err(fail)?;
+    let decisions = std::fs::read(root.join(cadence::store::model::DECISIONS))
+        .map_err(|error| refusal("continuation", "document-unavailable", error.to_string()))?;
+    let decisions: Vec<cadence::store::model::DecisionRecord> =
+        cadence::store::model::parse_lines(&decisions).map_err(fail)?;
+    for decision in decisions.iter().rev() {
+        let Some(historical) = cadence::evidence::persistence::decode_history(decision).map_err(fail)? else { continue };
+        let Some(record) = current.remove(&historical.key().map_err(fail)?) else { continue };
+        if record.scope.phase != active.phase.to_string()
+            || record.scope.planning_root != root.to_string_lossy()
+            || record.scope.plan != "native-execution" { continue; }
+        if let cadence::evidence::Fact::Gate(gate) = record.fact
+            && gate.purpose == cadence::evidence::gates::Purpose::Progress
+            && let cadence::evidence::gates::State::Answered(answer) = gate.state {
+            operational["continuation"] = json!({"question_id":answer.question_id,
+                "authorization_id":answer.authorization_id,"response":answer.actual_response,
+                "checkpoint":gate.checkpoint_id});
+            break;
+        }
+    }
+    let paths = data.get("layers").and_then(|layers| layers.get("active"))
+        .filter(|paths| !paths.is_null()).unwrap_or(&data["import"]["active"]);
+    let paths = serde_json::from_value(paths.clone())
+        .map_err(|error| refusal("commands", "document-unavailable", error.to_string()))?;
+    let config = crate::config::reload::Reload::new(paths, crate::config::reload::FileIo)
+        .refresh().map_err(|error| refusal("commands", "document-unavailable", error.to_string()))?;
+    let configured = ["workflow.test_command", "workflow.lint_command"].into_iter().map(|key|
+        cadence::execution::instructions::ConfiguredCommand {
+            key: key.into(),
+            value: crate::config::merge::get(&config.effective.values, key).and_then(Value::as_str).map(str::to_owned),
+            layer: config.effective.sources.get(key).and_then(|layer| serde_json::to_value(layer).ok()?.as_str().map(str::to_owned)),
+        }).collect::<Vec<_>>();
+    let project = root.parent().unwrap_or(root);
+    let present = cadence::execution::instructions::MANIFESTS.iter().map(|(name, _)| *name)
+        .filter(|name| project.join(name).exists()).collect::<Vec<_>>();
+    operational["commands"] = cadence::execution::instructions::command_policy(&configured, &present);
     let mut parts = Vec::new();
     let mut identity_fields = serde_json::Map::new();
     for key in ["protocol", "instructions", "phase", "plan", "occurrence", "admission_digest",
-        "expected_execution_version", "set_version", "base_sha", "head", "dispatch_id"] {
+        "expected_execution_version", "set_version", "base_sha", "head", "dispatch_id", "admitted_dispatch_id"] {
         identity_fields.insert(key.into(), operational[key].clone());
     }
     let mut add = |selector: String, body: String| parts.push(Part { title: selector.clone(), selector, body });
@@ -119,6 +157,10 @@ fn dispatch(root: &Path, identity: &DocumentIdentity, id: &str) -> Result<Resolv
     let suite_records = history::plan_records(&data, active.phase).map_err(fail)?;
     let suite = history::plan_project(&suite_records, &history::PlanIdentity { phase: active.phase,
         occurrence: basis.request.contract.occurrence.clone(), admission_digest: basis.request_digest.clone(), plan: active.plan });
+    if let Some(cadence::next_action::continuation::Decision::RepairSuite { question_id, approved: true }) =
+        cadence::next_action::continuation::plan_repair_decision(&suite) {
+        operational["continuation"] = json!({"suite_repair":{"question_id":question_id,"approved":true}});
+    }
     add("suite".into(), json!({"command":active.suite,"state":suite}).to_string());
     for key in ["continuation", "lease", "commands", "policy", "route"] {
         add(key.into(), operational[key].to_string());

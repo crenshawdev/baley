@@ -154,15 +154,12 @@ fn routing_validation_rejects_mismatched_evidence() {
 
 #[test]
 fn dispatch_envelope_has_an_independently_encoded_exact_digest() {
-    let answer = PreparedAnswer::new(cadence::envelope::Envelope::Ok(Success::Dispatch {
-        dispatch: Box::new(dispatch()),
-        prompt: "fixture".into(),
-    }))
+    let answer = PreparedAnswer::new(cadence::envelope::Envelope::Ok(Success::dispatch(&dispatch())))
     .unwrap();
     assert_eq!(
         (answer.response_digest.as_str(), answer.receipt),
         (
-            "7d30b24b24746184cf00b3a6e33220719a2f12fa95beadaf011dd683e273bea9",
+            cadence::store::model::digest(&canonical_wire(&identity_answer(DISPATCH_ID, serde_json::from_str(ROUTE).unwrap()))).as_str(),
             Receipt::Dispatch {
                 dispatch_id: DISPATCH_ID.into(),
                 prompt_bytes: None,
@@ -170,6 +167,15 @@ fn dispatch_envelope_has_an_independently_encoded_exact_digest() {
             }
         )
     );
+}
+
+fn identity_answer(id: &str, route: Value) -> Value {
+    json!({"status":"ok","outcome":"dispatch","dispatch_id":id,
+        "expected_execution_version":1,"route":route,
+        "identities":{"dispatch":{"kind":"dispatch","id":id},
+            "plan":{"kind":"phase-plan","phase":8,"plan":1},
+            "context":{"kind":"phase-context","phase":8}},
+        "prompt_digest":"f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"})
 }
 
 #[test]
@@ -1115,11 +1121,12 @@ fn dispatch_renderer_matches_independent_exact_byte_oracles_for_both_renderings(
 #[test]
 fn saved_dispatch_envelope_matches_the_independently_encoded_answer_digest() {
     for case in &SAVED {
-        let answer = PreparedAnswer::new(cadence::envelope::Envelope::Ok(Success::Dispatch {
-            dispatch: Box::new(saved_dispatch(case)),
-            prompt: "fixture".into(),
-        }))
-        .unwrap();
-        assert_eq!(answer.response_digest, case.envelope_digest);
+        let retained = saved_dispatch(case);
+        let historical = json!({"status":"ok","outcome":"dispatch","dispatch":retained,"prompt":"fixture"});
+        assert_eq!(cadence::store::model::digest(&canonical_wire(&historical)), case.envelope_digest);
+        let answer = PreparedAnswer::new(cadence::envelope::Envelope::Ok(Success::dispatch(&retained))).unwrap();
+        let expected = identity_answer(case.id, serde_json::from_str(case.route).unwrap());
+        assert_eq!(serde_json::to_value(&answer.envelope).unwrap(), expected);
+        assert_eq!(answer.response_digest, cadence::store::model::digest(&canonical_wire(&expected)));
     }
 }

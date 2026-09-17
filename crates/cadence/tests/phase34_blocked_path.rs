@@ -339,7 +339,7 @@ fn phase34_owner_retires_unfinished_task_and_next_plan_dispatches() {
     assert_eq!(authorized["status"], "ok", "{authorized}");
     let dispatch = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
-    assert_eq!(dispatch["dispatch"]["plan"], 1);
+    assert_eq!(dispatch["identities"]["plan"]["plan"], 1);
 
     let allocated = contract["allocation"].as_array().unwrap().iter()
         .find(|entry| entry["plan"] == 1 && entry["task"] == "control").unwrap()["checks"][0].clone();
@@ -410,7 +410,7 @@ fn phase34_owner_retires_unfinished_task_and_next_plan_dispatches() {
     let next = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(next["status"], "ok", "{next}");
     assert_eq!(next["outcome"], "dispatch", "{next}");
-    assert_eq!(next["dispatch"]["plan"], 2, "{next}");
+    assert_eq!(next["identities"]["plan"]["plan"], 2, "{next}");
     assert_ne!(next["outcome"], "complete");
     assert_ne!(next["outcome"], "judgment-stop");
     let final_history = history(project);
@@ -435,7 +435,8 @@ fn out_of_lease_completion_paths_are_retained_as_deviations() {
     assert_eq!(authorized["status"], "ok", "{authorized}");
     let dispatch = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
-    let files = dispatch["dispatch"]["files"].as_array().unwrap();
+    let parts = support::dispatch_parts(project, &dispatch);
+    let files = parts["lease"]["files"].as_array().unwrap();
     assert_eq!(&files[..2], &json!(["src/control.py","tests/control.py"]).as_array().unwrap()[..]);
     assert_eq!(&files[2..], &cadence::execution::render::RENDERED_PROJECT_FILES.iter()
         .map(|rendered| json!(rendered.path)).collect::<Vec<_>>()[..]);
@@ -517,7 +518,7 @@ fn phase34_blocked_then_completed_phase_is_derived_executed() {
 
     let first = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(first["outcome"], "dispatch", "{first}");
-    assert_eq!(first["dispatch"]["plan"], 1);
+    assert_eq!(first["identities"]["plan"]["plan"], 1);
     let old_assignment = contract["allocation"][0].clone();
     assert_eq!(start(project, 1, "retire", old_assignment["checks"].clone())["status"], "ok");
     let retired = call(project, "cadence_apply",
@@ -582,7 +583,7 @@ fn phase34_blocked_then_completed_phase_is_derived_executed() {
 
     let second = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(second["outcome"], "dispatch", "{second}");
-    assert_eq!(second["dispatch"]["plan"], 2);
+    assert_eq!(second["identities"]["plan"]["plan"], 2);
     assert_eq!(start(project, 2, "repair", json!([allocated.clone()]))["status"], "ok");
 
     fs::write(project.join("tests/control.py"),

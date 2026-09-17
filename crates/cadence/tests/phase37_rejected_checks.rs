@@ -301,7 +301,7 @@ impl RejectedFixture {
         complete_task(project, 1, "initial-owner", OLD_COMMAND,
             old_contract["allocation"][0]["checks"][0].clone(), "tests/old_control.py",
             "import sys, unittest\nsys.path.insert(0, 'src')\nfrom control import answer\nunittest.runner.time.perf_counter = lambda: 0.0\nclass OldCheck(unittest.TestCase):\n    def test_answer(self):\n        self.assertEqual(answer(), 7)\nif __name__ == '__main__':\n    unittest.main()\n",
-            "def answer():\n    return 7\n", "initial", &dispatch["dispatch"]["id"]);
+            "def answer():\n    return 7\n", "initial", &dispatch["dispatch_id"]);
 
         let verification = call(project, "cadence_query", json!({"operation":"verify-next",
             "phase":PHASE,"request_id":"verify-initial-plan"}));
@@ -513,11 +513,11 @@ fn phase37_fresh_verification_uses_only_reproved_check_definition() {
     assert_eq!(authorized["status"], "ok", "{authorized}");
     let dispatch = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
-    assert_eq!(dispatch["dispatch"]["plan"], 2);
+    assert_eq!(dispatch["identities"]["plan"]["plan"], 2);
     complete_task(project, 2, "replacement-owner", NEW_COMMAND,
         later_assignment["checks"][0].clone(), "tests/new_control.py",
         "import sys, unittest\nsys.path.insert(0, 'src')\nfrom control import answer\nunittest.runner.time.perf_counter = lambda: 0.0\nclass NewCheck(unittest.TestCase):\n    def test_replacement_answer(self):\n        self.assertEqual(answer(), 8)\nif __name__ == '__main__':\n    unittest.main()\n",
-        "def answer():\n    return 8\n", "replacement", &dispatch["dispatch"]["id"]);
+        "def answer():\n    return 8\n", "replacement", &dispatch["dispatch_id"]);
 
     let verification = call(project, "cadence_query", json!({"operation":"verify-next",
         "phase":PHASE,"request_id":"verify-reproved-check"}));

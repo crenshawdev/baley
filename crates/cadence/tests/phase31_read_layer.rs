@@ -1,5 +1,8 @@
 #[path = "support/phase31.rs"]
 mod phase31;
+#[allow(dead_code)]
+#[path = "support/phase13.rs"]
+mod dispatch_support;
 #[path = "support/phase31_hosts.rs"]
 mod phase31_hosts;
 
@@ -388,7 +391,7 @@ fn phase31_process_identity_returns_rendered_slice() {
     assert_eq!(authorized["status"], "ok", "{authorized}");
     let dispatch = client.call("cadence_query", json!({"operation":"execute-next","phase":31}));
     assert_eq!(dispatch["status"], "ok", "{dispatch}");
-    let operational = &dispatch["dispatch"]["operational"];
+    let operational = dispatch_support::dispatch_parts_with(&dispatch, |request| client.call("cadence_query", request));
     let task = operational["tasks"].as_array().unwrap().iter()
         .find(|task| task["id"] == "fixture-one-a").unwrap();
     let lease_scope = task["lease_scope"].clone();
@@ -482,7 +485,8 @@ fn phase31_process_identity_returns_rendered_slice() {
     assert!(!roadmap["body"].as_str().unwrap().contains("Phase 32"));
 
     let resumed = client.call("cadence_query", json!({"operation":"execute-next","phase":31}));
-    let completed = resumed["dispatch"]["operational"]["completed"].as_array().unwrap().iter()
+    let resumed_parts = dispatch_support::dispatch_parts_with(&resumed, |request| client.call("cadence_query", request));
+    let completed = resumed_parts["completed"].as_array().unwrap().iter()
         .find(|entry| entry["id"] == "fixture-one-a").unwrap();
     assert_eq!(completed["completion"], completion);
     let summary = client.call("cadence_query", json!({"operation":"document",

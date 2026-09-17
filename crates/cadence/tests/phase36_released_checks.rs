@@ -395,7 +395,7 @@ fn phase36_blocked_then_completed_phase_gets_verification_attempt() {
     assert_eq!(authorized["status"], "ok", "{authorized}");
     let dispatch = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
-    assert_eq!(dispatch["dispatch"]["plan"], 2, "{dispatch}");
+    assert_eq!(dispatch["identities"]["plan"]["plan"], 2, "{dispatch}");
     let current = task_for(project, 2, "later-owner");
     let started = call(project, "cadence_apply", json!({"operation":"execution-task-start","request":{
         "request_id":"start-verification-repair","task":current["task"],"attempt":"attempt-later-owner",

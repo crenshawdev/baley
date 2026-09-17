@@ -972,10 +972,7 @@ async fn scoped_dispatch(store: &Store) -> (View, ActiveDispatch, BoundaryV1) {
         BoundaryScope::Execution { phase: 6 },
         BoundaryTool::CadenceQuery,
         "new-dispatch",
-        Envelope::Ok(Success::Dispatch {
-            dispatch: Box::new(returned.clone()),
-            prompt: "x".repeat(512),
-        }),
+        Envelope::Ok(Success::dispatch(&returned)),
         Some(candidate.id.clone()),
     );
     let view = store
@@ -1001,12 +998,16 @@ fn scoped_writer_confirms_dispatch_complete_blocked_and_observation_public_diges
         runtime().block_on(async {
             let store = open(root.path()).await;
             let (view, dispatch, decision) = scoped_dispatch(&store).await;
-            let mut expected_dispatch = serde_json::to_value(&dispatch).unwrap();
-            expected_dispatch["body"] = json!("Build the execution slice.\n");
-            assert_disk_answer(root.path(), &view, &decision, json!({"status":"ok","outcome":"dispatch","dispatch":expected_dispatch,"prompt":"x".repeat(512)}));
+            assert_disk_answer(root.path(), &view, &decision, json!({
+                "status":"ok","outcome":"dispatch","dispatch_id":dispatch.id,
+                "expected_execution_version":1,"route":dispatch.route,
+                "identities":{"dispatch":{"kind":"dispatch","id":dispatch.id},
+                    "plan":{"kind":"phase-plan","phase":6,"plan":1},
+                    "context":{"kind":"phase-context","phase":6}},
+                "prompt_digest":digest("x".repeat(512).as_bytes())}));
             let selected = confirmed_boundary(&view, &decision).unwrap();
             assert!(selected.envelope(None).is_err());
-            let answer = Envelope::Ok(Success::Dispatch { dispatch: Box::new(dispatch.clone()), prompt: "x".repeat(512) });
+            let answer = Envelope::Ok(Success::dispatch(&dispatch));
             assert_eq!(selected.envelope(Some(answer.clone())).unwrap(), answer);
             let mut patch = complete_patch(&dispatch);
             let expected = if blocked {
@@ -1105,10 +1106,7 @@ fn recovery_operation(view: &View, case: &str, patch: Option<&ExecutorPatch>) ->
                     BoundaryScope::Execution { phase: 6 },
                     BoundaryTool::CadenceQuery,
                     "recovery-dispatch",
-                    Envelope::Ok(Success::Dispatch {
-                        dispatch: Box::new(returned),
-                        prompt: "x".repeat(512),
-                    }),
+                    Envelope::Ok(Success::dispatch(&returned)),
                     Some(candidate.id.clone()),
                 ),
                 BoundaryChange::Dispatch {

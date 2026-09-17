@@ -288,11 +288,11 @@ fn execute_next_dispatches_a_plan_admitted_after_the_phase_completed() {
     assert_eq!(authorized["status"], "ok", "{authorized}");
     let dispatch = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(dispatch["outcome"], "dispatch", "{dispatch}");
-    assert_eq!(dispatch["dispatch"]["plan"], 1, "{dispatch}");
+    assert_eq!(dispatch["identities"]["plan"]["plan"], 1, "{dispatch}");
     complete_task(project, 1, "initial-owner", OLD_COMMAND, old_assignment["checks"][0].clone(),
         "tests/old_control.py",
         "import sys, unittest\nsys.path.insert(0, 'src')\nfrom control import answer\nunittest.runner.time.perf_counter = lambda: 0.0\nclass OldCheck(unittest.TestCase):\n    def test_answer(self):\n        self.assertEqual(answer(), 7)\nif __name__ == '__main__':\n    unittest.main()\n",
-        "def answer():\n    return 7\n", "initial", &dispatch["dispatch"]["id"]);
+        "def answer():\n    return 7\n", "initial", &dispatch["dispatch_id"]);
 
     // Control: the phase is complete and says so.
     let finished = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
@@ -334,8 +334,8 @@ fn execute_next_dispatches_a_plan_admitted_after_the_phase_completed() {
 
     let reopened = call(project, "cadence_query", json!({"operation":"execute-next","phase":PHASE}));
     assert_eq!(reopened["outcome"], "dispatch", "{reopened}");
-    assert_eq!(reopened["dispatch"]["plan"], 2, "{reopened}");
-    assert_eq!(reopened["dispatch"]["operational"]["set_version"], 2, "{reopened}");
+    assert_eq!(reopened["identities"]["plan"]["plan"], 2, "{reopened}");
+    assert_eq!(support::dispatch_parts(project, &reopened)["set_version"], 2, "{reopened}");
     let plan_one = history(project)["plans"].as_array().unwrap().iter()
         .find(|entry| entry["plan"]["plan"] == 1).unwrap().clone();
     assert_eq!(plan_one["state"]["outcome"], "complete", "{plan_one}");

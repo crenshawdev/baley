@@ -857,6 +857,7 @@ fn historical_fixed_dispatch_serialization_omits_route_data() {
     assert!(supplied.prompt.is_empty() && supplied.prompt_digest.is_empty());
     assert_eq!(supplied.prompt_bytes, Some(512));
     assert_eq!(serde_json::to_value(&supplied).unwrap(), wire);
+    replay_historical_dispatch_fixture(&wire, &"x".repeat(512));
 
     // A dispatch admitted after D-165 carries the prompt and its digest and never the byte count.
     let prompt = "p".repeat(20);
@@ -867,6 +868,44 @@ fn historical_fixed_dispatch_serialization_omits_route_data() {
     let supplied: cadence::execution::model::ActiveDispatch = serde_json::from_value(current.clone()).unwrap();
     assert_eq!(supplied.prompt_bytes, None);
     assert_eq!(serde_json::to_value(&supplied).unwrap(), current);
+    replay_historical_dispatch_fixture(&current, &prompt);
+}
+
+fn replay_historical_dispatch_fixture(dispatch: &Value, prompt: &str) {
+    use cadence::execution::{boundary::BoundaryV1, model::ActiveDispatch};
+    use cadence::store::writer::ConfirmedBoundary;
+    // This fixture retains the historical prompt-bearing envelope. No fresh
+    // dispatch request or current PreparedAnswer creates its replay receipt.
+    let retained_envelope = json!({"status":"ok","outcome":"dispatch","dispatch":dispatch,"prompt":prompt});
+    let mut receipt = json!({"receipt":"dispatch","dispatch_id":dispatch["id"]});
+    if let Some(bytes) = dispatch.get("prompt_bytes") {
+        receipt["prompt_bytes"] = bytes.clone();
+    } else {
+        receipt["prompt_digest"] = dispatch["prompt_digest"].clone();
+    }
+    let raw = json!({"codec":1,"scope":{"scope":"execution","phase":6},
+        "tool":"cadence-query","operation":"execute-next",
+        "request_digest":"a".repeat(64),"outcome":"dispatch","subject_id":dispatch["id"],
+        "response_digest":model::digest(&canonical(&retained_envelope)),"receipt":receipt});
+    let boundary: BoundaryV1 = serde_json::from_value(raw.clone()).unwrap();
+    let record: DecisionRecord = serde_json::from_value(wire_record(raw, 1, false)).unwrap();
+    let before = serde_json::to_vec(&record).unwrap();
+    let Decision::BoundaryV1(value) = &record.decision else { panic!("historical boundary") };
+    let confirmed = ConfirmedBoundary { id: &record.id, value };
+    let supplied: ActiveDispatch = serde_json::from_value(dispatch.clone()).unwrap();
+    let mut expected = json!({"status":"ok","outcome":"dispatch","dispatch_id":"old-dispatch",
+        "expected_execution_version":1,"route":null,
+        "identities":{"dispatch":{"kind":"dispatch","id":"old-dispatch"},
+            "plan":{"kind":"phase-plan","phase":6,"plan":1},
+            "context":{"kind":"phase-context","phase":6}}});
+    if let Some(digest) = dispatch.get("prompt_digest") { expected["prompt_digest"] = digest.clone(); }
+    for _ in 0..2 {
+        let replay = confirmed.historical_dispatch(&supplied, prompt).unwrap();
+        assert_eq!(serde_json::to_value(replay).unwrap(), expected);
+        assert_eq!(serde_json::to_vec(&record).unwrap(), before);
+        assert_eq!(value.boundary.identity().unwrap(), boundary.identity().unwrap());
+    }
+    assert!(confirmed.historical_dispatch(&supplied, &format!("{prompt}!")).is_err());
 }
 
 #[test]

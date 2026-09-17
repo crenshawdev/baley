@@ -361,7 +361,8 @@ fn phase13_rules_gate_retirement_rehearsal() {
     assert_eq!(fixture.dispatches.len(), 2);
     for dispatch in &fixture.dispatches {
         assert_eq!(dispatch["outcome"], "dispatch");
-        assert!(dispatch["prompt"].as_str().unwrap().contains("**Executor.**"));
+        assert!(dispatch.get("prompt").is_none());
+        assert_eq!(dispatch["identities"]["dispatch"]["id"], dispatch["dispatch_id"]);
     }
     let verify = client.call("cadence_query", json!({"operation":"verify-next","phase":13,"request_id":"close-prerequisite"}));
     assert_eq!(verify["status"], "ok", "{verify}");
@@ -374,7 +375,7 @@ fn phase13_rules_gate_retirement_rehearsal() {
     let mut output = std::io::stdout().lock();
     writeln!(output, "CLOSE_PREREQUISITE {}", json!({
         "planner":"plan-instructions plus real stdio native plan-read/plan-submit",
-        "planner_bytes_sha256":sha(planner.as_bytes()),"executor_dispatches":fixture.dispatches.iter().map(|d| &d["dispatch"]["id"]).collect::<Vec<_>>(),
+        "planner_bytes_sha256":sha(planner.as_bytes()),"executor_dispatches":fixture.dispatches.iter().map(|d| &d["dispatch_id"]).collect::<Vec<_>>(),
         "verifier_attempt":verify["attempt"]["id"],"prompt_digest":verify["attempt"]["prompt_digest"]})).unwrap();
     drop(output);
 

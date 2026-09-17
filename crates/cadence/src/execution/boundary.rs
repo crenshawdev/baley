@@ -820,10 +820,7 @@ mod tests {
             "base_sha":"base","prompt":"p".repeat(20000),
             "prompt_digest":crate::store::model::digest(&vec![b'p'; 20000]),"body":"private body"});
         let dispatch = serde_json::from_value(fixture).unwrap();
-        let answer = PreparedAnswer::new(Envelope::Ok(Success::Dispatch {
-            dispatch,
-            prompt: "p".repeat(20000),
-        }))
+        let answer = PreparedAnswer::new(Envelope::Ok(Success::dispatch(&dispatch)))
         .unwrap();
         assert_eq!(
             serde_json::to_value(&answer.receipt).unwrap(),
@@ -831,6 +828,9 @@ mod tests {
                 "prompt_digest":crate::store::model::digest(&vec![b'p'; 20000])})
         );
         assert!(!answer.too_large());
+        let mut oversized = dispatch;
+        oversized.id = "d".repeat(MAX_COMPACT_BYTES);
+        assert!(PreparedAnswer::new(Envelope::Ok(Success::dispatch(&oversized))).unwrap().too_large());
     }
 
     #[test]
