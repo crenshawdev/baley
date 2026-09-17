@@ -398,6 +398,8 @@ impl ClosedRound {
     pub fn admitted() -> Self {
         let fixture = ProcessFixture::new();
         let project = fixture.project();
+        fs::write(project.join(".planning/config.json"), serde_json::to_vec(&json!({"review":{"triggers":{
+            "risk_surface":{"surfaces":cadence::rail::risk::CATEGORIES}}}})).unwrap()).unwrap();
         fs::write(project.join("src/lease.rs"), "def answer():\n    return 0\n").unwrap();
         // Track the authored planning inputs while leaving only the store's
         // bookkeeping ignored. SUMMARY.md is deliberately not ignored.
@@ -497,7 +499,7 @@ impl ClosedRound {
         }
         let risk = self.client.call("cadence_apply", json!({"operation":"risk-check","request_id":"round-risk",
             "scope":{"phase":31,"occurrence":self.plan["occurrence"],"worker":"1"},
-            "source":{"kind":"execution","plan":1,"dispatch_id":self.dispatch["dispatch_id"]},"surfaces":[]}));
+            "source":{"kind":"execution","plan":1,"dispatch_id":self.dispatch["dispatch_id"]},"surfaces":null}));
         assert_eq!(risk["status"], "ok", "{risk}");
         let history = self.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
         let completed = self.client.call("cadence_apply", json!({"operation":"execution-plan-complete","request":{
