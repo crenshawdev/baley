@@ -23,6 +23,30 @@ fn capture_retains_result_lines_past_prefix() {
         "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"]);
 }
 
+// D-168 and the run classifier both read cargo test's own lines. nextest, which
+// the suite runs under since D-176, writes its summary to stderr with a leading
+// indent and repeats cargo's `test result:` line indented under a failure, so
+// every nextest run came back Unknown and cost the owner a classification.
+#[test]
+fn classify_reads_nextest_summaries_and_keeps_their_result_lines() {
+    use super::{receipts::{Observation, Summary}, runner::{capture, classify, valid_result_line}};
+    let empty = capture(&b""[..]);
+    let green = capture(&b"    Starting 1 test across 1 binary (1 test skipped)\n        PASS [   0.062s] (1/1) cadence::phase32_typed_authoring phase32_plan_body_is_refused\n     Summary [   0.062s] 1 test run: 1 passed, 1 skipped\n"[..]);
+    assert_eq!(classify(&empty, &green), Observation::ResultsObserved { summary: Summary::Cargo { failed: false } });
+    let red = capture(&b"        FAIL [   0.065s] (1/1) cadence::phase32_typed_authoring phase32_plan_body_is_refused\n    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.06s\n     Summary [   0.066s] 1 test run: 0 passed, 1 failed, 1 skipped\nerror: test run failed\n"[..]);
+    assert_eq!(classify(&empty, &red), Observation::ResultsObserved { summary: Summary::Cargo { failed: true } });
+    let summary_only_red = capture(&b"     Summary [   0.066s] 2 tests run: 1 passed, 1 failed\n"[..]);
+    assert_eq!(classify(&empty, &summary_only_red), Observation::ResultsObserved { summary: Summary::Cargo { failed: true } });
+    for line in ["     Summary [   0.062s] 1 test run: 1 passed, 1 skipped",
+        "        PASS [   0.062s] (1/1) cadence::phase32_typed_authoring phase32_plan_body_is_refused",
+        "        FAIL [   0.065s] (1/1) cadence::phase32_typed_authoring phase32_plan_body_is_refused",
+        "    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.06s"] {
+        assert!(valid_result_line(line), "{line}");
+    }
+    assert!(!valid_result_line("    Starting 1 test across 1 binary (1 test skipped)"));
+    assert!(!valid_result_line("error: test run failed"));
+}
+
 // Constructed unit authority, not a claim of approval through the public API.
 // The acceptance check separately supplies that boundary with real stdio calls.
 fn native_unit_contract(command: &str) -> (serde_json::Value, std::collections::BTreeMap<String, String>, super::admission::Contract) {
