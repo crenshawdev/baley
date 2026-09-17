@@ -224,6 +224,7 @@ impl ProcessFixture {
     pub fn project(&self) -> &Path { self.temp.path() }
 }
 
+#[allow(dead_code)]
 pub fn tree(project: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
     fn visit(base: &Path, path: &Path, found: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
         let metadata = fs::symlink_metadata(path).unwrap();
