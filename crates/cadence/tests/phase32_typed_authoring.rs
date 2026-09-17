@@ -15,13 +15,11 @@ fn phase32_six_plan_publication_wire_bytes() {
     let project = fixture.project();
     let mut client = Client::open(project);
     let mut contents: Vec<Value> = serde_json::from_str(PHASE32_WIRE_PLANS).unwrap();
-    let mut truths: Vec<Value> = serde_json::from_str(PHASE32_WIRE_TRUTHS).unwrap();
+    let truths: Vec<Value> = serde_json::from_str(PHASE32_WIRE_TRUTHS).unwrap();
 
-    // Plans 5 and 6 retain plans 1 and 3's size, with distinct fixture identities.
-    for (source, plan, renames) in [
-        (0, 5, [("T1", "T8"), ("T5", "T9")]),
-        (2, 6, [("T3", "T10"), ("T4", "T11")]),
-    ] {
+    // Plans 5 and 6 retain plans 1 and 3's size with distinct task/artifact IDs.
+    // Identical shared check aliases keep one distinct check per truth in the union.
+    for (source, plan) in [(0, 5), (2, 6)] {
         let mut content = contents[source].clone();
         content["plan"] = json!(plan);
         for task in content["tasks"].as_array_mut().unwrap() {
@@ -30,24 +28,9 @@ fn phase32_six_plan_publication_wire_bytes() {
             ));
         }
         for item in content["evidence_map"]["items"].as_array_mut().unwrap() {
-            item["id"] = json!(format!("{}-plan-{plan}", item["id"].as_str().unwrap()));
-            for association in item["associations"].as_array_mut().unwrap() {
-                for (old, new) in renames {
-                    if association["truth_id"] == old {
-                        association["truth_id"] = json!(new);
-                    }
-                }
+            if item["kind"] != "check" {
+                item["id"] = json!(format!("{}-plan-{plan}", item["id"].as_str().unwrap()));
             }
-        }
-        for (old, new) in renames {
-            for requirement in content["requirements"].as_array_mut().unwrap() {
-                if *requirement == old {
-                    *requirement = json!(new);
-                }
-            }
-            let mut truth = truths.iter().find(|truth| truth["id"] == old).unwrap().clone();
-            truth["id"] = json!(new);
-            truths.push(truth);
         }
         contents.push(content);
     }
@@ -728,7 +711,7 @@ const PHASE32_WIRE_TRUTHS: &str = r###"[
     "id": "T1",
     "trigger": "the six-plan fixture is published",
     "observer": "the owner",
-    "verb": "observes",
+    "verb": "sees",
     "outcome": "When the planner submits a plan as typed pieces, the planner gets the digest of the PLAN.md the binary rendered and no document in the answer.",
     "kind": "property",
     "observable": true,
@@ -738,7 +721,7 @@ const PHASE32_WIRE_TRUTHS: &str = r###"[
     "id": "T5",
     "trigger": "the six-plan fixture is published",
     "observer": "the owner",
-    "verb": "observes",
+    "verb": "sees",
     "outcome": "When a plan-submit request carries a Markdown body, the planner is refused with the slot named.",
     "kind": "property",
     "observable": true,
@@ -748,7 +731,7 @@ const PHASE32_WIRE_TRUTHS: &str = r###"[
     "id": "T2",
     "trigger": "the six-plan fixture is published",
     "observer": "the owner",
-    "verb": "observes",
+    "verb": "sees",
     "outcome": "When the context author submits a context as typed pieces, the context author gets the digest of the CONTEXT.md the binary rendered and no document in the answer.",
     "kind": "property",
     "observable": true,
@@ -758,7 +741,7 @@ const PHASE32_WIRE_TRUTHS: &str = r###"[
     "id": "T3",
     "trigger": "the six-plan fixture is published",
     "observer": "the owner",
-    "verb": "observes",
+    "verb": "sees",
     "outcome": "When the owner approves a draft by its digest with owner and time, the owner sees the rendered document installed byte for byte equal to the draft read by identity.",
     "kind": "property",
     "observable": true,
@@ -768,7 +751,7 @@ const PHASE32_WIRE_TRUTHS: &str = r###"[
     "id": "T4",
     "trigger": "the six-plan fixture is published",
     "observer": "the owner",
-    "verb": "observes",
+    "verb": "sees",
     "outcome": "When the owner approves with the digest of a draft that has changed since, the owner is refused with the identity and part where the held draft differs.",
     "kind": "property",
     "observable": true,
@@ -778,7 +761,7 @@ const PHASE32_WIRE_TRUTHS: &str = r###"[
     "id": "T6",
     "trigger": "the six-plan fixture is published",
     "observer": "the owner",
-    "verb": "observes",
+    "verb": "sees",
     "outcome": "When a worker in a Claude host reads a draft by identity, the worker gets the same slice the main thread gets for that identity.",
     "kind": "property",
     "observable": true,
@@ -788,7 +771,7 @@ const PHASE32_WIRE_TRUTHS: &str = r###"[
     "id": "T7",
     "trigger": "the six-plan fixture is published",
     "observer": "the owner",
-    "verb": "observes",
+    "verb": "sees",
     "outcome": "When phase 32 closes, the owner sees the wire bytes for publishing a six-plan phase beside the 113KB-twice figure of 2026-09-12.",
     "kind": "property",
     "observable": true,
