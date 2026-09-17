@@ -210,15 +210,31 @@ pub struct ExternalChange {
 }
 
 impl ExternalChange {
-    pub fn validate(&self, actual: &Observed, replay: bool) -> Result<&[u8]> {
-        let installed = replay
+    fn installed(&self, actual: &Observed, replay: bool) -> bool {
+        replay
             && actual.bytes.as_ref() == Some(&self.bytes)
-            && actual.directory_identity == self.expected.directory_identity;
-        if actual != &self.expected && !installed {
+            && actual.directory_identity == self.expected.directory_identity
+    }
+
+    pub fn validate(&self, actual: &Observed, replay: bool) -> Result<&[u8]> {
+        if actual != &self.expected && !self.installed(actual, replay) {
             return Err(Error::Conflict(format!(
                 "pending participant changed: {}",
                 self.target
             )));
+        }
+        Ok(&self.bytes)
+    }
+
+    fn validate_digest(&self, actual: &Observed, replay: bool) -> Result<&[u8]> {
+        let expected = self.expected.identity.strip_prefix(DIGEST_IDENTITY)
+            .map(|digest| if digest.is_empty() { None } else { Some(digest.to_owned()) })
+            .unwrap_or_else(|| self.expected.bytes.as_deref().map(model::digest));
+        let matches = actual.bytes.as_deref().map(model::digest) == expected
+            && actual.directory_identity == self.expected.directory_identity;
+        if !matches && !self.installed(actual, replay)
+        {
+            return Err(Error::Conflict(format!("pending participant changed: {}", self.target)));
         }
         Ok(&self.bytes)
     }
@@ -252,18 +268,18 @@ impl Transaction {
 
 pub(crate) type Participant = ExternalChange;
 
-/// How an intent writes its participants' bytes (GH-261). `Array` is every
-/// byte as a JSON integer, the only form before this field existed and the
-/// form an intent without it is read in. `Text` writes UTF-8 bytes as a JSON
-/// string and anything else as an array. An intent is digested and written
-/// back in the encoding it was read in, so a journal left by an older binary
-/// still recovers.
+/// How an intent writes its participants (GH-261). `Array` is every byte as a
+/// JSON integer, the only form before this field existed and the form an
+/// intent without it is read in. `Text` writes UTF-8 bytes as a JSON string.
+/// `Digest` also replaces each observed preimage with its SHA-256 and bound
+/// directory. An intent is written back in the encoding it was read in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum Encoding {
     #[default]
     Array,
     Text,
+    Digest,
 }
 
 /// A participant's bytes on the wire, in either encoding.
@@ -277,7 +293,7 @@ enum BytesWire {
 impl BytesWire {
     fn encode(bytes: &[u8], encoding: Encoding) -> Self {
         match encoding {
-            Encoding::Text => match std::str::from_utf8(bytes) {
+            Encoding::Text | Encoding::Digest => match std::str::from_utf8(bytes) {
                 Ok(text) => Self::Text(text.to_owned()),
                 Err(_) => Self::Array(bytes.to_vec()),
             },
@@ -304,32 +320,66 @@ struct ObservedWire {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct DigestWire {
+    digest: Option<String>,
+    directory_identity: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum ExpectedWire {
+    Digest(DigestWire),
+    Observed(ObservedWire),
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ParticipantWire {
     target: String,
-    expected: ObservedWire,
+    expected: ExpectedWire,
     bytes: BytesWire,
 }
 
+const DIGEST_IDENTITY: &str = "sha256:";
+
 impl ParticipantWire {
     fn encode(participant: &Participant, encoding: Encoding) -> Self {
-        Self {
-            target: participant.target.clone(),
-            expected: ObservedWire {
+        let expected = if encoding == Encoding::Digest {
+            let digest = participant.expected.identity.strip_prefix(DIGEST_IDENTITY)
+                .map(|digest| if digest.is_empty() { None } else { Some(digest.to_owned()) })
+                .unwrap_or_else(|| participant.expected.bytes.as_deref().map(model::digest));
+            ExpectedWire::Digest(DigestWire {
+                digest, directory_identity: participant.expected.directory_identity.clone(),
+            })
+        } else {
+            ExpectedWire::Observed(ObservedWire {
                 bytes: participant.expected.bytes.as_deref().map(|bytes| BytesWire::encode(bytes, encoding)),
                 identity: participant.expected.identity.clone(),
                 directory_identity: participant.expected.directory_identity.clone(),
-            },
+            })
+        };
+        Self {
+            target: participant.target.clone(),
+            expected,
             bytes: BytesWire::encode(&participant.bytes, encoding),
         }
     }
     fn decode(self) -> Participant {
+        let expected = match self.expected {
+            ExpectedWire::Observed(expected) => Observed {
+                bytes: expected.bytes.map(BytesWire::decode),
+                identity: expected.identity,
+                directory_identity: expected.directory_identity,
+            },
+            ExpectedWire::Digest(expected) => Observed {
+                bytes: None,
+                identity: format!("{DIGEST_IDENTITY}{}", expected.digest.unwrap_or_default()),
+                directory_identity: expected.directory_identity,
+            },
+        };
         Participant {
             target: self.target,
-            expected: Observed {
-                bytes: self.expected.bytes.map(BytesWire::decode),
-                identity: self.expected.identity,
-                directory_identity: self.expected.directory_identity,
-            },
+            expected,
             bytes: self.bytes.decode(),
         }
     }
@@ -406,12 +456,13 @@ impl<'de> Deserialize<'de> for Intent {
 
 impl Intent {
     fn unfiltered(kind: IntentKind, participants: Vec<Participant>) -> Self {
-        Self { version: VERSION, kind, participants, integrity: String::new(), encoding: Encoding::Text }
+        Self { version: VERSION, kind, participants, integrity: String::new(), encoding: Encoding::Digest }
     }
 
     #[cfg(test)]
     fn new(kind: IntentKind, participants: Vec<Participant>) -> Self {
         let mut intent = Self::unfiltered(kind, participants);
+        intent.encoding = Encoding::Text;
         if intent.participants.iter().filter(|participant|
             participant.expected.bytes.as_ref() != Some(&participant.bytes)).count() == 1
         {
@@ -448,7 +499,7 @@ impl Intent {
         Ok(())
     }
 
-    fn validate_contents(&self) -> Result<Snapshot> {
+    fn parse_contents(&self) -> Result<Snapshot> {
         let bytes = |name| {
             self.participants
                 .iter()
@@ -460,7 +511,11 @@ impl Intent {
         let decisions = bytes(DECISIONS)?;
         #[cfg(test)]
         NEW_STATE_PARSES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let snapshot = Snapshot::parse(bytes(STATE)?, items, decisions)?;
+        Snapshot::parse(bytes(STATE)?, items, decisions)
+    }
+
+    fn validate_contents(&self) -> Result<Snapshot> {
+        let snapshot = self.parse_contents()?;
         self.validate_sealed(&snapshot)?;
         Ok(snapshot)
     }
@@ -1522,55 +1577,69 @@ fn execution_snapshot(snapshot: &Snapshot) -> Result<cadence::execution::model::
     serde_json::from_value(value).map_err(Error::from)
 }
 
+fn previous_on_disk<S: Storage>(storage: &mut S, participants: &[Participant], replay: bool,
+    root_binding: &str, binding_error: &str, preimage_error: &str) -> Result<Option<Snapshot>> {
+    let state = participants.iter().find(|participant| participant.target == STATE)
+        .ok_or_else(|| Error::Invalid("snapshot absent".into()))?;
+    let actual = storage.read(STATE)?;
+    if actual.directory_identity != root_binding {
+        return Err(Error::Invalid(binding_error.into()));
+    }
+    if state.installed(&actual, replay) {
+        return Ok(None);
+    }
+    let bytes = actual.bytes.as_deref().ok_or_else(|| Error::Invalid(preimage_error.into()))?;
+    Ok(Some(serde_json::from_slice(bytes)?))
+}
+
 fn validate_all<S: Storage>(
     storage: &mut S,
     participants: &[Participant],
     replay: bool,
     kind: &IntentKind,
+    encoding: Encoding,
 ) -> Result<()> {
     if let IntentKind::VerificationSubmitV1 { claim, root_binding } = kind {
-        if storage.read(STATE)?.directory_identity != *root_binding {
-            return Err(Error::Invalid("verification claim store binding changed".into()));
+        if let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
+            "verification claim store binding changed", "verification claim preimage absent")?
+        {
+            cadence::verification::verdicts::reobserve(&previous.data, claim)?;
         }
-        let state = participants.last().ok_or_else(|| Error::Invalid("snapshot absent".into()))?;
-        let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
-            .ok_or_else(|| Error::Invalid("verification claim preimage absent".into()))?)?;
-        cadence::verification::verdicts::reobserve(&previous.data, claim)?;
     }
     if let IntentKind::VerificationWaiverV1 { claim, root_binding } = kind {
-        if storage.read(STATE)?.directory_identity != *root_binding {
-            return Err(Error::Invalid("waiver claim store binding changed".into()));
+        if let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
+            "waiver claim store binding changed", "waiver claim preimage absent")?
+        {
+            cadence::verification::waivers::reobserve(&previous.data, claim)?;
         }
-        let previous = previous_snapshot(participants, "waiver claim")?;
-        cadence::verification::waivers::reobserve(&previous.data, claim)?;
     }
     if let IntentKind::VerificationHumanV1 { claim, root_binding } = kind {
-        if storage.read(STATE)?.directory_identity != *root_binding {
-            return Err(Error::Invalid("human result store binding changed".into()));
+        if previous_on_disk(storage, participants, replay, root_binding,
+            "human result store binding changed", "human result preimage absent")?.is_some()
+        {
+            cadence::verification::human::reobserve(claim)?;
         }
-        cadence::verification::human::reobserve(claim)?;
     }
     if let IntentKind::VerificationCompleteV1 { claim, root_binding } = kind {
-        if storage.read(STATE)?.directory_identity != *root_binding {
-            return Err(Error::Invalid("completion store binding changed".into()));
+        if let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
+            "completion store binding changed", "completion preimage absent")?
+        {
+            cadence::verification::completion::reobserve(&previous.data, claim)?;
         }
-        let previous = previous_snapshot(participants, "completion")?;
-        cadence::verification::completion::reobserve(&previous.data, claim)?;
     }
     if let IntentKind::VerificationRunV1 { record, root_binding } = kind {
-        if storage.read(STATE)?.directory_identity != *root_binding {
-            return Err(Error::Invalid("verification run store binding changed".into()));
+        if let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
+            "verification run store binding changed", "verification run preimage absent")?
+        {
+            cadence::verification::runner::reobserve_launch(&previous.data, record)?;
         }
-        let state = participants.last().ok_or_else(|| Error::Invalid("snapshot absent".into()))?;
-        let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
-            .ok_or_else(|| Error::Invalid("verification run preimage absent".into()))?)?;
-        cadence::verification::runner::reobserve_launch(&previous.data, record)?;
     }
     if let IntentKind::VerificationV1 { request, root_binding } = kind {
-        if storage.read(STATE)?.directory_identity != *root_binding {
-            return Err(Error::Invalid("verification store binding changed".into()));
+        if previous_on_disk(storage, participants, replay, root_binding,
+            "verification store binding changed", "verification preimage absent")?.is_some()
+        {
+            cadence::verification::inputs::reobserve_external(&request.root, &request.attempt.inputs, &request.documents)?;
         }
-        cadence::verification::inputs::reobserve_external(&request.root, &request.attempt.inputs, &request.documents)?;
     }
     if let IntentKind::NativeTaskV1 {request,root_binding}=kind
         && let cadence::execution::history::Event::Checkpoint {records,..}=&request.event
@@ -1605,7 +1674,42 @@ fn validate_all<S: Storage>(
     // This entire pass finishes before any participant can change.
     for participant in participants {
         let actual = storage.read(&participant.target)?;
-        participant.validate(&actual, replay)?;
+        match encoding {
+            Encoding::Digest => participant.validate_digest(&actual, replay)?,
+            Encoding::Array | Encoding::Text => participant.validate(&actual, replay)?,
+        };
+    }
+    Ok(())
+}
+
+struct Precondition {
+    target: String,
+    expected: Option<String>,
+    installed: String,
+    directory_identity: String,
+}
+
+impl Precondition {
+    fn new(participant: &Participant) -> Self {
+        Self {
+            target: participant.target.clone(),
+            expected: participant.expected.bytes.as_deref().map(model::digest),
+            installed: model::digest(&participant.bytes),
+            directory_identity: participant.expected.directory_identity.clone(),
+        }
+    }
+}
+
+fn validate_preconditions<S: Storage>(storage: &mut S, preconditions: &[Precondition], replay: bool) -> Result<()> {
+    for precondition in preconditions {
+        let actual = storage.read(&precondition.target)?;
+        let digest = actual.bytes.as_deref().map(model::digest);
+        let installed = replay && digest.as_ref() == Some(&precondition.installed);
+        if actual.directory_identity != precondition.directory_identity
+            || (digest != precondition.expected && !installed)
+        {
+            return Err(Error::Conflict(format!("pending participant changed: {}", precondition.target)));
+        }
     }
     Ok(())
 }
@@ -1636,7 +1740,8 @@ pub(crate) fn commit<S: Storage, P: Policy>(
             "pending operation requires recovery".into(),
         ));
     }
-    validate_all(storage, &participants, false, &kind)?;
+    validate_all(storage, &participants, false, &kind, Encoding::Digest)?;
+    let preconditions = participants.iter().map(Precondition::new).collect::<Vec<_>>();
     let mut prepared = Vec::new();
     for participant in &participants {
         if participant.expected.bytes.as_ref() == Some(&participant.bytes) {
@@ -1675,7 +1780,9 @@ pub(crate) fn commit<S: Storage, P: Policy>(
         }
     };
     if let Err(error) =
-        validate_all(storage, &intent.participants, false, &intent.kind).and_then(|()| match &route {
+        validate_all(storage, &intent.participants, false, &intent.kind, intent.encoding)
+        .and_then(|()| validate_preconditions(storage, &preconditions, false))
+        .and_then(|()| match &route {
             Some(route) => policy.validate_routing_admission(
                 &MutationContext {
                     operation: context.operation,
@@ -1699,7 +1806,8 @@ pub(crate) fn commit<S: Storage, P: Policy>(
     let mut remaining = prepared.into_iter();
     while let Some((target, bytes, file)) = remaining.next() {
         // Check all participants again immediately before each replacement.
-        let result = validate_all(storage, &intent.participants, true, &intent.kind)
+        let result = validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)
+            .and_then(|()| validate_preconditions(storage, &preconditions, true))
             .and_then(|()| storage.install(&file))
             .and_then(|()| storage.confirm(&target, &bytes).map(|_| ()));
         storage.discard(file)?;
@@ -1710,7 +1818,8 @@ pub(crate) fn commit<S: Storage, P: Policy>(
     }
     // Snapshot is the final semantic participant and holds completion receipts.
     // Removing the intent and syncing its directory is part of completion.
-    validate_all(storage, &intent.participants, true, &intent.kind)?;
+    validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)?;
+    validate_preconditions(storage, &preconditions, true)?;
     storage.remove(INTENT)
 }
 
@@ -1723,6 +1832,18 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) ->
         return Err(Error::Invalid("unknown operation intent fields".into()));
     }
     intent.validate_integrity()?;
+    let mut installed = false;
+    if intent.encoding == Encoding::Digest {
+        for participant in &mut intent.participants {
+            let actual = storage.read(&participant.target)?;
+            participant.validate_digest(&actual, true)?;
+            if participant.installed(&actual, true) {
+                installed = true;
+            } else {
+                participant.expected = actual;
+            }
+        }
+    }
     for target in [ITEMS, DECISIONS] {
         if !intent.participants.iter().any(|participant| participant.target == target) {
             let expected = storage.read(target)?;
@@ -1734,8 +1855,8 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) ->
     intent.participants.sort_by_key(|participant| match participant.target.as_str() {
         ITEMS => 1, DECISIONS => 2, STATE => 3, _ => 0,
     });
-    let snapshot = intent.validate_contents()?;
-    validate_all(storage, &intent.participants, true, &intent.kind)?;
+    let snapshot = if installed { intent.parse_contents()? } else { intent.validate_contents()? };
+    validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)?;
     policy.validate(&MutationContext {
         operation: if matches!(intent.kind, IntentKind::GuardAudit { .. }) {
             "guard_audit_recovery"
@@ -1745,7 +1866,7 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) ->
         snapshot: &snapshot,
     })?;
     for participant in &intent.participants {
-        validate_all(storage, &intent.participants, true, &intent.kind)?;
+        validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)?;
         let current = storage.read(&participant.target)?;
         if current.bytes.as_ref() == Some(&participant.bytes) {
             // Rename may have completed before its directory sync. Reconfirm
@@ -1753,7 +1874,7 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) ->
             storage.resync(&participant.target, &participant.bytes)?;
         } else {
             let file = storage.prepare(&participant.target, &participant.bytes)?;
-            let result = validate_all(storage, &intent.participants, true, &intent.kind)
+            let result = validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)
                 .and_then(|()| storage.install(&file))
                 .and_then(|()| {
                     storage
@@ -1764,7 +1885,7 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) ->
             result?;
         }
     }
-    validate_all(storage, &intent.participants, true, &intent.kind)?;
+    validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)?;
     storage.remove(INTENT)
 }
 
