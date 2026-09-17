@@ -356,6 +356,8 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         for name in [ITEMS, DECISIONS, STATE] {
             observed.insert(name.to_string(), storage.read(name)?);
         }
+        #[cfg(test)]
+        PARSES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let items_bytes = observed[ITEMS].bytes.as_deref().unwrap_or_default();
         let decision_bytes = observed[DECISIONS].bytes.as_deref().unwrap_or_default();
         let snapshot = match observed[STATE].bytes.as_deref() {
@@ -2144,5 +2146,46 @@ pub struct PlanningPolicy;
 impl Policy for PlanningPolicy {
     fn validate(&mut self, _: &MutationContext<'_>) -> Result<()> {
         Ok(())
+    }
+}
+
+/// Test-only count of snapshot and log parses by the writer, so a test can
+/// pin how many times the store's bytes are parsed, not how long it takes.
+#[cfg(test)]
+pub(crate) static PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+mod observe_tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    // GH-261: an operation on a store whose bytes have not changed since the
+    // writer last read them reuses the view it holds. On this project's
+    // store the parse is 630ms, before every verified read and every write.
+    #[test]
+    fn unchanged_store_bytes_are_parsed_once() {
+        let temp = tempfile::tempdir().unwrap();
+        tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
+            let store = Store::open(super::super::filesystem::Filesystem::new(temp.path()).unwrap(), PlanningPolicy).await.unwrap();
+            let view = store.request(Operation::ReadVerified).await.unwrap();
+            let written = store.request(Operation::CompareRewriteSnapshot {
+                expected_generation: view.snapshot.generation, expected_integrity: view.snapshot.integrity.clone(),
+                data: serde_json::json!({"value": 1}) }).await.unwrap();
+            assert_eq!(written.snapshot.generation, view.snapshot.generation + 1);
+            let before = PARSES.load(Ordering::SeqCst);
+            for _ in 0..3 {
+                assert_eq!(store.request(Operation::ReadVerified).await.unwrap(), written);
+            }
+            let again = store.request(Operation::CompareRewriteSnapshot {
+                expected_generation: written.snapshot.generation, expected_integrity: written.snapshot.integrity.clone(),
+                data: serde_json::json!({"value": 2}) }).await.unwrap();
+            assert_eq!(again.snapshot.generation, written.snapshot.generation + 1);
+            assert_eq!(store.request(Operation::ReadVerified).await.unwrap(), again);
+            assert_eq!(PARSES.load(Ordering::SeqCst) - before, 0, "the writer re-parsed bytes it had already read");
+            // Bytes changed under the writer: the next operation parses once.
+            std::fs::write(temp.path().join(model::ITEMS), b"").unwrap();
+            let _ = store.request(Operation::ReadVerified).await;
+            assert_eq!(PARSES.load(Ordering::SeqCst) - before, 1);
+        });
     }
 }
