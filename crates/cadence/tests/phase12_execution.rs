@@ -350,11 +350,16 @@ fn git(project:&Path,args:&[&str]) {
     assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
 }
 
-fn contract(project:&Path) -> Value {
-    let mut client=Client::open(project);
+fn contract(project: &Path) -> Value {
+    let mut client = Client::open(project);
+    let answer = contract_with(&mut client);
+    client.finish();
+    answer
+}
+
+fn contract_with(client: &mut Client) -> Value {
     let published=client.read("12",None);
     let map=client.call("cadence_query",json!({"operation":"evidence-read","phase":12}));
-    client.finish();
     let publications=published["native"]["publications"].as_object().unwrap();
     let mut assigned=std::collections::BTreeSet::new();
     let mut plans=Vec::new(); let mut allocation=Vec::new();
@@ -463,14 +468,26 @@ fn capture_bytes(capture: &Value) -> Vec<u8> {
 
 fn execution_history(project: &Path) -> Value {
     let mut client = Client::open(project);
-    let answer = client.call("cadence_query", json!({"operation":"execution-history","phase":12}));
-    assert_eq!(answer["status"], "ok", "{answer}");
+    let answer = history_with(&mut client);
     client.finish();
     answer
 }
 
+fn history_with(client: &mut Client) -> Value {
+    let answer = client.call("cadence_query", json!({"operation":"execution-history","phase":12}));
+    assert_eq!(answer["status"], "ok", "{answer}");
+    answer
+}
+
 fn task_state(project: &Path, name: &str) -> Value {
-    execution_history(project)["tasks"].as_array().unwrap().iter()
+    let mut client = Client::open(project);
+    let answer = task_state_with(&mut client, name);
+    client.finish();
+    answer
+}
+
+fn task_state_with(client: &mut Client, name: &str) -> Value {
+    history_with(client)["tasks"].as_array().unwrap().iter()
         .find(|t| t["task"]["plan"] == 1 && t["task"]["task"] == name).unwrap().clone()
 }
 
@@ -530,20 +547,22 @@ impl Tiny {
             if mode=="dispatch" {entry["content"]["tasks"][0]["action"]=json!(BODY_OVERRIDE);}
         }
         publish(project,&input);
-        let mut allocation = contract(project);
+        // Keep publication's fresh-server replay, then share one execution
+        // setup client through admission, task starts and every red/green run.
+        let mut client = Client::open(project);
+        let mut allocation = contract_with(&mut client);
         let checks = allocation["allocation"][0]["checks"].as_array().unwrap().clone();
         allocation["allocation"][0]["checks"] = json!(&checks[..2]);
         allocation["allocation"][1]["checks"] = json!([checks[2]]);
-        let answer = apply(project,admit_request(allocation,"tiny-admit",0)); assert_eq!(answer["status"],"ok","{answer}");
-        let answer = apply(project,json!({"operation":"execution-authorize","phase":12,"request_id":"tiny-authorize","owner":"Fixture Owner",
+        let answer = client.call("cadence_apply",admit_request(allocation,"tiny-admit",0)); assert_eq!(answer["status"],"ok","{answer}");
+        let answer = client.call("cadence_apply",json!({"operation":"execution-authorize","phase":12,"request_id":"tiny-authorize","owner":"Fixture Owner",
             "at":"2026-09-10T14:00:00Z","response":"Proceed with native execution"})); assert_eq!(answer["status"],"ok","{answer}");
-        let mut client = Client::open(project);
-        let dispatch = client.call("cadence_query",json!({"operation":"execute-next","phase":12})); client.finish();
+        let dispatch = client.call("cadence_query",json!({"operation":"execute-next","phase":12}));
         assert_eq!(dispatch["status"],"ok","{dispatch}");
         for (name, allocated) in [("A",json!(&checks[..2])),("B",json!([checks[2]])),("C",json!([]))] {
             if matches!(mode,"progress"|"dispatch") && name!="A" {continue;}
-            let task = task_state(project,name)["task"].clone();
-            let answer = apply(project,json!({"operation":"execution-task-start","request":{"request_id":format!("start-{name}"),"task":task,
+            let task = task_state_with(&mut client,name)["task"].clone();
+            let answer = client.call("cadence_apply",json!({"operation":"execution-task-start","request":{"request_id":format!("start-{name}"),"task":task,
                 "attempt":format!("attempt-{name}"),"expected_version":0,"predecessor":null,"checks":allocated}}));
             assert_eq!(answer["status"],"ok","{answer}");
         }
@@ -560,17 +579,18 @@ impl Tiny {
         git_value(project,&["add","tests/check.py"]); git_value(project,&["commit","-m","test(12): tiny check red A"]);
         let red = git_value(project,&["rev-parse","HEAD"]);
         let mut fixture = Self { temp, command, checks, red, green:String::new(), pairs:vec![] };
-        for i in 0..if matches!(mode,"progress"|"dispatch") {2}else{3} { fixture.run(if i < 2 {"A"} else {"B"},&format!("red-{i}"),Some(i),"red"); }
+        for i in 0..if matches!(mode,"progress"|"dispatch") {2}else{3} { fixture.run_with(&mut client,if i < 2 {"A"} else {"B"},&format!("red-{i}"),Some(i),"red"); }
         if mode == "setup-error" { assert!(!fixture.project().join(".run/body").exists(),"setUp error must precede the body"); }
         fs::write(fixture.project().join("src/tiny.py"), "def answer():\n    return 7\n").unwrap();
         git_value(fixture.project(),&["add","src/tiny.py"]); git_value(fixture.project(),&["commit","-S","-m","feat(12): tiny subject green A"]);
         fixture.green = git_value(fixture.project(),&["rev-parse","HEAD"]);
         assert_eq!(git_value(fixture.project(),&["show",&format!("{}:tests/check.py",fixture.red)]),git_value(fixture.project(),&["show",&format!("{}:tests/check.py",fixture.green)]));
         for i in 0..if matches!(mode,"progress"|"dispatch") {2}else{3} {
-            fixture.run(if i < 2 {"A"} else {"B"},&format!("green-{i}"),Some(i),"green");
+            fixture.run_with(&mut client,if i < 2 {"A"} else {"B"},&format!("green-{i}"),Some(i),"green");
             fixture.pairs.push(json!({"check":fixture.checks[i],"red_commit":fixture.red,"green_commit":fixture.green,
                 "red_run":format!("red-{i}"),"green_run":format!("green-{i}")}));
         }
+        client.finish();
         fixture
     }
     fn run(&self, task: &str, id: &str, check: Option<usize>, stage: &str) -> Value {
@@ -580,10 +600,21 @@ impl Tiny {
         self.run_in_attempt(task, &format!("attempt-{task}"), id, command, check, stage)
     }
     fn run_in_attempt(&self, task: &str, attempt: &str, id: &str, command: &str, check: Option<usize>, stage: &str) -> Value {
-        let state = task_state(self.project(),task);
+        let mut client = Client::open(self.project());
+        let result = self.run_in_attempt_with(&mut client, (task, attempt), id, command, check, stage);
+        client.finish();
+        result
+    }
+    fn run_with(&self, client: &mut Client, task: &str, id: &str, check: Option<usize>, stage: &str) -> Value {
+        self.run_named_with(client, task, id, &self.command, check, stage)
+    }
+    fn run_named_with(&self, client: &mut Client, task: &str, id: &str, command: &str, check: Option<usize>, stage: &str) -> Value {
+        self.run_in_attempt_with(client, (task, &format!("attempt-{task}")), id, command, check, stage)
+    }
+    fn run_in_attempt_with(&self, client: &mut Client, (task, attempt): (&str, &str), id: &str, command: &str, check: Option<usize>, stage: &str) -> Value {
+        let state = task_state_with(client,task);
         let request = json!({"operation":"execution-run","request":{"request_id":id,"task":state["task"],"attempt":attempt,
             "expected_version":state["state"]["version"],"command":command,"check":check.map(|i|self.checks[i].clone()),"stage":stage}});
-        let mut client = Client::open(self.project());
         let launch = client.call("cadence_apply",request.clone()); assert_eq!(launch["status"],"ok","{launch}");
         let deadline = std::time::Instant::now()+std::time::Duration::from_secs(20);
         let result = loop {
@@ -593,7 +624,6 @@ impl Tiny {
             std::thread::sleep(std::time::Duration::from_millis(10));
         };
         assert_eq!(client.call("cadence_apply",request)["receipt"],launch["receipt"],"launch replay");
-        client.finish();
         let event = &result["request"]["event"];
         assert_eq!(event["material_unchanged"],true,"{event}");
         assert!(event["observed_at"].as_u64().unwrap()>=launch["receipt"]["request"]["event"]["launched_at"].as_u64().unwrap());
@@ -607,8 +637,14 @@ impl Tiny {
         result
     }
     fn owner(&self, i: usize, id: &str, affirmative: bool) -> Value {
-        let task = if i<2 {"A"} else {"B"}; let state=task_state(self.project(),task);
-        let history=execution_history(self.project());
+        let mut client = Client::open(self.project());
+        let answer = self.owner_with(&mut client, i, id, affirmative);
+        client.finish();
+        answer
+    }
+    fn owner_with(&self, client: &mut Client, i: usize, id: &str, affirmative: bool) -> Value {
+        let task = if i<2 {"A"} else {"B"}; let state=task_state_with(client,task);
+        let history=history_with(client);
         let launch=history["events"].as_array().unwrap().iter().find(|e|e["request"]["event"]["run_id"]==format!("red-{i}") && e["request"]["event"]["kind"]=="launch").unwrap();
         let submission=json!({"check":self.checks[i],"test_digest":launch["request"]["event"]["material"]["test_digest"],
             "evidence":[format!("red-{i}"),format!("green-{i}")],"no_subject_stub":affirmative});
@@ -617,10 +653,25 @@ impl Tiny {
                 "approval":{"approved":true,"owner":"Fixture Owner","at":"2026-09-10T15:00:00Z","submission":submission}}}})
     }
     fn attest(&self) {
-        for i in 0..3 { let answer=apply(self.project(),self.owner(i,&format!("owner-{i}"),true)); assert_eq!(answer["status"],"ok","{answer}"); }
+        let mut client = Client::open(self.project());
+        self.attest_with(&mut client);
+        client.finish();
+    }
+    fn attest_with(&self, client: &mut Client) {
+        for i in 0..3 {
+            let request = self.owner_with(client, i, &format!("owner-{i}"), true);
+            let answer = client.call("cadence_apply", request);
+            assert_eq!(answer["status"],"ok","{answer}");
+        }
     }
     fn close(&self, id: &str) -> Value {
-        let state=task_state(self.project(),"A");
+        let mut client = Client::open(self.project());
+        let answer = self.close_with(&mut client, id);
+        client.finish();
+        answer
+    }
+    fn close_with(&self, client: &mut Client, id: &str) -> Value {
+        let state=task_state_with(client,"A");
         json!({"operation":"execution-task-close","request":{"request_id":id,"task":state["task"],"attempt":"attempt-A",
             "expected_version":state["state"]["version"],"completion":self.green,"checks":&self.pairs[..2],"verification":["green-0"]}})
     }
@@ -1354,22 +1405,25 @@ fn settle(project:&Path,id:&str,plan:u32) -> Value {
 // Closes A, B and C with real signed completions, red/green pairs, owner
 // records and task-named marker runs; returns the handwritten launch order.
 fn finish_tasks(fixture:&Tiny) -> Vec<String> {
-    let project=fixture.project();fixture.attest();
-    fixture.run_named("A","mark-A-1",MARK_A,None,"verify");fixture.run_named("A","mark-A-2",MARK_A,None,"verify");
-    let mut close=fixture.close("close-A");close["request"]["verification"]=json!(["green-0","mark-A-2"]);
-    let answer=apply(project,close);assert_eq!(answer["status"],"ok","{answer}");
+    let project=fixture.project();
+    let mut client = Client::open(project);
+    fixture.attest_with(&mut client);
+    fixture.run_named_with(&mut client,"A","mark-A-1",MARK_A,None,"verify");fixture.run_named_with(&mut client,"A","mark-A-2",MARK_A,None,"verify");
+    let mut close=fixture.close_with(&mut client,"close-A");close["request"]["verification"]=json!(["green-0","mark-A-2"]);
+    let answer=client.call("cadence_apply",close);assert_eq!(answer["status"],"ok","{answer}");
     git_value(project,&["commit","--allow-empty","-S","-m","feat(12): finish B"]);let completion_b=git_value(project,&["rev-parse","HEAD"]);
-    fixture.run("B","verify-B",None,"verify");fixture.run_named("B","mark-B",MARK_B,None,"verify");
-    let b=task_state(project,"B");
-    let answer=apply(project,json!({"operation":"execution-task-close","request":{"request_id":"close-B","task":b["task"],"attempt":"attempt-B",
+    fixture.run_with(&mut client,"B","verify-B",None,"verify");fixture.run_named_with(&mut client,"B","mark-B",MARK_B,None,"verify");
+    let b=task_state_with(&mut client,"B");
+    let answer=client.call("cadence_apply",json!({"operation":"execution-task-close","request":{"request_id":"close-B","task":b["task"],"attempt":"attempt-B",
         "expected_version":b["state"]["version"],"completion":completion_b,"checks":[fixture.pairs[2].clone()],"verification":["verify-B","mark-B"]}}));
     assert_eq!(answer["status"],"ok","{answer}");
     git_value(project,&["commit","--allow-empty","-S","-m","feat(12): finish C"]);let completion_c=git_value(project,&["rev-parse","HEAD"]);
-    fixture.run_named("C","mark-C",MARK_C,None,"verify");fixture.run_named("C","partial-C",PARTIAL,None,"verify");fixture.run_named("C","big-C",BIG,None,"verify");
-    let c=task_state(project,"C");
-    let answer=apply(project,json!({"operation":"execution-task-close","request":{"request_id":"close-C","task":c["task"],"attempt":"attempt-C",
+    fixture.run_named_with(&mut client,"C","mark-C",MARK_C,None,"verify");fixture.run_named_with(&mut client,"C","partial-C",PARTIAL,None,"verify");fixture.run_named_with(&mut client,"C","big-C",BIG,None,"verify");
+    let c=task_state_with(&mut client,"C");
+    let answer=client.call("cadence_apply",json!({"operation":"execution-task-close","request":{"request_id":"close-C","task":c["task"],"attempt":"attempt-C",
         "expected_version":c["state"]["version"],"completion":completion_c,"checks":[],"verification":["mark-C","partial-C","big-C"]}}));
     assert_eq!(answer["status"],"ok","{answer}");
+    client.finish();
     ["red-0","red-1","red-2","green-0","green-1","green-2","mark-A-1","mark-A-2","verify-B","mark-B","mark-C","partial-C","big-C"].iter().map(|s|s.to_string()).collect()
 }
 

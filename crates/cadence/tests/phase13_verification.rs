@@ -10,11 +10,11 @@ fn inspected_patch(project: &std::path::Path, id: &str) -> (Value, Value) {
 // A fresh dispatch, one independent run per saved check, and one complete
 // handwritten patch; `verdicts` overrides (item, verdict, observed) rows.
 fn inspected_with(project: &std::path::Path, id: &str, verdicts: &[(&str, &str, &str)]) -> (Value, Value) {
-    let dispatch = query(project, json!({"operation":"verify-next","phase":13,"request_id":id}));
+    let mut client = Client::open(project);
+    let dispatch = client.call("cadence_query", json!({"operation":"verify-next","phase":13,"request_id":id}));
     assert_eq!(dispatch["status"], "ok", "{dispatch}");
     let attempt = dispatch["attempt"].clone();
     let mut items = Vec::new();
-    let mut client = Client::open(project);
     for item in attempt["inputs"]["map"]["items"].as_array().unwrap() {
         let mut runs = Vec::new();
         if item["kind"] == "check" {
