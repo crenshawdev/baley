@@ -15,11 +15,14 @@ pub struct Client {
     pending: BTreeMap<u64, Value>,
 }
 
+// Used by the phase 32 target, which shares this transport with phase 31.
+#[allow(dead_code)]
 pub struct Caller {
     next_id: u64,
     end_id: u64,
 }
 
+#[allow(dead_code)]
 impl Caller {
     pub fn new(slot: u32) -> Self {
         let start = (u64::from(slot) + 1) * 1_000_000;
@@ -78,6 +81,7 @@ impl Client {
         self.receive_call(2)
     }
 
+    #[allow(dead_code)]
     pub fn send_call(&mut self, caller: &mut Caller, tool: &str, arguments: Value) -> u64 {
         assert!(caller.next_id < caller.end_id, "caller exhausted its request id range");
         let id = caller.next_id;
@@ -112,6 +116,7 @@ impl Client {
         structured
     }
 
+    #[allow(dead_code)]
     pub fn serve_processes(&self) -> Vec<u32> {
         let output = Command::new("ps").args(["-eo", "pid=,ppid=,args="]).output().unwrap();
         assert!(output.status.success());
