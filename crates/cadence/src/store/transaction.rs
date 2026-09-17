@@ -1389,6 +1389,12 @@ impl Intent {
                         Error::Invalid("dispatch intent lacks active dispatch".into())
                     })?;
                 super::writer::validate_routing(active, &records)?;
+                if let Some(issue) = execution.occurrences[&phase.to_string()].issues.get(&active.id)
+                    && (issue.binding != cadence::execution::dispatch::issue_binding(&snapshot.data, active)?
+                        || issue.issue_digest != cadence::execution::dispatch::binding_digest(&issue.binding)?
+                        || issue.issue_digest != active.issue_digest
+                        || issue.operational["dispatch_id"] != active.id)
+                { return Err(Error::Invalid("dispatch issue intent binding mismatch".into())); }
                 if active.phase != *phase
                     || value.terminal
                     || value.boundary.receipt
@@ -1437,6 +1443,15 @@ impl Intent {
                 expected_active.prompt = active.prompt.clone();
                 expected_active.prompt_digest = active.prompt_digest.clone();
                 expected_active.issue_digest = active.issue_digest.clone();
+                if let Some(issue) = execution.occurrences[&phase.to_string()].issues.get(issue_dispatch_id) {
+                    if issue.binding != cadence::execution::dispatch::issue_binding(&snapshot.data, active)?
+                        || issue.issue_digest != cadence::execution::dispatch::binding_digest(&issue.binding)?
+                        || issue.issue_digest != active.issue_digest
+                        || issue.operational["dispatch_id"] != *issue_dispatch_id
+                    { return Err(Error::Invalid("dispatch issue intent binding mismatch".into())); }
+                    expected_execution.occurrences.get_mut(&phase.to_string()).unwrap()
+                        .issues.insert(issue_dispatch_id.clone(), issue.clone());
+                }
                 let mut previous_data = previous.data;
                 let mut current_data = snapshot.data.clone();
                 previous_data.as_object_mut().unwrap().remove("execution");

@@ -778,7 +778,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             active: None,
             plans: Vec::new(),
             terminal: None,
-            receipts: BTreeMap::new(),
+            receipts: BTreeMap::new(), issues: BTreeMap::new(),
         });
     if occurrence.plan_set_fingerprint != plans.fingerprint {
         return record_refusal(
@@ -1109,7 +1109,7 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         Err(error) => return refuse("invalid-execution-store", error, None).await,
     };
     let occurrence = execution.occurrences.get(&phase.to_string()).cloned().unwrap_or_else(|| ExecutionOccurrence {
-        phase, plan_set_fingerprint: plans.fingerprint.clone(), version: 0, active: None, plans: Vec::new(), terminal: None, receipts: BTreeMap::new(),
+        phase, plan_set_fingerprint: plans.fingerprint.clone(), version: 0, active: None, plans: Vec::new(), terminal: None, receipts: BTreeMap::new(), issues: BTreeMap::new(),
     });
     if occurrence.plan_set_fingerprint != plans.fingerprint {
         return refuse("plan-set-changed", "native plan inputs differ from the admitted execution occurrence".into(), None).await;
@@ -1229,13 +1229,21 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         set_version: latest.set_version, head: &head, tasks, checks, completed, continuation,
         suite: json!({"command": admitted.suite, "state": suite_state}), commands: instructions::command_policy(&configured, &present) };
     let operational = native_operational(&state);
-    let issue_digest = match cadence::execution::boundary::canonical_bytes(&operational) {
-        Ok(bytes) => cadence::store::model::digest(&bytes),
-        Err(_) => return refuse("dispatch-state", "the current dispatch state cannot be encoded".into(), Some(admitted.id.clone())).await,
-    };
-    let (mut dispatch, operational) = match native_dispatch(&admitted, operational, executable, candidate.is_some()) {
+    let binding = cadence::execution::dispatch::issue_binding(data, &admitted).map_err(store_failure)?;
+    let issue_digest = cadence::execution::dispatch::binding_digest(&binding).map_err(store_failure)?;
+    let previous_issue = occurrence.issues.iter().find(|(_, issue)| issue.binding == binding);
+    let (mut dispatch, mut operational) = match native_dispatch(&admitted, operational, executable, candidate.is_some()) {
         Ok(value) => value,
         Err(error) => return refuse(error.code, error.detail, Some(admitted.id.clone())).await,
+    };
+    if let Some((id, _)) = previous_issue {
+        dispatch.id = id.clone();
+    } else if candidate.is_none() {
+        dispatch.id = cadence::store::model::digest(format!("native-issued-dispatch-1:{}:{issue_digest}", admitted.id).as_bytes());
+    }
+    operational["dispatch_id"] = json!(dispatch.id);
+    let issue = cadence::execution::model::DispatchIssue {
+        issue_digest: issue_digest.clone(), binding, operational: operational.clone(),
     };
     let fresh = candidate.is_some();
     let (prompt, reissued) = match issue_prompt(&mut dispatch, &issue_digest, fresh, || {
@@ -1279,6 +1287,9 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         }
         None => (format!("execution-observation:{}", decision.identity()?), BoundaryChange::Observe),
     };
+    let change = if previous_issue.is_none() {
+        BoundaryChange::Issue { change: Box::new(change), id: dispatch.id.clone(), issue }
+    } else { change };
     let written = session.request(Operation::BoundaryV1 {
         expected_generation: view.snapshot.generation, expected_integrity: view.snapshot.integrity.clone(),
         operation_id, decision: decision.clone(), change: Box::new(change),

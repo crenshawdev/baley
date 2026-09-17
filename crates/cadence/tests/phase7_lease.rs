@@ -531,6 +531,7 @@ fn writer_input(lease: &str, blocked: bool) -> (Value, cadence::execution::model
         plans: vec![],
         terminal: None,
         receipts: Default::default(),
+        issues: Default::default(),
     };
     let (occurrence, dispatch) = admit_dispatch(&occurrence, candidate).unwrap();
     let row = |id: &str, sha: &str| {

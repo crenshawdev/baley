@@ -175,6 +175,41 @@ pub fn native_operational(state: &NativeState<'_>) -> serde_json::Value {
     operational
 }
 
+pub fn issue_binding(data: &serde_json::Value, admitted: &ActiveDispatch) -> crate::store::Result<serde_json::Value> {
+    use super::{admission, history};
+    let records = history::records(data, admitted.phase)?;
+    let admissions = admission::records(data, admitted.phase)?;
+    let basis = admissions.iter().find(|record| record.request.contract.plans.iter().any(|plan| plan.plan == admitted.plan))
+        .ok_or_else(|| crate::store::Error::Invalid("dispatch admission is absent".into()))?;
+    let publication = crate::plan::persistence::saved(data, admitted.phase)?
+        .and_then(|plans| plans.publications.get(&admitted.plan).cloned())
+        .ok_or_else(|| crate::store::Error::Invalid("dispatch publication is absent".into()))?;
+    let tasks = history::plan_task_views(data, &records, admitted.phase, admitted.plan)?.into_iter()
+        .filter(|task| !task.state.completed && !records.iter().any(|record| record.request.task == task.task
+            && matches!(record.request.event, history::Event::Retirement { .. })))
+        .map(|task| serde_json::json!({"id":task.task.task,"checks":task.checks})).collect::<Vec<_>>();
+    Ok(serde_json::json!({"plan":admitted.plan,"content_revision":publication.revision,
+        "admission_digest":basis.request_digest,"set_version":admissions.last().map(|record| record.set_version),
+        "base_sha":admitted.base_sha,"tasks":tasks}))
+}
+
+pub fn binding_digest(binding: &serde_json::Value) -> crate::store::Result<String> {
+    Ok(crate::store::model::digest(&super::boundary::canonical_bytes(binding)
+        .map_err(|error| crate::store::Error::Invalid(error.to_string()))?))
+}
+
+pub fn changed_part(previous: &serde_json::Value, current: &serde_json::Value) -> Option<String> {
+    for slot in ["content_revision", "admission_digest", "set_version", "base_sha", "plan"] {
+        if previous[slot] != current[slot] { return Some(slot.into()); }
+    }
+    let old = previous["tasks"].as_array()?;
+    let new = current["tasks"].as_array()?;
+    old.iter().chain(new).find(|task| {
+        old.iter().find(|value| value["id"] == task["id"])
+            != new.iter().find(|value| value["id"] == task["id"])
+    }).map(|task| format!("task:{}", task["id"].as_str().unwrap_or_default()))
+}
+
 /// A fresh dispatch carries the admitted identity; a resumed one is a linked
 /// identity over the same admission and the confirmed state it binds.
 pub fn native_dispatch(

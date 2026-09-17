@@ -62,6 +62,7 @@ pub struct DocumentRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum DocumentIdentity {
+    Dispatch { id: String },
     PlanDraft { phase: NonZeroU32, plan: NonZeroU32, digest: String },
     ContextDraft { phase: NonZeroU32, digest: String },
     PhaseContext { phase: NonZeroU32 },

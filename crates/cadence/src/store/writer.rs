@@ -28,6 +28,11 @@ pub const STALE_SNAPSHOT: &str = "conditional snapshot precondition changed";
 
 #[derive(Clone, Debug, Serialize)]
 pub enum BoundaryChange {
+    Issue {
+        change: Box<BoundaryChange>,
+        id: String,
+        issue: cadence::execution::model::DispatchIssue,
+    },
     Observe,
     FinalizeRisk {
         phase: u32,
@@ -1001,6 +1006,10 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         decision: BoundaryV1,
         change: BoundaryChange,
     ) -> Result<View> {
+        let (change, issue) = match change {
+            BoundaryChange::Issue { change, id, issue } => (*change, Some((id, issue))),
+            change => (change, None),
+        };
         self.revalidate()?;
         self.policy.validate(&MutationContext {
             operation: "boundary_v1",
@@ -1087,6 +1096,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let mut next = self.view.clone();
         let mut participants = Vec::new();
         let kind = match change {
+            BoundaryChange::Issue { .. } => return Err(Error::Invalid("nested dispatch issue".into())),
             BoundaryChange::FinalizeRisk {
                 phase,
                 requirements,
@@ -1155,7 +1165,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                         active: None,
                         plans: Vec::new(),
                         terminal: None,
-                        receipts: BTreeMap::new(),
+                        receipts: BTreeMap::new(), issues: BTreeMap::new(),
                     });
                 let (occurrence, _) =
                     cadence::execution::dispatch::admit_dispatch(occurrence, dispatch)
@@ -1300,6 +1310,26 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 }
             }
         };
+        if let Some((issue_id, issue)) = issue {
+            let BoundaryScope::Execution { phase } = decision.scope else {
+                return Err(Error::Invalid("dispatch issue lacks execution scope".into()));
+            };
+            let mut execution = execution_snapshot(&next.snapshot.data)?;
+            let occurrence = execution.occurrences.get_mut(&phase.to_string())
+                .ok_or_else(|| Error::Invalid("dispatch issue lacks occurrence".into()))?;
+            let active = occurrence.active.as_ref()
+                .ok_or_else(|| Error::Invalid("dispatch issue lacks active dispatch".into()))?;
+            if issue.binding != cadence::execution::dispatch::issue_binding(&next.snapshot.data, active)?
+                || issue.issue_digest != cadence::execution::dispatch::binding_digest(&issue.binding)?
+                || issue.issue_digest != active.issue_digest
+                || issue.operational["dispatch_id"] != issue_id
+                || decision.subject_id.as_ref() != Some(&issue_id)
+            { return Err(Error::Invalid("dispatch issue binding mismatch".into())); }
+            if occurrence.issues.insert(issue_id, issue).is_some() {
+                return Err(Error::Conflict("dispatch issue already exists".into()));
+            }
+            install_execution(&mut next.snapshot.data, execution)?;
+        }
         next.decisions
             .push(record_v1(decision, self.next_generation()?, false)?);
         model::validate_decisions(&next.decisions)?;
@@ -1370,7 +1400,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 active: None,
                 plans: Vec::new(),
                 terminal: None,
-                receipts: BTreeMap::new(),
+                receipts: BTreeMap::new(), issues: BTreeMap::new(),
             });
         let (occurrence, _) = cadence::execution::dispatch::admit_dispatch(occurrence, dispatch)
             .map_err(|error| Error::Conflict(error.to_string()))?;

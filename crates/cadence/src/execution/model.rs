@@ -230,6 +230,18 @@ pub struct ExecutionOccurrence {
     pub plans: Vec<PlanOutcome>,
     pub terminal: Option<TerminalOutcome>,
     pub receipts: BTreeMap<String, AppliedReceipt>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub issues: BTreeMap<String, DispatchIssue>,
+}
+
+/// An issued identity binds admitted source and executable allocations, never
+/// the head or the live progress a worker is expected to change.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DispatchIssue {
+    pub issue_digest: String,
+    pub binding: serde_json::Value,
+    pub operational: serde_json::Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

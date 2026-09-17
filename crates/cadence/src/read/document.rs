@@ -11,6 +11,124 @@ use std::path::Path;
 
 const PART_BOUND: usize = 24_576;
 
+fn bounded_parts(parts: Vec<Part>) -> Vec<Part> {
+    parts.into_iter().flat_map(|part| {
+        let mut chunks = Vec::new();
+        let mut remaining = part.body.as_str();
+        loop {
+            let mut end = remaining.len().min(PART_BOUND);
+            while !remaining.is_char_boundary(end) { end -= 1; }
+            let selector = if chunks.is_empty() { part.selector.clone() }
+                else { format!("{}:{}", part.selector, chunks.len() + 1) };
+            chunks.push(Part { selector, title: part.title.clone(), body: remaining[..end].to_owned() });
+            remaining = &remaining[end..];
+            if remaining.is_empty() { break; }
+        }
+        chunks
+    }).collect()
+}
+
+fn dispatch(root: &Path, identity: &DocumentIdentity, id: &str) -> Result<Resolved, Value> {
+    use cadence::execution::{admission, dispatch::{changed_part, issue_binding}, history, model::ExecutionSnapshot};
+    let fail = |error: cadence::store::Error| refusal("identity", "document-unavailable", error.to_string());
+    let data = snapshot(root)?;
+    let execution: ExecutionSnapshot = serde_json::from_value(data["execution"].clone())
+        .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?;
+    let occurrence = execution.occurrences.values().find(|occurrence| occurrence.issues.contains_key(id)
+        || occurrence.active.as_ref().is_some_and(|active| active.id == id))
+        .ok_or_else(|| refusal("identity", "document-not-found", "issued dispatch identity is absent"))?;
+    let issue = occurrence.issues.get(id);
+    let Some(active) = &occurrence.active else {
+        let records = history::records(&data, occurrence.phase).map_err(fail)?;
+        let slot = issue.and_then(|issue| issue.binding["tasks"].as_array()).and_then(|tasks| {
+            tasks.iter().find(|task| records.iter().any(|record| record.request.task.task == task["id"]
+                && matches!(record.request.event, history::Event::Close(_) | history::Event::Retirement { .. })))
+        }).and_then(|task| task["id"].as_str()).map(|task| format!("task:{task}"));
+        let mut answer = refusal(slot.as_deref().unwrap_or("identity"), "dispatch-superseded", "the dispatch has ended");
+        answer["value"] = json!({"dispatch_id":null});
+        return Err(answer);
+    };
+    let binding = issue_binding(&data, active).map_err(fail)?;
+    if let Some(issue) = issue
+        && let Some(slot) = changed_part(&issue.binding, &binding) {
+            let current = occurrence.issues.iter().find(|(_, issue)| issue.binding == binding)
+                .map(|(id, _)| id.clone());
+            let mut answer = refusal(&slot, "dispatch-superseded", "the issued dispatch binding has changed");
+            answer["value"] = json!({"dispatch_id":current});
+            return Err(answer);
+    }
+    let publications = cadence::plan::persistence::saved(&data, active.phase).map_err(fail)?
+        .ok_or_else(|| refusal("identity", "document-not-found", "dispatch publication is absent"))?;
+    let publication = publications.publications.get(&active.plan)
+        .ok_or_else(|| refusal("identity", "document-not-found", "dispatch plan is absent"))?;
+    let records = history::records(&data, active.phase).map_err(fail)?;
+    let views = history::plan_task_views(&data, &records, active.phase, active.plan).map_err(fail)?;
+    let admissions = admission::records(&data, active.phase).map_err(fail)?;
+    let basis = admissions.iter().find(|record| record.request_digest == binding["admission_digest"])
+        .ok_or_else(|| refusal("identity", "document-not-found", "dispatch admission is absent"))?;
+    let mut operational = issue.map(|issue| issue.operational.clone()).unwrap_or_else(|| json!({
+        "protocol":cadence::execution::dispatch::NATIVE_PROTOCOL,
+        "instructions":cadence::execution::instructions::VERSION,"phase":active.phase,"plan":active.plan,
+        "occurrence":basis.request.contract.occurrence,"admission_digest":basis.request_digest,
+        "set_version":binding["set_version"],"base_sha":active.base_sha,
+        "expected_execution_version":active.expected_execution_version,"lease":{"files":active.files,"directories":active.directories},
+        "commands":{},"continuation":null,"policy":active.policy,"route":active.route
+    }));
+    let head = std::process::Command::new("git").args(["rev-parse", "HEAD"])
+        .current_dir(root.parent().unwrap_or(root)).output()
+        .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?;
+    if !head.status.success() { return Err(refusal("head", "document-unavailable", "cannot observe project head")); }
+    operational["head"] = json!(String::from_utf8_lossy(&head.stdout).trim());
+    operational["dispatch_id"] = json!(id);
+    let mut parts = Vec::new();
+    let mut identity_fields = serde_json::Map::new();
+    for key in ["protocol", "instructions", "phase", "plan", "occurrence", "admission_digest",
+        "expected_execution_version", "set_version", "base_sha", "head", "dispatch_id"] {
+        identity_fields.insert(key.into(), operational[key].clone());
+    }
+    let mut add = |selector: String, body: String| parts.push(Part { title: selector.clone(), selector, body });
+    add("identity".into(), Value::Object(identity_fields).to_string());
+    for (slot, body) in [("goal", &publication.content.goal), ("context", &publication.content.context), ("notes", &publication.content.notes)] {
+        if !body.is_empty() { add(slot.into(), body.clone()); }
+    }
+    let mut unfinished = Vec::new();
+    let mut completed = Vec::new();
+    for view in views {
+        if let Some(mut done) = history::completed_view(&records, &view) {
+            done["document_identity"] = json!({"kind":"task-summary","phase":view.task.phase,
+                "occurrence":view.task.occurrence,"plan":view.task.plan,"task":view.task.task});
+            completed.push(done);
+            continue;
+        }
+        let mut task = publication.content.tasks.iter().find(|task| task.id == view.task.task)
+            .map(serde_json::to_value).transpose().map_err(|error| refusal("part", "document-invalid", error.to_string()))?
+            .unwrap_or_else(|| json!({"id":view.task.task,"verify":view.verify}));
+        task["checks"] = json!(view.checks);
+        task["state"] = json!(view.state);
+        task["uncertainty"] = cadence::execution::runner::uncertainty(root.parent().unwrap_or(root), &records, &view).map_err(fail)?;
+        task["checkpoints"] = json!(history::task_checkpoints(&records, &view.task));
+        task["lease_scope"] = json!({"kind":"current-task-lease","phase":view.task.phase,
+            "occurrence":view.task.occurrence,"plan":view.task.plan,"task":view.task.task});
+        add(format!("task:{}", view.task.task), task.to_string());
+        unfinished.push(view);
+    }
+    for check in cadence::execution::dispatch::admitted_checks(&data, active.phase, basis, &unfinished).map_err(fail)? {
+        add(format!("check:{}", check["id"].as_str().unwrap_or_default()), check.to_string());
+    }
+    add("completed".into(), json!(completed).to_string());
+    let suite_records = history::plan_records(&data, active.phase).map_err(fail)?;
+    let suite = history::plan_project(&suite_records, &history::PlanIdentity { phase: active.phase,
+        occurrence: basis.request.contract.occurrence.clone(), admission_digest: basis.request_digest.clone(), plan: active.plan });
+    add("suite".into(), json!({"command":active.suite,"state":suite}).to_string());
+    for key in ["continuation", "lease", "commands", "policy", "route"] {
+        add(key.into(), operational[key].to_string());
+    }
+    let parts = bounded_parts(parts);
+    let bytes = parts.iter().flat_map(|part| part.body.bytes()).collect::<Vec<_>>();
+    Ok(Resolved { identity: identity.clone(), classification: "native-dispatch",
+        revision: cadence::store::model::digest(&bytes), parts })
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Part {
     pub selector: String,
@@ -78,6 +196,7 @@ fn roadmap(root: &Path, phase: u32) -> Result<Resolved, Value> {
 
 pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Value> {
     match identity {
+        DocumentIdentity::Dispatch { id } => dispatch(root, identity, id),
         DocumentIdentity::PlanDraft { phase, plan, digest } => {
             let drafts = crate::import::drafts(root)
                 .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?;
@@ -126,20 +245,33 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
                 .publications
                 .get(&plan.get())
                 .ok_or_else(|| refusal("identity", "document-not-found", "native plan identity is absent"))?;
-            let parts = cadence::plan::render::task_parts(&publication.content)
+            let mut parts = cadence::plan::render::task_parts(&publication.content)
                 .map_err(|error| refusal("part", "document-ambiguous", error.to_string()))?;
+            for (selector, body) in [("goal", &publication.content.goal),
+                ("context", &publication.content.context), ("notes", &publication.content.notes)] {
+                if !body.is_empty() {
+                    parts.push(cadence::plan::render::Part { selector: selector.into(), title: selector.into(), body: body.clone() });
+                }
+            }
+            if let Some(cadence::plan::evidence::Map::Attached { items }) = &publication.content.evidence_map {
+                for item in items {
+                    let value = serde_json::to_value(item).map_err(|error| refusal("part", "document-invalid", error.to_string()))?;
+                    let selector = format!("evidence:{}", value["id"].as_str().unwrap_or_default());
+                    parts.push(cadence::plan::render::Part { title: selector.clone(), selector, body: value.to_string() });
+                }
+            }
             Ok(Resolved {
                 identity: identity.clone(),
                 classification: "native-publication",
                 revision: publication.revision.clone(),
-                parts: parts
+                parts: bounded_parts(parts
                     .into_iter()
                     .map(|part| Part {
                         selector: part.selector,
                         title: part.title,
                         body: part.body,
                     })
-                    .collect(),
+                    .collect()),
             })
         }
         DocumentIdentity::PhaseRoadmapRow { phase } => roadmap(root, phase.get()),

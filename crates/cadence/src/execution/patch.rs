@@ -577,7 +577,7 @@ mod tests {
             active: None,
             plans: Vec::new(),
             terminal: None,
-            receipts: BTreeMap::new(),
+            receipts: BTreeMap::new(), issues: BTreeMap::new(),
         };
         let (occurrence, dispatch) = admit_dispatch(&occurrence, candidate).unwrap();
         let execution = ExecutionSnapshot {
@@ -649,7 +649,7 @@ mod tests {
             active: None,
             plans: vec![],
             terminal: None,
-            receipts: BTreeMap::new(),
+            receipts: BTreeMap::new(), issues: BTreeMap::new(),
         };
         let (admitted, active) = admit_dispatch(&occurrence, first).unwrap();
         assert_eq!(active.expected_execution_version, 1);
