@@ -1188,11 +1188,11 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                         != (Receipt::Dispatch {
                             dispatch_id: issue_dispatch_id.clone(),
                             prompt_bytes: None,
-                            prompt_digest: dispatch.prompt_digest.clone(),
+                            prompt_digest: if issue.is_some() { String::new() } else { dispatch.prompt_digest.clone() },
                         })
                     || dispatch.issue_digest.len() != 64
                     || !dispatch.issue_digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    || crate::store::model::digest(dispatch.prompt.as_bytes()) != dispatch.prompt_digest
+                    || (!dispatch.prompt_digest.is_empty() && crate::store::model::digest(dispatch.prompt.as_bytes()) != dispatch.prompt_digest)
                 {
                     return Err(Error::Invalid("dispatch re-issue boundary identity mismatch".into()));
                 }
@@ -2087,10 +2087,8 @@ impl ConfirmedBoundary<'_> {
                 let Some(envelope @ Envelope::Ok(Success::Dispatch { .. })) = dispatch else {
                     return Err(Failure::Confirmation);
                 };
-                if let Envelope::Ok(Success::Dispatch { dispatch, prompt }) = &envelope
-                    && (&dispatch.id != dispatch_id
-                        || dispatch.prompt_digest != *prompt_digest
-                        || crate::store::model::digest(prompt.as_bytes()) != *prompt_digest)
+                if let Envelope::Ok(Success::Dispatch { dispatch_id: id, prompt_digest: digest, .. }) = &envelope
+                    && (id != dispatch_id || digest.as_deref().unwrap_or_default() != prompt_digest)
                 {
                     return Err(Failure::Confirmation);
                 }
@@ -2101,6 +2099,26 @@ impl ConfirmedBoundary<'_> {
             return Err(Failure::Confirmation);
         }
         Ok(envelope)
+    }
+
+    /// Confirm the old prompt-bearing envelope against its original receipt,
+    /// then project the public identities without rewriting historical bytes.
+    pub fn historical_dispatch(&self, dispatch: &ActiveDispatch, prompt: &str)
+        -> std::result::Result<ExecutionEnvelope, Failure>
+    {
+        self.value.boundary.validate(self.value.terminal)?;
+        let Receipt::Dispatch { dispatch_id, prompt_bytes, prompt_digest } = &self.value.boundary.receipt else {
+            return Err(Failure::Confirmation);
+        };
+        if dispatch_id != &dispatch.id
+            || prompt_bytes.is_some_and(|bytes| bytes != prompt.len() as u64)
+            || (!prompt_digest.is_empty() && (dispatch.prompt_digest != *prompt_digest
+                || crate::store::model::digest(prompt.as_bytes()) != *prompt_digest))
+        { return Err(Failure::Confirmation); }
+        let retained = serde_json::json!({"status":"ok","outcome":"dispatch","dispatch":dispatch,"prompt":prompt});
+        if crate::store::model::digest(&cadence::execution::boundary::canonical_bytes(&retained)?)
+            != self.value.boundary.response_digest { return Err(Failure::Confirmation); }
+        Ok(Envelope::Ok(Success::dispatch(dispatch)))
     }
 }
 

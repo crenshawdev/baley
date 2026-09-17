@@ -673,8 +673,18 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 Some(active.id.clone()),
                 Some(active.prompt_digest.clone()),
             )?;
-            let confirmed = confirmed_boundary(&view, &decision)?;
-            return confirmed.envelope(Some(response.into_envelope()));
+            if let Ok(confirmed) = confirmed_boundary(&view, &decision) {
+                return confirmed.envelope(Some(response.into_envelope()));
+            }
+            let Response::Dispatch { dispatch, prompt } = &response else { unreachable!() };
+            let historical = view.decisions.iter().find_map(|record| match &record.decision {
+                cadence::store::model::Decision::BoundaryV1(value)
+                    if value.boundary.request_digest == raw_request
+                        && value.boundary.subject_id.as_ref() == Some(&dispatch.id)
+                        && value.boundary.outcome == "dispatch" => Some(&value.boundary),
+                _ => None,
+            }).ok_or(Failure::Confirmation)?;
+            return confirmed_boundary(&view, historical)?.historical_dispatch(dispatch, prompt);
         }
     }
 
@@ -1099,7 +1109,7 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
 ) -> Answer {
     use cadence::execution::{
         dispatch::{NativeState, admitted_checks, native_dispatch, native_operational},
-        history, instructions, model::TaskSpec, render::render_native_prompt, runner,
+        history, instructions, model::TaskSpec, runner,
     };
     let refuse = |code: &'static str, reason: String, subject: Option<String>| {
         record_refusal(session, view, phase, BoundaryTool::CadenceQuery, "execute-next", raw_request, code, reason, subject)
@@ -1229,6 +1239,23 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         set_version: latest.set_version, head: &head, tasks, checks, completed, continuation,
         suite: json!({"command": admitted.suite, "state": suite_state}), commands: instructions::command_policy(&configured, &present) };
     let operational = native_operational(&state);
+    // Historical unchanged requests are confirmed over their original prompt
+    // envelope. Projection never changes that receipt's digest or identity.
+    if candidate.is_none() && occurrence.issues.is_empty() && !admitted.prompt.is_empty()
+        && cadence::execution::boundary::canonical_bytes(&operational)
+            .is_ok_and(|bytes| cadence::store::model::digest(&bytes) == admitted.issue_digest)
+    {
+        let mut historical = admitted.clone();
+        historical.body = plan.body.clone();
+        let decision = view.decisions.iter().find_map(|record| match &record.decision {
+            cadence::store::model::Decision::BoundaryV1(value)
+                if value.boundary.request_digest == raw_request
+                    && value.boundary.subject_id.as_ref() == Some(&historical.id)
+                    && value.boundary.outcome == "dispatch" => Some(&value.boundary),
+            _ => None,
+        }).ok_or(Failure::Confirmation)?;
+        return confirmed_boundary(view, decision)?.historical_dispatch(&historical, &historical.prompt);
+    }
     let binding = cadence::execution::dispatch::issue_binding(data, &admitted).map_err(store_failure)?;
     let issue_digest = cadence::execution::dispatch::binding_digest(&binding).map_err(store_failure)?;
     let previous_issue = occurrence.issues.iter().find(|(_, issue)| issue.binding == binding);
@@ -1246,9 +1273,10 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         issue_digest: issue_digest.clone(), binding, operational: operational.clone(),
     };
     let fresh = candidate.is_some();
-    let (prompt, reissued) = match issue_prompt(&mut dispatch, &issue_digest, fresh, || {
-        render_native_prompt(&operational, Some(&instructions::dispatch_text()), &plan.body)
-    }) {
+    dispatch.prompt.clear();
+    dispatch.prompt_digest.clear();
+    dispatch.prompt_bytes = None;
+    let (prompt, reissued) = match issue_prompt(&mut dispatch, &issue_digest, fresh, String::new) {
         Ok(value) => value,
         Err((code, reason)) => return refuse(code, reason, Some(dispatch.id.clone())).await,
     };
@@ -1277,8 +1305,6 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         }
         None if reissued => {
             let mut retained = admitted;
-            retained.prompt = dispatch.prompt.clone();
-            retained.prompt_digest = dispatch.prompt_digest.clone();
             retained.issue_digest = dispatch.issue_digest.clone();
             (format!("execution-reissue:{}", dispatch.id), BoundaryChange::Reissue {
                 issue_dispatch_id: dispatch.id.clone(),
@@ -1876,6 +1902,9 @@ fn dispatch_response(active: &ActiveDispatch, plan: &ExecutionPlan) -> Response 
 }
 
 fn retained_prompt(dispatch: &ActiveDispatch) -> Result<String, (&'static str, String)> {
+    if dispatch.prompt.is_empty() && dispatch.prompt_digest.is_empty() && dispatch.prompt_bytes.is_none() {
+        return Ok(String::new());
+    }
     if dispatch.prompt.is_empty() {
         return Err((
             "prompt-not-retained",
@@ -1897,11 +1926,11 @@ fn issue_prompt(
     fresh: bool,
     render: impl FnOnce() -> String,
 ) -> Result<(String, bool), (&'static str, String)> {
-    if !fresh && (dispatch.issue_digest.is_empty() || dispatch.issue_digest == current_issue_digest) {
+    if !fresh && dispatch.issue_digest == current_issue_digest {
         return retained_prompt(dispatch).map(|prompt| (prompt, false));
     }
     let prompt = render();
-    dispatch.prompt_digest = cadence::store::model::digest(prompt.as_bytes());
+    dispatch.prompt_digest = if prompt.is_empty() { String::new() } else { cadence::store::model::digest(prompt.as_bytes()) };
     dispatch.prompt = prompt.clone();
     dispatch.issue_digest = current_issue_digest.to_owned();
     Ok((prompt, !fresh))

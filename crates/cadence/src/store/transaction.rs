@@ -1417,13 +1417,15 @@ impl Intent {
                 if active.phase != *phase
                     || active.issue_digest.len() != 64
                     || !active.issue_digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    || crate::store::model::digest(active.prompt.as_bytes()) != active.prompt_digest
+                    || (!active.prompt_digest.is_empty() && crate::store::model::digest(active.prompt.as_bytes()) != active.prompt_digest)
                     || value.terminal
                     || value.boundary.receipt
                         != (Receipt::Dispatch {
                             dispatch_id: issue_dispatch_id.clone(),
                             prompt_bytes: None,
-                            prompt_digest: active.prompt_digest.clone(),
+                            prompt_digest: if execution.occurrences[&phase.to_string()].issues.contains_key(issue_dispatch_id) {
+                                String::new()
+                            } else { active.prompt_digest.clone() },
                         })
                 {
                     return Err(Error::Invalid("dispatch re-issue intent receipt mismatch".into()));

@@ -834,13 +834,11 @@ impl Fixture {
         if answer["outcome"] == "dispatch" {
             assert_eq!(
                 matches[0].boundary.subject_id.as_deref(),
-                answer["dispatch"]["id"].as_str()
+                answer["dispatch_id"].as_str()
             );
-            assert_eq!(
-                hash(answer["prompt"].as_str().unwrap().as_bytes()),
-                answer["dispatch"]["prompt_digest"]
-            );
-        } else {
+
+        }
+        {
             assert!(
                 serde_json::to_vec(answer).unwrap().len() <= 16384,
                 "compact envelope bound"
@@ -935,6 +933,12 @@ impl Fixture {
         json!({"schema":1,"kind":"executor","dispatch_id":dispatch["id"],
             "expected_execution_version":dispatch["expected_execution_version"],"outcome":"complete",
             "tasks":tasks,"deviations":[],"blockers":[]})
+    }
+
+    fn dispatch(&self, answer: &Value) -> Value {
+        let active = self.read().snapshot.data["execution"]["occurrences"]["6"]["active"].clone();
+        assert_eq!(answer["dispatch_id"], active["id"]);
+        active
     }
 }
 
@@ -1047,7 +1051,8 @@ fn execution_calls_confirm_dispatch_completion_and_refused_patch_semantics() {
     let mut client = fixture.client();
     let first = fixture.query(&mut client);
     assert_eq!(first["outcome"], "dispatch");
-    let patch = fixture.complete_patch(&first["dispatch"]);
+    let first_record = fixture.dispatch(&first);
+    let patch = fixture.complete_patch(&first_record);
     let mut malformed = patch.clone();
     malformed.as_object_mut().unwrap().remove("tasks");
     fixture.refuse(&mut client, malformed, "invalid-patch");
@@ -1074,14 +1079,14 @@ fn execution_calls_confirm_dispatch_completion_and_refused_patch_semantics() {
             "checkout",
             "-q",
             "--detach",
-            first["dispatch"]["base_sha"].as_str().unwrap(),
+            first_record["base_sha"].as_str().unwrap(),
         ],
     );
     fixture.refuse(&mut client, patch.clone(), "git-order");
     git(fixture.root(), &["checkout", "-q", "--detach", sha]);
     let pending = fixture.call(&mut client, "cadence_apply", patch.clone());
     assert_eq!(pending["code"], "risk-pending");
-    fixture.settle(&mut client, &first["dispatch"]);
+    fixture.settle(&mut client, &first_record);
     assert_eq!(fixture.call(&mut client, "cadence_apply", patch), pending);
     assert_eq!(
         fixture.query(&mut client),
@@ -1094,7 +1099,8 @@ fn execution_calls_confirm_dispatch_completion_and_refused_patch_semantics() {
 fn execution_calls_confirm_blocked_judgment_stop() {
     let fixture = Fixture::new(&[&["T1", "T2"]]);
     let mut client = fixture.client();
-    let dispatch = fixture.query(&mut client)["dispatch"].clone();
+    let answer = fixture.query(&mut client);
+    let dispatch = fixture.dispatch(&answer);
     let answer = fixture.call(&mut client, "cadence_apply", json!({"schema":1,"kind":"executor",
         "dispatch_id":dispatch["id"],"expected_execution_version":dispatch["expected_execution_version"],
         "outcome":"blocked","tasks":[{"status":"blocked","task_id":"T1","blocker_id":"B1"},
@@ -1149,7 +1155,7 @@ fn execution_calls_log_bound_replay_preserves_terminal_bytes() {
         let answer = fixture.call(
             &mut client,
             "cadence_apply",
-            json!({"dispatch_id":dispatch["dispatch"]["id"],"invalid":index}),
+            json!({"dispatch_id":dispatch["dispatch_id"],"invalid":index}),
         );
         if answer["code"] == "log-bound" {
             break;
@@ -1171,7 +1177,7 @@ fn execution_calls_log_bound_replay_preserves_terminal_bytes() {
         fixture.call(
             &mut replacement,
             "cadence_apply",
-            json!({"dispatch_id":dispatch["dispatch"]["id"]})
+            json!({"dispatch_id":dispatch["dispatch_id"]})
         ),
         terminal
     );
@@ -1364,19 +1370,20 @@ fn execute_restart_preserves_dispatch_and_advances_overlapping_signed_plans() {
     let first = fixture.query(&mut first_child);
     assert_eq!(first["status"], "ok");
     assert_eq!(first["outcome"], "dispatch");
-    assert_eq!(first["dispatch"]["plan"], 1);
-    let files = first["dispatch"]["files"].as_array().unwrap();
+    let first_record = fixture.dispatch(&first);
+    assert_eq!(first_record["plan"], 1);
+    let files = first_record["files"].as_array().unwrap();
     assert_eq!(&files[..1], &json!(["src/shared.txt"]).as_array().unwrap()[..]);
     assert_eq!(&files[1..], &cadence::execution::render::RENDERED_PROJECT_FILES.iter()
         .map(|rendered| json!(rendered.path)).collect::<Vec<_>>()[..]);
     assert_eq!(
-        first["dispatch"]["policy"],
+        first_record["policy"],
         json!({"rung":"high","branch":"current","reviews":"disabled"})
     );
     let original_bytes = serde_json::to_vec(&first).unwrap();
     // Independently authored request: no ExecutorPatch or expected response type.
-    let missing_task = json!({"schema":1,"kind":"executor","dispatch_id":first["dispatch"]["id"],
-        "expected_execution_version":first["dispatch"]["expected_execution_version"],"outcome":"blocked",
+    let missing_task = json!({"schema":1,"kind":"executor","dispatch_id":first_record["id"],
+        "expected_execution_version":first_record["expected_execution_version"],"outcome":"blocked",
         "tasks":[{"status":"blocked","task_id":"T1","blocker_id":"B1"}],"deviations":[],
         "blockers":[{"id":"B1","text":"Fixture stop","evidence":[{"kind":"criterion","id":"AC6"}]}]});
     fixture.refuse(&mut first_child, missing_task.clone(), "task-set");
@@ -1399,11 +1406,11 @@ fn execute_restart_preserves_dispatch_and_advances_overlapping_signed_plans() {
         serde_json::to_vec(&fixture.query(&mut second_child)).unwrap(),
         original_bytes
     );
-    let first_patch = fixture.complete_patch(&first["dispatch"]);
+    let first_patch = fixture.complete_patch(&first_record);
     let next = fixture.call(&mut second_child, "cadence_apply", first_patch.clone());
     assert_eq!(next["code"], "risk-pending");
     assert_eq!(fixture.query(&mut second_child)["code"], "risk-pending");
-    fixture.settle(&mut second_child, &first["dispatch"]);
+    fixture.settle(&mut second_child, &first_record);
     let first_summary = fs::read(fixture.root().join(".planning/phases/6/SUMMARY.md")).unwrap();
     assert!(String::from_utf8_lossy(&first_summary).contains("Status: executing"));
     assert!(second_child.finish().success());
@@ -1414,24 +1421,25 @@ fn execute_restart_preserves_dispatch_and_advances_overlapping_signed_plans() {
     assert_ne!(third_pid, second_pid);
     let second = fixture.query(&mut third_child);
     assert_eq!(second["outcome"], "dispatch");
-    assert_eq!(second["dispatch"]["plan"], 2);
-    assert_eq!(second["dispatch"]["files"], first["dispatch"]["files"]);
+    let second_record = fixture.dispatch(&second);
+    assert_eq!(second_record["plan"], 2);
+    assert_eq!(second_record["files"], first_record["files"]);
     assert_eq!(
-        second["dispatch"]["base_sha"],
+        second_record["base_sha"],
         first_patch["tasks"][1]["commit"]
     );
-    assert_ne!(second["dispatch"]["id"], first["dispatch"]["id"]);
+    assert_ne!(second_record["id"], first_record["id"]);
     assert!(
-        second["dispatch"]["expected_execution_version"]
+        second_record["expected_execution_version"]
             .as_u64()
             .unwrap()
-            > first["dispatch"]["expected_execution_version"]
+            > first_record["expected_execution_version"]
                 .as_u64()
                 .unwrap()
     );
     fixture.refuse(
         &mut third_child,
-        json!({"dispatch_id":second["dispatch"]["id"],"state":{}}),
+        json!({"dispatch_id":second_record["id"],"state":{}}),
         "invalid-patch",
     );
     assert_eq!(
@@ -1439,10 +1447,10 @@ fn execute_restart_preserves_dispatch_and_advances_overlapping_signed_plans() {
         first_summary
     );
     assert_eq!(fixture.query(&mut third_child), second);
-    let second_patch = fixture.complete_patch(&second["dispatch"]);
+    let second_patch = fixture.complete_patch(&second_record);
     let pending = fixture.call(&mut third_child, "cadence_apply", second_patch.clone());
     assert_eq!(pending["code"], "risk-pending");
-    fixture.settle(&mut third_child, &second["dispatch"]);
+    fixture.settle(&mut third_child, &second_record);
     let complete = fixture.query(&mut third_child);
     assert_eq!(
         complete,
@@ -1464,7 +1472,7 @@ fn execute_restart_preserves_dispatch_and_advances_overlapping_signed_plans() {
         .map(|row| row["commit"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(commits.iter().collect::<BTreeSet<_>>().len(), 4);
-    let base = first["dispatch"]["base_sha"].as_str().unwrap();
+    let base = first_record["base_sha"].as_str().unwrap();
     assert_eq!(
         git(
             fixture.root(),

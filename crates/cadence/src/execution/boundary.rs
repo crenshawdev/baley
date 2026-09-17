@@ -62,8 +62,12 @@ impl BoundaryScope {
 #[serde(tag = "outcome", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Success {
     Dispatch {
-        dispatch: Box<ActiveDispatch>,
-        prompt: String,
+        dispatch_id: String,
+        expected_execution_version: u64,
+        route: Option<Box<super::model::DispatchRoute>>,
+        identities: DispatchIdentities,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt_digest: Option<String>,
     },
     NextPlan {
         phase: u32,
@@ -80,6 +84,32 @@ pub enum Success {
 }
 
 pub type ExecutionEnvelope = Envelope<Success>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DispatchIdentities {
+    pub dispatch: crate::read::model::DocumentIdentity,
+    pub plan: crate::read::model::DocumentIdentity,
+    pub context: crate::read::model::DocumentIdentity,
+}
+
+impl Success {
+    pub fn dispatch(active: &ActiveDispatch) -> Self {
+        use crate::read::model::DocumentIdentity;
+        Self::Dispatch {
+            dispatch_id: active.id.clone(),
+            expected_execution_version: active.expected_execution_version,
+            route: active.route.clone(),
+            identities: DispatchIdentities {
+                dispatch: DocumentIdentity::Dispatch { id: active.id.clone() },
+                plan: DocumentIdentity::PhasePlan { phase: std::num::NonZeroU32::new(active.phase).expect("admitted phase"),
+                    plan: std::num::NonZeroU32::new(active.plan).expect("admitted plan") },
+                context: DocumentIdentity::PhaseContext { phase: std::num::NonZeroU32::new(active.phase).expect("admitted phase") },
+            },
+            prompt_digest: (!active.prompt_digest.is_empty()).then(|| active.prompt_digest.clone()),
+        }
+    }
+}
 pub type Answer = Result<ExecutionEnvelope, Failure>;
 
 /// An unconfirmed operation cannot be represented as a recorded refusal.
@@ -155,8 +185,8 @@ impl Response {
 impl Response {
     pub fn into_envelope(self) -> ExecutionEnvelope {
         match self {
-            Self::Dispatch { dispatch, prompt } => {
-                Envelope::Ok(Success::Dispatch { dispatch, prompt })
+            Self::Dispatch { dispatch, .. } => {
+                Envelope::Ok(Success::dispatch(&dispatch))
             }
             Self::NextPlan { phase, plan } => Envelope::Ok(Success::NextPlan { phase, plan }),
             Self::Complete { phase } => Envelope::Ok(Success::Complete { phase }),
@@ -281,24 +311,18 @@ impl PreparedAnswer {
             }
             Envelope::Ok(_) => {}
         }
-        let dispatch = matches!(envelope, Envelope::Ok(Success::Dispatch { .. }));
-        if !dispatch && canonical_bytes(&envelope)?.len() > MAX_COMPACT_BYTES {
+        if canonical_bytes(&envelope)?.len() > MAX_COMPACT_BYTES {
             envelope = Envelope::Refused {
                 code: "response-too-large".into(),
                 reason: "the execution answer exceeds the 16384-byte compact envelope limit".into(),
             };
         }
         let receipt = match &envelope {
-            Envelope::Ok(Success::Dispatch { dispatch, prompt }) => {
-                super::dispatch::validate_route_choice(dispatch)
-                    .map_err(|_| Failure::RoutingEvidence)?;
-                if dispatch.prompt_digest != crate::store::model::digest(prompt.as_bytes()) {
-                    return Err(Failure::Encoding);
-                }
+            Envelope::Ok(Success::Dispatch { dispatch_id, prompt_digest, .. }) => {
                 Receipt::Dispatch {
-                    dispatch_id: dispatch.id.clone(),
+                    dispatch_id: dispatch_id.clone(),
                     prompt_bytes: None,
-                    prompt_digest: dispatch.prompt_digest.clone(),
+                    prompt_digest: prompt_digest.clone().unwrap_or_default(),
                 }
             }
             _ => Receipt::Compact {
