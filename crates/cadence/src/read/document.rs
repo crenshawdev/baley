@@ -78,6 +78,25 @@ fn roadmap(root: &Path, phase: u32) -> Result<Resolved, Value> {
 
 pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Value> {
     match identity {
+        DocumentIdentity::PlanDraft { phase, plan, digest } => {
+            let drafts = crate::import::drafts(root)
+                .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?;
+            let drafts = drafts.lock()
+                .map_err(|_| refusal("identity", "document-unavailable", "drafts unavailable"))?;
+            drafts.plans.get(&(phase.get(), digest.clone()))
+                .and_then(|draft| draft.documents.iter().find(|document| matches!(
+                    &document.identity, DocumentIdentity::PlanDraft { plan: number, .. } if number == plan
+                ))).cloned()
+                .ok_or_else(|| refusal("identity", "document-not-found", "held plan draft is absent"))
+        }
+        DocumentIdentity::ContextDraft { phase, digest } => {
+            let drafts = crate::import::drafts(root)
+                .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?;
+            let drafts = drafts.lock()
+                .map_err(|_| refusal("identity", "document-unavailable", "drafts unavailable"))?;
+            drafts.contexts.get(&(phase.get(), digest.clone())).map(|draft| draft.document.clone())
+                .ok_or_else(|| refusal("identity", "document-not-found", "held context draft is absent"))
+        }
         DocumentIdentity::PhaseContext { phase } => {
             let data = snapshot(root)?;
             let context = cadence::context::persistence::saved(&data, phase.get())
@@ -170,6 +189,94 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
             })
         }
     }
+}
+
+impl Resolved {
+    pub fn bytes(&self) -> Vec<u8> {
+        self.parts.iter().flat_map(|part| part.body.bytes()).collect()
+    }
+}
+
+/// Partition by the typed slots' lengths, never by headings in authored prose.
+pub fn plan_draft(
+    data: &Value, content: &cadence::plan::model::Content, digest: &str,
+) -> cadence::store::Result<Resolved> {
+    use cadence::plan::{persistence, render};
+    let retained = persistence::rendered_content(data, content)?;
+    let bytes = render::document(&retained)?;
+    let text = String::from_utf8(bytes.clone())
+        .map_err(|error| cadence::store::Error::Invalid(error.to_string()))?;
+    let mut spans = vec![("frontmatter".to_owned(), text.len() - retained.body.len())];
+    let slot_len = |value: &str| value.len() + usize::from(!value.ends_with('\n')) + 1;
+    spans.push(("goal".into(), "## Goal\n\n".len() + slot_len(&content.goal)));
+    let truths = persistence::required_truths(data, content)?;
+    spans.push(("truths".into(), "## Must be true when done\n\n".len()
+        + truths.iter().map(|(id, sentence)| format!("- {id}. {sentence}\n").len()).sum::<usize>() + 1));
+    spans.push(("context".into(), "## Context\n\n".len() + slot_len(&content.context)));
+    spans.push(("evidence-map".into(), content.evidence_map.as_ref()
+        .map(render::section).transpose()?.map_or(0, |text| text.len())));
+    spans.push(("tasks-heading".into(), "## Tasks\n\n".len()));
+    spans.extend(render::task_parts(&retained)?.into_iter().map(|part| (part.selector, part.body.len())));
+    let used = spans.iter().map(|(_, size)| size).sum::<usize>();
+    spans.push(("notes".into(), text.len().checked_sub(used)
+        .ok_or_else(|| cadence::store::Error::Invalid("draft partition exceeds document".into()))?));
+    let mut offset = 0;
+    let mut parts = Vec::new();
+    for (selector, size) in spans {
+        let body = text.get(offset..offset + size)
+            .ok_or_else(|| cadence::store::Error::Invalid("draft partition is invalid".into()))?.to_owned();
+        offset += size;
+        parts.push(Part { title: selector.clone(), selector, body });
+    }
+    Ok(Resolved {
+        identity: DocumentIdentity::PlanDraft { phase: content.phase, plan: content.plan, digest: digest.into() },
+        classification: "held-draft", revision: cadence::store::model::digest(&bytes), parts,
+    })
+}
+
+pub fn context_draft(
+    submission: &cadence::context::model::Submission, digest: &str,
+) -> cadence::store::Result<Resolved> {
+    use cadence::context::{persistence, render};
+    let text = persistence::rendered(submission)?;
+    let mut parts = vec![
+        Part { selector: "title".into(), title: "Title".into(),
+            body: format!("# Phase {}: {}\n\n", submission.phase, submission.title) },
+        Part { selector: "scope".into(), title: "Scope boundary".into(),
+            body: format!("## Scope boundary\n\n{}\n\n", submission.scope) },
+    ];
+    // Section headings belong to their first entry. Empty sections remain
+    // with the preceding part so every byte has exactly one owner.
+    for (heading, entries) in [
+        ("Durable decisions", submission.durable_decisions.iter()
+            .map(|value| (format!("durable-decision:{}", value.id), format!("- {}. {}\n", value.id, value.text))).collect::<Vec<_>>()),
+        ("Decisions", submission.decisions.iter()
+            .map(|value| (format!("decision:{}", value.id), format!("- {}. {}\n", value.id, value.text))).collect()),
+        ("Truths", submission.truths.iter().map(|value| Ok((
+            format!("truth:{}", value.id), format!("- {}. {}\n", value.id, render::sentence(value)?)
+        ))).collect::<cadence::store::Result<Vec<_>>>()?),
+        ("Flagged assumptions", submission.assumptions.iter().enumerate()
+            .map(|(index, value)| (format!("assumption:{}", index + 1), format!("- {value}\n"))).collect()),
+    ] {
+        let mut prefix = format!("## {heading}\n\n");
+        if entries.is_empty() {
+            parts.last_mut().unwrap().body.push_str(&prefix);
+        } else {
+            for (selector, body) in entries {
+                parts.push(Part { title: selector.clone(), selector, body: format!("{prefix}{body}") });
+                prefix.clear();
+            }
+        }
+        if heading != "Flagged assumptions" { parts.last_mut().unwrap().body.push('\n'); }
+    }
+    let resolved = Resolved {
+        identity: DocumentIdentity::ContextDraft { phase: submission.phase, digest: digest.into() },
+        classification: "held-draft", revision: cadence::store::model::digest(text.as_bytes()), parts,
+    };
+    if resolved.bytes() != text.as_bytes() {
+        return Err(cadence::store::Error::Invalid("context draft partition differs from document".into()));
+    }
+    Ok(resolved)
 }
 
 pub fn catalog(root: &Path, phase: u32) -> Result<Vec<Resolved>, Value> {

@@ -682,6 +682,37 @@ pub struct Session<I: ConfigIo = FileIo> {
     manifest: ImportManifest,
     /// Where the layers stand now, after every relocation the store accepted.
     active: Paths,
+    pub drafts: Arc<Mutex<cadence::import::Drafts>>,
+}
+
+#[derive(Clone)]
+pub struct PlanDraft {
+    pub submission: cadence::plan::model::Submission,
+    pub documents: Vec<cadence::read::document::Resolved>,
+}
+
+#[derive(Clone)]
+pub struct ContextDraft {
+    pub submission: cadence::context::model::Submission,
+    pub document: cadence::read::document::Resolved,
+}
+
+#[derive(Default)]
+pub struct Drafts {
+    pub plans: std::collections::BTreeMap<(u32, String), PlanDraft>,
+    pub contexts: std::collections::BTreeMap<(u32, String), ContextDraft>,
+    pub newest_plan: std::collections::BTreeMap<u32, String>,
+    pub newest_context: std::collections::BTreeMap<u32, String>,
+}
+
+/// Drafts precede the store's approval barrier and survive only this process.
+pub fn drafts(root: &Path) -> Result<Arc<Mutex<Drafts>>> {
+    type Registry = std::collections::BTreeMap<PathBuf, Arc<Mutex<Drafts>>>;
+    static DRAFTS: std::sync::OnceLock<Mutex<Registry>> = std::sync::OnceLock::new();
+    let root = reload::identity(root)?;
+    let mut registry = DRAFTS.get_or_init(Mutex::default).lock()
+        .map_err(|_| Error::Invalid("draft registry unavailable".into()))?;
+    Ok(registry.entry(root).or_default().clone())
 }
 impl<I: ConfigIo> Session<I> {
     /// Saved review operations read admitted policy; the writer still validates
@@ -1297,6 +1328,7 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
         // layers stand now beside it.
         let session = Arc::new(Session {
             root: root.clone(),
+            drafts: cadence::import::drafts(&root)?,
             store,
             config,
             manifest,

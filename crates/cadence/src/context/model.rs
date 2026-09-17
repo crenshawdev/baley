@@ -111,7 +111,8 @@ pub struct ApprovedContext {
 pub enum Apply {
     #[serde(rename = "context-submit")]
     Submit {
-        submission: Submission,
+        phase: Option<std::num::NonZeroU32>,
+        submission: Option<Submission>,
         approval: Option<Approval>,
     },
 }

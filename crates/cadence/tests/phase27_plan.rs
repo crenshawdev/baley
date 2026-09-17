@@ -370,10 +370,7 @@ fn phase27_approved_plan_is_published_at_returned_identity() {
         assert_eq!(saved["history"], json!([saved["revision"]]));
         assert_eq!(occurrence["high_water"], 1);
         assert_eq!(occurrence["consumed"], json!([1]));
-        assert_eq!(
-            occurrence["receipts"]["first-publication"]["results"],
-            answer["results"]
-        );
+        assert_publications(&occurrence["receipts"]["first-publication"]["results"], &answer["results"]);
         for key in ["context", "evidence", "import", "source_evidence"] {
             assert_eq!(
                 view.snapshot.data.get(key),
@@ -847,8 +844,8 @@ fn phase27_unauthorized_replacement_is_refused() {
     assert_eq!(occurrence["id"], "active-cycle:phase:27");
     assert_eq!(occurrence["high_water"], 1);
     assert_eq!(occurrence["consumed"], json!([1]));
-    assert_eq!(occurrence["receipts"]["original"]["results"], first["results"]);
-    assert_eq!(occurrence["receipts"]["replacement-winner"]["results"], replaced["results"]);
+    assert_publications(&occurrence["receipts"]["original"]["results"], &first["results"]);
+    assert_publications(&occurrence["receipts"]["replacement-winner"]["results"], &replaced["results"]);
     assert_eq!(occurrence["publications"]["1"]["history"], json!([revision,replaced["results"][0]["revision"]]));
 
     let admitted = admitted_legacy();
@@ -1105,10 +1102,7 @@ fn phase27_multiple_plans_have_distinct_numeric_order() {
             rendered
         );
     }
-    assert_eq!(
-        occurrence["receipts"]["batch-winner"]["results"],
-        answer["results"]
-    );
+    assert_publications(&occurrence["receipts"]["batch-winner"]["results"], &answer["results"]);
     assert!(occurrence["receipts"].get("batch-loser").is_none());
     let mut client = Client::open(project);
     let fresh = client.read("27", Some(1));
@@ -1184,4 +1178,21 @@ fn phase27_multiple_plans_have_distinct_numeric_order() {
     assert_eq!(refusal["rule"], "number-exhaustion", "{refusal}");
     client.finish();
     assert_eq!(tree(exhausted.path()), before);
+}
+fn assert_publication(saved: &Value, answer: &Value) {
+    assert!(answer.get("content").is_none(), "{answer}");
+    assert!(answer.get("approval").is_none(), "{answer}");
+    for field in ["identity", "revision", "map_revision", "readiness"] {
+        assert_eq!(saved[field], answer[field], "{field}");
+    }
+    assert_eq!(answer["content_digest"].as_str().unwrap().len(), 64);
+}
+
+fn assert_publications(saved: &Value, answer: &Value) {
+    let saved = saved.as_array().unwrap();
+    let answer = answer.as_array().unwrap();
+    assert_eq!(saved.len(), answer.len());
+    for (saved, answer) in saved.iter().zip(answer) {
+        assert_publication(saved, answer);
+    }
 }

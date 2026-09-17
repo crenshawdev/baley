@@ -144,12 +144,30 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             // acknowledged before phase 32 carries a body and answers its receipt.
             let typed_refusal = cadence::plan::validation::typed_content(&raw);
             let Apply::Submit {
+                phase,
                 submission,
                 approval,
             } = match serde_json::from_value(raw) {
                 Ok(value) => value,
                 Err(error) => return Ok(model::refused("submission", error.to_string())),
             };
+            let held = if submission.is_none() {
+                let Some(phase) = phase else {
+                    return Ok(model::refused("submission", "digest approval needs phase"));
+                };
+                let Some(digest) = approval.as_ref().and_then(|value| value.submission_digest.as_ref()) else {
+                    return Ok(model::refused("submission", "missing submission needs approval.submission_digest"));
+                };
+                cadence::import::drafts(root)?.lock()
+                    .map_err(|_| cadence::store::Error::Invalid("drafts unavailable".into()))?
+                    .plans.get(&(phase.get(), digest.clone())).cloned()
+            } else { None };
+            let Some(submission) = submission.or_else(|| held.as_ref().map(|draft| draft.submission.clone())) else {
+                return Ok(model::refused("unknown-draft", "held plan draft is absent"));
+            };
+            if phase.is_some_and(|phase| phase != submission.phase) {
+                return Ok(model::refused("submission", "phase must match submission.phase"));
+            }
             let approval = match approval.map(|a| persistence::bound(&data, &submission, a)).transpose() {
                 Ok(value) => value,
                 Err(error) => return path_error(error),
@@ -182,6 +200,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let Some(approval) = approval.filter(|a| a.approved) else {
                 // A draft is a digest, not a validated candidate: the complete
                 // preview and the approved publication validate the union.
+                hold(root, &data, &submission)?;
                 return Ok(model::ok(
                     "plan-submit",
                     json!({"persisted":false,"validation":"draft",
@@ -266,7 +285,12 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                         result.identity.phase, result.identity.plan
                     ),
                     expected,
-                    bytes: cadence::plan::render::document(&result.content)?,
+                    bytes: match held.as_ref().and_then(|draft| draft.documents.iter().find(|document|
+                        matches!(&document.identity, cadence::read::model::DocumentIdentity::PlanDraft { plan, .. }
+                            if *plan == result.identity.plan))) {
+                        Some(document) => document.bytes(),
+                        None => cadence::plan::render::document(&result.content)?,
+                    },
                 });
             }
             // Seed only the missing active requirement rows as Pending, in the
@@ -306,7 +330,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             {
                 Ok(_) => Ok(model::ok(
                     "plan-submit",
-                    json!({"persisted":true,"results":results,"coverage":coverage,"requirements":{"seeded":seeded}}),
+                    json!({"persisted":true,"results":publication_answers(&results)?,"coverage":coverage,"requirements":{"seeded":seeded}}),
                 )),
                 Err(error) => {
                     // Another approved request may have won after our owned
@@ -333,6 +357,34 @@ fn documents(data: &Value, submission: &model::Submission) -> Result<Vec<Value>>
     }).collect()
 }
 
+fn publication_answers(publications: &[model::Publication]) -> Result<Vec<Value>> {
+    publications.iter().map(|publication| {
+        let mut answer = json!({
+            "identity":publication.identity, "revision":publication.revision,
+            "readiness":publication.readiness,
+            "content_digest":cadence::store::model::digest(&serde_json::to_vec(&publication.content)?),
+        });
+        if let Some(revision) = &publication.map_revision {
+            answer["map_revision"] = json!(revision);
+        }
+        Ok(answer)
+    }).collect()
+}
+
+fn hold(root: &Path, data: &Value, submission: &model::Submission) -> Result<()> {
+    let digest = persistence::submission_digest(submission)?;
+    let documents = submission.plans.iter().map(|entry|
+        cadence::read::document::plan_draft(data, &entry.content, &digest)).collect::<Result<Vec<_>>>()?;
+    let drafts = cadence::import::drafts(root)?;
+    let mut drafts = drafts.lock()
+        .map_err(|_| cadence::store::Error::Invalid("drafts unavailable".into()))?;
+    drafts.plans.insert((submission.phase.get(), digest.clone()), cadence::import::PlanDraft {
+        submission: submission.clone(), documents,
+    });
+    drafts.newest_plan.insert(submission.phase.get(), digest);
+    Ok(())
+}
+
 fn complete_preview(root: &Path, data: &Value, submission: model::Submission) -> Result<Answer> {
     use cadence::plan::validation;
     let inventory = inventory::read(root, &submission.phase.to_string(), data)?;
@@ -347,6 +399,7 @@ fn complete_preview(root: &Path, data: &Value, submission: model::Submission) ->
     validation::replacement_preview(data, &submission, &inventory)?;
     persistence::validate_candidate(data, &submission, &inventory)?;
     let coverage = cadence::plan::associations::validate(data, &submission)?;
+    hold(root, data, &submission)?;
     Ok(model::ok("plan-read", json!({"persisted":false,
         "submission_digest":persistence::submission_digest(&submission)?,"documents":documents(data, &submission)?,
         "readiness":"provisional-authoring","coverage":coverage})))
@@ -377,7 +430,7 @@ fn replay_answer(root: &Path, data: &Value, receipt: model::Receipt) -> Result<A
             "current_revision":current.map(|p| &p.revision)}));
     }
     Ok(model::ok("plan-submit", json!({"persisted":true,"replayed":true,
-        "payload_digest":receipt.payload_digest,"results":receipt.results,"projections":projections})))
+        "payload_digest":receipt.payload_digest,"results":publication_answers(&receipt.results)?,"projections":projections})))
 }
 
 fn path_error(error: cadence::store::Error) -> Result<Answer> {

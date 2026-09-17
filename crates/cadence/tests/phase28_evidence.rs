@@ -89,16 +89,18 @@ impl Drop for Client {
     }
 }
 
-/// The approval as the binary retains it: the submission copy with each
-/// plan's content replaced by the rendered content the acknowledgment
-/// returned (D-179, D-182).
-fn retained_request(request: &Value, answer: &Value) -> Value {
+/// Expected retained approval binds the submitted slots to the installed document.
+fn retained_request(request: &Value, project: &Path) -> Value {
     let mut retained = request.clone();
-    let results = answer["results"].as_array().cloned().unwrap_or_default();
-    for (plan, result) in retained["approval"]["submission"]["plans"].as_array_mut().unwrap().iter_mut().zip(results) {
-        plan["content"] = result["content"].clone();
+    for plan in retained["approval"]["submission"]["plans"].as_array_mut().unwrap() {
+        let phase = plan["target"]["phase"].as_u64().unwrap() as u32;
+        let number = plan["target"]["plan"].as_u64().unwrap() as u32;
+        let bytes = fs::read(project.join(format!(".planning/phases/{phase}/PLAN-{number}.md"))).unwrap();
+        let parsed = cadence::execution::plan::parse_plan(&bytes, phase, number).unwrap();
+        plan["content"]["body"] = json!(parsed.body);
+        plan["content"]["execution"] = json!({"schema":parsed.schema,"suite":parsed.suite,"tasks":parsed.tasks});
         if plan["replacement"].is_object() {
-            plan["replacement"]["content"] = result["content"].clone();
+            plan["replacement"]["content"] = plan["content"].clone();
         }
     }
     retained
@@ -283,12 +285,14 @@ fn phase28_uncovered_current_truth_is_refused() {
     let gap = proposal(&mut client, "gap", &[attached(vec![artifact("gap-address", &["T1"])])], &["# Gap\n"]);
     let gap = publish(&mut client, &gap);
     assert_eq!(gap["results"][0]["identity"], json!({"phase":27,"plan":3}));
-    assert_eq!(gap["results"][0]["content"]["evidence_map"]["items"].as_array().unwrap().len(), 1);
+    let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":27}));
+    assert!(evidence["items"].as_array().unwrap().iter().any(|item| item["id"] == "gap-address"));
+    assert!(gap["results"][0].get("content").is_none());
     client.finish();
     let saved = reopened(project).snapshot;
     assert_eq!(saved.data["acceptance_maps"]["phases"]["27"]["revisions"].as_array().unwrap().len(), 3);
-    assert_eq!(saved.data["plan_publications"]["phases"]["27"]["publications"]["1"], published["results"][0]);
-    assert_eq!(saved.data["plan_publications"]["phases"]["27"]["publications"]["2"], published["results"][1]);
+    assert_publication(&saved.data["plan_publications"]["phases"]["27"]["publications"]["1"], &published["results"][0]);
+    assert_publication(&saved.data["plan_publications"]["phases"]["27"]["publications"]["2"], &published["results"][1]);
 
     // Provisional removal is not a validated map. Its missing coverage remains visible.
     let mut client = Client::open(project);
@@ -338,7 +342,7 @@ fn phase28_current_truth_without_check_is_refused() {
         client.finish();
         let saved = reopened(project).snapshot;
         assert_eq!(saved.data["acceptance_maps"]["phases"]["27"]["revisions"][0]["items"], json!(items));
-        assert_eq!(saved.data["plan_publications"]["phases"]["27"]["publications"]["1"], published["results"][0]);
+        assert_publication(&saved.data["plan_publications"]["phases"]["27"]["publications"]["1"], &published["results"][0]);
     }
 
     let temp = fixture();
@@ -363,7 +367,7 @@ fn phase28_current_truth_without_check_is_refused() {
     assert_refusal(&client.call("cadence_apply", approve(removes_check)), "truth-without-check", "T2");
     client.finish();
     assert_unchanged(project, &before, &prior);
-    assert_eq!(prior.data["plan_publications"]["phases"]["27"]["publications"]["2"], second["results"][0]);
+    assert_publication(&prior.data["plan_publications"]["phases"]["27"]["publications"]["2"], &second["results"][0]);
     let mut client = Client::open(project);
     let corrected = replacement(&mut client, "retains-check", 1, &first["results"][0], &old,
         attached(vec![check("one", "T1"), check("two", "T2")]), "# Both checks retained\n");
@@ -371,7 +375,7 @@ fn phase28_current_truth_without_check_is_refused() {
     client.finish();
     let saved = reopened(project).snapshot;
     assert_eq!(saved.data["acceptance_maps"]["phases"]["27"]["revisions"].as_array().unwrap().len(), 3);
-    assert_eq!(saved.data["plan_publications"]["phases"]["27"]["publications"]["2"], second["results"][0]);
+    assert_publication(&saved.data["plan_publications"]["phases"]["27"]["publications"]["2"], &second["results"][0]);
 }
 
 #[test]
@@ -564,7 +568,7 @@ fn phase28_noncurrent_truth_version_is_refused() {
     client.finish();
     let saved = reopened(project).snapshot;
     assert_eq!(saved.data["acceptance_maps"]["phases"]["27"]["revisions"][0]["items"], json!(items));
-    assert_eq!(saved.data["plan_publications"]["phases"]["27"]["publications"]["1"], published["results"][0]);
+    assert_publication(&saved.data["plan_publications"]["phases"]["27"]["publications"]["1"], &published["results"][0]);
 
     let absent = fixture();
     fs::write(absent.path().join(".planning/phases/27/CONTEXT.md"),
@@ -676,6 +680,7 @@ fn phase28_republication_supersedes_previous_map() {
         let original_request = approve(final_request(&preview(&mut client, &input)));
         let original = client.call("cadence_apply", original_request.clone());
         assert_eq!(original["persisted"], true, "{original}");
+        let original_retained = retained_request(&original_request, project);
         client.finish();
         let first = reopened(project).snapshot;
         let old_events = first.data["acceptance_maps"]["phases"]["27"]["revisions"].as_array().unwrap().clone();
@@ -751,9 +756,9 @@ fn phase28_republication_supersedes_previous_map() {
         client.finish();
         let saved = reopened(project).snapshot;
         let occurrence = &saved.data["plan_publications"]["phases"]["27"];
-        assert_eq!(occurrence["publications"]["1"], replacement["results"][0]);
+        assert_publication(&occurrence["publications"]["1"], &replacement["results"][0]);
         assert_eq!(occurrence["receipts"]["original"], first.data["plan_publications"]["phases"]["27"]["receipts"]["original"]);
-        assert_eq!(occurrence["receipts"]["original"]["results"][0]["approval"], retained_request(&original_request, &original)["approval"]);
+        assert_eq!(occurrence["receipts"]["original"]["results"][0]["approval"], original_retained["approval"]);
         let history = &saved.data["acceptance_maps"]["phases"]["27"];
         let events = history["revisions"].as_array().unwrap();
         assert_eq!(&events[..old_events.len()], old_events.as_slice());
@@ -772,7 +777,7 @@ fn phase28_republication_supersedes_previous_map() {
             if case == "spec" { assert_ne!(new_event["item_revisions"]["address"], old_events[0]["item_revisions"]["address"]); }
             else { assert_eq!(new_event["item_revisions"], old_events[0]["item_revisions"]); }
         }
-        if case == "shared" { assert_eq!(occurrence["publications"]["2"], original["results"][1]); }
+        if case == "shared" { assert_publication(&occurrence["publications"]["2"], &original["results"][1]); }
         let installed = fs::read(&path).unwrap();
         assert_eq!(model::digest(&installed), replacement["results"][0]["revision"]);
         assert_eq!(model::digest(&installed), complete["documents"][0]["revision"]);
@@ -870,7 +875,7 @@ fn phase28_republication_supersedes_previous_map() {
     let mut client = Client::open(project);
     let replay = client.call("cadence_apply", original_request.clone());
     assert_eq!(replay["replayed"], true, "{replay}");
-    assert_eq!(replay["results"], capture["acknowledgment"]["results"]);
+    assert_publications(&capture["acknowledgment"]["results"], &replay["results"]);
     assert_eq!(replay["payload_digest"], capture["payload_digest"]);
     assert_eq!(replay["projections"][0]["status"], "installed");
     client.finish();
@@ -890,18 +895,18 @@ fn phase28_republication_supersedes_previous_map() {
     let mut client = Client::open(project);
     let replay = client.call("cadence_apply", original_request.clone());
     assert_eq!(replay["replayed"], true);
-    assert_eq!(replay["results"], capture["acknowledgment"]["results"]);
+    assert_publications(&capture["acknowledgment"]["results"], &replay["results"]);
     assert_eq!(replay["payload_digest"], capture["payload_digest"]);
     assert_eq!(replay["projections"][0]["status"], "newer-authorized");
     assert_eq!(replay["projections"][0]["current_revision"], published["results"][0]["revision"]);
-    assert!(replay["results"][0]["content"].get("evidence_map").is_none());
+    assert!(replay["results"][0].get("content").is_none());
     client.finish();
     assert_unchanged(project, &after, &current);
     let persisted = reopened(project).snapshot;
     let occurrence = &persisted.data["plan_publications"]["phases"]["27"];
     let id = original_request["submission"]["request_id"].as_str().unwrap();
     assert_eq!(serde_json::to_vec(&occurrence["receipts"][id]).unwrap(), serde_json::to_vec(&capture["receipt"]).unwrap());
-    assert_eq!(occurrence["publications"]["1"], published["results"][0]);
+    assert_publication(&occurrence["publications"]["1"], &published["results"][0]);
     let events = persisted.data["acceptance_maps"]["phases"]["27"]["revisions"].as_array().unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["items"], json!([check("native-first-check", "T1")]));
@@ -1112,7 +1117,7 @@ fn phase28_readback_returns_authoritative_map_with_input_digest() {
     assert_eq!(complete["documents"][0]["revision"], independent_hash(&first_bytes));
     assert_eq!(complete["documents"][1]["revision"], independent_hash(&second_bytes));
     let saved = reopened(project).snapshot;
-    let retained = retained_request(&approved, &initial);
+    let retained = retained_request(&approved, project);
     let mut events = vec![expected_event(&retained, 1, &first_bytes, &first_items),
         expected_event(&retained, 2, &second_bytes, &second_items)];
     assert_eq!(saved.data["acceptance_maps"]["phases"]["27"]["revisions"], json!(events));
@@ -1129,7 +1134,7 @@ fn phase28_readback_returns_authoritative_map_with_input_digest() {
     let replacement_bytes = fs::read(project.join(".planning/phases/27/PLAN-1.md")).unwrap();
     assert_eq!(complete["documents"][0]["revision"], independent_hash(&replacement_bytes));
     let saved = reopened(project).snapshot;
-    events.push(expected_event(&retained_request(&replacement_request, &published), 1, &replacement_bytes, &first_items));
+    events.push(expected_event(&retained_request(&replacement_request, project), 1, &replacement_bytes, &first_items));
     assert_eq!(saved.data["acceptance_maps"]["phases"]["27"]["revisions"], json!(events));
     let expected = expected_view(&events, &[2, 1], &[(0, 2)]);
     assert_ne!(independent_hash(&canonical_test_bytes(&expected)), independent_hash(&canonical_test_bytes(&original_expected)));
@@ -1355,13 +1360,9 @@ fn phase28_accepted_map_is_attached_to_published_plan() {
         let occurrence = &saved.data["plan_publications"]["phases"]["27"];
         // The retained approval carries the copy the binary filled: the plan
         // content with its rendered body and derived execution (D-179, D-182).
-        let mut retained_approval = approved["approval"].clone();
-        retained_approval["submission"]["plans"][0]["content"] = acknowledgment["results"][0]["content"].clone();
-        if retained_approval["submission"]["plans"][0]["replacement"].is_object() {
-            retained_approval["submission"]["plans"][0]["replacement"]["content"] = acknowledgment["results"][0]["content"].clone();
-        }
+        let retained_approval = retained_request(&approved, project)["approval"].clone();
         assert_eq!(occurrence["publications"]["1"]["approval"], retained_approval);
-        assert_eq!(occurrence["receipts"]["attached"]["results"], acknowledgment["results"]);
+        assert_publications(&occurrence["receipts"]["attached"]["results"], &acknowledgment["results"]);
         let maps = &saved.data["acceptance_maps"];
         assert_eq!(maps["schema"], "acceptance-map-1");
         let events = maps["phases"]["27"]["revisions"].as_array().unwrap();
@@ -1397,5 +1398,22 @@ fn phase28_accepted_map_is_attached_to_published_plan() {
         }
         client.finish();
         assert_eq!(tree(project), after);
+    }
+}
+fn assert_publication(saved: &Value, answer: &Value) {
+    assert!(answer.get("content").is_none(), "{answer}");
+    assert!(answer.get("approval").is_none(), "{answer}");
+    for field in ["identity", "revision", "map_revision", "readiness"] {
+        assert_eq!(saved[field], answer[field], "{field}");
+    }
+    assert_eq!(answer["content_digest"].as_str().unwrap().len(), 64);
+}
+
+fn assert_publications(saved: &Value, answer: &Value) {
+    let saved = saved.as_array().unwrap();
+    let answer = answer.as_array().unwrap();
+    assert_eq!(saved.len(), answer.len());
+    for (saved, answer) in saved.iter().zip(answer) {
+        assert_publication(saved, answer);
     }
 }

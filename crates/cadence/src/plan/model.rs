@@ -158,7 +158,8 @@ pub struct Approval {
 pub enum Apply {
     #[serde(rename = "plan-submit")]
     Submit {
-        submission: Submission,
+        phase: Option<NonZeroU32>,
+        submission: Option<Submission>,
         approval: Option<Approval>,
     },
 }

@@ -53,6 +53,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 return Ok(refusal);
             }
             let Apply::Submit {
+                phase,
                 submission,
                 approval,
             } = match serde_json::from_value(raw) {
@@ -69,6 +70,29 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 }
             };
             use cadence::context::{persistence, render, validation};
+            let held = if submission.is_none() {
+                let Some(phase) = phase else {
+                    return Ok(model::refused("submission", "phase", "digest approval needs phase", None, None, None));
+                };
+                let Some(digest) = approval.as_ref().and_then(|value| value.submission_digest.as_ref()) else {
+                    return Ok(model::refused("submission", "approval.submission_digest",
+                        "missing submission needs approval.submission_digest", Some(phase.get()), None, None));
+                };
+                cadence::import::drafts(root)?.lock()
+                    .map_err(|_| cadence::store::Error::Invalid("drafts unavailable".into()))?
+                    .contexts.get(&(phase.get(), digest.clone())).cloned()
+            } else { None };
+            let Some(submission) = submission.or_else(|| held.as_ref().map(|draft| draft.submission.clone())) else {
+                return Ok(model::refused("unknown-draft", "approval.submission_digest",
+                    "held context draft is absent", phase.map(|value| value.get()), None, None));
+            };
+            if phase.is_some_and(|phase| phase != submission.phase) {
+                return Ok(model::refused("submission", "phase", "phase must match submission.phase",
+                    Some(submission.phase.get()), None, None));
+            }
+            if let Some(refusal) = validation::validate(&json!({"submission":submission})) {
+                return Ok(refusal);
+            }
             let approval = approval
                 .map(|approval| persistence::bound(&submission, approval))
                 .transpose()?;
@@ -159,7 +183,8 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                     external: vec![ExternalChange {
                         target: format!("phase-context:{phase}"),
                         expected,
-                        bytes: render::document(&context).into_bytes(),
+                        bytes: held.as_ref().map(|draft| draft.document.bytes())
+                            .unwrap_or_else(|| render::document(&context).into_bytes()),
                     }],
                 };
                 store
@@ -175,6 +200,17 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 ));
             }
             let rendered = persistence::rendered(&submission)?;
+            let digest = persistence::submission_digest(&submission)?;
+            let document = cadence::read::document::context_draft(&submission, &digest)?;
+            {
+                let drafts = cadence::import::drafts(root)?;
+                let mut drafts = drafts.lock()
+                    .map_err(|_| cadence::store::Error::Invalid("drafts unavailable".into()))?;
+                drafts.contexts.insert((submission.phase.get(), digest.clone()), cadence::import::ContextDraft {
+                    submission: submission.clone(), document,
+                });
+                drafts.newest_context.insert(submission.phase.get(), digest);
+            }
             Ok(model::ok(
                 "context-submit",
                 json!({"phase":submission.phase,"persisted":false,"validation":"draft",
