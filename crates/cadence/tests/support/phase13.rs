@@ -261,36 +261,6 @@ pub fn observation(id: &str, truths: &[&str]) -> Value {
         "associations":edges(truths)})
 }
 
-// Handwritten phase-28 section grammar. No production renderer, validator or
-// typed map serializer participates in this caller's expected document.
-pub fn section_json(value: &Value, depth: usize) -> String {
-    let indent = "  ".repeat(depth);
-    let child = "  ".repeat(depth + 1);
-    match value {
-        Value::Array(values) if !values.is_empty() => format!("[\n{}\n{indent}]", values.iter()
-            .map(|v| format!("{child}{}", section_json(v, depth + 1))).collect::<Vec<_>>().join(",\n")),
-        Value::Object(fields) if !fields.is_empty() => {
-            let order: &[&str] = if fields.contains_key("mode") { &["mode", "items"] }
-                else if fields.contains_key("spec") { &["kind", "id", "spec", "reason", "associations"] }
-                else if fields.contains_key("truth_id") { &["truth_id", "truth_version", "reason"] }
-                else if fields.contains_key("command") || fields.contains_key("expected") {
-                    &["command", "expected", "test", "setup", "call", "boundary", "fakes"]
-                } else if fields.contains_key("file") { &["file", "function"] }
-                else if fields.contains_key("locators") { &["locators", "substance"] }
-                else if fields.contains_key("caller") || fields.contains_key("callee") { &["caller", "callee", "value"] }
-                else if fields.contains_key("episode") { &["episode", "specification", "status"] }
-                else if fields.contains_key("approved_by") { &["source", "document", "approved_by", "approved_at"] }
-                else { &["kind", "value"] };
-            let mut keys = order.iter().copied().filter(|k| fields.contains_key(*k)).collect::<Vec<_>>();
-            keys.extend(fields.keys().map(String::as_str).filter(|k| !order.contains(k)));
-            format!("{{\n{}\n{indent}}}", keys.iter().map(|k| format!("{child}{}: {}",
-                serde_json::to_string(k).unwrap(), section_json(&fields[*k], depth + 1)))
-                .collect::<Vec<_>>().join(",\n"))
-        }
-        _ => serde_json::to_string(value).unwrap(),
-    }
-}
-
 // Some(number) replaces a current contribution; None allocates a new one.
 pub fn proposal(project: &Path, id: &str, maps: &[(Option<u32>, Value)]) -> Value {
     let mut client = Client::open(project);
