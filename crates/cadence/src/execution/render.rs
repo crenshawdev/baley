@@ -89,6 +89,11 @@ pub fn render_native_phase_summary(
         }
         for record in plan_records.iter().filter(|r| r.request.plan == plan) {
             match &record.request.event {
+                history::PlanEvent::RoundRecord(statement) => {
+                    let round = &statement.submission;
+                    let wire_bytes = round.wire_bytes.map_or_else(|| "unmeasured".into(), |n| n.to_string());
+                    writeln!(rendered, "Executor round tokens: {} (host {}, reported by the host) against 141893 (3.7 cad-executor median per dispatch, n=149, trace.jsonl locked 2026-08-24, superseded file); wire bytes {wire_bytes}", round.tokens, round.host).unwrap();
+                }
                 history::PlanEvent::SuiteLaunch(launch) => {
                     writeln!(rendered, "Suite launch {}: command {}; commit {}", launch.run_id, launch.material.command, launch.material.commit).unwrap();
                 }

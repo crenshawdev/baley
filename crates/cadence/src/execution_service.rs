@@ -115,7 +115,7 @@ pub async fn native_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root
         return super::execution_runner_service::apply(factory, root, raw).await;
     }
     if matches!(raw["operation"].as_str(), Some("execution-suite" | "execution-suite-repair-answer" |
-        "execution-suite-repair" | "execution-suite-relaunch" | "execution-plan-complete")) {
+        "execution-suite-repair" | "execution-suite-relaunch" | "execution-plan-complete" | "execution-round-record")) {
         return super::execution_runner_service::plan_apply(factory, root, raw).await;
     }
     use cadence::execution::{admission,boundary::NativeApply};

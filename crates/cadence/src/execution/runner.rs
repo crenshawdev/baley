@@ -99,11 +99,22 @@ pub struct RelaunchInput {
     pub statement: history::OwnerAbsence,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RoundInput {
+    pub request_id: String,
+    pub plan: history::PlanIdentity,
+    pub expected_version: u64,
+    pub statement: history::OwnerRound,
+}
+
 /// The plan-level operations: the one suite, the operator's single confirmed
 /// relaunch of a launch with no recognized result, and native completion.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", deny_unknown_fields)]
 pub enum PlanApply {
+    #[serde(rename = "execution-round-record")]
+    RoundRecord { request: RoundInput },
     #[serde(rename = "execution-suite")]
     Suite { request: SuiteInput },
     #[serde(rename = "execution-suite-repair-answer")]

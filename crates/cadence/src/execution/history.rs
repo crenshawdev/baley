@@ -487,6 +487,23 @@ pub struct OwnerAbsence {
     pub approval: OwnerApproval<Absence>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutorRound {
+    pub dispatch_id: String,
+    pub host: String,
+    pub tokens: std::num::NonZeroU64,
+    #[serde(default)]
+    pub wire_bytes: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerRound {
+    pub submission: ExecutorRound,
+    pub approval: OwnerApproval<ExecutorRound>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Completion {
@@ -497,6 +514,7 @@ pub struct Completion {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum PlanEvent {
+    RoundRecord(OwnerRound),
     SuiteLaunch(SuiteLaunch),
     SuiteResult(RunResult),
     SuiteRepairQuestion(SuiteRepairQuestion),
@@ -619,6 +637,7 @@ pub fn plan_project(records: &[PlanRecord], plan: &PlanIdentity) -> PlanProjecti
     for record in records.iter().filter(|r| r.request.plan == *plan) {
         projection.version = record.version;
         match &record.request.event {
+            PlanEvent::RoundRecord(_) => {},
             PlanEvent::SuiteLaunch(launch) => { projection.launches.push(launch.run_id.clone()); projection.outcome = "unknown".into(); }
             PlanEvent::SuiteResult(result) => {
                 projection.results.push(result.run_id.clone());
@@ -769,8 +788,9 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
     let mut history = plan_records(data, plan.phase)?;
     let projection = plan_project(&history, plan);
     let task_records = records(data, plan.phase)?;
-    if projection.completed { return Err(refuse("plan-completed", "plan already has a confirmed native completion")); }
-    if plan_outcomes(data, plan.phase)?.iter().any(|outcome| outcome.plan == plan.plan) {
+    let round_record = matches!(request.event, PlanEvent::RoundRecord(_));
+    if projection.completed && !round_record { return Err(refuse("plan-completed", "plan already has a confirmed native completion")); }
+    if !round_record && plan_outcomes(data, plan.phase)?.iter().any(|outcome| outcome.plan == plan.plan) {
         return Err(refuse("suite-failed", "the plan's repair launch reported a failure; its next repair is a newly approved gap plan"));
     }
     if request.expected_version != projection.version { return Err(refuse("plan-version", "expected plan version is stale")); }
@@ -788,6 +808,29 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
     let record_digest = plan_request_digest(request)?;
     let mut generated_question = None;
     match &request.event {
+        PlanEvent::RoundRecord(statement) => {
+            if !unfinished.is_empty() {
+                return Err(Error::Invalid(format!("native-task-refusal:{}", json!({
+                    "status":"refused","code":"round-open","rule":"round-open","slot":"plan",
+                    "phase":plan.phase,"id":plan.plan.to_string(),
+                    "reason":"the executor round remains open until the plan's last task closes"
+                }))));
+            }
+            let round = &statement.submission;
+            if round.host.trim().is_empty() || !validate_approval(round, &statement.approval) {
+                return Err(refuse("round-record", "the host must be nonblank and attributed, timed owner approval must echo the exact host report"));
+            }
+            let bound = task_records.iter().any(|record| {
+                record.request.task.plan == plan.plan && match &record.request.event {
+                    Event::Close(proof) => proof.dispatch.id == round.dispatch_id,
+                    _ => false,
+                }
+            }) || data["execution"]["occurrences"][plan.phase.to_string()]["issues"]
+                .get(&round.dispatch_id).is_some_and(|issue| issue["operational"]["plan"] == plan.plan);
+            if !bound {
+                return Err(refuse("round-dispatch", "the host report must name a retained dispatch for this plan"));
+            }
+        }
         PlanEvent::SuiteLaunch(launch) => {
             let active = active.filter(|a| a.plan == plan.plan && a.phase == plan.phase)
                 .ok_or_else(|| refuse("plan-active", "the suite needs the plan's active dispatch"))?;

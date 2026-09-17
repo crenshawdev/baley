@@ -39,7 +39,12 @@ pub async fn plan_apply<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>,
     let session = factory.first_touch(root).await?;
     let view = session.derivation_view().await?;
     let project = root.parent().ok_or_else(|| Error::Invalid("project root missing".into()))?;
+    let compact_round = matches!(input, runner::PlanApply::RoundRecord { .. });
     let result = match input {
+        runner::PlanApply::RoundRecord { request } => runner::plan_append(session.review_store(), PlanRequest {
+            request_id: request.request_id, plan: request.plan, expected_version: request.expected_version,
+            event: PlanEvent::RoundRecord(request.statement),
+        }).await,
         runner::PlanApply::Suite { request } => runner::suite_launch(session.review_store().clone(), project.to_path_buf(), request).await,
         runner::PlanApply::RepairAnswer { request } => match request.plan_request() {
             Ok(request) => runner::plan_append(session.review_store(), request).await,
@@ -76,6 +81,8 @@ pub async fn plan_apply<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>,
         }
     };
     Ok(match result {
+        Ok(receipt) if compact_round => json!({"status":"ok","receipt":{
+            "plan":receipt.request.plan,"request_id":receipt.request.request_id,"version":receipt.version}}),
         Ok(receipt) => json!({"status":"ok","receipt":receipt}),
         Err(error) => super::execution_service::native_error(error),
     })
