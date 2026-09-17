@@ -429,12 +429,25 @@ impl Intent {
         if self.version != VERSION || self.integrity != self.digest()? {
             return Err(Error::Conflict("invalid operation intent integrity".into()));
         }
-        self.validate_sealed()
+        let bytes = |name| {
+            self.participants
+                .iter()
+                .find(|p| p.target == name)
+                .map(|p| p.bytes.as_slice())
+                .ok_or_else(|| Error::Invalid("intent lacks semantic target".into()))
+        };
+        let items = bytes(ITEMS)?;
+        let decisions = bytes(DECISIONS)?;
+        #[cfg(test)]
+        NEW_STATE_PARSES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let snapshot = Snapshot::parse(bytes(STATE)?, items, decisions)?;
+        self.validate_sealed(&snapshot)?;
+        Ok(snapshot)
     }
 
     /// What the intent means, for an intent this process has just sealed and
     /// so need not digest a second time.
-    fn validate_sealed(&self) -> Result<Snapshot> {
+    fn validate_sealed(&self, snapshot: &Snapshot) -> Result<()> {
         let mut names = BTreeSet::new();
         let mut summary_phase = None;
         let mut context_phase = None;
@@ -583,9 +596,7 @@ impl Intent {
         let decisions = bytes(DECISIONS)?;
         model::validate_items(&model::parse_lines(items)?)?;
         model::validate_decisions(&model::parse_lines(decisions)?)?;
-        #[cfg(test)]
-        NEW_STATE_PARSES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let snapshot = Snapshot::parse(bytes(STATE)?, items, decisions)?;
+        snapshot.validate(items, decisions)?;
         let verification_intent = self.kind.verification();
         if !verification_intent {
             let previous_decisions = self.participants.iter().find(|p| p.target == DECISIONS)
@@ -646,7 +657,7 @@ impl Intent {
                 if names.len() != 3 { return Err(Error::Invalid("verification patch cannot change external participants".into())); }
                 if claim.root_binding != root_binding { return Err(Error::Invalid("verification claim root binding changed".into())); }
                 let previous = previous_snapshot(&self.participants, "verification claim")?;
-                validate_claim_transition(&self.participants, &snapshot, (items, decisions), &root_binding,
+                validate_claim_transition(&self.participants, snapshot, (items, decisions), &root_binding,
                     verdicts::transaction(&previous.data, &claim)?, verdicts::decision(&claim)?, "verification claim")?;
             }
             IntentKind::VerificationWaiverV1 { claim, root_binding } => {
@@ -654,7 +665,7 @@ impl Intent {
                 if names.len() != 3 { return Err(Error::Invalid("waiver cannot change external participants".into())); }
                 if claim.root_binding != root_binding { return Err(Error::Invalid("waiver claim root binding changed".into())); }
                 let previous = previous_snapshot(&self.participants, "waiver claim")?;
-                validate_claim_transition(&self.participants, &snapshot, (items, decisions), &root_binding,
+                validate_claim_transition(&self.participants, snapshot, (items, decisions), &root_binding,
                     waivers::transaction(&previous.data, &claim)?, waivers::decision(&claim)?, "waiver claim")?;
             }
             IntentKind::VerificationHumanV1 { claim, root_binding } => {
@@ -668,7 +679,7 @@ impl Intent {
                     return Err(Error::Invalid("UAT participant differs from the native render".into()));
                 }
                 let previous = previous_snapshot(&self.participants, "human result")?;
-                validate_claim_transition(&self.participants, &snapshot, (items, decisions), &root_binding,
+                validate_claim_transition(&self.participants, snapshot, (items, decisions), &root_binding,
                     human::transaction(&previous.data, &claim, uat.expected.clone())?, human::decision(&claim)?, "human result")?;
             }
             IntentKind::VerificationCompleteV1 { claim, root_binding } => {
@@ -686,7 +697,7 @@ impl Intent {
                     expected.push(participant.expected.clone());
                 }
                 let previous = previous_snapshot(&self.participants, "completion")?;
-                validate_claim_transition(&self.participants, &snapshot, (items, decisions), &root_binding,
+                validate_claim_transition(&self.participants, snapshot, (items, decisions), &root_binding,
                     completion::transaction(&previous.data, &claim, &expected)?, completion::decision(&claim)?, "completion")?;
             }
             IntentKind::VerificationRunV1 { record, root_binding } => {
@@ -845,7 +856,7 @@ impl Intent {
             }
             IntentKind::ExecutionDispatch { phase } => {
                 cadence::plan::persistence::require_legacy_execution(&snapshot.data, phase)?;
-                let execution = execution_snapshot(&snapshot)?;
+                let execution = execution_snapshot(snapshot)?;
                 let occurrence =
                     execution
                         .occurrences
@@ -885,7 +896,7 @@ impl Intent {
                 summary: true,
                 ..
             } => {
-                let execution = execution_snapshot(&snapshot)?;
+                let execution = execution_snapshot(snapshot)?;
                 let rendered = cadence::execution::render::render_phase_summary(&execution, phase)
                     .map_err(|error| Error::Invalid(error.to_string()))?;
                 let target = format!("phase-summary:{phase}");
@@ -929,13 +940,13 @@ impl Intent {
                 ));
             }
         }
-        self.validate_rail_receipt(&snapshot)?;
-        self.validate_risk_finalization(&snapshot)?;
-        self.validate_rail_observation(&snapshot)?;
-        self.validate_guard_audit(&snapshot)?;
-        self.validate_snapshot_repair(&snapshot)?;
-        self.validate_boundary_v1(&snapshot, decisions, summary_phase)?;
-        Ok(snapshot)
+        self.validate_rail_receipt(snapshot)?;
+        self.validate_risk_finalization(snapshot)?;
+        self.validate_rail_observation(snapshot)?;
+        self.validate_guard_audit(snapshot)?;
+        self.validate_snapshot_repair(snapshot)?;
+        self.validate_boundary_v1(snapshot, decisions, summary_phase)?;
+        Ok(())
     }
     /// The repair is exactly what the parse restores from the previous log:
     /// same items, same decisions, the next generation, the repair operation
@@ -1596,6 +1607,7 @@ pub(crate) fn commit<S: Storage, P: Policy>(
     storage: &mut S,
     policy: &mut P,
     context: &MutationContext<'_>,
+    snapshot: &Snapshot,
     kind: IntentKind,
     participants: Vec<Participant>,
 ) -> Result<()> {
@@ -1622,10 +1634,11 @@ pub(crate) fn commit<S: Storage, P: Policy>(
     }
     let mut intent = Intent::new(kind, participants);
     intent.integrity = intent.digest()?;
-    let prospective = intent.validate_sealed()?;
+    intent.validate_sealed(snapshot)?;
+    let prospective = snapshot;
     let route = match &intent.kind {
         IntentKind::ExecutionDispatchV1 { phase, .. }
-        | IntentKind::NativeExecutionDispatchV1 { phase, .. } => execution_snapshot(&prospective)?
+        | IntentKind::NativeExecutionDispatchV1 { phase, .. } => execution_snapshot(prospective)?
             .occurrences
             .get(&phase.to_string())
             .and_then(|occurrence| occurrence.active.as_ref())
@@ -1645,7 +1658,7 @@ pub(crate) fn commit<S: Storage, P: Policy>(
             Some(route) => policy.validate_routing_admission(
                 &MutationContext {
                     operation: context.operation,
-                    snapshot: &prospective,
+                    snapshot: prospective,
                 },
                 &route.inputs,
             ),

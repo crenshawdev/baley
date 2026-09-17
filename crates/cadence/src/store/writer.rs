@@ -1755,6 +1755,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 operation: operation_name,
                 snapshot: &self.view.snapshot,
             },
+            &next.snapshot,
             intent_kind,
             participants,
         ) {
