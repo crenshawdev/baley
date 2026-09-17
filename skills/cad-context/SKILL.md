@@ -102,7 +102,11 @@ To validate a complete draft call `mcp__cadence__cadence_apply` with:
 
 The values above illustrate the wire shape; obtain the actual values and both
 attestations from the owner. An `ok` draft response has `operation: context-submit`,
-`persisted: false`, and `validation: draft`. Draft success is not publication.
+`phase`, `persisted: false`, `validation: draft`, `submission_digest`, and
+`revision`. The submission digest binds approval to the exact typed set; revision
+is the SHA-256 of the CONTEXT.md the binary rendered. The response contains no
+document. Keep the reported submission digest with the draft. Draft success is
+not publication.
 
 ## Present the exact set and obtain approval
 
@@ -114,9 +118,15 @@ do not invent either. Any content change needs renewed approval of the changed s
 
 Only after that approval, resubmit `context-submit` with the identical `submission`
 and an `approval` object containing `approved: true`, `owner`, `at`, and
-`submission`: an exact copy of the entire approved submission, including the
-decisions, prose, truth slots and attestations. Approval of a subset, a mismatched
-copy, an empty owner or a missing time is insufficient. There is no draft token.
+`submission_digest`: the exact digest reported by the draft response for this
+approved set. Any content change needs a fresh draft response and renewed owner
+approval before using its digest. The digest binds the set; it does not supply
+the owner's approval.
+
+A full `submission` copy inside `approval` is also accepted, but sends the entire
+set twice. That copy must include every decision, prose, truth slot and
+attestation. Approval of a subset, a mismatched binding, an empty owner or a
+missing time is insufficient. There is no draft token.
 
 If approval is missing, stop without submitting an approved request. An explicit
 decline can be represented by `approval: {"approved": false}` and also ends
@@ -360,6 +370,7 @@ For the read-layer cycle-purpose close handoff, measure a new real Claude Code p
           ]
         },
         "submission": {
+          "description": "The approved submission. On the wire the owner may bind by\n`submission_digest` instead; the binary fills this copy before it\nrecords the context, so retained records always carry it.",
           "anyOf": [
             {
               "$ref": "#/$defs/Submission"
@@ -367,6 +378,13 @@ For the read-layer cycle-purpose close handoff, measure a new real Claude Code p
             {
               "type": "null"
             }
+          ]
+        },
+        "submission_digest": {
+          "description": "The digest of the exact submission, as `context-submit` reports it on\na draft answer. Either binding proves the same thing; the digest spares\nthe caller a second copy of the whole context set.",
+          "type": [
+            "string",
+            "null"
           ]
         }
       },
