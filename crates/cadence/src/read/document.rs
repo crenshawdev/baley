@@ -195,6 +195,16 @@ impl Resolved {
     pub fn bytes(&self) -> Vec<u8> {
         self.parts.iter().flat_map(|part| part.body.bytes()).collect()
     }
+
+    /// Compare in the newest document's order, then report a removed part.
+    pub fn first_difference(&self, previous: &Self) -> Option<String> {
+        self.parts.iter().find(|part| {
+            previous.parts.iter().find(|old| old.selector == part.selector)
+                .is_none_or(|old| old.body != part.body)
+        }).or_else(|| previous.parts.iter().find(|old| {
+            !self.parts.iter().any(|part| part.selector == old.selector)
+        })).map(|part| part.selector.clone())
+    }
 }
 
 /// Partition by the typed slots' lengths, never by headings in authored prose.

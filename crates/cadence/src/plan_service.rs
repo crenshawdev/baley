@@ -151,16 +151,53 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 Ok(value) => value,
                 Err(error) => return Ok(model::refused("submission", error.to_string())),
             };
-            let held = if submission.is_none() {
-                let Some(phase) = phase else {
+            let held = if submission.is_none() || approval.as_ref().is_some_and(|value|
+                value.approved && value.submission_digest.is_some()) {
+                let Some(phase) = phase.or_else(|| submission.as_ref().map(|value| value.phase)) else {
                     return Ok(model::refused("submission", "digest approval needs phase"));
                 };
                 let Some(digest) = approval.as_ref().and_then(|value| value.submission_digest.as_ref()) else {
                     return Ok(model::refused("submission", "missing submission needs approval.submission_digest"));
                 };
-                cadence::import::drafts(root)?.lock()
-                    .map_err(|_| cadence::store::Error::Invalid("drafts unavailable".into()))?
-                    .plans.get(&(phase.get(), digest.clone())).cloned()
+                let drafts = cadence::import::drafts(root)?;
+                let drafts = drafts.lock()
+                    .map_err(|_| cadence::store::Error::Invalid("drafts unavailable".into()))?;
+                let held = drafts.plans.get(&(phase.get(), digest.clone()));
+                if let Some(held) = held {
+                    if approval.as_ref().is_some_and(|value| value.approved)
+                        && let Some(newest_digest) = drafts.newest_plan.get(&phase.get()).filter(|newest| *newest != digest)
+                        && let Some(newest) = drafts.plans.get(&(phase.get(), newest_digest.clone()))
+                    {
+                        let targets = newest.submission.plans.iter().chain(&held.submission.plans)
+                            .map(|entry| entry.target.plan).collect::<std::collections::BTreeSet<_>>();
+                        for plan in &targets {
+                            let current = newest.submission.plans.iter().zip(&newest.documents)
+                                .find(|(entry, _)| entry.target.plan == *plan).map(|(_, document)| document);
+                            let previous = held.submission.plans.iter().zip(&held.documents)
+                                .find(|(entry, _)| entry.target.plan == *plan).map(|(_, document)| document);
+                            let part = match (current, previous) {
+                                (Some(current), Some(previous)) => current.first_difference(previous),
+                                (Some(document), None) | (None, Some(document)) =>
+                                    document.parts.first().map(|part| part.selector.clone()),
+                                (None, None) => None,
+                            };
+                            if part.is_some() {
+                                return Ok(Answer::DraftRefused { code: "stale-draft".into(),
+                                    identity: json!({"kind":"plan-draft","phase":phase,
+                                        "plan":plan,"digest":newest_digest}), part });
+                            }
+                        }
+                        // Submission metadata can change without changing any rendered part.
+                        return Ok(Answer::DraftRefused { code: "stale-draft".into(),
+                            identity: newest.documents.first().map_or_else(
+                                || json!({"kind":"phase-plan","phase":phase}),
+                                |document| json!(document.identity)), part: None });
+                    }
+                } else if submission.is_none() {
+                    return Ok(Answer::DraftRefused { code: "unknown-draft".into(),
+                        identity: json!({"kind":"phase-plan","phase":phase}), part: None });
+                }
+                held.cloned()
             } else { None };
             let Some(submission) = submission.or_else(|| held.as_ref().map(|draft| draft.submission.clone())) else {
                 return Ok(model::refused("unknown-draft", "held plan draft is absent"));

@@ -225,6 +225,13 @@ pub enum Answer {
         #[serde(skip_serializing_if = "Option::is_none")]
         details: Option<Details>,
     },
+    #[serde(rename = "refused")]
+    DraftRefused {
+        code: String,
+        identity: Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        part: Option<String>,
+    },
     Unknown { reason: String },
     NotApplicable { reason: String },
 }

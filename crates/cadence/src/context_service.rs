@@ -70,17 +70,33 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 }
             };
             use cadence::context::{persistence, render, validation};
-            let held = if submission.is_none() {
-                let Some(phase) = phase else {
+            let held = if submission.is_none() || approval.as_ref().is_some_and(|value|
+                value.approved && value.submission_digest.is_some()) {
+                let Some(phase) = phase.or_else(|| submission.as_ref().map(|value| value.phase)) else {
                     return Ok(model::refused("submission", "phase", "digest approval needs phase", None, None, None));
                 };
                 let Some(digest) = approval.as_ref().and_then(|value| value.submission_digest.as_ref()) else {
                     return Ok(model::refused("submission", "approval.submission_digest",
                         "missing submission needs approval.submission_digest", Some(phase.get()), None, None));
                 };
-                cadence::import::drafts(root)?.lock()
-                    .map_err(|_| cadence::store::Error::Invalid("drafts unavailable".into()))?
-                    .contexts.get(&(phase.get(), digest.clone())).cloned()
+                let drafts = cadence::import::drafts(root)?;
+                let drafts = drafts.lock()
+                    .map_err(|_| cadence::store::Error::Invalid("drafts unavailable".into()))?;
+                let held = drafts.contexts.get(&(phase.get(), digest.clone()));
+                if let Some(held) = held {
+                    if approval.as_ref().is_some_and(|value| value.approved)
+                        && let Some(newest_digest) = drafts.newest_context.get(&phase.get()).filter(|newest| *newest != digest)
+                        && let Some(newest) = drafts.contexts.get(&(phase.get(), newest_digest.clone()))
+                    {
+                        return Ok(Answer::DraftRefused { code: "stale-draft".into(),
+                            identity: json!(newest.document.identity),
+                            part: newest.document.first_difference(&held.document) });
+                    }
+                } else if submission.is_none() {
+                    return Ok(Answer::DraftRefused { code: "unknown-draft".into(),
+                        identity: json!({"kind":"phase-context","phase":phase}), part: None });
+                }
+                held.cloned()
             } else { None };
             let Some(submission) = submission.or_else(|| held.as_ref().map(|draft| draft.submission.clone())) else {
                 return Ok(model::refused("unknown-draft", "approval.submission_digest",
