@@ -1692,3 +1692,63 @@ mod provenance_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod intent_encoding_tests {
+    use super::*;
+
+    // An intent as the binary wrote it before GH-261: every participant's
+    // bytes, old and new, as JSON integer arrays, and no encoding field.
+    const LEGACY: &str = r#"{"version":1,"kind":{"operation":"store"},"participants":[{"target":"items.jsonl","expected":{"bytes":[],"identity":"1:2:420","directory_identity":"1:1;"},"bytes":[]},{"target":"decisions.jsonl","expected":{"bytes":[],"identity":"1:2:420","directory_identity":"1:1;"},"bytes":[123,34,118,101,114,115,105,111,110,34,58,49,44,34,105,100,34,58,34,100,34,44,34,114,101,118,105,115,105,111,110,34,58,49,44,34,111,114,105,103,105,110,34,58,123,34,115,111,117,114,99,101,34,58,34,116,34,44,34,111,114,105,103,105,110,97,108,34,58,34,109,105,115,115,105,110,103,34,125,44,34,100,101,99,105,115,105,111,110,34,58,123,34,99,108,97,115,115,34,58,34,103,97,116,101,34,44,34,111,117,116,99,111,109,101,34,58,34,100,34,44,34,101,118,105,100,101,110,99,101,34,58,110,117,108,108,125,125,10]},{"target":"state.json","expected":{"bytes":[123,34,111,108,100,34,58,116,114,117,101,125],"identity":"1:2:420","directory_identity":"1:1;"},"bytes":[123,34,110,101,119,34,58,116,114,117,101,125]}],"integrity":"815a063018f8b7b1abb8ec163a37fc705e60463b24d0aee3700a0577827b0b9f"}"#;
+
+    fn participants() -> Vec<Participant> {
+        let expected = |bytes: &[u8]| Observed { bytes: Some(bytes.to_vec()), identity: "1:2:420".into(), directory_identity: "1:1;".into() };
+        vec![
+            Participant { target: ITEMS.into(), expected: expected(b""), bytes: b"".to_vec() },
+            Participant { target: DECISIONS.into(), expected: expected(b""),
+                bytes: b"{\"version\":1,\"id\":\"d\",\"revision\":1,\"origin\":{\"source\":\"t\",\"original\":\"missing\"},\"decision\":{\"class\":\"gate\",\"outcome\":\"d\",\"evidence\":null}}\n".to_vec() },
+            Participant { target: STATE.into(), expected: expected(b"{\"old\":true}"), bytes: b"{\"new\":true}".to_vec() },
+        ]
+    }
+
+    // GH-261: the intent journal carried every participant's bytes as integer
+    // arrays, 766MB per write on this project. A new intent writes UTF-8
+    // bytes as strings and says so; an intent written before that is read,
+    // checked and written back exactly as it was.
+    #[test]
+    fn intent_writes_utf8_participants_as_text_and_keeps_a_legacy_intent_as_written() {
+        let legacy: Intent = serde_json::from_str(LEGACY).unwrap();
+        assert_eq!(legacy.integrity, legacy.digest().unwrap(), "a legacy intent keeps its integrity");
+        assert_eq!(serde_json::to_value(&legacy).unwrap(), serde_json::from_str::<Value>(LEGACY).unwrap(), "written back as read");
+        assert_eq!(legacy.participants.len(), 3);
+        assert_eq!(legacy.participants[2].expected.bytes.as_deref(), Some(&b"{\"old\":true}"[..]));
+        assert_eq!(legacy.participants[2].bytes, b"{\"new\":true}");
+
+        let mut fresh = Intent { version: VERSION, kind: IntentKind::Store, participants: participants(), integrity: String::new() };
+        fresh.integrity = fresh.digest().unwrap();
+        let written = serde_json::to_string(&fresh).unwrap();
+        let value: Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(value["encoding"], "text", "{written}");
+        assert_eq!(value["participants"][2]["expected"]["bytes"], "{\"old\":true}");
+        assert_eq!(value["participants"][2]["bytes"], "{\"new\":true}");
+        assert!(!written.contains("[123,"), "integer arrays in a text intent: {written}");
+        assert!(written.len() < LEGACY.len() / 2, "{} against {}", written.len(), LEGACY.len());
+        let read: Intent = serde_json::from_str(&written).unwrap();
+        assert_eq!(read.integrity, read.digest().unwrap());
+        assert_eq!(read.participants.iter().map(|p| (&p.target, &p.expected, &p.bytes)).collect::<Vec<_>>(),
+            fresh.participants.iter().map(|p| (&p.target, &p.expected, &p.bytes)).collect::<Vec<_>>());
+        assert_eq!(serde_json::to_value(&read).unwrap(), value, "written back as read");
+
+        // Bytes that are not UTF-8 stay an array inside a text intent.
+        let mut binary = participants();
+        binary[2].bytes = vec![0xff, 0xfe, b'{'];
+        let mut intent = Intent { version: VERSION, kind: IntentKind::Store, participants: binary, integrity: String::new() };
+        intent.integrity = intent.digest().unwrap();
+        let value: Value = serde_json::from_str(&serde_json::to_string(&intent).unwrap()).unwrap();
+        assert_eq!(value["participants"][2]["bytes"], serde_json::json!([255, 254, 123]));
+        assert_eq!(value["participants"][2]["expected"]["bytes"], "{\"old\":true}");
+        let read: Intent = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(read.participants[2].bytes, vec![0xff, 0xfe, b'{']);
+        assert_eq!(read.integrity, read.digest().unwrap());
+    }
+}
