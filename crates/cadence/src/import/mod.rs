@@ -1093,15 +1093,14 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
                 .as_array()
                 .and_then(|p| p.iter().find(|p| p["target"] == STATE))
                 .ok_or_else(|| Error::Conflict("pending intent lacks snapshot".into()))?;
-            let bytes: Vec<u8> = serde_json::from_value(participant["bytes"].clone())?;
+            let bytes = cadence::store::transaction::intent_bytes(&participant["bytes"])?;
             let snapshot: Snapshot = serde_json::from_slice(&bytes)?;
             owns_global = active.global.as_ref().is_some_and(|global| {
                 snapshot.data["import"]["created"]
                     .as_array()
                     .is_some_and(|created| created.contains(&json!(global)))
             });
-            let previous: Option<Vec<u8>> =
-                serde_json::from_value(participant["expected"]["bytes"].clone())?;
+            let previous = cadence::store::transaction::intent_bytes_option(&participant["expected"]["bytes"])?;
             snapshot.data["import"]["complete"] == true
                 && previous
                     .as_deref()

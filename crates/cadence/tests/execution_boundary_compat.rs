@@ -5,6 +5,7 @@ use cadence::execution::{
     model::BoundaryTool,
 };
 use cadence::store::filesystem::{Filesystem, Stage};
+use cadence::store::transaction::{encode_intent_bytes, intent_bytes};
 use cadence::store::model::{self, DECISIONS, Decision, DecisionRecord, ITEMS, STATE, Snapshot};
 use cadence::store::transaction::INTENT;
 use cadence::store::writer::{BoundaryChange, Operation, Store};
@@ -460,7 +461,7 @@ fn root_intent_rejects_unknown_scope_generation_receipt_targets_and_tampering_be
                 }
                 "generation"|"codec"|"digest"|"receipt" => {
                     let index = intent["participants"].as_array().unwrap().iter().position(|p|p["target"]==DECISIONS).unwrap();
-                    let bytes: Vec<u8> = serde_json::from_value(intent["participants"][index]["bytes"].clone()).unwrap();
+                    let bytes = intent_bytes(&intent["participants"][index]["bytes"]).unwrap();
                     let mut record: Value = serde_json::from_slice(&bytes).unwrap();
                     match case {
                         "generation" => record["decision"]["store_generation"]=json!(2),
@@ -469,14 +470,14 @@ fn root_intent_rejects_unknown_scope_generation_receipt_targets_and_tampering_be
                         _ => record["decision"]["boundary"]["receipt"]=json!({"receipt":"dispatch","dispatch_id":"foreign","prompt_digest":5}),
                     }
                     let mut bytes = serde_json::to_vec(&record).unwrap(); bytes.push(b'\n');
-                    intent["participants"][index]["bytes"] = json!(bytes);
+                    intent["participants"][index]["bytes"] = encode_intent_bytes(&intent, &bytes).unwrap();
                     let state_index = intent["participants"].as_array().unwrap().iter().position(|p| p["target"] == STATE).unwrap();
-                    let state_bytes: Vec<u8> = serde_json::from_value(intent["participants"][state_index]["bytes"].clone()).unwrap();
+                    let state_bytes = intent_bytes(&intent["participants"][state_index]["bytes"]).unwrap();
                     let mut state: Value = serde_json::from_slice(&state_bytes).unwrap();
                     state["decisions_digest"] = json!(model::digest(&bytes));
                     state["integrity"] = json!("");
                     state["integrity"] = json!(model::digest(&serde_json::to_vec(&state).unwrap()));
-                    intent["participants"][state_index]["bytes"] = json!(serde_json::to_vec(&state).unwrap());
+                    intent["participants"][state_index]["bytes"] = encode_intent_bytes(&intent, &serde_json::to_vec(&state).unwrap()).unwrap();
                 }
                 _ => {}
             }
@@ -702,10 +703,11 @@ fn recovery_rejects_foreign_bytes_directory_ancestry_and_legacy_tampering_before
                         .unwrap()
                         .last_mut()
                         .unwrap();
-                    let bytes: Vec<u8> = serde_json::from_value(last["bytes"].clone()).unwrap();
+                    let bytes = intent_bytes(&last["bytes"]).unwrap();
                     let mut state: Value = serde_json::from_slice(&bytes).unwrap();
                     state["data"]["foreign"] = json!(true);
-                    last["bytes"] = json!(serde_json::to_vec(&state).unwrap());
+                    let encoded = encode_intent_bytes(&intent, &serde_json::to_vec(&state).unwrap()).unwrap();
+                    intent["participants"].as_array_mut().unwrap().last_mut().unwrap()["bytes"] = encoded;
                 }
                 _ => {}
             }

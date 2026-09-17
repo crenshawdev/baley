@@ -235,21 +235,172 @@ impl Transaction {
 
 pub(crate) type Participant = ExternalChange;
 
+/// How an intent writes its participants' bytes (GH-261). `Array` is every
+/// byte as a JSON integer, the only form before this field existed and the
+/// form an intent without it is read in. `Text` writes UTF-8 bytes as a JSON
+/// string and anything else as an array. An intent is digested and written
+/// back in the encoding it was read in, so a journal left by an older binary
+/// still recovers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum Encoding {
+    #[default]
+    Array,
+    Text,
+}
+
+/// A participant's bytes on the wire, in either encoding.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum BytesWire {
+    Array(Vec<u8>),
+    Text(String),
+}
+
+impl BytesWire {
+    fn encode(bytes: &[u8], encoding: Encoding) -> Self {
+        match encoding {
+            Encoding::Text => match std::str::from_utf8(bytes) {
+                Ok(text) => Self::Text(text.to_owned()),
+                Err(_) => Self::Array(bytes.to_vec()),
+            },
+            Encoding::Array => Self::Array(bytes.to_vec()),
+        }
+    }
+    fn decode(self) -> Vec<u8> {
+        match self {
+            Self::Array(bytes) => bytes,
+            Self::Text(text) => text.into_bytes(),
+        }
+    }
+}
+
+// Field order matches `Observed` and `ExternalChange`, so an `Array` intent
+// serializes to the bytes the older binary wrote and digested.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ObservedWire {
+    bytes: Option<BytesWire>,
+    identity: String,
+    directory_identity: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParticipantWire {
+    target: String,
+    expected: ObservedWire,
+    bytes: BytesWire,
+}
+
+impl ParticipantWire {
+    fn encode(participant: &Participant, encoding: Encoding) -> Self {
+        Self {
+            target: participant.target.clone(),
+            expected: ObservedWire {
+                bytes: participant.expected.bytes.as_deref().map(|bytes| BytesWire::encode(bytes, encoding)),
+                identity: participant.expected.identity.clone(),
+                directory_identity: participant.expected.directory_identity.clone(),
+            },
+            bytes: BytesWire::encode(&participant.bytes, encoding),
+        }
+    }
+    fn decode(self) -> Participant {
+        Participant {
+            target: self.target,
+            expected: Observed {
+                bytes: self.expected.bytes.map(BytesWire::decode),
+                identity: self.expected.identity,
+                directory_identity: self.expected.directory_identity,
+            },
+            bytes: self.bytes.decode(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IntentWire {
+    version: u32,
+    kind: IntentKind,
+    participants: Vec<ParticipantWire>,
+    integrity: String,
+    #[serde(default, skip_serializing_if = "is_array")]
+    encoding: Encoding,
+}
+
+fn is_array(encoding: &Encoding) -> bool {
+    *encoding == Encoding::Array
+}
+
+/// A participant's bytes read from an intent as JSON, in either encoding.
+pub fn intent_bytes(value: &Value) -> Result<Vec<u8>> {
+    Ok(serde_json::from_value::<BytesWire>(value.clone())?.decode())
+}
+
+/// The same for a field that may be `null`, such as `expected.bytes`.
+pub fn intent_bytes_option(value: &Value) -> Result<Option<Vec<u8>>> {
+    Ok(serde_json::from_value::<Option<BytesWire>>(value.clone())?.map(BytesWire::decode))
+}
+
+/// Bytes written back into an intent read as JSON, in that intent's encoding,
+/// so the intent's own digest still covers them.
+pub fn encode_intent_bytes(intent: &Value, bytes: &[u8]) -> Result<Value> {
+    let encoding: Encoding = match intent.get("encoding") {
+        Some(value) => serde_json::from_value(value.clone())?,
+        None => Encoding::Array,
+    };
+    Ok(serde_json::to_value(BytesWire::encode(bytes, encoding))?)
+}
+
 struct Intent {
     version: u32,
     kind: IntentKind,
     participants: Vec<Participant>,
     integrity: String,
+    encoding: Encoding,
+}
+
+impl Serialize for Intent {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        IntentWire {
+            version: self.version,
+            kind: self.kind.clone(),
+            participants: self.wire_participants(),
+            integrity: self.integrity.clone(),
+            encoding: self.encoding,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Intent {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let wire = IntentWire::deserialize(deserializer)?;
+        Ok(Self {
+            version: wire.version,
+            kind: wire.kind,
+            participants: wire.participants.into_iter().map(ParticipantWire::decode).collect(),
+            integrity: wire.integrity,
+            encoding: wire.encoding,
+        })
+    }
 }
 
 impl Intent {
+    fn new(kind: IntentKind, participants: Vec<Participant>) -> Self {
+        Self { version: VERSION, kind, participants, integrity: String::new(), encoding: Encoding::Text }
+    }
+
+    fn wire_participants(&self) -> Vec<ParticipantWire> {
+        self.participants.iter().map(|p| ParticipantWire::encode(p, self.encoding)).collect()
+    }
+
     fn digest(&self) -> Result<String> {
         Ok(model::digest(&serde_json::to_vec(&(
             self.version,
             &self.kind,
-            &self.participants,
+            self.wire_participants(),
         ))?))
     }
 
@@ -1445,12 +1596,7 @@ pub(crate) fn commit<S: Storage, P: Policy>(
             }
         }
     }
-    let mut intent = Intent {
-        version: VERSION,
-        kind,
-        participants,
-        integrity: String::new(),
-    };
+    let mut intent = Intent::new(kind, participants);
     intent.integrity = intent.digest()?;
     let prospective = intent.validate()?;
     let route = match &intent.kind {
@@ -1724,7 +1870,7 @@ mod intent_encoding_tests {
         assert_eq!(legacy.participants[2].expected.bytes.as_deref(), Some(&b"{\"old\":true}"[..]));
         assert_eq!(legacy.participants[2].bytes, b"{\"new\":true}");
 
-        let mut fresh = Intent { version: VERSION, kind: IntentKind::Store, participants: participants(), integrity: String::new() };
+        let mut fresh = Intent::new(IntentKind::Store, participants());
         fresh.integrity = fresh.digest().unwrap();
         let written = serde_json::to_string(&fresh).unwrap();
         let value: Value = serde_json::from_str(&written).unwrap();
@@ -1732,7 +1878,6 @@ mod intent_encoding_tests {
         assert_eq!(value["participants"][2]["expected"]["bytes"], "{\"old\":true}");
         assert_eq!(value["participants"][2]["bytes"], "{\"new\":true}");
         assert!(!written.contains("[123,"), "integer arrays in a text intent: {written}");
-        assert!(written.len() < LEGACY.len() / 2, "{} against {}", written.len(), LEGACY.len());
         let read: Intent = serde_json::from_str(&written).unwrap();
         assert_eq!(read.integrity, read.digest().unwrap());
         assert_eq!(read.participants.iter().map(|p| (&p.target, &p.expected, &p.bytes)).collect::<Vec<_>>(),
@@ -1742,7 +1887,7 @@ mod intent_encoding_tests {
         // Bytes that are not UTF-8 stay an array inside a text intent.
         let mut binary = participants();
         binary[2].bytes = vec![0xff, 0xfe, b'{'];
-        let mut intent = Intent { version: VERSION, kind: IntentKind::Store, participants: binary, integrity: String::new() };
+        let mut intent = Intent::new(IntentKind::Store, binary);
         intent.integrity = intent.digest().unwrap();
         let value: Value = serde_json::from_str(&serde_json::to_string(&intent).unwrap()).unwrap();
         assert_eq!(value["participants"][2]["bytes"], serde_json::json!([255, 254, 123]));

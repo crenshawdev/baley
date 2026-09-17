@@ -1278,12 +1278,13 @@ fn lease_refusal_intent_recovery_preserves_evidence_and_rejects_forged_coverage(
         if tampered {
             let mut intent: Value =
                 serde_json::from_slice(&fs::read(planning.join(INTENT)).unwrap()).unwrap();
+            let encoding = intent.clone();
             let participants = intent["participants"].as_array_mut().unwrap();
             let entry = participants
                 .iter_mut()
                 .find(|p| p["target"] == model::DECISIONS)
                 .unwrap();
-            let bytes: Vec<u8> = serde_json::from_value(entry["bytes"].clone()).unwrap();
+            let bytes = cadence::store::transaction::intent_bytes(&entry["bytes"]).unwrap();
             let mut records: Vec<model::DecisionRecord> = model::parse_lines(&bytes).unwrap();
             let record = records.last_mut().unwrap();
             let model::Decision::BoundaryV1(value) = &mut record.decision else {
@@ -1305,17 +1306,17 @@ fn lease_refusal_intent_recovery_preserves_evidence_and_rejects_forged_coverage(
                     b
                 })
                 .collect::<Vec<_>>();
-            entry["bytes"] = json!(bytes);
+            entry["bytes"] = cadence::store::transaction::encode_intent_bytes(&encoding, &bytes).unwrap();
             let state = participants
                 .iter_mut()
                 .find(|p| p["target"] == model::STATE)
                 .unwrap();
-            let bytes_state: Vec<u8> = serde_json::from_value(state["bytes"].clone()).unwrap();
+            let bytes_state = cadence::store::transaction::intent_bytes(&state["bytes"]).unwrap();
             let mut snapshot: Value = serde_json::from_slice(&bytes_state).unwrap();
             snapshot["decisions_digest"] = json!(digest(&bytes));
             snapshot["integrity"] = json!("");
             snapshot["integrity"] = json!(digest(&serde_json::to_vec(&snapshot).unwrap()));
-            state["bytes"] = json!(serde_json::to_vec(&snapshot).unwrap());
+            state["bytes"] = cadence::store::transaction::encode_intent_bytes(&encoding, &serde_json::to_vec(&snapshot).unwrap()).unwrap();
             intent["kind"]["decision_id"] = json!(id);
             intent["integrity"] = json!(digest(
                 &serde_json::to_vec(&json!([

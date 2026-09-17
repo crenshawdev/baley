@@ -480,12 +480,13 @@ fn audit_payload_and_recovery_cannot_smuggle_unrelated_mutations() {
                 if field.contains('-') || field.contains(':') {
                     value["participants"][0]["target"] = serde_json::json!(field);
                 } else {
+                    let encoding = value.clone();
                     let participants = value["participants"].as_array_mut().unwrap();
                     let state = participants
                         .iter_mut()
                         .find(|p| p["target"] == "state.json")
                         .unwrap();
-                    let bytes: Vec<u8> = serde_json::from_value(state["bytes"].clone()).unwrap();
+                    let bytes = cadence::store::transaction::intent_bytes(&state["bytes"]).unwrap();
                     let mut snapshot: cadence::store::model::Snapshot =
                         serde_json::from_slice(&bytes).unwrap();
                     snapshot.data[field] = serde_json::json!({"authorized":true});
@@ -502,7 +503,7 @@ fn audit_payload_and_recovery_cannot_smuggle_unrelated_mutations() {
                         snapshot.data,
                     )
                     .unwrap();
-                    state["bytes"] = serde_json::to_value(new.render().unwrap()).unwrap();
+                    state["bytes"] = cadence::store::transaction::encode_intent_bytes(&encoding, &new.render().unwrap()).unwrap();
                 }
             });
             assert!(
