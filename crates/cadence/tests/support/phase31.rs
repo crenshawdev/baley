@@ -15,6 +15,7 @@ pub struct Client {
     pending: BTreeMap<u64, Value>,
     pub send_bytes: usize,
     pub recv_bytes: usize,
+    pub request_lines: Vec<String>,
 }
 
 // Used by the phase 32 target, which shares this transport with phase 31.
@@ -58,6 +59,7 @@ impl Client {
             pending: BTreeMap::new(),
             send_bytes: 0,
             recv_bytes: 0,
+            request_lines: Vec::new(),
             child,
         };
         client.send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
@@ -70,6 +72,7 @@ impl Client {
 
     fn send(&mut self, value: Value) {
         let line = format!("{value}\n");
+        self.request_lines.push(line.clone());
         self.stdin.as_mut().unwrap().write_all(line.as_bytes()).unwrap();
         self.send_bytes += line.len();
         self.stdin.as_mut().unwrap().flush().unwrap();
@@ -372,4 +375,130 @@ pub fn process_plan_submission(allocation: &Value, large_task: &str) -> Value {
                 "suite":"python3 -B tests/tiny.py",
                 "evidence_map":{"mode":"attached","items":[artifact("fixture/artifact-two")]}}}
         ]}})
+}
+
+/// One admitted round, kept open so callers can inspect or extend its lifecycle.
+#[allow(dead_code)]
+pub struct ClosedRound {
+    pub fixture: ProcessFixture,
+    pub client: Client,
+    pub dispatch: Value,
+    pub plan: Value,
+    pub commits: Vec<String>,
+    pub runs: Vec<String>,
+    pub closes: Vec<Value>,
+    pub check: Value,
+}
+
+#[allow(dead_code)]
+impl ClosedRound {
+    pub fn admitted() -> Self {
+        let fixture = ProcessFixture::new();
+        let project = fixture.project();
+        fs::write(project.join("src/lease.rs"), "def answer():\n    return 0\n").unwrap();
+        // Track the authored planning inputs while leaving only the store's
+        // bookkeeping ignored. SUMMARY.md is deliberately not ignored.
+        fs::write(project.join(".gitignore"), ".fixture-gnupg/\n.run/\n.planning/*\n!.planning/phases/\n.planning/phases/*\n!.planning/phases/31/\n").unwrap();
+        let mut client = Client::open(project);
+        let context = client.call("cadence_apply", approve(json!({"operation":"context-submit","submission":{
+            "phase":31,"title":"Round fixture","scope":"An actual two-task round.",
+            "durable_decisions":[],"decisions":[],"assumptions":[],
+            "truths":[{"id":"T4","trigger":"the round closes","observer":"the caller","verb":"gets",
+                "outcome":"the retained result","kind":"property","observable":true,"fixed_oracle":true}]}})));
+        assert_eq!(context["persisted"], true, "{context}");
+        let allocation = client.call("cadence_query", json!({"operation":"plan-read","phase":31,"count":1}));
+        let mut proposal = process_plan_submission(&allocation, "");
+        proposal["submission"]["plans"].as_array_mut().unwrap().truncate(1);
+        let published = client.call("cadence_apply", approve(proposal));
+        assert_eq!(published["persisted"], true, "{published}");
+        let evidence = client.call("cadence_query", json!({"operation":"evidence-read","phase":31}));
+        let check = evidence["items"].as_array().unwrap().iter().find(|i| i["id"] == "fixture/T4").unwrap();
+        let check = json!({"id":check["id"],"item_revision":check["item_revision"]});
+        let readback = client.call("cadence_query", json!({"operation":"plan-read","phase":31}));
+        let publications = readback["native"]["publications"].as_object().unwrap();
+        let contract = json!({"phase":31,"occurrence":readback["occurrence"],
+            "plans":publications.values().map(|p| json!({"plan":p["identity"]["plan"],
+                "publication_request":p["publication_request"],"content_revision":p["revision"],"map_revision":p["map_revision"]})).collect::<Vec<_>>(),
+            "allocation":[{"plan":1,"task":"fixture-one-a","checks":[check]},
+                {"plan":1,"task":"fixture-one-b","checks":[]}]});
+        let admitted = client.call("cadence_apply", json!({"operation":"execution-admit","request":{
+            "request_id":"round-admit","expected_set_version":0,"contract":contract}}));
+        assert_eq!(admitted["status"], "ok", "{admitted}");
+        git(project, &["add", "."]);
+        git(project, &["-c", "commit.gpgsign=false", "commit", "-m", "test(round): prepare planning inputs"]);
+        let authorized = client.call("cadence_apply", json!({"operation":"execution-authorize","phase":31,
+            "request_id":"round-authorize","owner":"Fixture Owner","at":"2026-09-17T12:00:00Z","response":"Execute the fixture round"}));
+        assert_eq!(authorized["status"], "ok", "{authorized}");
+        let dispatch = client.call("cadence_query", json!({"operation":"execute-next","phase":31}));
+        assert_eq!(dispatch["status"], "ok", "{dispatch}");
+        let history = client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
+        let plan = history["plans"][0]["plan"].clone();
+        Self { fixture, client, dispatch, plan, check, commits: vec![], runs: vec![], closes: vec![] }
+    }
+
+    pub fn state(&mut self, name: &str) -> Value {
+        let history = self.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
+        history["tasks"].as_array().unwrap().iter().find(|t| t["task"]["task"] == name).unwrap().clone()
+    }
+
+    fn run(&mut self, name: &str, stage: &str, check: Value) -> String {
+        let state = self.state(name);
+        let id = format!("{name}-{stage}");
+        let launched = self.client.call("cadence_apply", json!({"operation":"execution-run","request":{
+            "request_id":id,"task":state["task"],"attempt":name,"expected_version":state["state"]["version"],
+            "command":"python3 -B tests/tiny.py","check":check,"stage":stage}}));
+        assert_eq!(launched["status"], "ok", "{launched}");
+        let result = self.client.wait_for_event(31, &id);
+        assert_eq!(result["disposition"]["code"], if stage == "red" { 1 } else { 0 }, "{result}");
+        if stage == "red" {
+            assert_eq!(result["observation"]["summary"], json!({"runner":"unittest","failed":true,"failures":1,"errors":0}));
+        }
+        self.runs.push(id.clone());
+        id
+    }
+
+    pub fn close_tasks(&mut self) {
+        for (index, name) in ["fixture-one-a", "fixture-one-b"].into_iter().enumerate() {
+            let state = self.state(name);
+            let checks = if index == 0 { json!([self.check]) } else { json!([]) };
+            let started = self.client.call("cadence_apply", json!({"operation":"execution-task-start","request":{
+                "request_id":format!("{name}-start"),"task":state["task"],"attempt":name,
+                "expected_version":0,"predecessor":null,"checks":checks}}));
+            assert_eq!(started["status"], "ok", "{started}");
+            let mut pairs = Vec::new();
+            if index == 0 {
+                fs::write(self.fixture.project().join("tests/tiny.py"), concat!(
+                    "import unittest, runpy\n",
+                    "unittest.runner.time.perf_counter = lambda: 0.0\n",
+                    "class Tiny(unittest.TestCase):\n",
+                    "    def test_ok(self):\n",
+                    "        self.assertEqual(runpy.run_path('src/lease.rs')['answer'](), 7)\n",
+                    "if __name__ == '__main__':\n    unittest.main()\n")).unwrap();
+                git(self.fixture.project(), &["add", "tests/tiny.py"]);
+                git(self.fixture.project(), &["-c", "commit.gpgsign=false", "commit", "-m", "test(round): expose fixture-one-a failure"]);
+                let red = git(self.fixture.project(), &["rev-parse", "HEAD"]);
+                self.commits.push(red.clone());
+                let red_run = self.run(name, "red", checks[0].clone());
+                fs::write(self.fixture.project().join("src/lease.rs"), "def answer():\n    return 7\n").unwrap();
+                git(self.fixture.project(), &["add", "src/lease.rs"]);
+                git(self.fixture.project(), &["-c", "commit.gpgsign=false", "commit", "-S", "-m", "feat(round): complete fixture-one-a"]);
+                let green = git(self.fixture.project(), &["rev-parse", "HEAD"]);
+                self.commits.push(green.clone());
+                let green_run = self.run(name, "green", checks[0].clone());
+                pairs.push(json!({"check":checks[0],"red_commit":red,"green_commit":green,"red_run":red_run,"green_run":green_run}));
+            } else {
+                fs::write(self.fixture.project().join("src/lease.rs"), "def answer():\n    return 7\n# Second task completed.\n").unwrap();
+                git(self.fixture.project(), &["add", "src/lease.rs"]);
+                git(self.fixture.project(), &["-c", "commit.gpgsign=false", "commit", "-S", "-m", "feat(round): complete fixture-one-b"]);
+                self.commits.push(git(self.fixture.project(), &["rev-parse", "HEAD"]));
+            }
+            let verification = self.run(name, "verify", Value::Null);
+            let state = self.state(name);
+            let closed = self.client.call("cadence_apply", json!({"operation":"execution-task-close","request":{
+                "request_id":format!("{name}-close"),"task":state["task"],"attempt":name,"expected_version":state["state"]["version"],
+                "completion":self.commits.last().unwrap(),"checks":pairs,"verification":[verification]}}));
+            assert_eq!(closed["status"], "ok", "{closed}");
+            self.closes.push(closed);
+        }
+    }
 }
