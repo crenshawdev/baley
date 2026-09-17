@@ -13,6 +13,8 @@ pub struct Client {
     stdin: Option<ChildStdin>,
     stdout: BufReader<std::process::ChildStdout>,
     pending: BTreeMap<u64, Value>,
+    pub send_bytes: usize,
+    pub recv_bytes: usize,
 }
 
 // Used by the phase 32 target, which shares this transport with phase 31.
@@ -54,6 +56,8 @@ impl Client {
             stdin: child.stdin.take(),
             stdout: BufReader::new(child.stdout.take().unwrap()),
             pending: BTreeMap::new(),
+            send_bytes: 0,
+            recv_bytes: 0,
             child,
         };
         client.send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
@@ -65,13 +69,16 @@ impl Client {
     }
 
     fn send(&mut self, value: Value) {
-        writeln!(self.stdin.as_mut().unwrap(), "{value}").unwrap();
+        let line = format!("{value}\n");
+        self.stdin.as_mut().unwrap().write_all(line.as_bytes()).unwrap();
+        self.send_bytes += line.len();
         self.stdin.as_mut().unwrap().flush().unwrap();
     }
 
     fn recv(&mut self) -> Value {
         let mut line = String::new();
         assert!(self.stdout.read_line(&mut line).unwrap() > 0);
+        self.recv_bytes += line.len();
         serde_json::from_str(&line).unwrap()
     }
 
