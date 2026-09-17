@@ -313,25 +313,18 @@ pub fn publish(project: &Path, input: &Value) -> Value {
     let answer = client.call("cadence_apply", approved.clone());
     assert_eq!(answer["persisted"], true, "control publication: {answer}");
     client.finish();
-    let mut retained_approval = approved["approval"].clone();
-    for (plan, result) in retained_approval["submission"]["plans"].as_array_mut().unwrap()
-        .iter_mut().zip(answer["results"].as_array().unwrap())
-    {
-        plan["content"] = result["content"].clone();
-        if plan["replacement"].is_object() {
-            plan["replacement"]["content"] = result["content"].clone();
-        }
-    }
+    let retained_approval = retained_request(&approved, project)["approval"].clone();
     let before = tree(project);
     let prior = reopened(project).snapshot;
     let occurrence = &prior.data["plan_publications"]["phases"]["13"];
-    assert_eq!(occurrence["receipts"][input["submission"]["request_id"].as_str().unwrap()]["results"], answer["results"]);
+    assert_publications(&occurrence["receipts"][input["submission"]["request_id"].as_str().unwrap()]["results"], &answer["results"]);
     for (entry, result) in input["submission"]["plans"].as_array().unwrap().iter().zip(answer["results"].as_array().unwrap()) {
         assert_eq!(result["identity"], entry["target"]);
-        assert_eq!(result["content"]["goal"], entry["content"]["goal"]);
-        assert_eq!(result["content"]["tasks"], entry["content"]["tasks"]);
-        assert_eq!(result["approval"], retained_approval);
-        assert_eq!(occurrence["publications"][result["identity"]["plan"].as_u64().unwrap().to_string()], *result);
+        let saved = &occurrence["publications"][result["identity"]["plan"].as_u64().unwrap().to_string()];
+        assert_eq!(saved["content"]["goal"], entry["content"]["goal"]);
+        assert_eq!(saved["content"]["tasks"], entry["content"]["tasks"]);
+        assert_eq!(saved["approval"], retained_approval);
+        assert_publication(saved, result);
         let retained = prior.data["acceptance_maps"]["phases"]["13"]["revisions"].as_array().unwrap().iter()
             .find(|r| r["revision"] == result["map_revision"]).unwrap();
         assert_eq!(retained["items"], entry["content"]["evidence_map"]["items"]);
@@ -344,10 +337,10 @@ pub fn publish(project: &Path, input: &Value) -> Value {
     let read = client.call("cadence_query", json!({"operation":"evidence-read","phase":13}));
     assert_eq!(read["schema"], "acceptance-map-view-1");
     assert_eq!(read["coherence"], "consistent");
-    for result in answer["results"].as_array().unwrap() {
+    for (entry, result) in input["submission"]["plans"].as_array().unwrap().iter().zip(answer["results"].as_array().unwrap()) {
         assert!(read["contributions"].as_array().unwrap().iter().any(|c|
             c["identity"] == result["identity"] && c["map_revision"] == result["map_revision"]));
-        for expected in result["content"]["evidence_map"]["items"].as_array().unwrap() {
+        for expected in entry["content"]["evidence_map"]["items"].as_array().unwrap() {
             let actual = read["items"].as_array().unwrap().iter().find(|i| i["id"] == expected["id"]).unwrap();
             assert_eq!(actual["spec"], expected["spec"]);
         }
@@ -726,4 +719,39 @@ pub fn recovered(project: &Path) -> cadence::store::writer::View {
         ).await.unwrap();
         store.request(Operation::ReadVerified).await.unwrap()
     })
+}
+
+fn assert_publication(saved: &Value, answer: &Value) {
+    assert!(answer.get("content").is_none(), "{answer}");
+    assert!(answer.get("approval").is_none(), "{answer}");
+    for field in ["identity", "revision", "map_revision", "readiness"] {
+        assert_eq!(saved[field], answer[field], "{field}");
+    }
+    assert_eq!(answer["content_digest"].as_str().unwrap().len(), 64);
+}
+
+fn assert_publications(saved: &Value, answer: &Value) {
+    let saved = saved.as_array().unwrap();
+    let answer = answer.as_array().unwrap();
+    assert_eq!(saved.len(), answer.len());
+    for (saved, answer) in saved.iter().zip(answer) {
+        assert_publication(saved, answer);
+    }
+}
+
+/// The retained approval binds the submitted slots to the installed document.
+fn retained_request(request: &Value, project: &Path) -> Value {
+    let mut retained = request.clone();
+    for plan in retained["approval"]["submission"]["plans"].as_array_mut().unwrap() {
+        let phase = plan["target"]["phase"].as_u64().unwrap() as u32;
+        let number = plan["target"]["plan"].as_u64().unwrap() as u32;
+        let bytes = fs::read(project.join(format!(".planning/phases/{phase}/PLAN-{number}.md"))).unwrap();
+        let parsed = cadence::execution::plan::parse_plan(&bytes, phase, number).unwrap();
+        plan["content"]["body"] = json!(parsed.body);
+        plan["content"]["execution"] = json!({"schema":parsed.schema,"suite":parsed.suite,"tasks":parsed.tasks});
+        if plan["replacement"].is_object() {
+            plan["replacement"]["content"] = plan["content"].clone();
+        }
+    }
+    retained
 }
