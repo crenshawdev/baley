@@ -405,8 +405,24 @@ impl<'de> Deserialize<'de> for Intent {
 }
 
 impl Intent {
-    fn new(kind: IntentKind, participants: Vec<Participant>) -> Self {
+    fn unfiltered(kind: IntentKind, participants: Vec<Participant>) -> Self {
         Self { version: VERSION, kind, participants, integrity: String::new(), encoding: Encoding::Text }
+    }
+
+    #[cfg(test)]
+    fn new(kind: IntentKind, participants: Vec<Participant>) -> Self {
+        let mut intent = Self::unfiltered(kind, participants);
+        if intent.participants.iter().filter(|participant|
+            participant.expected.bytes.as_ref() != Some(&participant.bytes)).count() == 1
+        {
+            intent.omit_unchanged();
+        }
+        intent
+    }
+
+    fn omit_unchanged(&mut self) {
+        self.participants.retain(|participant|
+            participant.expected.bytes.as_ref() != Some(&participant.bytes));
     }
 
     fn wire_participants(&self) -> Vec<ParticipantWire> {
@@ -425,10 +441,14 @@ impl Intent {
 
     /// An intent read back from the journal: its integrity first, then what
     /// it means.
-    fn validate(&self) -> Result<Snapshot> {
+    fn validate_integrity(&self) -> Result<()> {
         if self.version != VERSION || self.integrity != self.digest()? {
             return Err(Error::Conflict("invalid operation intent integrity".into()));
         }
+        Ok(())
+    }
+
+    fn validate_contents(&self) -> Result<Snapshot> {
         let bytes = |name| {
             self.participants
                 .iter()
@@ -1632,9 +1652,10 @@ pub(crate) fn commit<S: Storage, P: Policy>(
             }
         }
     }
-    let mut intent = Intent::new(kind, participants);
-    intent.integrity = intent.digest()?;
+    let mut intent = Intent::unfiltered(kind, participants);
     intent.validate_sealed(snapshot)?;
+    intent.omit_unchanged();
+    intent.integrity = intent.digest()?;
     let prospective = snapshot;
     let route = match &intent.kind {
         IntentKind::ExecutionDispatchV1 { phase, .. }
@@ -1697,11 +1718,23 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) ->
     let Some(bytes) = storage.read(INTENT)?.bytes else {
         return Ok(());
     };
-    let intent: Intent = serde_json::from_slice(&bytes)?;
+    let mut intent: Intent = serde_json::from_slice(&bytes)?;
     if serde_json::from_slice::<Value>(&bytes)? != serde_json::to_value(&intent)? {
         return Err(Error::Invalid("unknown operation intent fields".into()));
     }
-    let snapshot = intent.validate()?;
+    intent.validate_integrity()?;
+    for target in [ITEMS, DECISIONS] {
+        if !intent.participants.iter().any(|participant| participant.target == target) {
+            let expected = storage.read(target)?;
+            intent.participants.push(Participant {
+                target: target.into(), bytes: expected.bytes.clone().unwrap_or_default(), expected,
+            });
+        }
+    }
+    intent.participants.sort_by_key(|participant| match participant.target.as_str() {
+        ITEMS => 1, DECISIONS => 2, STATE => 3, _ => 0,
+    });
+    let snapshot = intent.validate_contents()?;
     validate_all(storage, &intent.participants, true, &intent.kind)?;
     policy.validate(&MutationContext {
         operation: if matches!(intent.kind, IntentKind::GuardAudit { .. }) {
