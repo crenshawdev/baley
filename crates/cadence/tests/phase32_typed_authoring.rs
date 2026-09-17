@@ -80,6 +80,53 @@ fn is_digest(value: &Value) -> bool {
 }
 
 #[test]
+fn phase32_stale_digest_is_refused_with_identity_and_part() {
+    let fixture = ProcessFixture::new();
+    let project = fixture.project();
+    let mut client = Client::open(project);
+    native_context(&mut client);
+    let allocation = client.call(
+        "cadence_query",
+        json!({"operation":"plan-read","phase":PHASE,"count":1}),
+    );
+    let mut submission = typed_submission(&allocation);
+    let first = client.call(
+        "cadence_apply",
+        json!({"operation":"plan-submit","submission":submission}),
+    );
+    assert_eq!(first["status"], "ok", "{first}");
+    submission["plans"][0]["content"]["notes"] = json!("The owner must inspect these revised notes.");
+    let newest = client.call(
+        "cadence_apply",
+        json!({"operation":"plan-submit","submission":submission}),
+    );
+    assert_eq!(newest["status"], "ok", "{newest}");
+    assert_ne!(first["submission_digest"], newest["submission_digest"]);
+    let before = tree(project);
+    let answer = client.call(
+        "cadence_apply",
+        json!({"operation":"plan-submit","phase":PHASE,"approval":{
+            "approved":true,"owner":"Fixture Owner","at":"2026-09-17T12:00:00Z",
+            "submission_digest":first["submission_digest"]
+        }}),
+    );
+    assert_eq!(answer, json!({
+        "status":"refused","code":"stale-draft",
+        "identity":{"kind":"plan-draft","phase":PHASE,"plan":1,
+            "digest":newest["submission_digest"]},
+        "part":"notes"
+    }));
+    assert_eq!(tree(project), before);
+    let changed = client.call(
+        "cadence_query",
+        json!({"operation":"document","identity":answer["identity"],"part":answer["part"]}),
+    );
+    assert_eq!(changed["status"], "ok", "{changed}");
+    assert_eq!(changed["body"], "## Notes\n\nThe owner must inspect these revised notes.\n");
+    client.finish();
+}
+
+#[test]
 fn phase32_draft_read_by_identity_and_approved_by_digest_installs_same_bytes() {
     let fixture = ProcessFixture::new();
     let project = fixture.project();
