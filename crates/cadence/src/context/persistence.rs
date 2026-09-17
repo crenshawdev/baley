@@ -1,19 +1,37 @@
 //! A phase's first approval lives alongside the store's other domain records.
 use super::{model::*, render};
-use cadence::store::{Error, Result};
+use cadence::store::{Error, Result, model::digest};
 use serde_json::{Value, json};
 
 pub const NAMESPACE: &str = "context";
 
-pub fn approved(submission: Submission, approval: Approval) -> Result<ApprovedContext> {
-    if !approval.approved
-        || approval.submission.as_ref() != Some(&submission)
-        || approval.owner.as_ref().is_none_or(|s| s.trim().is_empty())
-        || approval.at.as_ref().is_none_or(|s| s.trim().is_empty())
-    {
-        return Err(Error::Invalid("incomplete context approval".into()));
+/// The digest a draft answer reports and an approval may carry instead of
+/// the copy: the exact typed submission, serialized once by the binary.
+pub fn submission_digest(submission: &Submission) -> Result<String> {
+    Ok(digest(&serde_json::to_vec(submission)?))
+}
+
+/// True when the approval binds this exact submission, by copy or by digest.
+pub fn binds(submission: &Submission, approval: &Approval) -> Result<bool> {
+    Ok(approval.submission.as_ref() == Some(submission)
+        || approval.submission_digest.as_deref() == Some(submission_digest(submission)?.as_str()))
+}
+
+/// The approval as it is recorded: the copy filled and the wire digest
+/// dropped, so digest- and copy-bound contexts read back identically.
+pub fn bound(submission: &Submission, approval: Approval) -> Result<Approval> {
+    if !binds(submission, &approval)? {
+        return Ok(approval);
     }
-    let truths = submission
+    Ok(Approval {
+        submission: Some(submission.clone()),
+        submission_digest: None,
+        ..approval
+    })
+}
+
+fn truths(submission: &Submission) -> Result<Vec<Truth>> {
+    submission
         .truths
         .iter()
         .map(|slots| {
@@ -27,7 +45,33 @@ pub fn approved(submission: Submission, approval: Approval) -> Result<ApprovedCo
                 status: Status::Pending,
             })
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect()
+}
+
+/// Render the candidate bytes without manufacturing an approval record.
+pub fn rendered(submission: &Submission) -> Result<String> {
+    Ok(render::document(&ApprovedContext {
+        submission: submission.clone(),
+        approval: Approval {
+            approved: false,
+            owner: None,
+            at: None,
+            submission: None,
+            submission_digest: None,
+        },
+        truths: truths(submission)?,
+    }))
+}
+
+pub fn approved(submission: Submission, approval: Approval) -> Result<ApprovedContext> {
+    if !approval.approved
+        || approval.submission.as_ref() != Some(&submission)
+        || approval.owner.as_ref().is_none_or(|s| s.trim().is_empty())
+        || approval.at.as_ref().is_none_or(|s| s.trim().is_empty())
+    {
+        return Err(Error::Invalid("incomplete context approval".into()));
+    }
+    let truths = truths(&submission)?;
     Ok(ApprovedContext {
         submission,
         approval,

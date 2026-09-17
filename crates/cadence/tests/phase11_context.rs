@@ -264,6 +264,40 @@ fn approve(mut request: Value) -> Value {
     request
 }
 
+#[test]
+fn phase11_digest_approval_retains_the_submission_copy() {
+    let temp = initialized_fixture(false);
+    let request = submission();
+    let mut client = Client::open(temp.path());
+    let draft = client.call("cadence_apply", request.clone());
+    let digest = draft["submission_digest"].clone();
+    assert_eq!(digest.as_str().map(str::len), Some(64), "{draft}");
+
+    let mut digest_request = request.clone();
+    digest_request["approval"] = json!({
+        "approved":true,"owner":"John Crenshaw","at":"2026-09-10T14:00:00Z",
+        "submission_digest":digest
+    });
+    let answer = client.call("cadence_apply", digest_request.clone());
+    assert_eq!(answer["persisted"], true, "{answer}");
+    client.finish();
+
+    let root = temp.path().join(".planning");
+    let state: Value = serde_json::from_slice(&fs::read(root.join("state.json")).unwrap()).unwrap();
+    assert_eq!(
+        state["data"]["context"]["phases"]["11"]["approval"],
+        json!({"approved":true,"owner":"John Crenshaw","at":"2026-09-10T14:00:00Z",
+            "submission":request["submission"]}),
+    );
+
+    let before_retry = tree(temp.path());
+    let mut client = Client::open(temp.path());
+    let retry = client.call("cadence_apply", digest_request);
+    assert_eq!(retry["persisted"], true, "{retry}");
+    client.finish();
+    assert_eq!(tree(temp.path()), before_retry);
+}
+
 fn initialized_fixture(phase_directory: bool) -> tempfile::TempDir {
     let temp = fixture(false, false, false);
     let root = temp.path().join(".planning");

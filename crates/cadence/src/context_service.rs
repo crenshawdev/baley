@@ -69,6 +69,9 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 }
             };
             use cadence::context::{persistence, render, validation};
+            let approval = approval
+                .map(|approval| persistence::bound(&submission, approval))
+                .transpose()?;
             let observed = persistence::read_snapshot(root)?;
             let saved = observed
                 .as_ref()
@@ -96,12 +99,12 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             if let Some(approval) = approval.filter(|value| value.approved) {
                 if approval.owner.as_ref().is_none_or(|s| s.trim().is_empty())
                     || approval.at.as_ref().is_none_or(|s| s.trim().is_empty())
-                    || approval.submission.as_ref() != Some(&submission)
+                    || !persistence::binds(&submission, &approval)?
                 {
                     return Ok(model::refused(
                         "exact-set-approval",
                         "approval",
-                        "approval needs owner, time and the exact complete submission",
+                        "approval needs owner, time and the exact complete submission or submission digest",
                         Some(submission.phase.get()),
                         None,
                         None,
@@ -171,9 +174,12 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                     json!({"phase":phase,"persisted":true}),
                 ));
             }
+            let rendered = persistence::rendered(&submission)?;
             Ok(model::ok(
                 "context-submit",
-                json!({"phase":submission.phase,"persisted":false,"validation":"draft"}),
+                json!({"phase":submission.phase,"persisted":false,"validation":"draft",
+                    "submission_digest":persistence::submission_digest(&submission)?,
+                    "revision":cadence::store::model::digest(rendered.as_bytes())}),
             ))
         }
     }
