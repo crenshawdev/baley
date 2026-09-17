@@ -238,6 +238,58 @@ fn roadmap(root: &Path, phase: u32) -> Result<Resolved, Value> {
 
 pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Value> {
     match identity {
+        DocumentIdentity::VerificationAttempt { phase, attempt } => {
+            let data = snapshot(root)?;
+            let unavailable = |error: cadence::store::Error| refusal("identity", "document-unavailable", error.to_string());
+            let saved = cadence::verification::persistence::attempts(&data).map_err(&unavailable)?
+                .into_iter().find(|a| a.id == *attempt && a.inputs.basis.phase == phase.get())
+                .ok_or_else(|| refusal("identity", "document-not-found", "retained verification attempt absent"))?;
+            let part = |selector: &str, value: Value| Part { selector: selector.into(), title: selector.into(), body: value.to_string() };
+            let mut parts = vec![
+                part("basis", json!(saved.inputs.basis)),
+                part("truths", saved.inputs.map["truths"].clone()),
+                part("publications", json!(saved.inputs.basis.publications)),
+                part("admissions", json!(saved.inputs.admissions.iter().map(|a| json!({"request_id":a.request.request_id,
+                    "request_digest":a.request_digest,"set_version":a.set_version})).collect::<Vec<_>>())),
+            ];
+            let mut execution = cadence::verification::dispatch::execution_view(&saved.inputs).map_err(&unavailable)?;
+            for plan in execution["plans"].as_array_mut().into_iter().flatten() {
+                for run in plan["suite_runs"].as_array_mut().into_iter().flatten() {
+                    run["identity"] = json!({"kind":"run-output","phase":phase,"run":run["run_id"]});
+                }
+                for task in plan["tasks"].as_array_mut().into_iter().flatten() {
+                    for run in task["runs"].as_array_mut().into_iter().flatten() {
+                        run["identity"] = json!({"kind":"run-output","phase":phase,"run":run["run_id"]});
+                    }
+                }
+            }
+            for check in &saved.inputs.checks {
+                let id = check["id"].as_str().unwrap_or_default();
+                let mut body = check.clone();
+                body["evidence"] = execution["items"][id].clone();
+                for key in ["owner_statements", "classifications"] {
+                    body["evidence"][key] = json!(execution["plans"].as_array().into_iter().flatten()
+                        .flat_map(|p| p["tasks"].as_array().into_iter().flatten())
+                        .flat_map(|t| t[key].as_array().into_iter().flatten())
+                        .filter(|r| r["statement"]["submission"]["check"]["id"] == id).collect::<Vec<_>>());
+                }
+                parts.push(part(&format!("check:{id}"), body));
+            }
+            for plan in execution["plans"].as_array().into_iter().flatten() {
+                parts.push(part(&format!("plan:{}", plan["plan"]["plan"]), plan.clone()));
+            }
+            let mut report = cadence::verification::status::report(root, &data, phase.get()).map_err(&unavailable)?;
+            report["history"].as_array_mut().into_iter().for_each(|rows| rows.retain(|r| r["attempt"] == *attempt));
+            parts.push(Part { selector: "report".into(), title: "report".into(), body: cadence::verification::render::text(&report) });
+            // Full caller observations remain available at this identity even
+            // when verification-read truncates their current row previews.
+            let claims = cadence::verification::verdicts::claims(&data).map_err(&unavailable)?;
+            for claim in claims.iter().filter(|c| c.patch.attempt == *attempt) {
+                parts.push(part(&format!("claim:{}", claim.patch.request_id), json!({"patch":claim.patch,"answer":claim.answer})));
+            }
+            let revision = cadence::store::model::digest(parts.iter().flat_map(|p| p.body.bytes()).collect::<Vec<_>>().as_slice());
+            Ok(Resolved { identity: identity.clone(), classification: "verification-attempt", revision, parts: bounded_parts(parts) })
+        }
         DocumentIdentity::RunOutput { phase, run } => {
             let data = snapshot(root)?;
             let view = cadence::execution::history::run_view(&data, phase.get(), run)?;

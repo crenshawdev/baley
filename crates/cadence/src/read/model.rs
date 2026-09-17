@@ -64,6 +64,7 @@ pub struct DocumentRequest {
 pub enum DocumentIdentity {
     Dispatch { id: String },
     RunOutput { phase: NonZeroU32, run: String },
+    VerificationAttempt { phase: NonZeroU32, attempt: String },
     PlanDraft { phase: NonZeroU32, plan: NonZeroU32, digest: String },
     ContextDraft { phase: NonZeroU32, digest: String },
     PhaseContext { phase: NonZeroU32 },

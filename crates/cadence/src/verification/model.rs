@@ -60,6 +60,33 @@ pub struct Patch {
     pub items: Vec<ItemVerdict>,
 }
 
+/// Fresh requests name retained authority instead of carrying its basis.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CompactPatch {
+    pub request_id: String,
+    pub attempt: String,
+    pub items: Vec<ItemVerdict>,
+}
+
+/// This wire arm only recognizes exact historical requests. Keeping its
+/// supplied basis as JSON also locates malformed fresh bases at patch.basis.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyPatch {
+    pub request_id: String,
+    pub attempt: String,
+    pub basis: serde_json::Value,
+    pub items: Vec<ItemVerdict>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum SubmitPatch {
+    Compact(CompactPatch),
+    Legacy(LegacyPatch),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Run {
@@ -117,7 +144,7 @@ pub enum Apply {
     #[serde(rename = "verification-run")]
     Run { request: Box<Run> },
     #[serde(rename = "verification-submit")]
-    Submit { patch: Box<Patch> },
+    Submit { patch: Box<SubmitPatch> },
     #[serde(rename = "truth-waive")]
     Waive { request_id: String, submission: Box<Waiver>, approval: Box<OwnerApproval<Waiver>> },
     #[serde(rename = "verification-human-result")]

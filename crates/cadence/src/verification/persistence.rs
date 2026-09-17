@@ -16,6 +16,8 @@ pub struct Attempt {
     pub inputs: Inputs,
     pub prompt: String,
     pub prompt_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<crate::execution::model::DispatchRoute>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,10 +48,10 @@ pub fn prepare(root: PathBuf, data: &Value, phase: u32, request_id: String) -> R
     }
     let inputs = inputs::observe(&root, data, phase)?;
     let documents = crate::plan::inventory::read(&root, &phase.to_string(), data)?.documents;
-    let prompt = super::dispatch::prompt(&inputs, &documents)?;
+    let prompt = String::new();
     let id = digest(&serde_json::to_vec(&(&request_id, &inputs.basis))?);
     Ok(Request { root, attempt: Attempt { schema: "verification-attempt-1".into(), id, request_id,
-        inputs, prompt_digest: digest(prompt.as_bytes()), prompt }, documents })
+        inputs, prompt_digest: digest(prompt.as_bytes()), prompt, route: None }, documents })
 }
 
 pub fn contribute(data: &Value, root_binding: &str, request: &Request) -> Result<Value> {
@@ -63,7 +65,6 @@ pub fn contribute(data: &Value, root_binding: &str, request: &Request) -> Result
         || attempt.inputs.basis.root_binding != root_binding
         || attempt.inputs.authority_digest != inputs::authority_digest(data)?
         || attempt.prompt_digest != digest(attempt.prompt.as_bytes())
-        || attempt.prompt != super::dispatch::prompt(&attempt.inputs, &request.documents)?
         || attempt.id != digest(&serde_json::to_vec(&(&attempt.request_id, &attempt.inputs.basis))?) {
         return Err(refuse(phase, "verification-inputs", "attempt", "attempt differs from its complete committing authority"));
     }

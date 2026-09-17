@@ -20,8 +20,26 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let session = factory.first_touch(root).await?;
             session.config()?;
             let view = session.derivation_view().await?;
+            use cadence::verification::model::{Patch, SubmitPatch};
+            let patch = match *patch {
+                SubmitPatch::Legacy(legacy) => {
+                    if let Ok(patch) = serde_json::from_value::<Patch>(json!(legacy))
+                        && let Some(prior) = verdicts::claims(&view.snapshot.data)?.iter().find(|c| c.patch == patch) {
+                        return Ok(prior.answer.clone());
+                    }
+                    return Ok(cadence::envelope::Refusal::new("typed-content", "verification-submit resolves basis from the retained attempt")
+                        .rule("typed-content").slot("patch.basis").value());
+                }
+                SubmitPatch::Compact(compact) => {
+                    let Some(attempt) = persistence::attempts(&view.snapshot.data)?.into_iter().find(|a| a.id == compact.attempt) else {
+                        return Ok(cadence::envelope::Refusal::new("verification-attempt", "retained attempt absent")
+                            .rule("verification-attempt").slot("patch.attempt").value());
+                    };
+                    Patch { request_id: compact.request_id, attempt: compact.attempt, items: compact.items, basis: attempt.inputs.basis }
+                }
+            };
             if let Some(answer) = verdicts::replay(&view.snapshot.data, &patch)? { return Ok(answer); }
-            let claim = verdicts::prepare(root, &view.snapshot.data, *patch)?;
+            let claim = verdicts::prepare(root, &view.snapshot.data, patch)?;
             let transaction = verdicts::transaction(&view.snapshot.data, &claim)?;
             let written = session.review_store().request(Operation::CompareTransact {
                 expected_generation: view.snapshot.generation, expected_integrity: view.snapshot.integrity, transaction,
@@ -97,7 +115,6 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
         cadence::plan::persistence::read_snapshot(root)?
     };
     let data = snapshot.as_ref().map(|s| s.data.clone()).unwrap_or_else(|| json!({}));
-    let repaired = snapshot.as_ref().map(|s| s.repaired.clone()).unwrap_or_default();
     match query {
         Query::Audit { phase, command } => audit::report(root, &data, phase, command.as_deref()),
         Query::Read { phase, attempt } => {
@@ -129,7 +146,7 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
             }
             if let Some(id) = &request_id
                 && let Some(saved) = persistence::replay(&data, phase, id)? {
-                return Ok(json!({"status":"ok","attempt":saved}));
+                return next_answer(factory, root, &saved).await;
             }
             let request_id = match request_id {
                 Some(id) => id,
@@ -139,11 +156,17 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 }
             };
             if let Some(saved) = persistence::replay(&data, phase, &request_id)? {
-                return Ok(json!({"status":"ok","attempt":saved}));
+                return next_answer(factory, root, &saved).await;
             }
-            let request = persistence::prepare(root.into(), &data, phase, request_id)?;
+            let mut request = persistence::prepare(root.into(), &data, phase, request_id)?;
             let session = factory.first_touch(root).await?;
-            session.config()?;
+            let config = session.config()?;
+            request.attempt.route = Some(cadence::execution::model::DispatchRoute {
+                choice: super::config_service::route_at(&config, &super::config_service::RouteRequest {
+                    role: "cad-verifier".into(), phase: std::num::NonZeroU32::new(phase), plan: None, attempt: None,
+                }, root)?.choice,
+                inputs: super::config_service::routing_inputs(&config),
+            });
             let view = session.derivation_view().await?;
             let written = session.review_store().request(Operation::VerificationV1 {
                 expected_generation: view.snapshot.generation, expected_integrity: view.snapshot.integrity,
@@ -152,9 +175,31 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let saved = persistence::replay(&written.snapshot.data, phase, &request.attempt.request_id)?
                 .ok_or_else(|| Error::Invalid("confirmed verification attempt absent".into()))?;
             inputs::reobserve_external(root, &written.snapshot.data, &saved.inputs, &request.documents)?;
-            let mut answer = json!({"status":"ok","attempt":saved});
-            if !repaired.is_empty() { answer["repaired"] = json!(repaired); }
-            Ok(answer)
+            next_answer(factory, root, &saved).await
         }
     }
+}
+
+async fn next_answer<I: crate::config::reload::ConfigIo + Clone + Sync>(
+    factory: &crate::import::SessionFactory<I>, root: &Path, saved: &persistence::Attempt,
+) -> Result<Value> {
+    let phase = saved.inputs.basis.phase;
+    let route = match &saved.route {
+        Some(route) => route.clone(),
+        None => {
+            let session = factory.first_touch(root).await?;
+            let config = session.config()?;
+            cadence::execution::model::DispatchRoute {
+                choice: super::config_service::route_at(&config, &super::config_service::RouteRequest {
+                    role: "cad-verifier".into(), phase: std::num::NonZeroU32::new(phase), plan: None, attempt: None,
+                }, root)?.choice,
+                inputs: super::config_service::routing_inputs(&config),
+            }
+        }
+    };
+    Ok(json!({"status":"ok","attempt":{"schema":saved.schema,"id":saved.id,"request_id":saved.request_id},
+        "identities":{"attempt":{"kind":"verification-attempt","phase":phase,"attempt":saved.id},
+            "context":{"kind":"phase-context","phase":phase},
+            "plans":saved.inputs.basis.publications.iter().map(|p| json!({"kind":"phase-plan","phase":phase,"plan":p.plan})).collect::<Vec<_>>()},
+        "route":route}))
 }
