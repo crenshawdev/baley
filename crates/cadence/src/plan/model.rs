@@ -20,6 +20,28 @@ pub struct Execution {
     pub tasks: Vec<TaskSpec>,
 }
 
+impl Execution {
+    pub fn is_empty(&self) -> bool {
+        self.schema == 0 && self.suite.is_empty() && self.tasks.is_empty()
+    }
+}
+
+impl Default for Execution {
+    fn default() -> Self {
+        Self { schema: 0, suite: String::new(), tasks: Vec::new() }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Task {
+    pub id: String,
+    pub title: String,
+    pub files: Vec<String>,
+    pub action: String,
+    pub verify: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Content {
@@ -29,12 +51,63 @@ pub struct Content {
     pub files: Vec<String>,
     #[serde(default)]
     pub directories: Vec<String>,
+    /// Filled only in retained publications. The authoring schema exposes the
+    /// typed `suite` and `tasks` fields below.
+    #[serde(default, skip_serializing_if = "Execution::is_empty")]
+    #[schemars(skip)]
     pub execution: Execution,
-    /// UTF-8 Markdown, including its original line endings and final newline.
+    /// Filled only in retained publications. A body on the wire is refused.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[schemars(skip)]
     pub body: String,
     /// Absence is retained only for historical phase-27 publications.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_map: Option<super::evidence::Map>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[schemars(required)]
+    pub goal: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[schemars(required)]
+    pub context: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[schemars(required)]
+    pub notes: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(required)]
+    pub tasks: Vec<Task>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[schemars(required)]
+    pub suite: String,
+}
+
+impl Content {
+    pub fn derived_execution(&self) -> Execution {
+        if !self.execution.is_empty() {
+            return self.execution.clone();
+        }
+        Execution {
+            schema: 1,
+            suite: self.suite.clone(),
+            tasks: self.tasks.iter().map(|task| TaskSpec {
+                id: task.id.clone(),
+                verify: task.verify.clone(),
+            }).collect(),
+        }
+    }
+
+    pub fn authored_eq(&self, other: &Self) -> bool {
+        let mut left = self.clone();
+        let mut right = other.clone();
+        if left.execution.is_empty() || right.execution.is_empty() {
+            left.execution = Execution::default();
+            right.execution = Execution::default();
+        }
+        if left.body.is_empty() || right.body.is_empty() {
+            left.body.clear();
+            right.body.clear();
+        }
+        left == right
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -198,6 +271,19 @@ pub fn refused(rule: &str, reason: impl Into<String>) -> Answer {
         slot: "submission".into(),
         phase: None,
         entry: None,
+        id: None,
+        details: None,
+    }
+}
+
+pub fn typed_refused(slot: impl Into<String>, phase: Option<u32>, entry: Option<usize>, reason: impl Into<String>) -> Answer {
+    Answer::Refused {
+        code: "typed-content".into(),
+        reason: reason.into(),
+        rule: "typed-content".into(),
+        slot: slot.into(),
+        phase,
+        entry,
         id: None,
         details: None,
     }

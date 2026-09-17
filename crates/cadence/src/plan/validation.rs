@@ -84,6 +84,41 @@ pub fn admitted(data: &serde_json::Value, phase: u32, plan: u32) -> cadence::sto
 }
 
 pub fn arguments(raw: &serde_json::Value) -> Option<Answer> {
+    let phase = raw["submission"]["phase"].as_u64().and_then(|value| u32::try_from(value).ok());
+    if let Some(plans) = raw["submission"]["plans"].as_array() {
+        for (entry, plan) in plans.iter().enumerate() {
+            let content = &plan["content"];
+            if content.get("body").is_some() {
+                return Some(super::model::typed_refused(
+                    format!("submission.plans[{entry}].content.body"), phase, Some(entry),
+                    "plan authoring accepts typed pieces and the binary renders the body",
+                ));
+            }
+            if content.get("execution").is_some() {
+                return Some(super::model::typed_refused(
+                    format!("submission.plans[{entry}].content.execution"), phase, Some(entry),
+                    "execution is derived from suite and typed task verify commands",
+                ));
+            }
+            let files = content["files"].as_array().into_iter().flatten()
+                .filter_map(serde_json::Value::as_str).collect::<std::collections::BTreeSet<_>>();
+            if let Some(tasks) = content["tasks"].as_array() {
+                for (task, value) in tasks.iter().enumerate() {
+                    if let Some(task_files) = value["files"].as_array() {
+                        for (file, path) in task_files.iter().enumerate() {
+                            if path.as_str().is_some_and(|path| !files.contains(path)) {
+                                return Some(super::model::typed_refused(
+                                    format!("submission.plans[{entry}].content.tasks[{task}].files[{file}]"),
+                                    phase, Some(entry),
+                                    "every task path must be declared in content.files",
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     // Inspect only destination-bearing contract positions, never authored body
     // text or the plan's source lease. These are forbidden fields, not an API.
     let mut objects = vec![raw, &raw["submission"]];

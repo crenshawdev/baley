@@ -147,7 +147,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 Ok(value) => value,
                 Err(error) => return Ok(model::refused("submission", error.to_string())),
             };
-            let approval = match approval.map(|a| persistence::bound(&submission, a)).transpose() {
+            let approval = match approval.map(|a| persistence::bound(&data, &submission, a)).transpose() {
                 Ok(value) => value,
                 Err(error) => return path_error(error),
             };
@@ -174,10 +174,14 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 return path_error(error);
             }
             let Some(approval) = approval.filter(|a| a.approved) else {
+                if let Err(error) = persistence::validate_candidate(&data, &submission, &inventory) {
+                    return path_error(error);
+                }
                 return Ok(model::ok(
                     "plan-submit",
-                    json!({"persisted":false,"validation":"draft","submission":submission,
-                        "submission_digest":persistence::submission_digest(&submission)?}),
+                    json!({"persisted":false,"validation":"draft",
+                        "submission_digest":persistence::submission_digest(&submission)?,
+                        "documents":documents(&data, &submission)?}),
                 ));
             };
             if approval.owner.as_ref().is_none_or(|s| s.trim().is_empty())
@@ -317,35 +321,29 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
     }
 }
 
-fn complete_preview(root: &Path, data: &Value, mut submission: model::Submission) -> Result<Answer> {
-    use cadence::plan::{render, validation};
+fn documents(data: &Value, submission: &model::Submission) -> Result<Vec<Value>> {
+    submission.plans.iter().map(|entry| {
+        let bytes = persistence::rendered_document(data, &entry.content)?;
+        Ok(json!({"identity":entry.target,"revision":cadence::store::model::digest(&bytes)}))
+    }).collect()
+}
+
+fn complete_preview(root: &Path, data: &Value, submission: model::Submission) -> Result<Answer> {
+    use cadence::plan::validation;
     let inventory = inventory::read(root, &submission.phase.to_string(), data)?;
-    let saved = persistence::saved(data, submission.phase.get())?;
-    let mut documents = Vec::new();
-    for entry in &mut submission.plans {
+    for entry in &submission.plans {
         cadence::store::filesystem::validate_plan_path(root, entry.target.phase.get(), entry.target.plan.get())?;
         if let Some(replacement) = &entry.replacement
             && replacement.content != entry.content
         {
             return Ok(model::refused("replacement-authorization", "replacement must name the same proposed content"));
         }
-        entry.content.body = render::normalize(&entry.content)?;
-        if let Some(replacement) = &mut entry.replacement { replacement.content = entry.content.clone(); }
-        let bytes = render::document(&entry.content)?;
-        let old = saved.as_ref().and_then(|s| s.publications.get(&entry.target.plan.get()));
-        let old_section = old.map(|p| render::old_section(&p.content.body)).transpose()?.flatten();
-        let section = match &entry.content.evidence_map {
-            Some(map @ cadence::plan::evidence::Map::Attached { .. }) => Some(render::section(map)?),
-            _ => None,
-        };
-        documents.push(json!({"identity":entry.target,"revision":cadence::store::model::digest(&bytes),
-            "document":String::from_utf8(bytes).expect("UTF-8 document"),"old_section":old_section,"section":section}));
     }
     validation::replacement_preview(data, &submission, &inventory)?;
     persistence::validate_candidate(data, &submission, &inventory)?;
     let coverage = cadence::plan::associations::validate(data, &submission)?;
-    Ok(model::ok("plan-read", json!({"persisted":false,"submission":submission,
-        "submission_digest":persistence::submission_digest(&submission)?,"documents":documents,
+    Ok(model::ok("plan-read", json!({"persisted":false,
+        "submission_digest":persistence::submission_digest(&submission)?,"documents":documents(data, &submission)?,
         "readiness":"provisional-authoring","coverage":coverage})))
 }
 

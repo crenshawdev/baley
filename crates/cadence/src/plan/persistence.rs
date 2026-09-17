@@ -65,20 +65,65 @@ pub fn submission_digest(submission: &Submission) -> Result<String> {
     Ok(digest(&serde_json::to_vec(submission)?))
 }
 
+fn authored(mut submission: Submission) -> Submission {
+    for entry in &mut submission.plans {
+        entry.content.execution = Execution::default();
+        entry.content.body.clear();
+        if let Some(replacement) = &mut entry.replacement {
+            replacement.content.execution = Execution::default();
+            replacement.content.body.clear();
+        }
+    }
+    submission
+}
+
+fn same_authored(left: &Submission, right: &Submission) -> bool {
+    authored(left.clone()) == authored(right.clone())
+}
+
+pub fn required_truths(data: &Value, content: &Content) -> Result<Vec<(String, String)>> {
+    let context = cadence::context::persistence::saved(data, content.phase.get())?
+        .ok_or_else(|| Error::Invalid("native-approved-truths: typed plan content needs approved truths".into()))?;
+    content.requirements.iter().map(|id| {
+        let truth = context.truths.iter().find(|truth| &truth.id == id)
+            .ok_or_else(|| Error::Invalid(format!("native-approved-truths: requirement {id} is absent")))?;
+        Ok((truth.id.clone(), truth.text.clone()))
+    }).collect()
+}
+
+pub fn rendered_content(data: &Value, content: &Content) -> Result<Content> {
+    if !content.execution.is_empty() || !content.body.is_empty() {
+        render::document(content)?;
+        return Ok(content.clone());
+    }
+    render::bound(content, &required_truths(data, content)?)
+}
+
+pub fn rendered_document(data: &Value, content: &Content) -> Result<Vec<u8>> {
+    render::document(&rendered_content(data, content)?)
+}
+
 /// True when the approval binds this exact submission, by copy or by digest.
 pub fn binds(submission: &Submission, approval: &Approval) -> Result<bool> {
-    Ok(approval.submission.as_ref() == Some(submission)
+    Ok(approval.submission.as_ref().is_some_and(|approved| same_authored(submission, approved))
         || approval.submission_digest.as_deref() == Some(submission_digest(submission)?.as_str()))
 }
 
 /// The approval as it is recorded: the copy filled and the wire digest
 /// dropped, so a digest-bound approval and a copy-bound one publish, replay
 /// and read back identically.
-pub fn bound(submission: &Submission, approval: Approval) -> Result<Approval> {
+pub fn bound(data: &Value, submission: &Submission, approval: Approval) -> Result<Approval> {
     if !binds(submission, &approval)? {
         return Ok(approval);
     }
-    Ok(Approval { submission: Some(submission.clone()), submission_digest: None, ..approval })
+    let mut retained = submission.clone();
+    for entry in &mut retained.plans {
+        entry.content = rendered_content(data, &entry.content)?;
+        if let Some(replacement) = &mut entry.replacement {
+            replacement.content = entry.content.clone();
+        }
+    }
+    Ok(Approval { submission: Some(retained), submission_digest: None, ..approval })
 }
 
 pub fn approve(submission: &Submission, approval: &Approval) -> Result<()> {
@@ -103,7 +148,10 @@ pub fn approve(submission: &Submission, approval: &Approval) -> Result<()> {
 }
 
 pub fn payload_digest(submission: &Submission, approval: &Approval) -> Result<String> {
-    Ok(digest(&serde_json::to_vec(&(submission, approval))?))
+    let canonical = approval.submission.as_ref()
+        .filter(|approved| same_authored(submission, approved))
+        .unwrap_or(submission);
+    Ok(digest(&serde_json::to_vec(&(canonical, approval))?))
 }
 
 /// The durable request receipt precedes inventory, allocation and replacement
@@ -166,7 +214,10 @@ pub fn contribute(
                 entry.target
             )));
         }
-        let bytes = render::document(&entry.content)?;
+        let retained = approval.submission.as_ref()
+            .and_then(|approved| approved.plans.iter().find(|candidate| candidate.target == entry.target))
+            .ok_or_else(|| Error::Invalid("exact-submission-approval: retained plan content is absent"))?;
+        let bytes = render::document(&retained.content)?;
         cadence::execution::plan::parse_plan(&bytes, phase, number)
             .map_err(|error| Error::Invalid(error.to_string()))?;
         let revision = digest(&bytes);
@@ -176,7 +227,7 @@ pub fn contribute(
             identity: entry.target.clone(),
             occurrence: occurrence.id.clone(),
             revision: revision.clone(),
-            content: entry.content.clone(),
+            content: retained.content.clone(),
             approval: approval.clone(),
             readiness: Readiness::ProvisionalAuthoring,
             history,
@@ -252,7 +303,7 @@ pub fn validate_candidate(previous: &Value, submission: &Submission, inventory: 
         if entry.target.plan.get() != number {
             return Err(Error::Conflict(format!("allocation target changed: expected phase {phase} plan {number}")));
         }
-        render::document(&entry.content)?;
+        rendered_document(previous, &entry.content)?;
     }
     Ok(())
 }

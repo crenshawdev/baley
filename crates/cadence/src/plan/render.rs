@@ -1,5 +1,5 @@
-//! Only strict frontmatter is rendered; the authored body is appended unchanged.
-use super::model::Content;
+//! Canonical plan documents are rendered from typed authoring pieces.
+use super::model::{Content, Execution, Task};
 use cadence::store::{Error, Result};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -9,7 +9,7 @@ pub struct Part {
     pub body: String,
 }
 
-pub fn document(content: &Content) -> Result<Vec<u8>> {
+fn finish_document(content: &Content, execution: &Execution, body: &str) -> Result<Vec<u8>> {
     if normalize(content)? != content.body {
         return Err(Error::Invalid("evidence-map-section: approve the complete previewed document before publication".into()));
     }
@@ -20,16 +20,82 @@ pub fn document(content: &Content) -> Result<Vec<u8>> {
         ("requirements", serde_json::to_value(&content.requirements)?),
         ("files", serde_json::to_value(&content.files)?),
         ("directories", serde_json::to_value(&content.directories)?),
-        ("execution", serde_json::to_value(&content.execution)?),
+        ("execution", serde_json::to_value(execution)?),
     ] {
         text.push_str(&format!("{key}: {}\n", serde_json::to_string(&value)?));
     }
     text.push_str("---\n");
-    text.push_str(&content.body);
+    text.push_str(body);
     let bytes = text.into_bytes();
     cadence::execution::plan::parse_plan(&bytes, content.phase.get(), content.plan.get())
         .map_err(|error| Error::Invalid(error.to_string()))?;
     Ok(bytes)
+}
+
+pub fn document(content: &Content) -> Result<Vec<u8>> {
+    if content.execution.is_empty() || content.body.is_empty() {
+        return Err(Error::Invalid("typed plan content has not been bound to its rendered document".into()));
+    }
+    finish_document(content, &content.execution, &content.body)
+}
+
+fn push_slot(text: &mut String, value: &str) {
+    text.push_str(value);
+    if !value.ends_with('\n') { text.push('\n'); }
+    text.push('\n');
+}
+
+fn task_section(number: usize, task: &Task) -> String {
+    let mut text = format!(
+        "### Task {number}: {}\n\n- **ID:** {}\n- **Files:** {}\n- **Action:** {}\n- **Verify:**\n",
+        task.title,
+        task.id,
+        task.files.join(", "),
+        task.action,
+    );
+    for command in &task.verify {
+        text.push_str(&format!("  - {command}\n"));
+    }
+    text.push('\n');
+    text
+}
+
+pub fn body(content: &Content, truths: &[(String, String)]) -> Result<String> {
+    let mut text = String::from("## Goal\n\n");
+    push_slot(&mut text, &content.goal);
+    text.push_str("## Must be true when done\n\n");
+    for (id, sentence) in truths {
+        text.push_str(&format!("- {id}. {sentence}\n"));
+    }
+    text.push_str("\n## Context\n\n");
+    push_slot(&mut text, &content.context);
+    if let Some(map) = &content.evidence_map {
+        text.push_str(&section(map)?);
+    }
+    text.push_str("## Tasks\n\n");
+    for (index, task) in content.tasks.iter().enumerate() {
+        text.push_str(&task_section(index + 1, task));
+    }
+    text.push_str("## Notes\n\n");
+    text.push_str(&content.notes);
+    if !text.ends_with('\n') { text.push('\n'); }
+    Ok(text)
+}
+
+pub fn bound(content: &Content, truths: &[(String, String)]) -> Result<Content> {
+    if !content.execution.is_empty() || !content.body.is_empty() {
+        document(content)?;
+        return Ok(content.clone());
+    }
+    let mut retained = content.clone();
+    retained.execution = content.derived_execution();
+    retained.body = body(content, truths)?;
+    document(&retained)?;
+    Ok(retained)
+}
+
+pub fn draft_document(content: &Content, truths: &[(String, String)]) -> Result<Vec<u8>> {
+    document(&bound(content, truths)?)
 }
 
 /// Level-two headings outside fenced and indented code, with byte offsets.
@@ -112,6 +178,13 @@ fn task_headings(body: &str) -> Vec<(usize, String)> {
 
 /// Fence-aware task spans aligned to the plan's retained execution task ids.
 pub fn task_parts(content: &Content) -> Result<Vec<Part>> {
+    if !content.tasks.is_empty() {
+        return Ok(content.tasks.iter().enumerate().map(|(index, task)| Part {
+            selector: format!("task:{}", task.id),
+            title: task.title.clone(),
+            body: task_section(index + 1, task),
+        }).collect());
+    }
     let headings = task_headings(&content.body);
     if headings.len() != content.execution.tasks.len() {
         return Err(Error::Invalid(format!(
