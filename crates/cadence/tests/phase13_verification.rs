@@ -1021,8 +1021,17 @@ fn deliver(project: &std::path::Path, admission: &Value) -> (Value, Value, Vec<(
         if saved["availability"] != "available" { entries.push((saved.clone(), vec![])); continue; }
         let read = client.call("cadence_query", json!({"operation":"review-material","attempt":attempt["attempt"],"entry":entry}));
         assert_eq!(read["status"], "ok", "{read}");
-        let bytes: Vec<u8> = serde_json::from_value(read["result"]["bytes"].clone()).unwrap();
-        assert_eq!(read["result"]["entry"], *saved);
+        assert!(read["result"].get("bytes").is_none());
+        let mut metadata = saved.clone();
+        metadata.as_object_mut().unwrap().remove("lines");
+        assert_eq!(read["result"]["entry"], metadata);
+        let identity = &read["result"]["identity"];
+        let index = client.call("cadence_query", json!({"operation":"document","identity":identity}));
+        let mut bytes = Vec::new();
+        for part in index["parts"].as_array().unwrap().iter().filter(|p| p["part"].as_str().unwrap().starts_with("text:")) {
+            let slice = client.call("cadence_query", json!({"operation":"document","identity":identity,"part":part["part"]}));
+            bytes.extend_from_slice(slice["body"].as_str().unwrap().as_bytes());
+        }
         entries.push((saved.clone(), bytes));
     }
     client.finish();

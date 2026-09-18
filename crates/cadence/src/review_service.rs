@@ -1078,7 +1078,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(
                 {
                     return Err(Error::Conflict("appended acquisition is immutable".into()));
                 }
-                return output("review-material-append", entry);
+                return output("review-material-append", material::entry_metadata(&entry)?);
             }
             let entry = material::append_material(
                 &saved,
@@ -1594,7 +1594,7 @@ fn historical_input(root: &Path, path: &str) -> Answer {
         }
     }
     let origin = review::history::read_pause_origin(&mut RetainedBytes(raw.clone()), path)?;
-    output("review-original", json!({"origin":origin,"raw_bytes":raw}))
+    output("review-original", json!({"origin":origin,"content":cadence::store::model::digest(&raw)}))
 }
 
 #[cfg(test)]

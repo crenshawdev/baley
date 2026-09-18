@@ -130,15 +130,14 @@ async fn accept_exact_q_ac5() {
         &input,
         Some(include_bytes!("fixtures/phase9/original-q.json")),
     );
-    assert_eq!(
-        returns::accept_return(&store, submitted, &mut FixedClock)
-            .await
-            .unwrap()
-            .originals
-            .unwrap()[0]
-            .claim,
-        "quote: \"\n雪"
-    );
+    let receipt = returns::accept_return(&store, submitted, &mut FixedClock).await.unwrap();
+    let original = cadence::review::originals::read_original(&store, "o1").await.unwrap();
+    assert_eq!(original.raw_bytes, include_bytes!("fixtures/phase9/original-q.json"));
+    assert_eq!(original.findings.unwrap()[0].claim, "quote: \"\n雪");
+    let projected = serde_json::to_value(receipt).unwrap();
+    assert_eq!(projected["findings"], json!({"digest":cadence::store::model::digest(
+        include_bytes!("fixtures/phase9/original-q.json")),"count":2}));
+    assert!(projected.get("original").is_none() && projected.get("originals").is_none());
 }
 #[tokio::test]
 async fn accept_sync_failure_ac45() {
@@ -166,8 +165,8 @@ async fn accept_replay_ac46() {
         .await
         .unwrap();
     assert_eq!(
-        json!({"attempt":result.attempt,"original":result.original,"terminal":result.terminal,"replayed":result.replayed}),
-        json!({"attempt":"a1","original":"o1","terminal":"accepted","replayed":true})
+        json!({"attempt":result.attempt,"findings":result.findings,"terminal":result.terminal,"replayed":result.replayed}),
+        json!({"attempt":"a1","findings":{"digest":input["original"]["content"],"count":1},"terminal":"accepted","replayed":true})
     );
 }
 #[tokio::test]
@@ -213,8 +212,8 @@ async fn accept_missing_return_closes_failed() {
         .await
         .unwrap();
     assert_eq!(
-        json!({"terminal":result.terminal,"original":result.original,"findings":result.originals,"terminal_count":result.durable_terminal_count}),
-        json!({"terminal":"failed","original":null,"findings":null,"terminal_count":1})
+        json!({"terminal":result.terminal,"findings":result.findings,"terminal_count":result.durable_terminal_count}),
+        json!({"terminal":"failed","findings":null,"terminal_count":1})
     );
 }
 #[tokio::test]

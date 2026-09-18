@@ -138,7 +138,8 @@ async fn phase10_empty_provider_result_is_usable() {
         assert_eq!(attempt["observed_host"], "openai");
         assert_eq!(attempt["failure"], Value::Null);
         let original = result(query_saved(&store, &root, Query::Original { original: attempt["original"].as_str().unwrap().into() }).await.unwrap());
-        assert_eq!(original["raw_bytes"], json!(b"{\"findings\":[]}".to_vec()));
+        assert!(original.get("raw_bytes").is_none());
+        assert_eq!(original["record"]["content"], cadence::store::model::digest(b"{\"findings\":[]}"));
         assert_eq!(original["findings"], json!([]));
         let inventory = result(query_saved(&store, &root, Query::Inventory {}).await.unwrap());
         let records = &inventory["records"];
@@ -342,7 +343,8 @@ async fn phase10_provider_records_observed_identity() {
             assert_eq!(attempt["requested"]["model"], "requested-alias");
             assert_eq!(attempt["requested"]["effort"], "high");
             let original = result(query_saved(&store, &root, Query::Original { original: attempt["original"].as_str().unwrap().into() }).await.unwrap());
-            assert_eq!(original["raw_bytes"], json!(findings.as_bytes()));
+            assert!(original.get("raw_bytes").is_none());
+            assert_eq!(original["record"]["content"], cadence::store::model::digest(findings.as_bytes()));
             let inventory = result(query_saved(&store, &root, Query::Inventory {}).await.unwrap());
             let evidence = &inventory["records"]["provider_evidence"][&attempt_id];
             assert_eq!(attempt["provider_evidence"], *evidence);
@@ -486,7 +488,7 @@ async fn local_host(factory: &SessionFactory, root: &Path, dispatch: &Value, out
         _ => None,
     };
     let apply = if outcome == "launch-failure" {
-        Apply::Return { identity, launch: None, host_return: None, raw: None, citations: vec![],
+        Apply::Return { identity, launch: None, host_return: None, raw: None, findings: None, citations: vec![],
             failure_event: Some(event("launch-failure", "launch-failure", None, None)),
             host_failure: Some("external host refused launch".into()) }
     } else {
@@ -504,7 +506,9 @@ async fn local_host(factory: &SessionFactory, root: &Path, dispatch: &Value, out
             })).await.unwrap());
         }
         Apply::Return { identity, launch: Some(launch), host_return: raw.as_ref().map(|_| returned),
-            raw, citations: vec![], failure_event: None, host_failure: None }
+            findings: raw.as_ref().and_then(|raw| serde_json::from_str::<review::model::Findings>(raw).ok()).map(|f| f.findings),
+            raw: None, citations: vec![], failure_event: None,
+            host_failure: (outcome == "malformed").then(|| "malformed-return".into()) }
     };
     let receipt = result(execute(factory, root, Command::Apply(apply.clone())).await.unwrap());
     assert_eq!(receipt["terminal"], if outcome == "success" { "accepted" } else { "failed" }, "{receipt}");
@@ -585,7 +589,7 @@ async fn phase10_fallback_closes_once() {
                         identity: submitted["identity"].clone(),
                         launch: submitted["launch"].as_str().map(str::to_owned),
                         host_return: submitted["host_return"].as_str().map(str::to_owned),
-                        raw: Some(r#"{"findings":[]}"#.into()), host_failure: None,
+                        raw: None, findings: Some(vec![]), host_failure: None,
                         failure_event: None, citations: vec![],
                     })).await.unwrap());
                     assert_eq!(late["code"], "conflicting-return");
@@ -629,7 +633,8 @@ async fn phase10_fallback_closes_once() {
                 })).await.unwrap());
                 assert_eq!(original["findings"], json!([{"file":"subject.rs","line":1,"severity":"medium",
                     "claim":"The fixed answer discards configuration.","failure_scenario":"A caller requiring a configured answer receives 42."}]));
-                assert_eq!(original["raw_bytes"], json!(br#"{"findings":[{"file":"subject.rs","line":1,"severity":"medium","claim":"The fixed answer discards configuration.","failure_scenario":"A caller requiring a configured answer receives 42."}]}"#.to_vec()));
+                assert!(original.get("raw_bytes").is_none());
+                assert_eq!(original["record"]["content"], cadence::store::model::digest(br#"{"findings":[{"file":"subject.rs","line":1,"severity":"medium","claim":"The fixed answer discards configuration.","failure_scenario":"A caller requiring a configured answer receives 42."}]}"#));
                 assert_eq!(records["originals"].as_object().unwrap().len(), 1);
             } else {
                 assert_eq!(fallback["original"], Value::Null);

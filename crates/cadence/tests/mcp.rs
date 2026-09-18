@@ -1322,6 +1322,11 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
     assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 13);
+    for command in ["cad-review", "cad-decision-review", "cad-minimalism-review", "cad-plan-review"] {
+        let text = cadence::review::instructions::frontdoor_markdown(command).unwrap();
+        assert!(text.contains("kind: review-entry") && text.contains("lines:<n>") && text.contains("text:<n>"));
+        assert!(text.contains("Never send\n   raw JSON text") && text.contains("findings digest and count"));
+    }
     for target in cadence::execution::render::RENDERED_PROJECT_FILES {
         let relative = target.path;
         let rendered = Command::new(env!("CARGO_BIN_EXE_cadence"))
