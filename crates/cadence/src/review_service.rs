@@ -64,6 +64,7 @@ pub enum Apply {
         failure_event: Option<Value>,
         host_return: Option<String>,
         raw: Option<String>,
+        findings: Option<Vec<review::model::Finding>>,
         host_failure: Option<String>,
         citations: Vec<Value>,
     },
@@ -123,6 +124,23 @@ pub fn refused(reason: impl Into<String>) -> Envelope<Output> {
         code: "invalid-review-operation".into(),
         reason: reason.into(),
     }
+}
+
+/// Validate the supplied array before serde discards the indexed field path.
+pub fn typed_return_refusal(request: &Value) -> Option<Value> {
+    if request["operation"] != "review-return" { return None; }
+    let findings = request.get("findings")?;
+    let bytes = serde_json::to_vec(&json!({"findings":findings})).ok()?;
+    let error = review::contract::validate_findings(&bytes).err()?;
+    let diagnostic = serde_json::to_value(&error).ok()?;
+    let field = diagnostic["field"].as_str().unwrap_or("findings");
+    let slot = match diagnostic["index"].as_u64() {
+        Some(index) if field != "findings" => format!("findings[{index}].{field}"),
+        Some(index) => format!("findings[{index}]"),
+        None => "findings".into(),
+    };
+    Some(cadence::envelope::Refusal::new("invalid-return", format!("{error:?}"))
+        .rule("H4-1").slot(slot).value())
 }
 fn output(operation: &str, result: impl Serialize) -> Answer {
     Ok(Envelope::Ok(Output {
@@ -945,6 +963,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(
             failure_event,
             host_return,
             raw,
+            findings,
             host_failure,
             citations,
         }) => {
@@ -952,6 +971,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(
                 if launch.is_some()
                     || host_return.is_some()
                     || raw.is_some()
+                    || findings.is_some()
                     || !citations.is_empty()
                 {
                     return Err(Error::Invalid(
@@ -973,10 +993,29 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(
                 };
             }
             let launch = launch.ok_or_else(|| Error::Invalid("unobserved-host-launch".into()))?;
+            if let Some(raw) = &raw {
+                let view = persistence::read(store).await?;
+                let records = persistence::records(&view.snapshot.data)?;
+                let saved = records["attempts"][identity["attempt"].as_str().unwrap_or("")]["original"].as_str()
+                    .and_then(|id| persistence::get::<review::model::Original>(&records, "originals", id).ok());
+                if findings.is_some() || saved.is_none_or(|original| original.raw != raw.as_bytes()) {
+                    return Ok(Envelope::Refused { code: "typed-content".into(),
+                        reason: "review-return requires typed findings; raw is only accepted for an exact retained replay".into() });
+                }
+            }
             let raw = raw
                 .map(|s| review::stream::read_return(s.as_bytes(), 4 * 1024 * 1024))
                 .transpose()
                 .map_err(|e| Error::Invalid(format!("{e:?}")))?;
+            let raw = match findings {
+                Some(findings) => {
+                    let bytes = serde_json::to_vec(&review::model::Findings { findings })?;
+                    review::contract::validate_findings(&bytes)
+                        .map_err(|error| Error::Invalid(format!("{error:?}")))?;
+                    Some(bytes)
+                }
+                None => raw,
+            };
             let submitted = review::returns::ReturnSubmission {
                 identity: serde_json::from_value(identity)?,
                 launch,
@@ -1137,10 +1176,11 @@ async fn query_saved(store: &Store, root: &Path, query: Query) -> Answer {
             }
             output("review-attempt", saved)
         }
-        Query::Original { original } => output(
-            "review-original",
-            review::originals::read_original(store, &original).await?,
-        ),
+        Query::Original { original } => {
+            let mut value = serde_json::to_value(review::originals::read_original(store, &original).await?)?;
+            value["record"].as_object_mut().unwrap().remove("raw");
+            output("review-original", value)
+        }
         Query::Roster { fire } => {
             let view = persistence::read(store).await?;
             let records = persistence::records(&view.snapshot.data)?;

@@ -1177,6 +1177,9 @@ impl ServerHandler for PublicServer {
                             .map(|answer| ApplyOutput::Context(Box::new(answer))),
                     ),
                     ApplyGroup::Review => {
+                        if let Some(refusal) = raw.as_ref().and_then(review_service::typed_return_refusal) {
+                            return structured_result(Ok(ApplyOutput::NativeExecution(refusal)));
+                        }
                         let answer = match serde_json::from_value::<review_service::Apply>(raw.unwrap()) {
                             Ok(review_service::Apply::Admit { request }) if request["caller"] == "pause" => {
                                 pause_service::modern_admission(&self.server.service, &self.root, request).await
@@ -1189,6 +1192,11 @@ impl ServerHandler for PublicServer {
                             }
                             Err(error) => Ok(review_service::refused(refused(error))),
                         };
+                        if let Ok(Envelope::Refused { code, reason }) = &answer
+                            && code == "typed-content" {
+                            return structured_result(Ok(ApplyOutput::NativeExecution(
+                                Refusal::new(code.clone(), reason.clone()).rule("typed-content").slot("raw").value())));
+                        }
                         structured_result(answer.map(|answer| ApplyOutput::Review(Box::new(answer))))
                     }
                     ApplyGroup::Config => {

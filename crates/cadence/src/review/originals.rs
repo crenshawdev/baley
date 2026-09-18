@@ -16,6 +16,7 @@ pub struct OriginalIdentity {
 #[derive(Debug, Serialize)]
 pub struct OriginalRead {
     pub identity: OriginalIdentity,
+    #[serde(skip_serializing)]
     pub raw_bytes: Vec<u8>,
     pub findings: Option<Vec<Finding>>,
     pub record: Original,

@@ -67,12 +67,21 @@ fn conflict(attempt: &str, original: &str) -> ReturnError {
 #[derive(Debug, Serialize)]
 pub struct ReturnReceipt {
     pub attempt: String,
+    #[serde(skip_serializing)]
     pub original: Option<String>,
     pub terminal: AttemptState,
     pub replayed: bool,
+    #[serde(skip_serializing)]
     pub originals: Option<Vec<Finding>>,
+    pub findings: Option<FindingsReceipt>,
     pub durable_terminal_count: usize,
     pub next_selection: Option<NextSelection>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FindingsReceipt {
+    pub digest: String,
+    pub count: usize,
 }
 
 fn next_selection(records: &Value, admission: &Admission) -> StoreResult<Option<NextSelection>> {
@@ -125,6 +134,13 @@ fn receipt(
     replayed: bool,
 ) -> StoreResult<ReturnReceipt> {
     let closure: Closure = persistence::get(records, "closures", &attempt.attempt)?;
+    let findings = closure.original.as_ref().map(|id| {
+        let original: Original = persistence::get(records, "originals", id)?;
+        Ok::<_, cadence::store::Error>(FindingsReceipt {
+            digest: original.content,
+            count: original.parsed.as_ref().map_or(0, |parsed| parsed.findings.len()),
+        })
+    }).transpose()?;
     let originals = match &closure.original {
         Some(id) => {
             let original: Original = persistence::get(records, "originals", id)?;
@@ -138,6 +154,7 @@ fn receipt(
         terminal: closure.terminal,
         replayed,
         originals,
+        findings,
         durable_terminal_count: persistence::terminal_count(records, &attempt.attempt),
         next_selection: next_selection(records, admission)?,
     })

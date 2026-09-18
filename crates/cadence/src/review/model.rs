@@ -331,6 +331,7 @@ pub struct Observation {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(schemars::JsonSchema)]
 pub enum Severity {
     Blocker,
     High,
@@ -339,6 +340,7 @@ pub enum Severity {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct Finding {
     pub file: String,
     pub line: u64,
