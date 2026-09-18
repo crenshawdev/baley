@@ -1498,6 +1498,6 @@ fn phase_five_acceptance_inventory_names_executable_obligations() {
     }
 
     assert!(MCP.contains(
-        "#[test]\nfn tools_list_declares_exactly_cadence_version_with_an_output_schema()"
+        "#[test]\nfn tools_list_declares_exactly_cadence_version_without_an_output_schema()"
     ));
 }

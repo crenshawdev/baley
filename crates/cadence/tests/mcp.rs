@@ -273,7 +273,7 @@ fn initialize_names_the_server_cadence_at_the_crate_version() {
 }
 
 #[test]
-fn tool_schemas_list_exactly_three_tools_with_output_schemas() {
+fn tool_schemas_list_exactly_three_tools_without_output_schemas() {
     // Refused calls below still open a store, so the server runs in a temp
     // project rather than the crate directory.
     let temp = tempfile::tempdir().unwrap();
@@ -294,12 +294,17 @@ fn tool_schemas_list_exactly_three_tools_with_output_schemas() {
         ["cadence_version", "cadence_query", "cadence_apply"]
     );
     for tool in tools {
-        assert!(tool["outputSchema"].is_object());
-        let output = tool["outputSchema"].to_string();
-        for status in ["ok", "refused", "unknown", "not-applicable"] {
-            assert!(output.contains(status));
-        }
+        assert!(
+            tool.get("outputSchema").is_none(),
+            "{} must not declare outputSchema",
+            tool["name"]
+        );
     }
+    let tools_bytes = serde_json::to_vec(tools).unwrap().len();
+    assert!(
+        tools_bytes < 65_000,
+        "tools/list result.tools is {tools_bytes} bytes; measured 60,649 bytes without output schemas"
+    );
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
     let query = &tools[1]["inputSchema"];
     assert!(query.to_string().contains("execute-next"));
@@ -339,7 +344,7 @@ fn tool_schemas_list_exactly_three_tools_with_output_schemas() {
 }
 
 #[test]
-fn tool_schemas_all_inputs_and_outputs_have_object_roots() {
+fn tool_schemas_all_inputs_have_object_roots() {
     let mut client = Client::spawn();
     client.handshake();
     let response = client.tools_list(2);
@@ -352,17 +357,15 @@ fn tool_schemas_all_inputs_and_outputs_have_object_roots() {
         "no advertised tools; response: {response}"
     );
     for tool in tools {
-        for field in ["inputSchema", "outputSchema"] {
-            let schema = tool
-                .get(field)
-                .unwrap_or_else(|| panic!("{} is missing {field}", tool["name"]));
-            assert_eq!(
-                schema.get("type"),
-                Some(&json!("object")),
-                "{}.{field} must have root type object; schema: {schema}",
-                tool["name"]
-            );
-        }
+        let schema = tool
+            .get("inputSchema")
+            .unwrap_or_else(|| panic!("{} is missing inputSchema", tool["name"]));
+        assert_eq!(
+            schema.get("type"),
+            Some(&json!("object")),
+            "{}.inputSchema must have root type object; schema: {schema}",
+            tool["name"]
+        );
     }
 }
 
@@ -399,7 +402,7 @@ fn tool_schemas_all_inputs_have_properties_without_root_unions() {
 }
 
 /// Claude's API refuses a tool whose schema nests more than 64 levels of
-/// objects and arrays. Every advertised input and output schema stays well
+/// objects and arrays. Every advertised input schema stays well
 /// under that so adding a variant never takes the whole host session down.
 #[test]
 fn tool_schemas_stay_within_host_nesting_limits() {
@@ -420,17 +423,15 @@ fn tool_schemas_stay_within_host_nesting_limits() {
         .as_array()
         .unwrap_or_else(|| panic!("result.tools is an array; response: {response}"));
     for tool in tools {
-        for field in ["inputSchema", "outputSchema"] {
-            let schema = tool
-                .get(field)
-                .unwrap_or_else(|| panic!("{} is missing {field}", tool["name"]));
-            let nesting = depth(schema);
-            assert!(
-                nesting <= HOST_LIMIT - HEADROOM,
-                "{}.{field} nests {nesting} levels; the host limit is {HOST_LIMIT}",
-                tool["name"]
-            );
-        }
+        let schema = tool
+            .get("inputSchema")
+            .unwrap_or_else(|| panic!("{} is missing inputSchema", tool["name"]));
+        let nesting = depth(schema);
+        assert!(
+            nesting <= HOST_LIMIT - HEADROOM,
+            "{}.inputSchema nests {nesting} levels; the host limit is {HOST_LIMIT}",
+            tool["name"]
+        );
     }
 }
 
@@ -1694,7 +1695,7 @@ fn execute_restart_root_binding_and_version_remain_isolated() {
 // Phase 5's executable inventory retains this registration name. The version
 // entry remains unique; tool_schemas owns the complete three-tool inventory.
 #[test]
-fn tools_list_declares_exactly_cadence_version_with_an_output_schema() {
+fn tools_list_declares_exactly_cadence_version_without_an_output_schema() {
     let mut client = Client::spawn();
     client.handshake();
     let response = client.tools_list(2);
@@ -1705,7 +1706,9 @@ fn tools_list_declares_exactly_cadence_version_with_an_output_schema() {
         .filter(|tool| tool["name"] == "cadence_version")
         .collect::<Vec<_>>();
     assert_eq!(versions.len(), 1);
-    assert!(versions[0]["outputSchema"].is_object());
+    assert!(versions[0].get("outputSchema").is_none());
+    let answer = client.tools_call(3, "cadence_version", json!({}));
+    assert_eq!(answer["result"]["structuredContent"]["status"], "ok");
     assert!(client.finish().success());
 }
 
