@@ -9,6 +9,7 @@ pub struct PreparedLifecycle {
     overlay: AcceptanceOverlay,
     answer: Lifecycle,
     intake: Option<ValidatedIntake>,
+    report_conflicts: bool,
 }
 
 impl PreparedLifecycle {
@@ -55,7 +56,13 @@ pub fn prepare_query(
     io: &mut (impl ArtifactIo + ?Sized),
 ) -> Result<PreparedLifecycle, DerivationError> {
     let unavailable = normalize_imported_cursor(&serde_json::Value::Null)?;
-    prepare(selected, io, &unavailable, None)
+    prepare(selected, io, &unavailable, None, false)
+}
+
+/// Only progress reports roadmap conflicts instead of refusing the read.
+pub fn prepare_progress(selected: &Path, io: &mut (impl ArtifactIo + ?Sized)) -> Result<PreparedLifecycle, DerivationError> {
+    let unavailable = normalize_imported_cursor(&serde_json::Value::Null)?;
+    prepare(selected, io, &unavailable, None, true)
 }
 
 /// Independent synchronous, read-only boundary for verified snapshot intake.
@@ -72,7 +79,7 @@ pub fn prepare_query_with_intake(
     if cursor.provenance().original_cursor != observation.cursor.clone().unwrap_or_default() {
         return Err(DerivationError::InputsChanged);
     }
-    prepare(selected, io, cursor, Some(observation))
+    prepare(selected, io, cursor, Some(observation), false)
 }
 
 /// The imported cursor is a compatibility assertion about the current phase.
@@ -100,6 +107,7 @@ fn prepare(
     io: &mut (impl ArtifactIo + ?Sized),
     cursor: &CompatibilityCursor,
     observation: Option<&IntakeObservation>,
+    report_conflicts: bool,
 ) -> Result<PreparedLifecycle, DerivationError> {
     let capture = capture_inputs(selected, io)?;
     // Native acceptance is read from the store files beside the artifacts,
@@ -107,11 +115,17 @@ fn prepare(
     // with its checked box without SUMMARY.md or UAT.md (D-131).
     let overlay = observe_acceptance(&capture.root)?;
     let answer = derive_with(&capture, &overlay)?;
-    check_consistency(validate_inputs(&capture)?, &answer, &yielded(cursor, &overlay, &answer))?;
+    let selected_cursor = yielded(cursor, &overlay, &answer);
+    if report_conflicts {
+        consistency::check_cursor(&answer, &selected_cursor)?;
+    } else {
+        check_consistency(validate_inputs(&capture)?, &answer, &selected_cursor)?;
+    }
     Ok(PreparedLifecycle {
         capture,
         overlay,
         answer,
+        report_conflicts,
         intake: observation.map(|observation| ValidatedIntake {
             cursor: cursor.clone(),
             observation: observation.clone(),
@@ -158,6 +172,7 @@ fn recheck(
             overlay: prepared.overlay.clone(),
             answer: prepared.answer.clone(),
             intake: prepared.intake.clone(),
+            report_conflicts: prepared.report_conflicts,
         },
     })
 }
@@ -189,11 +204,12 @@ impl PreparedLifecycle {
         {
             return Err(DerivationError::InputsChanged);
         }
-        check_consistency(
-            validate_inputs(&self.capture)?,
-            &self.answer,
-            &yielded(&selected.cursor, &self.overlay, &self.answer),
-        )?;
+        let cursor = yielded(&selected.cursor, &self.overlay, &self.answer);
+        if self.report_conflicts {
+            consistency::check_cursor(&self.answer, &cursor)?;
+        } else {
+            check_consistency(validate_inputs(&self.capture)?, &self.answer, &cursor)?;
+        }
         self.intake = Some(ValidatedIntake {
             cursor: selected.cursor.clone(),
             observation: selected.observation.clone(),

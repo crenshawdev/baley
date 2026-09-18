@@ -9,13 +9,13 @@ mod parse;
 mod query;
 pub use capture::{ArtifactFiles, ArtifactIo, capture_inputs};
 pub use compatibility::{normalize_imported_cursor, normalize_legacy_state};
-pub use consistency::{check_consistency, recheck_intake};
+pub use consistency::{check_consistency, recheck_intake, roadmap_conflicts};
 pub use intake::{adopt, select_intake};
 pub use memo::{DOMAIN, ENCODING_VERSION, SEMANTICS_VERSION, encode_inputs, input_key, input_key_with};
 pub use model::*;
 pub use parse::{parse_roadmap, parse_uat};
 pub use query::{
-    IntakeIo, PreparedLifecycle, RecheckedLifecycle, prepare_query, prepare_query_with_intake,
+    IntakeIo, PreparedLifecycle, RecheckedLifecycle, prepare_query, prepare_query_with_intake, prepare_progress,
     query, query_with_intake, recheck_query, recheck_query_with_intake,
 };
 

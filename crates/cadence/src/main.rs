@@ -24,6 +24,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Render the query-only progress front door without opening a project.
+    ProgressInstructions,
     /// Run the MCP stdio server.
     Serve,
     /// Guard Bash Git commands and binary-owned Write/Edit outputs.
@@ -72,6 +74,13 @@ fn main() -> std::process::ExitCode {
 
 fn run_command(command: Command) -> std::process::ExitCode {
     match command {
+        Command::ProgressInstructions => {
+            use std::io::Write;
+            match std::io::stdout().lock().write_all(cadence::progress::instructions::markdown().as_bytes()) {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(_) => std::process::ExitCode::FAILURE,
+            }
+        }
         Command::AuditInstructions { coverage } => {
             use std::io::Write;
             let rendered = cadence::verification::instructions::audit_frontdoor_markdown(coverage);

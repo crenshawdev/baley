@@ -83,11 +83,27 @@ pub async fn checked_query<I: ConfigIo + Clone + Sync>(
     root: &Path,
     driver: &Driver,
 ) -> Result<(RecheckedLifecycle, cadence::store::writer::View), DerivationError> {
+    checked(factory, root, driver, false).await
+}
+
+pub async fn checked_progress<I: ConfigIo + Clone + Sync>(
+    factory: &SessionFactory<I>, root: &Path, driver: &Driver,
+) -> Result<(RecheckedLifecycle, cadence::store::writer::View), DerivationError> {
+    checked(factory, root, driver, true).await
+}
+
+async fn checked<I: ConfigIo + Clone + Sync>(
+    factory: &SessionFactory<I>, root: &Path, driver: &Driver, report_conflicts: bool,
+) -> Result<(RecheckedLifecycle, cadence::store::writer::View), DerivationError> {
     let selected_root = root.to_path_buf();
     let task_driver = driver.clone();
     let (prepared, mut io) = tokio::task::spawn_blocking(move || {
         let mut io = (task_driver.artifacts)();
-        let prepared = prepare_query(&selected_root, io.as_mut())?;
+        let prepared = if report_conflicts {
+            prepare_progress(&selected_root, io.as_mut())?
+        } else {
+            prepare_query(&selected_root, io.as_mut())?
+        };
         #[cfg(test)]
         (task_driver.event)(Event::Derived);
         Ok::<_, DerivationError>((prepared, io))

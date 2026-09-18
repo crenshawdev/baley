@@ -114,7 +114,7 @@ impl RecheckedLifecycle {
     /// Production adoption accepts the freshly checked typed memo only.
     pub fn adopt_memo(&self, data: &Value, memo: &LifecycleMemo) -> Result<Value, DerivationError> {
         let raw = serde_json::to_value(memo).map_err(invalid)?;
-        let key = input_key(self.capture())?;
+        let key = input_key_with(self.capture(), self.overlay())?;
         if check_memo(Some(&raw), &key, self.answer())? != MemoDisposition::Hit {
             return Err(DerivationError::InputsChanged);
         }

@@ -203,6 +203,10 @@ mod resident {
     };
 
     enum Request {
+        Progress {
+            root: PathBuf,
+            reply: oneshot::Sender<std::result::Result<serde_json::Value, DerivationError>>,
+        },
         Verification {
             root: PathBuf,
             command: crate::server::verification_service::Command,
@@ -426,6 +430,10 @@ mod resident {
                 let mut read_domains = BTreeMap::<PathBuf, cadence::read::ReadDomain>::new();
                 while let Some(request) = receiver.recv().await {
                     match request {
+                        Request::Progress { root, reply } => {
+                            let result = crate::server::progress_service::query(&factory, &root, &driver).await;
+                            let _ = reply.send(result);
+                        }
                         Request::Read { root, query, reply } => {
                             let result = crate::server::read_service::execute(&mut read_domains, &root, query);
                             let _ = reply.send(result);
@@ -756,6 +764,13 @@ mod resident {
                 .await
                 .map_err(|_| Error::Closed)?;
             completion.await.map_err(|_| Error::Closed)?
+        }
+
+        pub async fn progress(&self, root: &Path) -> std::result::Result<serde_json::Value, DerivationError> {
+            let (reply, completion) = oneshot::channel();
+            self.requests.send(Request::Progress { root: root.into(), reply }).await
+                .map_err(|_| derivation_service::store_error(Error::Closed))?;
+            completion.await.map_err(|_| derivation_service::store_error(Error::Closed))?
         }
 
         pub async fn next_action(

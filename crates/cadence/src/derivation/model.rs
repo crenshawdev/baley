@@ -65,6 +65,16 @@ pub struct Lifecycle {
     pub phases: Vec<PhaseRecord>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RoadmapConflict {
+    pub phase: PhaseId,
+    pub status: LifecycleStatus,
+    pub source: String,
+    pub field: String,
+    pub declared: String,
+    pub derived: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputFailureCategory {
     PermissionDenied,

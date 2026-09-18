@@ -229,6 +229,13 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
     driver: &Driver,
 ) -> Result<Option<Action>, DerivationError> {
     let (checked, view) = derivation_service::checked_query(factory, root, driver).await?;
+    query_checked(factory, checked, view, driver, &[]).await
+}
+
+pub async fn query_checked<I: ConfigIo + Clone + Sync>(
+    factory: &SessionFactory<I>, checked: derivation::RecheckedLifecycle, view: View,
+    driver: &Driver, conflicts: &[derivation::RoadmapConflict],
+) -> Result<Option<Action>, DerivationError> {
     let root = checked.capture().root.clone();
     let session = factory.first_touch(&root).await.map_err(store_error)?;
     let config = session.config().map_err(store_error)?;
@@ -278,7 +285,7 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
         }
     }
     observations::include_reviews(&mut observed.queue, members.clone(), unreadable.clone());
-    let answer = next_action::select(checked.answer(), &observed, paused.as_ref(), skip);
+    let answer = next_action::select_with_conflicts(checked.answer(), &observed, paused.as_ref(), skip, conflicts);
     #[cfg(test)]
     {
         let event = driver.event.clone();

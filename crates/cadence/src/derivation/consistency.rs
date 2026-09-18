@@ -30,20 +30,35 @@ pub fn check_consistency(
     answer: &Lifecycle,
     cursor: &CompatibilityCursor,
 ) -> Result<(), DerivationError> {
+    if let Some(issue) = roadmap_conflicts(declarations, answer).first() {
+        return Err(conflict(issue.source.clone(), &issue.field, &issue.declared, &issue.derived));
+    }
+    check_cursor(answer, cursor)
+}
+
+/// Progress retains each disagreement without granting it execution authority.
+pub fn roadmap_conflicts(declarations: &ParsedRoadmap, answer: &Lifecycle) -> Vec<RoadmapConflict> {
+    let mut issues = Vec::new();
     for (declaration, phase) in declarations.phases.iter().zip(&answer.phases) {
         let complete = phase.status == LifecycleStatus::Complete;
         if declaration.checked != complete {
-            return Err(conflict(
-                format!(
+            issues.push(RoadmapConflict {
+                phase: phase.id,
+                status: phase.status,
+                source: format!(
                     "ROADMAP.md:{} entry {}",
                     declaration.source_line, declaration.ordinal
                 ),
-                "complete",
-                declaration.checked,
-                complete,
-            ));
+                field: "complete".into(),
+                declared: declaration.checked.to_string(),
+                derived: complete.to_string(),
+            });
         }
     }
+    issues
+}
+
+pub(super) fn check_cursor(answer: &Lifecycle, cursor: &CompatibilityCursor) -> Result<(), DerivationError> {
     let p = cursor.provenance();
     if let CompatibilityCursor::Assertion { status, .. } = cursor {
         let current = answer
