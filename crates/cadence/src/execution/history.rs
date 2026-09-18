@@ -137,13 +137,26 @@ pub fn records(data: &Value, phase: u32) -> Result<Vec<Record>> {
 
 pub fn project(records: &[Record], task: &Task) -> Projection {
     let mut projection = Projection { version: 0, attempt: None, completed: false, progress: vec![], unknown_runs: vec![] };
-    for record in records.iter().filter(|r| r.request.task == *task) {
+    let mut unanswered = std::collections::BTreeMap::new();
+    for (position, record) in records.iter().filter(|r| r.request.task == *task).enumerate() {
         projection.version = record.version;
         match &record.request.event {
             Event::Close(_) => projection.completed = true,
             Event::Attempt { .. } => projection.attempt = Some(record.request.attempt.clone()),
-            Event::Launch(launch) => projection.unknown_runs.push(launch.run_id.clone()),
-            Event::Result(result) => projection.unknown_runs.retain(|id| id != &result.run_id),
+            Event::Launch(launch) => {
+                unanswered.insert(launch.run_id.as_str(), (position, record.request.attempt.as_str(), launch));
+                projection.unknown_runs.push(launch.run_id.clone());
+            }
+            Event::Result(result) => {
+                if let Some((answered_position, attempt, answered)) = unanswered.remove(result.run_id.as_str()) {
+                    // Only a later launch with a result supersedes an unanswered
+                    // equivalent in this attempt. Retained events stay untouched.
+                    unanswered.retain(|_, (position, prior_attempt, launch)| !(*position < answered_position
+                        && *prior_attempt == attempt && launch.material.command == answered.material.command
+                        && launch.stage == answered.stage && launch.check == answered.check));
+                }
+                projection.unknown_runs.retain(|id| unanswered.contains_key(id.as_str()));
+            }
             Event::Progress { text, .. } | Event::AcknowledgedProgress { text, .. } => projection.progress.push(text.clone()),
             _ => {}
         }
