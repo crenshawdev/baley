@@ -5,7 +5,7 @@ mod phase13;
 mod phase14;
 
 use cadence::store::model;
-use phase13::{Client, apply, digest_of, reopened};
+use phase13::{Client, Completed, apply, digest_of, git_value, reopened};
 use phase14::{LEGACY_TICKED, TICKED, documents, legacy_fixture, natively_completed, progress_fixture};
 use serde_json::{Value, json};
 use std::{fs, path::Path, process::{Command, Stdio}};
@@ -113,6 +113,85 @@ fn phase14_first_touch_declares_ticked_phases_it_cannot_derive() {
     // Every document byte is as it was, except the test's own tick of phase 4.
     assert_eq!(documents(project), before);
     assert!(String::from_utf8(before[Path::new(".planning/phases/2/UAT.md")].clone()).unwrap().contains("status: fail\n"));
+}
+
+#[test]
+fn phase14_capture_records_items_and_reports_the_bound() {
+    let fixture = Completed::published(false, |project| {
+        let path = project.join(".planning/config.json");
+        let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        config["planning"] = json!({"max_capture_bullets": 2});
+        fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    });
+    let project = fixture.project();
+    let head = git_value(project, &["rev-parse", "HEAD"]);
+    assert!(!project.join(".planning/CAPTURE.md").exists());
+    let mut client = Client::open(project);
+    let sent = |request_id: &str, kind: &str, text: &str, phase: Option<u32>| {
+        let mut request = json!({"operation":"capture","request_id":request_id,"kind":kind,"text":text});
+        if let Some(phase) = phase { request["phase"] = json!(phase); }
+        request
+    };
+    let c1 = client.call("cadence_apply", sent("c1", "todo", "wire the bound", Some(13)));
+    let c2 = client.call("cadence_apply", sent("c2", "seed", "a global queue", None));
+    let c3 = client.call("cadence_apply", sent("c3", "note", "read once", None));
+    // Every receipt shows the item as it was sent and the bound as it stood,
+    // and the third lands over the bound instead of being refused by it.
+    for (answer, kind, text, phase, active, exceeded) in [
+        (&c1, "todo", "wire the bound", Some(13u64), 1, false),
+        (&c2, "seed", "a global queue", None, 2, false),
+        (&c3, "note", "read once", None, 3, true),
+    ] {
+        assert_eq!(answer["status"], "ok", "{answer}");
+        assert_eq!(answer["replayed"], false, "{answer}");
+        let item = &answer["item"];
+        assert_eq!((item["kind"].as_str(), item["text"].as_str()), (Some(kind), Some(text)), "{answer}");
+        assert_eq!(item.get("phase").and_then(Value::as_u64), phase, "{answer}");
+        assert_eq!(item["revision"], 1, "{answer}");
+        assert_eq!(item["disposition"]["status"], "captured", "{answer}");
+        assert_eq!(answer["captures"], json!({"active":active,"bound":2,"exceeded":exceeded}), "{answer}");
+    }
+    // A replay answers from the record it already wrote and appends nothing.
+    let mut replay = client.call("cadence_apply", sent("c1", "todo", "wire the bound", Some(13)));
+    assert_eq!(replay["replayed"], true, "{replay}");
+    replay["replayed"] = json!(false);
+    assert_eq!(replay, c1);
+    // Each refusal names the slot that decided it.
+    let c4 = client.call("cadence_apply", sent("c4", "seed", "a global queue", Some(13)));
+    assert_eq!((c4["status"].as_str(), c4["rule"].as_str(), c4["slot"].as_str()),
+        (Some("refused"), Some("capture"), Some("phase")), "{c4}");
+    let c5 = client.call("cadence_apply", sent("c5", "todo", "wire the bound", Some(99)));
+    assert_eq!((c5["status"].as_str(), c5["rule"].as_str(), c5["slot"].as_str(), c5["id"].as_str()),
+        (Some("refused"), Some("capture"), Some("phase"), Some("99")), "{c5}");
+    let c6 = client.call("cadence_apply", sent("c6", "note", "", None));
+    assert_eq!((c6["status"].as_str(), c6["rule"].as_str(), c6["slot"].as_str()),
+        (Some("refused"), Some("capture"), Some("text")), "{c6}");
+    assert!(progress(&mut client)["text"].as_str().unwrap().contains("\nCaptures: 3 active of 2, over bound\n"),
+        "{}", progress(&mut client)["text"]);
+    client.finish();
+
+    // Reopened: exactly the three records, and nothing written to the tree.
+    let reopened = reopened(project);
+    let handwritten = |answer: &Value, kind: &str, text: &str, phase: Option<u32>| {
+        let mut record = json!({"version":1,"id":answer["item"]["id"],"revision":1,
+            "origin":{"source":"capture","original":"missing"},
+            "text":text,"kind":kind,"disposition":{"status":"captured"},
+            "completed":false,"filing_uncertain":false});
+        if let Some(phase) = phase { record["phase"] = json!(phase); }
+        record
+    };
+    assert_eq!(reopened.items.iter().map(|item| serde_json::to_value(item).unwrap()).collect::<Vec<_>>(),
+        vec![handwritten(&c1, "todo", "wire the bound", Some(13)),
+            handwritten(&c2, "seed", "a global queue", None),
+            handwritten(&c3, "note", "read once", None)]);
+    assert_eq!(git_value(project, &["rev-parse", "HEAD"]), head);
+    assert!(!project.join(".planning/CAPTURE.md").exists());
+
+    let rendered = Command::new(env!("CARGO_BIN_EXE_cadence"))
+        .arg("capture-instructions").current_dir(project).stdin(Stdio::null()).output().unwrap();
+    assert!(rendered.status.success(), "{}", String::from_utf8_lossy(&rendered.stderr));
+    assert_eq!(rendered.stdout,
+        fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/cad-capture/SKILL.md")).unwrap());
 }
 
 #[test]
