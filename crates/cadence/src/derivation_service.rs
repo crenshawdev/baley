@@ -92,24 +92,34 @@ pub async fn checked_progress<I: ConfigIo + Clone + Sync>(
     checked(factory, root, driver, true).await
 }
 
-async fn checked<I: ConfigIo + Clone + Sync>(
-    factory: &SessionFactory<I>, root: &Path, driver: &Driver, report_conflicts: bool,
-) -> Result<(RecheckedLifecycle, cadence::store::writer::View), DerivationError> {
-    let selected_root = root.to_path_buf();
-    let task_driver = driver.clone();
-    let (prepared, mut io) = tokio::task::spawn_blocking(move || {
-        let mut io = (task_driver.artifacts)();
+/// One observation of the artifacts on the blocking pool; the test event
+/// fires for the request's first observation only.
+async fn observe(
+    selected: std::path::PathBuf, driver: Driver, report_conflicts: bool, first: bool,
+) -> Result<(PreparedLifecycle, Box<dyn ArtifactIo + Send>), DerivationError> {
+    tokio::task::spawn_blocking(move || {
+        let mut io = (driver.artifacts)();
         let prepared = if report_conflicts {
-            prepare_progress(&selected_root, io.as_mut())?
+            prepare_progress(&selected, io.as_mut())?
         } else {
-            prepare_query(&selected_root, io.as_mut())?
+            prepare_query(&selected, io.as_mut())?
         };
         #[cfg(test)]
-        (task_driver.event)(Event::Derived);
+        if first {
+            (driver.event)(Event::Derived);
+        }
+        #[cfg(not(test))]
+        let _ = first;
         Ok::<_, DerivationError>((prepared, io))
     })
     .await
-    .map_err(|_| store_error(Error::Closed))??;
+    .map_err(|_| store_error(Error::Closed))?
+}
+
+async fn checked<I: ConfigIo + Clone + Sync>(
+    factory: &SessionFactory<I>, root: &Path, driver: &Driver, report_conflicts: bool,
+) -> Result<(RecheckedLifecycle, cadence::store::writer::View), DerivationError> {
+    let (mut prepared, mut io) = observe(root.to_path_buf(), driver.clone(), report_conflicts, true).await?;
     // A missing root or inconsistent ROADMAP refuses before import can create it.
     let session = factory
         .first_touch(&prepared.capture().root)
@@ -117,9 +127,15 @@ async fn checked<I: ConfigIo + Clone + Sync>(
         .map_err(store_error)?;
     let view = session.derivation_view().await.map_err(store_error)?;
     // The native acceptance authority was read beside the artifacts; the
-    // owned view is the authority, and a difference is a changed input.
+    // owned view is the authority. A first touch that has just imported a
+    // legacy tree wrote its declared completions between the two reads, so
+    // the artifacts are observed once more against the imported store; any
+    // other difference is a changed input.
     if acceptance_overlay(&view.snapshot.data)? != *prepared.overlay() {
-        return Err(DerivationError::InputsChanged);
+        (prepared, io) = observe(prepared.capture().root.clone(), driver.clone(), report_conflicts, false).await?;
+        if acceptance_overlay(&view.snapshot.data)? != *prepared.overlay() {
+            return Err(DerivationError::InputsChanged);
+        }
     }
     let key = prepared.input_key()?;
     // Validate the namespace before intake interprets its retirement sibling.

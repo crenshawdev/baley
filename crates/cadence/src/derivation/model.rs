@@ -48,6 +48,14 @@ pub struct ParsedUat {
     pub counts: UatCounts,
 }
 
+/// A row the legacy table decided carries no marker; a row the acceptance
+/// overlay decided says so, because a completion declared at import or at
+/// adoption and a native completion all reach Complete with counts the
+/// legacy SUMMARY/UAT rule can never produce.
+fn legacy(accepted: &bool) -> bool {
+    !*accepted
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PhaseRecord {
     pub id: PhaseId,
@@ -55,6 +63,8 @@ pub struct PhaseRecord {
     pub plans: Vec<String>,
     pub status: LifecycleStatus,
     pub uat: Option<UatCounts>,
+    #[serde(default, skip_serializing_if = "legacy")]
+    pub accepted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

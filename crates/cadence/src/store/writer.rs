@@ -70,6 +70,14 @@ pub enum Operation {
         expected_integrity: String,
         request: Box<cadence::verification::persistence::Request>,
     },
+    /// The owner's explicit adoption of one ticked phase: the record the
+    /// service computed from the documents, retained under its request id.
+    AdoptionDeclareV1 {
+        expected_generation: u64,
+        expected_integrity: String,
+        record: Box<cadence::adoption::Record>,
+        request_id: String,
+    },
     NativeTaskV1 {
         expected_generation: u64,
         expected_integrity: String,
@@ -498,6 +506,8 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 self.verification_run(expected_generation, &expected_integrity, *record),
             Operation::VerificationV1 { expected_generation, expected_integrity, request } =>
                 self.verification(expected_generation, &expected_integrity, *request),
+            Operation::AdoptionDeclareV1 { expected_generation, expected_integrity, record, request_id } =>
+                self.adoption_declare(expected_generation, &expected_integrity, *record, request_id),
             Operation::NativeTaskV1 { expected_generation, expected_integrity, request } =>
                 self.native_task(expected_generation, &expected_integrity, *request),
             Operation::NativePlanV1 { expected_generation, expected_integrity, request } =>
@@ -711,6 +721,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             Operation::CheckedTransact { .. }
             | Operation::VerificationRunV1 { .. }
             | Operation::VerificationV1 { .. }
+            | Operation::AdoptionDeclareV1 { .. }
             | Operation::RailReceipt { .. }
             | Operation::RailObservation { .. }
             | Operation::GuardAudit(..)
@@ -974,6 +985,34 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         next.decisions.push(runner::decision(&record)?);
         self.persist(next, self.view.snapshot.operations.clone(), Vec::new(), "verification_run",
             super::transaction::IntentKind::VerificationRunV1 { record: Box::new(record), root_binding: binding })
+    }
+
+    /// The owner's explicit adoption of one ticked phase: the record lands
+    /// under the adoption namespace through its own intent, at the generation
+    /// it names, and only while ROADMAP.md still holds the bytes it was read
+    /// from. A request id already answered replays; a reused one conflicts.
+    fn adoption_declare(&mut self, generation: u64, integrity: &str, record: cadence::adoption::Record, request_id: String) -> Result<View> {
+        use cadence::adoption;
+        let binding = self.observed[STATE].directory_identity.clone();
+        if let Some(prior) = adoption::receipt(&self.view.snapshot.data, &request_id)? {
+            return if prior.record == record.id { Ok(self.view.as_ref().clone()) }
+                else { Err(Error::Conflict("request-id-reuse: adoption request already names another record".into())) };
+        }
+        self.check_expected(generation, integrity)?;
+        if record.root_binding != binding {
+            return Err(Error::Invalid("declared record root binding differs from the bound store".into()));
+        }
+        if record.import_generation != self.next_generation()? {
+            return Err(Error::Invalid("declared record names a generation other than its commit".into()));
+        }
+        let roadmap = self.storage.read("roadmap")?;
+        if roadmap.bytes.as_deref().map(model::digest).as_deref() != Some(record.roadmap.digest.as_str()) {
+            return Err(Error::Conflict("ROADMAP.md changed after the declaration was computed".into()));
+        }
+        let mut next = self.view.as_ref().clone();
+        next.snapshot.data = adoption::declare(&next.snapshot.data, &record, &request_id)?;
+        self.persist(next, self.view.snapshot.operations.clone(), Vec::new(), "adoption_declare",
+            super::transaction::IntentKind::AdoptionDeclareV1 { record: Box::new(record), request_id, root_binding: binding })
     }
 
     fn verification(&mut self, generation: u64, integrity: &str, request: cadence::verification::persistence::Request) -> Result<View> {

@@ -19,6 +19,7 @@ pub const NAMESPACE: &str = "adoption";
 pub const NAMESPACE_SCHEMA: &str = "adoption-1";
 pub const SCHEMA: &str = "verification-declared-completion-1";
 pub const AT_IMPORT: &str = "declared-at-import";
+pub const AT_ADOPTION: &str = "declared-at-adoption";
 pub const LEGACY_RULE: &str = "summary-and-uat";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +148,42 @@ pub fn contribute(data: &Value, records: &[Record]) -> Result<Value> {
     let mut next = if data.is_null() { json!({}) } else { data.clone() };
     if next.get(NAMESPACE).is_none() { next[NAMESPACE] = json!({"schema": NAMESPACE_SCHEMA}); }
     next[NAMESPACE]["declared_completions"] = json!(history);
+    Ok(next)
+}
+
+/// What one explicit adoption request answered: the phase it named and the
+/// record it wrote. A replay answers from this and appends nothing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Receipt {
+    pub phase: u32,
+    pub record: String,
+}
+
+pub fn receipt(data: &Value, request_id: &str) -> Result<Option<Receipt>> {
+    let Some(namespace) = data.get(NAMESPACE) else { return Ok(None) };
+    if namespace["schema"] != NAMESPACE_SCHEMA {
+        return Err(Error::Invalid("unsupported adoption namespace".into()));
+    }
+    namespace["receipts"].get(request_id).cloned().map(serde_json::from_value).transpose().map_err(Error::from)
+}
+
+/// The explicit adoption write (D-137): one declared-at-adoption record
+/// appended through the same writer the import uses, with the request id
+/// retained so a replay answers from history. It is the only write outside
+/// the import that the namespace guard admits, under its own intent.
+pub fn declare(data: &Value, record: &Record, request_id: &str) -> Result<Value> {
+    if record.provenance != AT_ADOPTION {
+        return Err(Error::Invalid("an explicit adoption carries the declared-at-adoption provenance".into()));
+    }
+    if request_id.trim().is_empty() {
+        return Err(Error::Invalid("adoption request id is blank".into()));
+    }
+    if receipt(data, request_id)?.is_some() {
+        return Err(Error::Invalid("adoption request id already answered".into()));
+    }
+    let mut next = contribute(data, std::slice::from_ref(record))?;
+    next[NAMESPACE]["receipts"][request_id] = json!(Receipt { phase: record.phase, record: record.id.clone() });
     Ok(next)
 }
 

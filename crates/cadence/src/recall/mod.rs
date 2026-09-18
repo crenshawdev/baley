@@ -207,6 +207,11 @@ mod resident {
             root: PathBuf,
             reply: oneshot::Sender<std::result::Result<serde_json::Value, DerivationError>>,
         },
+        Adoption {
+            root: PathBuf,
+            apply: crate::server::adoption_service::Apply,
+            reply: oneshot::Sender<Result<serde_json::Value>>,
+        },
         Verification {
             root: PathBuf,
             command: crate::server::verification_service::Command,
@@ -432,6 +437,10 @@ mod resident {
                     match request {
                         Request::Progress { root, reply } => {
                             let result = crate::server::progress_service::query(&factory, &root, &driver).await;
+                            let _ = reply.send(result);
+                        }
+                        Request::Adoption { root, apply, reply } => {
+                            let result = crate::server::adoption_service::execute(&factory, &root, apply).await;
                             let _ = reply.send(result);
                         }
                         Request::Read { root, query, reply } => {
@@ -771,6 +780,12 @@ mod resident {
             self.requests.send(Request::Progress { root: root.into(), reply }).await
                 .map_err(|_| derivation_service::store_error(Error::Closed))?;
             completion.await.map_err(|_| derivation_service::store_error(Error::Closed))?
+        }
+
+        pub async fn adoption(&self, root: &Path, apply: crate::server::adoption_service::Apply) -> Result<serde_json::Value> {
+            let (reply, completion) = oneshot::channel();
+            self.requests.send(Request::Adoption { root: root.into(), apply, reply }).await.map_err(|_| Error::Closed)?;
+            completion.await.map_err(|_| Error::Closed)?
         }
 
         pub async fn next_action(

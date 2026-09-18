@@ -607,6 +607,7 @@ fn contract_round_trips_order_plans_counters_and_null_cycles() {
                 skipped: 4,
                 blocked: 5,
             }),
+            accepted: false,
         });
     }
     live.total = live.phases.len();

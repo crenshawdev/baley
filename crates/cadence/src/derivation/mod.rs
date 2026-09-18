@@ -191,7 +191,7 @@ pub fn derive_with(capture: &CapturedInputs, overlay: &AcceptanceOverlay) -> Res
             } else {
                 (LifecycleStatus::Unplanned, None)
             };
-            phases.push(PhaseRecord { id: declaration.id, name: declaration.name.clone(), plans, status, uat });
+            phases.push(PhaseRecord { id: declaration.id, name: declaration.name.clone(), plans, status, uat, accepted: true });
             continue;
         }
         if matches!(observation.summary, Observation::Present(())) {
@@ -218,6 +218,7 @@ pub fn derive_with(capture: &CapturedInputs, overlay: &AcceptanceOverlay) -> Res
             plans,
             status,
             uat: uat.map(|u| u.counts),
+            accepted: false,
         });
     }
     Ok(Lifecycle {

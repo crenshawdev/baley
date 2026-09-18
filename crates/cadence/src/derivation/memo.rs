@@ -174,12 +174,17 @@ fn malformed_answer(raw: &Value) -> Result<Lifecycle, String> {
             }
             Some(counts)
         };
+        let accepted = match entry.get("accepted") {
+            None => false,
+            Some(value) => typed(value, &format!("{prefix}accepted"))?,
+        };
         phases.push(PhaseRecord {
             id,
             name,
             plans,
             status,
             uat,
+            accepted,
         });
     }
 
@@ -232,7 +237,11 @@ fn validate_structure(answer: &Lifecycle) -> Result<(), String> {
         {
             return Err(format!("phases[{i}].status"));
         }
-        if phase.status == LifecycleStatus::Complete
+        // Only the legacy table promises a clean UAT behind a Complete row.
+        // An accepted row's counts are the completion's truths or the very
+        // documents the declaration overrode, so they carry no such promise.
+        if !phase.accepted
+            && phase.status == LifecycleStatus::Complete
             && phase.uat.as_ref().is_none_or(|u| {
                 (u.pass == 0 && u.skipped == 0) || u.fail != 0 || u.pending != 0 || u.blocked != 0
             })
@@ -270,6 +279,9 @@ fn differences(stored: &Lifecycle, fresh: &Lifecycle) -> Vec<String> {
         }
         if a.status != b.status {
             fields.push(format!("{prefix}.status"));
+        }
+        if a.accepted != b.accepted {
+            fields.push(format!("{prefix}.accepted"));
         }
         match (&a.uat, &b.uat) {
             (Some(a), Some(b)) => {

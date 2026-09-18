@@ -85,6 +85,8 @@ pub mod context_service;
 pub mod plan_service;
 #[path = "verification_service.rs"]
 pub mod verification_service;
+#[path = "adoption_service.rs"]
+pub mod adoption_service;
 #[path = "read_service.rs"]
 pub mod read_service;
 
@@ -360,6 +362,7 @@ enum ApplyArguments {
     Executor(ExecutorPatch),
     Rail(cadence::rail::risk::Apply),
     Receipt(cadence::rail::receipts::Apply),
+    Adoption(adoption_service::Apply),
 }
 
 /// Who parses and answers an apply request. `Executor` is the one group with
@@ -375,10 +378,11 @@ enum ApplyGroup {
     Executor,
     Rail,
     Receipt,
+    Adoption,
 }
 
 /// One group per [`ApplyArguments`] variant, in variant order.
-const APPLY_GROUPS: [ApplyGroup; 15] = [
+const APPLY_GROUPS: [ApplyGroup; 16] = [
     ApplyGroup::Verification,
     ApplyGroup::Execution,
     ApplyGroup::Execution,
@@ -394,6 +398,7 @@ const APPLY_GROUPS: [ApplyGroup; 15] = [
     ApplyGroup::Executor,
     ApplyGroup::Rail,
     ApplyGroup::Receipt,
+    ApplyGroup::Adoption,
 ];
 
 /// The operation names `cadence_apply` accepts, each with its routing group
@@ -1309,6 +1314,14 @@ impl ServerHandler for PublicServer {
                         ),
                         Err(error) => receipt_result(Ok(rail_service::refused("invalid-arguments", &refused(error)))),
                     },
+                    ApplyGroup::Adoption => {
+                        let raw = raw.expect("an operation name came from the arguments");
+                        let answer = match serde_json::from_value::<adoption_service::Apply>(raw.clone()) {
+                            Ok(apply) => self.server.service.adoption(&self.root, apply).await,
+                            Err(error) => Ok(adoption_service::malformed(&raw, error)),
+                        };
+                        structured_result(answer.map(ApplyOutput::NativeExecution))
+                    }
                 }
             }
             _ => Err(ErrorData::invalid_params("unknown tool", None)),

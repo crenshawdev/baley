@@ -212,6 +212,23 @@ fn declare_at_import<I: ConfigIo>(
     Ok((declared, kept, root_binding))
 }
 
+/// The lifecycle documents read the way the import reads them: the capture
+/// derivation works from, and one guard per document naming the bytes read.
+/// An explicit adoption computes its record from exactly these bytes, so the
+/// record's roadmap digest is the digest of what the owner's tree holds.
+pub fn observe_documents<I: ConfigIo>(
+    root: &Path,
+    io: &mut I,
+) -> Result<(derivation::CapturedInputs, Vec<SourceGuard>)> {
+    let mut documents = GuardedDocuments { io, files: ArtifactFiles, guards: Vec::new(), failure: None };
+    let capture = derivation::capture_inputs(root, &mut documents)
+        .map_err(|error| Error::Io(format!("legacy documents unavailable: {error}")))?;
+    if let Some(error) = documents.failure {
+        return Err(error);
+    }
+    Ok((capture, documents.guards))
+}
+
 fn remove_path(value: &mut Value, key: &str) {
     let (head, tail) = key.split_once('.').unwrap_or((key, ""));
     if let Some(object) = value.as_object_mut() {
@@ -945,6 +962,13 @@ pub struct SessionFactory<I: ConfigIo + Clone = FileIo> {
     sessions: tokio::sync::Mutex<BTreeMap<PathBuf, Arc<Session<I>>>>,
     #[cfg(test)]
     probe: Option<TestProbe>,
+}
+
+impl<I: ConfigIo + Clone> SessionFactory<I> {
+    /// The reader every session of this factory observes documents through.
+    pub fn io(&self) -> I {
+        self.io.clone()
+    }
 }
 
 struct AuditOnlyPolicy;
