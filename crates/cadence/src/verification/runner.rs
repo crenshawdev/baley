@@ -48,76 +48,10 @@ pub fn acceptable(result: &RunResult) -> bool {
             let words: Vec<_> = line.split_whitespace().collect();
             (words.first() == Some(&"Ran") && words.get(1).is_some_and(|n| n.parse::<u64>().is_ok_and(|n| n > 0)))
                 || (line.starts_with("test result: ok.") && words.get(3).is_some_and(|n| n.parse::<u64>().is_ok_and(|n| n > 0)))
+                || child::nextest_summary(line).is_some_and(|summary| summary.nonempty && !summary.failed)
         })
     });
     passed && nonempty
-}
-
-#[cfg(test)]
-mod tests {
-    use super::acceptable;
-    use crate::execution::receipts::{Capture, Disposition, Observation, RunResult, Summary};
-
-    #[test]
-    fn acceptable_requires_a_nonzero_passing_nextest_summary() {
-        let pass = "        PASS [  16.118s] (1/1) cadence::phase33_execution phase33_execute_next_answers_dispatch_id_and_route";
-        let summary = "     Summary [  16.118s] 1 test run: 1 passed, 2 skipped";
-        let result = RunResult {
-            run_id: "verify-p33-t1-independent-1".into(),
-            disposition: Disposition::Exited { code: 0 },
-            stdout: Capture::new(vec![], true, vec![]),
-            stderr: Capture::new(vec![], true, vec![pass.into(), summary.into()]),
-            observed_at: 1,
-            observation: Observation::ResultsObserved { summary: Summary::Cargo { failed: false } },
-            material_unchanged: true,
-        };
-        assert!(acceptable(&result), "the retained nextest summary reports one passing test");
-
-        for (line, failed, expected) in [
-            ("Summary [ 0.001s] 2 tests run: 2 passed", false, true),
-            ("Summary [ 0.001s] 0 tests run: 0 passed, 3 skipped", false, false),
-            ("Summary [ 0.001s] 1 test run: 0 passed", false, false),
-            ("Summary [ 0.001s] 2 tests run: 1 passed, 1 failed", true, false),
-            ("Summary [ 0.001s] 2 tests run: 1 passed, 1 failed", false, false),
-            (pass, false, false),
-            ("unrecognised output", false, false),
-            ("test result: ok. 1 passed; 0 failed", false, true),
-            ("test result: ok. 0 passed; 0 failed", false, false),
-        ] {
-            let mut candidate = result.clone();
-            candidate.stderr = Capture::new(vec![], true, vec![line.into()]);
-            candidate.observation = Observation::ResultsObserved { summary: Summary::Cargo { failed } };
-            assert_eq!(acceptable(&candidate), expected, "{line}, failed={failed}");
-        }
-
-        let mut candidate = result.clone();
-        candidate.disposition = Disposition::Exited { code: 100 };
-        assert!(!acceptable(&candidate));
-        let mut candidate = result.clone();
-        candidate.stdout.complete = false;
-        assert!(!acceptable(&candidate));
-        let mut candidate = result.clone();
-        candidate.stderr.complete = false;
-        assert!(!acceptable(&candidate));
-        let mut candidate = result.clone();
-        candidate.observation = Observation::Unknown;
-        assert!(!acceptable(&candidate));
-
-        let mut candidate = result.clone();
-        candidate.stderr = Capture::new(format!("{pass}\n{summary}\n").into_bytes(), true, vec![]);
-        let candidate: RunResult = serde_json::from_value(serde_json::to_value(candidate).unwrap()).unwrap();
-        assert!(!candidate.stderr.bytes.is_empty(), "text captures restore bytes on read");
-        assert!(acceptable(&candidate));
-
-        let mut candidate = result;
-        candidate.observation = Observation::ResultsObserved {
-            summary: Summary::Unittest { failed: false, failures: 0, errors: 0 },
-        };
-        for (line, expected) in [("Ran 1 test in 0.001s", true), ("Ran 0 tests in 0.001s", false)] {
-            candidate.stderr = Capture::new(vec![], true, vec![line.into(), "OK".into()]);
-            assert_eq!(acceptable(&candidate), expected, "{line}");
-        }
-    }
 }
 
 pub fn decision(record: &Record) -> Result<DecisionRecord> {
@@ -246,4 +180,71 @@ pub async fn launch(store: Store, root: PathBuf, request: Run) -> Result<Record>
         }
     });
     Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::acceptable;
+    use crate::execution::receipts::{Capture, Disposition, Observation, RunResult, Summary};
+
+    #[test]
+    fn acceptable_requires_a_nonzero_passing_nextest_summary() {
+        let pass = "        PASS [  16.118s] (1/1) cadence::phase33_execution phase33_execute_next_answers_dispatch_id_and_route";
+        let summary = "     Summary [  16.118s] 1 test run: 1 passed, 2 skipped";
+        let result = RunResult {
+            run_id: "verify-p33-t1-independent-1".into(),
+            disposition: Disposition::Exited { code: 0 },
+            stdout: Capture::new(vec![], true, vec![]),
+            stderr: Capture::new(vec![], true, vec![pass.into(), summary.into()]),
+            observed_at: 1,
+            observation: Observation::ResultsObserved { summary: Summary::Cargo { failed: false } },
+            material_unchanged: true,
+        };
+        assert!(acceptable(&result), "the retained nextest summary reports one passing test");
+
+        for (line, failed, expected) in [
+            ("Summary [ 0.001s] 2 tests run: 2 passed", false, true),
+            ("Summary [ 0.001s] 0 tests run: 0 passed, 3 skipped", false, false),
+            ("Summary [ 0.001s] 1 test run: 0 passed", false, false),
+            ("Summary [ 0.001s] 2 tests run: 1 passed, 1 failed", true, false),
+            ("Summary [ 0.001s] 2 tests run: 1 passed, 1 failed", false, false),
+            (pass, false, false),
+            ("unrecognised output", false, false),
+            ("test result: ok. 1 passed; 0 failed", false, true),
+            ("test result: ok. 0 passed; 0 failed", false, false),
+        ] {
+            let mut candidate = result.clone();
+            candidate.stderr = Capture::new(vec![], true, vec![line.into()]);
+            candidate.observation = Observation::ResultsObserved { summary: Summary::Cargo { failed } };
+            assert_eq!(acceptable(&candidate), expected, "{line}, failed={failed}");
+        }
+
+        let mut candidate = result.clone();
+        candidate.disposition = Disposition::Exited { code: 100 };
+        assert!(!acceptable(&candidate));
+        let mut candidate = result.clone();
+        candidate.stdout.complete = false;
+        assert!(!acceptable(&candidate));
+        let mut candidate = result.clone();
+        candidate.stderr.complete = false;
+        assert!(!acceptable(&candidate));
+        let mut candidate = result.clone();
+        candidate.observation = Observation::Unknown;
+        assert!(!acceptable(&candidate));
+
+        let mut candidate = result.clone();
+        candidate.stderr = Capture::new(format!("{pass}\n{summary}\n").into_bytes(), true, vec![]);
+        let candidate: RunResult = serde_json::from_value(serde_json::to_value(candidate).unwrap()).unwrap();
+        assert!(!candidate.stderr.bytes.is_empty(), "text captures restore bytes on read");
+        assert!(acceptable(&candidate));
+
+        let mut candidate = result;
+        candidate.observation = Observation::ResultsObserved {
+            summary: Summary::Unittest { failed: false, failures: 0, errors: 0 },
+        };
+        for (line, expected) in [("Ran 1 test in 0.001s", true), ("Ran 0 tests in 0.001s", false)] {
+            candidate.stderr = Capture::new(vec![], true, vec![line.into(), "OK".into()]);
+            assert_eq!(acceptable(&candidate), expected, "{line}");
+        }
+    }
 }

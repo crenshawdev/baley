@@ -496,11 +496,28 @@ pub fn observation_consistent(stored: &Observation, stdout: &Capture, stderr: &C
     *stored == Observation::Unknown || *stored == classify(stdout, stderr)
 }
 
+pub(crate) struct NextestSummary {
+    pub nonempty: bool,
+    pub failed: bool,
+}
+
+/// Share nextest's summary grammar with independent verification, which also
+/// needs positive run and passed counts before accepting a successful result.
+pub(crate) fn nextest_summary(line: &str) -> Option<NextestSummary> {
+    static NEXTEST: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^Summary \[[^\]]*\] ([0-9]+) tests? run: ([0-9]+) passed(, ([0-9]+) failed)?").expect("fixed grammar")
+    });
+    let found = NEXTEST.captures(line.trim_start())?;
+    Some(NextestSummary {
+        nonempty: [1, 2].iter().all(|&index| found[index].parse::<u64>().is_ok_and(|n| n > 0)),
+        failed: found.get(4).is_some_and(|count| count.as_str() != "0"),
+    })
+}
+
 pub fn classify(stdout: &Capture, stderr: &Capture) -> Observation {
     let ran = regex::Regex::new(r"^Ran [0-9]+ tests?( in .+)?$").expect("fixed grammar");
     let failed = regex::Regex::new(r"^FAILED \(([^()]*)\)$").expect("fixed grammar");
     let counts = regex::Regex::new(r"^(failures|errors|skipped|expected failures|unexpected successes)=([0-9]+)$").expect("fixed grammar");
-    let nextest = regex::Regex::new(r"^Summary \[[^\]]*\] [0-9]+ tests? run: [0-9]+ passed(, ([0-9]+) failed)?").expect("fixed grammar");
     let mut python_ran = false;
     let mut python_outcome = None;
     for capture in [stdout, stderr] {
@@ -511,9 +528,8 @@ pub fn classify(stdout: &Capture, stderr: &Capture) -> Observation {
             }
             // nextest runs cargo's test binaries and writes one Summary line;
             // it repeats cargo's `test result:` only under a failure.
-            if let Some(found) = nextest.captures(line) {
-                let failed = found.get(2).is_some_and(|count| count.as_str() != "0");
-                return Observation::ResultsObserved { summary: Summary::Cargo { failed } };
+            if let Some(summary) = nextest_summary(line) {
+                return Observation::ResultsObserved { summary: Summary::Cargo { failed: summary.failed } };
             }
             if ran.is_match(line) { python_ran = true; }
             if line == "OK" { python_outcome = Some(Summary::Unittest { failed: false, failures: 0, errors: 0 }); }
