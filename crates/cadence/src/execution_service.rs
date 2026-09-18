@@ -64,6 +64,91 @@ pub(super) fn native_error(error:Error) -> Value {
 }
 
 pub async fn native_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value) -> cadence::store::Result<Value> {
+    let answer = native_answer(factory, root, raw.clone()).await?;
+    if answer["status"] == "refused" {
+        // D-140: a refusal the caller was told about and the log never heard of
+        // is one the owner has to go looking for. The answer is already decided,
+        // so a store that cannot take the record does not change it.
+        let _ = record_native_refusal(factory, root, &raw, &answer).await;
+    }
+    Ok(answer)
+}
+
+/// The rule that refused, which is what a later query joins on. A plan
+/// diagnostic stamps the same family code on every rule it carries, so the
+/// log names the rule; every other refusal already names itself.
+fn recorded_code(answer: &Value) -> &str {
+    match answer["code"].as_str() {
+        Some("invalid-plan") => answer["rule"].as_str().unwrap_or("invalid-plan"),
+        Some(code) => code,
+        None => "invalid-request",
+    }
+}
+
+/// The phase a refused native request was about: the diagnostic's own phase
+/// where it has one, otherwise the phase the request named.
+fn refused_phase(raw: &Value, answer: &Value) -> Option<u32> {
+    [
+        answer["phase"].as_u64(),
+        raw["request"]["task"]["phase"].as_u64(),
+        raw["request"]["plan"]["phase"].as_u64(),
+        raw["request"]["contract"]["phase"].as_u64(),
+        raw["phase"].as_u64(),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|phase| u32::try_from(phase).ok().filter(|phase| *phase > 0))
+}
+
+/// Record a native refusal as a boundary decision the way the schema-1 patch
+/// path records undeclared-files: the answered code, the diagnostic's rule,
+/// slot and id in `located`, the bounded envelope, and the stamp the writer
+/// adds. The operation id is the boundary's own identity, so a replayed
+/// refusal returns its receipt instead of appending a second record.
+async fn record_native_refusal<I: ConfigIo + Clone + Sync>(
+    factory: &SessionFactory<I>,
+    root: &Path,
+    raw: &Value,
+    answer: &Value,
+) -> cadence::store::Result<()> {
+    let Some(phase) = refused_phase(raw, answer) else {
+        return Ok(());
+    };
+    let code = recorded_code(answer);
+    let located = Located::rule(code, answer["slot"].as_str().unwrap_or("request"))
+        .id(answer["id"].as_str().unwrap_or_default());
+    let response = Response::Refused {
+        phase,
+        code: code.to_owned(),
+        reason: stable_reason(code, answer["reason"].as_str().unwrap_or_default()),
+    };
+    let encoding = || Error::Invalid("native refusal has no recordable boundary".to_owned());
+    let decision = boundary(
+        phase,
+        BoundaryTool::CadenceApply,
+        "executor",
+        &public_request_digest(BoundaryTool::CadenceApply, Some(raw)),
+        &response,
+        None,
+        None,
+    )
+    .map_err(|_| encoding())?
+    .with_located(Some(located));
+    let session = factory.first_touch(root).await?;
+    let view = session.derivation_view().await?;
+    session
+        .request(Operation::BoundaryV1 {
+            expected_generation: view.snapshot.generation,
+            expected_integrity: view.snapshot.integrity.clone(),
+            operation_id: format!("execution-observation:{}", decision.identity().map_err(|_| encoding())?),
+            decision,
+            change: Box::new(BoundaryChange::Observe),
+        })
+        .await?;
+    Ok(())
+}
+
+async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value) -> cadence::store::Result<Value> {
     if matches!(raw["operation"].as_str(), Some("execution-task-progress" | "execution-task-checkpoint" | "execution-task-answer")) {
         return native_progress_apply(factory, root, raw).await;
     }
