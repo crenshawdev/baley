@@ -64,6 +64,62 @@ fn retained_unknown_observation_stays_valid_when_the_classifier_learns_its_lines
     assert!(!observation_consistent(&observed, &empty, &custom));
 }
 
+#[test]
+fn later_answered_launch_supersedes_only_matching_unanswered_runs() {
+    use super::{allocation::Check, history::{self, Event, Record, Request, Task}, receipts::*, runner::capture};
+    let task = Task { phase: 33, occurrence: "active-cycle:phase:33".into(), admission_digest: "admitted".into(),
+        plan: 3, task: "P33-3-T3".into() };
+    let launch = |id: &str| Launch { run_id: id.into(), check: None, stage: Stage::Verify,
+        material: Material { command: "cargo nextest run -p cadence --test mcp".into(), commit: "f74d252d".into(),
+            tree: "material-tree".into(), test_file: String::new(), test_digest: String::new() }, launched_at: 1 };
+    let result = |id: &str| Event::Result(RunResult { run_id: id.into(), disposition: Disposition::Exited { code: 0 },
+        stdout: capture(&b""[..]), stderr: capture(&b""[..]), observed_at: 2,
+        observation: Observation::Unknown, material_unchanged: true });
+    let record = |version: u64, event: Event| {
+        let request = Request { request_id: format!("event-{version}"), task: task.clone(), attempt: "attempt".into(),
+            expected_version: version - 1, event };
+        Record { schema: "native-task-event-1".into(), root_binding: "fixture".into(), version,
+            request_digest: history::request_digest(&request).unwrap(), request }
+    };
+    let check = Check { id: "check/mcp".into(), item_revision: "revision-1".into() };
+    for case in ["different command", "different stage", "different check", "different check revision", "different attempt",
+        "different task", "unanswered retry", "older result", "matching null check", "matching check"] {
+        let mut first = launch("dead-launch");
+        let mut second = launch("resumed-launch");
+        match case {
+            "different command" => second.material.command = "cargo nextest run -p cadence --test phase33_verification".into(),
+            "different stage" => second.stage = Stage::Green,
+            "different check" => second.check = Some(check.clone()),
+            "different check revision" | "matching check" => {
+                first.check = Some(check.clone());
+                second.check = Some(check.clone());
+                if case == "different check revision" { second.check.as_mut().unwrap().item_revision = "revision-2".into(); }
+            }
+            _ => {}
+        }
+        let mut records = vec![record(1, Event::Launch(first)), record(2, Event::Launch(second))];
+        assert_eq!(history::project(&records[..1], &task).unknown_runs, ["dead-launch"], "{case}");
+        assert_eq!(history::project(&records, &task).unknown_runs, ["dead-launch", "resumed-launch"], "{case}");
+        if case != "unanswered retry" {
+            records.push(record(3, result(if case == "older result" { "dead-launch" } else { "resumed-launch" })));
+        }
+        for record in &mut records[1..] {
+            if case == "different attempt" { record.request.attempt = "another-attempt".into(); }
+            if case == "different task" { record.request.task.task = "another-task".into(); }
+            record.request_digest = history::request_digest(&record.request).unwrap();
+        }
+        let retained = serde_json::to_vec(&records).unwrap();
+        let expected = match case {
+            "matching null check" | "matching check" => vec![],
+            "unanswered retry" => vec!["dead-launch", "resumed-launch"],
+            "older result" => vec!["resumed-launch"],
+            _ => vec!["dead-launch"],
+        };
+        assert_eq!(history::project(&records, &task).unknown_runs, expected, "{case}");
+        assert_eq!(serde_json::to_vec(&records).unwrap(), retained, "projection must preserve retained records");
+    }
+}
+
 // D-168: a suite receipt always carries every failing test's name. nextest
 // names a failure as `FAIL [ time ] (n/m) crate::binary test`, indented, and
 // repeats the name in its final list; the repair question for suite-p32-1
