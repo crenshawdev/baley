@@ -31,7 +31,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                         .rule("typed-content").slot("patch.basis").value());
                 }
                 SubmitPatch::Compact(compact) => {
-                    let Some(attempt) = persistence::attempts(&view.snapshot.data)?.into_iter().find(|a| a.id == compact.attempt) else {
+                    let Some(attempt) = persistence::attempt(&view.snapshot.data, None, &compact.attempt)? else {
                         return Ok(cadence::envelope::Refusal::new("verification-attempt", "retained attempt absent")
                             .rule("verification-attempt").slot("patch.attempt").value());
                     };
@@ -110,25 +110,25 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
     factory: &crate::import::SessionFactory<I>, root: &Path, query: Query,
 ) -> Result<Value> {
     let snapshot = if matches!(query, Query::Read { .. }) && root.join(cadence::store::model::STATE).exists() {
-        Some(factory.first_touch(root).await?.derivation_view().await?.snapshot)
+        Some(cadence::store::cache::SharedSnapshot(factory.first_touch(root).await?.shared_derivation_view().await?))
     } else {
         cadence::plan::persistence::read_snapshot(root)?
     };
-    let data = snapshot.as_ref().map(|s| s.data.clone()).unwrap_or_else(|| json!({}));
+    let empty = json!({});
+    let data = snapshot.as_ref().map(|s| &s.data).unwrap_or(&empty);
     match query {
-        Query::Audit { phase, command } => audit::report(root, &data, phase, command.as_deref()),
+        Query::Audit { phase, command } => audit::report(root, data, phase, command.as_deref()),
         Query::Read { phase, attempt } => {
             // The requested attempt selects its receipts; the derived rows are
             // always the phase's current judgment, never the selected one's.
-            let saved = persistence::attempts(&data)?.into_iter().rev()
-                .find(|a| a.inputs.basis.phase == phase && attempt.as_ref().is_none_or(|id| a.id == *id));
+            let saved = persistence::latest_attempt(data, phase, attempt.as_deref())?;
             if attempt.is_some() && saved.is_none() {
                 return Err(inputs::refuse(phase, "verification-attempt", "attempt", "retained attempt absent"));
             }
-            let mut answer = status::report(root, &data, phase)?;
-            let runs: Vec<_> = runner::records(&data)?.into_iter().filter(|r| saved.as_ref().is_some_and(|a| r.attempt == a.id)).collect();
+            let mut answer = status::report(root, data, phase)?;
+            let runs: Vec<_> = runner::records(data)?.into_iter().filter(|r| saved.as_ref().is_some_and(|a| r.attempt == a.id)).collect();
             let unknown: Vec<_> = runs.iter().filter(|r| matches!(r.event, runner::Event::Launch { .. }) && runner::result(&runs, &r.id).is_none()).map(|r| r.id.clone()).collect();
-            let claims: Vec<_> = verdicts::claims(&data)?.into_iter().filter(|c| saved.as_ref().is_some_and(|a| c.patch.attempt == a.id))
+            let claims: Vec<_> = verdicts::claims(data)?.into_iter().filter(|c| saved.as_ref().is_some_and(|a| c.patch.attempt == a.id))
                 .map(|c| json!({"request_id":c.patch.request_id,"answer":c.answer})).collect();
             answer["attempt"] = json!(saved.as_ref().map(|a| json!({"schema":a.schema,"id":a.id,"request_id":a.request_id,
                 "identity":{"kind":"verification-attempt","phase":phase,"attempt":a.id}})));
@@ -151,26 +151,26 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
         }
         Query::Next { phase, request_id } => {
             if phase == 0 { return Err(inputs::refuse(phase, "verification-phase", "phase", "positive integer phase required")); }
-            if cadence::context::persistence::saved(&data, phase)?.is_none() {
+            if cadence::context::persistence::saved(data, phase)?.is_none() {
                 // Request identity reuse is checked first whenever a store exists.
-                if let Some(id) = &request_id { persistence::replay(&data, phase, id)?; }
+                if let Some(id) = &request_id { persistence::replay(data, phase, id)?; }
                 return Err(inputs::refuse(phase, "native-approved-truths", "context", "native approved truths required"));
             }
             if let Some(id) = &request_id
-                && let Some(saved) = persistence::replay(&data, phase, id)? {
+                && let Some(saved) = persistence::replay(data, phase, id)? {
                 return next_answer(factory, root, &saved).await;
             }
             let request_id = match request_id {
                 Some(id) => id,
                 None => {
-                    let observed = inputs::observe(root, &data, phase)?;
+                    let observed = inputs::observe(root, data, phase)?;
                     format!("verify-{}", cadence::store::model::digest(&serde_json::to_vec(&observed.basis)?))
                 }
             };
-            if let Some(saved) = persistence::replay(&data, phase, &request_id)? {
+            if let Some(saved) = persistence::replay(data, phase, &request_id)? {
                 return next_answer(factory, root, &saved).await;
             }
-            let mut request = persistence::prepare(root.into(), &data, phase, request_id)?;
+            let mut request = persistence::prepare(root.into(), data, phase, request_id)?;
             let session = factory.first_touch(root).await?;
             let config = session.config()?;
             request.attempt.route = Some(cadence::execution::model::DispatchRoute {

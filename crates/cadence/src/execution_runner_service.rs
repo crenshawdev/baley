@@ -94,7 +94,7 @@ pub async fn plan_apply<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>,
 /// phase never retained is refused, never answered with the phase.
 pub async fn read_run<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, phase: u32, run: &str) -> Result<Value> {
     let session = factory.first_touch(root).await?;
-    let view = session.derivation_view().await?;
+    let view = session.shared_derivation_view().await?;
     Ok(match history::run_view(&view.snapshot.data, phase, run) {
         Ok(view) => json!({"status":"ok","schema":"native-run-history-1","phase":phase,"run_id":run,
             "launch":view.launch,"result":view.result,"identity":{"kind":"run-output","phase":phase,"run":run}}),
@@ -106,10 +106,10 @@ pub async fn read_run<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, r
 pub async fn read<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, phase: u32,
     selected_plan: Option<u32>, selected_task: Option<String>) -> Result<Value> {
     let session = factory.first_touch(root).await?;
-    let view = session.derivation_view().await?;
-    let records = history::records(&view.snapshot.data, phase)?;
+    let view = session.shared_derivation_view().await?;
+    let records = history::selected_records(&view.snapshot.data, phase, selected_plan, None)?;
     let project = root.parent().ok_or_else(|| Error::Invalid("project root missing".into()))?;
-    let plan_events = history::plan_records(&view.snapshot.data, phase)?;
+    let plan_events = history::selected_plan_records(&view.snapshot.data, phase, selected_plan)?;
     let outcomes = history::plan_outcomes(&view.snapshot.data, phase)?;
     let active = &view.snapshot.data["execution"]["occurrences"][phase.to_string()]["active"];
     let mut answer = json!({"status":"ok","schema":"native-task-history-1","phase":phase,"bound":65536,

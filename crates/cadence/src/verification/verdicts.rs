@@ -27,12 +27,12 @@ pub struct Claim {
 }
 
 pub fn claims(data: &Value) -> Result<Vec<Claim>> {
-    persistence::attempts(data)?;
+    persistence::attempt_values(data)?;
     Ok(data[persistence::NAMESPACE].get("claims").cloned().map(serde_json::from_value).transpose()?.unwrap_or_default())
 }
 
 pub fn patches(data: &Value) -> Result<Vec<Patch>> {
-    persistence::attempts(data)?;
+    persistence::attempt_values(data)?;
     Ok(data[persistence::NAMESPACE].get("patches").cloned().map(serde_json::from_value).transpose()?.unwrap_or_default())
 }
 
@@ -91,7 +91,7 @@ fn assess(data: &Value, claim: &Claim) -> Result<Value> {
     if patch.request_id.trim().is_empty() || patch.request_id.len() > 256 || serde_json::to_vec(patch)?.len() > 262144 {
         return Ok(denied("verification-request", "request_id", "", "bounded nonblank claim required", json!(patch.request_id), Value::Null));
     }
-    let Some(attempt) = persistence::attempts(data)?.into_iter().find(|a| a.id == patch.attempt) else {
+    let Some(attempt) = persistence::attempt(data, None, &patch.attempt)? else {
         return Ok(denied("verification-attempt", "attempt", "", "retained attempt absent", json!(patch.attempt), Value::Null));
     };
     let requested = serde_json::to_value(&patch.basis)?;
@@ -201,7 +201,7 @@ pub fn reobserve(data: &Value, claim: &Claim) -> Result<()> {
         return Err(Error::Conflict("verification claim root changed".into()));
     }
     if claim.answer["status"] == "ok" {
-        let attempt = persistence::attempts(data)?.into_iter().find(|a| a.id == claim.patch.attempt)
+        let attempt = persistence::attempt(data, None, &claim.patch.attempt)?
             .ok_or_else(|| Error::Invalid("claim attempt absent".into()))?;
         inputs::reobserve_external(&claim.root, data, &attempt.inputs, &claim.documents)?;
     }

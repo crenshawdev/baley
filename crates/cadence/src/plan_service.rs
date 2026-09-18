@@ -25,10 +25,8 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
         return cadence::plan::map_view::read(root, phase);
     }
     let observed = persistence::read_snapshot(root)?;
-    let data = observed
-        .as_ref()
-        .map(|s| s.data.clone())
-        .unwrap_or_else(|| json!({}));
+    let empty = json!({});
+    let data = observed.as_ref().map(|s| &s.data).unwrap_or(&empty);
     match command {
         Command::EvidenceRead { .. } => unreachable!("evidence read observes its own inputs"),
         Command::Read { phase, count, submission } => {
@@ -36,12 +34,12 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 if count.is_some() || submission.phase.to_string() != phase {
                     return Ok(model::refused("preview-scope", "complete submission must match phase and cannot accompany count"));
                 }
-                return match complete_preview(root, &data, *submission) {
+                return match complete_preview(root, data, *submission) {
                     Ok(answer) => Ok(answer),
                     Err(error) => path_error(error),
                 };
             }
-            let inventory = match inventory::read(root, &phase, &data) {
+            let inventory = match inventory::read(root, &phase, data) {
                 Ok(value) => value,
                 Err(error) => return Ok(model::refused("inventory", error.to_string())),
             };
@@ -50,18 +48,18 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 .ok()
                 .filter(|n| n.to_string() == phase);
             let approved = native
-                .map(|n| cadence::context::persistence::saved(&data, n.get()))
+                .map(|n| cadence::context::persistence::saved(data, n.get()))
                 .transpose()?
                 .flatten()
                 .is_some();
             let saved = native
-                .map(|n| persistence::saved(&data, n.get()))
+                .map(|n| persistence::saved(data, n.get()))
                 .transpose()?
                 .flatten();
             let occurrence = native
-                .map(|n| persistence::occurrence(&data, n.get()))
+                .map(|n| persistence::occurrence(data, n.get()))
                 .transpose()?;
-            let map_history = native.map(|n| cadence::plan::map_history::view(&data, n.get()))
+            let map_history = native.map(|n| cadence::plan::map_history::view(data, n.get()))
                 .transpose()?.unwrap_or_default();
             let plans = inventory.occupied.iter().filter_map(|number| {
                 let canonical = format!("phases/{phase}/PLAN-{number}.md");
@@ -205,12 +203,12 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             if phase.is_some_and(|phase| phase != submission.phase) {
                 return Ok(model::refused("submission", "phase must match submission.phase"));
             }
-            let approval = match approval.map(|a| persistence::bound(&data, &submission, a)).transpose() {
+            let approval = match approval.map(|a| persistence::bound(data, &submission, a)).transpose() {
                 Ok(value) => value,
                 Err(error) => return path_error(error),
             };
-            match persistence::replay(&data, &submission, approval.as_ref()) {
-                Ok(Some(receipt)) => return replay_answer(root, &data, receipt),
+            match persistence::replay(data, &submission, approval.as_ref()) {
+                Ok(Some(receipt)) => return replay_answer(root, data, receipt),
                 Ok(None) => {}
                 Err(error) => return path_error(error),
             }
@@ -227,22 +225,22 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                     }
                 }
             }
-            let inventory = match inventory::read(root, &submission.phase.to_string(), &data) {
+            let inventory = match inventory::read(root, &submission.phase.to_string(), data) {
                 Ok(value) => value,
                 Err(error) => return Ok(model::refused("inventory", error.to_string())),
             };
-            if let Err(error) = cadence::plan::validation::replacement(&data, &submission, approval.as_ref(), &inventory) {
+            if let Err(error) = cadence::plan::validation::replacement(data, &submission, approval.as_ref(), &inventory) {
                 return path_error(error);
             }
             let Some(approval) = approval.filter(|a| a.approved) else {
                 // A draft is a digest, not a validated candidate: the complete
                 // preview and the approved publication validate the union.
-                hold(root, &data, &submission)?;
+                hold(root, data, &submission)?;
                 return Ok(model::ok(
                     "plan-submit",
                     json!({"persisted":false,"validation":"draft",
                         "submission_digest":persistence::submission_digest(&submission)?,
-                        "documents":documents(&data, &submission)?}),
+                        "documents":documents(data, &submission)?}),
                 ));
             };
             if approval.owner.as_ref().is_none_or(|s| s.trim().is_empty())
@@ -254,7 +252,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                     "approval needs owner, reported time and the exact submission, as a copy or as the submission_digest a draft answer reports",
                 ));
             }
-            if cadence::context::persistence::saved(&data, submission.phase.get())?.is_none() {
+            if cadence::context::persistence::saved(data, submission.phase.get())?.is_none() {
                 return Ok(model::Diagnostic {
                     details: None,
                     rule: "native-approved-truths".into(), slot: "submission.phase".into(),
@@ -262,7 +260,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                     reason: format!("phase {} current native truth authority is absent; use context-intake and context-submit", submission.phase),
                 }.answer());
             }
-            if let Err(error) = persistence::contribute(&data, &submission, &approval, &inventory) {
+            if let Err(error) = persistence::contribute(data, &submission, &approval, &inventory) {
                 return path_error(error);
             }
             let roadmap = std::fs::read_to_string(root.join("ROADMAP.md"))?;

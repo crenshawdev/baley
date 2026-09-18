@@ -60,7 +60,7 @@ pub struct Claim {
 }
 
 pub fn records(data: &Value) -> Result<Vec<Record>> {
-    persistence::attempts(data)?;
+    persistence::attempt_values(data)?;
     Ok(data[persistence::NAMESPACE].get("waivers").cloned().map(serde_json::from_value).transpose()?.unwrap_or_default())
 }
 

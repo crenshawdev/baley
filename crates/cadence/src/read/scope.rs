@@ -15,11 +15,11 @@ pub(super) fn task_lease_files(
     plan: u32,
     task: &str,
 ) -> Result<Vec<PathBuf>, Value> {
-    let data = cadence::context::persistence::read_snapshot(&domain.planning_root)
+    let snapshot = cadence::context::persistence::read_snapshot(&domain.planning_root)
         .map_err(|error| refusal("scope", "scope-unavailable", error.to_string()))?
-        .map(|snapshot| snapshot.data)
         .ok_or_else(|| refusal("scope", "scope-not-found", "native execution authority is absent"))?;
-    let publication = cadence::plan::persistence::saved(&data, phase)
+    let data = &snapshot.data;
+    let publication = cadence::plan::persistence::saved(data, phase)
         .map_err(|error| refusal("scope", "scope-unavailable", error.to_string()))?
         .filter(|saved| saved.id == occurrence)
         .and_then(|saved| saved.publications.get(&plan).cloned())
@@ -32,7 +32,7 @@ pub(super) fn task_lease_files(
         .and_then(|entry| entry.active.as_ref())
         .filter(|active| active.plan == plan && active.tasks.iter().any(|candidate| candidate.id == task))
         .ok_or_else(|| refusal("scope", "scope-not-current", "task lease is not in the active dispatch"))?;
-    let records = cadence::execution::history::records(&data, phase)
+    let records = cadence::execution::history::records(data, phase)
         .map_err(|error| refusal("scope", "scope-unavailable", error.to_string()))?;
     let current = records
         .iter()

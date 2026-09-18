@@ -113,7 +113,7 @@ impl Judgment {
 }
 
 pub fn judgment(root: &Path, data: &Value, phase: u32) -> Result<Judgment> {
-    let attempts: Vec<Attempt> = persistence::attempts(data)?.into_iter().filter(|a| a.inputs.basis.phase == phase).collect();
+    let attempts: Vec<Attempt> = persistence::phase_attempts(data, phase)?;
     let patches = verdicts::patches(data)?;
     let complete: Vec<Option<Patch>> = attempts.iter().map(|a| patches.iter().find(|p| p.attempt == a.id).cloned()).collect();
     let (observed, unavailable) = match inputs::observe(root, data, phase) {

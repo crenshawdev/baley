@@ -336,6 +336,8 @@ pub(crate) fn phase_summary_target(target: &str) -> Result<Option<u32>> {
 impl Storage for Filesystem {
     type Prepared = Prepared;
 
+    fn root(&self) -> Option<&Path> { Some(&self.root) }
+
     fn acquire(&mut self) -> Result<Box<dyn Send>> {
         let mut ownership = BTreeMap::new();
         for (path, expected) in &self.directories {
@@ -516,6 +518,7 @@ impl Storage for Filesystem {
     }
 
     fn install(&mut self, prepared: &Prepared) -> Result<()> {
+        super::cache::invalidate(&self.root);
         if prepared.plan {
             self.check_plan_parent(&prepared.target)?;
         }
@@ -560,6 +563,7 @@ impl Storage for Filesystem {
     }
 
     fn remove(&mut self, target: &str) -> Result<()> {
+        super::cache::invalidate(&self.root);
         let path = self.target(target)?;
         fs::remove_file(&path)?;
         let parent = path.parent().unwrap();

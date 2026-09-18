@@ -25,8 +25,17 @@ pub struct Record {
 }
 
 pub fn records(data: &Value) -> Result<Vec<Record>> {
-    persistence::attempts(data)?;
+    persistence::attempt_values(data)?;
     Ok(data[persistence::NAMESPACE].get("runs").cloned().map(serde_json::from_value).transpose()?.unwrap_or_default())
+}
+
+/// A run document needs only matching launches/results, not every capture.
+pub fn records_for_run(data: &Value, run: &str) -> Result<Vec<Record>> {
+    persistence::attempt_values(data)?;
+    let Some(records) = data[persistence::NAMESPACE].get("runs") else { return Ok(vec![]); };
+    let records = records.as_array().ok_or_else(|| Error::from(Vec::<Record>::deserialize(records).unwrap_err()))?;
+    records.iter().filter(|r| r["event"]["run_id"] == run || r["event"]["launch"]["run_id"] == run)
+        .map(|r| Record::deserialize(r).map_err(Error::from)).collect()
 }
 
 pub fn result<'a>(records: &'a [Record], run_id: &str) -> Option<&'a Record> {
@@ -61,7 +70,7 @@ pub fn decision(record: &Record) -> Result<DecisionRecord> {
 }
 
 pub fn contribute(data: &Value, binding: &str, record: &Record) -> Result<Value> {
-    let attempt = persistence::attempts(data)?.into_iter().find(|a| a.id == record.attempt)
+    let attempt = persistence::attempt(data, None, &record.attempt)?
         .ok_or_else(|| Error::Invalid("verification attempt absent".into()))?;
     let phase = attempt.inputs.basis.phase;
     let mut history = records(data)?;
@@ -108,7 +117,7 @@ pub fn contribute(data: &Value, binding: &str, record: &Record) -> Result<Value>
 
 pub fn reobserve_launch(data: &Value, record: &Record) -> Result<()> {
     if let Event::Launch { documents, .. } = &record.event {
-        let attempt = persistence::attempts(data)?.into_iter().find(|a| a.id == record.attempt)
+        let attempt = persistence::attempt(data, None, &record.attempt)?
             .ok_or_else(|| Error::Invalid("verification attempt absent".into()))?;
         inputs::reobserve_external(&record.root, data, &attempt.inputs, documents)?;
     }
@@ -131,7 +140,7 @@ pub async fn launch(store: Store, root: PathBuf, request: Run) -> Result<Record>
             Ok(prior.clone())
         } else { Err(refuse(request.basis.phase, "verification-run-reuse", "request_id", "request already names another run payload")) };
     }
-    let attempt = persistence::attempts(&view.snapshot.data)?.into_iter().find(|a| a.id == request.attempt)
+    let attempt = persistence::attempt(&view.snapshot.data, None, &request.attempt)?
         .ok_or_else(|| refuse(request.basis.phase, "verification-attempt", "attempt", "attempt absent"))?;
     if attempt.inputs.basis != request.basis {
         return Err(refuse(request.basis.phase, "verification-run-basis", "basis", "echo the saved attempt basis"));

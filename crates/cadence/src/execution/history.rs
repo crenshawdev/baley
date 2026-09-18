@@ -43,29 +43,35 @@ pub struct RunView {
 /// Resolve all run namespaces before choosing one; a colliding id is never
 /// silently answered from whichever collection happened to be read last.
 pub fn run_view(data: &Value, phase: u32, run: &str) -> std::result::Result<RunView, Value> {
-    use crate::{execution::history, verification::{persistence, runner}};
+    use crate::verification::{persistence, runner};
     let unavailable = |error: Error| crate::envelope::Refusal::new("document-unavailable", error.to_string())
         .rule("D-187").slot("identity").phase(phase).value();
     let mut found = Vec::new();
-    let records = history::records(data, phase).map_err(unavailable)?;
+    let records = task_record_values(data, phase).map_err(unavailable)?.iter()
+        .filter(|r| r["request"]["event"]["run_id"] == run)
+        .map(Record::deserialize).collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| unavailable(error.into()))?;
     for record in &records {
         if matches!(&record.request.event, Event::Launch(l) if l.run_id == run) {
             let result = records.iter().find(|r| matches!(&r.request.event, Event::Result(result) if result.run_id == run));
             found.push((json!(record), json!(result), false));
         }
     }
-    let records = history::plan_records(data, phase).map_err(unavailable)?;
+    let records = plan_record_values(data, phase).map_err(unavailable)?.iter()
+        .filter(|r| r["request"]["event"]["run_id"] == run)
+        .map(PlanRecord::deserialize).collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| unavailable(error.into()))?;
     for record in &records {
         if matches!(&record.request.event, PlanEvent::SuiteLaunch(l) if l.run_id == run) {
             let result = records.iter().find(|r| matches!(&r.request.event, PlanEvent::SuiteResult(result) if result.run_id == run));
             found.push((json!(record), json!(result), false));
         }
     }
-    let attempts = persistence::attempts(data).map_err(unavailable)?;
-    let records = runner::records(data).map_err(unavailable)?;
+    let attempts = persistence::attempt_values(data).map_err(unavailable)?;
+    let records = runner::records_for_run(data, run).map_err(unavailable)?;
     for record in &records {
         if matches!(&record.event, runner::Event::Launch { launch, .. } if launch.run_id == run)
-            && attempts.iter().any(|a| a.id == record.attempt && a.inputs.basis.phase == phase) {
+            && attempts.iter().any(|a| a["id"] == record.attempt && a["inputs"]["basis"]["phase"] == phase) {
             let result = records.iter().find(|r| r.attempt == record.attempt
                 && matches!(&r.event, runner::Event::Result { run_id, .. } if run_id == run));
             let mut launch = json!(record);
@@ -126,13 +132,30 @@ pub struct Projection {
     pub unknown_runs: Vec<String>,
 }
 
+fn record_values<'a>(data: &'a Value, phase: u32, namespace: &str, schema: &str, rule: &str, reason: &str) -> Result<&'a [Value]> {
+    let Some(value) = data.get(namespace) else { return Ok(&[]); };
+    if value["schema"] != schema { return Err(admission::refuse(phase, rule, namespace, "", reason)); }
+    let Some(records) = value["phases"].get(phase.to_string()) else { return Ok(&[]); };
+    records.as_array().map(Vec::as_slice).ok_or_else(|| Vec::<Value>::deserialize(records).unwrap_err().into())
+}
+
+fn task_record_values(data: &Value, phase: u32) -> Result<&[Value]> {
+    record_values(data, phase, NAMESPACE, "native-tasks-1", "task-schema", "unsupported native task history")
+}
+
+fn plan_record_values(data: &Value, phase: u32) -> Result<&[Value]> {
+    record_values(data, phase, PLAN_NAMESPACE, "native-plans-1", "plan-schema", "unsupported native plan history")
+}
+
 pub fn records(data: &Value, phase: u32) -> Result<Vec<Record>> {
-    let Some(namespace) = data.get(NAMESPACE) else { return Ok(vec![]) };
-    if namespace["schema"] != "native-tasks-1" {
-        return Err(admission::refuse(phase, "task-schema", NAMESPACE, "", "unsupported native task history"));
-    }
-    namespace["phases"].get(phase.to_string()).cloned().map(serde_json::from_value)
-        .transpose().map(|r| r.unwrap_or_default()).map_err(Error::from)
+    selected_records(data, phase, None, None)
+}
+
+pub fn selected_records(data: &Value, phase: u32, plan: Option<u32>, task: Option<&str>) -> Result<Vec<Record>> {
+    task_record_values(data, phase)?.iter().filter(|r| {
+        let identity = &r["request"]["task"];
+        plan.is_none_or(|plan| identity["plan"] == plan) && task.is_none_or(|task| identity["task"] == task)
+    }).map(|r| Record::deserialize(r).map_err(Error::from)).collect()
 }
 
 pub fn project(records: &[Record], task: &Task) -> Projection {
@@ -661,12 +684,12 @@ pub struct PlanProjection {
 }
 
 pub fn plan_records(data: &Value, phase: u32) -> Result<Vec<PlanRecord>> {
-    let Some(namespace) = data.get(PLAN_NAMESPACE) else { return Ok(vec![]) };
-    if namespace["schema"] != "native-plans-1" {
-        return Err(admission::refuse(phase, "plan-schema", PLAN_NAMESPACE, "", "unsupported native plan history"));
-    }
-    namespace["phases"].get(phase.to_string()).cloned().map(serde_json::from_value)
-        .transpose().map(|r| r.unwrap_or_default()).map_err(Error::from)
+    selected_plan_records(data, phase, None)
+}
+
+pub fn selected_plan_records(data: &Value, phase: u32, plan: Option<u32>) -> Result<Vec<PlanRecord>> {
+    plan_record_values(data, phase)?.iter().filter(|r| plan.is_none_or(|plan| r["request"]["plan"]["plan"] == plan))
+        .map(|r| PlanRecord::deserialize(r).map_err(Error::from)).collect()
 }
 
 pub fn suite_result<'a>(records: &'a [PlanRecord], plan: &PlanIdentity, run_id: &str) -> Option<&'a RunResult> {

@@ -28,14 +28,38 @@ pub struct Request {
     pub documents: BTreeMap<String, String>,
 }
 
-pub fn attempts(data: &Value) -> Result<Vec<Attempt>> {
-    let Some(namespace) = data.get(NAMESPACE) else { return Ok(vec![]); };
+pub fn attempt_values(data: &Value) -> Result<&[Value]> {
+    let Some(namespace) = data.get(NAMESPACE) else { return Ok(&[]); };
     if namespace["schema"] != "verification-1" { return Err(Error::Invalid("unsupported verification namespace".into())); }
-    Ok(serde_json::from_value(namespace["attempts"].clone())?)
+    namespace["attempts"].as_array().map(Vec::as_slice)
+        .ok_or_else(|| Vec::<Attempt>::deserialize(&namespace["attempts"]).unwrap_err().into())
+}
+
+pub fn attempts(data: &Value) -> Result<Vec<Attempt>> {
+    attempt_values(data)?.iter().map(|value| Attempt::deserialize(value).map_err(Error::from)).collect()
+}
+
+/// Select the retained value before deserializing its (potentially large) inputs.
+pub fn attempt(data: &Value, phase: Option<u32>, id: &str) -> Result<Option<Attempt>> {
+    attempt_values(data)?.iter().find(|a| a["id"] == id
+        && phase.is_none_or(|phase| a["inputs"]["basis"]["phase"] == phase))
+        .map(Attempt::deserialize).transpose().map_err(Error::from)
+}
+
+pub fn latest_attempt(data: &Value, phase: u32, id: Option<&str>) -> Result<Option<Attempt>> {
+    attempt_values(data)?.iter().rev().find(|a| a["inputs"]["basis"]["phase"] == phase
+        && id.is_none_or(|id| a["id"] == id))
+        .map(Attempt::deserialize).transpose().map_err(Error::from)
+}
+
+pub fn phase_attempts(data: &Value, phase: u32) -> Result<Vec<Attempt>> {
+    attempt_values(data)?.iter().filter(|a| a["inputs"]["basis"]["phase"] == phase)
+        .map(|value| Attempt::deserialize(value).map_err(Error::from)).collect()
 }
 
 pub fn replay(data: &Value, phase: u32, request_id: &str) -> Result<Option<Attempt>> {
-    let saved = attempts(data)?.into_iter().find(|a| a.request_id == request_id);
+    let saved = attempt_values(data)?.iter().find(|a| a["request_id"] == request_id)
+        .map(Attempt::deserialize).transpose()?;
     if saved.as_ref().is_some_and(|a| a.inputs.basis.phase != phase) {
         return Err(refuse(phase, "verification-request-reuse", "request_id", "request already names another phase"));
     }

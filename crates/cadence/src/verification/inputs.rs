@@ -21,9 +21,24 @@ pub fn refuse(phase: u32, rule: &str, slot: &str, reason: impl Into<String>) -> 
 }
 
 pub fn authority_digest(data: &Value) -> Result<String> {
-    let mut data = data.clone();
-    if let Some(object) = data.as_object_mut() { object.remove(super::persistence::NAMESPACE); }
-    Ok(digest(&serde_json::to_vec(&data)?))
+    // Serialize the same ordered object without copying retained attempts just
+    // to discard their namespace. Preserve the digest byte-for-byte.
+    struct Authority<'a>(&'a Value);
+    impl Serialize for Authority<'_> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+            use serde::ser::SerializeMap;
+            let Some(object) = self.0.as_object() else { return self.0.serialize(serializer); };
+            let mut entries: Vec<_> = object.iter().collect();
+            // serde_json's preserve_order Map::remove uses swap_remove.
+            if let Some(index) = entries.iter().position(|(key, _)| *key == super::persistence::NAMESPACE) {
+                entries.swap_remove(index);
+            }
+            let mut map = serializer.serialize_map(Some(entries.len()))?;
+            for (key, value) in entries { map.serialize_entry(key, value)?; }
+            map.end()
+        }
+    }
+    Ok(digest(&serde_json::to_vec(&Authority(data))?))
 }
 
 pub fn root_binding(root: &Path) -> Result<String> {
@@ -188,4 +203,21 @@ pub fn reobserve_external_accounting(root: &Path, inputs: &Inputs, documents: &B
         return Err(refuse(phase, "verification-inputs", "publications", "installed plan inventory changed before confirmation"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use super::*;
+
+    #[test]
+    fn borrowed_authority_preserves_the_existing_digest_and_key_order() {
+        for text in [r#"{"verification":{},"a":1,"b":2,"c":3}"#,
+            r#"{"a":1,"verification":{},"b":2,"c":3}"#,
+            r#"{"a":1,"b":2,"verification":{}}"#, r#"{"a":1}"#, "null"] {
+            let data: Value = serde_json::from_str(text).unwrap();
+            let mut previous = data.clone();
+            if let Some(object) = previous.as_object_mut() { object.remove(super::super::persistence::NAMESPACE); }
+            assert_eq!(authority_digest(&data).unwrap(), digest(&serde_json::to_vec(&previous).unwrap()));
+        }
+    }
 }

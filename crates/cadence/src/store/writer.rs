@@ -11,6 +11,7 @@ use cadence::execution::model::{
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
 #[path = "../guard/audit.rs"]
@@ -160,6 +161,7 @@ pub enum Operation {
 }
 
 struct Request {
+    shared: Option<oneshot::Sender<Result<Arc<View>>>>,
     operation: Operation,
     reply: oneshot::Sender<Result<View>>,
     #[cfg(test)]
@@ -215,6 +217,11 @@ impl Store {
                     }
                 };
                 while let Some(request) = receiver.blocking_recv() {
+                    if let Some(reply) = request.shared {
+                        let result = writer.refresh().map(|()| writer.view.clone());
+                        let _ = reply.send(result);
+                        continue;
+                    }
                     let result = writer.execute(request.operation);
                     finish_reply(
                         request.reply,
@@ -228,6 +235,14 @@ impl Store {
             })?;
         completion.await.map_err(|_| Error::Closed)??;
         Ok(Self { requests })
+    }
+
+    pub async fn shared_view(&self) -> Result<Arc<View>> {
+        let (reply, completion) = oneshot::channel();
+        let (unused, _) = oneshot::channel();
+        self.requests.send(Request { operation: Operation::ReadVerified, reply: unused,
+            shared: Some(reply), #[cfg(test)] id: String::new() }).await.map_err(|_| Error::Closed)?;
+        completion.await.map_err(|_| Error::Closed)?
     }
 
     pub async fn request(&self, operation: Operation) -> Result<View> {
@@ -252,6 +267,7 @@ impl Store {
         let (reply, completion) = oneshot::channel();
         self.requests
             .send(Request {
+                shared: None,
                 operation,
                 reply,
                 #[cfg(test)]
@@ -313,7 +329,8 @@ impl<P: Policy> Policy for CheckedPolicy<P> {
 struct Writer<S: Storage, P: Policy> {
     storage: S,
     policy: CheckedPolicy<P>,
-    view: View,
+    view: Arc<View>,
+    identity: Option<super::cache::Identity>,
     observed: BTreeMap<String, Observed>,
     failed: Option<Error>,
 }
@@ -322,7 +339,11 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     fn open(mut storage: S, mut policy: P) -> Result<Self> {
         let _ownership = storage.acquire()?;
         super::transaction::recover(&mut storage, &mut policy)?;
+        let identity = storage.root().map(super::cache::identity).transpose()?;
         let (view, observed) = Self::observe(&mut storage)?;
+        if identity != storage.root().map(super::cache::identity).transpose()? {
+            return Err(Error::Conflict("store changed while opening".into()));
+        }
         let mut writer = Self {
             storage,
             policy: CheckedPolicy {
@@ -330,10 +351,12 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 check: None,
             },
             observed,
-            view,
+            identity,
+            view: Arc::new(view),
             failed: None,
         };
         writer.repair_snapshot()?;
+        writer.publish()?;
         Ok(writer)
     }
 
@@ -349,10 +372,10 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let mut operations = self.view.snapshot.operations.clone();
         operations.insert(super::transaction::snapshot_repair_operation(self.next_generation()?),
             model::digest(&serde_json::to_vec(&repaired)?));
-        let next = self.view.clone();
+        let next = self.view.as_ref().clone();
         self.persist(next, operations, Vec::new(), "snapshot_repair",
             super::transaction::IntentKind::SnapshotRepairV1 { repaired: repaired.clone() })?;
-        self.view.snapshot.repaired = repaired;
+        Arc::make_mut(&mut self.view).snapshot.repaired = repaired;
         Ok(())
     }
 
@@ -406,23 +429,34 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         })
     }
 
-    fn execute(&mut self, operation: Operation) -> Result<View> {
-        if let Some(error) = &self.failed {
-            return Err(error.clone());
+    fn publish(&self) -> Result<()> {
+        if let (Some(root), Some(identity)) = (self.storage.root(), &self.identity) {
+            super::cache::publish(root, identity.clone(), self.view.clone())?;
         }
-        // Unverified reads expose the last confirmed view, even if external
-        // bytes have since changed. Only verified reads and writes refresh it.
-        if matches!(operation, Operation::Read) {
-            return Ok(self.view.clone());
-        }
+        Ok(())
+    }
+
+    fn refresh(&mut self) -> Result<()> {
         let _ownership = self.storage.acquire()?;
+        self.refresh_owned()
+    }
+
+    fn refresh_owned(&mut self) -> Result<()> {
+        if let Some(error) = &self.failed { return Err(error.clone()); }
         if let Err(error) = super::transaction::recover(&mut self.storage, &mut self.policy) {
             // Recovery can install participants just like commit. A failed
             // attempt requires a replacement owner, not a retry on this writer.
             self.failed = Some(error.clone());
             return Err(error);
         }
+        let identity = self.storage.root().map(super::cache::identity).transpose()?;
+        if identity.is_some() && identity == self.identity {
+            return Ok(());
+        }
         let observed = Self::read_files(&mut self.storage)?;
+        if identity != self.storage.root().map(super::cache::identity).transpose()? {
+            return Err(Error::Conflict("store changed while reading".into()));
+        }
         if observed != self.observed {
             let view = Self::parse(&observed)?;
             if view.snapshot.generation <= self.view.snapshot.generation
@@ -436,10 +470,29 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     "externally changed store generation".into(),
                 ));
             }
-            self.view = view;
+            self.view = Arc::new(view);
             self.observed = observed;
+            self.identity = identity.clone();
             self.repair_snapshot()?;
+            self.publish()?;
+            return Ok(());
         }
+        self.identity = identity;
+        self.publish()?;
+        Ok(())
+    }
+
+    fn execute(&mut self, operation: Operation) -> Result<View> {
+        if let Some(error) = &self.failed {
+            return Err(error.clone());
+        }
+        // Unverified reads expose the last confirmed view, even if external
+        // bytes have since changed. Only verified reads and writes refresh it.
+        if matches!(operation, Operation::Read) {
+            return Ok(self.view.as_ref().clone());
+        }
+        let _ownership = self.storage.acquire()?;
+        self.refresh_owned()?;
         match operation {
             Operation::VerificationRunV1 { expected_generation, expected_integrity, record } =>
                 self.verification_run(expected_generation, &expected_integrity, *record),
@@ -552,7 +605,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             ),
             other => (other, None),
         };
-        let mut next = self.view.clone();
+        let mut next = self.view.as_ref().clone();
         let mut external = Vec::new();
         let mut operations = next.snapshot.operations.clone();
         let mut verification_claim = None;
@@ -911,12 +964,12 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         use cadence::verification::runner;
         let binding = self.observed[STATE].directory_identity.clone();
         if let Some(prior) = runner::records(&self.view.snapshot.data)?.iter().find(|r| r.id == record.id) {
-            return if prior == &record && self.view.decisions.contains(&runner::decision(prior)?) { Ok(self.view.clone()) }
+            return if prior == &record && self.view.decisions.contains(&runner::decision(prior)?) { Ok(self.view.as_ref().clone()) }
                 else { Err(Error::Invalid("verification run request reused".into())) };
         }
         self.check_expected(generation, integrity)?;
         runner::reobserve_launch(&self.view.snapshot.data, &record)?;
-        let mut next = self.view.clone();
+        let mut next = self.view.as_ref().clone();
         next.snapshot.data = runner::contribute(&next.snapshot.data, &binding, &record)?;
         next.decisions.push(runner::decision(&record)?);
         self.persist(next, self.view.snapshot.operations.clone(), Vec::new(), "verification_run",
@@ -931,12 +984,12 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             if prior != request.attempt || !self.view.decisions.contains(&persistence::decision(&prior)?) {
                 return Err(Error::Invalid("verification replay differs from retained attempt or journal".into()));
             }
-            return Ok(self.view.clone());
+            return Ok(self.view.as_ref().clone());
         }
         self.check_expected(generation, integrity)?;
         let current = inputs::observe(&request.root, &self.view.snapshot.data, request.attempt.inputs.basis.phase)?;
         if current != request.attempt.inputs { return Err(Error::Conflict("verification inputs changed at committing snapshot".into())); }
-        let mut next = self.view.clone();
+        let mut next = self.view.as_ref().clone();
         next.snapshot.data = persistence::contribute(&next.snapshot.data, &root_binding, &request)?;
         next.decisions.push(persistence::decision(&request.attempt)?);
         self.persist(next, self.view.snapshot.operations.clone(), Vec::new(), "verification",
@@ -950,11 +1003,11 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             if !history::decisions(&record)?.iter().all(|decision|self.view.decisions.contains(decision)) {
                 return Err(Error::Invalid("native task receipt lacks its immutable event".into()));
             }
-            return Ok(self.view.clone());
+            return Ok(self.view.as_ref().clone());
         }
         self.check_expected(generation, integrity)?;
         let (data, record) = history::contribute(&self.view.snapshot.data, &root_binding, &request)?;
-        let mut next = self.view.clone();
+        let mut next = self.view.as_ref().clone();
         next.snapshot.data = data;
         next.decisions.extend(history::decisions(&record)?);
         let participants = self.native_summary_participants(&next, request.task.phase)?;
@@ -969,11 +1022,11 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             if !self.view.decisions.contains(&history::plan_decision(&record)?) {
                 return Err(Error::Invalid("native plan receipt lacks its immutable event".into()));
             }
-            return Ok(self.view.clone());
+            return Ok(self.view.as_ref().clone());
         }
         self.check_expected(generation, integrity)?;
         let (data, record) = history::plan_contribute(&self.view.snapshot.data, &root_binding, &request)?;
-        let mut next = self.view.clone();
+        let mut next = self.view.as_ref().clone();
         next.snapshot.data = data;
         next.decisions.push(history::plan_decision(&record)?);
         let participants = self.native_summary_participants(&next, request.plan.phase)?;
@@ -998,14 +1051,14 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             if !self.view.decisions.contains(&admission::decision(&record)?) {
                 return Err(Error::Invalid("native admission receipt lacks its immutable event".into()));
             }
-            return Ok(self.view.clone());
+            return Ok(self.view.as_ref().clone());
         }
         self.check_expected(generation,integrity)?;
         let inventory=self.storage.read(&format!("phase-plan-inventory:{}",request.contract.phase))?;
         let parsed:cadence::plan::inventory::Inventory=serde_json::from_slice(inventory.bytes.as_deref()
             .ok_or_else(||Error::Invalid("missing plan inventory".into()))?)?;
         let (data,record)=admission::contribute(&self.view.snapshot.data,&parsed.documents,&root_binding,&request)?;
-        let mut next=self.view.clone(); next.snapshot.data=data; next.decisions.push(admission::decision(&record)?);
+        let mut next=self.view.as_ref().clone(); next.snapshot.data=data; next.decisions.push(admission::decision(&record)?);
         self.persist(next,self.view.snapshot.operations.clone(),Vec::new(),"native_admission",
             super::transaction::IntentKind::NativeAdmissionV1 {request:Box::new(request),root_binding,inventory})
     }
@@ -1040,7 +1093,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             return Err(Error::Invalid("invalid boundary scope".into()));
         }
         if terminal_v1(&self.view, &decision.scope).is_some() {
-            return Ok(self.view.clone());
+            return Ok(self.view.as_ref().clone());
         }
         decision.validate(false).map_err(boundary_error)?;
         if operation_id.trim().is_empty() {
@@ -1049,7 +1102,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let fingerprint = operation_fingerprint(&("boundary-operation-v1", &decision, &change))?;
         if let Some(prior) = self.view.snapshot.operations.get(operation_id) {
             return if *prior == fingerprint {
-                Ok(self.view.clone())
+                Ok(self.view.as_ref().clone())
             } else {
                 Err(Error::Conflict(
                     "operation identity reused for different content".into(),
@@ -1060,7 +1113,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         if self.view.decisions.iter().any(|record| record.id == id) {
             // A distinct caller ID cannot turn the same answer into another mutation.
             return if matches!(change, BoundaryChange::Observe) {
-                Ok(self.view.clone())
+                Ok(self.view.as_ref().clone())
             } else {
                 Err(Error::Conflict(
                     "boundary decision already admitted under another operation".into(),
@@ -1079,7 +1132,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 },
                 decision_id: record.id.clone(),
             };
-            let mut next = self.view.clone();
+            let mut next = self.view.as_ref().clone();
             next.decisions.push(record);
             model::validate_decisions(&next.decisions)?;
             return self.persist(
@@ -1105,7 +1158,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 .ok_or_else(|| Error::Invalid("lease refusal lacks its open dispatch".into()))?;
             evidence.validate_active(active).map_err(boundary_error)?;
         }
-        let mut next = self.view.clone();
+        let mut next = self.view.as_ref().clone();
         let mut participants = Vec::new();
         let kind = match change {
             BoundaryChange::Issue { .. } => return Err(Error::Invalid("nested dispatch issue".into())),
@@ -1392,14 +1445,14 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let admission = self.boundary_admission(&decision)?;
         if matches!(admission, BoundaryAdmission::Replay) {
             self.revalidate()?;
-            return Ok(self.view.clone());
+            return Ok(self.view.as_ref().clone());
         }
         if matches!(admission, BoundaryAdmission::Terminal(_)) {
             return self.persist_terminal(admission, decision.phase);
         }
         self.check_expected(expected_generation, expected_integrity)?;
 
-        let mut next = self.view.clone();
+        let mut next = self.view.as_ref().clone();
         let mut execution = execution_snapshot(&next.snapshot.data)?;
         let key = dispatch.phase.to_string();
         let occurrence = execution
@@ -1479,7 +1532,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let admission = self.boundary_admission(&decision)?;
         if matches!(admission, BoundaryAdmission::Replay) {
             self.revalidate()?;
-            return Ok(self.view.clone());
+            return Ok(self.view.as_ref().clone());
         }
         if matches!(admission, BoundaryAdmission::Terminal(_)) {
             return self.persist_terminal(admission, decision.phase);
@@ -1497,12 +1550,12 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         .map_err(|error| Error::Invalid(error.to_string()))?;
         if application.disposition == cadence::execution::patch::ApplicationDisposition::Replay {
             self.revalidate()?;
-            return Ok(self.view.clone());
+            return Ok(self.view.as_ref().clone());
         }
         if application.outcome.phase != decision.phase {
             return Err(Error::Invalid("patch boundary phase mismatch".into()));
         }
-        let mut next = self.view.clone();
+        let mut next = self.view.as_ref().clone();
         next.snapshot.data = application.data;
         let mut execution = execution_snapshot(&next.snapshot.data)?;
         if complete_phase {
@@ -1558,13 +1611,13 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let admission = self.boundary_admission(&decision)?;
         if matches!(admission, BoundaryAdmission::Replay) {
             self.revalidate()?;
-            return Ok(self.view.clone());
+            return Ok(self.view.as_ref().clone());
         }
         if matches!(admission, BoundaryAdmission::Terminal(_)) {
             return self.persist_terminal(admission, decision.phase);
         }
         self.check_expected(expected_generation, expected_integrity)?;
-        let mut next = self.view.clone();
+        let mut next = self.view.as_ref().clone();
         append_admitted_boundary(&mut next, admission)?;
         let mut operations = next.snapshot.operations.clone();
         operations.insert(operation_id.to_owned(), fingerprint);
@@ -1590,12 +1643,12 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         }
         if terminal_boundary(&self.view.decisions, phase).is_some() {
             self.revalidate()?;
-            return Ok(Some(self.view.clone()));
+            return Ok(Some(self.view.as_ref().clone()));
         }
         if let Some(prior) = self.view.snapshot.operations.get(operation_id).cloned() {
             self.revalidate()?;
             return if prior == fingerprint {
-                Ok(Some(self.view.clone()))
+                Ok(Some(self.view.as_ref().clone()))
             } else {
                 Err(Error::Conflict(
                     "operation identity reused for different content".into(),
@@ -1643,7 +1696,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let BoundaryAdmission::Terminal(record) = admission else {
             return Err(Error::Invalid("terminal boundary record is absent".into()));
         };
-        let mut next = self.view.clone();
+        let mut next = self.view.as_ref().clone();
         next.decisions.push(record);
         model::validate_decisions(&next.decisions)?;
         self.persist(
@@ -1677,7 +1730,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             .remove(&record.fact.key().map_err(rail_error)?)
         {
             return if old == record && self.view.decisions.contains(&rail_fact_record(&record)?) {
-                Ok(self.view.clone())
+                Ok(self.view.as_ref().clone())
             } else {
                 Err(Error::Conflict("receipt request identity reused".into()))
             };
@@ -1688,7 +1741,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 "receipt confirmation generation mismatch".into(),
             ));
         }
-        let mut next = self.view.clone();
+        let mut next = self.view.as_ref().clone();
         next.snapshot.data = receipts::project(&next.snapshot.data, &record).map_err(rail_error)?;
         next.decisions.push(rail_fact_record(&record)?);
         self.persist(
@@ -1715,7 +1768,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             .remove(&record.observation.key().map_err(rail_error)?)
         {
             return if old == record && self.view.decisions.contains(&rail_record(&record)?) {
-                Ok(self.view.clone())
+                Ok(self.view.as_ref().clone())
             } else {
                 Err(Error::Conflict("rail request identity reused".into()))
             };
@@ -1726,7 +1779,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 "rail confirmation generation mismatch".into(),
             ));
         }
-        let mut next = self.view.clone();
+        let mut next = self.view.as_ref().clone();
         next.snapshot.data = risk::project(&next.snapshot.data, &record).map_err(rail_error)?;
         next.decisions.push(rail_record(&record)?);
         model::validate_decisions(&next.decisions)?;
@@ -1745,14 +1798,14 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let record = audit.record()?;
         if let Some(prior) = self.view.decisions.iter().find(|r| r.id == record.id) {
             return if audit.same_event(&audit::from_record(prior)?) {
-                Ok(self.view.clone())
+                Ok(self.view.as_ref().clone())
             } else {
                 Err(Error::Conflict(
                     "guard event identity reused for different command".into(),
                 ))
             };
         }
-        let mut next = self.view.clone();
+        let mut next = self.view.as_ref().clone();
         next.snapshot.data = audit::project(&self.view.snapshot, &audit)?;
         next.decisions.push(record);
         model::validate_decisions(&next.decisions)?;
@@ -1806,11 +1859,17 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             }
             return Err(error);
         }
+        let identity = self.storage.root().map(super::cache::identity).transpose()?;
         for name in [ITEMS, DECISIONS, STATE] {
             self.observed.insert(name.into(), self.storage.read(name)?);
         }
-        self.view = next;
-        Ok(self.view.clone())
+        if identity != self.storage.root().map(super::cache::identity).transpose()? {
+            return Err(Error::Conflict("store changed after commit".into()));
+        }
+        self.identity = identity;
+        self.view = Arc::new(next);
+        self.publish()?;
+        Ok(self.view.as_ref().clone())
     }
 
     fn next_generation(&self) -> Result<u64> {
@@ -2272,6 +2331,44 @@ mod observe_tests {
             std::fs::write(root.join(STATE), external.render().unwrap()).unwrap();
             assert_eq!(document_scope(root), "external write\n");
             assert_eq!(document_scope(root), "external write\n");
+        });
+    }
+
+    #[test]
+    fn shared_reads_use_the_writer_view_and_recheck_all_store_file_identities() {
+        use super::super::cache;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
+            let store = Store::open(super::super::filesystem::Filesystem::new(root).unwrap(), PlanningPolicy).await.unwrap();
+            assert!(cache::read(root).unwrap().is_none(), "an empty writer must not manufacture a snapshot");
+            store.request(Operation::RewriteSnapshot(document_data("first"))).await.unwrap();
+            let first = store.shared_view().await.unwrap();
+            let second = store.shared_view().await.unwrap();
+            assert!(Arc::ptr_eq(&first, &second), "resident reads must borrow the same view");
+            assert!(Arc::ptr_eq(&first, &cache::read(root).unwrap().unwrap().0),
+                "document reads must borrow the writer's verified view");
+            let path = root.join(STATE);
+            let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+            let external = Snapshot::new(first.snapshot.generation + 1, b"", b"", document_data("other")).unwrap().render().unwrap();
+            assert_eq!(external.len() as u64, std::fs::metadata(&path).unwrap().len());
+            let replacement = root.join("replacement.json");
+            std::fs::write(&replacement, external).unwrap();
+            std::fs::File::options().write(true).open(&replacement).unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();
+            std::fs::rename(replacement, &path).unwrap();
+            assert_eq!(document_scope(root), "other\n", "same size and mtime replacement must invalidate");
+            let current = store.shared_view().await.unwrap();
+            assert_eq!(current.snapshot.data, document_data("other"));
+            assert!(Arc::ptr_eq(&current, &cache::read(root).unwrap().unwrap().0));
+            for file in [STATE, ITEMS, DECISIONS] {
+                let path = root.join(file);
+                let original = std::fs::read(&path).unwrap();
+                std::fs::write(&path, b"corrupt").unwrap();
+                assert!(cache::read(root).is_err(), "a changed {file} must not return the cached view");
+                std::fs::write(path, original).unwrap();
+                assert_eq!(document_scope(root), "other\n");
+            }
         });
     }
 

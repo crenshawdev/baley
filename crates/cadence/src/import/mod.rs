@@ -764,6 +764,11 @@ impl<I: ConfigIo> Session<I> {
         };
         self.store.request(operation).await
     }
+    pub async fn shared_derivation_view(&self) -> Result<std::sync::Arc<View>> {
+        self.config()?;
+        self.store.shared_view().await
+    }
+
     pub async fn derivation_view(&self) -> Result<View> {
         self.config()?;
         self.store.request(Operation::ReadVerified).await

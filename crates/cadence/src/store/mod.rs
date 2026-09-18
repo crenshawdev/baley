@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod decisions;
 pub mod filesystem;
 pub mod items;
@@ -63,6 +64,7 @@ pub struct Observed {
 /// and confirm must check the installed bytes before the writer acknowledges.
 pub trait Storage: Send + 'static {
     type Prepared;
+    fn root(&self) -> Option<&std::path::Path> { None }
     /// Hold root and registered shared-parent ownership until the guard is dropped.
     /// In-memory adapters already have one owner and need no additional lock.
     fn acquire(&mut self) -> Result<Box<dyn Send>> {

@@ -368,7 +368,7 @@ mod resident {
         // Reads through the same owner as writes. Since this task serializes
         // its operations, only another supplied session client can change the
         // generation during I/O; rechecking below catches that too.
-        let view = session.request(Operation::Read).await?;
+        let view = session.shared_derivation_view().await?;
         let config = session.config()?;
         let backend = merge::get(&config.effective.values, "memory.backend")
             .and_then(serde_json::Value::as_str)
@@ -387,7 +387,7 @@ mod resident {
             tokio::task::spawn_blocking(move || prepare(&task_root, &task_view, &task_config))
                 .await
                 .map_err(|_| Error::Closed)?;
-        let latest = session.request(Operation::Read).await?;
+        let latest = session.shared_derivation_view().await?;
         let latest_config = session.config()?;
         if latest.snapshot != view.snapshot || latest_config != config {
             *cache = None;

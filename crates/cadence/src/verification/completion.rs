@@ -69,7 +69,7 @@ pub struct Claim {
 }
 
 pub fn records(data: &Value) -> Result<Vec<Record>> {
-    persistence::attempts(data)?;
+    persistence::attempt_values(data)?;
     Ok(data[persistence::NAMESPACE].get("completions").cloned().map(serde_json::from_value).transpose()?.unwrap_or_default())
 }
 
@@ -390,7 +390,7 @@ pub fn reobserve(data: &Value, claim: &Claim) -> Result<()> {
     if inputs::root_binding(&claim.root)? != claim.root_binding {
         return Err(Error::Conflict("completion claim root changed".into()));
     }
-    let attempt = persistence::attempts(data)?.into_iter().find(|a| a.id == claim.request.attempt)
+    let attempt = persistence::attempt(data, None, &claim.request.attempt)?
         .ok_or_else(|| Error::Invalid("completion attempt absent".into()))?;
     let mut installed = crate::execution::render::installed_summaries(data)?;
     installed.extend(accounted(claim)?);

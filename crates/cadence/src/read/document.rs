@@ -83,10 +83,7 @@ fn dispatch(root: &Path, identity: &DocumentIdentity, id: &str) -> Result<Resolv
     operational["admitted_dispatch_id"] = json!(active.id);
     // The issue pins eligibility; continuation and command provenance are views.
     let mut current = cadence::evidence::persistence::read(&data).map_err(fail)?;
-    let decisions = std::fs::read(root.join(cadence::store::model::DECISIONS))
-        .map_err(|error| refusal("continuation", "document-unavailable", error.to_string()))?;
-    let decisions: Vec<cadence::store::model::DecisionRecord> =
-        cadence::store::model::parse_lines(&decisions).map_err(fail)?;
+    let decisions = &data.0.0.decisions;
     for decision in decisions.iter().rev() {
         let Some(historical) = cadence::evidence::persistence::decode_history(decision).map_err(fail)? else { continue };
         let Some(record) = current.remove(&historical.key().map_err(fail)?) else { continue };
@@ -191,11 +188,54 @@ fn refusal(slot: &str, code: &str, reason: impl Into<String>) -> Value {
     Refusal::new(code, reason).rule("D-148").slot(slot).value()
 }
 
-fn snapshot(root: &Path) -> Result<Value, Value> {
+struct SnapshotData(cadence::store::cache::SharedSnapshot);
+impl std::ops::Deref for SnapshotData {
+    type Target = Value;
+    fn deref(&self) -> &Value { &self.0.data }
+}
+
+fn snapshot(root: &Path) -> Result<SnapshotData, Value> {
     cadence::context::persistence::read_snapshot(root)
         .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?
-        .map(|snapshot| snapshot.data)
+        .map(SnapshotData)
         .ok_or_else(|| refusal("identity", "document-not-found", "native process authority is absent"))
+}
+
+struct AttemptExecution {
+    snapshot: std::sync::Weak<cadence::store::writer::View>,
+    attempt: String,
+    phase: u32,
+    execution: std::sync::Arc<Value>,
+}
+thread_local! {
+    static ATTEMPT_EXECUTION: std::cell::RefCell<Option<AttemptExecution>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Only immutable attempt material is memoized. Judgment and source observation
+/// still run on each read; their external inputs can change without a store write.
+fn attempt_execution(snapshot: &cadence::store::cache::SharedSnapshot,
+    saved: &cadence::verification::persistence::Attempt) -> cadence::store::Result<std::sync::Arc<Value>> {
+    let key = std::sync::Arc::downgrade(&snapshot.0);
+    if let Some(hit) = ATTEMPT_EXECUTION.with(|cache| cache.borrow().as_ref()
+        .filter(|entry| entry.snapshot.ptr_eq(&key) && entry.attempt == saved.id && entry.phase == saved.inputs.basis.phase)
+        .map(|entry| entry.execution.clone())) { return Ok(hit); }
+    let phase = saved.inputs.basis.phase;
+    let mut execution = cadence::verification::dispatch::execution_view(&saved.inputs)?;
+    for plan in execution["plans"].as_array_mut().into_iter().flatten() {
+        for run in plan["suite_runs"].as_array_mut().into_iter().flatten() {
+            run["identity"] = json!({"kind":"run-output","phase":phase,"run":run["run_id"]});
+        }
+        for task in plan["tasks"].as_array_mut().into_iter().flatten() {
+            for run in task["runs"].as_array_mut().into_iter().flatten() {
+                run["identity"] = json!({"kind":"run-output","phase":phase,"run":run["run_id"]});
+            }
+        }
+    }
+    let execution = std::sync::Arc::new(execution);
+    ATTEMPT_EXECUTION.with(|cache| *cache.borrow_mut() = Some(AttemptExecution {
+        snapshot: key, attempt: saved.id.clone(), phase, execution: execution.clone(),
+    }));
+    Ok(execution)
 }
 
 fn roadmap(root: &Path, phase: u32) -> Result<Resolved, Value> {
@@ -241,7 +281,7 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
         DocumentIdentity::ReviewEntry { attempt, entry } => {
             use crate::review::{material, persistence};
             let unavailable = |error: cadence::store::Error| refusal("identity", "document-unavailable", error.to_string());
-            let records = persistence::records(&snapshot(root)?).map_err(unavailable)?;
+            let records = persistence::records(&*snapshot(root)?).map_err(unavailable)?;
             let saved = material::authorized_entry(&records, attempt, entry).map_err(unavailable)?;
             let bytes = material::read_material(&mut persistence::MaterialStorage::from_records(&records).map_err(unavailable)?, &saved).map_err(unavailable)?;
             let text = String::from_utf8(bytes).map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?;
@@ -279,8 +319,7 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
         DocumentIdentity::VerificationAttempt { phase, attempt } => {
             let data = snapshot(root)?;
             let unavailable = |error: cadence::store::Error| refusal("identity", "document-unavailable", error.to_string());
-            let saved = cadence::verification::persistence::attempts(&data).map_err(unavailable)?
-                .into_iter().find(|a| a.id == *attempt && a.inputs.basis.phase == phase.get())
+            let saved = cadence::verification::persistence::attempt(&data, Some(phase.get()), attempt).map_err(unavailable)?
                 .ok_or_else(|| refusal("identity", "document-not-found", "retained verification attempt absent"))?;
             let part = |selector: &str, value: Value| Part { selector: selector.into(), title: selector.into(), body: value.to_string() };
             let mut parts = vec![
@@ -291,17 +330,7 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
                 part("admissions", json!(saved.inputs.admissions.iter().map(|a| json!({"request_id":a.request.request_id,
                     "request_digest":a.request_digest,"set_version":a.set_version})).collect::<Vec<_>>())),
             ];
-            let mut execution = cadence::verification::dispatch::execution_view(&saved.inputs).map_err(unavailable)?;
-            for plan in execution["plans"].as_array_mut().into_iter().flatten() {
-                for run in plan["suite_runs"].as_array_mut().into_iter().flatten() {
-                    run["identity"] = json!({"kind":"run-output","phase":phase,"run":run["run_id"]});
-                }
-                for task in plan["tasks"].as_array_mut().into_iter().flatten() {
-                    for run in task["runs"].as_array_mut().into_iter().flatten() {
-                        run["identity"] = json!({"kind":"run-output","phase":phase,"run":run["run_id"]});
-                    }
-                }
-            }
+            let execution = attempt_execution(&data.0, &saved).map_err(unavailable)?;
             for check in &saved.inputs.checks {
                 let id = check["id"].as_str().unwrap_or_default();
                 let mut body = check.clone();
@@ -415,8 +444,8 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
             let unavailable = |error: cadence::store::Error| refusal("identity", "document-unavailable", error.to_string());
             if let Some((identity, _)) = history::admitted_plans(&data, phase.get()).map_err(unavailable)?
                 .into_iter().find(|(identity, _)| identity.plan == plan.get()) {
-                let plan_records = history::plan_records(&data, phase.get()).map_err(unavailable)?;
-                let task_records = history::records(&data, phase.get()).map_err(unavailable)?;
+                let plan_records = history::selected_plan_records(&data, phase.get(), Some(plan.get())).map_err(unavailable)?;
+                let task_records = history::selected_records(&data, phase.get(), Some(plan.get()), None).map_err(unavailable)?;
                 if plan_records.iter().any(|record| record.request.plan == identity)
                     || task_records.iter().any(|record| {
                         let task = &record.request.task;
@@ -453,7 +482,7 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
                 return Err(refusal("identity", "document-identity", "task summary identity must be complete"));
             }
             let data = snapshot(root)?;
-            let records = cadence::execution::history::records(&data, phase.get())
+            let records = cadence::execution::history::selected_records(&data, phase.get(), Some(plan.get()), Some(task))
                 .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?;
             let body = cadence::execution::render::render_native_task_row(
                 &records,

@@ -21,21 +21,27 @@ const INTENT: &str = ".store-intent.json";
 struct Input {
     bytes: Option<Vec<u8>>,
     modified: Option<SystemTime>,
+    identity: Option<cadence::store::cache::FileIdentity>,
 }
 
-fn observe(root: &Path, path: &str) -> std::io::Result<Input> {
+fn observe(root: &Path, path: &str, cached: bool) -> std::io::Result<Input> {
+    let metadata_only = cached && [STATE, ITEMS, DECISIONS].contains(&path);
     let path = root.join(path);
     let before = match std::fs::metadata(&path) {
         Ok(meta) => meta,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Input { bytes: None, modified: None }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Input { bytes: None, modified: None, identity: None }),
         Err(error) => return Err(error),
     };
+    if metadata_only {
+        return Ok(Input { bytes: None, modified: before.modified().ok(),
+            identity: Some(cadence::store::cache::FileIdentity::new(&before)) });
+    }
     let bytes = std::fs::read(&path)?;
     let after = std::fs::metadata(&path)?;
     if before.modified().ok() != after.modified().ok() || before.len() != after.len() {
         return Err(std::io::Error::other("input changed while reading"));
     }
-    Ok(Input { bytes: Some(bytes), modified: after.modified().ok() })
+    Ok(Input { bytes: Some(bytes), modified: after.modified().ok(), identity: None })
 }
 
 fn inconsistent(phase: u32, inputs: Vec<String>, reason: String) -> Answer {
@@ -47,9 +53,13 @@ fn inconsistent(phase: u32, inputs: Vec<String>, reason: String) -> Answer {
 /// recovery or inventory parser is involved. This detects observed changes; it
 /// does not claim filesystem-wide atomicity or acquire a reader-start guard.
 pub fn read(root: &Path, phase: u32) -> Result<Answer> {
+    // Successful reads borrow the verified view. On a cache/read error retain
+    // the original byte-level diagnostics and their exact input attribution.
+    let store_identity = cadence::store::cache::identity(root).ok();
+    let cached = persistence::read_snapshot(root).ok().flatten();
     let mut before = BTreeMap::new();
     for path in [INTENT, STATE, ITEMS, DECISIONS] {
-        let input = match observe(root, path) {
+        let input = match observe(root, path, cached.is_some()) {
             Ok(input) => input,
             Err(error) => return Ok(inconsistent(phase, vec![path.into()], error.to_string())),
         };
@@ -58,47 +68,54 @@ pub fn read(root: &Path, phase: u32) -> Result<Answer> {
         }
         before.insert(path.to_owned(), input);
     }
-    let data = match before[STATE].bytes.as_deref() {
-        None if before[ITEMS].bytes.is_none() && before[DECISIONS].bytes.is_none() => json!({}),
-        bytes => {
-            let snapshot = match Snapshot::parse(bytes.unwrap_or_default(),
-                before[ITEMS].bytes.as_deref().unwrap_or_default(), before[DECISIONS].bytes.as_deref().unwrap_or_default()) {
-                Ok(snapshot) => snapshot,
-                Err(error) => return Ok(inconsistent(phase, vec![STATE.into(), ITEMS.into(), DECISIONS.into()], error.to_string())),
-            };
-            // Match normal verified snapshot readback's JSONL record validation.
-            for result in [
-                cadence::store::model::parse_lines(before[ITEMS].bytes.as_deref().unwrap_or_default())
-                    .and_then(|records| cadence::store::model::validate_items(&records)),
-                cadence::store::model::parse_lines(before[DECISIONS].bytes.as_deref().unwrap_or_default())
-                    .and_then(|records| cadence::store::model::validate_decisions(&records)),
-            ] {
-                if let Err(error) = result {
-                    return Ok(inconsistent(phase, vec![ITEMS.into(), DECISIONS.into()], error.to_string()));
+    let fallback;
+    let data = if let Some(snapshot) = &cached { &snapshot.data } else {
+        fallback = match before[STATE].bytes.as_deref() {
+            None if before[ITEMS].bytes.is_none() && before[DECISIONS].bytes.is_none() => json!({}),
+            bytes => {
+                let snapshot = match Snapshot::parse(bytes.unwrap_or_default(),
+                    before[ITEMS].bytes.as_deref().unwrap_or_default(), before[DECISIONS].bytes.as_deref().unwrap_or_default()) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => return Ok(inconsistent(phase, vec![STATE.into(), ITEMS.into(), DECISIONS.into()], error.to_string())),
+                };
+                // Match normal verified snapshot readback's JSONL record validation.
+                for result in [
+                    cadence::store::model::parse_lines(before[ITEMS].bytes.as_deref().unwrap_or_default())
+                        .and_then(|records| cadence::store::model::validate_items(&records)),
+                    cadence::store::model::parse_lines(before[DECISIONS].bytes.as_deref().unwrap_or_default())
+                        .and_then(|records| cadence::store::model::validate_decisions(&records)),
+                ] {
+                    if let Err(error) = result {
+                        return Ok(inconsistent(phase, vec![ITEMS.into(), DECISIONS.into()], error.to_string()));
+                    }
                 }
+                snapshot.data
             }
-            snapshot.data
-        }
+        };
+        &fallback
     };
-    let saved = match persistence::saved(&data, phase) {
+    let saved = match persistence::saved(data, phase) {
         Ok(saved) => saved,
         Err(error) => return Ok(inconsistent(phase, vec![STATE.into()], error.to_string())),
     };
     if let Some(saved) = &saved {
         for publication in saved.publications.values() {
             let path = format!("phases/{phase}/PLAN-{}.md", publication.identity.plan);
-            let input = match observe(root, &path) {
+            let input = match observe(root, &path, cached.is_some()) {
                 Ok(input) => input,
                 Err(error) => return Ok(inconsistent(phase, vec![path], error.to_string())),
             };
             before.insert(path, input);
         }
     }
-    let assembled = assemble(&data, phase, &before);
+    let assembled = assemble(data, phase, &before);
     let changed: Vec<_> = before.iter().filter_map(|(path, input)| {
-        let after = observe(root, path);
+        let after = observe(root, path, cached.is_some());
         (!after.is_ok_and(|after| after == *input)).then(|| path.clone())
     }).collect();
+    let changed = if changed.is_empty() && cadence::store::cache::identity(root).ok() != store_identity {
+        vec![STATE.into(), ITEMS.into(), DECISIONS.into()]
+    } else { changed };
     if !changed.is_empty() {
         return Ok(inconsistent(phase, changed, "participating inputs changed during readback".into()));
     }

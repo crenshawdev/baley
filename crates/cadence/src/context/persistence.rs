@@ -149,23 +149,9 @@ pub fn operation_id(context: &ApprovedContext) -> Result<String> {
     ))
 }
 
-/// Reopen actual store bytes without acquiring ownership, creating files, or
-/// recovering a retained intent. Draft and collision paths use only this view.
-pub fn read_snapshot(root: &std::path::Path) -> Result<Option<cadence::store::model::Snapshot>> {
-    use cadence::store::model::{self, Snapshot};
-    let bytes = match std::fs::read(root.join(model::STATE)) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    let items = std::fs::read(root.join(model::ITEMS))?;
-    let decisions = std::fs::read(root.join(model::DECISIONS))?;
-    #[cfg(test)]
-    READ_PARSES.with(|count| count.set(count.get() + 1));
-    let snapshot = Snapshot::parse(&bytes, &items, &decisions)?;
-    model::validate_items(&model::parse_lines(&items)?)?;
-    model::validate_decisions(&model::parse_lines(&decisions)?)?;
-    Ok(Some(snapshot))
+/// Read a verified shared snapshot without acquiring ownership or recovering.
+pub fn read_snapshot(root: &std::path::Path) -> Result<Option<cadence::store::cache::SharedSnapshot>> {
+    cadence::store::cache::read(root)
 }
 
 #[cfg(test)]
