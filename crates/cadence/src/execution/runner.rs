@@ -312,7 +312,7 @@ pub async fn suite_repair(store: &Store, project: &Path, input: RepairInput) -> 
         }
         return Ok(prior.clone());
     }
-    clean(project)?;
+    crate::verification::inputs::clean_accounting(project, &crate::verification::inputs::confirmed_summaries(project)?)?;
     let projection = history::plan_project(&records, &input.plan);
     let question = projection.repair_question.as_ref()
         .filter(|question| question.id == input.question_id)
