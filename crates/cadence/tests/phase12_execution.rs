@@ -1556,7 +1556,7 @@ fn phase12_runner_retains_task_commands_and_one_suite() {
         let mut client=Client::open(project);let launch=client.call("cadence_apply",request);assert_eq!(launch["status"],"ok","{launch}");
         let deadline=std::time::Instant::now()+std::time::Duration::from_secs(20);
         let result=loop {
-            let history=client.call("cadence_query",json!({"operation":"execution-history","phase":12}));
+            let history=phase13::retained_history(project,12);
             if let Some(record)=history["plan_events"].as_array().unwrap().iter()
                 .find(|e|e["request"]["event"]["kind"]=="suite-result" && e["request"]["event"]["run_id"]=="fail-1") {break record["request"]["event"].clone();}
             assert!(std::time::Instant::now()<deadline,"suite result timed out: {history}");
