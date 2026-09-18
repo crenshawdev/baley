@@ -113,7 +113,13 @@ pub async fn read<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root:
     let outcomes = history::plan_outcomes(&view.snapshot.data, phase)?;
     let active = &view.snapshot.data["execution"]["occurrences"][phase.to_string()]["active"];
     let mut answer = json!({"status":"ok","schema":"native-task-history-1","phase":phase,"bound":65536,
-        "plans":[],"tasks":[],"active":active["id"].as_str().map(|id| json!({"id":id,"identity":{"kind":"dispatch","id":id}})),
+        "plans":[],"tasks":[],"active":active["id"].as_str().map(|id| {
+            let mut entry = json!({"id":id,"identity":{"kind":"dispatch","id":id}});
+            if let Some(selection) = active.get("owner_selection") {
+                entry["owner_selection"] = selection.clone();
+            }
+            entry
+        }),
         "repaired":view.snapshot.repaired,"incomplete":false,"continue":null});
     trim_ids(&mut answer, "repaired", 64);
     let mut started = selected_task.is_none();
@@ -158,7 +164,7 @@ pub async fn read<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root:
 }
 
 fn trim_ids(value: &mut Value, key: &str, limit: usize) {
-    if let Some(ids) = value[key].as_array_mut() {
+    if let Some(ids) = value.get_mut(key).and_then(Value::as_array_mut) {
         let before = ids.len();
         ids.truncate(limit);
         while !ids.is_empty() && serde_json::to_vec(ids).expect("JSON values serialize").len() > 8192 {

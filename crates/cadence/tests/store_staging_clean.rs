@@ -91,14 +91,16 @@ fn native_last_close_recovers_its_summary_and_receipt() {
     let Ok(project) = std::env::var("CADENCE_SUMMARY_RECOVERY_PROJECT") else {
         let mut round = round_support::ClosedRound::admitted();
         let close = round.prepare_last_close();
-        let history = round.client.call("cadence_query", serde_json::json!({"operation":"execution-history","phase":31}));
         let project = round.fixture.project().to_path_buf();
         round.client.finish();
+        // The bounded history index is not the full retained close-proof input.
+        let snapshot = cadence::context::persistence::read_snapshot(&project.join(".planning")).unwrap().unwrap();
+        let dispatch = &snapshot.data["execution"]["occurrences"]["31"]["active"];
         let result = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "native_last_close_recovers_its_summary_and_receipt", "--nocapture"])
             .env("CADENCE_SUMMARY_RECOVERY_PROJECT", &project)
             .env("CADENCE_SUMMARY_RECOVERY_CLOSE", close.to_string())
-            .env("CADENCE_SUMMARY_RECOVERY_DISPATCH", history["active"].to_string())
+            .env("CADENCE_SUMMARY_RECOVERY_DISPATCH", dispatch.to_string())
             .env("GNUPGHOME", project.join(".fixture-gnupg"))
             .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1")
             .output().unwrap();
