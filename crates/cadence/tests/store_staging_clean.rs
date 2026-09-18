@@ -21,6 +21,66 @@ use std::sync::{Arc, Mutex};
 mod round_support;
 
 #[test]
+fn native_suite_repair_accounts_for_installed_untracked_summary() {
+    use serde_json::json;
+
+    let mut round = round_support::ClosedRound::admitted();
+    round.close_tasks();
+    let project = round.fixture.project().to_path_buf();
+    let name = ".planning/phases/31/SUMMARY.md";
+    let summary_only = vec![("?? ".into(), name.into())];
+    assert_eq!(runner::status(&project).unwrap(), summary_only);
+    assert_eq!(std::fs::read(project.join(name)).unwrap(), inputs::confirmed_summaries(&project).unwrap()[name]);
+
+    // The admitted command also serves the suite. Give it a recognized failure
+    // after the native last close, without adding the installed summary to Git.
+    let test = std::fs::read_to_string(project.join("tests/tiny.py")).unwrap();
+    let failing = test.replace(", 7)", ", 8)");
+    assert_ne!(failing, test);
+    std::fs::write(project.join("tests/tiny.py"), failing).unwrap();
+    round_support::git(&project, &["add", "tests/tiny.py"]);
+    round_support::git(&project, &["commit", "-S", "-m", "test(round): expose suite failure"]);
+    let history = round.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
+    let suite = round.client.call("cadence_apply", json!({"operation":"execution-suite","request":{
+        "request_id":"summary-suite","plan":round.plan,"expected_version":history["plans"][0]["state"]["version"],
+        "proposed_paths":["tests/tiny.py"]}}));
+    assert_eq!(suite["status"], "ok", "{suite}");
+    let result = round.client.wait_for_event(31, "summary-suite");
+    assert_eq!(result["observation"]["summary"]["failed"], true, "{result}");
+    let history = round.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
+    let question = &history["plans"][0]["state"]["repair_question"];
+    assert_eq!(question["failed_run"], "summary-suite", "{history}");
+    let question_id = question["id"].clone();
+    let answer = round.client.call("cadence_apply", json!({"operation":"execution-suite-repair-answer","request":{
+        "request_id":"summary-repair-answer","plan":round.plan,"expected_version":history["plans"][0]["state"]["version"],
+        "question_id":question_id,"owner":"Fixture Owner","at":"2026-09-18T12:00:00Z","disposition":"approve"}}));
+    assert_eq!(answer["status"], "ok", "{answer}");
+    std::fs::write(project.join("tests/tiny.py"), test).unwrap();
+    round_support::git(&project, &["add", "tests/tiny.py"]);
+    round_support::git(&project, &["commit", "-S", "-m", "fix(round): repair suite failure"]);
+    let commit = round_support::git(&project, &["rev-parse", "HEAD"]);
+    let history = round.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
+    let repair = json!({"operation":"execution-suite-repair","request":{
+        "request_id":"summary-repair","plan":round.plan,"expected_version":history["plans"][0]["state"]["version"],
+        "question_id":question_id,"commits":[commit]}});
+
+    // An owner's edit must still be refused, and cannot consume the repair.
+    let installed = std::fs::read(project.join(name)).unwrap();
+    assert_eq!(installed, inputs::confirmed_summaries(&project).unwrap()[name]);
+    std::fs::write(project.join(name), b"owner edit\n").unwrap();
+    let refused = round.client.call("cadence_apply", repair.clone());
+    assert_eq!(refused["status"], "refused", "{refused}");
+    assert!(refused.to_string().contains("evidence-source-dirty"), "{refused}");
+    std::fs::write(project.join(name), installed).unwrap();
+    assert_eq!(runner::status(&project).unwrap(), summary_only);
+    let repaired = round.client.call("cadence_apply", repair);
+    assert_eq!(repaired["status"], "ok", "{repaired}");
+    assert_eq!(repaired["receipt"]["request"]["event"]["commits"], json!([commit]));
+    assert_eq!(repaired["receipt"]["request"]["event"]["changed_paths"][&commit], json!(["tests/tiny.py"]));
+    round.client.finish();
+}
+
+#[test]
 fn native_summary_accounts_for_exact_untracked_and_modified_bytes() {
     let mut round = round_support::ClosedRound::admitted();
     round.close_tasks();
