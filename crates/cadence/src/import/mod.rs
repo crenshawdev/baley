@@ -836,12 +836,15 @@ impl<I: ConfigIo> Session<I> {
         let current = self.store.request(Operation::ReadVerified).await?;
         // Reconstructing the projection after another write changes attempt data,
         // not the logical input. Recover its immutable receipt before projecting.
+        // The comparison is over the content, never the write-time stamp: the
+        // retried submit is a second process and never observed the second the
+        // first one wrote in.
         if let Some(prior) = current
             .decisions
             .iter()
             .find(|prior| prior.id == decision.id)
         {
-            return if prior == &decision {
+            return if prior.same_record(&decision) {
                 Ok(current)
             } else {
                 Err(Error::Conflict(
