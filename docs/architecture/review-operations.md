@@ -16,7 +16,7 @@ rejected. IDs are the binary's saved IDs, not names reconstructed from paths.
 | review-next | fire: string | A durable issued dispatch with saved attempt and admission, or delivery/completion/action/deferred state. |
 | review-admission | fire: string | Saved H1 Admission. |
 | review-material | attempt: string, entry: string | Retained MaterialEntry and exact bytes (integer array); unavailable material is an error. |
-| review-original | original: string | OriginalRead: identity, raw_bytes, findings, original record and saved interpretation. |
+| review-original | original: string | OriginalRead: identity, retained parsed findings, original record and saved interpretation; no raw bytes. |
 | review-attempt | attempt: string | H3 Attempt, including requested and observed facts separately. |
 | review-roster | fire: string | Required/pending roster and complete saved attempts. |
 | review-inventory | none | Authoritative review record families and unfiltered all-home deferred inventory. |
@@ -45,7 +45,7 @@ adapter instead of silently impersonated by a local agent.
 |---|---|---|
 | review-admit | request: AdmissionRequest | fire, attempt, replayed; off returns no fire or dispatch. |
 | review-observation | observation: Observation | Saved attempt and durable observation receipt, including replay status. |
-| review-return | identity: ReturnIdentity, launch: string, host_return: string or null, raw: string or null, host_failure: string or null, citations: array | Durable ReturnReceipt or typed binding/conflict/delivery failure. |
+| review-return | identity: ReturnIdentity, launch: string or null, host_return: string or null, findings: array (omit on failure), host_failure: string or null, failure_event: object or null, citations: array | Durable ReturnReceipt with findings {digest,count}, or typed binding/conflict/delivery failure. |
 | review-material-append | manifest: string, acquisition: string, path: string or null, label: string or null, bytes: integer array, delivered: [attempt, MaterialView] or null | Append-only retained MaterialEntry after its conditional commit. |
 | review-enqueue | fire: string | Durable initial member/continuation receipt, absent obligation, or enqueue-write-failed with wait. |
 
@@ -85,12 +85,18 @@ has nullable input/output/cost/currency. Contract is
 Observations bind actual bridge events to issued attempts. Unknown facts stay
 null; a voice label is not evidence that an agent ran.
 
-`raw` contains the exact returned text, JSON-escaped only for transport. The
-adapter passes the decoded bytes unchanged through forward_return into
-ReturnSubmission. H4 accumulation is capped at 4 MiB. Missing raw text stays
-missing. Each citations item is null or a SourceReference with entry/path/side/
-line; it never changes the five finding fields. Acceptance and closure share
-one conditional store transaction. A failure receipt is not acknowledgment.
+`findings` is the reviewer's unchanged parsed array of five-field objects:
+file, line, severity, claim and failure_scenario. Never send raw JSON text.
+Missing or malformed host output uses `host_failure` without findings; a
+definite launch failure uses `failure_event` plus `host_failure`, with null
+launch and host_return. Never manufacture an empty successful review.
+The receipt's findings contain only digest and count; `review-original` reads
+the retained parsed findings and identity. The digest hashes the canonical
+retained object envelope {"findings":[...]} with the five fields in that order.
+H4 accumulation is capped at 4 MiB. Each citations item is null or a
+SourceReference with entry/path/side/line; it never changes the five finding
+fields. Acceptance and closure share one conditional store transaction.
+A failure receipt is not acknowledgment.
 
 Append acquisition identity deterministically names the additional entry. With
 no delivered binding it is later evidence. Delivered context must identify an

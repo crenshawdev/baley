@@ -206,12 +206,16 @@ Then use these actual public operations:
    WAIT for the local host's actual return. Call `cadence_apply review-return`
    with `identity: {fire, occurrence, artifact, view, attempt, round}` copied
    from the returned admission/attempt, observed `launch` and `host_return`,
-   unchanged `raw`, `failure_event: null`, `host_failure: null` and
-   `citations: []`. For a definite launch failure, forward its actual
-   `failure_event` and `host_failure` with null launch/host_return/raw. For a
-   launched host that produces no return, retain the launch and submit null
-   raw/host_return; never invent an empty successful review.
+   the unchanged five-field `findings` array (file, line, severity, claim,
+   failure_scenario), `failure_event: null`, `host_failure: null` and
+   `citations: []`. Never send raw JSON text. For a definite launch failure,
+   forward its actual `failure_event` and `host_failure` with null launch and
+   host_return, omitting findings. Missing or malformed host output uses
+   `host_failure` without findings; retain any observed launch and host_return,
+   leaving missing host_return null. Never invent an empty successful review.
 6. Wait for `review-return`'s durable receipt (`durable_terminal_count: 1`).
+   Its findings carry only digest and count; `review-original` reads the
+   retained parsed findings and identity.
    Repeat that identical return and confirm `replayed: true`. Poll
    `review-next` for `usable-complete` or `complete-with-failure` according
    to the actual fallback result. Read every issued `review-attempt`, the

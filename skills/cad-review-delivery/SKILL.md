@@ -55,15 +55,19 @@ If the host cannot expose a binding, stop with the attempt pending; never invent
 origin. Unknown stop attribution does not close anything.
 
 WAIT for the local return. Submit `review-return` with identity
-{fire,occurrence,artifact,view,attempt,round}, launch, host_return, raw,
-host_failure and citations. Copy raw text byte-for-byte, preserving whitespace,
-quotations, newlines and Unicode. Escape it only for the tool's JSON transport;
-never parse/reserialize, summarize or filter the finding payload. Keep missing
-text null. Supply citation sidecars only when actually reported; otherwise use
-an empty citations array. Do not manufacture observed usage or empty success.
+{fire,occurrence,artifact,view,attempt,round}, launch, host_return, findings,
+host_failure and citations. Submit the reviewer's unchanged five-field findings
+array as findings: each item has file, line, severity, claim and failure_scenario.
+Never send raw JSON text. Do not summarize or filter the findings. Missing or
+malformed host output uses host_failure without findings, never an empty clean
+result. Supply citation sidecars only when actually reported; otherwise use an
+empty citations array. Do not manufacture observed usage or empty success.
+The receipt carries only the findings digest and count; `review-original`
+reads the retained parsed findings and identity. The digest hashes the canonical
+retained object envelope {"findings":[...]} with the five fields in that order.
 For a definite failed launch or unavailable provider (`dispatch.local:false`),
 submit `review-return` with the issued attempt's full identity, launch null,
-host_return null, raw null, citations [], the actual reason in host_failure,
+host_return null, no findings, citations [], the actual reason in host_failure,
 and failure_event containing the actual event: kind `launch-failure`, its
 bounded observation ID/reference, attempt, observed_at, contract and observed
 usage. Unobserved launch, host_return, host and model fields stay null. This
@@ -74,8 +78,8 @@ request under a local voice. Phase 10 owns remote transport.
 
 WAIT for durable acknowledgment. A delivery-write-failed, conflict or refusal
 is not completion. Retry the identical return when appropriate, retaining its
-identity and bytes. A SubagentStop observation alone cannot deliver missing
-raw text or close a review. Neither coordinator nor reviewer writes findings,
+identity and typed values. A SubagentStop observation alone cannot deliver missing
+findings or close a review. Neither coordinator nor reviewer writes findings,
 review lifecycle records, traces or queue members.
 
 Then query review-next again. Follow its saved next choice or wait state.
