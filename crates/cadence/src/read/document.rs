@@ -388,6 +388,7 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
             })
         }
         DocumentIdentity::PhasePlan { phase, plan } => {
+            use cadence::execution::history;
             let data = snapshot(root)?;
             let occurrence = cadence::plan::persistence::saved(&data, phase.get())
                 .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?
@@ -409,6 +410,22 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
                     let value = serde_json::to_value(item).map_err(|error| refusal("part", "document-invalid", error.to_string()))?;
                     let selector = format!("evidence:{}", value["id"].as_str().unwrap_or_default());
                     parts.push(cadence::plan::render::Part { title: selector.clone(), selector, body: value.to_string() });
+                }
+            }
+            let unavailable = |error: cadence::store::Error| refusal("identity", "document-unavailable", error.to_string());
+            if let Some((identity, _)) = history::admitted_plans(&data, phase.get()).map_err(unavailable)?
+                .into_iter().find(|(identity, _)| identity.plan == plan.get()) {
+                let plan_records = history::plan_records(&data, phase.get()).map_err(unavailable)?;
+                let task_records = history::records(&data, phase.get()).map_err(unavailable)?;
+                if plan_records.iter().any(|record| record.request.plan == identity)
+                    || task_records.iter().any(|record| {
+                        let task = &record.request.task;
+                        task.plan == identity.plan && task.occurrence == identity.occurrence
+                            && task.admission_digest == identity.admission_digest
+                    }) {
+                    let body = serde_json::to_string(&history::plan_project(&plan_records, &identity))
+                        .map_err(|error| refusal("part", "document-invalid", error.to_string()))?;
+                    parts.push(cadence::plan::render::Part { selector: "execution".into(), title: "execution".into(), body });
                 }
             }
             Ok(Resolved {

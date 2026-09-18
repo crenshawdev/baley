@@ -21,7 +21,12 @@ output is named by digest and byte_length. Read document with
 indexed launch, result, stdout:<n> and stderr:<n> parts. Each stream part is
 bounded text; follow next until null. execution-history answers metadata and
 that identity, and without run it answers a bounded index. Follow an incomplete
-index's continue selector, including plan and task. An owner's attestation
+index's continue selector, including plan and task. Plan state includes round
+(dispatch_id, host, tokens, wire_bytes, owner, at and request_id) and completion
+(suite_run, request_id and the settlement material base/head) once recorded;
+absent fields are omitted. The phase-plan document's execution part serves the
+same state when native execution records exist and is searchable through
+document-search. An owner's attestation
 is a record to inspect, not a mechanical proof that the check did not stub its
 subject. Never fake the boundary the truth promises.
 

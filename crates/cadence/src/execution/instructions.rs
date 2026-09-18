@@ -50,7 +50,11 @@ operational input or from `execution-history`:
    commands or they are not run through Cadence.
 3. `mcp__cadence__cadence_query` `{"operation": "execution-history", "phase"}`
    reads every retained run, result, task version and receipt; with `run` it
-   reads one run by id, its output as text.
+   reads one run by id, its output as text. Plan state includes `round`
+   (dispatch_id, host, tokens, wire_bytes, owner, at and request_id) and
+   `completion` (suite_run, request_id and the settlement material base/head)
+   once recorded; absent fields are omitted. The `phase-plan` document's
+   `execution` part serves the same state when native execution records exist.
 4. `execution-task-progress` with `event.kind` `progress`, `deviation` or
    `failed-attempt`: acknowledge work as it lands. A commit the history has not
    acknowledged is visible uncertainty; the owner reconciles it before any

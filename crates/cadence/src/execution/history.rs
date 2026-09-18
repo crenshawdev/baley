@@ -619,12 +619,33 @@ pub struct PlanRecord {
     pub request: PlanRequest,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoundRecord {
+    #[serde(flatten)]
+    pub submission: ExecutorRound,
+    pub owner: String,
+    pub at: String,
+    pub request_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletionSummary {
+    pub suite_run: String,
+    pub request_id: String,
+    pub base: Option<String>,
+    pub head: Option<String>,
+}
+
 /// The suite's standing as the binary observed it: `pending` before a launch,
 /// `unknown` while the latest launch has no recognized result, `failed` or
 /// `passed` from a recognized result, and `complete` after native completion.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanProjection {
     pub version: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<RoundRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<CompletionSummary>,
     pub launches: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub results: Vec<String>,
@@ -708,12 +729,15 @@ pub fn failing_tests(result: &RunResult) -> Vec<String> {
 }
 
 pub fn plan_project(records: &[PlanRecord], plan: &PlanIdentity) -> PlanProjection {
-    let mut projection = PlanProjection { version: 0, launches: vec![], results: vec![], relaunch: None,
+    let mut projection = PlanProjection { version: 0, round: None, completion: None, launches: vec![], results: vec![], relaunch: None,
         repair_question: None, repair_answer: None, repair: None, outcome: "pending".into(), completed: false };
     for record in records.iter().filter(|r| r.request.plan == *plan) {
         projection.version = record.version;
         match &record.request.event {
-            PlanEvent::RoundRecord(_) => {},
+            PlanEvent::RoundRecord(round) => projection.round = Some(RoundRecord {
+                submission: round.submission.clone(), owner: round.approval.owner.clone(),
+                at: round.approval.at.clone(), request_id: record.request.request_id.clone(),
+            }),
             PlanEvent::SuiteLaunch(launch) => { projection.launches.push(launch.run_id.clone()); projection.outcome = "unknown".into(); }
             PlanEvent::SuiteResult(result) => {
                 projection.results.push(result.run_id.clone());
@@ -723,7 +747,15 @@ pub fn plan_project(records: &[PlanRecord], plan: &PlanIdentity) -> PlanProjecti
             PlanEvent::SuiteRepairAnswer(answer) => projection.repair_answer = Some(answer.clone()),
             PlanEvent::SuiteRepair(repair) => projection.repair = Some(repair.clone()),
             PlanEvent::SuiteRelaunch(_) => projection.relaunch = Some(record.request.request_id.clone()),
-            PlanEvent::Completion(_) => { projection.completed = true; projection.outcome = "complete".into(); }
+            PlanEvent::Completion(completion) => {
+                projection.completion = Some(CompletionSummary {
+                    suite_run: completion.suite_run.clone(), request_id: record.request.request_id.clone(),
+                    base: completion.settlement.as_ref().map(|s| s.material.base_id().to_owned()),
+                    head: completion.settlement.as_ref().map(|s| s.material.tip_id().to_owned()),
+                });
+                projection.completed = true;
+                projection.outcome = "complete".into();
+            }
         }
     }
     projection
