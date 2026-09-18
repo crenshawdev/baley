@@ -18,6 +18,16 @@ fn in_phase(value: &Value, phase: &str) -> bool {
         || value.as_u64().is_some_and(|value| phase.parse::<u64>() == Ok(value)))
 }
 
+/// One refusal line's material: its code, its located summary and the second
+/// it was written, which a record from before D-143 does not have.
+fn detail(record: &cadence::store::model::DecisionRecord, code: &str, located: String) -> Value {
+    let mut detail = json!({"code":code,"located":located});
+    if let Some(at) = record.at {
+        detail["at"] = json!(at);
+    }
+    detail
+}
+
 fn records(view: &View, phase: &str) -> Value {
     let mut routing = 0;
     let mut gates = 0;
@@ -45,13 +55,18 @@ fn records(view: &View, phase: &str) -> Value {
                     || (outcome == "gate_fire" && in_phase(&value, phase)) { gates += 1; }
             }
             Decision::Refusal { reason, evidence: value } if in_phase(&evidence(value), phase) => {
-                refusals.push(json!({"code":reason,"located":evidence(value).to_string()}));
+                refusals.push(detail(record, reason, evidence(value).to_string()));
             }
             Decision::BoundaryV1(value) => {
                 let boundary = serde_json::to_value(&value.boundary).expect("boundary record");
                 if in_phase(&boundary, phase) && boundary["receipt"]["envelope"]["status"] == "refused" {
                     let envelope = &boundary["receipt"]["envelope"];
-                    refusals.push(json!({"code":envelope["code"],"located":envelope["reason"]}));
+                    // The typed located object when the record carries one; a
+                    // record written before D-140 has only its bounded reason.
+                    let located = value.boundary.located.as_ref().map_or_else(
+                        || envelope["reason"].as_str().unwrap_or_default().to_owned(),
+                        cadence::execution::boundary::Located::summary);
+                    refusals.push(detail(record, envelope["code"].as_str().unwrap_or("unknown"), located));
                 }
             }
             _ => {}

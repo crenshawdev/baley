@@ -3,7 +3,7 @@
 use crate::store as production_store;
 use production_store::filesystem::{Filesystem, Stage};
 use production_store::model::{
-    Decision, DecisionRecord, Disposition, Evidence, ItemRecord, Origin, VERSION,
+    self, Decision, DecisionRecord, Disposition, Evidence, ItemRecord, Origin, VERSION,
 };
 use production_store::transaction::Transaction;
 use production_store::writer::{Operation, Store};
@@ -52,6 +52,7 @@ fn operation(id: &str) -> Transaction {
                 outcome: id.into(),
                 evidence: Evidence::Null,
             },
+            at: model::stamped_at(),
         }],
         snapshot: Some(serde_json::json!({"value":id})),
         external: vec![],

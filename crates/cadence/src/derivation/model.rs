@@ -147,6 +147,18 @@ pub struct CapturedInputs {
     pub phases: Vec<PhaseObservation>,
 }
 
+/// One roadmap line that disagreed, kept whole so a refusal can be joined to
+/// it: the document and line, the zero-based entry, the phase id itself and
+/// the status the derivation reached.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConflictEntry {
+    pub source: String,
+    pub line: u64,
+    pub entry: u64,
+    pub phase: String,
+    pub status: String,
+}
+
 /// Further consistency and memo refusals extend this shared error vocabulary.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +181,11 @@ pub enum DerivationError {
         field: String,
         declared: String,
         derived: String,
+        /// The roadmap entry behind a declaration conflict (D-140). The
+        /// flattened pair says a tick disagrees; it cannot say which phase or
+        /// what the derivation made of it, and the log needs both.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<ConflictEntry>,
     },
     InvalidStatus {
         source: String,

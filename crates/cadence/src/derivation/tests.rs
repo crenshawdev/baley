@@ -950,6 +950,7 @@ fn ac5_agreement_frozen_agree_mutant_fails_shared_table() {
                 field: "status".into(),
                 declared: "unplanned".into(),
                 derived: "unplanned".into(),
+                entry: None,
             });
         }
         agreement(capture, word, phase, total)
@@ -964,7 +965,7 @@ fn conflict_only<T>(
     declared: &str,
     derived: &str,
 ) -> bool {
-    matches!(result, Err(DerivationError::StateConflict { source: s, field: f, declared: a, derived: b })
+    matches!(result, Err(DerivationError::StateConflict { source: s, field: f, declared: a, derived: b, .. })
         if s == source && f == field && a == declared && b == derived && a != b)
 }
 

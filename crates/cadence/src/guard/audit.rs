@@ -118,6 +118,7 @@ impl Audit {
                     evidence,
                 }
             },
+            at: model::stamped_at(),
         })
     }
     pub fn same_event(&self, other: &Self) -> bool {
@@ -137,7 +138,7 @@ pub fn from_record(record: &DecisionRecord) -> Result<Audit> {
         return Err(Error::Invalid("guard receipt lacks evidence".into()));
     };
     let audit: Audit = serde_json::from_str(text)?;
-    if audit.record()? != *record {
+    if !audit.record()?.same_record(record) {
         return Err(Error::Invalid(
             "guard receipt differs from its evidence".into(),
         ));

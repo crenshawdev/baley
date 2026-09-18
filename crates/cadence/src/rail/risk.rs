@@ -380,6 +380,7 @@ impl Recorded {
                 .into(),
                 evidence: Evidence::Text(serde_json::to_string(self)?),
             },
+            at: crate::store::model::stamped_at(),
         })
     }
 }
@@ -423,7 +424,7 @@ pub fn confirmed(view: &View, scope: &Scope, request_id: &str) -> Result<Option<
         return Ok(None);
     };
     if record.confirmation.generation > view.snapshot.generation
-        || !view.decisions.contains(&record.decision()?)
+        || !crate::store::model::retained(&view.decisions, &record.decision()?)
     {
         return Err(Error::Invalid(
             "rail observation lacks confirmed history".into(),

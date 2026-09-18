@@ -468,7 +468,8 @@ pub enum RetirementApply {
 pub fn decision(record: &Record) -> Result<DecisionRecord> {
     Ok(DecisionRecord { version: 1, id: format!("native-task:{}:{}", record.request.task.phase, record.request_digest), revision: 1,
         origin: Origin { source: "native-task-event-1".into(), original: Evidence::Missing },
-        decision: Decision::Gate { outcome: "native-task-event-1".into(), evidence: Evidence::Text(serde_json::to_string(record)?) } })
+        decision: Decision::Gate { outcome: "native-task-event-1".into(), evidence: Evidence::Text(serde_json::to_string(record)?) },
+        at: crate::store::model::stamped_at() })
 }
 
 pub fn decisions(record: &Record) -> Result<Vec<DecisionRecord>> {
@@ -1153,7 +1154,8 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
 pub fn plan_decision(record: &PlanRecord) -> Result<DecisionRecord> {
     Ok(DecisionRecord { version: 1, id: format!("native-plan:{}:{}", record.request.plan.phase, record.request_digest), revision: 1,
         origin: Origin { source: "native-plan-event-1".into(), original: Evidence::Missing },
-        decision: Decision::Gate { outcome: "native-plan-event-1".into(), evidence: Evidence::Text(serde_json::to_string(record)?) } })
+        decision: Decision::Gate { outcome: "native-plan-event-1".into(), evidence: Evidence::Text(serde_json::to_string(record)?) },
+        at: crate::store::model::stamped_at() })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

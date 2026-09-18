@@ -183,6 +183,7 @@ fn validate_claim_transition(participants: &[Participant], snapshot: &Snapshot, 
         .ok_or_else(|| Error::Invalid(format!("{what} requires previous decisions")))?;
     let mut expected_decisions: Vec<DecisionRecord> = model::parse_lines(old_decisions)?;
     expected_decisions.push(decision);
+    model::adopt_stamps(&mut expected_decisions, decisions)?;
     let mut operations = previous.operations.clone();
     if operations.insert(transaction.id.clone(), transaction.fingerprint()?).is_some()
         || Some(&snapshot.data) != transaction.snapshot.as_ref() || old_items != Some(items)
@@ -822,6 +823,7 @@ impl Intent {
                     .ok_or_else(|| Error::Invalid("verification run requires previous decisions".into()))?;
                 let mut expected_decisions: Vec<DecisionRecord> = model::parse_lines(old_decisions)?;
                 expected_decisions.push(runner::decision(&record)?);
+                model::adopt_stamps(&mut expected_decisions, decisions)?;
                 if snapshot.data != expected || old_items != Some(items)
                     || decisions != model::render_lines(&expected_decisions)?
                     || snapshot.operations != previous.operations
@@ -842,6 +844,7 @@ impl Intent {
                     .ok_or_else(|| Error::Invalid("verification requires previous decisions".into()))?;
                 let mut expected_decisions: Vec<DecisionRecord> = model::parse_lines(old_decisions)?;
                 expected_decisions.push(persistence::decision(&request.attempt)?);
+                model::adopt_stamps(&mut expected_decisions, decisions)?;
                 if snapshot.data != expected || old_items != Some(items)
                     || decisions != model::render_lines(&expected_decisions)?
                     || snapshot.operations != previous.operations
@@ -881,6 +884,7 @@ impl Intent {
                     .ok_or_else(|| Error::Invalid("native plan requires previous decisions".into()))?;
                 let mut expected_decisions: Vec<DecisionRecord> = model::parse_lines(old_decisions)?;
                 expected_decisions.push(history::plan_decision(&record)?);
+                model::adopt_stamps(&mut expected_decisions, decisions)?;
                 if snapshot.data != expected || old_items != Some(items)
                     || decisions != model::render_lines(&expected_decisions)?
                     || snapshot.operations != previous.operations
@@ -902,6 +906,7 @@ impl Intent {
                     .ok_or_else(|| Error::Invalid("native task requires previous decisions".into()))?;
                 let mut expected_decisions: Vec<DecisionRecord> = model::parse_lines(old_decisions)?;
                 expected_decisions.extend(history::decisions(&record)?);
+                model::adopt_stamps(&mut expected_decisions, decisions)?;
                 if snapshot.data != expected || old_items != Some(items)
                     || decisions != model::render_lines(&expected_decisions)?
                     || snapshot.operations != previous.operations
@@ -923,6 +928,7 @@ impl Intent {
                     .ok_or_else(||Error::Invalid("native admission requires previous decisions".into()))?;
                 let mut expected_decisions:Vec<DecisionRecord>=model::parse_lines(old_decisions)?;
                 expected_decisions.push(admission::decision(&record)?);
+                model::adopt_stamps(&mut expected_decisions,decisions)?;
                 if snapshot.data!=expected || old_items!=Some(items)
                     || decisions!=model::render_lines(&expected_decisions)?
                     || snapshot.operations!=previous.operations
@@ -1206,6 +1212,7 @@ impl Intent {
         };
         let mut expected: Vec<DecisionRecord> = model::parse_lines(old_decisions)?;
         expected.push(super::writer::rail_fact_record(record)?);
+        model::adopt_stamps(&mut expected, &decisions.bytes)?;
         if items.bytes != old_items
             || decisions.bytes != model::render_lines(&expected)?
             || old.generation.checked_add(1) != Some(snapshot.generation)
@@ -1259,6 +1266,7 @@ impl Intent {
         };
         let mut expected: Vec<DecisionRecord> = model::parse_lines(old_decisions)?;
         expected.push(super::writer::rail_record(record)?);
+        model::adopt_stamps(&mut expected, &decisions.bytes)?;
         if items.bytes != old_items
             || decisions.bytes != model::render_lines(&expected)?
             || old.generation.checked_add(1) != Some(snapshot.generation)
@@ -1316,6 +1324,7 @@ impl Intent {
         };
         let mut expected: Vec<DecisionRecord> = model::parse_lines(old_decisions)?;
         expected.push(audit.record()?);
+        model::adopt_stamps(&mut expected, &decisions.bytes)?;
         if items.bytes != old_items
             || decisions.bytes != model::render_lines(&expected)?
             || old.generation.checked_add(1) != Some(snapshot.generation)

@@ -211,6 +211,9 @@ pub fn translate(
                     original: Evidence::Missing,
                 },
                 decision,
+                // D-143: a row read out of a legacy source was not written now,
+                // and the source says nothing about when it was.
+                at: None,
             });
         }
     }

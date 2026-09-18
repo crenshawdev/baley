@@ -975,7 +975,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         use cadence::verification::runner;
         let binding = self.observed[STATE].directory_identity.clone();
         if let Some(prior) = runner::records(&self.view.snapshot.data)?.iter().find(|r| r.id == record.id) {
-            return if prior == &record && self.view.decisions.contains(&runner::decision(prior)?) { Ok(self.view.as_ref().clone()) }
+            return if prior == &record && model::retained(&self.view.decisions, &runner::decision(prior)?) { Ok(self.view.as_ref().clone()) }
                 else { Err(Error::Invalid("verification run request reused".into())) };
         }
         self.check_expected(generation, integrity)?;
@@ -1020,7 +1020,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let root_binding = self.observed[STATE].directory_identity.clone();
         if let Some(prior) = persistence::replay(&self.view.snapshot.data,
             request.attempt.inputs.basis.phase, &request.attempt.request_id)? {
-            if prior != request.attempt || !self.view.decisions.contains(&persistence::decision(&prior)?) {
+            if prior != request.attempt || !model::retained(&self.view.decisions, &persistence::decision(&prior)?) {
                 return Err(Error::Invalid("verification replay differs from retained attempt or journal".into()));
             }
             return Ok(self.view.as_ref().clone());
@@ -1039,7 +1039,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         use cadence::execution::history;
         let root_binding = self.observed[STATE].directory_identity.clone();
         if let Some(record) = history::replay(&self.view.snapshot.data, &request)? {
-            if !history::decisions(&record)?.iter().all(|decision|self.view.decisions.contains(decision)) {
+            if !history::decisions(&record)?.iter().all(|decision| model::retained(&self.view.decisions, decision)) {
                 return Err(Error::Invalid("native task receipt lacks its immutable event".into()));
             }
             return Ok(self.view.as_ref().clone());
@@ -1058,7 +1058,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         use cadence::execution::history;
         let root_binding = self.observed[STATE].directory_identity.clone();
         if let Some(record) = history::plan_replay(&self.view.snapshot.data, &request)? {
-            if !self.view.decisions.contains(&history::plan_decision(&record)?) {
+            if !model::retained(&self.view.decisions, &history::plan_decision(&record)?) {
                 return Err(Error::Invalid("native plan receipt lacks its immutable event".into()));
             }
             return Ok(self.view.as_ref().clone());
@@ -1087,7 +1087,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         use cadence::execution::admission;
         let root_binding=self.observed[STATE].directory_identity.clone();
         if let Some(record)=admission::replay(&self.view.snapshot.data,&request)? {
-            if !self.view.decisions.contains(&admission::decision(&record)?) {
+            if !model::retained(&self.view.decisions, &admission::decision(&record)?) {
                 return Err(Error::Invalid("native admission receipt lacks its immutable event".into()));
             }
             return Ok(self.view.as_ref().clone());
@@ -1768,7 +1768,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             .map_err(rail_error)?
             .remove(&record.fact.key().map_err(rail_error)?)
         {
-            return if old == record && self.view.decisions.contains(&rail_fact_record(&record)?) {
+            return if old == record && model::retained(&self.view.decisions, &rail_fact_record(&record)?) {
                 Ok(self.view.as_ref().clone())
             } else {
                 Err(Error::Conflict("receipt request identity reused".into()))
@@ -1806,7 +1806,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             .map_err(rail_error)?
             .remove(&record.observation.key().map_err(rail_error)?)
         {
-            return if old == record && self.view.decisions.contains(&rail_record(&record)?) {
+            return if old == record && model::retained(&self.view.decisions, &rail_record(&record)?) {
                 Ok(self.view.as_ref().clone())
             } else {
                 Err(Error::Conflict("rail request identity reused".into()))
@@ -1994,6 +1994,7 @@ fn boundary_record(decision: &BoundaryDecision, store_generation: u64) -> Result
             response_digest: decision.response_digest.clone(),
             terminal: false,
         },
+        at: model::stamped_at(),
     };
     model::validate_decisions(std::slice::from_ref(&record))?;
     Ok(record)
@@ -2021,6 +2022,7 @@ fn terminal_record(phase: u32, store_generation: u64) -> Result<DecisionRecord> 
             response_digest: identity,
             terminal: true,
         },
+        at: model::stamped_at(),
     };
     model::validate_decisions(std::slice::from_ref(&record))?;
     Ok(record)
@@ -2094,6 +2096,7 @@ fn record_v1(
             store_generation,
             terminal,
         }),
+        at: model::stamped_at(),
     })
 }
 
@@ -2291,20 +2294,19 @@ pub fn routing_decision(dispatch: &ActiveDispatch) -> Result<Option<DecisionReco
             observed_effort: Evidence::Missing,
             receipt: Evidence::Missing,
         },
+        at: super::model::stamped_at(),
     })))
 }
 
 pub fn validate_routing(dispatch: &ActiveDispatch, records: &[DecisionRecord]) -> Result<()> {
-    if let Some(expected) = routing_decision(dispatch)?
-        && records
-            .iter()
-            .filter(|record| record.id == expected.id)
-            .collect::<Vec<_>>()
-            != [&expected]
-    {
-        return Err(Error::Invalid(
-            "dispatch lacks its exact routing decision".into(),
-        ));
+    if let Some(expected) = routing_decision(dispatch)? {
+        let saved: Vec<&DecisionRecord> =
+            records.iter().filter(|record| record.id == expected.id).collect();
+        if saved.len() != 1 || !saved[0].same_record(&expected) {
+            return Err(Error::Invalid(
+                "dispatch lacks its exact routing decision".into(),
+            ));
+        }
     }
     Ok(())
 }

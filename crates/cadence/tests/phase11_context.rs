@@ -348,6 +348,7 @@ fn initialized_fixture(phase_directory: bool) -> tempfile::TempDir {
                             outcome: "proceed".into(),
                             evidence: model::Evidence::Text("Prior approval".into()),
                         },
+                        at: model::stamped_at(),
                     }],
                     snapshot: Some(data),
                     external: vec![],

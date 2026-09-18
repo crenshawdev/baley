@@ -66,7 +66,8 @@ pub fn acceptable(result: &RunResult) -> bool {
 pub fn decision(record: &Record) -> Result<DecisionRecord> {
     Ok(DecisionRecord { version: 1, id: format!("verification-run:{}", record.id), revision: 1,
         origin: Origin { source: "verification-run-1".into(), original: Evidence::Missing },
-        decision: Decision::Gate { outcome: "verification-run-1".into(), evidence: Evidence::Text(serde_json::to_string(record)?) } })
+        decision: Decision::Gate { outcome: "verification-run-1".into(), evidence: Evidence::Text(serde_json::to_string(record)?) },
+        at: crate::store::model::stamped_at() })
 }
 
 pub fn contribute(data: &Value, binding: &str, record: &Record) -> Result<Value> {

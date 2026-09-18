@@ -453,6 +453,159 @@ impl LeaseRefusal {
 
 /// This is a distinct wire contract. No field is defaulted into a legacy
 /// decision, operation fingerprint, snapshot or intent integrity preimage.
+/// Where a refusal sits, typed, beside the bounded prose of its envelope
+/// (D-140). A summary alone cannot be joined to a line and a reason alone
+/// cannot be read without parsing prose, so the record carries both.
+///
+/// Three shapes, and nothing else: a roadmap conflict names the document line,
+/// the zero-based entry and the phase id it disagreed about; a missing or
+/// invalid input names its path; every other refusal names the rule that
+/// refused, the slot at fault and, when it has one, the subject. The fields
+/// are declared in the order a reader says them aloud, because that is the
+/// order progress renders them in.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Located {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+}
+
+impl Located {
+    /// A declaration in a document disagreeing with what the binary derived.
+    pub fn conflict(
+        source: impl Into<String>,
+        line: u64,
+        entry: u64,
+        phase: impl Into<String>,
+        field: impl Into<String>,
+        declared: impl Into<String>,
+        derived: impl Into<String>,
+    ) -> Self {
+        Self {
+            source: Some(source.into()),
+            line: Some(line),
+            entry: Some(entry),
+            phase: Some(phase.into()),
+            field: Some(field.into()),
+            declared: Some(declared.into()),
+            derived: Some(derived.into()),
+            ..Self::default()
+        }
+    }
+
+    /// An input the operation needed and could not read.
+    pub fn input(rule: impl Into<String>, slot: impl Into<String>, path: impl Into<String>) -> Self {
+        Self {
+            rule: Some(rule.into()),
+            slot: Some(slot.into()),
+            path: Some(path.into()),
+            ..Self::default()
+        }
+    }
+
+    /// The rule that refused and the slot it refused over.
+    pub fn rule(rule: impl Into<String>, slot: impl Into<String>) -> Self {
+        Self {
+            rule: Some(rule.into()),
+            slot: Some(slot.into()),
+            ..Self::default()
+        }
+    }
+
+    /// The subject the rule refused about, when the refusal names one.
+    #[must_use]
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        let id = id.into();
+        self.id = (!id.trim().is_empty()).then_some(id);
+        self
+    }
+
+    /// The fields as `key=value` in declaration order, which is how the
+    /// progress Record block reads a refusal back to the owner.
+    pub fn summary(&self) -> String {
+        let pairs: [(&str, Option<String>); 11] = [
+            ("source", self.source.clone()),
+            ("line", self.line.map(|line| line.to_string())),
+            ("entry", self.entry.map(|entry| entry.to_string())),
+            ("phase", self.phase.clone()),
+            ("field", self.field.clone()),
+            ("declared", self.declared.clone()),
+            ("derived", self.derived.clone()),
+            ("rule", self.rule.clone()),
+            ("slot", self.slot.clone()),
+            ("path", self.path.clone()),
+            ("id", self.id.clone()),
+        ];
+        pairs
+            .iter()
+            .filter_map(|(key, value)| value.as_ref().map(|value| format!("{key}={value}")))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn valid(&self) -> bool {
+        let text = [
+            &self.source,
+            &self.phase,
+            &self.field,
+            &self.declared,
+            &self.derived,
+            &self.rule,
+            &self.slot,
+            &self.path,
+            &self.id,
+        ];
+        if text
+            .iter()
+            .any(|value| value.as_ref().is_some_and(|value| value.trim().is_empty()))
+        {
+            return false;
+        }
+        let conflict = self.source.is_some()
+            && self.line.is_some()
+            && self.entry.is_some()
+            && self.phase.is_some()
+            && self.field.is_some()
+            && self.declared.is_some()
+            && self.derived.is_some()
+            && self.rule.is_none()
+            && self.slot.is_none()
+            && self.path.is_none()
+            && self.id.is_none();
+        let ruled = self.rule.is_some()
+            && self.slot.is_some()
+            && self.source.is_none()
+            && self.line.is_none()
+            && self.entry.is_none()
+            && self.phase.is_none()
+            && self.field.is_none()
+            && self.declared.is_none()
+            && self.derived.is_none()
+            && !(self.path.is_some() && self.id.is_some());
+        conflict || ruled
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BoundaryV1 {
@@ -467,6 +620,8 @@ pub struct BoundaryV1 {
     pub receipt: Receipt,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_refusal: Option<Box<LeaseRefusal>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub located: Option<Located>,
 }
 
 impl BoundaryV1 {
@@ -489,7 +644,15 @@ impl BoundaryV1 {
             response_digest: answer.response_digest.clone(),
             receipt: answer.receipt.clone(),
             lease_refusal: None,
+            located: None,
         }
+    }
+
+    /// The typed detail the log keeps beside the bounded envelope.
+    #[must_use]
+    pub fn with_located(mut self, located: Option<Located>) -> Self {
+        self.located = located;
+        self
     }
 }
 
@@ -569,10 +732,15 @@ impl BoundaryV1 {
         } else if self.outcome == "refused:log-bound" {
             return Err(Failure::Encoding);
         }
+        if let Some(located) = &self.located
+            && (terminal || !located.valid())
+        {
+            return Err(Failure::Encoding);
+        }
         if let Some(evidence) = &self.lease_refusal {
             evidence.validate()?;
-            let expected =
-                Self::lease_refusal(self.request_digest.clone(), evidence.paths.clone())?;
+            let expected = Self::lease_refusal(self.request_digest.clone(), evidence.paths.clone())?
+                .with_located(self.located.clone());
             if terminal || *self != expected {
                 return Err(Failure::Encoding);
             }

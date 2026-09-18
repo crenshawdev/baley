@@ -503,6 +503,7 @@ impl RecordedFact {
                 .into(),
                 evidence: Evidence::Text(serde_json::to_string(self)?),
             },
+            at: crate::store::model::stamped_at(),
         })
     }
 }
@@ -539,14 +540,14 @@ pub fn history(data: &serde_json::Value) -> Result<(Vec<Recorded>, Vec<Fire>, Ve
 pub fn confirmed_history(view: &crate::store::writer::View) -> Result<()> {
     for record in risk::read(&view.snapshot.data)?.values() {
         if record.confirmation.generation > view.snapshot.generation
-            || !view.decisions.contains(&record.decision()?)
+            || !crate::store::model::retained(&view.decisions, &record.decision()?)
         {
             return Err(invalid("scan lacks confirmed durable history"));
         }
     }
     for record in read(&view.snapshot.data)?.values() {
         if record.confirmation.generation > view.snapshot.generation
-            || !view.decisions.contains(&record.decision()?)
+            || !crate::store::model::retained(&view.decisions, &record.decision()?)
         {
             return Err(invalid("receipt lacks confirmed durable history"));
         }

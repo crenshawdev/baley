@@ -32,6 +32,7 @@ fn decision(id: &str) -> DecisionRecord {
             outcome: id.into(),
             evidence: Evidence::Missing,
         },
+        at: cadence::store::model::stamped_at(),
     }
 }
 fn transaction(id: &str) -> Transaction {

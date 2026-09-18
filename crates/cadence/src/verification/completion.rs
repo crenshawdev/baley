@@ -334,7 +334,8 @@ pub fn replay(data: &Value, request: &Request) -> Result<Option<Value>> {
 pub fn decision(claim: &Claim) -> Result<DecisionRecord> {
     Ok(DecisionRecord { version: 1, id: format!("verification-completion:{}", digest(claim.request.request_id.as_bytes())), revision: 1,
         origin: Origin { source: SCHEMA.into(), original: Evidence::Missing },
-        decision: Decision::Gate { outcome: SCHEMA.into(), evidence: Evidence::Text(serde_json::to_string(claim)?) } })
+        decision: Decision::Gate { outcome: SCHEMA.into(), evidence: Evidence::Text(serde_json::to_string(claim)?) },
+        at: crate::store::model::stamped_at() })
 }
 
 /// The projection participants an accepted claim installs, in order.

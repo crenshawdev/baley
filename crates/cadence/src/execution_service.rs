@@ -42,7 +42,7 @@ use std::{
 use cadence::envelope::{Envelope, Refusal};
 pub use cadence::execution::boundary::{Answer, Failure, Response};
 use cadence::execution::boundary::{
-    BoundaryScope, BoundaryV1, ExecutionEnvelope, PreparedAnswer, Receipt,
+    BoundaryScope, BoundaryV1, ExecutionEnvelope, Located, PreparedAnswer, Receipt,
 };
 
 #[derive(Clone)]
@@ -531,6 +531,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &raw_request,
                 refused(phase, "risk-pending", reason),
                 None,
+                Some(Located::rule("risk-pending", "risk")),
             )
             .await;
         }
@@ -556,6 +557,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &raw_request,
                 response,
                 occurrence.active.as_ref().map(|active| active.id.clone()),
+                None,
             )
             .await;
         }
@@ -658,6 +660,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                     &raw_request,
                     response,
                     Some(active.id.clone()),
+                    None,
                 )
                 .await;
             };
@@ -829,6 +832,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                     &raw_request,
                     refused(phase, "risk-pending", reason),
                     None,
+                    Some(Located::rule("risk-pending", "risk")),
                 )
                 .await;
             }
@@ -1511,6 +1515,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                 &request,
                 refused(phase, "risk-pending", reason),
                 Some(patch.dispatch_id.clone()),
+                Some(Located::rule("risk-pending", "risk").id(patch.dispatch_id.clone())),
             )
             .await;
         }
@@ -2393,13 +2398,37 @@ async fn record_refusal<I: ConfigIo>(
     subject_id: Option<String>,
 ) -> Answer {
     let code = code.into();
+    // Every refusal names at least the rule that refused and the operation it
+    // refused in; a caller with a document line or an input path to name uses
+    // record_located_refusal instead.
+    let located = Located::rule(code.clone(), operation).id(subject_id.clone().unwrap_or_default());
+    record_located_refusal(
+        session, view, phase, tool, operation, request, code, reason, subject_id, Some(located),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_located_refusal<I: ConfigIo>(
+    session: &Arc<Session<I>>,
+    view: &View,
+    phase: u32,
+    tool: BoundaryTool,
+    operation: &str,
+    request: &str,
+    code: impl Into<String>,
+    reason: impl Into<String>,
+    subject_id: Option<String>,
+    located: Option<Located>,
+) -> Answer {
+    let code = code.into();
     let response = Response::Refused {
         phase,
         reason: stable_reason(&code, &reason.into()),
         code,
     };
     record_observation(
-        session, view, phase, tool, operation, request, response, subject_id,
+        session, view, phase, tool, operation, request, response, subject_id, located,
     )
     .await
 }
@@ -2414,8 +2443,10 @@ async fn record_observation<I: ConfigIo>(
     request: &str,
     response: Response,
     subject_id: Option<String>,
+    located: Option<Located>,
 ) -> Answer {
-    let decision = boundary(phase, tool, operation, request, &response, subject_id, None)?;
+    let decision =
+        boundary(phase, tool, operation, request, &response, subject_id, None)?.with_located(located);
     let written = session
         .request(Operation::BoundaryV1 {
             expected_generation: view.snapshot.generation,
@@ -2525,14 +2556,15 @@ fn continuation_next_call(decision: &ContinuationDecision) -> String {
     }
 }
 
+/// D-140: the envelope keeps each code's own detail. A sentence that fits every
+/// code cannot be joined to anything, and cad-suggest and cad-why read these.
+/// Only a refusal that arrived with nothing to say falls back, and then it says
+/// which code refused and no more.
 fn stable_reason(code: &str, detail: &str) -> String {
-    if matches!(code, "provisional-authoring" | "reconciliation-required" | "state-conflict" | "invalid-phase" | "invalid-patch" | "continuation-refusal") {
-        return detail.to_owned();
+    if detail.trim().is_empty() {
+        return format!("execution refused ({code})");
     }
-    match code {
-        "foreign-dispatch" => "the patch does not identify a dispatch in this store; request the next execution dispatch".into(),
-        _ => format!("execution validation failed ({code}); check the controlling inputs and retry"),
-    }
+    detail.to_owned()
 }
 
 async fn begin<I: ConfigIo + Clone + Sync>(
@@ -2639,23 +2671,76 @@ async fn derivation_refusal<I: ConfigIo>(
         return Err(Failure::Store);
     }
     let view = session.derivation_view().await.map_err(store_failure)?;
-    let detail = match &error {
-        cadence::derivation::DerivationError::StateConflict { source, field, declared, derived } =>
+    let code = error.code();
+    // Each variant's own fields, both as the reason a person reads and as the
+    // typed object a later query joins to the line it names (D-140).
+    let (detail, located) = match &error {
+        cadence::derivation::DerivationError::StateConflict { source, field, declared, derived, entry } => (
             json!({"source":source,"field":field,"declared":declared,"derived":derived}).to_string(),
-        _ => format!("lifecycle input validation failed: {}", error.code()),
+            match entry {
+                Some(entry) => Located::conflict(&entry.source, entry.line, entry.entry,
+                    &entry.phase, field, declared, &entry.status),
+                None => Located::rule(code, field).id(source),
+            },
+        ),
+        cadence::derivation::DerivationError::MissingPlanningRoot { path } => (
+            format!("{code}: {} is absent", planning_path(path)),
+            Located::input(code, "planning-root", planning_path(path)),
+        ),
+        cadence::derivation::DerivationError::MissingRoadmap { path } => (
+            format!("{code}: {} is absent", planning_path(path)),
+            Located::input(code, "roadmap", planning_path(path)),
+        ),
+        cadence::derivation::DerivationError::InputFailure(failure) => (
+            format!("{code}: {} is unreadable ({:?})", planning_path(&failure.path), failure.category),
+            Located::input(code, "input", planning_path(&failure.path)),
+        ),
+        cadence::derivation::DerivationError::InvalidRoadmap { detail } => (
+            format!("{code}: {detail}"),
+            Located::rule(code, "roadmap"),
+        ),
+        cadence::derivation::DerivationError::InvalidIntake { source, detail } => (
+            format!("{code}: {detail}"),
+            Located::rule(code, "intake").id(source),
+        ),
+        cadence::derivation::DerivationError::InvalidStatus { source, original_status } => (
+            format!("{code}: {source} carries the unusable status {original_status}"),
+            Located::rule(code, "status").id(source),
+        ),
+        cadence::derivation::DerivationError::DerivationConflict { requested_hash, stored_hash, fields } => (
+            format!("{code}: the memo for {requested_hash} (stored {}) disagrees at {}",
+                stored_hash.as_deref().unwrap_or("none"), fields.join(", ")),
+            Located::rule(code, "memo").id(requested_hash),
+        ),
+        _ => (
+            format!("{code}: the controlling lifecycle inputs changed while the answer was prepared"),
+            Located::rule(code, "inputs"),
+        ),
     };
-    record_refusal(
+    record_located_refusal(
         session,
         &view,
         phase,
         tool,
         tool_operation(tool),
         request,
-        error.code(),
+        code,
         detail,
         None,
+        Some(located),
     )
     .await
+}
+
+/// A planning input said the way the owner reads it, rooted at the directory
+/// the project keeps its planning in rather than at whatever absolute path the
+/// server happened to open.
+fn planning_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    match text.rfind(".planning") {
+        Some(start) => text[start..].to_owned(),
+        None => text.into_owned(),
+    }
 }
 
 // Execution observes lifecycle authority without publishing a memo on a later refusal.
@@ -2818,7 +2903,7 @@ fn confirmed_repair_head(view: &View, phase: u32, plan: u32) -> Result<Option<St
     let Some(repair) = projection.repair.as_ref() else { return Ok(None) };
     let confirmed = plan_records.iter().any(|record| record.request.plan == identity
         && matches!(&record.request.event, cadence::execution::history::PlanEvent::SuiteRepair(_))
-        && cadence::execution::history::plan_decision(record).is_ok_and(|decision| view.decisions.contains(&decision)));
+        && cadence::execution::history::plan_decision(record).is_ok_and(|decision| cadence::store::model::retained(&view.decisions, &decision)));
     if !confirmed {
         return Err("native risk source lacks a confirmed suite repair receipt".into());
     }
@@ -2843,7 +2928,7 @@ pub fn risk_material(
         let records = cadence::execution::history::records(&view.snapshot.data, phase).map_err(|e| e.to_string())?;
         let confirmed = records.iter().any(|record| record.request.task == basis.task
             && record.request_digest == basis.execution.transition_id
-            && cadence::execution::history::decision(record).is_ok_and(|decision| view.decisions.contains(&decision)));
+            && cadence::execution::history::decision(record).is_ok_and(|decision| cadence::store::model::retained(&view.decisions, &decision)));
         if basis.task.phase != phase || basis.task.plan != plan || !confirmed {
             return Err("native risk source lacks a confirmed task receipt".into());
         }
@@ -2862,7 +2947,7 @@ pub fn risk_material(
         let task_records = cadence::execution::history::records(&view.snapshot.data, phase).map_err(|error| error.to_string())?;
         if plan_bases.iter().any(|basis| !task_records.iter().any(|record| record.request.task == basis.task
             && record.request_digest == basis.execution.transition_id
-            && cadence::execution::history::decision(record).is_ok_and(|decision| view.decisions.contains(&decision)))) {
+            && cadence::execution::history::decision(record).is_ok_and(|decision| cadence::store::model::retained(&view.decisions, &decision)))) {
             return Err("native risk source lacks a confirmed task receipt".into());
         }
         let plan_records = cadence::execution::history::plan_records(&view.snapshot.data, phase).map_err(|error| error.to_string())?;
@@ -2872,7 +2957,7 @@ pub fn risk_material(
         let projection = cadence::execution::history::plan_project(&plan_records, &identity);
         if projection.repair.is_some() && !plan_records.iter().any(|record| record.request.plan == identity
             && matches!(&record.request.event, cadence::execution::history::PlanEvent::SuiteRepair(_))
-            && cadence::execution::history::plan_decision(record).is_ok_and(|decision| view.decisions.contains(&decision))) {
+            && cadence::execution::history::plan_decision(record).is_ok_and(|decision| cadence::store::model::retained(&view.decisions, &decision))) {
             return Err("native risk source lacks a confirmed suite repair receipt".into());
         }
         let head_id = projection.repair.as_ref().and_then(|repair| repair.commits.last()).cloned()

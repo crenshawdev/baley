@@ -108,6 +108,46 @@ pub struct DecisionRecord {
     pub revision: u64,
     pub origin: Origin,
     pub decision: Decision,
+    /// Seconds since the epoch, observed when the binary wrote the record
+    /// (D-143). Generation says in what order records arrived and never when;
+    /// a row imported from a legacy source carries no time at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<u64>,
+}
+
+/// The second a record is being written, from the clock the review runners use.
+pub fn stamped_at() -> Option<u64> {
+    use crate::review::io::Clock;
+    Some(crate::review::material_io::WallClock.now())
+}
+
+impl DecisionRecord {
+    /// Whole-record equality apart from the write-time stamp. A caller that
+    /// rebuilds a record from its own evidence never observes the instant the
+    /// writer did, so every equality either side validates is taken over the
+    /// content and leaves `at` to the observation it is.
+    pub fn same_record(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.id == other.id
+            && self.revision == other.revision
+            && self.origin == other.origin
+            && self.decision == other.decision
+    }
+}
+
+/// Whether the log already holds this record, ignoring its write-time stamp.
+pub fn retained(records: &[DecisionRecord], record: &DecisionRecord) -> bool {
+    records.iter().any(|saved| saved.same_record(record))
+}
+
+/// Take the write-time stamps of the rendered journal onto the records a
+/// validator rebuilt, so the comparison that follows is over everything else.
+/// Nothing else is copied: a length or content difference still fails it.
+pub fn adopt_stamps(expected: &mut [DecisionRecord], rendered: &[u8]) -> Result<()> {
+    for (record, observed) in expected.iter_mut().zip(parse_lines::<DecisionRecord>(rendered)?) {
+        record.at = observed.at;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -400,6 +440,7 @@ mod tests {
                 outcome: "pass".into(),
                 evidence: Evidence::Null,
             },
+            at: stamped_at(),
         }];
         let decision_bytes = render_lines(&decisions).unwrap();
         let parsed: Vec<DecisionRecord> = parse_lines(&decision_bytes).unwrap();

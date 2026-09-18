@@ -119,7 +119,8 @@ pub fn decision(record:&Record) -> Result<crate::store::model::DecisionRecord> {
     use crate::store::model::{DecisionRecord,Decision,Origin,Evidence};
     Ok(DecisionRecord {version:1,id:format!("native-admission:{}:{}:{}",record.request.contract.phase,record.set_version,record.request_digest),
         revision:1,origin:Origin {source:"native-admission-1".into(),original:Evidence::Missing},
-        decision:Decision::Gate {outcome:"native-admission-1".into(),evidence:Evidence::Text(serde_json::to_string(record)?)} })
+        decision:Decision::Gate {outcome:"native-admission-1".into(),evidence:Evidence::Text(serde_json::to_string(record)?)},
+        at:crate::store::model::stamped_at() })
 }
 
 pub fn refuse(phase: u32, rule: &str, slot: &str, id: &str, reason: impl Into<String>) -> Error {

@@ -103,5 +103,6 @@ pub fn contribute(data: &Value, root_binding: &str, request: &Request) -> Result
 pub fn decision(attempt: &Attempt) -> Result<DecisionRecord> {
     Ok(DecisionRecord { version: 1, id: format!("verification-attempt:{}", attempt.id), revision: 1,
         origin: Origin { source: "verification-attempt-1".into(), original: Evidence::Missing },
-        decision: Decision::Gate { outcome: "verification-attempt-1".into(), evidence: Evidence::Text(serde_json::to_string(attempt)?) } })
+        decision: Decision::Gate { outcome: "verification-attempt-1".into(), evidence: Evidence::Text(serde_json::to_string(attempt)?) },
+        at: crate::store::model::stamped_at() })
 }

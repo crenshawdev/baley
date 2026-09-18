@@ -11,6 +11,7 @@ fn conflict(
         field: field.into(),
         declared: declared.to_string(),
         derived: derived.to_string(),
+        entry: None,
     }
 }
 
@@ -30,29 +31,56 @@ pub fn check_consistency(
     answer: &Lifecycle,
     cursor: &CompatibilityCursor,
 ) -> Result<(), DerivationError> {
-    if let Some(issue) = roadmap_conflicts(declarations, answer).first() {
-        return Err(conflict(issue.source.clone(), &issue.field, &issue.declared, &issue.derived));
+    if let Some((issue, entry)) = located_conflicts(declarations, answer).into_iter().next() {
+        return Err(DerivationError::StateConflict {
+            source: issue.source,
+            field: issue.field,
+            declared: issue.declared,
+            derived: issue.derived,
+            entry: Some(entry),
+        });
     }
     check_cursor(answer, cursor)
 }
 
 /// Progress retains each disagreement without granting it execution authority.
 pub fn roadmap_conflicts(declarations: &ParsedRoadmap, answer: &Lifecycle) -> Vec<RoadmapConflict> {
+    located_conflicts(declarations, answer)
+        .into_iter()
+        .map(|(issue, _)| issue)
+        .collect()
+}
+
+/// Each disagreement with the roadmap line it sits on, so a refusal over the
+/// first one can be joined to that line rather than to a flattened sentence.
+fn located_conflicts(
+    declarations: &ParsedRoadmap,
+    answer: &Lifecycle,
+) -> Vec<(RoadmapConflict, ConflictEntry)> {
     let mut issues = Vec::new();
     for (declaration, phase) in declarations.phases.iter().zip(&answer.phases) {
         let complete = phase.status == LifecycleStatus::Complete;
         if declaration.checked != complete {
-            issues.push(RoadmapConflict {
-                phase: phase.id,
-                status: phase.status,
-                source: format!(
-                    "ROADMAP.md:{} entry {}",
-                    declaration.source_line, declaration.ordinal
-                ),
-                field: "complete".into(),
-                declared: declaration.checked.to_string(),
-                derived: complete.to_string(),
-            });
+            issues.push((
+                RoadmapConflict {
+                    phase: phase.id,
+                    status: phase.status,
+                    source: format!(
+                        "ROADMAP.md:{} entry {}",
+                        declaration.source_line, declaration.ordinal
+                    ),
+                    field: "complete".into(),
+                    declared: declaration.checked.to_string(),
+                    derived: complete.to_string(),
+                },
+                ConflictEntry {
+                    source: "ROADMAP.md".into(),
+                    line: declaration.source_line as u64,
+                    entry: declaration.ordinal as u64,
+                    phase: phase.id.address(),
+                    status: status_name(phase.status).into(),
+                },
+            ));
         }
     }
     issues

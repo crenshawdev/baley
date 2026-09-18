@@ -388,6 +388,7 @@ fn error_only<T>(
                 field: f,
                 declared: a,
                 derived: b,
+                ..
             },
         ) if s == source && f == field && a == declared && b == derived && a != b => {
             let diagnostic = error.to_string();

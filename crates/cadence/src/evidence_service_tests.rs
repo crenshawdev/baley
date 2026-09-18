@@ -758,6 +758,7 @@ fn legacy_evidence_is_readable_without_native_acceptance() {
                             outcome: "pass".into(),
                             evidence,
                         },
+                        at: cadence::store::model::stamped_at(),
                     }),
                 )
                 .await

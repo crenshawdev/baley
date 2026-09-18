@@ -304,6 +304,7 @@ fn durable_decisions_preserve_provenance_and_missing_receipts() {
                         observed_effort: Evidence::Text(effort.into()),
                         receipt: Evidence::Missing,
                     },
+                    at: cadence::store::model::stamped_at(),
                 }))
                 .await
                 .unwrap();
@@ -561,6 +562,7 @@ fn transaction(id: &str) -> cadence::store::transaction::Transaction {
                 outcome: "accepted".into(),
                 evidence: Evidence::Missing,
             },
+            at: cadence::store::model::stamped_at(),
         }],
         snapshot: Some(serde_json::json!({"complete":true})),
         external: vec![],

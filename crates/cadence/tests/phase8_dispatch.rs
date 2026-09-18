@@ -56,7 +56,15 @@ fn record() -> DecisionRecord {
             observed_effort: Evidence::Missing,
             receipt: Evidence::Missing,
         },
+        at: None,
     }
+}
+
+/// The record without D-143's write-time stamp, which no caller rebuilding a
+/// record from the dispatch can observe. The stamp is asserted where it lands.
+fn undated(mut record: DecisionRecord) -> DecisionRecord {
+    record.at = None;
+    record
 }
 
 #[test]
@@ -117,7 +125,9 @@ fn routed_builder_binds_the_literal_model_agent_and_config_input_to_identity() {
 
 #[test]
 fn routing_decision_returns_the_exact_record_without_observed_effort_or_receipt() {
-    assert_eq!(routing_decision(&dispatch()).unwrap(), Some(record()));
+    let written = routing_decision(&dispatch()).unwrap().unwrap();
+    assert!(written.at.is_some(), "{written:?}");
+    assert_eq!(undated(written), record());
 }
 
 #[test]
@@ -228,6 +238,7 @@ fn writer_admits_the_route_and_routing_record_in_one_persistence_result() {
                 prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into(),
             },
             lease_refusal: None,
+            located: None,
         };
         let written = store
             .request(Operation::BoundaryV1 {
@@ -247,7 +258,7 @@ fn writer_admits_the_route_and_routing_record_in_one_persistence_result() {
         assert_eq!(
             (
                 written.decisions.len(),
-                &written.decisions[0],
+                &undated(written.decisions[0].clone()),
                 written.snapshot.generation,
                 &active["route"]["choice"]["model"],
                 &active["id"]
@@ -535,6 +546,7 @@ fn admission() -> cadence::store::writer::Operation {
                 prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into(),
             },
             lease_refusal: None,
+            located: None,
         },
         change: Box::new(BoundaryChange::Dispatch {
             plan_set_fingerprint: "2".repeat(64),
@@ -806,6 +818,7 @@ fn duplicate_request_returns_the_single_previously_confirmed_routing_record() {
                     .iter()
                     .filter(|record| matches!(record.decision, Decision::Routing { .. }))
                     .cloned()
+                    .map(undated)
                     .collect::<Vec<_>>()
             ),
             (1, vec![record()])
@@ -1068,7 +1081,7 @@ fn each_new_admission_returns_the_exact_saved_choice_and_missing_host_evidence()
             assert_eq!(
                 (
                     answer.snapshot.data["execution"]["occurrences"]["8"]["active"]["id"].clone(),
-                    answer.decisions[0].clone()
+                    undated(answer.decisions[0].clone())
                 ),
                 (
                     json!(case.id),
@@ -1090,7 +1103,8 @@ fn each_new_admission_returns_the_exact_saved_choice_and_missing_host_evidence()
                             requested_effort: Evidence::Text(case.rung.into()),
                             observed_effort: Evidence::Missing,
                             receipt: Evidence::Missing
-                        }
+                        },
+                        at: None
                     }
                 )
             );

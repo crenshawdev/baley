@@ -151,7 +151,8 @@ fn final_intent_preparation_cannot_admit_a_stale_route() {
                             prompt_bytes: None,
                             prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into()
                         },
-                        lease_refusal: None
+                        lease_refusal: None,
+                        located: None
                     },
                     change: Box::new(BoundaryChange::Dispatch {
                         plan_set_fingerprint: "2".repeat(64),

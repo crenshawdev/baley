@@ -65,6 +65,7 @@ pub fn history(operation_id: &str, record: &Record) -> Result<DecisionRecord> {
             outcome: MARKER.into(),
             evidence: Evidence::Text(serde_json::to_string(record)?),
         },
+        at: crate::store::model::stamped_at(),
     })
 }
 

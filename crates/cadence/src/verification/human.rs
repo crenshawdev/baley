@@ -259,7 +259,8 @@ pub fn contribute(data: &Value, binding: &str, claim: &Claim) -> Result<Value> {
 pub fn decision(claim: &Claim) -> Result<DecisionRecord> {
     Ok(DecisionRecord { version: 1, id: format!("verification-human:{}", digest(claim.request.request_id.as_bytes())), revision: 1,
         origin: Origin { source: SCHEMA.into(), original: Evidence::Missing },
-        decision: Decision::Gate { outcome: SCHEMA.into(), evidence: Evidence::Text(serde_json::to_string(claim)?) } })
+        decision: Decision::Gate { outcome: SCHEMA.into(), evidence: Evidence::Text(serde_json::to_string(claim)?) },
+        at: crate::store::model::stamped_at() })
 }
 
 /// The confirmed transaction installs the record and the rendered UAT.md
