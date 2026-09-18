@@ -15,6 +15,7 @@ fn item(id: &str, text: &str) -> ItemRecord {
         },
         text: text.into(),
         kind: "note".into(),
+        phase: None,
         disposition: Disposition::Captured,
         completed: false,
         filing_uncertain: false,

@@ -172,6 +172,8 @@ fn capture_threshold_reports_active_identities_without_refusing_append() {
             text: "same text\nwith continuation".into(),
             kind: "todo".into(),
             completed: false,
+            phase: None,
+            completed: false,
             disposition: Disposition::Captured,
             filing_uncertain: false,
         });

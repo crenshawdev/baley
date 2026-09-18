@@ -38,6 +38,7 @@ fn operation(id: &str) -> Transaction {
             origin: origin.clone(),
             text: format!("{id} complete content"),
             kind: "todo".into(),
+            phase: None,
             disposition: Disposition::Captured,
             completed: false,
             filing_uncertain: false,

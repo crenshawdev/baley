@@ -21,6 +21,7 @@ fn item(id: &str) -> ItemRecord {
         },
         text: id.into(),
         kind: "todo".into(),
+        phase: None,
         disposition: Disposition::Captured,
         completed: false,
         filing_uncertain: false,

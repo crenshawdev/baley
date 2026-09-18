@@ -331,6 +331,7 @@ fn initialized_fixture(phase_directory: bool) -> tempfile::TempDir {
                         },
                         text: "Retain the prior item".into(),
                         kind: "todo".into(),
+                        phase: None,
                         disposition: model::Disposition::Captured,
                         completed: false,
                         filing_uncertain: false,

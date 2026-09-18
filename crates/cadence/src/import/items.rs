@@ -298,6 +298,7 @@ pub fn translate(
             },
             text: first.text.clone(),
             kind: first.kind.clone(),
+            phase: None,
             disposition: event.disposition.clone(),
             completed: event.completed,
             filing_uncertain: event.uncertain,

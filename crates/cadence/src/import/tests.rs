@@ -708,6 +708,8 @@ fn capture_item(id: &str) -> cadence::store::model::ItemRecord {
         text: format!("{id}\ncontinued text"),
         kind: "todo".into(),
         disposition: Disposition::Captured,
+        phase: None,
+        disposition: Disposition::Captured,
         completed: false,
         filing_uncertain: false,
     }

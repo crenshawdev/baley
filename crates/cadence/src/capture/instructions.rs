@@ -1,4 +1,5 @@
----
+pub fn markdown() -> &'static str {
+    r#"---
 name: cad-capture
 description: Park a phase-linked todo, a seed for a later milestone, or a note, as one typed item.
 allowed-tools:
@@ -23,3 +24,5 @@ show its exact rule, slot and reason so the owner can send it again.
 
 Capturing friction with Cadence itself is parked for a later phase; this door
 records items about the project you are in.
+"#
+}

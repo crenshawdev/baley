@@ -252,6 +252,7 @@ fn item(id: &str) -> ItemRecord {
         origin: Origin { source: "test".into(), original: Evidence::Missing },
         text: id.into(),
         kind: "todo".into(),
+        phase: None,
         disposition: Disposition::Captured,
         completed: false,
         filing_uncertain: false,

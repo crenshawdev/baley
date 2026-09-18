@@ -106,6 +106,7 @@ fn intervening_item_or_snapshot_makes_evidence_stale() {
                     },
                     text: "keep".into(),
                     kind: "todo".into(),
+                    phase: None,
                     disposition: Disposition::Captured,
                     completed: false,
                     filing_uncertain: false,

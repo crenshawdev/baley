@@ -49,6 +49,10 @@ pub struct ItemRecord {
     pub origin: Origin,
     pub text: String,
     pub kind: String,
+    /// The phase a capture is about (D-144), typed and never carried inside
+    /// the text. Only a todo takes one, and a revision may not change it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<u32>,
     pub disposition: Disposition,
     pub completed: bool,
     pub filing_uncertain: bool,
@@ -247,7 +251,10 @@ pub fn validate_items(records: &[ItemRecord]) -> Result<()> {
             previous.map(|r| r.revision),
         )?;
         if previous.is_some_and(|old| {
-            old.origin != record.origin || old.text != record.text || old.kind != record.kind
+            old.origin != record.origin
+                || old.text != record.text
+                || old.kind != record.kind
+                || old.phase != record.phase
         }) {
             return Err(Error::Invalid("revision changed capture identity".into()));
         }
@@ -370,6 +377,7 @@ mod tests {
             },
             text: "first".into(),
             kind: "todo".into(),
+            phase: None,
             disposition: Disposition::Captured,
             completed: false,
             filing_uncertain: false,

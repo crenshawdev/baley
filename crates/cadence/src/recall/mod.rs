@@ -20,6 +20,10 @@ pub enum Provenance {
         id: String,
         revision: u64,
         source: String,
+        /// The phase a captured item named (D-144), so recall can be filtered
+        /// by it instead of parsing the snippet back out.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<u32>,
         commit: Option<String>,
     },
     Document {
@@ -65,6 +69,7 @@ pub fn records(items: RecallItems<'_>) -> Vec<Candidate> {
                 id: r.id.clone(),
                 revision: r.revision,
                 source: r.origin.source.clone(),
+                phase: r.phase,
                 commit: None,
             },
         })
@@ -93,6 +98,7 @@ pub fn current(view: &View) -> Vec<Candidate> {
                 id: r.id.clone(),
                 revision: r.revision,
                 source: r.origin.source.clone(),
+                phase: None,
                 commit: None,
             },
         });
@@ -210,6 +216,11 @@ mod resident {
         Adoption {
             root: PathBuf,
             apply: crate::server::adoption_service::Apply,
+            reply: oneshot::Sender<Result<serde_json::Value>>,
+        },
+        Capture {
+            root: PathBuf,
+            apply: crate::server::capture_service::Apply,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
         Verification {
@@ -441,6 +452,10 @@ mod resident {
                         }
                         Request::Adoption { root, apply, reply } => {
                             let result = crate::server::adoption_service::execute(&factory, &root, apply).await;
+                            let _ = reply.send(result);
+                        }
+                        Request::Capture { root, apply, reply } => {
+                            let result = crate::server::capture_service::execute(&factory, &root, apply).await;
                             let _ = reply.send(result);
                         }
                         Request::Read { root, query, reply } => {
@@ -785,6 +800,12 @@ mod resident {
         pub async fn adoption(&self, root: &Path, apply: crate::server::adoption_service::Apply) -> Result<serde_json::Value> {
             let (reply, completion) = oneshot::channel();
             self.requests.send(Request::Adoption { root: root.into(), apply, reply }).await.map_err(|_| Error::Closed)?;
+            completion.await.map_err(|_| Error::Closed)?
+        }
+
+        pub async fn capture(&self, root: &Path, apply: crate::server::capture_service::Apply) -> Result<serde_json::Value> {
+            let (reply, completion) = oneshot::channel();
+            self.requests.send(Request::Capture { root: root.into(), apply, reply }).await.map_err(|_| Error::Closed)?;
             completion.await.map_err(|_| Error::Closed)?
         }
 
