@@ -1,6 +1,6 @@
-use crate::phase13::{Completed, apply, digest_of, git, query, tree, verify};
-use serde_json::json;
-use std::{collections::BTreeMap, fs, path::{Path, PathBuf}};
+use crate::phase13::{Client, Completed, admit_request, apply, contract, digest_of, git, git_value, query, tree, verify};
+use serde_json::{Value, json};
+use std::{collections::BTreeMap, fs, path::{Path, PathBuf}, time::{Duration, Instant}};
 
 pub const OPEN: &str = "## Phases\n- [ ] **Phase 5: Legacy**\n- [ ] **Phase 13: Plan publication**\n- [ ] **Phase 28: Next phase**\n";
 pub const TICKED: &str = "## Phases\n- [x] **Phase 5: Legacy**\n- [ ] **Phase 13: Plan publication**\n- [ ] **Phase 28: Next phase**\n";
@@ -62,6 +62,82 @@ pub fn natively_completed() -> (Completed, String) {
     assert_eq!(done["status"], "ok", "{done}");
     let id = done["receipt"]["record"]["id"].as_str().unwrap().to_owned();
     (fixture, id)
+}
+
+fn task_state(client: &mut Client, plan: u32) -> Value {
+    let history = client.call("cadence_query", json!({"operation":"execution-history","phase":13}));
+    history["tasks"].as_array().unwrap_or(&Vec::new()).iter()
+        .find(|entry| entry["task"]["plan"] == plan)
+        .unwrap_or_else(|| panic!("plan {plan} has no open task: {history}")).clone()
+}
+
+fn task_run(client: &mut Client, id: &str, check: &Value, stage: &str, command: &str) -> Value {
+    let state = task_state(client, 1);
+    let launch = client.call("cadence_apply", json!({"operation":"execution-run","request":{
+        "request_id":id,"task":state["task"],"attempt":"attempt-1",
+        "expected_version":state["state"]["version"],"check":check,"stage":stage,"command":command}}));
+    assert_eq!(launch["status"], "ok", "{launch}");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let history = client.call("cadence_query", json!({"operation":"execution-history","phase":13,"run":id}));
+        if history["result"]["request"]["event"]["kind"] == "result" {
+            return history["result"]["request"]["event"].clone();
+        }
+        assert!(Instant::now() < deadline, "missing {id}: {history}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// One published plan carried to the edge of its close: admitted, authorized,
+/// dispatched, with a committed red run and a signed green run recorded. The
+/// close request comes back unsent, so the caller decides what the worktree
+/// looks like when it asks for it.
+pub fn dispatched_plan() -> (Completed, Value) {
+    let fixture = Completed::published(false, |_| {});
+    let project = fixture.project();
+    let contract = contract(project);
+    let check = contract["allocation"].as_array().unwrap().iter()
+        .find(|entry| entry["plan"] == 1).unwrap()["checks"][0].clone();
+    assert_eq!(check["id"], "check/A", "{contract}");
+    let mut client = Client::open(project);
+    let admitted = client.call("cadence_apply", admit_request(contract, "admit-one", 0));
+    assert_eq!(admitted["status"], "ok", "{admitted}");
+    let authorized = client.call("cadence_apply", json!({"operation":"execution-authorize","phase":13,
+        "request_id":"authorize-1","owner":"Fixture Owner","at":"2026-09-11T12:00:00Z",
+        "response":"Proceed with native execution"}));
+    assert_eq!(authorized["status"], "ok", "{authorized}");
+    let dispatch = client.call("cadence_query", json!({"operation":"execute-next","phase":13}));
+    assert_eq!(dispatch["status"], "ok", "{dispatch}");
+    let task = task_state(&mut client, 1);
+    let started = client.call("cadence_apply", json!({"operation":"execution-task-start","request":{
+        "request_id":"start-1","task":task["task"],"attempt":"attempt-1","expected_version":0,
+        "predecessor":null,"checks":[check.clone()]}}));
+    assert_eq!(started["status"], "ok", "{started}");
+    let command = "python3 -B tests/a.py";
+    fs::write(project.join("tests/a.py"),
+        "import sys, unittest\nsys.path.insert(0, 'src')\nfrom a import answer\n\
+         unittest.runner.time.perf_counter = lambda: 0.0\nclass Check(unittest.TestCase):\n    \
+         def test_answer(self):\n        self.assertEqual(answer(), 7)\n\
+         if __name__ == '__main__':\n    unittest.main()\n").unwrap();
+    git_value(project, &["add", "tests/a.py"]);
+    git_value(project, &["commit", "-m", "test(13): red task-a"]);
+    let red_commit = git_value(project, &["rev-parse", "HEAD"]);
+    let red = task_run(&mut client, "red-1", &check, "red", command);
+    assert_eq!(red["disposition"], json!({"kind":"exited","code":1}), "{red}");
+    fs::write(project.join("src/a.py"), "def answer():\n    return 7\n").unwrap();
+    git_value(project, &["add", "src/a.py"]);
+    git_value(project, &["commit", "-S", "-m", "feat(13): green task-a"]);
+    let green_commit = git_value(project, &["rev-parse", "HEAD"]);
+    let green = task_run(&mut client, "green-1", &check, "green", command);
+    assert_eq!(green["disposition"], json!({"kind":"exited","code":0}), "{green}");
+    let task = task_state(&mut client, 1);
+    let close = json!({"operation":"execution-task-close","request":{"request_id":"close-1",
+        "task":task["task"],"attempt":"attempt-1","expected_version":task["state"]["version"],
+        "completion":green_commit,"checks":[{"check":check,"red_commit":red_commit,
+        "green_commit":green_commit,"red_run":"red-1","green_run":"green-1"}],
+        "verification":["green-1"]}});
+    client.finish();
+    (fixture, close)
 }
 
 pub fn documents(project: &Path) -> BTreeMap<PathBuf, Vec<u8>> {

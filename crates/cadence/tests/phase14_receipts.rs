@@ -6,9 +6,9 @@ mod phase14;
 
 use cadence::store::model;
 use phase13::{Client, Completed, apply, digest_of, git_value, reopened};
-use phase14::{LEGACY_TICKED, TICKED, documents, legacy_fixture, natively_completed, progress_fixture};
+use phase14::{LEGACY_TICKED, TICKED, dispatched_plan, documents, legacy_fixture, natively_completed, progress_fixture};
 use serde_json::{Value, json};
-use std::{fs, path::Path, process::{Command, Stdio}};
+use std::{fs, path::Path, process::{Command, Stdio}, time::{SystemTime, UNIX_EPOCH}};
 
 fn progress(client: &mut Client) -> Value {
     let answer = client.call("cadence_query", json!({"operation":"progress"}));
@@ -18,6 +18,129 @@ fn progress(client: &mut Client) -> Value {
     assert_eq!(answer["text"].as_str().unwrap().lines().filter(|line| line.starts_with("Next:")).count(), 1);
     assert!(answer["text"].as_str().unwrap().len() <= 24_576);
     answer
+}
+
+fn seconds() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+}
+
+/// Every decision the reopened store holds, as the JSON its journal line carries.
+fn journal(project: &Path) -> Vec<Value> {
+    reopened(project).decisions.iter().map(|record| serde_json::to_value(record).unwrap()).collect()
+}
+
+fn refused(records: &[Value]) -> Vec<&Value> {
+    records.iter().filter(|record| record["decision"]["boundary"]["outcome"].as_str()
+        .is_some_and(|outcome| outcome.starts_with("refused:"))).collect()
+}
+
+/// The integer seconds a record was written, which the progress line repeats.
+fn at(record: &Value, window: (u64, u64)) -> u64 {
+    let at = record.get("at").and_then(Value::as_u64)
+        .unwrap_or_else(|| panic!("record carries no time: {record}"));
+    assert!((window.0..=window.1).contains(&at), "{at} outside {window:?}: {record}");
+    at
+}
+
+#[test]
+fn phase14_refusal_records_carry_code_detail_and_time() {
+    let before = seconds();
+
+    // (a) A legacy tree the owner ticks after the first touch: the declaration
+    // and the derivation disagree, and execution refuses on the disagreement.
+    let legacy = legacy_fixture();
+    let a = legacy.path().to_owned();
+    fs::write(a.join(".planning/trace.jsonl"),
+        "{\"family\":\"outcome\",\"event\":\"legacy_check\",\"phase\":1,\"verdict\":\"opaque legacy pass\"}\n").unwrap();
+    let mut client = Client::open(&a);
+    progress(&mut client);
+    fs::write(a.join(".planning/ROADMAP.md"), LEGACY_TICKED).unwrap();
+    let conflict = client.call("cadence_query", json!({"operation":"execute-next","phase":4}));
+    assert_eq!((conflict["status"].as_str(), conflict["code"].as_str()),
+        (Some("refused"), Some("state-conflict")), "{conflict}");
+    let text_a = progress(&mut client)["text"].as_str().unwrap().to_owned();
+    client.finish();
+    // The same refusal after a restart answers the same and records nothing new.
+    let mut client = Client::open(&a);
+    assert_eq!(client.call("cadence_query", json!({"operation":"execute-next","phase":4})), conflict);
+    client.finish();
+
+    // (b) A dispatched plan whose close observes a staged path outside its lease.
+    let (fixture, close) = dispatched_plan();
+    let b = fixture.project().to_owned();
+    fs::create_dir_all(b.join("docs")).unwrap();
+    fs::write(b.join("docs/outside.md"), "outside the plan's lease\n").unwrap();
+    git_value(&b, &["add", "docs/outside.md"]);
+    let mut client = Client::open(&b);
+    let lease = client.call("cadence_apply", close);
+    assert_eq!((lease["status"].as_str(), lease["rule"].as_str(), lease["slot"].as_str(), lease["id"].as_str()),
+        (Some("refused"), Some("lease"), Some("staged"), Some("docs/outside.md")), "{lease}");
+    let text_b = progress(&mut client)["text"].as_str().unwrap().to_owned();
+    client.finish();
+
+    // (c) A project with a planning root and no roadmap to derive from.
+    let empty = tempfile::tempdir().unwrap();
+    let c = empty.path().to_owned();
+    fs::create_dir_all(c.join(".planning")).unwrap();
+    fs::write(c.join(".planning/config.json"), "{}\n").unwrap();
+    let mut client = Client::open(&c);
+    let missing = client.call("cadence_query", json!({"operation":"execute-next","phase":1}));
+    assert_eq!((missing["status"].as_str(), missing["code"].as_str()),
+        (Some("refused"), Some("missing-roadmap")), "{missing}");
+    let reason = missing["reason"].as_str().unwrap();
+    assert!(reason.contains("ROADMAP.md") && !reason.contains("execution validation failed"), "{missing}");
+    client.finish();
+
+    let window = (before, seconds());
+
+    // (a) One record, located on the roadmap line that disagreed.
+    let records = journal(&a);
+    let refusals = refused(&records);
+    assert_eq!(refusals.len(), 1, "{records:#?}");
+    let boundary = &refusals[0]["decision"]["boundary"];
+    assert_eq!(boundary["outcome"], "refused:state-conflict", "{boundary}");
+    assert_eq!(boundary["located"], json!({"source":"ROADMAP.md","line":5,"entry":3,"phase":"4",
+        "field":"complete","declared":"true","derived":"planned"}), "{boundary}");
+    let stamp = at(refusals[0], window);
+    assert!(text_a.contains(&format!(
+        "Record (phase 4): 0 routing decisions, 1 refusals, 0 gate fires\n  refused state-conflict at \
+         source=ROADMAP.md line=5 entry=3 phase=4 field=complete declared=true derived=planned, {stamp}\n")),
+        "{text_a}");
+    // Every record the binary wrote carries its time; the imported row carries none.
+    let (imported, written): (Vec<&Value>, Vec<&Value>) = records.iter()
+        .partition(|record| record["id"].as_str().is_some_and(|id| id.starts_with("decision:")));
+    assert_eq!(imported.len(), 1, "{records:#?}");
+    assert!(imported[0].get("at").is_none(), "{}", imported[0]);
+    assert!(written.iter().all(|record| record.get("at").is_some()), "{written:#?}");
+
+    // (b) One record for the staged path the lease does not cover.
+    let records = journal(&b);
+    let leases: Vec<&Value> = refused(&records).into_iter()
+        .filter(|record| record["decision"]["boundary"]["outcome"] == "refused:lease").collect();
+    assert_eq!(leases.len(), 1, "{records:#?}");
+    assert_eq!(leases[0]["decision"]["boundary"]["located"],
+        json!({"rule":"lease","slot":"staged","id":"docs/outside.md"}), "{}", leases[0]);
+    let stamp = at(leases[0], window);
+    assert!(text_b.contains(&format!("  refused lease at rule=lease slot=staged id=docs/outside.md, {stamp}\n")),
+        "{text_b}");
+
+    // (c) One record naming the input it could not read.
+    let records = journal(&c);
+    let refusals = refused(&records);
+    assert_eq!(refusals.len(), 1, "{records:#?}");
+    assert_eq!(refusals[0]["decision"]["boundary"]["outcome"], "refused:missing-roadmap", "{}", refusals[0]);
+    assert_eq!(refusals[0]["decision"]["boundary"]["located"],
+        json!({"rule":"missing-roadmap","slot":"roadmap","path":".planning/ROADMAP.md"}), "{}", refusals[0]);
+    at(refusals[0], window);
+
+    // No refusal in any of the three stores explains itself with the generic sentence.
+    for project in [&a, &b, &c] {
+        let records = journal(project);
+        for record in refused(&records) {
+            let reason = record["decision"]["boundary"]["receipt"]["envelope"]["reason"].as_str().unwrap_or_default();
+            assert!(!reason.contains("execution validation failed"), "{record}");
+        }
+    }
 }
 
 #[test]
