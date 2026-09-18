@@ -1554,14 +1554,8 @@ fn phase12_runner_retains_task_commands_and_one_suite() {
         let failed=Tiny::new(mode);let project=failed.project();finish_tasks(&failed);
         let request=plan_request(project,"execution-suite","fail-1",1,json!({"proposed_paths":["src/tiny.py"]}));
         let mut client=Client::open(project);let launch=client.call("cadence_apply",request);assert_eq!(launch["status"],"ok","{launch}");
-        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(20);
-        let result=loop {
-            let history=phase13::retained_history(project,12);
-            if let Some(record)=history["plan_events"].as_array().unwrap().iter()
-                .find(|e|e["request"]["event"]["kind"]=="suite-result" && e["request"]["event"]["run_id"]=="fail-1") {break record["request"]["event"].clone();}
-            assert!(std::time::Instant::now()<deadline,"suite result timed out: {history}");
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        };client.finish();
+        let result=phase13::native_result_with(|request| client.call("cadence_query",request),12,"fail-1")["request"]["event"].clone();
+        client.finish();
         assert_eq!(result["observation"],json!({"class":"results-observed","summary":expected}));
         assert_eq!(result["disposition"]["code"],if mode=="runner-failed-cargo" {101} else {1});
         plan_refused(project,plan_request(project,"execution-suite-relaunch","relaunch-failed",1,absence("fail-1",json!(output_identity(&result)))),"suite-results-observed");
