@@ -185,7 +185,7 @@ pub enum DerivationError {
         /// flattened pair says a tick disagrees; it cannot say which phase or
         /// what the derivation made of it, and the log needs both.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        entry: Option<ConflictEntry>,
+        entry: Option<Box<ConflictEntry>>,
     },
     InvalidStatus {
         source: String,

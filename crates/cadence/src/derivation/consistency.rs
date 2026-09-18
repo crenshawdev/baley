@@ -37,7 +37,7 @@ pub fn check_consistency(
             field: issue.field,
             declared: issue.declared,
             derived: issue.derived,
-            entry: Some(entry),
+            entry: Some(Box::new(entry)),
         });
     }
     check_cursor(answer, cursor)

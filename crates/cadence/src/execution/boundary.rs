@@ -621,7 +621,7 @@ pub struct BoundaryV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease_refusal: Option<Box<LeaseRefusal>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub located: Option<Located>,
+    pub located: Option<Box<Located>>,
 }
 
 impl BoundaryV1 {
@@ -651,7 +651,7 @@ impl BoundaryV1 {
     /// The typed detail the log keeps beside the bounded envelope.
     #[must_use]
     pub fn with_located(mut self, located: Option<Located>) -> Self {
-        self.located = located;
+        self.located = located.map(Box::new);
         self
     }
 }
@@ -740,7 +740,7 @@ impl BoundaryV1 {
         if let Some(evidence) = &self.lease_refusal {
             evidence.validate()?;
             let expected = Self::lease_refusal(self.request_digest.clone(), evidence.paths.clone())?
-                .with_located(self.located.clone());
+                .with_located(self.located.as_deref().cloned());
             if terminal || *self != expected {
                 return Err(Failure::Encoding);
             }

@@ -63,7 +63,7 @@ fn records(view: &View, phase: &str) -> Value {
                     let envelope = &boundary["receipt"]["envelope"];
                     // The typed located object when the record carries one; a
                     // record written before D-140 has only its bounded reason.
-                    let located = value.boundary.located.as_ref().map_or_else(
+                    let located = value.boundary.located.as_deref().map_or_else(
                         || envelope["reason"].as_str().unwrap_or_default().to_owned(),
                         cadence::execution::boundary::Located::summary);
                     refusals.push(detail(record, envelope["code"].as_str().unwrap_or("unknown"), located));
