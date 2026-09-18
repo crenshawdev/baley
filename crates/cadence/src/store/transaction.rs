@@ -262,9 +262,17 @@ impl Transaction {
     pub fn fingerprint(&self) -> Result<String> {
         // Preconditions describe a particular attempt, not the logical import.
         // A retry after recovery has different installed identities.
+        //
+        // The write-time stamp is an observation and not part of what the
+        // transaction installs (D-143). A validator, a replay or a recovery
+        // rebuilding this transaction from the same evidence never observes
+        // the second the writer did, so the operation fingerprint is taken
+        // over the records without it and every other field still counts.
+        let decisions: Vec<DecisionRecord> =
+            self.decisions.iter().map(DecisionRecord::unstamped).collect();
         Ok(model::digest(&serde_json::to_vec(&(
             &self.items,
-            &self.decisions,
+            &decisions,
             &self.snapshot,
             self.external
                 .iter()

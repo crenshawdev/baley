@@ -133,6 +133,15 @@ impl DecisionRecord {
             && self.origin == other.origin
             && self.decision == other.decision
     }
+
+    /// This record without its write-time stamp, for a preimage a rebuild has
+    /// to reproduce byte for byte. A record that never carried one serializes
+    /// exactly as it always did, so a digest already taken over it is
+    /// unchanged.
+    #[must_use]
+    pub fn unstamped(&self) -> Self {
+        Self { at: None, ..self.clone() }
+    }
 }
 
 /// Whether the log already holds this record, ignoring its write-time stamp.
