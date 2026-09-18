@@ -885,7 +885,8 @@ impl ServerHandler for PublicServer {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
                         Ok(QueryArguments::Progress {}) => match self.server.service.progress(&self.root).await {
                             Ok(answer) => answer,
-                            Err(error) => serde_json::json!({"status":"refused","code":error.code(),"reason":error.to_string(),"detail":error}),
+                            Err(error) => Refusal::new(error.code(), error.to_string())
+                                .details(serde_json::json!(error)).value(),
                         },
                         Err(error) => Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value(),
                         Ok(_) => unreachable!("progress operation selected"),

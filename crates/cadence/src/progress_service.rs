@@ -1,5 +1,6 @@
 use super::{derivation_service::{self, Driver, store_error}, next_action_service};
 use crate::{config::reload::ConfigIo, import::SessionFactory};
+use cadence::envelope::Refusal;
 use cadence::{derivation::{self, DerivationError}, store::{Error, model::{Decision, Evidence}, writer::View}};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -96,7 +97,8 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
         &lifecycle, &overlay, &issues, record,
         json!({"active":captures.active,"bound":captures.bound,"exceeded":captures.exceeded}), &next.instruction());
     if serde_json::to_vec(&answer).expect("progress answer").len() > 24_576 {
-        return Ok(json!({"status":"refused","code":"progress-bound","slot":"progress","reason":"progress exceeds the 24576-byte answer bound"}));
+        return Ok(Refusal::new("progress-bound", "progress exceeds the 24576-byte answer bound")
+            .slot("progress").value());
     }
     Ok(answer)
 }
