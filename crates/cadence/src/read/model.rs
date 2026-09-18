@@ -62,6 +62,7 @@ pub struct DocumentRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum DocumentIdentity {
+    ReviewEntry { attempt: String, entry: String },
     Dispatch { id: String },
     RunOutput { phase: NonZeroU32, run: String },
     VerificationAttempt { phase: NonZeroU32, attempt: String },

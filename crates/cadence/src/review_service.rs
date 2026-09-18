@@ -72,8 +72,10 @@ pub enum Apply {
     MaterialAppend {
         manifest: String,
         acquisition: String,
+        location: Option<String>,
         path: Option<String>,
         label: Option<String>,
+        #[serde(default)]
         bytes: Vec<u8>,
         delivered: Option<Value>,
     },
@@ -1038,6 +1040,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(
         Command::Apply(Apply::MaterialAppend {
             manifest,
             acquisition,
+            location: _,
             path,
             label,
             bytes,
@@ -1098,7 +1101,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(
             storage.contribute(&mut records)?;
             persistence::insert(&mut records, "appended", &entry.entry, &entry)?;
             persistence::update(store, &view, "material-append", records).await?;
-            output("review-material-append", entry)
+            output("review-material-append", material::entry_metadata(&entry)?)
         }
         Command::Apply(Apply::Admit { .. }) => unreachable!(),
         Command::ExecutionHandoff { .. } => unreachable!(),
@@ -1128,30 +1131,8 @@ fn validate_material_delivery(
     Ok(supplied == &attempt.view)
 }
 
-fn authorize_material_read(
-    records: &Value,
-    attempt: &Attempt,
-    manifest: &Manifest,
-    entry: &MaterialEntry,
-) -> Result<()> {
-    if manifest.fire != attempt.fire || manifest.manifest != attempt.view.manifest {
-        return Err(Error::Invalid("foreign material manifest".into()));
-    }
-    if attempt.view.entries.contains(&entry.entry) && manifest.entries.contains(entry) {
-        return Ok(());
-    }
-    for record in collection::<DeliveryRecord>(records, "deliveries")?.into_values() {
-        if record.attempt == attempt.attempt
-            && record.delivery.view.manifest == manifest.manifest
-            && record.delivery.view.entries.contains(&entry.entry)
-            && record.delivery.contents.get(&entry.entry) == entry.content.as_ref()
-        {
-            review::attempts::delivered_view(records, attempt, &record.delivery.view)?;
-            return Ok(());
-        }
-    }
-    Err(Error::Invalid("entry outside retained attempt view".into()))
-}
+#[cfg(test)]
+use material::authorize_material_read;
 
 async fn query_saved(store: &Store, root: &Path, query: Query) -> Answer {
     match query {
@@ -1196,20 +1177,11 @@ async fn query_saved(store: &Store, root: &Path, query: Query) -> Answer {
         Query::Material { attempt, entry } => {
             let view = persistence::read(store).await?;
             let records = persistence::records(&view.snapshot.data)?;
-            let attempt: Attempt = persistence::get(&records, "attempts", &attempt)?;
-            let manifest: Manifest =
-                persistence::get(&records, "manifests", &attempt.view.manifest)?;
-            let appended = collection::<MaterialEntry>(&records, "appended")?;
-            let saved = manifest
-                .entries
-                .iter()
-                .find(|e| e.entry == entry)
-                .or_else(|| appended.get(&entry))
-                .ok_or_else(|| Error::Invalid("unknown retained entry".into()))?;
-            authorize_material_read(&records, &attempt, &manifest, saved)?;
+            let saved = material::authorized_entry(&records, &attempt, &entry)?;
+            material::read_material(&mut persistence::MaterialStorage::from_records(&records)?, &saved)?;
             output(
                 "review-material",
-                json!({"entry":saved,"bytes":material::read_material(&mut persistence::MaterialStorage::from_records(&records)?,saved)?}),
+                json!({"entry":material::entry_metadata(&saved)?,"identity":{"kind":"review-entry","attempt":attempt,"entry":entry}}),
             )
         }
         Query::Deferred {} => output(
@@ -1534,7 +1506,7 @@ pub(super) async fn next(store: &Store, fire: &str) -> Answer {
         return output(
             "review-next",
             json!({"state":"dispatch","dispatch":review::invoking::local_dispatch(&admission,&attempt),"attempt":attempt,"admission":admission,
-                "guidance":"WAIT: run this local dispatch once. Forward actual launch and return events with cadence_apply review-observation; forward the unchanged raw return with review-return using this admission/attempt identity. For definite launch failure, use review-return with failure_event and host_failure, without a launch or raw return. For a launched host with no return, forward its observed launch and a missing return. Wait for the durable review-return acknowledgment, then poll review-next. Missing or malformed output is failure."}),
+                "guidance":"WAIT: run this local dispatch once. Read retained material through document review-entry identities and their bounded parts. Forward actual launch and return events with cadence_apply review-observation; submit the unchanged five-field findings array with review-return using this admission/attempt identity, launch and host_return. For definite launch failure, use failure_event and host_failure without launch or findings. For missing or malformed host output, report host_failure without findings. Wait for the durable review-return digest/count acknowledgment, then poll review-next."}),
         );
     }
     let mut changed = false;

@@ -105,8 +105,20 @@ applies a finding: no file is changed, deleted, staged or committed.
 3. Deliver. Call cadence_query `{{"operation":"review-next","fire":<fire>}}` and
    follow only the saved dispatch: invoke Task with `dispatch.agent` and exactly
    `dispatch.prompt`, passing `dispatch.model` only when present. Forward the
-   actual launch and return events with review-observation and the unchanged
-   raw return with review-return under the issued identity, wait for the
+   actual launch and return events with review-observation. Read retained
+   material with document identity `{{kind: review-entry, attempt, entry}}`:
+   read its index, compact entry metadata, lines:<n> and text:<n> parts, following
+   next. review-material supplies this identity and metadata, never bytes.
+   Additional material uses review-material-append with manifest, acquisition
+   and an issued location or file reference; never send bytes.
+   Submit the reviewer's unchanged five-field findings array as findings on
+   review-return under the issued identity, launch and host_return. Never send
+   raw JSON text. The receipt carries only the findings digest and count;
+   review-original reads the retained parsed findings and identity. The digest
+   hashes the canonical retained object envelope {{"findings":[...]}} with
+   fields file, line, severity, claim, failure_scenario in that order.
+   Missing or malformed host output uses host_failure without findings;
+   definite launch failure uses failure_event and host_failure. Wait for the
    durable acknowledgment, then poll review-next again until delivery is
    usable-complete or complete-with-failure. Provider work stays with the
    resident binary; missing or malformed output is failure, never an empty

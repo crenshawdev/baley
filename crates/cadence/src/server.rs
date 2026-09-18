@@ -1177,6 +1177,11 @@ impl ServerHandler for PublicServer {
                             .map(|answer| ApplyOutput::Context(Box::new(answer))),
                     ),
                     ApplyGroup::Review => {
+                        if raw.as_ref().is_some_and(|v| v["operation"] == "review-material-append" && v.get("bytes").is_some()) {
+                            return structured_result(Ok(ApplyOutput::NativeExecution(
+                                Refusal::new("typed-content", "review-material-append acquires an issued location")
+                                    .rule("typed-content").slot("bytes").value())));
+                        }
                         if let Some(refusal) = raw.as_ref().and_then(review_service::typed_return_refusal) {
                             return structured_result(Ok(ApplyOutput::NativeExecution(refusal)));
                         }

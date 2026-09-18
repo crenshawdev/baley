@@ -238,6 +238,44 @@ fn roadmap(root: &Path, phase: u32) -> Result<Resolved, Value> {
 
 pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Value> {
     match identity {
+        DocumentIdentity::ReviewEntry { attempt, entry } => {
+            use crate::review::{material, persistence};
+            let unavailable = |error: cadence::store::Error| refusal("identity", "document-unavailable", error.to_string());
+            let records = persistence::records(&snapshot(root)?).map_err(unavailable)?;
+            let saved = material::authorized_entry(&records, attempt, entry).map_err(unavailable)?;
+            let bytes = material::read_material(&mut persistence::MaterialStorage::from_records(&records).map_err(unavailable)?, &saved).map_err(unavailable)?;
+            let text = String::from_utf8(bytes).map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?;
+            let mut parts = vec![Part { selector: "entry".into(), title: "entry".into(),
+                body: material::entry_metadata(&saved).map_err(unavailable)?.to_string() }];
+            // Each line-map part is a complete array, independently readable.
+            let mut lines = Vec::new();
+            let mut size = 2;
+            let mut ordinal = 1;
+            for line in &saved.lines {
+                let value = json!(line);
+                let length = value.to_string().len() + usize::from(!lines.is_empty());
+                if size + length > PART_BOUND {
+                    parts.push(Part { selector: format!("lines:{ordinal}"), title: "line map".into(), body: json!(lines).to_string() });
+                    ordinal += 1;
+                    lines.clear();
+                    size = 2;
+                }
+                size += value.to_string().len() + usize::from(!lines.is_empty());
+                lines.push(value);
+            }
+            parts.push(Part { selector: format!("lines:{ordinal}"), title: "line map".into(), body: json!(lines).to_string() });
+            let mut first = 1;
+            for (index, mut part) in bounded_parts(vec![Part { selector: "text".into(), title: "text".into(), body: text }]).into_iter().enumerate() {
+                let newlines = part.body.bytes().filter(|b| *b == b'\n').count();
+                let last = first + newlines - usize::from(part.body.ends_with('\n'));
+                part.selector = format!("text:{}", index + 1);
+                part.title = format!("text lines {first}-{}", last.max(first));
+                first += newlines;
+                parts.push(part);
+            }
+            let revision = cadence::store::model::digest(parts.iter().flat_map(|p| p.body.bytes()).collect::<Vec<_>>().as_slice());
+            Ok(Resolved { identity: identity.clone(), classification: "review-entry", revision, parts })
+        }
         DocumentIdentity::VerificationAttempt { phase, attempt } => {
             let data = snapshot(root)?;
             let unavailable = |error: cadence::store::Error| refusal("identity", "document-unavailable", error.to_string());
@@ -612,7 +650,7 @@ impl ReadDomain {
                 let (base, number) = selected.selector.rsplit_once(':')
                     .and_then(|(base, n)| n.parse::<usize>().ok().map(|n| (base, n)))
                     .unwrap_or((&selected.selector, 1));
-                matches!(resolved.identity, DocumentIdentity::RunOutput { .. })
+                matches!(resolved.identity, DocumentIdentity::RunOutput { .. } | DocumentIdentity::ReviewEntry { .. })
                     || (following.title == selected.title && (following.selector == format!("{}:2", selected.selector)
                         || following.selector == format!("{base}:{}", number + 1)))
             })

@@ -129,6 +129,50 @@ pub fn read_material<S: Storage>(store: &mut S, entry: &MaterialEntry) -> Result
     Ok(bytes)
 }
 
+/// Both public entry reads use this retained delivery membership gate.
+pub fn authorized_entry(records: &serde_json::Value, attempt_id: &str, entry_id: &str) -> Result<MaterialEntry> {
+    use super::{model::Attempt, persistence};
+    let attempt: Attempt = persistence::get(records, "attempts", attempt_id)?;
+    let manifest: Manifest = persistence::get(records, "manifests", &attempt.view.manifest)?;
+    let entry = manifest.entries.iter().find(|entry| entry.entry == entry_id).cloned()
+        .or_else(|| persistence::get(records, "appended", entry_id).ok())
+        .ok_or_else(|| Error::Invalid("unknown retained entry".into()))?;
+    if attempt.attempt != attempt_id {
+        return Err(Error::Invalid("foreign material attempt".into()));
+    }
+    authorize_material_read(records, &attempt, &manifest, &entry)?;
+    Ok(entry)
+}
+
+pub fn authorize_material_read(records: &serde_json::Value, attempt: &super::model::Attempt,
+    manifest: &Manifest, entry: &MaterialEntry) -> Result<()> {
+    use super::model::DeliveryRecord;
+    if manifest.fire != attempt.fire || manifest.manifest != attempt.view.manifest {
+        return Err(Error::Invalid("foreign material manifest".into()));
+    }
+    if attempt.view.entries.contains(&entry.entry) && manifest.entries.contains(entry) {
+        return Ok(());
+    }
+    let deliveries: std::collections::BTreeMap<String, DeliveryRecord> = records.get("deliveries")
+        .cloned().map(serde_json::from_value).transpose()?.unwrap_or_default();
+    for record in deliveries.into_values() {
+        if record.attempt == attempt.attempt
+            && record.delivery.view.manifest == manifest.manifest
+            && record.delivery.view.entries.contains(&entry.entry)
+            && record.delivery.contents.get(&entry.entry) == entry.content.as_ref() {
+            super::attempts::delivered_view(records, attempt, &record.delivery.view)?;
+            return Ok(());
+        }
+    }
+    Err(Error::Invalid("entry outside retained attempt view".into()))
+}
+
+pub fn entry_metadata(entry: &MaterialEntry) -> Result<serde_json::Value> {
+    let mut value = serde_json::to_value(entry)?;
+    value.as_object_mut().unwrap().remove("lines");
+    Ok(value)
+}
+
 pub fn material_matches(saved: &[u8], proposed: &[u8]) -> bool {
     saved == proposed
 }

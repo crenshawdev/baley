@@ -456,9 +456,24 @@ mod resident {
                         }
                         Request::Review {
                             root,
-                            command,
+                            mut command,
                             reply,
                         } => {
+                            if let crate::server::review_service::Command::Apply(crate::server::review_service::Apply::MaterialAppend {
+                                location, path, bytes, ..
+                            }) = command.as_mut() {
+                                let acquired = read_domains.get(&root)
+                                    .ok_or_else(|| "location was not issued by this resident".to_string())
+                                    .and_then(|domain| domain.acquire(location.as_deref().unwrap_or(""))
+                                        .map_err(|answer| answer.to_string()));
+                                match acquired {
+                                    Ok((issued_path, issued_bytes)) => { *path = Some(issued_path); *bytes = issued_bytes; }
+                                    Err(reason) => {
+                                        let _ = reply.send(Ok(crate::server::review_service::refused(reason)));
+                                        continue;
+                                    }
+                                }
+                            }
                             let result =
                                 crate::server::review_service::execute(&factory, &root, *command)
                                     .await;

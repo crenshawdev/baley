@@ -22,6 +22,20 @@ pub(super) fn nameable_units(path: &Path, content: &str) -> (Vec<Unit>, Vec<&'st
 }
 
 impl ReadDomain {
+    /// Resolve only resident-issued capabilities, retaining their exact span.
+    pub fn acquire(&self, token: &str) -> Result<(String, Vec<u8>), Value> {
+        let (path, revision, span) = match self.registry.get(token) {
+            Some(Capability::Unit { path, revision, unit, .. }) => (path, revision, Some(unit.first_byte..unit.last_byte)),
+            Some(Capability::File { path, revision }) => (path, revision, None),
+            _ => return Err(refusal("location", "location-not-issued", "location was not issued by this resident")),
+        };
+        let content = self.current(&path, &revision)?;
+        let bytes = match span {
+            Some(span) => content.get(span).ok_or_else(|| refusal("location", "stale-location", "issued span no longer exists"))?.as_bytes().to_vec(),
+            None => content.into_bytes(),
+        };
+        Ok((path.to_string_lossy().into_owned(), bytes))
+    }
     pub(super) fn read(&mut self, request: ReadRequest) -> Value {
         match (request.location, request.file, request.unit) {
             (Some(location), None, None) => self.read_location(&location),
