@@ -980,7 +980,7 @@ fn phase38_approved_plan_repair_accepts_one_second_launch() {
     assert_eq!(recorded["status"], "ok", "{recorded}");
     let summary = fs::read_to_string(project.join(".planning/phases/38/SUMMARY.md")).unwrap();
     assert!(summary.contains("Status: complete"));
-    assert!(summary.contains("Executor round tokens: 17 (host fixture host, reported by the host)"));
+    assert!(summary.contains("Executor round tokens: 17 against 141893 (3.7 cad-executor median per dispatch, n=149, .planning/trace.jsonl, locked 2026-08-24); host fixture host; wire bytes 42"));
     assert!(summary.contains("wire bytes 42"));
 }
 

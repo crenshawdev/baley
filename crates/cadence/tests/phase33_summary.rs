@@ -23,7 +23,7 @@ fn phase33_round_record_renders_tokens_beside_the_median() {
     let recorded = round.client.call("cadence_apply", request.clone());
     assert_eq!(recorded, json!({"status":"ok","receipt":{"plan":round.plan,"request_id":"round-tokens","version":1}}));
     let summary = fs::read_to_string(round.fixture.project().join(".planning/phases/31/SUMMARY.md")).unwrap();
-    assert_eq!(summary.lines().filter(|line| *line == "Executor round tokens: 106259 (host codex exec, reported by the host) against 141893 (3.7 cad-executor median per dispatch, n=149, trace.jsonl locked 2026-08-24, superseded file); wire bytes unmeasured").count(), 1);
+    assert_eq!(summary.lines().filter(|line| *line == "Executor round tokens: 106259 against 141893 (3.7 cad-executor median per dispatch, n=149, .planning/trace.jsonl, locked 2026-08-24); host codex exec; wire bytes unmeasured").count(), 1);
     let before = support::tree(round.fixture.project());
     assert_eq!(round.client.call("cadence_apply", request.clone()), recorded);
     assert_eq!(support::tree(round.fixture.project()), before);
