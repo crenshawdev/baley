@@ -302,8 +302,8 @@ fn tool_schemas_list_exactly_three_tools_with_minimal_inputs() {
     }
     let tools_bytes = serde_json::to_vec(tools).unwrap().len();
     assert!(
-        tools_bytes < 9_500,
-        "tools/list result.tools is {tools_bytes} bytes; measured 6,846 bytes before top-level types (9,303 bytes with the derived property union)"
+        tools_bytes < 9_800,
+        "tools/list result.tools is {tools_bytes} bytes; measured 6,846 bytes before top-level types, 9,303 bytes with the derived property union, 9,578 once adoption-declare and capture joined the apply enum"
     );
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
     for (tool, names) in [("query", query_operation_names()), ("apply", apply_operation_names())] {
@@ -1559,7 +1559,7 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
 
     // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
-    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 14);
+    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 15);
     let (progress, body) = markdown_parts("skills/cad-progress/SKILL.md");
     assert_eq!(progress["name"], "cad-progress");
     assert_eq!(progress["allowed-tools"], json!(["mcp__cadence__cadence_query"]));
@@ -1568,6 +1568,19 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     for forbidden in ["Write", "Bash", "SlashCommand", "CLAUDE_PLUGIN_ROOT", "--stats", "--trace"] {
         assert!(!cadence::progress::instructions::markdown().contains(forbidden));
     }
+    let (capture, body) = markdown_parts("skills/cad-capture/SKILL.md");
+    assert_eq!(capture["name"], "cad-capture");
+    assert_eq!(capture["allowed-tools"], json!(["mcp__cadence__cadence_apply", "mcp__cadence__cadence_query"]));
+    assert!(body.contains("once") && body.contains(r#""operation":"capture""#));
+    assert!(body.contains("only for a todo") && body.contains("`captures`"));
+    // The 3.x door ran a script, wrote CAPTURE.md and committed it; this one
+    // refuses all three, and parks --cadence rather than implying it works.
+    for forbidden in ["Write", "Bash", "SlashCommand", "CLAUDE_PLUGIN_ROOT", "planning.mjs", "--cadence "] {
+        assert!(!cadence::capture::instructions::markdown().contains(forbidden), "{forbidden}");
+    }
+    assert!(body.contains("do not open or change
+`.planning/CAPTURE.md`, and do not make a commit"));
+    assert!(body.contains("parked for a later phase"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for retired in ["cad-health", "cad-report"] {
         assert!(!root.join(format!("skills/{retired}/SKILL.md")).exists());
