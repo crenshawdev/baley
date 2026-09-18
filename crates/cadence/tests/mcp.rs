@@ -1559,7 +1559,19 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
 
     // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
-    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 13);
+    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 14);
+    let (progress, body) = markdown_parts("skills/cad-progress/SKILL.md");
+    assert_eq!(progress["name"], "cad-progress");
+    assert_eq!(progress["allowed-tools"], json!(["mcp__cadence__cadence_query"]));
+    assert!(body.contains("once") && body.contains(r#"{"operation":"progress"}"#));
+    assert!(body.contains("Print the returned `text` unchanged"));
+    for forbidden in ["Write", "Bash", "SlashCommand", "CLAUDE_PLUGIN_ROOT", "--stats", "--trace"] {
+        assert!(!cadence::progress::instructions::markdown().contains(forbidden));
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for retired in ["cad-health", "cad-report"] {
+        assert!(!root.join(format!("skills/{retired}/SKILL.md")).exists());
+    }
     for command in ["cad-review", "cad-decision-review", "cad-minimalism-review", "cad-plan-review"] {
         let text = cadence::review::instructions::frontdoor_markdown(command).unwrap();
         assert!(text.contains("kind: review-entry") && text.contains("lines:<n>") && text.contains("text:<n>"));
