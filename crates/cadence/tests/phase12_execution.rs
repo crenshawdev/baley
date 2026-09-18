@@ -1867,3 +1867,48 @@ fn retained_request(request: &Value, project: &Path) -> Value {
     }
     retained
 }
+
+// P9: the routing decision the writer records at issue is an edge with nothing
+// on its far end until the plan it routed reaches an outcome. Completion fills
+// it in place, as a second revision whose receipt names the completion record.
+#[test]
+fn phase12_routing_decision_gains_its_outcome_revision() {
+    use model::{Decision, Evidence};
+    let fixture = Tiny::new("runner");
+    let project = fixture.project();
+    finish_tasks(&fixture);
+    let dispatch = reopened(project).snapshot.data["execution"]["occurrences"]["12"]["active"]["id"]
+        .as_str().unwrap().to_owned();
+    let routing = || -> Vec<model::DecisionRecord> {
+        reopened(project).decisions.into_iter()
+            .filter(|record| record.id == format!("routing:{dispatch}")).collect()
+    };
+    let issued = routing();
+    assert_eq!(issued.len(), 1, "{issued:?}");
+    let Decision::Routing { observed_effort, receipt, .. } = &issued[0].decision else {
+        panic!("routing expected: {issued:?}")
+    };
+    assert_eq!((observed_effort, receipt), (&Evidence::Missing, &Evidence::Missing));
+
+    suite_run(project, "suite-1", 1);
+    settle(project, "settle-1", 1);
+    let complete = plan_apply(project, "execution-plan-complete", "complete-1", 1, json!({}));
+    assert_eq!(complete["status"], "ok", "{complete}");
+
+    let completed = routing();
+    assert_eq!(completed.len(), 2, "{completed:?}");
+    assert_eq!(completed[0], issued[0], "the issued revision is not rewritten");
+    assert_eq!(completed[1].revision, 2);
+    assert_eq!(completed[1].origin, issued[0].origin);
+    assert!(completed[1].at.is_some(), "{:?}", completed[1]);
+    let Decision::Routing { choice, config_provenance, requested_effort, observed_effort, receipt } =
+        &completed[1].decision else { panic!("routing expected: {completed:?}") };
+    let Decision::Routing { choice: at_issue, config_provenance: provenance, requested_effort: asked, .. } =
+        &issued[0].decision else { unreachable!() };
+    assert_eq!((choice, config_provenance, requested_effort), (at_issue, provenance, asked));
+    assert_eq!(*observed_effort, Evidence::Missing, "no host ever reported an effort");
+    assert_eq!(*receipt, Evidence::Text(format!("native-plan:12:{}",
+        complete["receipt"]["request_digest"].as_str().unwrap())));
+    // The second revision reopens with the plan and the phase still completes.
+    assert_eq!(execute_next(project)["outcome"], "complete");
+}
