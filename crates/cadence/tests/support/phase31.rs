@@ -238,6 +238,49 @@ pub fn approve(mut request: Value) -> Value {
     request
 }
 
+#[allow(dead_code)]
+pub fn publish_review_plan(client: &mut Client) {
+    let context = client.call("cadence_apply", approve(json!({"operation":"context-submit","submission":{
+        "phase":31,"title":"Review fixture","scope":"Review a native plan.",
+        "durable_decisions":[],"decisions":[],"assumptions":[],
+        "truths":[{"id":"T4","trigger":"a review returns","observer":"the caller","verb":"gets",
+            "outcome":"the retained result","kind":"property","observable":true,"fixed_oracle":true}]}})));
+    assert_eq!(context["persisted"], true, "{context}");
+    let allocation = client.call("cadence_query", json!({"operation":"plan-read","phase":31,"count":1}));
+    let mut proposal = process_plan_submission(&allocation, "");
+    proposal["submission"]["plans"].as_array_mut().unwrap().truncate(1);
+    let published = client.call("cadence_apply", approve(proposal));
+    assert_eq!(published["persisted"], true, "{published}");
+}
+
+/// Exercise the local host's launch/return binding over the real stdio wire.
+#[allow(dead_code)]
+pub fn observed_plan_review(client: &mut Client, key: &str) -> Value {
+    let selected = client.call("cadence_query", json!({"operation":"review-select",
+        "command":"cad-review","arguments":["plan","31"],"replay_key":key}));
+    assert_eq!(selected["status"], "ok", "{selected}");
+    let admitted = client.call("cadence_apply", json!({"operation":"review-admit","request":selected["result"]["admission"]}));
+    assert_eq!(admitted["status"], "ok", "{admitted}");
+    let next = client.call("cadence_query", json!({"operation":"review-next","fire":admitted["result"]["fire"]}));
+    assert_eq!(next["result"]["state"], "dispatch", "{next}");
+    assert_eq!(next["result"]["dispatch"]["local"], true, "{next}");
+    let attempt = &next["result"]["attempt"];
+    let launch = format!("{key}-launch");
+    let returned = format!("{key}-return");
+    for (kind, host_return) in [("launch", Value::Null), ("return", json!(returned))] {
+        let observed = client.call("cadence_apply", json!({"operation":"review-observation","observation":{
+            "observation":format!("{key}-{kind}-observation"),"attempt":attempt["attempt"],
+            "launch":launch,"host_return":host_return,"kind":kind,"reference":format!("event:{key}-{kind}"),
+            "observed_at":1,"host":"fixture","model":null,
+            "usage":{"input":null,"output":null,"cost":null,"currency":null},"contract":attempt["contract"]}}));
+        assert_eq!(observed["status"], "ok", "{observed}");
+    }
+    json!({"operation":"review-return","identity":{
+        "fire":attempt["fire"],"occurrence":attempt["occurrence"],"artifact":attempt["view"]["manifest"],
+        "view":attempt["view"]["view"],"attempt":attempt["attempt"],"round":attempt["round"]},
+        "launch":launch,"host_return":returned,"citations":[]})
+}
+
 pub fn git(project: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(args)
