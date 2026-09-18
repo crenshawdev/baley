@@ -884,6 +884,9 @@ impl Intent {
                     .ok_or_else(|| Error::Invalid("native plan requires previous decisions".into()))?;
                 let mut expected_decisions: Vec<DecisionRecord> = model::parse_lines(old_decisions)?;
                 expected_decisions.push(history::plan_decision(&record)?);
+                if let Some(outcome) = super::writer::plan_routing_outcome(&previous.data, &expected_decisions, &record) {
+                    expected_decisions.push(outcome);
+                }
                 model::adopt_stamps(&mut expected_decisions, decisions)?;
                 if snapshot.data != expected || old_items != Some(items)
                     || decisions != model::render_lines(&expected_decisions)?

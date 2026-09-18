@@ -1068,6 +1068,9 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let mut next = self.view.as_ref().clone();
         next.snapshot.data = data;
         next.decisions.push(history::plan_decision(&record)?);
+        if let Some(outcome) = plan_routing_outcome(&self.view.snapshot.data, &self.view.decisions, &record) {
+            next.decisions.push(outcome);
+        }
         let participants = self.native_summary_participants(&next, request.plan.phase)?;
         self.persist(next, self.view.snapshot.operations.clone(), participants, "native_plan",
             super::transaction::IntentKind::NativePlanV1 { request: Box::new(request), root_binding })
@@ -1399,6 +1402,11 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     occurrence.terminal = Some(TerminalOutcome::Complete { phase });
                 }
                 install_execution(&mut next.snapshot.data, execution.clone())?;
+                // P9: a schema-1 patch answers the dispatch, so the routing
+                // decision's outcome edge names the boundary record that took it.
+                if let Some(outcome) = routing_outcome(&self.view.decisions, &patch.dispatch_id, &id) {
+                    next.decisions.push(outcome);
+                }
                 let target = format!("phase-summary:{phase}");
                 participants.push(super::transaction::Participant {
                     expected: self.storage.read(&target)?,
@@ -2302,13 +2310,96 @@ pub fn validate_routing(dispatch: &ActiveDispatch, records: &[DecisionRecord]) -
     if let Some(expected) = routing_decision(dispatch)? {
         let saved: Vec<&DecisionRecord> =
             records.iter().filter(|record| record.id == expected.id).collect();
-        if saved.len() != 1 || !saved[0].same_record(&expected) {
+        let ok = match saved.as_slice() {
+            [issued] => issued.same_record(&expected),
+            [issued, outcome] => issued.same_record(&expected) && answers(outcome, &expected),
+            _ => false,
+        };
+        if !ok {
             return Err(Error::Invalid(
                 "dispatch lacks its exact routing decision".into(),
             ));
         }
     }
     Ok(())
+}
+
+/// P9: the later revision fills the outcome edge and changes nothing else.
+fn answers(outcome: &DecisionRecord, issued: &DecisionRecord) -> bool {
+    use super::model::{Decision, Evidence};
+    let mut edge = outcome.clone();
+    let Decision::Routing {
+        observed_effort,
+        receipt,
+        ..
+    } = &mut edge.decision
+    else {
+        return false;
+    };
+    if *observed_effort != Evidence::Missing || receipt.is_missing() {
+        return false;
+    }
+    *receipt = Evidence::Missing;
+    edge.revision = 1;
+    outcome.revision == 2 && edge.same_record(issued)
+}
+
+/// The dispatch a phase is running, from the state the writer is working from.
+fn active_dispatch_id(data: &Value, phase: u32) -> Option<String> {
+    data.get("execution")?
+        .get("occurrences")?
+        .get(phase.to_string())?
+        .get("active")?
+        .get("id")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// P9: the routing decision the writer recorded when the dispatch was issued
+/// gains its second revision once the plan it routed has an outcome. The
+/// receipt is the identity of the record that answered the dispatch; the
+/// observed effort stays Missing, because no host ever reported one.
+pub fn routing_outcome(
+    decisions: &[DecisionRecord],
+    dispatch_id: &str,
+    receipt: &str,
+) -> Option<DecisionRecord> {
+    use super::model::{Decision, Evidence};
+    let id = format!("routing:{dispatch_id}");
+    let mut record = decisions.iter().rev().find(|record| record.id == id)?.clone();
+    if record.revision != 1 || receipt.trim().is_empty() {
+        return None;
+    }
+    let Decision::Routing { receipt: edge, .. } = &mut record.decision else {
+        return None;
+    };
+    if !edge.is_missing() {
+        return None;
+    }
+    *edge = Evidence::Text(receipt.to_owned());
+    record.revision = 2;
+    record.at = super::model::stamped_at();
+    Some(record)
+}
+
+/// The same edge, for a plan that completed through the native family.
+pub fn plan_routing_outcome(
+    previous: &Value,
+    decisions: &[DecisionRecord],
+    record: &cadence::execution::history::PlanRecord,
+) -> Option<DecisionRecord> {
+    if !matches!(
+        record.request.event,
+        cadence::execution::history::PlanEvent::Completion(_)
+    ) {
+        return None;
+    }
+    let dispatch = active_dispatch_id(previous, record.request.plan.phase)?;
+    let receipt = format!(
+        "native-plan:{}:{}",
+        record.request.plan.phase, record.request_digest
+    );
+    routing_outcome(decisions, &dispatch, &receipt)
 }
 
 pub struct PlanningPolicy;
