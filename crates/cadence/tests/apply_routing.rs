@@ -84,17 +84,16 @@ fn a_request_without_an_operation_is_still_read_as_an_executor_patch() {
 }
 
 #[test]
-fn the_apply_schema_lists_one_variant_per_operation() {
+fn the_apply_schema_lists_each_operation_once() {
     let project = fixture();
     let tool = advertised_apply_tool(project.path());
-    // The advertised root unions every variant's `operation` constant; the
-    // server refuses a constant claimed by two variants at startup.
-    let variants = tool["inputSchema"]["properties"]["operation"]["anyOf"]
+    // The enum follows the operation table; duplicate names remain forbidden.
+    let variants = tool["inputSchema"]["properties"]["operation"]["enum"]
         .as_array()
-        .unwrap_or_else(|| panic!("no properties.operation.anyOf in {}", tool["inputSchema"]));
+        .unwrap_or_else(|| panic!("no properties.operation.enum in {}", tool["inputSchema"]));
     let mut names: Vec<&str> = variants
         .iter()
-        .filter_map(|variant| variant["const"].as_str())
+        .map(|variant| variant.as_str().unwrap())
         .collect();
     names.sort_unstable();
     let count = names.len();

@@ -273,7 +273,7 @@ fn initialize_names_the_server_cadence_at_the_crate_version() {
 }
 
 #[test]
-fn tool_schemas_list_exactly_three_tools_without_output_schemas() {
+fn tool_schemas_list_exactly_three_tools_with_minimal_inputs() {
     // Refused calls below still open a store, so the server runs in a temp
     // project rather than the crate directory.
     let temp = tempfile::tempdir().unwrap();
@@ -302,26 +302,26 @@ fn tool_schemas_list_exactly_three_tools_without_output_schemas() {
     }
     let tools_bytes = serde_json::to_vec(tools).unwrap().len();
     assert!(
-        tools_bytes < 65_000,
-        "tools/list result.tools is {tools_bytes} bytes; measured 60,649 bytes without output schemas"
+        tools_bytes < 7_000,
+        "tools/list result.tools is {tools_bytes} bytes; measured 6,846 bytes with minimal input schemas"
     );
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
+    for (tool, names) in [("query", query_operation_names()), ("apply", apply_operation_names())] {
+        let declared = tools.iter().find(|entry| entry["name"] == format!("cadence_{tool}")).unwrap();
+        let description = format!("Full request shapes: cadence_query {{\"operation\":\"schema\",\"tool\":\"{tool}\",\"for\":\"<operation>\"}} or the compiled contracts.");
+        assert_eq!(declared["inputSchema"], json!({
+            "type":"object", "required":["operation"],
+            "properties":{"operation":{"type":"string","enum":names,"description":description}},
+            "additionalProperties":true
+        }));
+        assert!(declared["inputSchema"].get("$defs").is_none());
+    }
     let query = &tools[1]["inputSchema"];
-    assert!(query.to_string().contains("execute-next"));
-    assert!(schema_accepts(
-        query,
-        query,
-        &json!({"operation":"execute-next","phase":6})
-    ));
-    assert!(schema_accepts(
-        query,
-        query,
-        &json!({"operation":"execute-next","phase":6,"plan":2})
-    ));
-    // The flattened root unions every operation's shape for a field, and
-    // plan-read's phase admits a decimal legacy address, so a wrong-typed
-    // phase passes the advertised root and is refused by the server, which
-    // deserializes the complete selected variant on every call.
+    for sample in [json!({"operation":"execute-next","phase":6}),
+        json!({"operation":"execute-next","phase":6,"plan":2})] {
+        assert!(schema_accepts(query, query, &sample));
+    }
+    // The tool list declares names; the selected handler still validates fields.
     for phase in [json!(0), json!(-1), json!(1.5), json!("6")] {
         let answer = envelope(&client.tools_call(
             3,
@@ -339,7 +339,130 @@ fn tool_schemas_list_exactly_three_tools_without_output_schemas() {
         assert_eq!(answer["status"], "refused", "{answer}");
     }
     let patch = &tools[2]["inputSchema"];
-    assert!(schema_accepts(patch, patch, &schema_fixture()));
+    assert!(!schema_accepts(patch, patch, &schema_fixture()), "legacy patches have no declared operation but still reach the handler");
+    assert!(client.finish().success());
+}
+
+// Read the enum tables themselves so adding an operation cannot silently omit
+// its name from tools/list. Only variant-level serde names are operation names.
+fn enum_source<'a>(source: &'a str, name: &str) -> &'a str {
+    source.split_once(&format!("enum {name} {{")).unwrap().1.split_once("\n}").unwrap().0
+}
+
+fn operation_names(source: &str, name: &str) -> Vec<String> {
+    enum_source(source, name).lines().filter_map(|line|
+        line.strip_prefix("    #[serde(rename = \"")?.split_once('"').map(|(name, _)| name.to_owned())
+    ).collect()
+}
+
+fn apply_operation_names() -> Vec<String> {
+    let source = include_str!("../src/server.rs");
+    let mut names = Vec::new();
+    for line in enum_source(source, "ApplyArguments").lines().filter(|line| line.contains('(')) {
+        let ty = line.split_once('(').unwrap().1.split_once(')').unwrap().0;
+        if ty == "ExecutorPatch" { continue; } // The unchanged unnamed legacy request.
+        let (module, name) = ty.rsplit_once("::").unwrap();
+        let module = module.strip_prefix("cadence::").unwrap_or(module).replace("::", "/");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(format!("{module}.rs"));
+        names.extend(operation_names(&fs::read_to_string(path).unwrap(), name));
+    }
+    names
+}
+
+fn query_operation_names() -> Vec<String> {
+    let mut names = operation_names(include_str!("../src/server.rs"), "QueryArguments");
+    // The new operation is part of this red contract before the table adds it.
+    if !names.iter().any(|name| name == "schema") { names.push("schema".into()); }
+    names.extend(operation_names(include_str!("../src/review_service.rs"), "Query"));
+    names
+}
+
+// Derive the same group prefix as the apply table, preserving schemars' names
+// for generic definitions and types with identical Rust names across modules.
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+#[allow(dead_code)]
+enum ApplySchemaGroups {
+    Verification(cadence::verification::model::Apply),
+    NativeRetirement(cadence::execution::history::RetirementApply),
+    NativeProgress(cadence::execution::history::ProgressApply),
+    NativeClose(cadence::execution::receipts::CloseApply),
+    NativeOwner(cadence::execution::receipts::OwnerApply),
+    NativeRunner(cadence::execution::runner::Apply),
+}
+
+#[derive(schemars::JsonSchema)]
+#[serde(tag = "operation", deny_unknown_fields)]
+#[allow(dead_code)]
+enum VerificationSchema {
+    #[serde(rename = "verify-next")]
+    Next { phase: std::num::NonZeroU32, request_id: Option<String> },
+}
+
+fn derived_operation(root: &Value, node: &Value, name: &str) -> Option<Value> {
+    let node = resolve_schema(root, node);
+    if node["properties"]["operation"]["const"] == name { return Some(node.clone()); }
+    node.get("oneOf").or_else(|| node.get("anyOf"))?.as_array()?.iter()
+        .find_map(|variant| derived_operation(root, variant, name))
+}
+
+fn operation_with_definitions(root: &Value, name: &str) -> Value {
+    fn references(node: &Value, names: &mut BTreeSet<String>) {
+        match node {
+            Value::Object(fields) => {
+                if let Some(reference) = fields.get("$ref").and_then(Value::as_str) {
+                    names.insert(reference.strip_prefix("#/$defs/").unwrap().to_owned());
+                }
+                for value in fields.values() { references(value, names); }
+            }
+            Value::Array(values) => for value in values { references(value, names); },
+            _ => {}
+        }
+    }
+    let mut schema = derived_operation(root, root, name).unwrap();
+    let mut names = BTreeSet::new();
+    references(&schema, &mut names);
+    loop {
+        let previous = names.clone();
+        for name in &previous { references(&root["$defs"][name], &mut names); }
+        if previous == names { break; }
+    }
+    if !names.is_empty() {
+        schema["$defs"] = names.into_iter().map(|name| {
+            let value = root["$defs"][&name].clone();
+            assert!(!value.is_null(), "missing definition {name}");
+            (name, value)
+        }).collect::<serde_json::Map<_, _>>().into();
+    }
+    schema
+}
+
+#[test]
+fn schema_queries_serve_derived_operations_and_locate_unknown_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut client = isolated_client(temp.path());
+    client.handshake();
+    for (tool, operation, derived) in [
+        ("apply", "execution-run", serde_json::to_value(schemars::schema_for!(ApplySchemaGroups)).unwrap()),
+        ("query", "verify-next", serde_json::to_value(schemars::schema_for!(VerificationSchema)).unwrap()),
+    ] {
+        let answer = envelope(&client.tools_call(3, "cadence_query",
+            json!({"operation":"schema","tool":tool,"for":operation})));
+        assert_eq!(answer, json!({"status":"ok","tool":tool,"operation":operation,
+            "schema":operation_with_definitions(&derived, operation)}));
+    }
+    for (tool, operation, slot, code) in [
+        ("apply", "no-such-operation", "for", "unknown-operation"),
+        ("query", "no-such-operation", "for", "unknown-operation"),
+        ("other", "execution-run", "tool", "unknown-tool"),
+    ] {
+        let answer = envelope(&client.tools_call(4, "cadence_query",
+            json!({"operation":"schema","tool":tool,"for":operation})));
+        assert_eq!(answer["status"], "refused", "{answer}");
+        assert_eq!(answer["slot"], slot, "{answer}");
+        assert_eq!(answer["code"], code, "{answer}");
+        assert!(answer["reason"].is_string(), "{answer}");
+    }
     assert!(client.finish().success());
 }
 
@@ -634,7 +757,8 @@ fn tool_schemas_malformed_objects_reach_cadence_and_protocol_errors_stay_distinc
         assert_eq!(missing["status"], "refused");
         assert!(missing["code"].is_string() && missing["reason"].is_string());
         let schema = &listing["result"]["tools"][index]["inputSchema"];
-        assert!(schema_accepts(schema, schema, &sample), "{name} root admits {sample}");
+        assert_eq!(schema_accepts(schema, schema, &sample), index != 2,
+            "{name}: legacy executor patches bypass the declared operation requirement");
         let mut paths = vec![];
         object_paths(&sample, "", &mut paths);
         if index == 2 {
