@@ -9,7 +9,9 @@ pinned assertion, not an accident of registration.
 
 As of 2026-09-18, the two tools `cadence_apply` and `cadence_query` and their
 operation names are the wire contract; operation names are append-only. The
-tool list declares only the operation enum. Each operation's request shape is
+tool list declares the operation enum plus each top-level property with its
+plain type and no nested definitions, because a host that receives an undeclared
+property may send it as a string. Each operation's full request shape is still
 served on demand by `cadence_query`'s `schema` operation and by the compiled
 contracts. Validation stays in the handler.
 

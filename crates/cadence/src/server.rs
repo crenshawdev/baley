@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     borrow::Cow,
+    collections::{BTreeMap, BTreeSet},
     num::NonZeroU32,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
@@ -495,15 +496,68 @@ fn operation_schema(root: &Value, mut variant: Value) -> Value {
     variant
 }
 
-fn minimal_schema<'a>(tool: &str, names: impl Iterator<Item = &'a str>) -> Value {
-    serde_json::json!({
+/// Collect only the property's own types, following references and schema
+/// alternatives without descending into object properties or array items.
+fn plain_types(root: &Value, property: &Value) -> BTreeSet<String> {
+    let mut types = BTreeSet::new();
+    let mut references = BTreeSet::new();
+    let mut pending = vec![property];
+    while let Some(node) = pending.pop() {
+        match &node["type"] {
+            Value::String(kind) => { types.insert(kind.clone()); }
+            Value::Array(kinds) => {
+                types.extend(kinds.iter().filter_map(Value::as_str).map(str::to_owned));
+            }
+            _ => {}
+        }
+        if let Some(reference) = node.get("$ref").and_then(Value::as_str)
+            && references.insert(reference)
+            && let Some(definition) = reference.strip_prefix('#').and_then(|path| root.pointer(path))
+        {
+            pending.push(definition);
+        }
+        for keyword in ["oneOf", "anyOf", "allOf"] {
+            if let Some(variants) = node[keyword].as_array() { pending.extend(variants); }
+        }
+    }
+    types.remove("null");
+    types
+}
+
+fn minimal_schema<'a>(
+    tool: &str,
+    names: impl Iterator<Item = &'a str>,
+    schemas: impl Iterator<Item = &'a Value>,
+) -> Value {
+    let mut schema = serde_json::json!({
         "type":"object", "required":["operation"],
         "properties":{"operation":{
             "type":"string", "enum":names.collect::<Vec<_>>(),
             "description":format!("Full request shapes: cadence_query {{\"operation\":\"schema\",\"tool\":\"{tool}\",\"for\":\"<operation>\"}} or the compiled contracts.")
         }},
         "additionalProperties":true
-    })
+    });
+    let mut types_by_name = BTreeMap::<String, BTreeSet<String>>::new();
+    for operation in schemas {
+        for (name, property) in operation["properties"].as_object().expect("operation properties") {
+            if name == "operation" { continue; }
+            types_by_name.entry(name.clone()).or_default().extend(plain_types(operation, property));
+        }
+    }
+    let mut properties = BTreeMap::new();
+    for (name, types) in types_by_name {
+        let mut property = serde_json::json!({});
+        if types.len() == 1 {
+            property["type"] = serde_json::json!(types.first().expect("one type"));
+        } else if !types.is_empty() {
+            property["type"] = serde_json::json!(types);
+        }
+        if types.contains("object") { property["additionalProperties"] = Value::Bool(true); }
+        properties.insert(name, property);
+    }
+    properties.insert("operation".to_owned(), schema["properties"]["operation"].take());
+    schema["properties"] = serde_json::to_value(properties).expect("plain properties");
+    schema
 }
 
 /// Drop every `$defs` entry no `$ref` reaches from the root. A definition
@@ -556,11 +610,19 @@ static QUERY_OPERATIONS: LazyLock<Vec<(String, Value)>> = LazyLock::new(|| {
 });
 
 fn query_schema() -> Value {
-    minimal_schema("query", QUERY_OPERATIONS.iter().map(|(name, _)| name.as_str()))
+    minimal_schema(
+        "query",
+        QUERY_OPERATIONS.iter().map(|(name, _)| name.as_str()),
+        QUERY_OPERATIONS.iter().map(|(_, schema)| schema),
+    )
 }
 
 fn apply_schema() -> Value {
-    minimal_schema("apply", APPLY_OPERATIONS.names.iter().map(|(name, _)| name.as_str()))
+    minimal_schema(
+        "apply",
+        APPLY_OPERATIONS.names.iter().map(|(name, _)| name.as_str()),
+        APPLY_OPERATIONS.schemas.iter(),
+    )
 }
 
 const SCHEMA_PART_BOUND: usize = 24_576;
