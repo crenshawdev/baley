@@ -1493,7 +1493,8 @@ fn phase12_runner_retains_task_commands_and_one_suite() {
     assert_eq!(commands,json!([fixture.command,fixture.command,fixture.command,fixture.command,fixture.command,fixture.command,MARK_A,MARK_A,fixture.command,MARK_B,MARK_C,PARTIAL,BIG]).as_array().unwrap().clone());
     let events=suite_events(project,1);
     assert_eq!(events.iter().map(|e|e["request"]["event"]["kind"].as_str().unwrap()).collect::<Vec<_>>(),vec!["suite-launch","suite-result","completion"]);
-    assert_eq!(plan_view(project,1)["state"],json!({"version":3,"launches":["suite-1"],"results":["suite-1"],"relaunch":null,"outcome":"complete","completed":true}));
+    assert_eq!(plan_view(project,1)["state"],json!({"version":3,"launches":["suite-1"],"results":["suite-1"],"relaunch":null,"outcome":"complete","completed":true,"completion":{"suite_run":"suite-1","request_id":"complete-1","base":complete["receipt"]["request"]["event"]["settlement"]["material"]["base_id"],"head":complete["receipt"]["request"]["event"]["settlement"]["material"]["head_id"]}}));
+    assert!(plan_view(project,1)["state"].get("round").is_none());
     for (run,stdout,complete_capture) in [("partial-C","Ran 1 test in 0.000s\n".as_bytes().to_vec(),true),("big-C",vec![b'x';65536],false),("mark-C",vec![],true)] {
         let result=&history["events"].as_array().unwrap().iter().find(|e|e["request"]["event"]["kind"]=="result" && e["request"]["event"]["run_id"]==run).unwrap()["request"]["event"];
         assert_eq!(result["observation"],json!({"class":"unknown"}),"{run}");
@@ -1541,7 +1542,8 @@ fn phase12_runner_retains_task_commands_and_one_suite() {
     plan_refused(project,plan_request(project,"execution-suite","dead-3",1,json!({})),"suite-once");
     let complete=plan_apply(project,"execution-plan-complete","complete-dead-2",1,json!({}));assert_eq!(complete["status"],"ok","{complete}");
     assert_eq!(complete["receipt"]["request"]["event"]["suite_run"],"dead-2");
-    assert_eq!(plan_view(project,1)["state"],json!({"version":5,"launches":["dead-1","dead-2"],"results":["dead-2"],"relaunch":"relaunch-dead","outcome":"complete","completed":true}));
+    assert_eq!(plan_view(project,1)["state"],json!({"version":5,"launches":["dead-1","dead-2"],"results":["dead-2"],"relaunch":"relaunch-dead","outcome":"complete","completed":true,"completion":{"suite_run":"dead-2","request_id":"complete-dead-2","base":complete["receipt"]["request"]["event"]["settlement"]["material"]["base_id"],"head":complete["receipt"]["request"]["event"]["settlement"]["material"]["head_id"]}}));
+    assert!(plan_view(project,1)["state"].get("round").is_none());
     let events=suite_events(project,1);
     assert_eq!(events.iter().map(|e|e["request"]["event"]["kind"].as_str().unwrap()).collect::<Vec<_>>(),vec!["suite-launch","suite-relaunch","suite-launch","suite-result","completion"]);
     assert!(events[0]["request"]["event"].get("observed_at").is_none(),"the dead launch never acquires a result");
@@ -1604,7 +1606,8 @@ fn phase12_runner_retains_task_commands_and_one_suite() {
     assert_eq!(retained[1]["request"]["event"],result,"the Unknown result keeps its class, bytes and disposition");
     settle(project,"settle-startup",1);
     let complete=plan_apply(project,"execution-plan-complete","complete-startup-2",1,json!({}));assert_eq!(complete["status"],"ok","{complete}");
-    assert_eq!(plan_view(project,1)["state"],json!({"version":6,"launches":["startup-1","startup-2"],"results":["startup-1","startup-2"],"relaunch":"startup-relaunch","outcome":"complete","completed":true}));
+    assert_eq!(plan_view(project,1)["state"],json!({"version":6,"launches":["startup-1","startup-2"],"results":["startup-1","startup-2"],"relaunch":"startup-relaunch","outcome":"complete","completed":true,"completion":{"suite_run":"startup-2","request_id":"complete-startup-2","base":complete["receipt"]["request"]["event"]["settlement"]["material"]["base_id"],"head":complete["receipt"]["request"]["event"]["settlement"]["material"]["head_id"]}}));
+    assert!(plan_view(project,1)["state"].get("round").is_none());
     assert_eq!(execute_next(project)["outcome"],"complete");
 }
 

@@ -10,6 +10,16 @@ use support::ClosedRound;
 fn phase33_round_record_renders_tokens_beside_the_median() {
     use serde_json::json;
     let mut round = ClosedRound::admitted();
+    let initial = round.client.call("cadence_query", json!({"operation":"execution-history","phase":31,"plan":1}));
+    assert!(initial["plans"][0]["state"].get("round").is_none(), "{initial}");
+    assert!(initial["plans"][0]["state"].get("completion").is_none(), "{initial}");
+    let identity = json!({"kind":"phase-plan","phase":31,"plan":1});
+    let index = round.client.call("cadence_query", json!({"operation":"document","identity":identity}));
+    assert!(!index["parts"].as_array().unwrap().iter().any(|part| part["part"] == "execution"));
+    let original_parts: Vec<_> = index["parts"].as_array().unwrap().iter().map(|part| {
+        round.client.call("cadence_query", json!({"operation":"document","identity":identity,"part":part["part"]}))
+    }).collect();
+    let base = support::git(round.fixture.project(), &["rev-parse", "HEAD"]);
     let submission = json!({"dispatch_id":round.dispatch["dispatch_id"],"host":"codex exec","tokens":106259,"wire_bytes":null});
     let statement = json!({"submission":submission,"approval":{"approved":true,
         "owner":"Fixture Owner","at":"2026-09-17T12:00:00Z","submission":submission}});
@@ -22,6 +32,11 @@ fn phase33_round_record_renders_tokens_beside_the_median() {
     round.close_tasks();
     let recorded = round.client.call("cadence_apply", request.clone());
     assert_eq!(recorded, json!({"status":"ok","receipt":{"plan":round.plan,"request_id":"round-tokens","version":1}}));
+    let expected_round = json!({"dispatch_id":round.dispatch["dispatch_id"],"host":"codex exec",
+        "tokens":106259,"wire_bytes":null,"owner":"Fixture Owner","at":"2026-09-17T12:00:00Z",
+        "request_id":"round-tokens"});
+    let state = assert_plan_read_surface(&mut round, &expected_round, &original_parts);
+    assert!(state.get("completion").is_none(), "{state}");
     let summary = fs::read_to_string(round.fixture.project().join(".planning/phases/31/SUMMARY.md")).unwrap();
     assert_eq!(summary.lines().filter(|line| *line == "Executor round tokens: 106259 against 141893 (3.7 cad-executor median per dispatch, n=149, .planning/trace.jsonl, locked 2026-08-24); host codex exec; wire bytes unmeasured").count(), 1);
     let before = support::tree(round.fixture.project());
@@ -46,6 +61,35 @@ fn phase33_round_record_renders_tokens_beside_the_median() {
     reused["request"]["statement"]["submission"]["tokens"] = json!(2);
     assert_eq!(round.client.call("cadence_apply", reused)["status"], "refused");
     assert_eq!(support::tree(round.fixture.project()), before);
+    round.complete();
+    let state = assert_plan_read_surface(&mut round, &expected_round, &original_parts);
+    assert_eq!(state["completion"], json!({"suite_run":"round-suite","request_id":"round-complete",
+        "base":base,"head":round.commits.last().unwrap()}));
+    println!("served round: {}", state["round"]);
+}
+
+fn assert_plan_read_surface(
+    round: &mut ClosedRound, expected_round: &serde_json::Value, original_parts: &[serde_json::Value],
+) -> serde_json::Value {
+    use serde_json::{Value, json};
+    let history = round.client.call("cadence_query", json!({"operation":"execution-history","phase":31,"plan":1}));
+    let state = history["plans"][0]["state"].clone();
+    assert_eq!(&state["round"], expected_round, "{history}");
+    let index = round.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
+    assert_eq!(index["plans"][0]["state"], state);
+    assert!(serde_json::to_vec(&index).unwrap().len() <= index["bound"].as_u64().unwrap() as usize);
+    let identity = json!({"kind":"phase-plan","phase":31,"plan":1});
+    let index = round.client.call("cadence_query", json!({"operation":"document","identity":identity}));
+    assert_eq!(index["parts"].as_array().unwrap().iter().filter(|part| part["part"] == "execution").count(), 1, "{index}");
+    let document = round.client.call("cadence_query", json!({"operation":"document","identity":identity,"part":"execution"}));
+    assert_eq!(serde_json::from_str::<Value>(document["body"].as_str().unwrap()).unwrap(), state);
+    for original in original_parts {
+        let current = round.client.call("cadence_query", json!({"operation":"document","identity":identity,"part":original["part"]}));
+        assert_eq!(current, *original, "existing document parts stay unchanged");
+    }
+    let search = round.client.call("cadence_query", json!({"operation":"document-search","phase":31,"pattern":"round-tokens"}));
+    assert!(search["hits"].as_array().unwrap().iter().any(|hit| hit["identity"] == identity && hit["part"] == "execution"), "{search}");
+    state
 }
 
 #[test]
