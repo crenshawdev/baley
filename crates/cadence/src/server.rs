@@ -315,10 +315,20 @@ enum QueryArguments {
         source: cadence::rail::risk::Source,
         surfaces: Option<Vec<String>>,
     },
+    #[serde(rename = "schema")]
+    Schema {
+        /// The tool whose operation is requested: apply or query.
+        tool: String,
+        #[serde(rename = "for")]
+        operation: String,
+        /// One-based part for schemas over 24,576 bytes; defaults to 1.
+        /// Concatenate the returned bodies in order, then parse the JSON.
+        part: Option<usize>,
+    },
 }
 
-/// Every request `cadence_apply` accepts, for the schema a host sees and for
-/// nothing else. Routing never parses this enum: it reads the operation name,
+/// Every request `cadence_apply` accepts, for on-demand request schemas.
+/// Routing never parses this enum: it reads the operation name,
 /// finds the group in [`APPLY_OPERATIONS`], and parses with that group's own
 /// `#[serde(tag = "operation")]` type, so a miss names the field that was
 /// wrong instead of reporting that fifteen shapes all failed.
@@ -380,12 +390,12 @@ const APPLY_GROUPS: [ApplyGroup; 15] = [
     ApplyGroup::Receipt,
 ];
 
-/// The operation names `cadence_apply` accepts, each with its group, and the
-/// schema that lists one variant per operation. Both come from one walk of
+/// The operation names `cadence_apply` accepts, each with its routing group
+/// and its derived request schema. Both come from one walk of
 /// the derived [`ApplyArguments`] schema.
 struct ApplyOperations {
     names: Vec<(String, ApplyGroup)>,
-    schema: Value,
+    schemas: Vec<Value>,
 }
 
 static APPLY_OPERATIONS: LazyLock<ApplyOperations> = LazyLock::new(|| {
@@ -394,7 +404,7 @@ static APPLY_OPERATIONS: LazyLock<ApplyOperations> = LazyLock::new(|| {
     let groups = schema["anyOf"].as_array().expect("untagged variants").clone();
     assert_eq!(groups.len(), APPLY_GROUPS.len(), "one group per apply variant");
     let mut names = Vec::new();
-    let mut variants = Vec::new();
+    let mut schemas = Vec::new();
     for (entry, group) in groups.iter().zip(APPLY_GROUPS) {
         let resolved = match entry.get("$ref").and_then(Value::as_str) {
             Some(reference) => schema
@@ -414,11 +424,11 @@ static APPLY_OPERATIONS: LazyLock<ApplyOperations> = LazyLock::new(|| {
                     "apply operation {name} is claimed twice"
                 );
                 names.push((name.to_owned(), group));
+                schemas.push(operation_schema(&schema, shape));
             }
-            variants.push(shape);
         }
     }
-    ApplyOperations { names, schema: host_schema(schema) }
+    ApplyOperations { names, schemas }
 });
 
 fn apply_group(operation: &str) -> Option<ApplyGroup> {
@@ -473,80 +483,27 @@ enum QueryOutput {
     Receipt(Box<Envelope<rail_service::ReceiptOutput>>),
 }
 
-/// Hosts require object properties at the root. Advertise the field union and
-/// common required fields of the derived variants here, and keep only the
-/// definitions a `$ref` still reaches. The strict variants are the Rust types:
-/// deserialization validates the complete selected variant on every call.
-fn host_schema(mut schema: Value) -> Value {
-    fn objects(root: &Value, node: &Value, out: &mut Vec<Value>) {
-        if let Some(reference) = node.get("$ref").and_then(Value::as_str) {
-            objects(
-                root,
-                root.pointer(reference.strip_prefix('#').expect("local schema ref"))
-                    .expect("schema definition"),
-                out,
-            );
-        } else if let Some(variants) = node.get("oneOf").or_else(|| node.get("anyOf")) {
-            for variant in variants.as_array().expect("derived variants") {
-                objects(root, variant, out);
-            }
-        } else {
-            out.push(node.clone());
+/// Keep the derived variant unchanged and attach only its reachable definitions.
+fn operation_schema(root: &Value, mut variant: Value) -> Value {
+    if let Some(definitions) = root.get("$defs") {
+        variant["$defs"] = definitions.clone();
+        prune_definitions(&mut variant);
+        if variant["$defs"].as_object().is_some_and(|defs| defs.is_empty()) {
+            variant.as_object_mut().expect("operation schema").remove("$defs");
         }
     }
-    let mut variants = Vec::new();
-    objects(&schema, &schema, &mut variants);
-    // One flat union per field. Wrapping each new shape around the previous
-    // union nests one level per variant, and hosts cap schema depth.
-    let mut shapes: Vec<(String, Vec<Value>)> = Vec::new();
-    let mut required: Option<std::collections::BTreeSet<String>> = None;
-    for variant in &variants {
-        for (name, field) in variant["properties"].as_object().expect("object variant") {
-            match shapes.iter_mut().find(|(known, _)| known == name) {
-                Some((_, seen)) => {
-                    if !seen.contains(field) {
-                        seen.push(field.clone());
-                    }
-                }
-                None => shapes.push((name.clone(), vec![field.clone()])),
-            }
-        }
-        let fields = variant
-            .get("required")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .map(|v| v.as_str().expect("required name").to_owned())
-            .collect::<std::collections::BTreeSet<_>>();
-        required = Some(match required {
-            None => fields,
-            Some(old) => old.intersection(&fields).cloned().collect(),
-        });
-    }
-    let root = schema.as_object_mut().expect("schema object");
-    for keyword in ["oneOf", "anyOf", "allOf", "$ref"] {
-        root.remove(keyword);
-    }
-    root.insert("type".into(), Value::String("object".into()));
-    let properties = shapes
-        .into_iter()
-        .map(|(name, mut seen)| {
-            let field = if seen.len() == 1 {
-                seen.pop().expect("one shape")
-            } else {
-                serde_json::json!({ "anyOf": seen })
-            };
-            (name, field)
-        })
-        .collect();
-    root.insert("properties".into(), Value::Object(properties));
-    root.insert(
-        "required".into(),
-        serde_json::to_value(required.unwrap_or_default()).expect("required fields"),
-    );
-    root.insert("additionalProperties".into(), Value::Bool(false));
-    prune_definitions(&mut schema);
-    schema
+    variant
+}
+
+fn minimal_schema<'a>(tool: &str, names: impl Iterator<Item = &'a str>) -> Value {
+    serde_json::json!({
+        "type":"object", "required":["operation"],
+        "properties":{"operation":{
+            "type":"string", "enum":names.collect::<Vec<_>>(),
+            "description":format!("Full request shapes: cadence_query {{\"operation\":\"schema\",\"tool\":\"{tool}\",\"for\":\"<operation>\"}} or the compiled contracts.")
+        }},
+        "additionalProperties":true
+    })
 }
 
 /// Drop every `$defs` entry no `$ref` reaches from the root. A definition
@@ -582,30 +539,69 @@ fn prune_definitions(schema: &mut Value) {
     schema["$defs"] = Value::Object(kept);
 }
 
-fn query_schema() -> Value {
-    let mut schema =
-        serde_json::to_value(schemars::schema_for!(QueryArguments)).expect("query schema");
-    let review =
-        serde_json::to_value(schemars::schema_for!(review_service::Query)).expect("review schema");
-    for (name, value) in review
-        .get("$defs")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flatten()
-    {
-        schema["$defs"][name] = value.clone();
+static QUERY_OPERATIONS: LazyLock<Vec<(String, Value)>> = LazyLock::new(|| {
+    let mut operations = Vec::new();
+    for root in [
+        serde_json::to_value(schemars::schema_for!(QueryArguments)).expect("query schema"),
+        serde_json::to_value(schemars::schema_for!(review_service::Query)).expect("review schema"),
+    ] {
+        for variant in root["oneOf"].as_array().expect("query variants") {
+            let name = variant["properties"]["operation"]["const"].as_str().expect("query name");
+            assert!(!operations.iter().any(|(known, _)| known == name),
+                "query operation {name} is claimed twice");
+            operations.push((name.to_owned(), operation_schema(&root, variant.clone())));
+        }
     }
-    let mut variant = review;
-    variant.as_object_mut().unwrap().remove("$defs");
-    schema["oneOf"]
-        .as_array_mut()
-        .expect("query variants")
-        .push(variant);
-    host_schema(schema)
+    operations
+});
+
+fn query_schema() -> Value {
+    minimal_schema("query", QUERY_OPERATIONS.iter().map(|(name, _)| name.as_str()))
 }
 
 fn apply_schema() -> Value {
-    APPLY_OPERATIONS.schema.clone()
+    minimal_schema("apply", APPLY_OPERATIONS.names.iter().map(|(name, _)| name.as_str()))
+}
+
+const SCHEMA_PART_BOUND: usize = 24_576;
+
+fn schema_answer(tool: &str, operation: &str, part: Option<usize>) -> Value {
+    let schema = match tool {
+        "apply" => APPLY_OPERATIONS.names.iter().position(|(name, _)| name == operation)
+            .map(|index| &APPLY_OPERATIONS.schemas[index]),
+        "query" => QUERY_OPERATIONS.iter().find(|(name, _)| name == operation)
+            .map(|(_, schema)| schema),
+        _ => return Refusal::new("unknown-tool", "schema tool must be apply or query")
+            .slot("tool").value(),
+    };
+    let Some(schema) = schema else {
+        return Refusal::new("unknown-operation", format!("no cadence_{tool} operation is named `{operation}`"))
+            .slot("for").value();
+    };
+    schema_part(tool, operation, schema, part)
+}
+
+fn schema_part(tool: &str, operation: &str, schema: &Value, part: Option<usize>) -> Value {
+    let serialized = serde_json::to_string(schema).expect("operation schema JSON");
+    let mut remaining = serialized.as_str();
+    let mut parts = Vec::new();
+    while !remaining.is_empty() {
+        let mut end = remaining.len().min(SCHEMA_PART_BOUND);
+        while !remaining.is_char_boundary(end) { end -= 1; }
+        parts.push(&remaining[..end]);
+        remaining = &remaining[end..];
+    }
+    let part = part.unwrap_or(1);
+    let Some(body) = part.checked_sub(1).and_then(|index| parts.get(index)) else {
+        return Refusal::new("schema-part-not-found", "the requested schema part is absent")
+            .slot("part").value();
+    };
+    if serialized.len() <= SCHEMA_PART_BOUND {
+        return serde_json::json!({"status":"ok","tool":tool,"operation":operation,"schema":schema});
+    }
+    let next = (part < parts.len()).then_some(part + 1);
+    serde_json::json!({"status":"ok","tool":tool,"operation":operation,
+        "bound":SCHEMA_PART_BOUND,"part":part,"body":body,"next":next})
 }
 
 impl CadenceServer {
@@ -818,6 +814,14 @@ impl ServerHandler for PublicServer {
                 .into())
             }
             "cadence_query" => {
+                if raw.as_ref().is_some_and(|value| value["operation"] == "schema") {
+                    let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
+                        Ok(QueryArguments::Schema { tool, operation, part }) => schema_answer(&tool, &operation, part),
+                        Err(error) => Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value(),
+                        Ok(_) => unreachable!("schema operation selected"),
+                    };
+                    return structured_result(Ok(QueryOutput::Read(answer)));
+                }
                 if raw.as_ref().and_then(|value| value["operation"].as_str()).is_some_and(|operation| matches!(operation, "search" | "list" | "read" | "document" | "document-search")) {
                     let query = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
                         Ok(QueryArguments::Search(request)) => cadence::read::Query::Search(request),
@@ -983,6 +987,7 @@ impl ServerHandler for PublicServer {
                         unreachable!("context intake is decoded before execution fallback")
                     }
                     Some(QueryArguments::Search(_) | QueryArguments::List(_) | QueryArguments::Read(_) | QueryArguments::Document(_) | QueryArguments::DocumentSearch(_)) => unreachable!("read operation routed before generic query"),
+                    Some(QueryArguments::Schema { .. }) => unreachable!("schema routed before generic query"),
                     Some(QueryArguments::ExecutionHistory { .. }) => unreachable!("native history decoded before execution fallback"),
                     Some(QueryArguments::PlanRead { .. } | QueryArguments::EvidenceRead { .. }) => {
                         unreachable!("plan read decoded before execution")
@@ -1227,6 +1232,61 @@ impl ServerHandler for PublicServer {
                 }
             }
             _ => Err(ErrorData::invalid_params("unknown tool", None)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn schema_parts_round_trip_utf8_and_escaped_json() {
+        let schema = json!({"description":"é🦀\"\\".repeat(SCHEMA_PART_BOUND)});
+        let mut combined = String::new();
+        let mut part = None;
+        let mut number = 1;
+        loop {
+            let answer = schema_part("apply", "synthetic", &schema, part);
+            assert_eq!(answer["status"], "ok");
+            assert_eq!(answer["tool"], "apply");
+            assert_eq!(answer["operation"], "synthetic");
+            assert_eq!(answer["part"], number);
+            assert_eq!(answer["bound"], SCHEMA_PART_BOUND);
+            assert!(answer.get("schema").is_none());
+            let body = answer["body"].as_str().unwrap();
+            assert!(!body.is_empty() && body.len() <= SCHEMA_PART_BOUND);
+            combined.push_str(body);
+            if answer["next"].is_null() { break; }
+            number += 1;
+            assert_eq!(answer["next"], number);
+            part = Some(number);
+        }
+        assert!(number > 1);
+        assert_eq!(combined, serde_json::to_string(&schema).unwrap());
+        assert_eq!(serde_json::from_str::<Value>(&combined).unwrap(), schema);
+    }
+
+    #[test]
+    fn schema_part_boundary_is_inclusive_and_missing_parts_are_located() {
+        let schema = json!("x".repeat(SCHEMA_PART_BOUND - 2));
+        assert_eq!(serde_json::to_vec(&schema).unwrap().len(), SCHEMA_PART_BOUND);
+        assert_eq!(schema_part("query", "synthetic", &schema, None),
+            json!({"status":"ok","tool":"query","operation":"synthetic","schema":schema}));
+        let oversized = json!("x".repeat(SCHEMA_PART_BOUND - 1));
+        let first = schema_part("query", "synthetic", &oversized, None);
+        assert_eq!(first["part"], 1);
+        assert_eq!(first["next"], 2);
+        assert_eq!(first["body"].as_str().unwrap().len(), SCHEMA_PART_BOUND);
+        let last = schema_part("query", "synthetic", &oversized, Some(2));
+        assert_eq!(last["body"].as_str().unwrap().len(), 1);
+        assert!(last["next"].is_null());
+        for part in [0, 2, usize::MAX] {
+            let refused = schema_part("query", "synthetic", &schema, Some(part));
+            assert_eq!(refused["status"], "refused");
+            assert_eq!(refused["slot"], "part");
+            assert_eq!(refused["code"], "schema-part-not-found");
         }
     }
 }

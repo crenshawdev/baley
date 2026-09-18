@@ -350,9 +350,8 @@ fn enum_source<'a>(source: &'a str, name: &str) -> &'a str {
 }
 
 fn operation_names(source: &str, name: &str) -> Vec<String> {
-    enum_source(source, name).lines().filter_map(|line|
-        line.strip_prefix("    #[serde(rename = \"")?.split_once('"').map(|(name, _)| name.to_owned())
-    ).collect()
+    let names = regex::Regex::new(r#"(?m)^    #\[serde\(rename\s*=\s*"([^"]+)"\)\]"#).unwrap();
+    names.captures_iter(enum_source(source, name)).map(|capture| capture[1].to_owned()).collect()
 }
 
 fn apply_operation_names() -> Vec<String> {
@@ -371,7 +370,7 @@ fn apply_operation_names() -> Vec<String> {
 
 fn query_operation_names() -> Vec<String> {
     let mut names = operation_names(include_str!("../src/server.rs"), "QueryArguments");
-    // The new operation is part of this red contract before the table adds it.
+    // Schema discovery itself must remain discoverable.
     if !names.iter().any(|name| name == "schema") { names.push("schema".into()); }
     names.extend(operation_names(include_str!("../src/review_service.rs"), "Query"));
     names
@@ -462,6 +461,59 @@ fn schema_queries_serve_derived_operations_and_locate_unknown_names() {
         assert_eq!(answer["slot"], slot, "{answer}");
         assert_eq!(answer["code"], code, "{answer}");
         assert!(answer["reason"].is_string(), "{answer}");
+    }
+    assert!(client.finish().success());
+}
+
+#[test]
+fn every_declared_operation_has_a_bounded_self_contained_schema() {
+    fn check_refs(root: &Value, node: &Value) {
+        match node {
+            Value::Object(fields) => {
+                if let Some(reference) = fields.get("$ref").and_then(Value::as_str) {
+                    assert!(root.pointer(reference.strip_prefix('#').unwrap()).is_some(), "{reference}");
+                }
+                for value in fields.values() { check_refs(root, value); }
+            }
+            Value::Array(values) => for value in values { check_refs(root, value); },
+            _ => {}
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let mut client = isolated_client(temp.path());
+    client.handshake();
+    for (tool, names) in [("apply", apply_operation_names()), ("query", query_operation_names())] {
+        for name in names {
+            let mut request = json!({"operation":"schema","tool":tool,"for":name});
+            let mut answer = envelope(&client.tools_call(3, "cadence_query", request.clone()));
+            assert_eq!(answer["status"], "ok", "{answer}");
+            let schema = if answer.get("schema").is_some() {
+                assert!(serde_json::to_vec(&answer["schema"]).unwrap().len() <= 24_576);
+                answer["schema"].clone()
+            } else {
+                let mut serialized = String::new();
+                let mut part = 1;
+                loop {
+                    assert_eq!(answer["status"], "ok", "{answer}");
+                    assert_eq!(answer["tool"], tool);
+                    assert_eq!(answer["operation"], name);
+                    assert_eq!(answer["part"], part);
+                    assert_eq!(answer["bound"], 24_576);
+                    let body = answer["body"].as_str().unwrap();
+                    assert!(!body.is_empty() && body.len() <= 24_576);
+                    serialized.push_str(body);
+                    if answer["next"].is_null() { break; }
+                    part += 1;
+                    assert_eq!(answer["next"], part);
+                    request["part"] = json!(part);
+                    answer = envelope(&client.tools_call(3, "cadence_query", request.clone()));
+                }
+                assert!(serialized.len() > 24_576);
+                serde_json::from_str(&serialized).unwrap()
+            };
+            assert_eq!(schema["properties"]["operation"]["const"], name);
+            check_refs(&schema, &schema);
+        }
     }
     assert!(client.finish().success());
 }

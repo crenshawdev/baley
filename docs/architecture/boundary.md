@@ -7,6 +7,12 @@ and `cadence_apply`, which submits executor patches or risk observations and
 contracted receipt facts. `tools/list` declaring exactly three is a
 pinned assertion, not an accident of registration.
 
+As of 2026-09-18, the two tools `cadence_apply` and `cadence_query` and their
+operation names are the wire contract; operation names are append-only. The
+tool list declares only the operation enum. Each operation's request shape is
+served on demand by `cadence_query`'s `schema` operation and by the compiled
+contracts. Validation stays in the handler.
+
 Validation does not live at the boundary. The handler receives
 `CallToolRequestParams.arguments` as a raw optional JSON object and
 deserializes inside the named handler, so absent, extra, wrong-typed and
@@ -89,10 +95,9 @@ constraints above. Those clauses belong to the live UAT and are recorded in
 `.planning/phases/6/UAT.md` with their actual status, never rounded up.
 
 Phase 7 operations preserve object roots and real input properties. The
-advertised input schemas combine operation fields within properties, with
-strict per-operation schemas retained in definitions; no top-level input union
-is introduced. Runtime validators still refuse unknown fields and malformed
-operation objects. Risk and structural results use typed `ok` / `refused`
+advertised input schemas declare the operation names; strict per-operation
+schemas are served on demand, with no top-level input union in the tool list.
+Runtime validators still refuse unknown fields and malformed operation objects. Risk and structural results use typed `ok` / `refused`
 envelopes inside the same tools.
 
 The loaded skill now encounters a durable `risk-pending` refusal after a valid
