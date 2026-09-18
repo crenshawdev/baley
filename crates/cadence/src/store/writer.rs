@@ -2229,6 +2229,52 @@ mod observe_tests {
     use super::*;
     use std::sync::atomic::Ordering;
 
+    fn document_data(scope: &str) -> Value {
+        serde_json::json!({"context":{"schema":"context-1","phases":{"1":{
+            "submission":{"phase":1,"title":"Cache fixture","scope":scope,
+                "durable_decisions":[],"decisions":[],"assumptions":[],"truths":[]},
+            "approval":{"approved":true,"owner":"fixture","at":"2026-09-18","submission":null},
+            "truths":[]}}}})
+    }
+
+    fn document_scope(root: &std::path::Path) -> String {
+        let identity = cadence::read::model::DocumentIdentity::PhaseContext { phase: 1.try_into().unwrap() };
+        cadence::read::document::resolve(root, &identity).unwrap().parts.into_iter()
+            .find(|part| part.selector == "scope").unwrap().body
+    }
+
+    #[test]
+    fn document_reads_parse_once_and_observe_resident_and_external_writes() {
+        use cadence::context::persistence::READ_PARSES;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let initial = Snapshot::new(1, b"", b"", document_data("first")).unwrap();
+        std::fs::write(root.join(STATE), initial.render().unwrap()).unwrap();
+        std::fs::write(root.join(ITEMS), b"").unwrap();
+        std::fs::write(root.join(DECISIONS), b"").unwrap();
+        let before = READ_PARSES.with(|count| count.get());
+        let start = std::time::Instant::now();
+        assert_eq!(document_scope(root), "first\n");
+        let first = start.elapsed();
+        let start = std::time::Instant::now();
+        assert_eq!(document_scope(root), "first\n");
+        let second = start.elapsed();
+        eprintln!("fixture document read: first={first:?}, second={second:?}");
+        assert_eq!(READ_PARSES.with(|count| count.get()) - before, 1,
+            "consecutive document parts must reuse one verified snapshot parse");
+        tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
+            let store = Store::open(super::super::filesystem::Filesystem::new(root).unwrap(), PlanningPolicy).await.unwrap();
+            let written = store.request(Operation::RewriteSnapshot(document_data("resident write"))).await.unwrap();
+            assert_eq!(document_scope(root), "resident write\n");
+            let external = Snapshot::new(written.snapshot.generation + 1,
+                &std::fs::read(root.join(ITEMS)).unwrap(), &std::fs::read(root.join(DECISIONS)).unwrap(),
+                document_data("external write")).unwrap();
+            std::fs::write(root.join(STATE), external.render().unwrap()).unwrap();
+            assert_eq!(document_scope(root), "external write\n");
+            assert_eq!(document_scope(root), "external write\n");
+        });
+    }
+
     // GH-261: an operation on a store whose bytes have not changed since the
     // writer last read them reuses the view it holds. On this project's
     // store the parse is 630ms, before every verified read and every write.

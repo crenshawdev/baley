@@ -160,8 +160,13 @@ pub fn read_snapshot(root: &std::path::Path) -> Result<Option<cadence::store::mo
     };
     let items = std::fs::read(root.join(model::ITEMS))?;
     let decisions = std::fs::read(root.join(model::DECISIONS))?;
+    #[cfg(test)]
+    READ_PARSES.with(|count| count.set(count.get() + 1));
     let snapshot = Snapshot::parse(&bytes, &items, &decisions)?;
     model::validate_items(&model::parse_lines(&items)?)?;
     model::validate_decisions(&model::parse_lines(&decisions)?)?;
     Ok(Some(snapshot))
 }
+
+#[cfg(test)]
+thread_local! { pub(crate) static READ_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
