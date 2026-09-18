@@ -302,26 +302,57 @@ fn tool_schemas_list_exactly_three_tools_with_minimal_inputs() {
     }
     let tools_bytes = serde_json::to_vec(tools).unwrap().len();
     assert!(
-        tools_bytes < 7_000,
-        "tools/list result.tools is {tools_bytes} bytes; measured 6,846 bytes with minimal input schemas"
+        tools_bytes < 9_500,
+        "tools/list result.tools is {tools_bytes} bytes; measured 6,846 bytes before top-level types (9,303 bytes with the derived property union)"
     );
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
     for (tool, names) in [("query", query_operation_names()), ("apply", apply_operation_names())] {
         let declared = tools.iter().find(|entry| entry["name"] == format!("cadence_{tool}")).unwrap();
         let description = format!("Full request shapes: cadence_query {{\"operation\":\"schema\",\"tool\":\"{tool}\",\"for\":\"<operation>\"}} or the compiled contracts.");
-        assert_eq!(declared["inputSchema"], json!({
-            "type":"object", "required":["operation"],
-            "properties":{"operation":{"type":"string","enum":names,"description":description}},
-            "additionalProperties":true
+        let input = &declared["inputSchema"];
+        assert_eq!(input["type"], "object");
+        assert_eq!(input["required"], json!(["operation"]));
+        assert_eq!(input["additionalProperties"], true);
+        for keyword in ["$defs", "$ref", "oneOf", "anyOf"] {
+            assert!(input.get(keyword).is_none(), "{tool}: root contains {keyword}");
+        }
+        let properties = input["properties"].as_object().unwrap();
+        assert_eq!(properties["operation"], json!({
+            "type":"string", "enum":names, "description":description
         }));
-        assert!(declared["inputSchema"].get("$defs").is_none());
+        let mut expected = std::collections::BTreeMap::<String, BTreeSet<String>>::new();
+        for operation in &names {
+            let schema = served_operation_schema(&mut client, tool, operation);
+            for (name, property) in schema["properties"].as_object().unwrap() {
+                if name == "operation" { continue; }
+                expected.entry(name.clone()).or_default()
+                    .extend(schema_plain_types(&schema, property));
+            }
+        }
+        for (name, types) in &expected {
+            let property = properties.get(name)
+                .unwrap_or_else(|| panic!("{tool}: tools/list omits argument {name}"));
+            let mut plain = json!({});
+            if types.len() == 1 {
+                plain["type"] = json!(types.first().unwrap());
+            } else if !types.is_empty() {
+                plain["type"] = json!(types);
+            }
+            if types.contains("object") { plain["additionalProperties"] = json!(true); }
+            assert_eq!(property, &plain, "{tool}: plain types for {name}");
+        }
+        let mut expected_names = expected.keys().map(String::as_str).collect::<Vec<_>>();
+        expected_names.push("operation");
+        expected_names.sort_unstable();
+        assert_eq!(properties.keys().map(String::as_str).collect::<Vec<_>>(), expected_names,
+            "{tool}: exactly the top-level properties, sorted by name");
     }
     let query = &tools[1]["inputSchema"];
     for sample in [json!({"operation":"execute-next","phase":6}),
         json!({"operation":"execute-next","phase":6,"plan":2})] {
         assert!(schema_accepts(query, query, &sample));
     }
-    // The tool list declares names; the selected handler still validates fields.
+    // The tool list declares plain types; the selected handler still validates fields.
     for phase in [json!(0), json!(-1), json!(1.5), json!("6")] {
         let answer = envelope(&client.tools_call(
             3,
@@ -341,6 +372,36 @@ fn tool_schemas_list_exactly_three_tools_with_minimal_inputs() {
     let patch = &tools[2]["inputSchema"];
     assert!(!schema_accepts(patch, patch, &schema_fixture()), "legacy patches have no declared operation but still reach the handler");
     assert!(client.finish().success());
+}
+
+fn served_operation_schema(client: &mut Client, tool: &str, operation: &str) -> Value {
+    let mut request = json!({"operation":"schema","tool":tool,"for":operation});
+    let mut serialized = String::new();
+    loop {
+        let answer = envelope(&client.tools_call(3, "cadence_query", request.clone()));
+        assert_eq!(answer["status"], "ok", "{answer}");
+        if let Some(schema) = answer.get("schema") { return schema.clone(); }
+        serialized.push_str(answer["body"].as_str().unwrap());
+        if answer["next"].is_null() { return serde_json::from_str(&serialized).unwrap(); }
+        request["part"] = answer["next"].clone();
+    }
+}
+
+fn schema_plain_types(root: &Value, node: &Value) -> BTreeSet<String> {
+    let node = resolve_schema(root, node);
+    let mut types = BTreeSet::new();
+    match &node["type"] {
+        Value::String(kind) => { types.insert(kind.clone()); }
+        Value::Array(kinds) => types.extend(kinds.iter().map(|kind| kind.as_str().unwrap().to_owned())),
+        _ => {}
+    }
+    for keyword in ["oneOf", "anyOf", "allOf"] {
+        if let Some(variants) = node[keyword].as_array() {
+            for variant in variants { types.extend(schema_plain_types(root, variant)); }
+        }
+    }
+    types.remove("null");
+    types
 }
 
 // Read the enum tables themselves so adding an operation cannot silently omit
