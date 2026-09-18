@@ -240,6 +240,10 @@ pub fn approve(mut request: Value) -> Value {
 
 #[allow(dead_code)]
 pub fn publish_review_plan(client: &mut Client) {
+    let configured = client.call("cadence_apply", json!({"operation":"config-apply","layer":"repo","updates":[
+        {"key":"review.reviewers","value":["claude-subagent"]},
+        {"key":"review.combination","value":"single"}]}));
+    assert_eq!(configured["status"], "ok", "{configured}");
     let context = client.call("cadence_apply", approve(json!({"operation":"context-submit","submission":{
         "phase":31,"title":"Review fixture","scope":"Review a native plan.",
         "durable_decisions":[],"decisions":[],"assumptions":[],
