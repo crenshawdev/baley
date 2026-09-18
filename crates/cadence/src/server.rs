@@ -231,8 +231,8 @@ impl CadenceServer {
     async fn cadence_version(&self) -> Result<Json<Envelope<VersionReport>>, ErrorData> {
         // `Json` rather than a text block: the envelope is the answer, so it
         // rides `structuredContent` where a caller can branch on `status`
-        // (D-07). Wrapping it here is also what gives the tool an
-        // `outputSchema`, derived from the envelope's own `JsonSchema`.
+        // (D-07). The tool returns `structuredContent` without declaring an
+        // `outputSchema`.
         //
         // Read from this binary's own compile-time constants, never from a
         // manifest on disk: the question is which binary is serving, and a
@@ -666,7 +666,7 @@ impl PublicServer {
     }
 }
 
-fn tool<Output: JsonSchema + 'static>(
+fn tool(
     name: &'static str,
     description: impl Into<Cow<'static, str>>,
     input: Value,
@@ -675,16 +675,11 @@ fn tool<Output: JsonSchema + 'static>(
         name,
         description,
         input.as_object().expect("derived object schema").clone(),
-    )
-    .with_output_schema::<Output>();
+    );
     // MCP hosts require an explicit object root. Tagged enums derive a root
     // oneOf; keep its variants and constraints intact alongside the root type.
-    for schema in [
-        &mut tool.input_schema,
-        tool.output_schema.as_mut().expect("derived output schema"),
-    ] {
-        Arc::make_mut(schema).insert("type".into(), Value::String("object".into()));
-    }
+    Arc::make_mut(&mut tool.input_schema)
+        .insert("type".into(), Value::String("object".into()));
     // Empty structs omit properties in schemars; hosts still need the field.
     Arc::make_mut(&mut tool.input_schema)
         .entry("properties")
@@ -776,18 +771,18 @@ impl ServerHandler for PublicServer {
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult {
             tools: vec![
-                tool::<Envelope<VersionReport>>(
+                tool(
                     "cadence_version",
                     "Report this binary's version, OS and architecture without changing state.",
                     serde_json::to_value(schemars::schema_for!(VersionArguments))
                         .expect("version schema"),
                 ),
-                tool::<QueryOutput>(
+                tool(
                     "cadence_query",
                     "Read supported configuration, role routing, native execution, review records, exact material risk status and structural surface evidence in the bound project.\n\nplan-read: phase is the integer every operation takes, or a decimal legacy address such as `27.1` that reads and never publishes. count (1 through 64) previews allocation without reserving. submission instead of count previews a complete draft read-only; approve its returned final submission, documents and canonical replacement map section together. The preview locates check-command, check-expected, truth-check-limit, link-content, link-value-not-named and link-truth-unresolvable refusals with item and truth ids and exact paths; the rules behind them are stated on cadence_apply. No command runs and no runner or test-selection gate is imposed. A typed evidence_map publishes with that exact plan; mapless authoring names provisional mode explicitly. The answer also carries retained current and superseded map history and the plan-submit contract.\n\nevidence-read: for a numeric phase, returns the authoritative acceptance-map-view-1: current truths, contributions, items, associations and origins, aliases, retained history, coverage and provisional readiness. Bind to its input_digest only when coherence is consistent. Inconsistent inputs or an outstanding intent produce no usable digest, and reads never repair or recover.\n\ncontext-intake: reads the phase scope and truths.\n\nreview-next: returns provider pending promptly; poll the same fire. Canceling a poll does not cancel or restart resident provider work.\n\nA local dispatch requires the host to run it once, wait, and forward the actual observations and its unchanged return through cadence_apply before advancing.",
                     query_schema(),
                 ),
-                tool::<ApplyOutput>(
+                tool(
                     "cadence_apply",
                     "Apply an atomic config batch, executor patch, risk-check, contracted risk fire or consequence, or a native execution operation: execution-admit/extend/authorize, execution-task-start/run/progress/checkpoint/answer/close, owner-only execution-task-retire, execution-owner-attest, execution-classify-run, execution-suite, execution-suite-repair-answer, execution-suite-repair, execution-suite-relaunch, execution-round-record and execution-plan-complete, each replayed by request id and refused with a located rule. plan-submit publishes the typed map with provisional authored plans under one exact owner approval and native current truth authority. Every item has an opaque id, kind/spec/reason and explicit truth_id/truth_version/reason associations. Fresh attached publication revalidates all saved/proposed contributions on the committing snapshot: nonblank check command and tagged literal/property expected value, one distinct check id per current truth, nonblank link endpoints/value and exact value occurrence inside one associated approved slot for every truth. It neither executes commands nor evaluates property prose. Link comparison preserves internal case/whitespace/punctuation, trims outer char::is_whitespace only, and uses char::is_alphanumeric() or underscore run boundaries. Slots are never joined and prose/other truths never authorize a match; unavailable slot authority yields link-truth-unresolvable. Located refusals preserve ids/paths, with optional details for all distinct checks and saved/proposed origins or the link association. Correct every offending contribution in one exact approved replacement batch. Historical replay preserves old payloads without certification under new limits; provisional mapless authoring and the phase-12 execution-admission gate remain. The current phase union must cover each truth with evidence and its one distinct check; observations are supplementary pending specifications. Correct uncovered-truth, truth-without-check, evidence-item-truth, truth-version-mismatch and shared-definition refusals through a complete new preview and approval. Native replacement requires exact target, old revision/bytes and proposed content consent, including explicit map resubmission; old map/item revisions stay superseded and readable. Retry the same request ID and complete approved payload for the historical allocation, original payload_digest and map binding; inspect replay projections separately for missing, drifted or newer content. Replay never reinstalls old authority. Wait for confirmed publication; conflicts require fresh preview and approval, never automatic retargeting. For review dispatches, review-observation forwards actual launch/return events and review-return forwards unchanged raw output or definite launch failure with the supplied identity. Missing or malformed output is failure. Wait for durable acknowledgment, then poll review-next; replay never authorizes a second dispatch.",
                     apply_schema(),
