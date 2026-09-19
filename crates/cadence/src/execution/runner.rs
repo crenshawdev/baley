@@ -166,9 +166,16 @@ pub async fn worker_exit(store: &Store, report: WorkerExit) -> Result<serde_json
     let generation = view.snapshot.generation + 1;
     let at = now() / 1000;
     let mut next = data.clone();
-    let mut decisions = vec![];
     let interrupted;
     if let Some(id) = &report.dispatch {
+        if let Some(saved) = history::plan_records(data, report.phase)?.into_iter()
+            .find(|r| r.request.request_id == report.request_id) {
+            if let history::PlanEvent::WorkerExit { dispatch_id, host, outcome, detail, at, generation, interrupted } = &saved.request.event
+                && *dispatch_id == *id && *host == report.host && *outcome == report.outcome && *detail == report.detail {
+                return Ok(json!({"status":"ok","request_id":report.request_id,"interrupted":interrupted,"at":at,"generation":generation}));
+            }
+            return Err(super::admission::refuse(report.phase, "exit-request-reuse", "request_id", &report.request_id, "exit request already names another payload"));
+        }
         let issue = &data["execution"]["occurrences"][report.phase.to_string()]["issues"][id];
         let plan = history::admitted_plans(data, report.phase)?.into_iter()
             .map(|(plan, _)| plan).find(|p| issue["operational"]["plan"] == p.plan)
@@ -179,12 +186,9 @@ pub async fn worker_exit(store: &Store, report: WorkerExit) -> Result<serde_json
             expected_version: projection.version, event: history::PlanEvent::WorkerExit {
                 dispatch_id: id.clone(), host: report.host.clone(), outcome: report.outcome.clone(),
                 detail: report.detail.clone(), at, generation, interrupted } };
-        let root = super::admission::records(data, report.phase)?.into_iter()
-            .find(|r| r.request_digest == request.plan.admission_digest)
-            .ok_or_else(|| Error::Invalid("exit admission missing".into()))?.root_binding;
-        let (proposed, record) = history::plan_contribute(data, &root, &request)?;
-        next = proposed;
-        decisions.push(history::plan_decision(&record)?);
+        store.request(Operation::NativePlanV1 { expected_generation: view.snapshot.generation,
+            expected_integrity: view.snapshot.integrity, request: Box::new(request) }).await?;
+        return Ok(json!({"status":"ok","request_id":report.request_id,"interrupted":interrupted,"at":at,"generation":generation}));
     } else if let Some(id) = &report.attempt {
         if crate::verification::persistence::attempt(data, Some(report.phase), id)?.is_none() {
             return Err(super::admission::refuse(report.phase, "exit-target", "attempt", id, "verification attempt was never retained"));
@@ -205,7 +209,7 @@ pub async fn worker_exit(store: &Store, report: WorkerExit) -> Result<serde_json
     next["worker_exits"][key] = json!({"request":report,"answer":answer});
     store.request(Operation::CompareTransact { expected_generation: view.snapshot.generation,
         expected_integrity: view.snapshot.integrity, transaction: crate::store::transaction::Transaction {
-            id: format!("worker-exit:{}", report.request_id), items: vec![], decisions,
+            id: format!("worker-exit:{}", report.request_id), items: vec![], decisions: vec![],
             snapshot: Some(next), external: vec![] } }).await?;
     Ok(answer)
 }
