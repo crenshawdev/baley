@@ -126,7 +126,7 @@ pub async fn record_observation(
 
 fn contribute_observation(mut records: Value, event: &Observation, at: u64) -> Result<Value> {
     let mut attempt: Attempt = persistence::get(&records, "attempts", &event.attempt)?;
-    records = contribute_delivery(&records, &attempt, &event)?;
+    records = contribute_delivery(&records, &attempt, event)?;
     let bindings: BTreeMap<String, String> = records
         .get("host_returns")
         .cloned()
