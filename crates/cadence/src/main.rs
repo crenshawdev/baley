@@ -28,6 +28,8 @@ enum Command {
     ProgressInstructions,
     /// Render the retune front door without opening a project.
     SuggestInstructions,
+    /// Render the query-only why front door without opening a project.
+    WhyInstructions,
     /// Render the capture front door without opening a project.
     CaptureInstructions,
     /// Run the MCP stdio server.
@@ -81,6 +83,13 @@ fn run_command(command: Command) -> std::process::ExitCode {
         Command::SuggestInstructions => {
             use std::io::Write;
             match std::io::stdout().lock().write_all(cadence::suggest::instructions::markdown().as_bytes()) {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(_) => std::process::ExitCode::FAILURE,
+            }
+        }
+        Command::WhyInstructions => {
+            use std::io::Write;
+            match std::io::stdout().lock().write_all(cadence::why::instructions::markdown().as_bytes()) {
                 Ok(()) => std::process::ExitCode::SUCCESS,
                 Err(_) => std::process::ExitCode::FAILURE,
             }

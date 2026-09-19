@@ -1559,7 +1559,19 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
 
     // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
-    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 16);
+    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 17);
+    let (why, body) = markdown_parts("skills/cad-why/SKILL.md");
+    assert_eq!(why["name"], "cad-why");
+    assert_eq!(why["argument-hint"], "<path>[:<line>]");
+    assert_eq!(why["allowed-tools"], json!(["mcp__cadence__cadence_query"]));
+    assert!(body.contains("once") && body.contains(r#"{"operation":"why","path":"<path>"}"#));
+    assert!(body.contains("`\"line\":<n>` as a JSON integer"));
+    assert!(body.contains("Print the returned `text` verbatim and nothing else"));
+    assert!(body.contains("no reformatting"));
+    // The 3.x door ran why.mjs through Bash; this one is query-only.
+    for forbidden in ["Bash", "why.mjs", "node ", "CLAUDE_PLUGIN_ROOT", "SlashCommand", "--dir", "--top"] {
+        assert!(!cadence::why::instructions::markdown().contains(forbidden), "{forbidden}");
+    }
     let (suggest, body) = markdown_parts("skills/cad-suggest/SKILL.md");
     assert_eq!(suggest["name"], "cad-suggest");
     assert_eq!(suggest["argument-hint"], "[phase]");

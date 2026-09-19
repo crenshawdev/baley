@@ -7,6 +7,7 @@
 
 pub mod corpus;
 pub mod git;
+pub mod instructions;
 pub mod render;
 
 use serde::Serialize;
