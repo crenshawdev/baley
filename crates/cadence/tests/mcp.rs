@@ -1559,7 +1559,18 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
 
     // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
-    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 15);
+    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 16);
+    let (suggest, body) = markdown_parts("skills/cad-suggest/SKILL.md");
+    assert_eq!(suggest["name"], "cad-suggest");
+    assert_eq!(suggest["argument-hint"], "[phase]");
+    assert_eq!(suggest["allowed-tools"], json!(["mcp__cadence__cadence_query", "mcp__cadence__cadence_apply"]));
+    assert!(body.contains("once") && body.contains(r#"{"operation":"suggest"}"#));
+    assert!(body.contains("key, current value, proposed value and counted decisions\nunchanged"));
+    assert!(body.contains("accepted `apply` payload unchanged"));
+    assert!(body.contains("decline and nothing before asking"));
+    for forbidden in ["SlashCommand", "planning.mjs", "Bash", "CLAUDE_PLUGIN_ROOT"] {
+        assert!(!cadence::suggest::instructions::markdown().contains(forbidden));
+    }
     let (progress, body) = markdown_parts("skills/cad-progress/SKILL.md");
     assert_eq!(progress["name"], "cad-progress");
     assert_eq!(progress["allowed-tools"], json!(["mcp__cadence__cadence_query"]));

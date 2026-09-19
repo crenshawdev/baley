@@ -1,4 +1,5 @@
----
+pub fn markdown() -> &'static str {
+    r#"---
 name: cad-suggest
 description: Show retune suggestions from retained decisions and apply only an accepted payload.
 argument-hint: "[phase]"
@@ -22,3 +23,5 @@ accept it. Send only the accepted `apply` payload unchanged through
 `mcp__cadence__cadence_apply`, then show the returned result. Send nothing on
 decline and nothing before asking. Never re-derive a value, alter a payload,
 combine proposals, or write configuration directly.
+"#
+}
