@@ -41,6 +41,7 @@ pub async fn plan_apply<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>,
     let project = root.parent().ok_or_else(|| Error::Invalid("project root missing".into()))?;
     let compact_round = matches!(input, runner::PlanApply::RoundRecord { .. });
     let result = match input {
+        runner::PlanApply::WorkerExit { report } => return runner::worker_exit(session.review_store(), report).await,
         runner::PlanApply::RoundRecord { request } => runner::plan_append(session.review_store(), PlanRequest {
             request_id: request.request_id, plan: request.plan, expected_version: request.expected_version,
             event: PlanEvent::RoundRecord(request.statement),

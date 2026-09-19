@@ -3,6 +3,16 @@ use crate::execution::{admission::Binding, allocation::Check, receipts::OwnerApp
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Interruption {
+    pub request_id: String,
+    pub host: String,
+    pub outcome: crate::execution::runner::WorkerOutcome,
+    pub detail: Option<String>,
+    pub at: u64,
+    pub generation: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TruthVersion {

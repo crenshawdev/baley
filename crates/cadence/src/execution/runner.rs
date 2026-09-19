@@ -113,6 +113,8 @@ pub struct RoundInput {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", deny_unknown_fields)]
 pub enum PlanApply {
+    #[serde(rename = "execution-worker-exit")]
+    WorkerExit { #[serde(flatten)] report: WorkerExit },
     #[serde(rename = "execution-round-record")]
     RoundRecord { request: RoundInput },
     #[serde(rename = "execution-suite")]
@@ -125,6 +127,87 @@ pub enum PlanApply {
     Relaunch { request: RelaunchInput },
     #[serde(rename = "execution-plan-complete")]
     Complete { request: PlanInput },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkerOutcome { Exited, Failed }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerExit {
+    pub request_id: String,
+    pub phase: u32,
+    pub host: String,
+    pub outcome: WorkerOutcome,
+    #[serde(default)] pub detail: Option<String>,
+    #[serde(default)] pub dispatch: Option<String>,
+    #[serde(default)] pub attempt: Option<String>,
+    #[serde(default)] pub review: Option<String>,
+}
+
+pub async fn worker_exit(store: &Store, report: WorkerExit) -> Result<serde_json::Value> {
+    use serde_json::json;
+    let view = store.request(Operation::ReadVerified).await?;
+    let data = &view.snapshot.data;
+    let key = crate::store::model::digest(report.request_id.as_bytes());
+    let prior = &data["worker_exits"][&key];
+    if !prior.is_null() {
+        if prior["request"] != json!(report) {
+            return Err(super::admission::refuse(report.phase, "exit-request-reuse", "request_id", &report.request_id, "exit request already names another payload"));
+        }
+        return Ok(prior["answer"].clone());
+    }
+    let targets = [&report.dispatch, &report.attempt, &report.review];
+    if report.phase == 0 || report.request_id.trim().is_empty() || report.host.trim().is_empty()
+        || targets.iter().filter(|id| id.is_some()).count() != 1 {
+        return Err(super::admission::refuse(report.phase, "exit-target", "target", "", "positive phase, request, host and exactly one dispatch, attempt or review required"));
+    }
+    let generation = view.snapshot.generation + 1;
+    let at = now() / 1000;
+    let mut next = data.clone();
+    let mut decisions = vec![];
+    let interrupted;
+    if let Some(id) = &report.dispatch {
+        let issue = &data["execution"]["occurrences"][report.phase.to_string()]["issues"][id];
+        let plan = history::admitted_plans(data, report.phase)?.into_iter()
+            .map(|(plan, _)| plan).find(|p| issue["operational"]["plan"] == p.plan)
+            .ok_or_else(|| super::admission::refuse(report.phase, "exit-target", "dispatch", id, "dispatch was never issued"))?;
+        let projection = history::plan_project(&history::plan_records(data, report.phase)?, &plan);
+        interrupted = !projection.completed;
+        let request = history::PlanRequest { request_id: report.request_id.clone(), plan,
+            expected_version: projection.version, event: history::PlanEvent::WorkerExit {
+                dispatch_id: id.clone(), host: report.host.clone(), outcome: report.outcome.clone(),
+                detail: report.detail.clone(), at, generation, interrupted } };
+        let root = super::admission::records(data, report.phase)?.into_iter()
+            .find(|r| r.request_digest == request.plan.admission_digest)
+            .ok_or_else(|| Error::Invalid("exit admission missing".into()))?.root_binding;
+        let (proposed, record) = history::plan_contribute(data, &root, &request)?;
+        next = proposed;
+        decisions.push(history::plan_decision(&record)?);
+    } else if let Some(id) = &report.attempt {
+        if crate::verification::persistence::attempt(data, Some(report.phase), id)?.is_none() {
+            return Err(super::admission::refuse(report.phase, "exit-target", "attempt", id, "verification attempt was never retained"));
+        }
+        interrupted = true;
+        next["verification"]["interruptions"][id] = json!(crate::verification::model::Interruption {
+            request_id: report.request_id.clone(), host: report.host.clone(), outcome: report.outcome.clone(),
+            detail: report.detail.clone(), at, generation });
+    } else {
+        let id = report.review.as_deref().expect("one target");
+        let (records, observed) = crate::review::attempts::worker_exit(
+            &crate::review::persistence::records(data)?, &report, id, at)?;
+        next["review"] = records;
+        interrupted = observed;
+    }
+    let answer = json!({"status":"ok","request_id":report.request_id,"interrupted":interrupted,
+        "at":at,"generation":generation});
+    next["worker_exits"][key] = json!({"request":report,"answer":answer});
+    store.request(Operation::CompareTransact { expected_generation: view.snapshot.generation,
+        expected_integrity: view.snapshot.integrity, transaction: crate::store::transaction::Transaction {
+            id: format!("worker-exit:{}", report.request_id), items: vec![], decisions,
+            snapshot: Some(next), external: vec![] } }).await?;
+    Ok(answer)
 }
 
 pub fn now() -> u64 {

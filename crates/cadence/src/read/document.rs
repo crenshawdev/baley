@@ -159,6 +159,7 @@ fn dispatch(root: &Path, identity: &DocumentIdentity, id: &str) -> Result<Resolv
         operational["continuation"] = json!({"suite_repair":{"question_id":question_id,"approved":true}});
     }
     add("suite".into(), json!({"command":active.suite,"state":suite}).to_string());
+    add("execution".into(), json!(suite).to_string());
     for key in ["continuation", "lease", "commands", "policy", "route"] {
         add(key.into(), operational[key].to_string());
     }

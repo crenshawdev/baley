@@ -172,6 +172,14 @@ async fn record_native_refusal<I: ConfigIo + Clone + Sync>(
 }
 
 async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value) -> cadence::store::Result<Value> {
+    if raw["operation"] == "execution-worker-exit" {
+        let cadence::execution::runner::PlanApply::WorkerExit { report } = serde_json::from_value(raw)? else {
+            unreachable!("worker exit operation")
+        };
+        let session = factory.first_touch(root).await?;
+        session.config()?;
+        return cadence::execution::runner::worker_exit(session.review_store(), report).await;
+    }
     if matches!(raw["operation"].as_str(), Some("execution-task-progress" | "execution-task-checkpoint" | "execution-task-answer")) {
         return native_progress_apply(factory, root, raw).await;
     }

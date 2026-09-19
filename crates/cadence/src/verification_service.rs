@@ -132,6 +132,13 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 .map(|c| json!({"request_id":c.patch.request_id,"answer":c.answer})).collect();
             answer["attempt"] = json!(saved.as_ref().map(|a| json!({"schema":a.schema,"id":a.id,"request_id":a.request_id,
                 "identity":{"kind":"verification-attempt","phase":phase,"attempt":a.id}})));
+            if let Some(a) = &saved {
+                let interruption = &data["verification"]["interruptions"][&a.id];
+                if !interruption.is_null() {
+                    answer["attempt"]["interrupted"] = json!(true);
+                    answer["attempt"]["exit"] = interruption.clone();
+                }
+            }
             answer["runs"] = json!(runs.iter().filter(|r| matches!(r.event, runner::Event::Launch { .. })).map(|r|
                 json!({"id":r.id,"identity":{"kind":"run-output","phase":phase,"run":r.id}})).collect::<Vec<_>>());
             answer["unknown_runs"] = json!(unknown);

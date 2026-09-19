@@ -614,6 +614,8 @@ pub struct Completion {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum PlanEvent {
+    WorkerExit { dispatch_id: String, host: String, outcome: super::runner::WorkerOutcome,
+        detail: Option<String>, at: u64, generation: u64, interrupted: bool },
     RoundRecord(OwnerRound),
     SuiteLaunch(SuiteLaunch),
     SuiteResult(RunResult),
@@ -696,6 +698,8 @@ pub struct CompletionSummary {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanProjection {
     pub version: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worker_exits: Vec<PlanEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub round: Option<RoundRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -783,11 +787,12 @@ pub fn failing_tests(result: &RunResult) -> Vec<String> {
 }
 
 pub fn plan_project(records: &[PlanRecord], plan: &PlanIdentity) -> PlanProjection {
-    let mut projection = PlanProjection { version: 0, round: None, completion: None, launches: vec![], results: vec![], relaunch: None,
+    let mut projection = PlanProjection { version: 0, worker_exits: vec![], round: None, completion: None, launches: vec![], results: vec![], relaunch: None,
         repair_question: None, repair_answer: None, repair: None, outcome: "pending".into(), completed: false };
     for record in records.iter().filter(|r| r.request.plan == *plan) {
         projection.version = record.version;
         match &record.request.event {
+            PlanEvent::WorkerExit { .. } => projection.worker_exits.push(record.request.event.clone()),
             PlanEvent::RoundRecord(round) => projection.round = Some(RoundRecord {
                 submission: round.submission.clone(), owner: round.approval.owner.clone(),
                 at: round.approval.at.clone(), request_id: record.request.request_id.clone(),
@@ -827,6 +832,27 @@ pub fn plan_replay(data: &Value, request: &PlanRequest) -> Result<Option<PlanRec
         return Ok(Some(record));
     }
     Ok(None)
+}
+
+/// Completion and an attributed continuation settle the interruption, while
+/// the observation itself remains immutable in plan history.
+pub fn unanswered_worker_exit(data: &Value, phase: u32, dispatch: &str) -> Result<Option<PlanRecord>> {
+    let records = plan_records(data, phase)?;
+    let Some(exit) = records.iter().rev().find(|r| matches!(&r.request.event,
+        PlanEvent::WorkerExit { dispatch_id, .. } if dispatch_id == dispatch)) else { return Ok(None); };
+    if !matches!(exit.request.event, PlanEvent::WorkerExit { interrupted: true, .. })
+        || plan_project(&records, &exit.request.plan).completed
+        || plan_outcomes(data, phase)?.iter().any(|p| p.plan == exit.request.plan.plan) {
+        return Ok(None);
+    }
+    use crate::evidence::{Fact, gates::{State, Disposition}};
+    let answered = crate::evidence::persistence::read(data)?.values().any(|r| {
+        let Fact::Gate(gate) = &r.fact else { return false; };
+        let need: Value = serde_json::from_str(&gate.need).unwrap_or(Value::Null);
+        need["dispatch"] == dispatch && need["exit_request_id"] == exit.request.request_id
+            && matches!(&gate.state, State::Answered(a) if a.disposition == Disposition::Approve)
+    });
+    Ok((!answered).then(|| exit.clone()))
 }
 
 /// Every admitted plan with the admission that first admitted it.
@@ -950,7 +976,7 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
     let mut history = plan_records(data, plan.phase)?;
     let projection = plan_project(&history, plan);
     let task_records = records(data, plan.phase)?;
-    let round_record = matches!(request.event, PlanEvent::RoundRecord(_));
+    let round_record = matches!(request.event, PlanEvent::RoundRecord(_) | PlanEvent::WorkerExit { .. });
     if projection.completed && !round_record { return Err(refuse("plan-completed", "plan already has a confirmed native completion")); }
     if !round_record && plan_outcomes(data, plan.phase)?.iter().any(|outcome| outcome.plan == plan.plan) {
         return Err(refuse("suite-failed", "the plan's repair launch reported a failure; its next repair is a newly approved gap plan"));
@@ -970,6 +996,16 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
     let record_digest = plan_request_digest(request)?;
     let mut generated_question = None;
     match &request.event {
+        PlanEvent::WorkerExit { dispatch_id, host, interrupted, .. } => {
+            let issue = &data["execution"]["occurrences"][plan.phase.to_string()]["issues"][dispatch_id];
+            if issue["operational"]["plan"] != plan.plan || host.trim().is_empty()
+                || *interrupted == projection.completed {
+                return Err(refuse("exit-target", "exit must name an issued dispatch and its observed completion state"));
+            }
+            if unanswered_worker_exit(data, plan.phase, dispatch_id)?.is_some() {
+                return Err(refuse("exit-duplicate", "dispatch already has an unanswered interruption"));
+            }
+        }
         PlanEvent::RoundRecord(statement) => {
             if !unfinished.is_empty() {
                 return Err(Error::Invalid(format!("native-task-refusal:{}", crate::envelope::Refusal::new(

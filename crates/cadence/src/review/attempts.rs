@@ -101,6 +101,30 @@ pub async fn record_observation(
     {
         return receipt(&records, &event, true);
     }
+    records = contribute_observation(records, &event, clock.now())?;
+    let committed = match persistence::update(
+        store,
+        &view,
+        &format!("observation:{}", event.observation),
+        records,
+    )
+    .await
+    {
+        Ok(committed) => committed,
+        Err(Error::Conflict(_)) => {
+            let winner = persistence::read(store).await?;
+            return receipt(&persistence::records(&winner.snapshot.data)?, &event, true);
+        }
+        Err(error) => return Err(error),
+    };
+    receipt(
+        &persistence::records(&committed.snapshot.data)?,
+        &event,
+        false,
+    )
+}
+
+fn contribute_observation(mut records: Value, event: &Observation, at: u64) -> Result<Value> {
     let mut attempt: Attempt = persistence::get(&records, "attempts", &event.attempt)?;
     records = contribute_delivery(&records, &attempt, &event)?;
     let bindings: BTreeMap<String, String> = records
@@ -157,33 +181,35 @@ pub async fn record_observation(
         &mut records,
         "observation_recorded_at",
         &event.observation,
-        &clock.now(),
+        &at,
     )?;
     persistence::put(&mut records, "attempts", &event.attempt, &attempt)?;
-    let committed = match persistence::update(
-        store,
-        &view,
-        &format!("observation:{}", event.observation),
-        records,
-    )
-    .await
-    {
-        Ok(committed) => committed,
-        Err(Error::Conflict(_)) => {
-            let winner = persistence::read(store).await?;
-            return receipt(&persistence::records(&winner.snapshot.data)?, &event, true);
-        }
-        Err(error) => return Err(error),
-    };
-    receipt(
-        &persistence::records(&committed.snapshot.data)?,
-        &event,
-        false,
-    )
+    Ok(records)
 }
 
 fn delivery_key(attempt: &str, view: &str) -> String {
     cadence::store::model::digest(&serde_json::to_vec(&(attempt, view)).expect("string pair"))
+}
+
+/// The host-independent exit report and the Claude stop hook share the same
+/// Interrupted observation reducer. A terminal return is never undone.
+pub fn worker_exit(records: &Value, report: &crate::execution::runner::WorkerExit,
+    id: &str, at: u64) -> Result<(Value, bool)> {
+    let refuse = || crate::execution::admission::refuse(report.phase, "exit-target", "review", id,
+        "exit must name an issued local review attempt in this phase");
+    let attempt: Attempt = persistence::get(records, "attempts", id).map_err(|_| refuse())?;
+    let admission: super::model::Admission = persistence::get(records, "admissions", &attempt.fire).map_err(|_| refuse())?;
+    if records["issued"].get(id).is_none() || admission.home.id != report.phase.to_string()
+        || super::provider::Provider::parse(&attempt.requested.agent).is_some() {
+        return Err(refuse());
+    }
+    let event = Observation { observation: format!("worker-exit:{}", report.request_id),
+        attempt: id.into(), launch: None, host_return: None, kind: ObservationKind::Interrupted,
+        reference: serde_json::to_string(report)?, observed_at: at, host: Some(report.host.clone()),
+        model: None, usage: super::model::Usage { input: None, output: None, cost: None, currency: None }, contract: attempt.contract };
+    let next = contribute_observation(records.clone(), &event, at)?;
+    let saved: Attempt = persistence::get(&next, "attempts", id)?;
+    Ok((next, saved.state == AttemptState::Interrupted))
 }
 
 pub fn delivered_view(
@@ -314,6 +340,31 @@ mod gap153_delivery_tests {
             attempt,
             event,
         )
+    }
+
+    #[test]
+    fn worker_exit_delegates_to_interrupted_without_undoing_a_return() {
+        let fixture: Value = serde_json::from_str(include_str!("../../tests/fixtures/phase9/h1-admission.json")).unwrap();
+        let mut admission = fixture["H"].clone();
+        admission["home"]["id"] = json!("14");
+        let records = json!({"attempts":{"a1":fixture["a1"]},"admissions":{"f1":admission},"issued":{"a1":true}});
+        let report = crate::execution::runner::WorkerExit { request_id: "exit-review".into(), phase: 14,
+            host: "codex exec".into(), outcome: crate::execution::runner::WorkerOutcome::Failed,
+            detail: Some("host exited".into()), dispatch: None, attempt: None, review: Some("a1".into()) };
+        let (mut next, interrupted) = worker_exit(&records, &report, "a1", 100).unwrap();
+        assert!(interrupted);
+        assert_eq!(next["attempts"]["a1"]["state"], "interrupted");
+        assert_eq!(next["observations"]["worker-exit:exit-review"]["kind"], "interrupted");
+        assert_eq!(next["observation_recorded_at"]["worker-exit:exit-review"], 100);
+        assert_eq!(next["closures"], Value::Null);
+        next["attempts"]["a1"]["state"] = json!("accepted");
+        next["attempts"]["a1"]["original"] = json!("original-1");
+        let report = crate::execution::runner::WorkerExit { request_id: "exit-after-return".into(), ..report };
+        let (next, interrupted) = worker_exit(&next, &report, "a1", 101).unwrap();
+        assert!(!interrupted);
+        assert_eq!(next["attempts"]["a1"]["state"], "accepted");
+        assert_eq!(next["attempts"]["a1"]["original"], "original-1");
+        assert!(worker_exit(&records, &report, "unknown", 101).is_err());
     }
     #[test]
     fn gap153_delivery_contribution_records_exact_membership() {
