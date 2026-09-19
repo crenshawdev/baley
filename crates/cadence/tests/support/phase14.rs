@@ -163,7 +163,6 @@ pub struct WorkerRound {
 }
 
 impl WorkerRound {
-    pub const PHASE: u32 = 31;
     const COMMAND: &'static str = "python3 -B tests/tiny.py";
 
     pub fn new() -> Self {
@@ -259,10 +258,15 @@ impl WorkerRound {
     pub fn close_task(&mut self, plan: u32, first: bool) {
         let id = format!("p{plan}-{}", if first { "a" } else { "b" });
         let task = self.task(&id);
+        let checks = if first {
+            let evidence = self.query(json!({"operation":"evidence-read","phase":31}));
+            let item = evidence["items"].as_array().unwrap().iter().find(|i| i["id"] == format!("check/{plan}")).unwrap();
+            json!([{"id":item["id"],"item_revision":item["item_revision"]}])
+        } else { json!([]) };
         self.apply(json!({"operation":"execution-task-start","request":{"request_id":format!("{id}-start"),
-            "task":task["task"],"attempt":id,"expected_version":0,"predecessor":null,"checks":task["checks"]}}));
+            "task":task["task"],"attempt":id,"expected_version":0,"predecessor":null,"checks":checks}}));
         let (completion, checks, verification) = if first {
-            let check = task["checks"][0].clone();
+            let check = checks[0].clone();
             fs::write(self.fixture.project().join("tests/tiny.py"), format!("import sys, unittest\nsys.path.insert(0, 'src')\nfrom answer import answer\nunittest.runner.time.perf_counter = lambda: 0.0\nclass Tiny(unittest.TestCase):\n    def test_answer(self):\n        self.assertEqual(answer(), {})\nif __name__ == '__main__':\n    unittest.main()\n", plan + 6)).unwrap();
             let red = self.commit(&["tests/tiny.py"], &format!("test(14): expect answer {id}"));
             let red_run = self.run(&id, "red", check.clone());
