@@ -519,6 +519,11 @@ async fn local_host(factory: &SessionFactory, root: &Path, dispatch: &Value, out
 #[tokio::test]
 async fn phase10_fallback_closes_once() {
     use std::sync::atomic::Ordering::SeqCst;
+    // Wall-clock room for real work the manual clock does not advance: the
+    // HTTP read starting and the expired attempt closing on disk. The claim is
+    // that the close happens, not how fast; two seconds held here and missed
+    // once on the shared GitHub runner, which took twenty-three for the test.
+    const RUNNER_BUDGET: Duration = Duration::from_secs(30);
     for (row, local) in [
         ("outer-expiry/canceled-poll", "success"),
         ("no-key", "success"), ("over-cap", "success"), ("transport", "success"),
@@ -548,7 +553,7 @@ async fn phase10_fallback_closes_once() {
             let mut attempt_id = first;
             for ordinal in 1..=2 {
                 if timed {
-                    tokio::time::timeout(Duration::from_secs(2), async {
+                    tokio::time::timeout(RUNNER_BUDGET, async {
                         while control.reading.load(SeqCst) < ordinal { tokio::task::yield_now().await; }
                     }).await.expect("HTTP read never started");
                     // Poll once to Pending then drop the request. The provider
@@ -562,7 +567,7 @@ async fn phase10_fallback_closes_once() {
                     }
                     clock.advance(if row == "native-timeout" { 100 } else { 539_000 });
                 }
-                let failed = tokio::time::timeout(Duration::from_secs(2), failed_attempt(&factory, &root, &attempt_id))
+                let failed = tokio::time::timeout(RUNNER_BUDGET, failed_attempt(&factory, &root, &attempt_id))
                     .await.unwrap_or_else(|_| panic!("{row}: expired operation did not durably close after canceled poll within acknowledgment budget"));
                 assert_eq!(failed["state"], "failed", "{row}");
                 if timed {
