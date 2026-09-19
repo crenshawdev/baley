@@ -192,7 +192,7 @@ pub fn suggest_fixture() -> Completed {
     assert_eq!(admitted["status"], "ok", "{admitted}");
     assert!(admitted["result"]["fire"].is_string(), "{admitted}");
     // The admitted fire counts before a reviewer has answered its gate.
-    let saved = reopened(project);
+    let saved = super::phase13::reopened(project);
     let admission = &saved.snapshot.data["review"]["admissions"][admitted["result"]["fire"].as_str().unwrap()];
     assert_eq!(admission["gate"], "blocking");
     assert_eq!(admission["settlement"], "pending");
