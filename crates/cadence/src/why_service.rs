@@ -1,5 +1,5 @@
 use cadence::envelope::Refusal;
-use cadence::why::{corpus, git};
+use cadence::why::{corpus, git, render};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -74,10 +74,12 @@ pub fn query(root: &Path, request: &Request) -> Value {
         Some(_) => None,
     };
     let (entries, joined_warnings) = corpus::join_chain(root, path, &index, &raws);
+    let rendered = render::render_chain(&entries, request.top, excluded.as_deref(), path);
     let warnings: Vec<&String> = index.warnings.iter().chain(&joined_warnings).collect();
     json!({
         "status":"ok","path":path,"line":line,"result":"chain",
-        "entries":entries,
+        "text":rendered.text,"shown":rendered.shown,"total":rendered.total,
+        "entries":rendered.entries,
         "excluded":excluded,
         "warnings":warnings,
     })
