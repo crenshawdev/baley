@@ -856,8 +856,8 @@ export const CONTRACTS = {
     // are both required so the stored ids are a range an auditor can check out,
     // and `--round` keeps a re-arm's member off round one's file.
     //
-    // TWO WORDS, unlike `adjudication`: the queue takes three operations
-    // (`record`, then `list` and `carry`), which is the `risk-check run|status`
+    // TWO WORDS, unlike `adjudication`: the queue takes two operations
+    // (`record` and `list`), which is the `risk-check run|status`
     // precedent for widening `TWO_WORD` rather than the single-operation one.
     'deferred record': {
       '--phase': { required: true, type: 'phase', value: 'refuse', bare: 'refuse' },
@@ -885,31 +885,6 @@ export const CONTRACTS = {
     // and `--phase 2.1` address the directory the caller spelled.
     'deferred list': {
       '--phase': { required: false, type: 'phase', value: 'refuse', bare: 'refuse' },
-    },
-    // THE CARRY a milestone close runs before `milestone-prune` deletes the
-    // phase directory (D-10). `--phase` is REQUIRED and there is no whole-tree
-    // form: this face MOVES committed artifacts, and a mistyped or absent flag
-    // that carried every phase at once would be indistinguishable from the one
-    // the caller meant. It takes no other flag - the SET it moves is exactly
-    // what `deferred list --phase` returns, derived rather than named.
-    'deferred carry': {
-      '--phase': { required: true, type: 'phase', value: 'refuse', bare: 'refuse' },
-    },
-    // THE RISK_SURFACE RULINGS a milestone close carries out of the phase
-    // directory before `milestone-prune` deletes it (LND-02, D-01), so
-    // `land-cleanup.mjs gate` still has records to derive its verdict from.
-    // `--phase` is REQUIRED and there is no whole-tree form, for the reason
-    // `deferred carry` above gives: this face WRITES, and a mistyped or absent
-    // flag that carried every phase at once would be indistinguishable from the
-    // one the caller meant. It takes no other flag - the SET it copies is
-    // derived from the phase directory's own contents, never named on the
-    // command line, so no argument can widen it past the `risk_surface` trigger.
-    //
-    // ONE WORD, unlike `deferred carry`: `subcommandKey` consumes a second word
-    // only for the families in `TWO_WORD`, this is a single operation, and
-    // widening that Set would change how every existing spelling resolves.
-    'risk-carry': {
-      '--phase': { required: true, type: 'phase', value: 'refuse', bare: 'refuse' },
     },
     // `--detail-file` is `--detail`'s path transport, for a detail the CALLER
     // derived: the inline form puts that text in a double-quoted shell word,

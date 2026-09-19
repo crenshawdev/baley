@@ -881,9 +881,8 @@ function fireHome(dir, n, what, task) {
     `neither phases/${n}/ nor deferred/${n}/ is a directory under ${dir} - the ${what} is `
     + 'written BESIDE the sibling REVIEW file, or beside the queue member a milestone close '
     + 'carried out of that phase, so one of the two has to exist already',
-    `check the --phase spelling first - it addresses phases/${n}/ verbatim. If the milestone close `
-    + `already carried this phase's queue out, run \`deferred carry --phase ${n}\`, which is what `
-    + 'creates the second home');
+    `check the --phase spelling first - it addresses phases/${n}/ verbatim. A historical `
+    + 'deferred home must already exist; this command does not create or move one');
   return null;
 }
 

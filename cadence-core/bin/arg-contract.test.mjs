@@ -145,7 +145,7 @@ test('subcommandKey: the words a script was invoked with, resolved to its table 
   // dispatch has to reach the same row for the same words.
   const ROWS = [
     [['cursor', 'set'], 'cursor set', 'the six two-word families consume their second word'],
-    [['deferred', 'record'], 'deferred record', 'the sixth family: the deferred queue takes three operations'],
+    [['deferred', 'record'], 'deferred record', 'the sixth family: the deferred queue takes two operations'],
     [['trace', 'append'], 'trace append', 'the same, on the family with the most rows'],
     [['uat', 'record'], 'uat record', 'the same'],
     [['risk-check', 'run'], 'risk-check run', 'a hyphenated first word is still one word'],
@@ -420,9 +420,9 @@ test('every flag in every row declares a complete grammar', () => {
     }
   }
   // The walk reached the whole table, so no arm above is vacuous.
-  // CADENCE-CENSUS: arg-contract-flag-entries | asserts: the CONTRACTS table declares 201 flag entries across 18 top-level rows
-  // 201 since the `reads` subcommand and its `--join` flag left with read-trace.
-  assert.equal(entries, 201, `the table declares ${entries} flag entries`);
+  // CADENCE-CENSUS: arg-contract-flag-entries | asserts: the CONTRACTS table declares 199 flag entries across 18 top-level rows
+  // 199 after removing the two carry writers and their phase flags.
+  assert.equal(entries, 199, `the table declares ${entries} flag entries`);
   assert.equal(Object.keys(CONTRACTS).length, 18, 'one row per top-level bin script');
 });
 
