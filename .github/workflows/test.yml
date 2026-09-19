@@ -18,8 +18,11 @@ jobs:
   # been red since 2026-09-13 on a citation a rendered skill stopped carrying
   # in phase 13. There is no further 3.x work; the 3.x branch is that suite's
   # home, and cadence-core/ leaves this branch surface by surface as the binary
-  # replaces it. Until it does, the frozen-reference step below is the only
-  # thing that still needs to know it exists.
+  # replaces it. The step that held that tree byte-identical to v3.7.12 went
+  # the same way on 2026-09-19: phase 14 plan 4 was the first plan to delete
+  # replaced JavaScript, and a guard that fails on every removal the rule
+  # allows guards nothing. The frozen reference is the tag, and the tests that
+  # need it read the tag.
   cargo-test:
     # The Rust binary is the product. This is the suite.
     runs-on: ubuntu-latest
@@ -64,13 +67,3 @@ jobs:
           cargo nextest --version
       - run: cargo build --locked
       - run: cargo nextest run --locked --workspace --no-fail-fast
-
-      # The frozen reference guard, and now the ONLY one running in CI: the
-      # self-verify job that used to lint the shipped tree was removed under
-      # D-29. Every 4.0 plan asserts this locally in its Verify block; asserting
-      # it here too means a change to cadence-core/ cannot reach main unnoticed
-      # just because nobody ran a plan. Exact and instant, where the v3 test
-      # suite was a slow and weaker proxy for the same property.
-      - name: The frozen v3 reference is byte-identical to its tag
-        run: git diff --exit-code v3.7.12 -- cadence-core/
-
