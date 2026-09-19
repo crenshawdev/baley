@@ -1,4 +1,6 @@
----
+//! The milestone front door is compiled alongside its typed operations.
+pub fn markdown() -> &'static str {
+    r#"---
 name: cad-milestone
 description: "Read the per-phase audits and request an explicitly selected local milestone close."
 argument-hint: "<phase ids> <display label>"
@@ -31,3 +33,5 @@ allowed-tools:
    owner requests retuning, cadence_query `{"operation":"suggest"}` is advisory:
    its output grants no permission to apply a proposal or to land.
 </process>
+"#
+}

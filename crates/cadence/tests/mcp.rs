@@ -302,8 +302,8 @@ fn tool_schemas_list_exactly_three_tools_with_minimal_inputs() {
     }
     let tools_bytes = serde_json::to_vec(tools).unwrap().len();
     assert!(
-        tools_bytes < 9_900,
-        "tools/list result.tools is {tools_bytes} bytes; measured 6,846 bytes before top-level types, 9,303 bytes with the derived property union, 9,578 once adoption-declare and capture joined the apply enum, 9,830 once why joined the query enum with path, line and top"
+        tools_bytes < 10_100,
+        "tools/list result.tools is {tools_bytes} bytes; measured 10,022 bytes with milestone and landing operations"
     );
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
     for (tool, names) in [("query", query_operation_names()), ("apply", apply_operation_names())] {
@@ -1559,7 +1559,21 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
 
     // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
-    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 17);
+    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 18);
+    let (milestone, body) = markdown_parts("skills/cad-milestone/SKILL.md");
+    assert_eq!(milestone["name"], "cad-milestone");
+    assert_eq!(milestone["allowed-tools"], json!(["mcp__cadence__cadence_query", "mcp__cadence__cadence_apply"]));
+    assert!(body.contains("milestone-read") && body.contains("verification-audit"));
+    assert!(body.contains("cad-audit's phase argument") && body.contains("positive integer phase ids"));
+    assert!(body.contains("`actions.close` typed payload\n   unchanged"));
+    assert!(body.contains("Close-only stops at the local milestone close"));
+    assert!(body.contains("output grants no permission"));
+    for forbidden in ["Bash", "Write", "Edit", "planning.mjs", "CLAUDE_PLUGIN_ROOT", "git ", "carry moves"] {
+        assert!(!cadence::milestone::instructions::markdown().contains(forbidden), "{forbidden}");
+    }
+    let tools_bytes = serde_json::to_vec(&listed["result"]["tools"]).unwrap().len();
+    println!("tools/list result.tools: {tools_bytes} bytes");
+    assert!(tools_bytes < 10_100);
     let (why, body) = markdown_parts("skills/cad-why/SKILL.md");
     assert_eq!(why["name"], "cad-why");
     assert_eq!(why["argument-hint"], "<path>[:<line>]");

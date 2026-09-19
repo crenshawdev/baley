@@ -24,6 +24,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Render the milestone front door without opening a project.
+    MilestoneInstructions,
     /// Render the query-only progress front door without opening a project.
     ProgressInstructions,
     /// Render the retune front door without opening a project.
@@ -80,6 +82,13 @@ fn main() -> std::process::ExitCode {
 
 fn run_command(command: Command) -> std::process::ExitCode {
     match command {
+        Command::MilestoneInstructions => {
+            use std::io::Write;
+            match std::io::stdout().lock().write_all(cadence::milestone::instructions::markdown().as_bytes()) {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(_) => std::process::ExitCode::FAILURE,
+            }
+        }
         Command::SuggestInstructions => {
             use std::io::Write;
             match std::io::stdout().lock().write_all(cadence::suggest::instructions::markdown().as_bytes()) {
