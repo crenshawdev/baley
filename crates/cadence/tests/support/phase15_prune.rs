@@ -121,7 +121,11 @@ pub fn exercise() {
             "tasks":[{"id":"task-open","title":"Deliver ready","files":["src/p17.txt"],"action":"Write the artifact.","verify":["true"]}],
             "suite":"true","evidence_map":{"mode":"attached","items":[{"kind":"artifact","id":"artifact/open",
                 "spec":{"locators":["src/p17.txt"],"substance":"The ready artifact contains ready."},"reason":"Observe ready.",
-                "associations":[{"truth_id":"T1","truth_version":1,"reason":"Observe ready."}]}]}}}]}})));
+                "associations":[{"truth_id":"T1","truth_version":1,"reason":"Observe ready."}]},
+                {"kind":"check","id":"check/open","spec":{"command":"true","expected":{"kind":"literal","value":"ready"},
+                    "test":{"file":"tests/open.py","function":"test_open"},"setup":"An open artifact.","call":"Read it.",
+                    "boundary":"real filesystem","fakes":[]},"reason":"Read ready.",
+                    "associations":[{"truth_id":"T1","truth_version":1,"reason":"Read ready."}]}]}}}]}})));
     assert_eq!(plan["status"], "ok", "{plan}");
     let _member = phase15::deferred(project, 17);
     fs::write(project.join(".planning/REQUIREMENTS.md"), REQUIREMENTS).unwrap();
