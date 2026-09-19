@@ -355,3 +355,106 @@ fn phase14_progress_reports_status_issues_and_one_next_action() {
         assert!(!root.join(format!("skills/{retired}/SKILL.md")).exists());
     }
 }
+
+#[test]
+fn phase14_exited_worker_without_completion_is_interrupted() {
+    use phase14::WorkerRound;
+    let mut round = WorkerRound::new();
+    let project = round.fixture.project().to_owned();
+    let before_documents = documents(&project);
+    let before_tree = phase13::tree(&project);
+    let before = seconds();
+    let a = round.issue();
+    let id = a["dispatch_id"].as_str().unwrap().to_owned();
+    let issued_generation = reopened(&project).snapshot.generation;
+    let exit_request = json!({"operation":"execution-worker-exit","request_id":"exit-A","phase":31,
+        "dispatch":id,"host":"codex exec","outcome":"exited"});
+    let exit_a = round.apply(exit_request.clone());
+    assert_eq!(exit_a["interrupted"], true, "{exit_a}");
+    assert_eq!(exit_a["generation"], issued_generation + 1, "{exit_a}");
+    let text = round.progress()["text"].as_str().unwrap().to_owned();
+    assert!(text.contains(&format!("Dispatch: dispatch {id} interrupted, no return; 1 generations since issue\n")), "{text}");
+    assert!(text.ends_with(&format!("Next: Continue dispatch {id} with execution-authorize or retire it\n")), "{text}");
+    let document = round.query(json!({"operation":"document","identity":{"kind":"dispatch","id":id},"part":"execution"}));
+    assert_eq!(document["status"], "ok", "{document}");
+    let execution: Value = serde_json::from_str(document["body"].as_str().unwrap()).unwrap();
+    assert_eq!(execution["worker_exits"][0]["dispatch_id"], id);
+    let refused = round.query(json!({"operation":"execute-next","phase":31}));
+    assert_eq!(refused["code"], "continuation-refusal", "{refused}");
+    assert_eq!(refused["located"], json!({"rule":"interrupted","slot":"dispatch","id":id}), "{refused}");
+    let mut duplicate_request = exit_request.clone();
+    duplicate_request["request_id"] = json!("exit-A-duplicate");
+    let duplicate = round.client.call("cadence_apply", duplicate_request);
+    assert_eq!(duplicate["rule"], "exit-duplicate", "{duplicate}");
+    assert_eq!(round.apply(exit_request.clone()), exit_a);
+    let irrelevant = round.client.call("cadence_apply", json!({"operation":"execution-authorize","phase":31,
+        "request_id":"wrong-continuation","dispatch":"unknown","owner":"Fixture Owner","at":"2026-09-19T12:00:00Z","response":"Continue"}));
+    assert_eq!(irrelevant["rule"], "continuation-target", "{irrelevant}");
+    round.apply(json!({"operation":"execution-authorize","phase":31,"request_id":"continue-A","dispatch":id,
+        "owner":"Fixture Owner","at":"2026-09-19T12:00:00Z","response":"Continue this interrupted dispatch"}));
+    let resumed = round.issue();
+    for slot in ["dispatch_id", "route", "identities"] { assert_eq!(resumed[slot], a[slot]); }
+    assert!(!round.progress()["text"].as_str().unwrap().contains("Dispatch:"));
+    round.close_task(1, true);
+    round.close_task(1, false);
+    round.complete(1, &a);
+    let completed_exit = round.apply(json!({"operation":"execution-worker-exit","request_id":"exit-A-complete","phase":31,
+        "dispatch":id,"host":"codex exec","outcome":"exited"}));
+    assert_eq!(completed_exit["interrupted"], false);
+    assert!(!round.progress()["text"].as_str().unwrap().contains("Dispatch:"));
+
+    let b = round.issue();
+    round.close_task(2, true);
+    let exit_b = round.apply(json!({"operation":"execution-worker-exit","request_id":"exit-B","phase":31,
+        "dispatch":b["dispatch_id"],"host":"codex exec","outcome":"failed","detail":"worker exited after the first task"}));
+    assert_eq!(exit_b["interrupted"], true);
+    round.close_task(2, false);
+    round.complete(2, &b);
+    let final_progress = round.progress();
+    let text = final_progress["text"].as_str().unwrap();
+    assert!(!text.contains("Dispatch:"), "{text}");
+    assert!(text.contains("Record (phase 31): 2 routing decisions, 1 refusals, 0 gate fires\n"), "{text}");
+    let unknown = round.client.call("cadence_apply", json!({"operation":"execution-worker-exit","request_id":"exit-unknown","phase":31,
+        "dispatch":"unknown","host":"codex exec","outcome":"exited"}));
+    assert_eq!(unknown["rule"], "exit-target", "{unknown}");
+    assert_eq!(round.apply(exit_request.clone()), exit_a);
+    let v = round.query(json!({"operation":"verify-next","phase":31,"request_id":"verify-exit"}));
+    assert_eq!(v["status"], "ok", "{v}");
+    let verifier_exit = round.apply(json!({"operation":"execution-worker-exit","request_id":"exit-V","phase":31,
+        "attempt":v["attempt"]["id"],"host":"codex exec","outcome":"exited"}));
+    assert_eq!(verifier_exit["interrupted"], true);
+    let verification = round.query(json!({"operation":"verification-read","phase":31,"attempt":v["attempt"]["id"]}));
+    assert_eq!(verification["attempt"]["interrupted"], true, "{verification}");
+    round.client.finish();
+    round.client = phase14::exit_support::Client::open(&project);
+    assert_eq!(round.apply(exit_request), exit_a);
+    let verification = round.query(json!({"operation":"verification-read","phase":31,"attempt":v["attempt"]["id"]}));
+    assert_eq!(verification["attempt"]["interrupted"], true);
+    round.client.finish();
+    let after = seconds();
+    let reopened = reopened(&project);
+    let exits: Vec<Value> = cadence::execution::history::plan_records(&reopened.snapshot.data, 31).unwrap().iter()
+        .map(|r| serde_json::to_value(&r.request.event).unwrap()).filter(|e| e["kind"] == "worker-exit").collect();
+    assert_eq!(exits.len(), 3, "{exits:?}");
+    assert_eq!(exits.iter().filter(|e| e["interrupted"] == true).count(), 2);
+    assert_eq!(exits.iter().map(|e| e["dispatch_id"].clone()).collect::<Vec<_>>(), [a["dispatch_id"].clone(), a["dispatch_id"].clone(), b["dispatch_id"].clone()]);
+    for event in &exits {
+        assert_eq!(event["host"], "codex exec");
+        at(event, (before, after));
+        assert!(event["generation"].as_u64().is_some_and(|g| g > issued_generation));
+    }
+    let refusals: Vec<_> = reopened.decisions.iter().map(|r| serde_json::to_value(r).unwrap())
+        .filter(|r| r["decision"]["boundary"]["outcome"] == "refused:continuation-refusal").collect();
+    assert_eq!(refusals.len(), 1);
+    at(&refusals[0], (before, after));
+    assert_eq!(refusals[0]["decision"]["boundary"]["located"], json!({"rule":"interrupted","slot":"dispatch","id":id}));
+    let mut after_documents = documents(&project);
+    after_documents.remove(Path::new(".planning/phases/31/SUMMARY.md"));
+    assert_eq!(after_documents, before_documents);
+    for (path, bytes) in phase13::tree(&project) {
+        if path.starts_with(".planning") && before_tree.get(&path) != Some(&bytes) {
+            assert!([".planning/state.json", ".planning/decisions.jsonl", ".planning/items.jsonl", ".planning/phases/31/SUMMARY.md"]
+                .iter().any(|allowed| path == Path::new(allowed)), "unexpected planning write: {}", path.display());
+        }
+    }
+}

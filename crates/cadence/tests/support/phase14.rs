@@ -150,3 +150,156 @@ pub fn documents(project: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         document.then_some(bytes).flatten().map(|bytes| (path, bytes))
     }).collect()
 }
+
+#[allow(dead_code)]
+#[path = "phase31.rs"]
+pub mod exit_support;
+
+/// The phase 33 process fixture, with two plans and an interleavable version of
+/// phase 13's native completion flow. Only programs and caller inputs are fake.
+pub struct WorkerRound {
+    pub fixture: exit_support::ProcessFixture,
+    pub client: exit_support::Client,
+}
+
+impl WorkerRound {
+    pub const PHASE: u32 = 31;
+    const COMMAND: &'static str = "python3 -B tests/tiny.py";
+
+    pub fn new() -> Self {
+        let fixture = exit_support::ProcessFixture::new();
+        fs::write(fixture.project().join("src/answer.py"), "def answer():\n    return 0\n").unwrap();
+        exit_support::git(fixture.project(), &["add", "src/answer.py"]);
+        exit_support::git(fixture.project(), &["-c", "commit.gpgsign=false", "-c", "user.name=Cadence Phase31", "-c", "user.email=phase31@example.invalid", "commit", "-m", "Fixture subject"]);
+        let client = exit_support::Client::open(fixture.project());
+        let mut this = Self { fixture, client };
+        this.publish("context-submit", json!({"phase":31,"title":"Worker exits","scope":"Retain and continue interrupted workers.",
+            "durable_decisions":[],"decisions":[],"assumptions":[],"truths":[1,2].map(|n| json!({
+                "id":format!("T{n}"),"trigger":"a worker exits","observer":"the owner","verb":"sees",
+                "outcome":"an interruption","kind":"property","observable":true,"fixed_oracle":true}))}));
+        let allocation = this.query(json!({"operation":"plan-read","phase":31,"count":2}));
+        let plans = (1..=2).map(|n| json!({"target":allocation["targets"][n-1],"content":{
+            "phase":31,"plan":n,"requirements":[format!("T{n}")],"files":["src/answer.py","src/lease.rs","tests/tiny.py"],"directories":[],
+            "goal":"Retain exit observations.","context":"Two tasks allow a late close.","notes":"No wall-clock timeout.",
+            "tasks":["a","b"].map(|s| json!({"id":format!("p{n}-{s}"),"title":"Deliver fixture work",
+                "files":["src/answer.py","src/lease.rs","tests/tiny.py"],"action":"Deliver the fixture answer.","verify":[Self::COMMAND]})),
+            "suite":Self::COMMAND,"evidence_map":{"mode":"attached","items":[{
+                "kind":"check","id":format!("check/{n}"),"reason":"Observe the answer.",
+                "spec":{"command":Self::COMMAND,"expected":{"kind":"literal","value":"the expected answer"},
+                    "test":{"file":"tests/tiny.py","function":"Tiny.test_answer"},"setup":"A real project.","call":"Run the subject.","boundary":"stdio","fakes":[]},
+                "associations":[{"truth_id":format!("T{n}"),"truth_version":1,"reason":"Observe the answer."}]}]}}})).collect::<Vec<_>>();
+        this.publish("plan-submit", json!({"phase":31,"occurrence":allocation["occurrence"],"request_id":"exit-plans",
+            "inventory_basis":allocation["inventory"]["basis"],"plans":plans}));
+        let evidence = this.query(json!({"operation":"evidence-read","phase":31}));
+        let read = this.query(json!({"operation":"plan-read","phase":31}));
+        let allocation = (1..=2).flat_map(|n| {
+            let check = evidence["items"].as_array().unwrap().iter().find(|i| i["id"] == format!("check/{n}")).unwrap();
+            [json!({"plan":n,"task":format!("p{n}-a"),"checks":[{"id":check["id"],"item_revision":check["item_revision"]}]}),
+             json!({"plan":n,"task":format!("p{n}-b"),"checks":[]})]
+        }).collect::<Vec<_>>();
+        this.apply(json!({"operation":"execution-admit","request":{"request_id":"exit-admit","expected_set_version":0,"contract":{
+            "phase":31,"occurrence":read["occurrence"],"allocation":allocation,
+            "plans":read["native"]["publications"].as_object().unwrap().values().map(|p| json!({"plan":p["identity"]["plan"],
+                "publication_request":p["publication_request"],"content_revision":p["revision"],"map_revision":p["map_revision"]})).collect::<Vec<_>>()}}}));
+        this.apply(json!({"operation":"execution-authorize","phase":31,"request_id":"exit-authorize",
+            "owner":"Fixture Owner","at":"2026-09-19T12:00:00Z","response":"Proceed with both plans"}));
+        this
+    }
+
+    fn publish(&mut self, operation: &str, submission: Value) {
+        let draft = self.apply(json!({"operation":operation,"submission":submission}));
+        let answer = self.apply(json!({"operation":operation,"phase":31,"approval":{"approved":true,
+            "owner":"Fixture Owner","at":"2026-09-19T12:00:00Z","submission_digest":draft["submission_digest"]}}));
+        assert_eq!(answer["persisted"], true, "{answer}");
+    }
+
+    pub fn query(&mut self, request: Value) -> Value { self.client.call("cadence_query", request) }
+    pub fn apply(&mut self, request: Value) -> Value {
+        let answer = self.client.call("cadence_apply", request);
+        assert_eq!(answer["status"], "ok", "{answer}");
+        answer
+    }
+    pub fn issue(&mut self) -> Value {
+        let answer = self.query(json!({"operation":"execute-next","phase":31}));
+        assert_eq!(answer["outcome"], "dispatch", "{answer}");
+        answer
+    }
+    pub fn progress(&mut self) -> Value {
+        let answer = self.query(json!({"operation":"progress"}));
+        assert_eq!(answer["status"], "ok", "{answer}");
+        answer
+    }
+    fn task(&mut self, id: &str) -> Value {
+        let history = self.query(json!({"operation":"execution-history","phase":31}));
+        history["tasks"].as_array().unwrap().iter().find(|t| t["task"]["task"] == id).unwrap().clone()
+    }
+    fn plan(&mut self, number: u32) -> Value {
+        let history = self.query(json!({"operation":"execution-history","phase":31}));
+        history["plans"].as_array().unwrap().iter().find(|p| p["plan"]["plan"] == number).unwrap().clone()
+    }
+    fn commit(&self, paths: &[&str], subject: &str) -> String {
+        let project = self.fixture.project();
+        let mut args = vec!["add"];
+        args.extend_from_slice(paths);
+        exit_support::git(project, &args);
+        exit_support::git(project, &["-c", "commit.gpgsign=false", "-c", "user.name=Cadence Phase31", "-c", "user.email=phase31@example.invalid", "commit", "-S", "-m", subject]);
+        exit_support::git(project, &["rev-parse", "HEAD"])
+    }
+    fn run(&mut self, id: &str, stage: &str, check: Value) -> String {
+        let task = self.task(id);
+        let run = format!("{id}-{stage}");
+        self.apply(json!({"operation":"execution-run","request":{"request_id":run,"task":task["task"],"attempt":id,
+            "expected_version":task["state"]["version"],"command":Self::COMMAND,"check":check,"stage":stage}}));
+        let result = self.client.wait_for_event(31, &run);
+        assert_eq!(result["disposition"]["code"], if stage == "red" { 1 } else { 0 }, "{result}");
+        if stage == "red" { assert_eq!(result["observation"]["summary"], json!({"runner":"unittest","failed":true,"failures":1,"errors":0})); }
+        run
+    }
+
+    pub fn close_task(&mut self, plan: u32, first: bool) {
+        let id = format!("p{plan}-{}", if first { "a" } else { "b" });
+        let task = self.task(&id);
+        self.apply(json!({"operation":"execution-task-start","request":{"request_id":format!("{id}-start"),
+            "task":task["task"],"attempt":id,"expected_version":0,"predecessor":null,"checks":task["checks"]}}));
+        let (completion, checks, verification) = if first {
+            let check = task["checks"][0].clone();
+            fs::write(self.fixture.project().join("tests/tiny.py"), format!("import sys, unittest\nsys.path.insert(0, 'src')\nfrom answer import answer\nunittest.runner.time.perf_counter = lambda: 0.0\nclass Tiny(unittest.TestCase):\n    def test_answer(self):\n        self.assertEqual(answer(), {})\nif __name__ == '__main__':\n    unittest.main()\n", plan + 6)).unwrap();
+            let red = self.commit(&["tests/tiny.py"], &format!("test(14): expect answer {id}"));
+            let red_run = self.run(&id, "red", check.clone());
+            fs::write(self.fixture.project().join("src/answer.py"), format!("def answer():\n    return {}\n", plan + 6)).unwrap();
+            let green = self.commit(&["src/answer.py"], &format!("feat(14): deliver answer {id}"));
+            let green_run = self.run(&id, "green", check.clone());
+            let observed = self.query(json!({"operation":"execution-history","phase":31,"run":red_run}));
+            let inspection = json!({"check":check,"test_digest":observed["launch"]["request"]["event"]["material"]["test_digest"],
+                "evidence":[red_run,green_run],"no_subject_stub":true});
+            let task = self.task(&id);
+            self.apply(json!({"operation":"execution-owner-attest","request":{"request_id":format!("{id}-owner"),
+                "task":task["task"],"attempt":id,"expected_version":task["state"]["version"],
+                "statement":{"submission":inspection,"approval":{"approved":true,"owner":"Fixture Owner","at":"2026-09-19T12:00:00Z","submission":inspection}}}}));
+            (green.clone(), json!([{"check":check,"red_commit":red,"green_commit":green,"red_run":red_run,"green_run":green_run}]), green_run)
+        } else {
+            fs::write(self.fixture.project().join("src/lease.rs"), format!("pub fn lease_needle() -> u32 {{ {plan} }}\n")).unwrap();
+            let commit = self.commit(&["src/lease.rs"], &format!("feat(14): finish fixture {id}"));
+            let run = self.run(&id, "verify", Value::Null);
+            (commit, json!([]), run)
+        };
+        let task = self.task(&id);
+        self.apply(json!({"operation":"execution-task-close","request":{"request_id":format!("{id}-close"),
+            "task":task["task"],"attempt":id,"expected_version":task["state"]["version"],"completion":completion,
+            "checks":checks,"verification":[verification]}}));
+    }
+
+    pub fn complete(&mut self, number: u32, dispatch: &Value) {
+        let plan = self.plan(number);
+        let run = format!("suite-{number}");
+        self.apply(json!({"operation":"execution-suite","request":{"request_id":run,"plan":plan["plan"],"expected_version":plan["state"]["version"]}}));
+        let result = self.client.wait_for_event(31, &run);
+        assert_eq!(result["disposition"]["code"], 0, "{result}");
+        self.apply(json!({"operation":"risk-check","request_id":format!("risk-{number}"),
+            "scope":{"phase":31,"occurrence":"phase-31-execution","worker":number.to_string()},
+            "source":{"kind":"execution","plan":number,"dispatch_id":dispatch["dispatch_id"]},"surfaces":null}));
+        let plan = self.plan(number);
+        self.apply(json!({"operation":"execution-plan-complete","request":{"request_id":format!("complete-{number}"),
+            "plan":plan["plan"],"expected_version":plan["state"]["version"]}}));
+    }
+}
