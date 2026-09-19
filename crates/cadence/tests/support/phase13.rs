@@ -24,6 +24,10 @@ impl Client {
     }
 
     pub fn open_with_program(project: &Path, program: &Path) -> Self {
+        Self::open_with_env(project, program, &[])
+    }
+
+    pub fn open_with_env(project: &Path, program: &Path, env: &[(&str, &std::ffi::OsStr)]) -> Self {
         // A fixture that owns a global configuration file names it here; every
         // server for that project then reads the same global layer.
         let global = project.join(".fixture-global/config.json");
@@ -37,6 +41,7 @@ impl Client {
             .env("GIT_CONFIG_KEY_1", "user.name").env("GIT_CONFIG_VALUE_1", "Cadence-Phase13")
             .env("GIT_CONFIG_KEY_2", "user.email").env("GIT_CONFIG_VALUE_2", "phase13@example.invalid")
             .env("GNUPGHOME", project.join(".fixture-gnupg"))
+            .envs(env.iter().copied())
             .current_dir(project)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
