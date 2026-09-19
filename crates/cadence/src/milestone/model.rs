@@ -41,6 +41,17 @@ pub struct CloseRequest {
 pub enum Apply {
     #[serde(rename = "milestone-close")]
     Close { request: CloseRequest },
+    #[serde(rename = "milestone-prune")]
+    Prune { request: PruneRequest },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PruneRequest {
+    pub request_id: String,
+    pub close: String,
+    pub expected_generation: u64,
+    pub selection: Selection,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

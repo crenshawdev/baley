@@ -336,6 +336,15 @@ pub(crate) fn phase_summary_target(target: &str) -> Result<Option<u32>> {
 impl Storage for Filesystem {
     type Prepared = Prepared;
 
+    fn validate_prune(&mut self, prune: &crate::milestone::prune::Prune, replay: bool) -> Result<()> {
+        crate::milestone::prune::validate(&self.root, prune, replay)
+    }
+
+    fn install_prune(&mut self, prune: &crate::milestone::prune::Prune) -> Result<()> {
+        super::cache::invalidate(&self.root);
+        crate::milestone::prune::install(&self.root, prune)
+    }
+
     fn root(&self) -> Option<&Path> { Some(&self.root) }
 
     fn acquire(&mut self) -> Result<Box<dyn Send>> {

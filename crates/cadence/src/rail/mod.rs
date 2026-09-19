@@ -1,5 +1,6 @@
 //! Shared pure rail decisions; workflows retain their own questions and mutations.
 pub mod branch;
+pub mod commit;
 pub mod git;
 pub mod receipts;
 pub mod risk;

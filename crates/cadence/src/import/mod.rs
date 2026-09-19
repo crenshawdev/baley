@@ -1164,7 +1164,10 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
                     .is_some_and(|created| created.contains(&json!(global)))
             });
             let previous = cadence::store::transaction::intent_bytes_option(&participant["expected"]["bytes"])?;
-            snapshot.data["import"]["complete"] == true
+            // A prune requires an already imported store. Its digest-encoded
+            // preimage omits bytes; that omission is not an import transition.
+            intent["kind"]["operation"] != "milestone-prune-v1"
+                && snapshot.data["import"]["complete"] == true
                 && previous
                     .as_deref()
                     .map(serde_json::from_slice::<Snapshot>)

@@ -140,34 +140,47 @@ pub struct CommitRow {
     pub description: String,
 }
 
-/// The rows of the `## Commits` table whose header names a `commit` column.
+/// Legacy commit tables and the native SUMMARY's per-plan task tables.
 pub fn parse_commit_rows(text: &str) -> Vec<CommitRow> {
     static TABLE_ROW: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*\|"));
     static SEPARATOR_ROW: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*\|[\s|:-]*$"));
     let text = normalize(text);
     let lines: Vec<&str> = text.split('\n').collect();
-    let Some((start, end)) = section_span(&lines, COMMITS_HEADING) else { return Vec::new() };
+    let native = re(r"^## Plan [1-9][0-9]*\s*$");
+    let commits = re(COMMITS_HEADING);
+    let mut fenced = fence_scanner();
+    let mut selected = false;
     let mut header: Option<BTreeMap<&str, usize>> = None;
     let mut out = Vec::new();
-    for line in &lines[start + 1..end] {
+    for line in &lines {
+        if fenced(line) { continue; }
+        if line.starts_with("## ") || line.starts_with("# ") {
+            selected = commits.is_match(line) || native.is_match(line);
+            header = None;
+            continue;
+        }
+        if !selected { continue; }
         if !TABLE_ROW.is_match(line) || SEPARATOR_ROW.is_match(line) { continue; }
         let cs = cells(line);
         let Some(columns) = &header else {
             let mut found = BTreeMap::new();
             for (index, cell) in cs.iter().enumerate() {
                 let key = cell.to_lowercase();
-                for name in ["plan", "task", "commit", "description"] {
+                for name in ["plan", "task", "commit", "description", "status", "verification"] {
                     if key == name { found.entry(name).or_insert(index); }
                 }
             }
-            if !found.contains_key("commit") { return Vec::new(); }
+            if !found.contains_key("commit") { continue; }
             header = Some(found);
             continue;
         };
         let at = |name: &str| columns.get(name).and_then(|index| cs.get(*index)).cloned().unwrap_or_default();
         let commit = at("commit");
         if !is_hex(&commit) { continue; }
-        out.push(CommitRow { plan: at("plan"), task: at("task"), commit, description: at("description") });
+        let description = if columns.contains_key("status") && columns.contains_key("verification") {
+            format!("{}; verification {}; source SUMMARY.md", at("status"), at("verification"))
+        } else { at("description") };
+        out.push(CommitRow { plan: at("plan"), task: at("task"), commit, description });
     }
     out
 }
@@ -609,26 +622,24 @@ pub fn parse_prune_records(stdout: &str) -> Vec<Prune> {
     prunes
 }
 
-/// The one `## ` heading each prune commit added to ARCHIVE.md, when exactly
-/// one; zero binds nothing and two or more do not say which owns the phases.
+/// The nearest containing release tag, peeled to its commit. An earlier
+/// ancestor release cannot label a later close; names break equal-distance ties.
 fn prune_labels(repo: &Path, commits: &[String]) -> BTreeMap<String, Option<String>> {
-    static ADDED_SECTION: LazyLock<Regex> = LazyLock::new(|| re(r"^\+## (.+?)\s*$"));
-    let mut added: BTreeMap<String, Vec<String>> = commits.iter().map(|commit| (commit.clone(), Vec::new())).collect();
-    if commits.is_empty() { return BTreeMap::new(); }
-    let mut args = git_args(&["show", "-U0", "-M", "--format=%x01%H"]);
-    args.extend(commits.iter().cloned());
-    args.extend(git_args(&["--", ".planning/ARCHIVE.md"]));
-    let out = git::run(repo, &args);
-    let mut current: Option<String> = None;
-    for line in out.stdout.split('\n') {
-        if let Some(rest) = line.strip_prefix('\x01') { current = Some(rest.trim().to_owned()); continue; }
-        let Some(commit) = &current else { continue };
-        let Some(headings) = added.get_mut(commit) else { continue };
-        if let Some(found) = ADDED_SECTION.captures(line) { headings.push(found[1].to_owned()); }
-    }
-    added.into_iter().map(|(commit, headings)| {
-        let label = (headings.len() == 1).then(|| headings[0].clone());
-        (commit, label)
+    let release = re(r"^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$");
+    let out = git::run(repo, &git_args(&["tag", "--list"]));
+    let tags: Vec<_> = out.stdout.lines().filter(|tag| release.is_match(tag)).collect();
+    commits.iter().map(|commit| {
+        let mut candidates = Vec::new();
+        for tag in &tags {
+            let peeled = git::run(repo, &git_args(&["rev-parse", "--verify", &format!("refs/tags/{tag}^{{commit}}") ]));
+            if !peeled.ok() { continue; }
+            let tip = peeled.stdout.trim();
+            if !git::run(repo, &git_args(&["merge-base", "--is-ancestor", commit, tip])).ok() { continue; }
+            let distance = git::run(repo, &git_args(&["rev-list", "--count", "--ancestry-path", &format!("{commit}..{tip}")]));
+            if distance.ok() && let Ok(distance) = distance.stdout.trim().parse::<u64>() { candidates.push((distance,(*tag).to_owned())); }
+        }
+        candidates.sort();
+        (commit.clone(), candidates.into_iter().next().map(|(_,tag)| tag))
     }).collect()
 }
 

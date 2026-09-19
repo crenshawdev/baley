@@ -60,6 +60,11 @@ pub enum BoundaryChange {
 pub type InputCheck = Box<dyn FnMut() -> Result<()> + Send>;
 
 pub enum Operation {
+    MilestonePruneV1 {
+        expected_generation: u64,
+        expected_integrity: String,
+        prune: Box<crate::milestone::prune::Prune>,
+    },
     VerificationRunV1 {
         expected_generation: u64,
         expected_integrity: String,
@@ -502,6 +507,15 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let _ownership = self.storage.acquire()?;
         self.refresh_owned()?;
         match operation {
+            Operation::MilestonePruneV1 { expected_generation, expected_integrity, prune } => {
+                self.check_expected(expected_generation, &expected_integrity)?;
+                self.storage.validate_prune(&prune, false)?;
+                let mut next = self.view.as_ref().clone();
+                next.snapshot.data = crate::milestone::prune::contribute(&next.snapshot.data, &prune)?;
+                let operations = next.snapshot.operations.clone();
+                self.persist(next, operations, vec![], "milestone_prune",
+                    super::transaction::IntentKind::MilestonePruneV1 { prune })
+            },
             Operation::VerificationRunV1 { expected_generation, expected_integrity, record } =>
                 self.verification_run(expected_generation, &expected_integrity, *record),
             Operation::VerificationV1 { expected_generation, expected_integrity, request } =>
@@ -719,6 +733,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 "rewrite_snapshot"
             }
             Operation::CheckedTransact { .. }
+            | Operation::MilestonePruneV1 { .. }
             | Operation::VerificationRunV1 { .. }
             | Operation::VerificationV1 { .. }
             | Operation::AdoptionDeclareV1 { .. }

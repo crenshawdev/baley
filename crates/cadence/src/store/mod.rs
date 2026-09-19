@@ -64,6 +64,12 @@ pub struct Observed {
 /// and confirm must check the installed bytes before the writer acknowledges.
 pub trait Storage: Send + 'static {
     type Prepared;
+    fn validate_prune(&mut self, _prune: &crate::milestone::prune::Prune, _replay: bool) -> Result<()> {
+        Err(Error::Invalid("storage does not support milestone prune".into()))
+    }
+    fn install_prune(&mut self, _prune: &crate::milestone::prune::Prune) -> Result<()> {
+        Err(Error::Invalid("storage does not support milestone prune".into()))
+    }
     fn root(&self) -> Option<&std::path::Path> { None }
     /// Hold root and registered shared-parent ownership until the guard is dropped.
     /// In-memory adapters already have one owner and need no additional lock.

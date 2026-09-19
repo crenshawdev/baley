@@ -29,6 +29,9 @@ async fn audits<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &
 }
 
 async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command) -> Result<Value> {
+    if let Command::Apply(Apply::Prune { request }) = command {
+        return execute_prune(factory, root, request).await;
+    }
     let session = factory.first_touch(root).await?;
     let store = session.review_store();
     let view = session.derivation_view().await?;
@@ -43,6 +46,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
     let (occurrence, selection, request) = match command {
         Command::Read { occurrence, selection } => (occurrence, selection, None),
         Command::Apply(Apply::Close { request }) => (request.occurrence.clone(), request.selection.clone(), Some(request)),
+        Command::Apply(Apply::Prune { .. }) => unreachable!("prune is routed before document derivation"),
     };
     let id = model::identity("milestone", &binding, &occurrence);
     let prior = records.records.get(&id).cloned();
@@ -114,4 +118,46 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
     if let (Some(request), Some(raw)) = (request, raw) {
         model::persist(store, &view, "milestones", &mut records, Receipt { root_binding: binding, request_id: request.request_id, request: raw, answer }).await
     } else { Ok(answer) }
+}
+
+async fn execute_prune<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, request: model::PruneRequest) -> Result<Value> {
+    use cadence::{milestone::prune::{self, Prune, NAMESPACE}, store::writer::Operation};
+    let session = factory.first_touch(root).await?;
+    let store = session.review_store();
+    let view = store.request(Operation::ReadVerified).await?;
+    let binding = cadence::verification::inputs::root_binding(root)?;
+    let mut records = model::records::<Prune>(&view.snapshot.data, NAMESPACE)?;
+    let raw = serde_json::to_value(&request)?;
+    if let Some(answer) = model::replay(&records, &binding, &request.request_id, &raw)? { return Ok(answer); }
+    let refusal = if model::reused(&records, &binding, &request.request_id) {
+        Some(model::refuse("request-reused", "request_id already binds different prune inputs"))
+    } else if let Err(error) = prune::require_close(&view.snapshot.data, &binding, &request) {
+        Some(Refusal::new("prune-close-identity", error.to_string()).slot("request.close")
+            .details(json!({"close":request.close,"expected_generation":request.expected_generation,"selection":request.selection})).value())
+    } else if let Some(prior) = records.records.values().find(|p| p.request.close == request.close) {
+        Some(Refusal::new("prune-exists", "retry the identified prune request").slot("request.close")
+            .details(json!({"id":prior.id,"request":prior.request})).value())
+    } else {
+        let current = session.derivation_view().await?;
+        let unsettled = preflight::collect(store, &current, &request.selection).await?;
+        if !unsettled.is_empty() {
+            Some(Refusal::new("milestone-unsettled", "selected phases retain unsettled records").details(json!({"unsettled":unsettled})).value())
+        } else {
+            let config = session.config()?;
+            let protected = cadence::rail::branch::protected_branches(config.effective.values.pointer("/git/protected_branches"));
+            let on_protected = config.effective.values.pointer("/git/on_protected").and_then(Value::as_str).unwrap_or("ask").to_owned();
+            match prune::freeze(root, &view.snapshot.data, &binding, request.clone(), protected, on_protected) {
+                Ok(prune) => {
+                    let answer = prune::answer(&prune);
+                    store.request(Operation::MilestonePruneV1 {expected_generation:view.snapshot.generation,
+                        expected_integrity:view.snapshot.integrity.clone(),prune:Box::new(prune)}).await?;
+                    return Ok(answer);
+                }
+                Err(error) => Some(Refusal::new("prune-preflight", error.to_string()).slot("request.close")
+                    .details(json!({"close":request.close})).value()),
+            }
+        }
+    };
+    model::persist(store, &view, NAMESPACE, &mut records, Receipt {root_binding:binding,
+        request_id:request.request_id,request:raw,answer:refusal.expect("all successful branches return")}).await
 }

@@ -11,6 +11,9 @@ pub const INTENT: &str = ".store-intent.json";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum IntentKind {
+    MilestonePruneV1 {
+        prune: Box<crate::milestone::prune::Prune>,
+    },
     VerificationSubmitV1 {
         claim: Box<cadence::verification::verdicts::Claim>,
         root_binding: String,
@@ -777,6 +780,16 @@ impl Intent {
                 let previous = previous_snapshot(&self.participants, "verification claim")?;
                 validate_claim_transition(&self.participants, snapshot, (items, decisions), &root_binding,
                     verdicts::transaction(&previous.data, &claim)?, verdicts::decision(&claim)?, "verification claim")?;
+            }
+            IntentKind::MilestonePruneV1 { prune } => {
+                if names.len() != 3 { return Err(Error::Invalid("prune has only its sealed filesystem participant and store record".into())); }
+                let previous = previous_snapshot(&self.participants, "milestone prune")?;
+                if snapshot.data != crate::milestone::prune::contribute(&previous.data, &prune)?
+                    || snapshot.operations != previous.operations
+                    || snapshot.generation != previous.generation.checked_add(1).ok_or_else(|| Error::Invalid("generation exhausted".into()))?
+                    || self.participants.iter().filter(|p| p.target != STATE).any(|p| p.expected.bytes.as_deref() != Some(&p.bytes)) {
+                    return Err(Error::Invalid("prune intent differs from its immutable transition".into()));
+                }
             }
             IntentKind::VerificationWaiverV1 { claim, root_binding } => {
                 use cadence::verification::waivers;
@@ -1687,6 +1700,9 @@ fn validate_all<S: Storage>(
     kind: &IntentKind,
     encoding: Encoding,
 ) -> Result<()> {
+    if let IntentKind::MilestonePruneV1 { prune } = kind {
+        storage.validate_prune(prune, replay)?;
+    }
     if let IntentKind::VerificationSubmitV1 { claim, root_binding } = kind
         && let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
             "verification claim store binding changed", "verification claim preimage absent")?
@@ -1879,15 +1895,21 @@ pub(crate) fn commit<S: Storage, P: Policy>(
         dispose(storage, prepared)?;
         return Err(error);
     }
+    prune_stop(&intent.kind, "intent:before")?;
     let installed = storage.install(&intent_file);
     storage.discard(intent_file)?;
     if let Err(error) = installed.and_then(|()| storage.confirm(INTENT, &bytes).map(|_| ())) {
         dispose(storage, prepared)?;
         return Err(error);
     }
+    prune_stop(&intent.kind, "intent:after")?;
+    if let IntentKind::MilestonePruneV1 { prune } = &intent.kind {
+        storage.install_prune(prune)?;
+    }
     let mut remaining = prepared.into_iter();
     while let Some((target, bytes, file)) = remaining.next() {
         // Check all participants again immediately before each replacement.
+        prune_stop(&intent.kind, "record:before")?;
         let result = validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)
             .and_then(|()| validate_preconditions(storage, &preconditions, true))
             .and_then(|()| storage.install(&file))
@@ -1897,12 +1919,20 @@ pub(crate) fn commit<S: Storage, P: Policy>(
             dispose(storage, remaining.collect())?;
             return Err(error);
         }
+        prune_stop(&intent.kind, "record:after")?;
     }
     // Snapshot is the final semantic participant and holds completion receipts.
     // Removing the intent and syncing its directory is part of completion.
     validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)?;
     validate_preconditions(storage, &preconditions, true)?;
-    storage.remove(INTENT)
+    prune_stop(&intent.kind, "clear:before")?;
+    storage.remove(INTENT)?;
+    prune_stop(&intent.kind, "clear:after")
+}
+
+fn prune_stop(kind: &IntentKind, point: &str) -> Result<()> {
+    if matches!(kind, IntentKind::MilestonePruneV1 { .. }) { crate::milestone::prune::stop(point)?; }
+    Ok(())
 }
 
 pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) -> Result<()> {
@@ -1947,6 +1977,9 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) ->
         },
         snapshot: &snapshot,
     })?;
+    if let IntentKind::MilestonePruneV1 { prune } = &intent.kind {
+        storage.install_prune(prune)?;
+    }
     for participant in &intent.participants {
         validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)?;
         let current = storage.read(&participant.target)?;
