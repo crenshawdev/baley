@@ -329,8 +329,10 @@ fn task_declared_files(text: &str) -> Vec<DeclaredFiles> {
     }).collect()
 }
 
-/// A declaration covers a path when it names it, or is a directory prefix.
-pub fn covers(declaration: &str, path: &str) -> bool {
+/// A declared file names a path outright, or is a directory prefix of it:
+/// the record grammar of why-record.mjs, not the lease rule in
+/// execution::lease, which is the one coverage definition the lease pins.
+pub fn declares(declaration: &str, path: &str) -> bool {
     if !declaration.ends_with('/') { return declaration == path; }
     path.starts_with(declaration)
 }
@@ -338,7 +340,7 @@ pub fn covers(declaration: &str, path: &str) -> bool {
 /// The tasks of a plan whose declared files cover `path`.
 pub fn declaring_tasks(text: &str, path: &str) -> Vec<DeclaringTask> {
     task_declared_files(text).into_iter().filter_map(|task| {
-        let declaration = task.files.iter().find(|file| covers(file, path))?.clone();
+        let declaration = task.files.iter().find(|file| declares(file, path))?.clone();
         Some(DeclaringTask { ordinal: task.ordinal, title: task.title, declaration })
     }).collect()
 }
