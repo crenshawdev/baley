@@ -302,8 +302,8 @@ fn tool_schemas_list_exactly_three_tools_with_minimal_inputs() {
     }
     let tools_bytes = serde_json::to_vec(tools).unwrap().len();
     assert!(
-        tools_bytes < 9_800,
-        "tools/list result.tools is {tools_bytes} bytes; measured 6,846 bytes before top-level types, 9,303 bytes with the derived property union, 9,578 once adoption-declare and capture joined the apply enum"
+        tools_bytes < 9_900,
+        "tools/list result.tools is {tools_bytes} bytes; measured 6,846 bytes before top-level types, 9,303 bytes with the derived property union, 9,578 once adoption-declare and capture joined the apply enum, 9,830 once why joined the query enum with path, line and top"
     );
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
     for (tool, names) in [("query", query_operation_names()), ("apply", apply_operation_names())] {
