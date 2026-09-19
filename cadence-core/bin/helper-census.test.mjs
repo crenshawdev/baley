@@ -189,7 +189,7 @@ const HELPERS = [
     // The two halves of the loop's contract, in the order a copy would carry
     // them: record the failure under the CALLER's own key, then honour the
     // caller's discipline. Never an export name and never a call site -
-    // cmdRenumber and cmdMilestonePrune both legitimately CALL this module, so
+    // cmdRenumber legitimately CALLS this module, so
     // a call-site census would redden on every correct use, while a paste-back
     // under a new name is still a copy of this body. The bounded gap between
     // the anchors is the readText row's device, and it is what keeps the
@@ -205,9 +205,8 @@ const HELPERS = [
       + 'this row a fifth hand-written approximation lands in a sixth file and '
       + 'no test can see it. The discipline arm is part of the body on '
       + 'purpose: renumber stops at the first throw because the tree no longer '
-      + 'matches the plan its later steps were computed from, prune continues '
-      + 'so the phases that cleared still get pruned, and a copy that picked '
-      + 'one arm for both callers would change what completed and failed mean.',
+      + 'matches the plan its later steps were computed from; a copy that '
+      + 'changes that discipline changes what completed and failed mean.',
   },
   {
     name: 'the genuinely-unfixed test (unfixedFromEntries)',

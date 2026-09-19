@@ -30,8 +30,7 @@
 // (!rest.includes(flag)) continue;` - and this is where it is written down.
 // The reason is that the diagnostics for a missing enum-valued flag are not
 // expressible in a declaration: `capture --kind must be one of todo | seed |
-// note` and `milestone-prune needs --mode <delete|archive>` would each become
-// one generic sentence. So `required` below records a fact for the bins that
+// note` would become one generic sentence. So `required` below records a fact for the bins that
 // choose to read it (route.mjs's `--role`, review-provider.mjs's handlers),
 // never a rule the shared door enforces.
 //
@@ -380,8 +379,7 @@ export function subcommandKey(words) {
  * that owns the wording. That is review-provider.mjs's shipped position - its
  * `parseArgs` skips a flag with `if (!rest.includes(flag)) continue;` - and
  * reversing it would replace diagnostics a declaration cannot express
- * (`capture --kind must be one of todo | seed | note`, `milestone-prune needs
- * --mode <delete|archive> (tagged release: ...)`) with one generic sentence.
+ * (`capture --kind must be one of todo | seed | note`) with one generic sentence.
  * `required` therefore stays a fact the table states for the bins that choose
  * to read it, not a rule this door enforces.
  *
@@ -674,16 +672,6 @@ export const CONTRACTS = {
       '--phase': { required: true, type: 'phase', value: 'refuse', bare: 'refuse' },
       '--payload': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
       '--point': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
-    },
-    // `--label-file` is `--label`'s path transport: an untagged close takes the
-    // label from PROJECT.md's milestone NAME, which is repository content. The
-    // table term (`|` or a newline) and the containment term run on the
-    // resolved value either way - the transport changes how it arrives, never
-    // what it must satisfy.
-    'milestone-prune': {
-      '--label': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
-      '--label-file': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
-      '--mode': { required: true, type: 'string', value: 'refuse', bare: 'refuse' },
     },
     'seed-reqs': {
       '--phase': { required: true, type: 'phase', value: 'refuse', bare: 'refuse' },

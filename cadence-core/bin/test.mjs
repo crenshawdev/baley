@@ -63,7 +63,7 @@ const GROUPS = Object.freeze({
     'planning-capture-check', 'planning-capture-sections', 'planning-cite-count',
     'planning-criteria-coverage', 'planning-criteria-size', 'planning-cursor',
     'planning-debt-harvest', 'planning-deferred', 'planning-detect',
-    'planning-files', 'planning-lease-check', 'planning-milestone-prune',
+    'planning-files', 'planning-lease-check',
     'planning-phase-done', 'planning-plans', 'planning-recall', 'planning-recall-fold',
     'planning-replay-check',
     'planning-renumber', 'planning-seed-reqs', 'planning-status',

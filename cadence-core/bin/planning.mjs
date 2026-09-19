@@ -167,14 +167,6 @@
 //                                   tree, collected into .planning/CAPTURE.md's
 //                                   own `## Debt markers` section (NOT --dir:
 //                                   it scans source and writes into .planning)
-//   milestone-prune --label <l> --mode <delete|archive>
-//                                   the mechanical half of a milestone close:
-//                                   checked phases leave ROADMAP (line +
-//                                   detail section), their dirs delete
-//                                   (tagged release) or move to
-//                                   _archive-<label>/ (untagged), and their
-//                                   requirements move from Active/Traceability
-//                                   into ## Shipped rows carrying the label
 //   trace window [--phase N]        every paired bracket's terminal `tokens`
 //                                   figure against its role's
 //                                   workflow.max_dispatch_tokens ceiling, as
@@ -227,7 +219,6 @@ import { cmdCapture } from './planning/capture.mjs';
 import { cmdCaptureSections } from './planning/capture-sections.mjs';
 import { cmdCaptureCheck } from './planning/capture-check.mjs';
 import { cmdDebtHarvest } from './planning/debt-harvest.mjs';
-import { cmdMilestonePrune } from './planning/milestone-prune.mjs';
 import { cmdTrace } from './planning/trace.mjs';
 import { cmdRiskCheck } from './planning/risk-check.mjs';
 import { cmdAdjudication } from './planning/adjudication.mjs';
@@ -331,7 +322,6 @@ const COMMANDS = {
   'debt-harvest': (_dir, _sub, opts) =>
     cmdDebtHarvest(typeof opts.root === 'string' ? opts.root : process.cwd()),
   renumber: (dir, sub, opts) => cmdRenumber(dir, sub, opts),
-  'milestone-prune': (dir, _sub, opts) => cmdMilestonePrune(dir, opts),
 };
 
 try {
