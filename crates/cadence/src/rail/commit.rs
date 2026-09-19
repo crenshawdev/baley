@@ -79,7 +79,7 @@ fn tree(root: &Path, entries: &BTreeMap<String, (String,String)>, prefix: &str, 
             (name.trim_end_matches('/').to_owned(),"40000".into(),id)
         };
         bytes.extend_from_slice(format!("{mode} {name}\0").as_bytes());
-        for pair in id.as_bytes().chunks_exact(2) {
+        for pair in id.as_bytes().as_chunks::<2>().0 {
             bytes.push(u8::from_str_radix(std::str::from_utf8(pair).unwrap(),16).map_err(|e| Error::Invalid(e.to_string()))?);
         }
     }
