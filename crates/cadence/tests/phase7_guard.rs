@@ -1286,17 +1286,7 @@ fn shipped_manifest_loads_both_native_arms_and_preserves_unrelated_hooks() {
         manifest["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
         "cadence guard"
     );
-    let frozen = Command::new("git")
-        .args(["show", "v3.7.12:hooks/hooks.json"])
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(frozen.status.success());
-    let frozen: serde_json::Value = serde_json::from_slice(&frozen.stdout).unwrap();
-    assert_eq!(
-        manifest["hooks"]["PostToolUse"],
-        frozen["hooks"]["PostToolUse"]
-    );
+    assert!(manifest["hooks"].get("PostToolUse").is_none());
     assert_eq!(
         manifest["hooks"]["SubagentStop"],
         serde_json::json!([{
