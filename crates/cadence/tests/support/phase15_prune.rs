@@ -174,7 +174,7 @@ pub fn exercise() {
 
     restore(saved.path(), project);
     let original = phase14::documents(project);
-    fs::set_permissions(project.join(".planning/REQUIREMENTS.md"), fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(project.join(".planning/REQUIREMENTS.md"), fs::Permissions::from_mode(0o0)).unwrap();
     // This real launch verifies the open fails under the same effective uid that
     // runs serve. chmod alone is not an unreadable-input test when cargo is root.
     let wrapper = project.join("unprivileged-serve");
