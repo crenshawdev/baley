@@ -162,6 +162,43 @@ pub struct WorkerRound {
     pub client: exit_support::Client,
 }
 
+/// Import three historical routes, then retain two real native dispatches.
+pub fn suggest_fixture() -> Completed {
+    let mut fixture = Completed::published(false, |project| {
+        let rows = [
+            json!({"family":"routing","event":"resolve","phase":12,"role":"cad-executor",
+                "agent":"cad-executor","effort":"high","attempt":1,"escalated":false}),
+            json!({"family":"routing","event":"resolve","phase":12,"role":"cad-executor",
+                "agent":"cad-executor-xhigh","effort":"xhigh","attempt":2,"escalated":true}),
+            json!({"family":"routing","event":"resolve","phase":12,"role":"cad-executor",
+                "agent":"cad-executor-xhigh","effort":"xhigh","attempt":2,"escalated":true}),
+        ];
+        let trace = rows.iter().map(|row| format!("{row}\n")).collect::<String>();
+        fs::write(project.join(".planning/trace.jsonl"), trace).unwrap();
+        fs::write(project.join(".planning/config.json"), serde_json::to_vec(&json!({"review":{"triggers":{
+            "diff":{"gate":"blocking"},"risk_surface":{"surfaces":cadence::rail::risk::CATEGORIES}}}})).unwrap()).unwrap();
+    });
+    let configured = apply(fixture.project(), json!({"operation":"config-apply","layer":"repo",
+        "updates":[{"key":"roles.cad-executor.effort","value":"high"}]}));
+    assert_eq!(configured["status"], "ok", "{configured}");
+    fixture.execute();
+    let project = fixture.project();
+    let admitted = apply(project, json!({"operation":"review-admit","request":{
+        "replay_key":"suggest-diff","caller":"execute","trigger":"diff","specialist":null,
+        "project":project.to_string_lossy(),"cycle":"live","home":{"kind":"phase","id":"13"},
+        "discriminator":"suggest-diff","phase":13,"plan":1,"anchor":null,"round":1,
+        "target":{"kind":"committed-range","base":fixture.pairs[0]["red_commit"],
+            "head":fixture.pairs[0]["green_commit"]},"decision":null,"risk_observation":null}}));
+    assert_eq!(admitted["status"], "ok", "{admitted}");
+    assert!(admitted["result"]["fire"].is_string(), "{admitted}");
+    // The admitted fire counts before a reviewer has answered its gate.
+    let saved = reopened(project);
+    let admission = &saved.snapshot.data["review"]["admissions"][admitted["result"]["fire"].as_str().unwrap()];
+    assert_eq!(admission["gate"], "blocking");
+    assert_eq!(admission["settlement"], "pending");
+    fixture
+}
+
 impl WorkerRound {
     const COMMAND: &'static str = "python3 -B tests/tiny.py";
 

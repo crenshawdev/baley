@@ -29,6 +29,59 @@ fn journal(project: &Path) -> Vec<Value> {
     reopened(project).decisions.iter().map(|record| serde_json::to_value(record).unwrap()).collect()
 }
 
+#[test]
+fn phase14_suggest_prices_from_routing_decisions_and_writes_nothing() {
+    let fixture = phase14::suggest_fixture();
+    let project = fixture.project();
+    let imported: std::collections::BTreeSet<_> = reopened(project).decisions.iter()
+        .filter(|r| r.origin.source == "trace.jsonl")
+        .map(|r| r.id.clone()).collect();
+    assert_eq!(imported.len(), 3);
+    let native: std::collections::BTreeSet<_> = fixture.dispatches.iter()
+        .map(|d| format!("routing:{}", d["dispatch_id"].as_str().unwrap())).collect();
+    assert_eq!(native.len(), 2);
+    let decisions: Vec<_> = imported.union(&native).cloned().collect();
+    let config_before = fs::read(project.join(".planning/config.v4.json")).unwrap();
+    let mut client = Client::open(project);
+    let facts_before = client.call("cadence_query", json!({"operation":"config-facts"}));
+    assert_eq!(facts_before["status"], "ok", "{facts_before}");
+    let before = phase13::tree(project);
+    let retained = reopened(project);
+    let first = client.call("cadence_query", json!({"operation":"suggest"}));
+    assert_eq!(first, json!({"status":"ok","suggestions":[
+        {"key":"roles.cad-executor.effort","layer":"repo","current":"high","proposed":"xhigh",
+         "evidence":{"counted":5,"escalated":2,"decisions":decisions},
+         "apply":{"operation":"config-apply","layer":"repo","updates":[{"key":"roles.cad-executor.effort","value":"xhigh"}]}},
+        {"key":"review.triggers.diff.gate","priced":false,"counted":1}
+    ]}));
+    let phase13 = client.call("cadence_query", json!({"operation":"suggest","phase":13}));
+    assert_eq!(phase13, json!({"status":"ok","suggestions":[
+        {"key":"roles.cad-executor.effort","priced":false,"counted":2},
+        {"key":"review.triggers.diff.gate","priced":false,"counted":1}
+    ]}));
+    let phase12 = client.call("cadence_query", json!({"operation":"suggest","phase":12}));
+    assert_eq!(phase12, json!({"status":"ok","suggestions":[
+        {"key":"roles.cad-executor.effort","layer":"repo","current":"high","proposed":"xhigh",
+         "evidence":{"counted":3,"escalated":2,"decisions":imported},
+         "apply":{"operation":"config-apply","layer":"repo","updates":[{"key":"roles.cad-executor.effort","value":"xhigh"}]}}
+    ]}));
+    assert_eq!(client.call("cadence_query", json!({"operation":"config-facts"})), facts_before);
+    client.finish();
+    let mut client = Client::open(project);
+    assert_eq!(client.call("cadence_query", json!({"operation":"suggest"})), first);
+    client.finish();
+    assert_eq!(fs::read(project.join(".planning/config.v4.json")).unwrap(), config_before);
+    assert_eq!(phase13::tree(project), before, "suggest retains no new receipt or other write");
+    let after = reopened(project);
+    assert_eq!(after.snapshot, retained.snapshot);
+    assert_eq!(after.decisions, retained.decisions);
+    let rendered = Command::new(env!("CARGO_BIN_EXE_cadence"))
+        .arg("suggest-instructions").current_dir(project).stdin(Stdio::null()).output().unwrap();
+    assert!(rendered.status.success(), "{}", String::from_utf8_lossy(&rendered.stderr));
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    assert_eq!(rendered.stdout, fs::read(root.join("skills/cad-suggest/SKILL.md")).unwrap());
+}
+
 fn refused(records: &[Value]) -> Vec<&Value> {
     records.iter().filter(|record| record["decision"]["boundary"]["outcome"].as_str()
         .is_some_and(|outcome| outcome.starts_with("refused:"))).collect()
