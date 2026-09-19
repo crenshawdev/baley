@@ -3,7 +3,7 @@
 use crate::store as production_store;
 use production_store::filesystem::{Filesystem, Stage};
 use production_store::model::{
-    self, Decision, DecisionRecord, Disposition, Evidence, ItemRecord, Origin, VERSION,
+    Decision, DecisionRecord, Disposition, Evidence, ItemRecord, Origin, VERSION,
 };
 use production_store::transaction::Transaction;
 use production_store::writer::{Operation, Store};
@@ -52,7 +52,12 @@ fn operation(id: &str) -> Transaction {
                 outcome: id.into(),
                 evidence: Evidence::Null,
             },
-            at: model::stamped_at(),
+            // One instant for every write the driver compares, in the parent
+            // and in the killed child: the assertions below hold bytes against
+            // bytes, and the second a record was written is an observation
+            // that a slow runner lets differ between the reference store and
+            // the recovered one.
+            at: Some(STAMP),
         }],
         snapshot: Some(serde_json::json!({"value":id})),
         external: vec![],
@@ -70,6 +75,7 @@ fn apply(root: &Path, id: &str) {
     });
 }
 const TARGETS: [&str; 3] = ["items.jsonl", "decisions.jsonl", "state.json"];
+const STAMP: u64 = 1_700_000_000;
 fn values(root: &Path) -> Vec<Option<Vec<u8>>> {
     TARGETS
         .iter()

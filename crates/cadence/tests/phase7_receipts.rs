@@ -509,10 +509,11 @@ fn receipt_confirmation_failure_replays_once_after_recovery_without_changing_exe
             let recovered = replacement.request(operation()).await.unwrap();
             assert_eq!(recovered.snapshot.data["execution"], seed["execution"]);
             assert_eq!(recovered.snapshot.data["other"], seed["other"]);
-            assert_eq!(
-                recovered.decisions,
-                vec![record.decision().unwrap(), fact.decision().unwrap()]
-            );
+            // The stored record carries the second the writer observed and the
+            // rebuilt one the second of this call; equality is over content.
+            assert_eq!(recovered.decisions.len(), 2);
+            assert!(recovered.decisions[0].same_record(&record.decision().unwrap()));
+            assert!(recovered.decisions[1].same_record(&fact.decision().unwrap()));
             assert_eq!(replacement.request(operation()).await.unwrap(), recovered);
             receipts::confirmed_history(&recovered).unwrap();
             assert_eq!(

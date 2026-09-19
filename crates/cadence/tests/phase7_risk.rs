@@ -305,7 +305,7 @@ fn public_range_records_exact_material_without_a_review_pass_and_replays_lost_re
         risk::confirmed(&view, &record.observation.scope, "recorded").unwrap(),
         Some(record.clone())
     );
-    assert!(view.decisions.contains(&record.decision().unwrap()));
+    assert!(cadence::store::model::retained(&view.decisions, &record.decision().unwrap()));
     assert_eq!(
         cadence::evidence::persistence::read(&view.snapshot.data)
             .unwrap()
@@ -361,7 +361,8 @@ fn rail_writer_confirms_atomic_namespace_preservation_and_recovers_persistence_f
             let reopened = Store::open(Filesystem::new(dir.path()).unwrap(), Allow).await.unwrap();
             let recovered = reopened.request(operation()).await.unwrap();
             for (key, value) in seed.as_object().unwrap() { assert_eq!(&recovered.snapshot.data[key], value); }
-            assert_eq!(recovered.decisions, vec![record.decision().unwrap()]);
+            assert_eq!(recovered.decisions.len(), 1);
+            assert!(recovered.decisions[0].same_record(&record.decision().unwrap()));
             assert_eq!(risk::confirmed(&recovered, &record.observation.scope, &record.observation.request_id).unwrap(), Some(record.clone()));
             assert_eq!(reopened.request(operation()).await.unwrap(), recovered);
         });

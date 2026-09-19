@@ -1,6 +1,6 @@
 //! Native guard and cooperating-store process fixtures. All mutable inputs are temporary.
 use cadence::store::filesystem::{Filesystem, Stage};
-use cadence::store::model::{Decision, DecisionRecord, Evidence, Origin, VERSION};
+use cadence::store::model::{Decision, DecisionRecord, Evidence, Origin, VERSION, retained};
 use cadence::store::transaction::{INTENT, Transaction};
 use cadence::store::writer::{Operation, STALE_SNAPSHOT, Store};
 use cadence::store::{Error, MutationContext, Policy, Result};
@@ -362,7 +362,7 @@ fn audit_survives_healthy_torn_and_unreadable_layers_and_later_import() {
                     let imported = session.derivation_view().await.unwrap();
                     assert_eq!(imported.snapshot.data["import"]["complete"], true);
                     assert_eq!(imported.items.len(), 1);
-                    assert!(imported.decisions.contains(&event.record().unwrap()));
+                    assert!(retained(&imported.decisions, &event.record().unwrap()));
                     let second = reopened
                         .guard_audit(&root, audit_event(&root, "second-event"))
                         .await
@@ -413,7 +413,8 @@ fn audit_confirmation_failure_never_acknowledges_and_recovery_replays_receipt() 
                 .await
                 .unwrap();
             assert_eq!(view.snapshot.generation, 1);
-            assert_eq!(view.decisions, vec![event.record().unwrap()]);
+            assert_eq!(view.decisions.len(), 1);
+            assert!(view.decisions[0].same_record(&event.record().unwrap()));
             let mut recomputed = event.clone();
             recomputed.reason = "policy changed after event".into();
             assert_eq!(
