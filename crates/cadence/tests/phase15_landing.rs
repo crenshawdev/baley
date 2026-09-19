@@ -15,7 +15,7 @@ use std::{fs, path::Path};
 fn phase15_close_refuses_unsettled_records_and_land_refuses_unruled_deferred() {
     let fixture = Fixture::new(&[15, 16]);
     let project = fixture.project();
-    let (scan, _, clear) = risk(project, 15);
+    let (scan, _, clear) = risk(project, 15, true);
     let member = deferred(project, 16);
     let before = phase14::documents(project);
     let expected = json!([
@@ -40,7 +40,7 @@ fn phase15_close_refuses_unsettled_records_and_land_refuses_unruled_deferred() {
 
     let risk_only = Fixture::new(&[15]);
     let project = risk_only.project();
-    let (scan, fire, _) = risk(project, 15);
+    let (scan, fire, _) = risk(project, 15, false);
     let refused = apply(project, close("risk-before", &[15]));
     assert_eq!(refused["unsettled"], json!([{"kind":"risk","phase":15,"identity":scan["confirmation"]["decision_id"]}]));
     let settled = apply(project, json!({"operation":"risk-consequence","request_id":"settle-risk","receipt":{

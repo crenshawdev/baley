@@ -156,7 +156,7 @@ fn complete_phase(project: &Path, phase: u32) {
     client.finish();
 }
 
-pub fn risk(project: &Path, phase: u32) -> (Value, Value, Value) {
+pub fn risk(project: &Path, phase: u32, later_clear: bool) -> (Value, Value, Value) {
     let base = git_value(project, &["rev-parse", "HEAD"]);
     fs::write(project.join("src/risk.txt"), "jwt.verify(token)\n").unwrap();
     git(project, &["add", "src/risk.txt"]);
@@ -173,6 +173,7 @@ pub fn risk(project: &Path, phase: u32) -> (Value, Value, Value) {
         "review_scope":["src/risk.txt"],"rearm_of":null});
     let fired = apply(project, json!({"operation":"risk-fire","request_id":"fire-risk","fire":fire}));
     assert_eq!(fired["status"], "ok", "{fired}");
+    if !later_clear { return (scan, fire, Value::Null); }
     fs::write(project.join("src/clear.txt"), "clear\n").unwrap();
     git(project, &["add", "src/clear.txt"]);
     git(project, &["commit", "-m", "Fixture later clear material"]);
