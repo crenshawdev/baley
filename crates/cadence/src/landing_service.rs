@@ -1,4 +1,5 @@
 use crate::{config::reload::ConfigIo, import::SessionFactory};
+use cadence::envelope::Refusal;
 use cadence::{landing::model::{Apply, Landing}, milestone::model::{self, Receipt}, store::{Error, Result}};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -48,7 +49,8 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
             let generation = prior.map_or(0, |p| p.generation);
             if !valid { model::refuse("invalid-arguments", "landing requires named branches and remote, and exact source/base commit hashes") }
             else if request.expected_generation != generation {
-                json!({"status":"refused","code":"landing-generation","generation":generation,"expected_generation":request.expected_generation})
+                Refusal::new("landing-generation", "expected generation does not match the current landing generation")
+                    .details(json!({"generation":generation,"expected_generation":request.expected_generation})).value()
             } else if let Some(prior) = prior {
                 if prior.source != request.source || prior.base != request.base || prior.remote != request.remote {
                     model::refuse("landing-inputs", "landing source, base and remote are immutable")
@@ -63,14 +65,21 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
             // repository refs. An unruled member in ANY home forbids effects.
             match cadence::review::consumers::unruled_members(store).await {
                 Err(error) => model::refuse("landing-unavailable", error.to_string()),
-                Ok(unsettled) if !unsettled.is_empty() => json!({"status":"refused","code":"landing-unsettled",
-                    "landing":request.landing,"step":"publish","reason":"unruled deferred members forbid publishing","unsettled":unsettled}),
+                Ok(unsettled) if !unsettled.is_empty() => {
+                    let mut refusal = Refusal::new("landing-unsettled", "unruled deferred members forbid publishing")
+                        .details(json!({"landing":request.landing,"step":"publish","unsettled":unsettled})).value();
+                    // Keep the plan 1 caller's top-level unsettled list available.
+                    refusal["unsettled"] = refusal["details"]["unsettled"].clone();
+                    refusal
+                },
                 Ok(_) => match records.records.get(&request.landing) {
                     None => model::refuse("landing-unknown", &request.landing),
-                    Some(landing) if landing.generation != request.expected_generation => json!({"status":"refused","code":"landing-generation",
-                        "landing":landing.id,"generation":landing.generation,"expected_generation":request.expected_generation}),
-                    Some(landing) => json!({"status":"refused","code":"landing-authorization-required","landing":landing.id,"step":"publish",
-                        "reason":"an explicit landing step authorization is required; publication is not available in this plan"}),
+                    Some(landing) if landing.generation != request.expected_generation =>
+                        Refusal::new("landing-generation", "expected generation does not match the current landing generation")
+                            .details(json!({"landing":landing.id,"generation":landing.generation,"expected_generation":request.expected_generation})).value(),
+                    Some(landing) => Refusal::new("landing-authorization-required",
+                        "an explicit landing step authorization is required; publication is not available in this plan")
+                        .details(json!({"landing":landing.id,"step":"publish"})).value(),
                 },
             }
         }

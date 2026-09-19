@@ -1,8 +1,9 @@
 //! Immutable close selections and request receipts in the existing store.
+use crate::envelope::Refusal;
 use crate::store::{Error, Result, model::digest, transaction::Transaction, writer::{Operation, Store, View}};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{collections::BTreeMap, num::NonZeroU32};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -101,7 +102,7 @@ pub fn reused<T>(records: &Records<T>, root: &str, id: &str) -> bool {
     records.receipts.values().any(|r| r.root_binding == root && r.request_id == id)
 }
 pub fn refuse(code: &str, reason: impl Into<String>) -> Value {
-    json!({"status":"refused","code":code,"reason":reason.into()})
+    Refusal::new(code, reason).value()
 }
 
 pub async fn persist<T: Serialize>(store: &Store, view: &View, namespace: &str, records: &mut Records<T>, receipt: Receipt) -> Result<Value> {

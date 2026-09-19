@@ -1,4 +1,5 @@
 use crate::{config::reload::ConfigIo, import::SessionFactory};
+use cadence::envelope::Refusal;
 use cadence::{milestone::{model::{self, Apply, Close, Receipt, Selection, State}, preflight}, store::{Error, Result}};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -63,9 +64,14 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                     if model::name(&request.request_id).is_err() {
                         model::refuse("invalid-arguments", "request_id must be nonblank bounded text")
                     } else if !unsettled.is_empty() {
-                        json!({"status":"refused","code":"milestone-unsettled","reason":"selected phases retain unsettled records","unsettled":unsettled})
+                        let mut refusal = Refusal::new("milestone-unsettled", "selected phases retain unsettled records")
+                            .details(json!({"unsettled":unsettled})).value();
+                        // Keep the plan 1 caller's top-level unsettled list available.
+                        refusal["unsettled"] = refusal["details"]["unsettled"].clone();
+                        refusal
                     } else if request.expected_generation != generation {
-                        json!({"status":"refused","code":"milestone-generation","expected_generation":request.expected_generation,"generation":generation})
+                        Refusal::new("milestone-generation", "expected generation does not match the current milestone generation")
+                            .details(json!({"expected_generation":request.expected_generation,"generation":generation})).value()
                     } else if let Some(close) = &prior {
                         if close.selection != selection { model::refuse("milestone-selection", "a ready close has an immutable phase selection and label") }
                         else { json!({"status":"ok","close":close}) }
@@ -76,13 +82,15 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                                 .is_some_and(|(_, applies, _)| applies) { incomplete.push(phase.get()); }
                         }
                         if !incomplete.is_empty() {
-                            json!({"status":"refused","code":"milestone-incomplete","reason":"selected phases need current native completion","phases":incomplete})
+                            Refusal::new("milestone-incomplete", "selected phases need current native completion")
+                                .details(json!({"phases":incomplete})).value()
                         } else {
                             // Reading existing audits is not a new audit verdict. Prune is
                             // a later operation; this record changes no authored document.
                             let audit = audits(factory, root, &selection).await?;
                             if audit.iter().any(|a| a["audit"]["status"] != "ok") {
-                                json!({"status":"refused","code":"milestone-audit-unavailable","audits":audit})
+                                Refusal::new("milestone-audit-unavailable", "selected phases need available audit reports")
+                                    .details(json!({"audits":audit})).value()
                             } else {
                                 let close = Close { id: id.clone(), root_binding: binding.clone(), occurrence: occurrence.clone(), generation: 1,
                                     selection: selection.clone(), state: State::Ready };
