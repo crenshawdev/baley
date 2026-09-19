@@ -174,15 +174,15 @@ impl WorkerRound {
         let client = exit_support::Client::open(fixture.project());
         let mut this = Self { fixture, client };
         this.publish("context-submit", json!({"phase":31,"title":"Worker exits","scope":"Retain and continue interrupted workers.",
-            "durable_decisions":[],"decisions":[],"assumptions":[],"truths":[1,2].map(|n| json!({
+            "durable_decisions":[],"decisions":[],"assumptions":[],"truths":([1,2].map(|n| json!({
                 "id":format!("T{n}"),"trigger":"a worker exits","observer":"the owner","verb":"sees",
-                "outcome":"an interruption","kind":"property","observable":true,"fixed_oracle":true}))}));
+                "outcome":"an interruption","kind":"property","observable":true,"fixed_oracle":true})))}));
         let allocation = this.query(json!({"operation":"plan-read","phase":31,"count":2}));
         let plans = (1..=2).map(|n| json!({"target":allocation["targets"][n-1],"content":{
             "phase":31,"plan":n,"requirements":[format!("T{n}")],"files":["src/answer.py","src/lease.rs","tests/tiny.py"],"directories":[],
             "goal":"Retain exit observations.","context":"Two tasks allow a late close.","notes":"No wall-clock timeout.",
-            "tasks":["a","b"].map(|s| json!({"id":format!("p{n}-{s}"),"title":"Deliver fixture work",
-                "files":["src/answer.py","src/lease.rs","tests/tiny.py"],"action":"Deliver the fixture answer.","verify":[Self::COMMAND]})),
+            "tasks":(["a","b"].map(|s| json!({"id":format!("p{n}-{s}"),"title":"Deliver fixture work",
+                "files":["src/answer.py","src/lease.rs","tests/tiny.py"],"action":"Deliver the fixture answer.","verify":[Self::COMMAND]}))),
             "suite":Self::COMMAND,"evidence_map":{"mode":"attached","items":[{
                 "kind":"check","id":format!("check/{n}"),"reason":"Observe the answer.",
                 "spec":{"command":Self::COMMAND,"expected":{"kind":"literal","value":"the expected answer"},
