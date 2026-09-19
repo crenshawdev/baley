@@ -46,6 +46,88 @@ pub fn legacy_fixture() -> tempfile::TempDir {
     temp
 }
 
+/// The why fixture's commits, in the order they were made: the four that touch
+/// src/thing.py, the two that record a phase, and the prune that deletes
+/// phase 2 with no ARCHIVE.md heading (D-139, corrected in plan 6's notes).
+pub struct WhyFixture {
+    pub temp: tempfile::TempDir,
+    /// The four commits touching src/thing.py, oldest first.
+    pub thing: [String; 4],
+    /// The commit that recorded phases/2/SUMMARY.md: the prune's parent.
+    pub parent: String,
+    /// The `git rm -r .planning/phases/2` commit.
+    pub prune: String,
+}
+
+impl WhyFixture {
+    pub fn project(&self) -> &Path { self.temp.path() }
+}
+
+/// A tracked `.planning` tree with every author and committer date fixed, so
+/// the shas the checked-in expected bytes carry are the shas this builds.
+fn why_git(project: &Path, day: u32, args: &[&str]) -> String {
+    let date = format!("2026-01-{day:02}T00:00:00+00:00");
+    let output = std::process::Command::new("git")
+        .args(["-c", "commit.gpgsign=false", "-c", "core.excludesFile=/dev/null",
+            "-c", "user.name=Cadence Phase14", "-c", "user.email=phase14@example.invalid"])
+        .args(args).current_dir(project)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_DATE", &date).env("GIT_COMMITTER_DATE", &date)
+        .stdin(std::process::Stdio::null()).output().unwrap();
+    assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8(output.stdout).unwrap().trim_end().to_owned()
+}
+
+pub const WHY_ROADMAP: &str = "## Phases\n- [x] **Phase 1: Seed**\n- [ ] **Phase 2: Double**\n";
+pub const WHY_CONTEXT: &str = "# Phase 1 context\n\n## Decisions\n- D-01: thing keeps three named values, one per line\n";
+pub const WHY_PLAN: &str = "---\nphase: 1\nplan: 1\n---\n# Phase 1 plan\n\n## Context\nSeeds src/thing.py.\n\n## Tasks\n\n### Task 1: Seed thing\n\n- **Files:** src/thing.py\n- **Action:** Write the three values D-01 names.\n- **Verify:** python3 -m py_compile src/thing.py\n";
+
+/// Three commits touching src/thing.py, phase 1 recorded on disk with one
+/// deviation naming D-01, phase 2 recorded and then pruned by a real
+/// `git rm -r` commit, and a fourth commit touching the file after the prune.
+pub fn why_fixture() -> WhyFixture {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path();
+    let planning = project.join(".planning");
+    why_git(project, 1, &["init", "--initial-branch=fixture/why"]);
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::create_dir_all(planning.join("phases/1")).unwrap();
+    fs::write(planning.join("ROADMAP.md"), WHY_ROADMAP).unwrap();
+    fs::write(planning.join("phases/1/CONTEXT.md"), WHY_CONTEXT).unwrap();
+    fs::write(planning.join("phases/1/PLAN-1.md"), WHY_PLAN).unwrap();
+    fs::write(project.join("src/thing.py"), "alpha = 1\nbeta = 2\ngamma = 3\n").unwrap();
+    why_git(project, 1, &["add", "."]);
+    why_git(project, 1, &["commit", "-m", "feat(1-1): seed thing with three lines"]);
+    let one = why_git(project, 1, &["rev-parse", "HEAD"]);
+    fs::write(project.join("src/thing.py"), "alpha = 1\nbeta = 2\ngamma = 30\n").unwrap();
+    why_git(project, 2, &["commit", "-am", "feat(1-1): raise gamma"]);
+    let two = why_git(project, 2, &["rev-parse", "HEAD"]);
+    fs::write(planning.join("phases/1/SUMMARY.md"), format!(
+        "# Phase 1 summary\n\n## Commits\n\n| plan | task | commit | description |\n|---|---|---|---|\n\
+         | 1 | 1 | {} | seed thing with three lines |\n| 1 | 1 | {} | raise gamma |\n\n\
+         ## Deviations\n\n- [deviation] D-01 was kept: gamma stays an integer rather than the float the plan proposed\n",
+        &one[..8], &two[..8])).unwrap();
+    why_git(project, 3, &["add", ".planning/phases/1/SUMMARY.md"]);
+    why_git(project, 3, &["commit", "-m", "docs(1): record phase 1"]);
+    fs::write(project.join("src/thing.py"), "alpha = 2\nbeta = 2\ngamma = 30\n").unwrap();
+    why_git(project, 4, &["commit", "-am", "feat(2-1): double alpha"]);
+    let three = why_git(project, 4, &["rev-parse", "HEAD"]);
+    fs::create_dir_all(planning.join("phases/2")).unwrap();
+    fs::write(planning.join("phases/2/SUMMARY.md"), format!(
+        "# Phase 2 summary\n\n## Commits\n\n| plan | task | commit | description |\n|---|---|---|---|\n\
+         | 1 | 1 | {} | double alpha |\n", &three[..8])).unwrap();
+    why_git(project, 5, &["add", ".planning/phases/2/SUMMARY.md"]);
+    why_git(project, 5, &["commit", "-m", "docs(2): record phase 2"]);
+    let parent = why_git(project, 5, &["rev-parse", "HEAD"]);
+    why_git(project, 6, &["rm", "-r", "-q", ".planning/phases/2"]);
+    why_git(project, 6, &["commit", "-m", "chore: close phase 2 without a label"]);
+    let prune = why_git(project, 6, &["rev-parse", "HEAD"]);
+    fs::write(project.join("src/thing.py"), "alpha = 2\nbeta = 20\ngamma = 30\n").unwrap();
+    why_git(project, 7, &["commit", "-am", "feat(3-1): raise beta after the prune"]);
+    let four = why_git(project, 7, &["rev-parse", "HEAD"]);
+    WhyFixture { temp, thing: [one, two, three, four], parent, prune }
+}
+
 /// A second project verified and natively completed the way
 /// phase13_verification completes one; the completion record's id comes back
 /// with it.

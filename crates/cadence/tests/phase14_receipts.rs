@@ -6,7 +6,7 @@ mod phase14;
 
 use cadence::store::model;
 use phase13::{Client, Completed, apply, digest_of, git_value, reopened};
-use phase14::{LEGACY_TICKED, TICKED, dispatched_plan, documents, legacy_fixture, natively_completed, progress_fixture};
+use phase14::{LEGACY_TICKED, TICKED, dispatched_plan, documents, legacy_fixture, natively_completed, progress_fixture, why_fixture};
 use serde_json::{Value, json};
 use std::{fs, path::Path, process::{Command, Stdio}, time::{SystemTime, UNIX_EPOCH}};
 
@@ -80,6 +80,83 @@ fn phase14_suggest_prices_from_routing_decisions_and_writes_nothing() {
     assert!(rendered.status.success(), "{}", String::from_utf8_lossy(&rendered.stderr));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     assert_eq!(rendered.stdout, fs::read(root.join("skills/cad-suggest/SKILL.md")).unwrap());
+}
+
+fn why(client: &mut Client, request: Value) -> Value {
+    let answer = client.call("cadence_query", request);
+    assert_eq!(answer["status"], "ok", "{answer}");
+    answer
+}
+
+fn shas(answer: &Value) -> Vec<&str> {
+    answer["entries"].as_array().unwrap().iter().map(|entry| entry["sha"].as_str().unwrap()).collect()
+}
+
+#[test]
+fn phase14_why_text_is_byte_exact_including_pruned_phase() {
+    let fixture = why_fixture();
+    let project = fixture.project();
+    let [one, two, three, four] = &fixture.thing;
+    let status = ["-c", "core.excludesFile=/dev/null", "status", "--porcelain", "--untracked-files=all"];
+    assert_eq!(git_value(project, &status), "");
+    let mut client = Client::open(project);
+    let first = why(&mut client, json!({"operation":"why","path":"src/thing.py"}));
+    assert_eq!(first["result"], "chain", "{first}");
+    assert_eq!(first["path"], "src/thing.py");
+    assert_eq!(first["line"], Value::Null);
+    assert_eq!(shas(&first), [four, three, two, one]);
+    assert_eq!(first["shown"], 4);
+    assert_eq!(first["total"], 4);
+    assert_eq!(first["excluded"], json!([]));
+    assert_eq!(first["warnings"], json!([]));
+    // The fixed expected text, taken once from the frozen 3.x seam over this
+    // same repository; the recovered phase is spelled with the fixture's shas.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/phase14");
+    let expected = fs::read(fixtures.join("why-expected.txt")).unwrap();
+    let text = first["text"].as_str().unwrap();
+    assert!(text.contains(&format!("\nphase: an unlabelled close ({}) phase 2 (recovered from {}:.planning/phases/2)\n",
+        &fixture.prune[..8], &fixture.parent[..8])), "{text}");
+    assert!(text.contains("\nphase: NOT RESOLVED - "), "{text}");
+    assert_eq!(text.as_bytes(), expected.as_slice(), "text:\n{text}");
+
+    let top = why(&mut client, json!({"operation":"why","path":"src/thing.py","top":1}));
+    assert_eq!(top["text"].as_str().unwrap().as_bytes(), fs::read(fixtures.join("why-top-expected.txt")).unwrap().as_slice(), "{top}");
+    assert_eq!(top["shown"], 1);
+    assert_eq!(top["total"], 4);
+    assert_eq!(shas(&top), [four]);
+    assert!(top["text"].as_str().unwrap().ends_with("\n\nShowing 1 of 4 commit(s). Pass --top 4 to see the rest."));
+
+    // Line 1 was written by the first commit and doubled by the third; the
+    // other two touched other lines. Each block is the bare chain's block.
+    let blocks = text.split("\n\n").collect::<Vec<_>>();
+    assert_eq!(blocks.len(), 4, "{text}");
+    let line = why(&mut client, json!({"operation":"why","path":"src/thing.py","line":1}));
+    assert_eq!(line["result"], "chain", "{line}");
+    assert_eq!(line["line"], 1);
+    assert_eq!(shas(&line), [three, one]);
+    assert_eq!(line["shown"], 2);
+    assert_eq!(line["total"], 2);
+    assert_eq!(line["excluded"], Value::Null);
+    assert_eq!(line["text"], format!("{}\n\n{}", blocks[1], blocks[3]));
+
+    let never = why(&mut client, json!({"operation":"why","path":"never/here.py"}));
+    assert_eq!(never, json!({"status":"ok","path":"never/here.py","line":null,"result":"not-in-history",
+        "text":"No commits: git has never seen \"never/here.py\" in this repository's history."}));
+    client.finish();
+
+    let mut client = Client::open(project);
+    let again = why(&mut client, json!({"operation":"why","path":"src/thing.py"}));
+    assert_eq!(serde_json::to_vec(&again).unwrap(), serde_json::to_vec(&first).unwrap());
+    client.finish();
+    assert_eq!(git_value(project, &status), "", "why reads the repository and writes nothing");
+
+    let rendered = Command::new(env!("CARGO_BIN_EXE_cadence"))
+        .arg("why-instructions").current_dir(project).stdin(Stdio::null()).output().unwrap();
+    assert!(rendered.status.success(), "{}", String::from_utf8_lossy(&rendered.stderr));
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    assert_eq!(rendered.stdout, fs::read(root.join("skills/cad-why/SKILL.md")).unwrap());
+    let skill = String::from_utf8(rendered.stdout).unwrap();
+    assert!(skill.contains("Print the returned `text` verbatim and nothing else"), "{skill}");
 }
 
 fn refused(records: &[Value]) -> Vec<&Value> {
