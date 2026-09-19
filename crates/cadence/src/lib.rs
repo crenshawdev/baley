@@ -22,4 +22,5 @@ pub mod rail;
 pub mod review;
 pub mod read;
 pub mod store;
+pub mod suggest;
 pub mod verification;

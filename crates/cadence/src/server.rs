@@ -49,6 +49,8 @@ pub mod next_action_service;
 
 #[path = "progress_service.rs"]
 pub mod progress_service;
+#[path = "suggest_service.rs"]
+pub mod suggest_service;
 #[cfg(test)]
 #[path = "next_action_service_tests.rs"]
 mod next_action_service_tests;
@@ -262,6 +264,8 @@ struct VersionArguments {}
 enum QueryArguments {
     #[serde(rename = "progress")]
     Progress {},
+    #[serde(rename = "suggest")]
+    Suggest { phase: Option<NonZeroU32> },
     #[serde(rename = "search")]
     Search(cadence::read::model::SearchRequest),
     #[serde(rename = "list")]
@@ -891,6 +895,17 @@ impl ServerHandler for PublicServer {
                 .into())
             }
             "cadence_query" => {
+                if raw.as_ref().is_some_and(|value| value["operation"] == "suggest") {
+                    let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
+                        Ok(QueryArguments::Suggest { phase }) => match self.server.service.suggest(&self.root, phase.map(NonZeroU32::get)).await {
+                            Ok(answer) => answer,
+                            Err(error) => Refusal::new("suggest-unavailable", error.to_string()).slot("suggest").value(),
+                        },
+                        Err(error) => Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value(),
+                        Ok(_) => unreachable!("suggest operation selected"),
+                    };
+                    return structured_result(Ok(QueryOutput::Read(answer)));
+                }
                 if raw.as_ref().is_some_and(|value| value["operation"] == "progress") {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
                         Ok(QueryArguments::Progress {}) => match self.server.service.progress(&self.root).await {
@@ -1078,6 +1093,7 @@ impl ServerHandler for PublicServer {
                     Some(QueryArguments::Search(_) | QueryArguments::List(_) | QueryArguments::Read(_) | QueryArguments::Document(_) | QueryArguments::DocumentSearch(_)) => unreachable!("read operation routed before generic query"),
                     Some(QueryArguments::Schema { .. }) => unreachable!("schema routed before generic query"),
                     Some(QueryArguments::Progress {}) => unreachable!("progress routed before generic query"),
+                    Some(QueryArguments::Suggest { .. }) => unreachable!("suggest routed before generic query"),
                     Some(QueryArguments::ExecutionHistory { .. }) => unreachable!("native history decoded before execution fallback"),
                     Some(QueryArguments::PlanRead { .. } | QueryArguments::EvidenceRead { .. }) => {
                         unreachable!("plan read decoded before execution")

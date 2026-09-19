@@ -209,6 +209,11 @@ mod resident {
     };
 
     enum Request {
+        Suggest {
+            root: PathBuf,
+            phase: Option<u32>,
+            reply: oneshot::Sender<Result<serde_json::Value>>,
+        },
         Progress {
             root: PathBuf,
             reply: oneshot::Sender<std::result::Result<serde_json::Value, DerivationError>>,
@@ -446,6 +451,10 @@ mod resident {
                 let mut read_domains = BTreeMap::<PathBuf, cadence::read::ReadDomain>::new();
                 while let Some(request) = receiver.recv().await {
                     match request {
+                        Request::Suggest { root, phase, reply } => {
+                            let result = crate::server::suggest_service::query(&factory, &root, phase).await;
+                            let _ = reply.send(result);
+                        }
                         Request::Progress { root, reply } => {
                             let result = crate::server::progress_service::query(&factory, &root, &driver).await;
                             let _ = reply.send(result);
@@ -795,6 +804,13 @@ mod resident {
             self.requests.send(Request::Progress { root: root.into(), reply }).await
                 .map_err(|_| derivation_service::store_error(Error::Closed))?;
             completion.await.map_err(|_| derivation_service::store_error(Error::Closed))?
+        }
+
+        pub async fn suggest(&self, root: &Path, phase: Option<u32>) -> Result<serde_json::Value> {
+            let (reply, completion) = oneshot::channel();
+            self.requests.send(Request::Suggest { root: root.into(), phase, reply }).await
+                .map_err(|_| Error::Closed)?;
+            completion.await.map_err(|_| Error::Closed)?
         }
 
         pub async fn adoption(&self, root: &Path, apply: crate::server::adoption_service::Apply) -> Result<serde_json::Value> {
