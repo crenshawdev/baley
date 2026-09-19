@@ -167,6 +167,8 @@ impl WorkerRound {
 
     pub fn new() -> Self {
         let fixture = exit_support::ProcessFixture::new();
+        fs::write(fixture.project().join(".planning/config.json"), serde_json::to_vec(&json!({"review":{"triggers":{
+            "risk_surface":{"surfaces":cadence::rail::risk::CATEGORIES}}}})).unwrap()).unwrap();
         fs::write(fixture.project().join("src/answer.py"), "def answer():\n    return 0\n").unwrap();
         exit_support::git(fixture.project(), &["add", "src/answer.py"]);
         exit_support::git(fixture.project(), &["-c", "commit.gpgsign=false", "-c", "user.name=Cadence Phase31", "-c", "user.email=phase31@example.invalid", "commit", "-m", "Fixture subject"]);
