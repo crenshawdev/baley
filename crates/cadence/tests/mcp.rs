@@ -1567,6 +1567,10 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     assert!(body.contains("cad-audit's phase argument") && body.contains("positive integer phase ids"));
     assert!(body.contains("`actions.close` typed payload\n   unchanged"));
     assert!(body.contains("Close-only stops at the local milestone close"));
+    assert!(body.contains("`actions.prune` typed payload\n   unchanged"));
+    assert!(body.contains("retry the identical milestone-prune\n   request"));
+    assert!(body.contains("durable id, state, commit") && body.contains("single-parent commit"));
+    assert!(body.contains("ready close records readiness only; it changes no documents"));
     assert!(body.contains("output grants no permission"));
     for forbidden in ["Bash", "Write", "Edit", "planning.mjs", "CLAUDE_PLUGIN_ROOT", "git ", "carry moves"] {
         assert!(!cadence::milestone::instructions::markdown().contains(forbidden), "{forbidden}");

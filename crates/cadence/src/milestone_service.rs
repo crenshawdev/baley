@@ -50,6 +50,19 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
     };
     let id = model::identity("milestone", &binding, &occurrence);
     let prior = records.records.get(&id).cloned();
+    if request.is_none() && let Some(close) = &prior {
+        if close.selection != selection {
+            return Ok(Refusal::new("milestone-selection", "a ready close has an immutable phase selection and label")
+                .slot("selection").details(json!({"close":close.id,"selection":close.selection})).value());
+        }
+        let prunes = model::records::<cadence::milestone::prune::Prune>(&view.snapshot.data, cadence::milestone::prune::NAMESPACE)?;
+        if let Some(prune) = prunes.records.values().find(|p| p.request.close == close.id) {
+            return Ok(json!({"status":"ok","read_only":true,"close":close,"identity":id,"generation":close.generation,
+                "occurrence":occurrence,"selection":selection,"prune":cadence::milestone::prune::answer(prune)["prune"],
+                "recovery":"committed; retry returns the retained receipt","next":"landing requires a separate owner choice",
+                "actions":{"prune":{"operation":"milestone-prune","request":prune.request}}}));
+        }
+    }
     let raw = request.as_ref().map(serde_json::to_value).transpose()?;
     if let (Some(request), Some(raw)) = (&request, &raw)
         && let Some(answer) = model::replay(&records, &binding, &request.request_id, raw)? { return Ok(answer); }
@@ -108,9 +121,16 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                     let action = json!({"operation":"milestone-close","request":{
                         "request_id":model::identity("close", &binding, &format!("{occurrence}:{}:{generation}:{}", cadence::store::model::digest(&serde_json::to_vec(&selection)?), view.snapshot.generation)),
                         "occurrence":occurrence,"expected_generation":generation,"selection":selection}});
+                    let mut actions = json!({"close":action});
+                    if let Some(close) = &prior {
+                        actions["prune"] = json!({"operation":"milestone-prune","request":{
+                            "request_id":model::identity("prune-request",&binding,&close.id),"close":close.id,
+                            "expected_generation":close.generation,"selection":close.selection}});
+                    }
                     json!({"status":"ok","read_only":true,"close":prior,"identity":id,"generation":generation,
                         "occurrence":occurrence,"selection":selection,"audits":audit,"unsettled":unsettled,
-                        "actions":{"close":action}})
+                        "next":if prior.is_some(){"milestone-prune after the owner's explicit choice"}else{"milestone-close"},
+                        "actions":actions})
                 }
             }
         }
