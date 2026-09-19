@@ -11,6 +11,14 @@ use phase15::{Fixture, close, deferred, risk};
 use serde_json::json;
 use std::{fs, path::Path};
 
+#[path = "support/phase15_prune.rs"]
+mod phase15_prune;
+
+#[test]
+fn phase15_prune_retries_to_one_result_from_every_write_point() {
+    phase15_prune::exercise();
+}
+
 #[test]
 fn phase15_close_refuses_unsettled_records_and_land_refuses_unruled_deferred() {
     let fixture = Fixture::new(&[15, 16]);
