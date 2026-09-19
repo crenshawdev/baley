@@ -624,6 +624,36 @@ pub enum PlanEvent {
     Completion(Completion),
 }
 
+#[cfg(test)]
+mod worker_exit_tests {
+    use super::*;
+
+    #[test]
+    fn worker_exit_retains_observation_after_completion() {
+        let plan = PlanIdentity { phase: 14, occurrence: "phase-14".into(),
+            admission_digest: "admission".into(), plan: 1 };
+        let exit = json!({"kind":"worker-exit","dispatch_id":"dispatch-A",
+            "host":"codex exec","outcome":"exited","detail":null,
+            "at":100,"generation":7,"interrupted":true});
+        let event: PlanEvent = serde_json::from_value(exit.clone()).expect("worker exit is a retained plan event");
+        let mut records = vec![PlanRecord { schema: "native-plan-event-1".into(),
+            root_binding: "fixture".into(), version: 1, request_digest: "exit-digest".into(),
+            request: PlanRequest { request_id: "exit-A".into(), plan: plan.clone(),
+                expected_version: 0, event } }];
+        let view = serde_json::to_value(plan_project(&records, &plan)).unwrap();
+        assert_eq!(view["worker_exits"], json!([exit]));
+        assert_eq!(view["completed"], false);
+        records.push(PlanRecord { schema: "native-plan-event-1".into(), root_binding: "fixture".into(),
+            version: 2, request_digest: "completion-digest".into(), request: PlanRequest {
+                request_id: "complete".into(), plan: plan.clone(), expected_version: 1,
+                event: PlanEvent::Completion(Completion { suite_run: "suite".into(), settlement: None }) } });
+        let view = serde_json::to_value(plan_project(&records, &plan)).unwrap();
+        assert_eq!(view["worker_exits"], json!([exit]));
+        assert_eq!(view["completed"], true);
+        assert_eq!(view["version"], 2);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanRequest {
