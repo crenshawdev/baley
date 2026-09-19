@@ -14,6 +14,8 @@ pub mod evidence;
 pub mod execution;
 /// Legacy sources are immutable evidence, never replayed writers.
 pub mod import;
+pub mod landing;
+pub mod milestone;
 pub mod next_action;
 pub mod pause;
 pub mod plan;

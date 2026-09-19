@@ -53,6 +53,10 @@ pub mod progress_service;
 pub mod suggest_service;
 #[path = "why_service.rs"]
 pub mod why_service;
+#[path = "milestone_service.rs"]
+pub mod milestone_service;
+#[path = "landing_service.rs"]
+pub mod landing_service;
 #[cfg(test)]
 #[path = "next_action_service_tests.rs"]
 mod next_action_service_tests;
@@ -264,6 +268,10 @@ struct VersionArguments {}
 #[derive(Deserialize, JsonSchema)]
 #[serde(tag = "operation", deny_unknown_fields)]
 enum QueryArguments {
+    #[serde(rename = "milestone-read")]
+    MilestoneRead { occurrence: String, selection: cadence::milestone::model::Selection },
+    #[serde(rename = "land-read")]
+    LandRead { landing: String },
     #[serde(rename = "progress")]
     Progress {},
     #[serde(rename = "suggest")]
@@ -381,6 +389,8 @@ enum ApplyArguments {
     Receipt(cadence::rail::receipts::Apply),
     Adoption(adoption_service::Apply),
     Capture(capture_service::Apply),
+    Milestone(cadence::milestone::model::Apply),
+    Landing(cadence::landing::model::Apply),
 }
 
 /// Who parses and answers an apply request. `Executor` is the one group with
@@ -398,10 +408,12 @@ enum ApplyGroup {
     Receipt,
     Adoption,
     Capture,
+    Milestone,
+    Landing,
 }
 
 /// One group per [`ApplyArguments`] variant, in variant order.
-const APPLY_GROUPS: [ApplyGroup; 17] = [
+const APPLY_GROUPS: [ApplyGroup; 19] = [
     ApplyGroup::Verification,
     ApplyGroup::Execution,
     ApplyGroup::Execution,
@@ -419,6 +431,8 @@ const APPLY_GROUPS: [ApplyGroup; 17] = [
     ApplyGroup::Receipt,
     ApplyGroup::Adoption,
     ApplyGroup::Capture,
+    ApplyGroup::Milestone,
+    ApplyGroup::Landing,
 ];
 
 /// The operation names `cadence_apply` accepts, each with its routing group
@@ -906,6 +920,17 @@ impl ServerHandler for PublicServer {
                 .into())
             }
             "cadence_query" => {
+                if raw.as_ref().and_then(|v| v["operation"].as_str()).is_some_and(|op| matches!(op, "milestone-read" | "land-read")) {
+                    let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
+                        Ok(QueryArguments::MilestoneRead { occurrence, selection }) => self.server.service.milestone(&self.root,
+                            milestone_service::Command::Read { occurrence, selection }).await,
+                        Ok(QueryArguments::LandRead { landing }) => self.server.service.landing(&self.root,
+                            landing_service::Command::Read { landing }).await,
+                        Err(error) => Ok(Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value()),
+                        Ok(_) => unreachable!("selected milestone/landing query"),
+                    };
+                    return structured_result(answer.map(QueryOutput::Read));
+                }
                 if raw.as_ref().is_some_and(|value| value["operation"] == "suggest") {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
                         Ok(QueryArguments::Suggest { phase }) => match self.server.service.suggest(&self.root, phase.map(NonZeroU32::get)).await {
@@ -1116,6 +1141,7 @@ impl ServerHandler for PublicServer {
                     Some(QueryArguments::Search(_) | QueryArguments::List(_) | QueryArguments::Read(_) | QueryArguments::Document(_) | QueryArguments::DocumentSearch(_)) => unreachable!("read operation routed before generic query"),
                     Some(QueryArguments::Schema { .. }) => unreachable!("schema routed before generic query"),
                     Some(QueryArguments::Progress {}) => unreachable!("progress routed before generic query"),
+                    Some(QueryArguments::MilestoneRead { .. } | QueryArguments::LandRead { .. }) => unreachable!("milestone/landing routed before generic query"),
                     Some(QueryArguments::Suggest { .. }) => unreachable!("suggest routed before generic query"),
                     Some(QueryArguments::Why { .. }) => unreachable!("why routed before generic query"),
                     Some(QueryArguments::ExecutionHistory { .. }) => unreachable!("native history decoded before execution fallback"),
@@ -1275,6 +1301,20 @@ impl ServerHandler for PublicServer {
                 let operation = operation.unwrap_or_default();
                 let refused = |error: serde_json::Error| format!("{operation}: {error}");
                 match group {
+                    ApplyGroup::Milestone => {
+                        let answer = match serde_json::from_value::<cadence::milestone::model::Apply>(raw.unwrap()) {
+                            Ok(apply) => self.server.service.milestone(&self.root, milestone_service::Command::Apply(apply)).await,
+                            Err(error) => Ok(Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value()),
+                        };
+                        structured_result(answer.map(ApplyOutput::NativeExecution))
+                    }
+                    ApplyGroup::Landing => {
+                        let answer = match serde_json::from_value::<cadence::landing::model::Apply>(raw.unwrap()) {
+                            Ok(apply) => self.server.service.landing(&self.root, landing_service::Command::Apply(apply)).await,
+                            Err(error) => Ok(Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value()),
+                        };
+                        structured_result(answer.map(ApplyOutput::NativeExecution))
+                    }
                     ApplyGroup::Executor => {
                         let patch = raw.clone().and_then(|value| serde_json::from_value::<ExecutorPatch>(value).ok());
                         let Some(patch) = patch else {

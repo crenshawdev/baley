@@ -209,6 +209,16 @@ mod resident {
     };
 
     enum Request {
+        Milestone {
+            root: PathBuf,
+            command: crate::server::milestone_service::Command,
+            reply: oneshot::Sender<Result<serde_json::Value>>,
+        },
+        Landing {
+            root: PathBuf,
+            command: crate::server::landing_service::Command,
+            reply: oneshot::Sender<Result<serde_json::Value>>,
+        },
         Suggest {
             root: PathBuf,
             phase: Option<u32>,
@@ -456,6 +466,12 @@ mod resident {
                 let mut read_domains = BTreeMap::<PathBuf, cadence::read::ReadDomain>::new();
                 while let Some(request) = receiver.recv().await {
                     match request {
+                        Request::Milestone { root, command, reply } => {
+                            let _ = reply.send(crate::server::milestone_service::execute(&factory, &root, command).await);
+                        }
+                        Request::Landing { root, command, reply } => {
+                            let _ = reply.send(crate::server::landing_service::execute(&factory, &root, command).await);
+                        }
                         Request::Suggest { root, phase, reply } => {
                             let result = crate::server::suggest_service::query(&factory, &root, phase).await;
                             let _ = reply.send(result);
@@ -823,6 +839,18 @@ mod resident {
             self.requests.send(Request::Suggest { root: root.into(), phase, reply }).await
                 .map_err(|_| Error::Closed)?;
             completion.await.map_err(|_| Error::Closed)?
+        }
+
+        pub async fn milestone(&self, root: &Path, command: crate::server::milestone_service::Command) -> Result<serde_json::Value> {
+            let (reply, receive) = oneshot::channel();
+            self.requests.send(Request::Milestone { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
+            receive.await.map_err(|_| Error::Closed)?
+        }
+
+        pub async fn landing(&self, root: &Path, command: crate::server::landing_service::Command) -> Result<serde_json::Value> {
+            let (reply, receive) = oneshot::channel();
+            self.requests.send(Request::Landing { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
+            receive.await.map_err(|_| Error::Closed)?
         }
 
         pub async fn why(&self, root: &Path, request: crate::server::why_service::Request) -> Result<serde_json::Value> {
