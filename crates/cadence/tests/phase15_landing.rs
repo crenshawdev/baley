@@ -1,6 +1,8 @@
 #[path = "support/phase13.rs"]
+#[allow(dead_code)]
 mod phase13;
 #[path = "support/phase14.rs"]
+#[allow(dead_code)]
 mod phase14;
 #[path = "support/phase15.rs"]
 mod phase15;

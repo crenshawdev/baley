@@ -69,22 +69,38 @@ fn complete_phase(project: &Path, phase: u32) {
             "tasks":[{"id":"task-ready","title":"Deliver ready","files":[file],"action":"Write the ready artifact.","verify":[command]}],
             "suite":command,"evidence_map":{"mode":"attached","items":[{"kind":"artifact","id":"artifact/ready",
                 "spec":{"locators":[file],"substance":"The ready artifact contains ready."},"reason":"Observe the ready artifact.",
-                "associations":[{"truth_id":"T1","truth_version":1,"reason":"Observe ready."}]}]}}}]}})));
+                "associations":[{"truth_id":"T1","truth_version":1,"reason":"Observe ready."}]},
+                {"kind":"check","id":"check/ready","reason":"Read the real artifact.","spec":{"command":command,
+                    "expected":{"kind":"literal","value":"ready followed by a newline"},"test":{"file":format!("tests/p{phase}.py"),"function":"Check.test_file"},
+                    "setup":"A pending artifact.","call":"Read the artifact.","boundary":"real filesystem","fakes":[]},
+                    "associations":[{"truth_id":"T1","truth_version":1,"reason":"Read ready."}]}]}}}]}})));
     git(project, &["add", ".planning"]);
     git(project, &["commit", "-m", &format!("Fixture phase {phase} publication")]);
     let read = client.call("cadence_query", json!({"operation":"plan-read","phase":phase}));
     let publication = &read["native"]["publications"]["1"];
+    let map = client.call("cadence_query", json!({"operation":"evidence-read","phase":phase}));
+    let item = map["items"].as_array().unwrap().iter().find(|i| i["kind"] == "check").unwrap();
+    let check = json!({"id":item["id"],"item_revision":item["item_revision"]});
     ok(&mut client, json!({"operation":"execution-admit","request":{"request_id":format!("admit-{phase}"),"expected_set_version":0,
         "contract":{"phase":phase,"occurrence":read["occurrence"],"plans":[{"plan":1,"publication_request":publication["publication_request"],
             "content_revision":publication["revision"],"map_revision":publication["map_revision"]}],
-            "allocation":[{"plan":1,"task":"task-ready","checks":[]}]}}}));
+            "allocation":[{"plan":1,"task":"task-ready","checks":[check]}]}}}));
     ok(&mut client, json!({"operation":"execution-authorize","phase":phase,"request_id":format!("authorize-{phase}"),
         "owner":"Fixture Owner","at":"2026-09-19T12:00:00Z","response":"Proceed with the fixture"}));
     let dispatch = client.call("cadence_query", json!({"operation":"execute-next","phase":phase}));
     assert_eq!(dispatch["status"], "ok", "{dispatch}");
     let task = state(&mut client, phase, "tasks");
     ok(&mut client, json!({"operation":"execution-task-start","request":{"request_id":format!("start-{phase}"),"task":task["task"],
-        "attempt":"attempt-ready","expected_version":0,"predecessor":null,"checks":[]}}));
+        "attempt":"attempt-ready","expected_version":0,"predecessor":null,"checks":[check]}}));
+    git(project, &["add", &format!("tests/p{phase}.py")]);
+    git(project, &["commit", "--allow-empty", "-m", &format!("test({phase}): expect ready task-ready")]);
+    let red_commit = git_value(project, &["rev-parse", "HEAD"]);
+    let task = state(&mut client, phase, "tasks");
+    let red_run = format!("red-{phase}");
+    ok(&mut client, json!({"operation":"execution-run","request":{"request_id":red_run,"task":task["task"],"attempt":"attempt-ready",
+        "expected_version":task["state"]["version"],"command":command,"check":check,"stage":"red"}}));
+    let red = phase13::native_result_with(|v| client.call("cadence_query", v), phase, &red_run);
+    assert_eq!(red["request"]["event"]["disposition"]["code"], 1, "{red}");
     fs::write(project.join(&file), "ready\n").unwrap();
     git(project, &["add", &file]);
     git_value(project, &["commit", "-S", "-m", &format!("feat({phase}): deliver ready task-ready")]);
@@ -92,12 +108,20 @@ fn complete_phase(project: &Path, phase: u32) {
     let task = state(&mut client, phase, "tasks");
     let run = format!("verify-{phase}");
     ok(&mut client, json!({"operation":"execution-run","request":{"request_id":run,"task":task["task"],"attempt":"attempt-ready",
-        "expected_version":task["state"]["version"],"command":command,"stage":"verify"}}));
+        "expected_version":task["state"]["version"],"command":command,"check":check,"stage":"green"}}));
     let result = phase13::native_result_with(|v| client.call("cadence_query", v), phase, &run);
     assert_eq!(result["request"]["event"]["disposition"]["code"], 0, "{result}");
+    let launch = client.call("cadence_query", json!({"operation":"execution-history","phase":phase,"run":red_run}));
+    let inspection = json!({"check":check,"test_digest":launch["launch"]["request"]["event"]["material"]["test_digest"],
+        "evidence":[red_run,run],"no_subject_stub":true});
+    let task = state(&mut client, phase, "tasks");
+    ok(&mut client, json!({"operation":"execution-owner-attest","request":{"request_id":format!("inspect-{phase}"),"task":task["task"],
+        "attempt":"attempt-ready","expected_version":task["state"]["version"],"statement":{"submission":inspection,
+            "approval":{"approved":true,"owner":"Fixture Owner","at":"2026-09-19T12:00:00Z","submission":inspection}}}}));
     let task = state(&mut client, phase, "tasks");
     ok(&mut client, json!({"operation":"execution-task-close","request":{"request_id":format!("close-{phase}"),"task":task["task"],
-        "attempt":"attempt-ready","expected_version":task["state"]["version"],"completion":completion,"checks":[],"verification":[run]}}));
+        "attempt":"attempt-ready","expected_version":task["state"]["version"],"completion":completion,
+        "checks":[{"check":check,"red_commit":red_commit,"green_commit":completion,"red_run":red_run,"green_run":run}],"verification":[run]}}));
     let plan = state(&mut client, phase, "plans");
     let suite = format!("suite-{phase}");
     ok(&mut client, json!({"operation":"execution-suite","request":{"request_id":suite,"plan":plan["plan"],"expected_version":plan["state"]["version"]}}));
@@ -111,9 +135,21 @@ fn complete_phase(project: &Path, phase: u32) {
     let dispatch = client.call("cadence_query", json!({"operation":"verify-next","phase":phase,"request_id":format!("verification-{phase}")}));
     assert_eq!(dispatch["status"], "ok", "{dispatch}");
     let attempt = phase13::attempt_with(&mut client, &dispatch);
-    let item = &attempt["map"]["items"][0];
+    let mut items = Vec::new();
+    for item in attempt["map"]["items"].as_array().unwrap() {
+        let mut runs = Vec::new();
+        if item["kind"] == "check" {
+            let run = format!("independent-{phase}");
+            ok(&mut client, json!({"operation":"verification-run","request":{"request_id":run,"attempt":attempt["id"],"basis":attempt["basis"],
+                "item":{"id":item["id"],"item_revision":item["item_revision"]}}}));
+            let result = phase13::independent_result(&mut client, phase, &run);
+            assert_eq!(result["disposition"]["code"], 0, "{result}");
+            runs.push(run);
+        }
+        items.push(json!({"id":item["id"],"item_revision":item["item_revision"],"verdict":"accepted","observed":"The real artifact reads ready followed by a newline.","runs":runs}));
+    }
     ok(&mut client, json!({"operation":"verification-submit","patch":{"request_id":format!("patch-{phase}"),"attempt":attempt["id"],
-        "items":[{"id":item["id"],"item_revision":item["item_revision"],"verdict":"accepted","observed":"The artifact contains ready followed by a newline.","runs":[]}]}}));
+        "items":items}}));
     let read = client.call("cadence_query", json!({"operation":"verification-read","phase":phase}));
     ok(&mut client, json!({"operation":"verification-complete","request_id":format!("verified-{phase}"),"attempt":attempt["id"],
         "basis":read["current"]["observed"],"projections":{"roadmap":phase13::digest_of(&project.join(".planning/ROADMAP.md")),"requirements":null}}));
