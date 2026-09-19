@@ -556,12 +556,19 @@ async fn phase10_fallback_closes_once() {
                     tokio::time::timeout(RUNNER_BUDGET, async {
                         while control.reading.load(SeqCst) < ordinal { tokio::task::yield_now().await; }
                     }).await.expect("HTTP read never started");
-                    // Poll once to Pending then drop the request. The provider
-                    // operation must remain resident, independent of that poll.
+                    // Poll once, then drop the request. The provider operation
+                    // must remain resident, independent of that poll. The store
+                    // answers from its own thread, so the one poll is Pending
+                    // when the reply is still in flight and Ready when the
+                    // thread won the race; both are a dropped poll, and neither
+                    // may touch the delivery.
                     {
                         let mut poll = Box::pin(execute(&factory, &root, Command::Query(Query::Next { fire: fire.clone() })));
                         std::future::poll_fn(|cx| {
-                            assert!(std::future::Future::poll(poll.as_mut(), cx).is_pending());
+                            if let std::task::Poll::Ready(answer) = std::future::Future::poll(poll.as_mut(), cx) {
+                                let answer = result(answer.unwrap());
+                                assert_eq!(answer["action"], "wait-for-delivery", "{row}: {answer}");
+                            }
                             std::task::Poll::Ready(())
                         }).await;
                     }
