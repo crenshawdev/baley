@@ -199,7 +199,8 @@ pub fn worker_exit(records: &Value, report: &crate::execution::runner::WorkerExi
         "exit must name an issued local review attempt in this phase");
     let attempt: Attempt = persistence::get(records, "attempts", id).map_err(|_| refuse())?;
     let admission: super::model::Admission = persistence::get(records, "admissions", &attempt.fire).map_err(|_| refuse())?;
-    if records["issued"].get(id).is_none() || admission.home.id != report.phase.to_string()
+    if records["issued"].get(id).is_none()
+        || admission.home.kind == super::model::HomeKind::Phase && admission.home.id != report.phase.to_string()
         || super::provider::Provider::parse(&attempt.requested.agent).is_some() {
         return Err(refuse());
     }

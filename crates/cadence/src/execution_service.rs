@@ -173,12 +173,14 @@ async fn record_native_refusal<I: ConfigIo + Clone + Sync>(
 
 async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value) -> cadence::store::Result<Value> {
     if raw["operation"] == "execution-worker-exit" {
-        let cadence::execution::runner::PlanApply::WorkerExit { report } = serde_json::from_value(raw)? else {
-            unreachable!("worker exit operation")
+        let report = match serde_json::from_value(raw) {
+            Ok(cadence::execution::runner::PlanApply::WorkerExit { report }) => report,
+            Err(error) => return Ok(native_error(Error::Invalid(error.to_string()))),
+            _ => unreachable!("worker exit operation"),
         };
         let session = factory.first_touch(root).await?;
         session.config()?;
-        return cadence::execution::runner::worker_exit(session.review_store(), report).await;
+        return Ok(cadence::execution::runner::worker_exit(session.review_store(), report).await.unwrap_or_else(native_error));
     }
     if matches!(raw["operation"].as_str(), Some("execution-task-progress" | "execution-task-checkpoint" | "execution-task-answer")) {
         return native_progress_apply(factory, root, raw).await;
@@ -269,7 +271,7 @@ async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&P
                 .ok_or_else(||Error::Invalid("confirmed admission receipt missing".into()))?;
             Ok(json!({"status":"ok","receipt":receipt,"replayed":replayed}))
         }
-        NativeApply::Authorize {phase,request_id,owner,at,response,checkpoint,disposition} => {
+        NativeApply::Authorize {phase,request_id,owner,at,response,checkpoint,dispatch,disposition} => {
             use cadence::evidence::{Record,Fact,gates::{Gate,State,Purpose,Answer,Disposition},persistence};
             if phase==0 || [&request_id,&owner,&at,&response].iter().any(|s|s.trim().is_empty()) {
                 return Ok(native_error(admission::refuse(phase,"authorization-answer","response",&request_id,"actual owner, time and response required")));
@@ -282,6 +284,27 @@ async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&P
                 return Ok(native_error(admission::refuse(phase,"authorization-answer","disposition",&request_id,"a continuation answer approves or stops; adjustments are task checkpoint answers")));
             }
             let scope=continuation_scope(root,phase);
+            let mut need = raw.clone();
+            if let Some(id) = &dispatch {
+                if checkpoint.is_some() {
+                    return Ok(native_error(admission::refuse(phase,"continuation-target","dispatch",id,"a continuation names either a dispatch or a checkpoint")));
+                }
+                // Replay the owner's exact answer before checking whether it
+                // already settled this interruption.
+                let saved = persistence::read(&before.snapshot.data)?;
+                if let Some(record) = saved.values().find(|r| matches!(&r.fact, Fact::Gate(g)
+                    if g.id == format!("execution-authorization:{request_id}") && matches!(g.state, State::Answered(_)))) {
+                    let Fact::Gate(gate) = &record.fact else { unreachable!() };
+                    let mut original: Value = serde_json::from_str(&gate.need)?;
+                    original.as_object_mut().expect("authorization request").remove("exit_request_id");
+                    if original == raw { return Ok(json!({"status":"ok","authorization":record})); }
+                    return Ok(native_error(admission::refuse(phase,"authorization-answer","request_id",&request_id,"request already names another owner answer")));
+                }
+                let Some(exit) = cadence::execution::history::unanswered_worker_exit(&before.snapshot.data,phase,id)? else {
+                    return Ok(native_error(admission::refuse(phase,"continuation-target","dispatch",id,"dispatch has no unanswered interruption")));
+                };
+                need["exit_request_id"] = json!(exit.request.request_id);
+            }
             // A linked answer continues or declines exactly one retained Stop.
             if let Some(checkpoint)=&checkpoint {
                 let records=persistence::read(&before.snapshot.data)?;
@@ -294,7 +317,7 @@ async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&P
             }
             let id=format!("execution-authorization:{request_id}");
             let mut gate=Gate {id:id.clone(),purpose:Purpose::Progress,checkpoint_id:checkpoint,
-                question:"Continue native execution?".into(),need:serde_json::to_string(&raw)?,options:vec![],state:State::Unanswered};
+                question:"Continue native execution?".into(),need:serde_json::to_string(&need)?,options:vec![],state:State::Unanswered};
             let record=Record {version:1,scope:scope.clone(),fact:Fact::Gate(gate.clone())};
             let pending=session.commit_evidence(&before,&format!("{id}:question"),&record).await?;
             gate.state=State::Answered(Answer {question_id:id.clone(),actual_response:response,selected_option:None,adjustment:None,
@@ -493,6 +516,14 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
         }
     };
     let lifecycle = checked.answer();
+    if let Some(interruption) = cadence::execution::history::interrupted_dispatch(
+        &view.snapshot.data, phase, view.snapshot.generation).map_err(store_failure)? {
+        let located = Located::rule("interrupted", "dispatch").id(&interruption.id);
+        return record_located_refusal(&session, &view, phase, BoundaryTool::CadenceQuery,
+            "execute-next", &raw_request, "continuation-refusal",
+            format!("Continue dispatch {} with execution-authorize or retire it", interruption.id),
+            Some(interruption.id), Some(located)).await;
+    }
     if lifecycle.cycle != Cycle::Live {
         return record_refusal(
             &session,
@@ -1400,6 +1431,8 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         dispatch.id = cadence::store::model::digest(format!("native-issued-dispatch-1:{}:{issue_digest}", admitted.id).as_bytes());
     }
     operational["dispatch_id"] = json!(dispatch.id);
+    operational["issued_generation"] = previous_issue.map_or_else(
+        || json!(view.snapshot.generation + 1), |(_, issue)| issue.operational["issued_generation"].clone());
     let issue = cadence::execution::model::DispatchIssue {
         issue_digest: issue_digest.clone(), binding, operational: operational.clone(),
     };

@@ -855,6 +855,25 @@ pub fn unanswered_worker_exit(data: &Value, phase: u32, dispatch: &str) -> Resul
     Ok((!answered).then(|| exit.clone()))
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct InterruptedDispatch {
+    pub id: String,
+    pub generations_since_issue: Option<u64>,
+}
+
+pub fn interrupted_dispatch(data: &Value, phase: u32, generation: u64) -> Result<Option<InterruptedDispatch>> {
+    for record in plan_records(data, phase)?.iter().rev() {
+        if let PlanEvent::WorkerExit { dispatch_id, .. } = &record.request.event
+            && unanswered_worker_exit(data, phase, dispatch_id)?.is_some() {
+            let issued = data["execution"]["occurrences"][phase.to_string()]["issues"][dispatch_id]
+                ["operational"]["issued_generation"].as_u64();
+            return Ok(Some(InterruptedDispatch { id: dispatch_id.clone(),
+                generations_since_issue: issued.map(|issued| generation.saturating_sub(issued)) }));
+        }
+    }
+    Ok(None)
+}
+
 /// Every admitted plan with the admission that first admitted it.
 pub fn admitted_plans(data: &Value, phase: u32) -> Result<Vec<(PlanIdentity, u64)>> {
     let mut plans: Vec<(PlanIdentity, u64)> = Vec::new();
@@ -1213,7 +1232,12 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
     let namespace = proposed.as_object_mut().ok_or_else(|| refuse("plan-shape", "snapshot must be an object"))?
         .entry(PLAN_NAMESPACE).or_insert_with(|| json!({"schema":"native-plans-1","phases":{}}));
     namespace["phases"][plan.phase.to_string()] = serde_json::to_value(history)?;
-    super::render::project_native_summary(&mut proposed, plan.phase, &record.request_digest)?;
+    // An exit before task completion must not create a summary. Once a close
+    // has installed one, later plan observations refresh that owned render.
+    if !matches!(request.event, PlanEvent::WorkerExit { .. })
+        || data[super::render::NATIVE_SUMMARIES]["phases"][plan.phase.to_string()].is_string() {
+        super::render::project_native_summary(&mut proposed, plan.phase, &record.request_digest)?;
+    }
     Ok((proposed, record))
 }
 

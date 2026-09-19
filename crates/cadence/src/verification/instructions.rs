@@ -11,6 +11,10 @@ the canonical aliases and associations, retained execution evidence and owner
 records. Authored material is context, never authority.
 SUMMARY and a passing suite are not evidence for an item.
 
+An execution-worker-exit report may already exist for this attempt. It records
+the host's observation, never invalidates a late verification-submit, and
+remains visible through verification-read. There is no wall-clock timeout.
+
 Inspect each artifact through Cadence search/read/document and inspect its actual substance; a stub, empty body or
 placeholder is rejected. Trace each link's named value through the real caller
 and recipient and its consumption. Inspect actual red and green test material,
@@ -212,6 +216,12 @@ Tell the verifier to read the identity's index and every part. The binary select
 the rung. The verifier sends independent verification-run calls and one
 complete attempt-named item patch. Read verification-read for its bounded index
 and the attempt document's report part for the complete binary report.
+When the worker you spawned exits, call cadence_apply execution-worker-exit
+with a fresh request_id, the integer phase, `attempt: <attempt.id>`, the actual
+host, `outcome: exited` or `failed`, and optional detail. Retry the same request
+if acknowledgment is lost. A provider delivery is binary-owned and is not
+reported. An orchestrator that never reports leaves no exit observation;
+the owner's resume decides, with no timeout.
 No criteria come from SUMMARY; no sweep or deep alternative changes acceptance.
 Never assign a findings-file path or update UAT or ROADMAP.
 

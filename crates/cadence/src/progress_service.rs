@@ -78,6 +78,10 @@ fn records(view: &View, phase: &str) -> Value {
 pub async fn query<I: ConfigIo + Clone + Sync>(
     factory: &SessionFactory<I>, root: &Path, driver: &Driver,
 ) -> Result<Value, DerivationError> {
+    // Age the work at query entry. A cursor/memo repair performed by this
+    // progress read is not another generation of elapsed worker activity.
+    let observed_generation = factory.first_touch(root).await.map_err(store_error)?
+        .derivation_view().await.map_err(store_error)?.snapshot.generation;
     let (checked, view) = derivation_service::checked_progress(factory, root, driver).await?;
     let mut lifecycle = checked.answer().clone();
     let overlay = checked.overlay().clone();
@@ -111,6 +115,11 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
         &root.parent().and_then(Path::file_name).unwrap_or_default().to_string_lossy(),
         &lifecycle, &overlay, &issues, record,
         json!({"active":captures.active,"bound":captures.bound,"exceeded":captures.exceeded}), &next.instruction());
+    let interruption = match lifecycle.current.and_then(|p| p.address().parse::<u32>().ok()) {
+        Some(phase) => cadence::execution::history::interrupted_dispatch(&view.snapshot.data, phase, observed_generation).map_err(store_error)?,
+        None => None,
+    };
+    let answer = cadence::progress::render::with_dispatch(answer, interruption);
     if serde_json::to_vec(&answer).expect("progress answer").len() > 24_576 {
         return Ok(Refusal::new("progress-bound", "progress exceeds the 24576-byte answer bound")
             .slot("progress").value());

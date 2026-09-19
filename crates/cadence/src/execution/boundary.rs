@@ -42,6 +42,7 @@ pub enum NativeApply {
     #[serde(rename="execution-authorize")]
     Authorize {phase:u32,request_id:String,owner:String,at:String,response:String,
         #[serde(default)] checkpoint:Option<String>,
+        #[serde(default)] dispatch:Option<String>,
         #[serde(default)] disposition:Option<crate::evidence::gates::Disposition>},
 }
 

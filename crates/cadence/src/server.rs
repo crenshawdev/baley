@@ -1150,11 +1150,33 @@ impl ServerHandler for PublicServer {
                         ))));
                     }
                     Some(QueryArguments::ExecuteNext { phase, plan }) => {
-                        return execute_next_handler(
+                        let response = execute_next_handler(
                             || self.review_handoff(Some(phase.get()), None),
                             || self.server.query_selected_execution(&self.root, phase.get(), plan),
                         )
-                        .await;
+                        .await?;
+                        // The historical execution envelope stays byte-exact.
+                        // Expose the interruption's separately retained typed
+                        // location beside that envelope at the wire boundary.
+                        if let CallToolResponse::Complete(result) = &response
+                            && let Some(value) = &result.structured_content
+                            && value["code"] == "continuation-refusal" {
+                            let view = self.server.service.store(&self.root, cadence::store::writer::Operation::ReadVerified)
+                                .await.map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                            for record in view.decisions.iter().rev() {
+                                if let cadence::store::model::Decision::BoundaryV1(saved) = &record.decision
+                                    && saved.boundary.scope == (cadence::execution::boundary::BoundaryScope::Execution { phase: phase.get() })
+                                    && let cadence::execution::boundary::Receipt::Compact { envelope } = &saved.boundary.receipt
+                                    && serde_json::to_value(envelope).ok().as_ref() == Some(value)
+                                    && let Some(located) = &saved.boundary.located
+                                    && located.rule.as_deref() == Some("interrupted") {
+                                    let mut value = value.clone();
+                                    value["located"] = serde_json::json!(located);
+                                    return Ok(CallToolResult::structured(value).into());
+                                }
+                            }
+                        }
+                        return Ok(response);
                     }
                     Some(QueryArguments::DetectSurfaces { answered }) => {
                         return structured_result(Ok(QueryOutput::Surfaces(Box::new(

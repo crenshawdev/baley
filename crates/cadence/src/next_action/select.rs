@@ -11,6 +11,7 @@ pub struct Pause {
 pub enum Action {
     Resolve { phase: PhaseId, source: String },
     Resume(String),
+    Interrupted(String),
     Execute(PhaseId),
     Verify(PhaseId),
     Context(PhaseId),
@@ -25,6 +26,7 @@ impl Action {
         match self {
             Self::Resolve { phase, source } => format!("Resolve {source}: declare phase {} with adoption-declare or untick it", phase.address()),
             Self::Resume(next) => next.clone(),
+            Self::Interrupted(id) => format!("Continue dispatch {id} with execution-authorize or retire it"),
             Self::Execute(id) => format!("/cad-execute {}", id.address()),
             Self::Verify(id) => format!("/cad-verify {}", id.address()),
             Self::Context(id) => format!("/cad-context {}", id.address()),
@@ -44,6 +46,7 @@ impl Action {
 #[derive(Clone, Copy)]
 pub(super) enum Rule {
     Conflict,
+    Interrupted,
     Pause,
     Planned,
     Outstanding,
@@ -74,12 +77,12 @@ impl Rule {
         pause: Option<&Pause>,
         skip_discuss: bool,
     ) -> Option<Action> {
-        self.apply_with_conflicts(lifecycle, observations, pause, skip_discuss, &[])
+        self.apply_with_conflicts(lifecycle, observations, pause, skip_discuss, &[], None)
     }
 
     fn apply_with_conflicts(
         self, lifecycle: &Lifecycle, observations: &Observations, pause: Option<&Pause>,
-        skip_discuss: bool, conflicts: &[crate::derivation::RoadmapConflict],
+        skip_discuss: bool, conflicts: &[crate::derivation::RoadmapConflict], interrupted: Option<&str>,
     ) -> Option<Action> {
         let lowest = |status, outstanding: bool| {
             lifecycle
@@ -90,6 +93,7 @@ impl Rule {
                 .map(|p| p.id)
         };
         match self {
+            Self::Interrupted => interrupted.map(|id| Action::Interrupted(id.into())),
             Self::Conflict => conflicts.iter()
                 .min_by(|a, b| a.phase.number().total_cmp(&b.phase.number()))
                 .map(|issue| Action::Resolve { phase: issue.phase, source: issue.source.clone() }),
@@ -139,7 +143,14 @@ pub fn select_with_conflicts(
     lifecycle: &Lifecycle, observations: &Observations, pause: Option<&Pause>,
     skip_discuss: bool, conflicts: &[crate::derivation::RoadmapConflict],
 ) -> Option<Action> {
-    // Conflict is the tenth compiled rule and precedes the established nine.
-    Rule::Conflict.apply_with_conflicts(lifecycle, observations, pause, skip_discuss, conflicts)
+    select_with_interruptions(lifecycle, observations, pause, skip_discuss, conflicts, None)
+}
+
+pub fn select_with_interruptions(
+    lifecycle: &Lifecycle, observations: &Observations, pause: Option<&Pause>,
+    skip_discuss: bool, conflicts: &[crate::derivation::RoadmapConflict], interrupted: Option<&str>,
+) -> Option<Action> {
+    Rule::Conflict.apply_with_conflicts(lifecycle, observations, pause, skip_discuss, conflicts, interrupted)
+        .or_else(|| Rule::Interrupted.apply_with_conflicts(lifecycle, observations, pause, skip_discuss, conflicts, interrupted))
         .or_else(|| RULES.iter().find_map(|rule| rule.apply(lifecycle, observations, pause, skip_discuss)))
 }

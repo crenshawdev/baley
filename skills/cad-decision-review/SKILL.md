@@ -60,6 +60,15 @@ For the read-layer cycle-purpose close handoff, measure a new real Claude Code p
    usable-complete or complete-with-failure. Provider work stays with the
    resident binary; missing or malformed output is failure, never an empty
    clean result.
+   When the local worker you spawned exits, call cadence_apply
+   execution-worker-exit with a fresh request_id, the integer phase,
+   `review: <attempt.attempt>`, the actual host, `outcome: exited` or `failed`,
+   and optional detail. Retry the same request if acknowledgment is lost.
+   A provider delivery is binary-owned and is not reported. The report uses
+   the same Interrupted observation as review-stop; late returns are accepted.
+   An orchestrator that never reports leaves no exit observation; the owner's
+   resume decides, with no timeout. Use the selected phase; for a target with
+   no phase, retain the review's ordinary launch/return observations.
 4. Present. Show the reviewer's findings unedited - file, line, severity, claim
    and failure scenario - beside the retained target and the selected kind. A
    clean pass names the target that was read; it is never a bare "no findings".

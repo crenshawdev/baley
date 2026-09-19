@@ -133,7 +133,7 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
             answer["attempt"] = json!(saved.as_ref().map(|a| json!({"schema":a.schema,"id":a.id,"request_id":a.request_id,
                 "identity":{"kind":"verification-attempt","phase":phase,"attempt":a.id}})));
             if let Some(a) = &saved {
-                let interruption = &data["verification"]["interruptions"][&a.id];
+                let interruption = &data["worker_interruptions"]["verification"][&a.id];
                 if !interruption.is_null() {
                     answer["attempt"]["interrupted"] = json!(true);
                     answer["attempt"]["exit"] = interruption.clone();

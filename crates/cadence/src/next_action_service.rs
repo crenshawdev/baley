@@ -285,7 +285,12 @@ pub async fn query_checked<I: ConfigIo + Clone + Sync>(
         }
     }
     observations::include_reviews(&mut observed.queue, members.clone(), unreadable.clone());
-    let answer = next_action::select_with_conflicts(checked.answer(), &observed, paused.as_ref(), skip, conflicts);
+    let interruption = match checked.answer().current.and_then(|p| p.address().parse::<u32>().ok()) {
+        Some(phase) => cadence::execution::history::interrupted_dispatch(&view.snapshot.data, phase, view.snapshot.generation).map_err(store_error)?,
+        None => None,
+    };
+    let answer = next_action::select_with_interruptions(checked.answer(), &observed, paused.as_ref(), skip, conflicts,
+        interruption.as_ref().map(|i| i.id.as_str()));
     #[cfg(test)]
     {
         let event = driver.event.clone();

@@ -59,3 +59,17 @@ pub fn answer(
     json!({"status":"ok", "text":text, "phases":phases, "issues":issues,
         "record":record, "dispatch":null, "captures":captures, "next":{"instruction":next}})
 }
+
+pub fn with_dispatch(mut answer: Value, dispatch: Option<crate::execution::history::InterruptedDispatch>) -> Value {
+    if let Some(dispatch) = dispatch {
+        let age = dispatch.generations_since_issue.map_or_else(|| "unknown".into(), |n| n.to_string());
+        let line = format!("Dispatch: dispatch {} interrupted, no return; {age} generations since issue\n", dispatch.id);
+        if let Some(text) = answer["text"].as_str() {
+            // Captures is always the final block before Next; insert by line.
+            let offset = text.rfind("\nCaptures:").map(|n| n + 1).expect("progress captures block");
+            answer["text"] = json!(format!("{}{}{}", &text[..offset], line, &text[offset..]));
+        }
+        answer["dispatch"] = json!(dispatch);
+    }
+    answer
+}

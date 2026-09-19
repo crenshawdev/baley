@@ -194,7 +194,7 @@ pub async fn worker_exit(store: &Store, report: WorkerExit) -> Result<serde_json
             return Err(super::admission::refuse(report.phase, "exit-target", "attempt", id, "verification attempt was never retained"));
         }
         interrupted = true;
-        next["verification"]["interruptions"][id] = json!(crate::verification::model::Interruption {
+        next["worker_interruptions"]["verification"][id] = json!(crate::verification::model::Interruption {
             request_id: report.request_id.clone(), host: report.host.clone(), outcome: report.outcome.clone(),
             detail: report.detail.clone(), at, generation });
     } else {

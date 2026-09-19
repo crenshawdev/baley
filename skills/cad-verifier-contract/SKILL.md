@@ -35,6 +35,10 @@ the canonical aliases and associations, retained execution evidence and owner
 records. Authored material is context, never authority.
 SUMMARY and a passing suite are not evidence for an item.
 
+An execution-worker-exit report may already exist for this attempt. It records
+the host's observation, never invalidates a late verification-submit, and
+remains visible through verification-read. There is no wall-clock timeout.
+
 Inspect each artifact through Cadence search/read/document and inspect its actual substance; a stub, empty body or
 placeholder is rejected. Trace each link's named value through the real caller
 and recipient and its consumption. Inspect actual red and green test material,

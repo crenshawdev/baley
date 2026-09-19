@@ -208,8 +208,13 @@ task id. Read execution-history's checkpoint_history. A linked Stop continues
 only with later owner approval naming that same checkpoint. An unlinked Stop
 has no checkpoint: later execution-authorize needs actual owner approval with
 checkpoint omitted or null. Stop itself never authorizes either continuation.
+An execution-worker-exit report may already exist when you return. It never
+invalidates a late task close or plan completion; the exit stays in history.
+An unanswered interruption requires the owner's execution-authorize answer
+with `dispatch` naming that exact issued id before execute-next re-serves it.
+There is no timeout or lease expiry; progress shows generations since issue.
 The authorization fields are phase, request_id, owner, at, response,
-optional checkpoint and disposition `approve` or `stop`; preserve the owner's
+optional checkpoint or dispatch and disposition `approve` or `stop`; preserve the owner's
 actual response. A task's question is answered through execution-task-answer.
 
 Use a conventional completion subject with the actual task token, for example

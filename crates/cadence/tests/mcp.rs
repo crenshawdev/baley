@@ -1589,6 +1589,8 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
         let text = cadence::review::instructions::frontdoor_markdown(command).unwrap();
         assert!(text.contains("kind: review-entry") && text.contains("lines:<n>") && text.contains("text:<n>"));
         assert!(text.contains("Never send\n   raw JSON text") && text.contains("findings digest and count"));
+        assert!(text.contains("execution-worker-exit") && text.contains("`review: <attempt.attempt>`"));
+        assert!(text.contains("A provider delivery is binary-owned and is not reported"));
     }
     for target in cadence::execution::render::RENDERED_PROJECT_FILES {
         let relative = target.path;
@@ -1614,6 +1616,8 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     assert!(frontdoor.contains("verify-next") && frontdoor.contains("`identities`"));
     assert!(frontdoor.contains("route.choice") && !frontdoor.contains("attempt.prompt"));
     assert!(verifier.contains("verification-run") && verifier.contains("verification-submit"));
+    assert!(frontdoor.contains("execution-worker-exit") && frontdoor.contains("`attempt: <attempt.id>`"));
+    assert!(verifier.contains("execution-worker-exit report may already exist"));
     for (name, effort) in [("cad-verifier", "high"), ("cad-verifier-low", "low"),
         ("cad-verifier-medium", "medium"), ("cad-verifier-xhigh", "xhigh"), ("cad-verifier-max", "max")] {
         let (agent, body) = markdown_parts(&format!("agents/{name}.md"));
@@ -1640,6 +1644,8 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     );
     assert_eq!(contract["name"], "cad-executor-contract");
     assert_eq!(contract["user-invocable"], false);
+    assert!(main.contains("execution-worker-exit") && main.contains("`dispatch: <dispatch_id>`"));
+    assert!(executor.contains("execution-worker-exit report may already exist"));
     // The five agent manifests are metadata adapters: they name the compiled
     // contract by reference, carry the routing rung and grant exactly the
     // Cadence tools the native task protocol needs. They state no policy.
