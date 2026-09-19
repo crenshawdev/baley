@@ -51,6 +51,8 @@ pub mod next_action_service;
 pub mod progress_service;
 #[path = "suggest_service.rs"]
 pub mod suggest_service;
+#[path = "why_service.rs"]
+pub mod why_service;
 #[cfg(test)]
 #[path = "next_action_service_tests.rs"]
 mod next_action_service_tests;
@@ -266,6 +268,15 @@ enum QueryArguments {
     Progress {},
     #[serde(rename = "suggest")]
     Suggest { phase: Option<NonZeroU32> },
+    #[serde(rename = "why")]
+    Why {
+        /// A repository-relative path: the owner's question, never a read location.
+        path: String,
+        /// A 1-based line; omit for every commit that touched the path.
+        line: Option<NonZeroU32>,
+        /// The entry cap; omit for the default of 6.
+        top: Option<NonZeroU32>,
+    },
     #[serde(rename = "search")]
     Search(cadence::read::model::SearchRequest),
     #[serde(rename = "list")]
@@ -906,6 +917,18 @@ impl ServerHandler for PublicServer {
                     };
                     return structured_result(Ok(QueryOutput::Read(answer)));
                 }
+                if raw.as_ref().is_some_and(|value| value["operation"] == "why") {
+                    let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
+                        Ok(QueryArguments::Why { path, line, top }) => match self.server.service.why(&self.root,
+                            why_service::Request { path, line: line.map(NonZeroU32::get), top: top.map(NonZeroU32::get) }).await {
+                            Ok(answer) => answer,
+                            Err(error) => Refusal::new("why-unavailable", error.to_string()).slot("why").value(),
+                        },
+                        Err(error) => Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value(),
+                        Ok(_) => unreachable!("why operation selected"),
+                    };
+                    return structured_result(Ok(QueryOutput::Read(answer)));
+                }
                 if raw.as_ref().is_some_and(|value| value["operation"] == "progress") {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
                         Ok(QueryArguments::Progress {}) => match self.server.service.progress(&self.root).await {
@@ -1094,6 +1117,7 @@ impl ServerHandler for PublicServer {
                     Some(QueryArguments::Schema { .. }) => unreachable!("schema routed before generic query"),
                     Some(QueryArguments::Progress {}) => unreachable!("progress routed before generic query"),
                     Some(QueryArguments::Suggest { .. }) => unreachable!("suggest routed before generic query"),
+                    Some(QueryArguments::Why { .. }) => unreachable!("why routed before generic query"),
                     Some(QueryArguments::ExecutionHistory { .. }) => unreachable!("native history decoded before execution fallback"),
                     Some(QueryArguments::PlanRead { .. } | QueryArguments::EvidenceRead { .. }) => {
                         unreachable!("plan read decoded before execution")

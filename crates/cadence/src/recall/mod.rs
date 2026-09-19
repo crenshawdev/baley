@@ -214,6 +214,11 @@ mod resident {
             phase: Option<u32>,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
+        Why {
+            root: PathBuf,
+            request: crate::server::why_service::Request,
+            reply: oneshot::Sender<Result<serde_json::Value>>,
+        },
         Progress {
             root: PathBuf,
             reply: oneshot::Sender<std::result::Result<serde_json::Value, DerivationError>>,
@@ -453,6 +458,13 @@ mod resident {
                     match request {
                         Request::Suggest { root, phase, reply } => {
                             let result = crate::server::suggest_service::query(&factory, &root, phase).await;
+                            let _ = reply.send(result);
+                        }
+                        Request::Why { root, request, reply } => {
+                            // git and the record are read on a blocking thread
+                            // so a long chain never holds the resident's loop.
+                            let result = tokio::task::spawn_blocking(move || crate::server::why_service::query(&root, &request))
+                                .await.map_err(|_| Error::Closed);
                             let _ = reply.send(result);
                         }
                         Request::Progress { root, reply } => {
@@ -809,6 +821,13 @@ mod resident {
         pub async fn suggest(&self, root: &Path, phase: Option<u32>) -> Result<serde_json::Value> {
             let (reply, completion) = oneshot::channel();
             self.requests.send(Request::Suggest { root: root.into(), phase, reply }).await
+                .map_err(|_| Error::Closed)?;
+            completion.await.map_err(|_| Error::Closed)?
+        }
+
+        pub async fn why(&self, root: &Path, request: crate::server::why_service::Request) -> Result<serde_json::Value> {
+            let (reply, completion) = oneshot::channel();
+            self.requests.send(Request::Why { root: root.into(), request, reply }).await
                 .map_err(|_| Error::Closed)?;
             completion.await.map_err(|_| Error::Closed)?
         }
