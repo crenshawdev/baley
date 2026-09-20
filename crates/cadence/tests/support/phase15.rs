@@ -432,3 +432,225 @@ else:
             .lines().map(|line| serde_json::from_str(line).unwrap()).collect()
     }
 }
+
+pub struct UndoFixture {
+    pub fixture: Fixture,
+    pub hashes: Vec<String>,
+    pub decoy: String,
+}
+
+impl UndoFixture {
+    pub fn new(native: bool) -> Self {
+        let fixture = undo_base();
+        let project = fixture.project();
+        git(project, &["config", "commit.gpgsign", "false"]);
+        fs::create_dir_all(project.join(".planning/phases/13")).unwrap();
+        fs::create_dir_all(project.join(".run")).unwrap();
+        fs::write(project.join(".git/info/exclude"), ".run/\n").unwrap();
+        fs::write(project.join(".planning/ROADMAP.md"), "## Phases\n- [ ] **Phase 13: Undo fixture**\n").unwrap();
+        for path in ["src/p13.txt", "src/second.txt", "src/third.txt", "docs.txt"] {
+            fs::write(project.join(path), "pending\n").unwrap();
+        }
+        fs::write(project.join("tests/p13.py"), "import pathlib, unittest\nclass Check(unittest.TestCase):\n    def test_file(self):\n        self.assertEqual(pathlib.Path('src/p13.txt').read_text(), 'ready\\n')\nif __name__ == '__main__':\n    unittest.main()\n").unwrap();
+        git(project, &["add", "."]);
+        git(project, &["commit", "-m", "Fixture undo baseline"]);
+        let hashes = if native { complete_undo_phase(project) } else {
+            fs::write(project.join(".planning/phases/13/PLAN-1.md"), "# Legacy plan\n").unwrap();
+            let mut hashes = Vec::new();
+            for (index, path) in ["src/p13.txt", "src/second.txt", "src/third.txt", "docs.txt"].iter().enumerate() {
+                fs::write(project.join(path), "ready\n").unwrap();
+                git(project, &["add", path]);
+                git(project, &["commit", "-m", &format!("feat(13): deliver legacy {index}")]);
+                hashes.push(git_value(project, &["rev-parse", "HEAD"]));
+            }
+            hashes
+        };
+        fs::write(project.join("decoy.txt"), "keep this unrelated commit\n").unwrap();
+        git(project, &["add", "decoy.txt"]);
+        git(project, &["commit", "-m", "feat(13): misleading phase commit"]);
+        let decoy = git_value(project, &["rev-parse", "HEAD"]);
+        let manifest = if native { vec![decoy.clone()] } else { hashes.clone() };
+        fs::write(project.join(".planning/phases/13/SUMMARY.md"),
+            format!("# Summary\n\n## Commits\n\n{}\n", manifest.iter().map(|h| format!("- `{h}`\n")).collect::<String>())).unwrap();
+        fs::write(project.join(".planning/phases/13/UAT.md"), "### 1. Fixture\nstatus: pass\n").unwrap();
+        git(project, &["add", ".planning"]);
+        git(project, &["commit", "-m", "Fixture completed phase documents"]);
+        Self { fixture, hashes, decoy }
+    }
+    pub fn project(&self) -> &Path { self.fixture.project() }
+    pub fn client(&self) -> Client {
+        Client::open_with_env(self.project(), Path::new(env!("CARGO_BIN_EXE_cadence")),
+            &[("GIT_TRACE2_EVENT", self.project().join(".run/undo.trace").as_os_str())])
+    }
+    pub fn reverts(&self) -> Vec<String> {
+        fs::read_to_string(self.project().join(".run/undo.trace")).unwrap_or_default().lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|event| event["event"] == "start")
+            .filter_map(|event| {
+                let argv = event["argv"].as_array()?;
+                let pos = argv.iter().position(|arg| arg == "revert")?;
+                argv.get(pos + 2)?.as_str().map(str::to_owned)
+            }).collect()
+    }
+}
+
+fn undo_task(client: &mut Client, id: &str) -> Value {
+    let history = client.call("cadence_query", json!({"operation":"execution-history","phase":13}));
+    history["tasks"].as_array().unwrap().iter().find(|t| t["task"]["task"] == id).unwrap().clone()
+}
+
+fn complete_undo_phase(project: &Path) -> Vec<String> {
+    let phase = 13;
+    let mut hashes = Vec::new();
+    let mut client = Client::open(project);
+    let context = phase13::approve(json!({"operation":"context-submit","submission":{
+        "phase":phase,"title":"Native milestone fixture","scope":"Complete one real artifact.",
+        "durable_decisions":[],"decisions":[],"assumptions":[],"truths":[{
+            "id":"T1","trigger":"the owner opens the artifact","observer":"the owner","verb":"sees",
+            "outcome":"ready","kind":"property","observable":true,"fixed_oracle":true}]}}));
+    ok(&mut client, context);
+    let allocation = client.call("cadence_query", json!({"operation":"plan-read","phase":phase,"count":1}));
+    let command = format!("python3 -B tests/p{phase}.py");
+    let file = format!("src/p{phase}.txt");
+    ok(&mut client, phase13::approve(json!({"operation":"plan-submit","submission":{
+        "phase":phase,"occurrence":allocation["occurrence"],"request_id":format!("publish-{phase}"),
+        "inventory_basis":allocation["inventory"]["basis"],"plans":[{"target":allocation["targets"][0],"content":{
+            "phase":phase,"plan":1,"requirements":["T1"],"files":[file,"src/second.txt","src/third.txt","docs.txt"],"directories":[],
+            "goal":"Deliver the ready artifact.","context":"Native completion fixture.","notes":"One artifact.",
+            "tasks":[{"id":"task-ready","title":"Deliver ready","files":[file],"action":"Write the ready artifact.","verify":[command]},
+                {"id":"task-second","title":"Second implementation","files":["src/second.txt"],"action":"Deliver second.","verify":[command]},
+                {"id":"task-third","title":"Third implementation","files":["src/third.txt"],"action":"Deliver third.","verify":[command]},
+                {"id":"task-docs","title":"Documentation","files":["docs.txt"],"action":"Document the result.","verify":[command]}],
+            "suite":command,"evidence_map":{"mode":"attached","items":[{"kind":"artifact","id":"artifact/ready",
+                "spec":{"locators":[file],"substance":"The ready artifact contains ready."},"reason":"Observe the ready artifact.",
+                "associations":[{"truth_id":"T1","truth_version":1,"reason":"Observe ready."}]},
+                {"kind":"check","id":"check/ready","reason":"Read the real artifact.","spec":{"command":command,
+                    "expected":{"kind":"literal","value":"ready followed by a newline"},"test":{"file":format!("tests/p{phase}.py"),"function":"Check.test_file"},
+                    "setup":"A pending artifact.","call":"Read the artifact.","boundary":"real filesystem","fakes":[]},
+                    "associations":[{"truth_id":"T1","truth_version":1,"reason":"Read ready."}]}]}}}]}})));
+    git(project, &["add", ".planning"]);
+    git(project, &["commit", "-m", &format!("Fixture phase {phase} publication")]);
+    let read = client.call("cadence_query", json!({"operation":"plan-read","phase":phase}));
+    let publication = &read["native"]["publications"]["1"];
+    let map = client.call("cadence_query", json!({"operation":"evidence-read","phase":phase}));
+    let item = map["items"].as_array().unwrap().iter().find(|i| i["kind"] == "check").unwrap();
+    let check = json!({"id":item["id"],"item_revision":item["item_revision"]});
+    ok(&mut client, json!({"operation":"execution-admit","request":{"request_id":format!("admit-{phase}"),"expected_set_version":0,
+        "contract":{"phase":phase,"occurrence":read["occurrence"],"plans":[{"plan":1,"publication_request":publication["publication_request"],
+            "content_revision":publication["revision"],"map_revision":publication["map_revision"]}],
+            "allocation":[{"plan":1,"task":"task-ready","checks":[check]},
+                {"plan":1,"task":"task-second","checks":[]},{"plan":1,"task":"task-third","checks":[]},{"plan":1,"task":"task-docs","checks":[]}]}}}));
+    ok(&mut client, json!({"operation":"execution-authorize","phase":phase,"request_id":format!("authorize-{phase}"),
+        "owner":"Fixture Owner","at":"2026-09-19T12:00:00Z","response":"Proceed with the fixture"}));
+    let dispatch = client.call("cadence_query", json!({"operation":"execute-next","phase":phase}));
+    assert_eq!(dispatch["status"], "ok", "{dispatch}");
+    let task = state(&mut client, phase, "tasks");
+    ok(&mut client, json!({"operation":"execution-task-start","request":{"request_id":format!("start-{phase}"),"task":task["task"],
+        "attempt":"attempt-ready","expected_version":0,"predecessor":null,"checks":[check]}}));
+    git(project, &["add", &format!("tests/p{phase}.py")]);
+    git(project, &["commit", "--allow-empty", "-m", &format!("test({phase}): expect ready task-ready")]);
+    let red_commit = git_value(project, &["rev-parse", "HEAD"]);
+    let task = state(&mut client, phase, "tasks");
+    let red_run = format!("red-{phase}");
+    ok(&mut client, json!({"operation":"execution-run","request":{"request_id":red_run,"task":task["task"],"attempt":"attempt-ready",
+        "expected_version":task["state"]["version"],"command":command,"check":check,"stage":"red"}}));
+    let red = phase13::native_result_with(|v| client.call("cadence_query", v), phase, &red_run);
+    assert_eq!(red["request"]["event"]["disposition"]["code"], 1, "{red}");
+    fs::write(project.join(&file), "ready\n").unwrap();
+    git(project, &["add", &file]);
+    git_value(project, &["commit", "-S", "-m", &format!("feat({phase}): deliver ready task-ready")]);
+    let completion = git_value(project, &["rev-parse", "HEAD"]);
+    let task = state(&mut client, phase, "tasks");
+    let run = format!("verify-{phase}");
+    ok(&mut client, json!({"operation":"execution-run","request":{"request_id":run,"task":task["task"],"attempt":"attempt-ready",
+        "expected_version":task["state"]["version"],"command":command,"check":check,"stage":"green"}}));
+    let result = phase13::native_result_with(|v| client.call("cadence_query", v), phase, &run);
+    assert_eq!(result["request"]["event"]["disposition"]["code"], 0, "{result}");
+    let launch = client.call("cadence_query", json!({"operation":"execution-history","phase":phase,"run":red_run}));
+    let inspection = json!({"check":check,"test_digest":launch["launch"]["request"]["event"]["material"]["test_digest"],
+        "evidence":[red_run,run],"no_subject_stub":true});
+    let task = state(&mut client, phase, "tasks");
+    ok(&mut client, json!({"operation":"execution-owner-attest","request":{"request_id":format!("inspect-{phase}"),"task":task["task"],
+        "attempt":"attempt-ready","expected_version":task["state"]["version"],"statement":{"submission":inspection,
+            "approval":{"approved":true,"owner":"Fixture Owner","at":"2026-09-19T12:00:00Z","submission":inspection}}}}));
+    let task = state(&mut client, phase, "tasks");
+    ok(&mut client, json!({"operation":"execution-task-close","request":{"request_id":format!("close-{phase}"),"task":task["task"],
+        "attempt":"attempt-ready","expected_version":task["state"]["version"],"completion":completion,
+        "checks":[{"check":check,"red_commit":red_commit,"green_commit":completion,"red_run":red_run,"green_run":run}],"verification":[run]}}));
+
+    hashes.push(completion);
+    for (id, path) in [("task-second", "src/second.txt"), ("task-third", "src/third.txt"), ("task-docs", "docs.txt")] {
+        let task = undo_task(&mut client, id);
+        ok(&mut client, json!({"operation":"execution-task-start","request":{"request_id":format!("undo-fixture-start-{id}"),
+            "task":task["task"],"attempt":id,"expected_version":0,"predecessor":null,"checks":[]}}));
+        fs::write(project.join(path), "ready\n").unwrap();
+        git(project, &["add", path]);
+        git_value(project, &["commit", "-S", "-m", &format!("feat(13): deliver fixture {id}")]);
+        let completion = git_value(project, &["rev-parse", "HEAD"]);
+        let task = undo_task(&mut client, id);
+        let run = format!("undo-fixture-verify-{id}");
+        ok(&mut client, json!({"operation":"execution-run","request":{"request_id":run,"task":task["task"],"attempt":id,
+            "expected_version":task["state"]["version"],"command":command,"check":null,"stage":"verify"}}));
+        let result = phase13::native_result_with(|v| client.call("cadence_query", v), phase, &run);
+        assert_eq!(result["request"]["event"]["disposition"]["code"], 0, "{result}");
+        let task = undo_task(&mut client, id);
+        ok(&mut client, json!({"operation":"execution-task-close","request":{"request_id":format!("undo-fixture-close-{id}"),
+            "task":task["task"],"attempt":id,"expected_version":task["state"]["version"],
+            "completion":completion,"checks":[],"verification":[run]}}));
+        hashes.push(completion);
+    }
+    let plan = state(&mut client, phase, "plans");
+    let suite = format!("suite-{phase}");
+    ok(&mut client, json!({"operation":"execution-suite","request":{"request_id":suite,"plan":plan["plan"],"expected_version":plan["state"]["version"]}}));
+    let result = phase13::native_result_with(|v| client.call("cadence_query", v), phase, &suite);
+    assert_eq!(result["request"]["event"]["disposition"]["code"], 0, "{result}");
+    ok(&mut client, json!({"operation":"risk-check","request_id":format!("execution-risk-{phase}"),
+        "scope":{"phase":phase,"occurrence":format!("phase-{phase}-execution"),"worker":"1"},
+        "source":{"kind":"execution","plan":1,"dispatch_id":dispatch["dispatch_id"]},"surfaces":null}));
+    let plan = state(&mut client, phase, "plans");
+    ok(&mut client, json!({"operation":"execution-plan-complete","request":{"request_id":format!("complete-{phase}"),"plan":plan["plan"],"expected_version":plan["state"]["version"]}}));
+    let dispatch = client.call("cadence_query", json!({"operation":"verify-next","phase":phase,"request_id":format!("verification-{phase}")}));
+    assert_eq!(dispatch["status"], "ok", "{dispatch}");
+    let attempt = phase13::attempt_with(&mut client, &dispatch);
+    let mut items = Vec::new();
+    for item in attempt["map"]["items"].as_array().unwrap() {
+        let mut runs = Vec::new();
+        if item["kind"] == "check" {
+            let run = format!("independent-{phase}");
+            ok(&mut client, json!({"operation":"verification-run","request":{"request_id":run,"attempt":attempt["id"],"basis":attempt["basis"],
+                "item":{"id":item["id"],"item_revision":item["item_revision"]}}}));
+            let result = phase13::independent_result(&mut client, phase, &run);
+            assert_eq!(result["disposition"]["code"], 0, "{result}");
+            runs.push(run);
+        }
+        items.push(json!({"id":item["id"],"item_revision":item["item_revision"],"verdict":"accepted","observed":"The real artifact reads ready followed by a newline.","runs":runs}));
+    }
+    ok(&mut client, json!({"operation":"verification-submit","patch":{"request_id":format!("patch-{phase}"),"attempt":attempt["id"],
+        "items":items}}));
+    let read = client.call("cadence_query", json!({"operation":"verification-read","phase":phase}));
+    ok(&mut client, json!({"operation":"verification-complete","request_id":format!("verified-{phase}"),"attempt":attempt["id"],
+        "basis":read["current"]["observed"],"projections":{"roadmap":phase13::digest_of(&project.join(".planning/ROADMAP.md")),"requirements":null}}));
+    client.finish();
+    hashes
+}
+
+fn undo_base() -> Fixture {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path();
+    for path in [".planning/phases", "src", "tests", ".fixture-gnupg"] {
+        fs::create_dir_all(project.join(path)).unwrap();
+    }
+    fs::set_permissions(project.join(".fixture-gnupg"), fs::Permissions::from_mode(0o700)).unwrap();
+    let output = Command::new("gpg").env("GNUPGHOME", project.join(".fixture-gnupg"))
+        .args(["--batch", "--pinentry-mode", "loopback", "--passphrase", "", "--quick-generate-key",
+            "Cadence-Phase13 <phase13@example.invalid>", "ed25519", "sign", "0"])
+        .stdin(Stdio::null()).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    git(project, &["init", "--initial-branch=fixture/undo"]);
+    git_value(project, &["config", "user.signingkey", "phase13@example.invalid"]);
+    fs::write(project.join(".gitignore"), ".planning/*\n!.planning/*.md\n!.planning/config.json\n!.planning/phases/\n.planning/phases/*/*\n!.planning/phases/*/*.md\n.fixture-gnupg/\n__pycache__/\n.run/\n").unwrap();
+    fs::write(project.join(".planning/config.json"), serde_json::to_vec(&json!({"review":{"triggers":{
+        "plan":{"gate":"deferred"},"risk_surface":{"surfaces":cadence::rail::risk::CATEGORIES}}}})).unwrap()).unwrap();
+    Fixture { temp }
+}
+

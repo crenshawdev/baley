@@ -513,3 +513,117 @@ fn phase15_confirmed_merge_orders_cleanup_and_reap_checks_containment() {
         assert_eq!(git_value(project, &["rev-parse", "fixture/execution"]), fixture.head);
     }
 }
+
+#[test]
+fn phase15_undo_reverts_exact_hashes_and_marks_the_record() {
+    use phase15::UndoFixture;
+    use serde_json::Value;
+    let request = |id: &str, manifest: &Value, mode: &str| json!({"operation":"undo-phase","request":{
+        "request_id":id,"phase":13,"manifest":manifest["id"],"mode":mode}});
+    let completed_hashes = |answer: &Value| answer["undo"]["completed"].as_array().unwrap().iter()
+        .map(|step| step["hash"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    for mode in ["committed", "no-commit", "conflict", "legacy"] {
+        let fixture = UndoFixture::new(mode != "legacy");
+        let project = fixture.project();
+        let [first, second, third, docs]: [String; 4] = fixture.hashes.clone().try_into().unwrap();
+        let expected = vec![docs, third, second, first];
+        if mode == "conflict" {
+            fs::write(project.join("src/third.txt"), "later conflicting work\n").unwrap();
+            git(project, &["add", "src/third.txt"]);
+            git(project, &["commit", "-m", "feat(99): retain later conflicting work"]);
+        }
+        let before_head = git_value(project, &["rev-parse", "HEAD"]);
+        let before_docs = phase14::documents(project);
+        let before_store = reopened(project).snapshot.data;
+        let mut client = fixture.client();
+        if mode != "legacy" {
+            let progress = client.call("cadence_query", json!({"operation":"progress"}));
+            assert_eq!(progress["status"], "ok", "{progress}");
+            assert_eq!(progress["phases"][0]["status"], "complete", "{progress}");
+        }
+        let read = client.call("cadence_query", json!({"operation":"undo-read","phase":13}));
+        assert_eq!(read["status"], "ok", "undo-read must expose the recorded exact manifest: {read}");
+        let manifest = &read["manifest"];
+        assert_eq!(manifest["hashes"], json!(fixture.hashes), "{read}");
+        assert_eq!(manifest["source"], if mode == "legacy" { "SUMMARY" } else { "execution" });
+        assert!(!manifest["hashes"].as_array().unwrap().contains(&json!(fixture.decoy)));
+        let wire = request(&format!("undo-{mode}"), manifest, if mode == "no-commit" { mode } else { "committed" });
+        // A different immutable manifest must refuse before any Git mutation.
+        let mut wrong = wire.clone();
+        wrong["request"]["request_id"] = json!(format!("undo-{mode}-wrong"));
+        wrong["request"]["manifest"] = json!("not-the-recorded-manifest");
+        let refusal = client.call("cadence_apply", wrong);
+        assert_eq!(refusal["status"], "refused", "{refusal}");
+        assert_eq!(git_value(project, &["rev-parse", "HEAD"]), before_head);
+        assert!(fixture.reverts().is_empty());
+        let answer = client.call("cadence_apply", wire.clone());
+        assert_eq!(answer["status"], if mode == "conflict" { "refused" } else { "ok" }, "{answer}");
+        if mode == "conflict" {
+            assert_eq!(completed_hashes(&answer), vec![expected[0].clone()]);
+            assert_eq!(answer["undo"]["conflict"]["hash"], expected[1]);
+            assert_eq!(answer["undo"]["conflict"]["paths"], json!(["src/third.txt"]));
+            assert!(git_value(project, &["ls-files", "-u"]).contains("src/third.txt"));
+            assert_eq!(fixture.reverts(), expected[..2]);
+            assert_eq!(git_value(project, &["rev-list", "--count", &format!("{before_head}..HEAD")]), "1");
+        } else {
+            assert_eq!(completed_hashes(&answer), expected);
+            assert_eq!(fixture.reverts(), expected);
+            for path in ["src/p13.txt", "src/second.txt", "src/third.txt", "docs.txt"] {
+                assert_eq!(fs::read_to_string(project.join(path)).unwrap(), "pending\n");
+            }
+        }
+        assert_eq!(fs::read_to_string(project.join("decoy.txt")).unwrap(), "keep this unrelated commit\n");
+        client.finish();
+        let after = reopened(project).snapshot.data;
+        assert_eq!(after["execution"]["history"], before_store["execution"]["history"]);
+        assert_eq!(after["verification"], before_store["verification"], "verification evidence is retained");
+        if mode == "no-commit" || mode == "conflict" {
+            assert_eq!(after["execution"]["occurrences"]["13"], before_store["execution"]["occurrences"]["13"]);
+            assert_eq!(after["cursor"], before_store["cursor"]);
+            assert_eq!(phase14::documents(project), before_docs);
+            if mode == "no-commit" {
+                assert_eq!(git_value(project, &["rev-parse", "HEAD"]), before_head);
+                assert_eq!(git_value(project, &["diff", "--cached", "--name-only"]),
+                    "docs.txt\nsrc/p13.txt\nsrc/second.txt\nsrc/third.txt");
+            }
+        } else {
+            let subjects = git_value(project, &["log", "--reverse", "--format=%s", &format!("{before_head}..HEAD")]);
+            let subjects: Vec<_> = subjects.lines().collect();
+            assert_eq!(subjects.len(), 4, "document repair belongs to the last revert, with no fifth commit");
+            for (subject, original) in subjects.iter().zip(&expected) { assert!(subject.contains(original), "{subjects:?}"); }
+            if mode != "legacy" {
+                let marker = &after["execution"]["occurrences"]["13"]["undone"];
+                assert_eq!(marker["undo"], answer["undo"]["id"]);
+                assert_eq!(marker["manifest"], manifest["id"]);
+                assert_eq!(marker["occurrence"], manifest["occurrence"]);
+            } else {
+                assert!(after["execution"]["occurrences"]["13"].is_null(), "legacy undo invents no native execution");
+            }
+            let roadmap = fs::read_to_string(project.join(".planning/ROADMAP.md")).unwrap();
+            assert!(roadmap.contains("- [ ] **Phase 13:"), "{roadmap}");
+            let changed = git_value(project, &["show", "--format=", "--name-only", "HEAD"]);
+            assert!(changed.contains(".planning/ROADMAP.md") || mode == "legacy", "{changed}");
+            assert!(changed.contains(".planning/STATE.md"), "{changed}");
+            assert_eq!(git_value(project, &["status", "--porcelain"]), "");
+        }
+        let trace_before_retry = fixture.reverts();
+        let mut restarted = fixture.client();
+        let reread = restarted.call("cadence_query", json!({"operation":"undo-read","phase":13}));
+        assert_eq!(reread["manifest"], *manifest);
+        let retry = restarted.call("cadence_apply", wire);
+        assert_eq!(retry, answer, "restart replays the exact persisted completed set");
+        assert_eq!(fixture.reverts(), trace_before_retry, "retry runs no successful hash twice");
+        if mode == "committed" || mode == "legacy" {
+            let progress = restarted.call("cadence_query", json!({"operation":"progress"}));
+            assert_eq!(progress["status"], "ok", "{progress}");
+            assert_eq!(progress["phases"][0]["status"], "planned", "{progress}");
+            assert_eq!(progress["issues"], json!([]));
+            let state = fs::read_to_string(project.join(".planning/STATE.md")).unwrap();
+            assert!(state.contains("13") && state.to_lowercase().contains("planned"), "{state}");
+            assert!(state.contains(progress["next"]["instruction"].as_str().unwrap()), "{state}; {progress}");
+            let selected = restarted.call("cadence_query", json!({"operation":"execute-next","phase":13}));
+            assert_ne!(selected["code"], "phase-not-current", "{selected}");
+        }
+        restarted.finish();
+    }
+}
