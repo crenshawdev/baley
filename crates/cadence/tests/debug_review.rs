@@ -73,8 +73,11 @@ fn debug_resolve_risk_checks_the_index_without_a_phase() {
             assert_eq!(next["result"]["state"], "dispatch", "{case}: {next}");
             assert!(next["result"]["dispatch"].is_object());
             let attempt = next["result"]["attempt"]["attempt"].as_str().unwrap();
-            for entry in next["result"]["attempt"]["view"]["entries"].as_array().unwrap() {
-                let read = client.call("cadence_query", json!({"operation":"review-material","attempt":attempt,"entry":entry}));
+            let inventory = client.call("cadence_query", json!({"operation":"review-inventory"}));
+            let manifest_id = next["result"]["attempt"]["view"]["manifest"].as_str().unwrap();
+            let entries = inventory["result"]["records"]["manifests"][manifest_id]["entries"].as_array().unwrap();
+            for entry in entries.iter().filter(|entry| entry["availability"] == "available") {
+                let read = client.call("cadence_query", json!({"operation":"review-material","attempt":attempt,"entry":entry["entry"]}));
                 assert_eq!(read["status"], "ok", "{read}");
             }
             let retry = client.call("cadence_apply", json!({"operation":"debug-resolve","request":{
