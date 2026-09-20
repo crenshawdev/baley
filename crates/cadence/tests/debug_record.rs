@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 #[path = "support/phase13.rs"]
 mod phase13;
 #[path = "support/support_records.rs"]
