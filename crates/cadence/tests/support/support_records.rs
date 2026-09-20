@@ -14,6 +14,26 @@ pub fn fixture() -> tempfile::TempDir {
     temp
 }
 
+pub fn risk_fixture() -> tempfile::TempDir {
+    let temp = phase13::fixture();
+    fs::write(temp.path().join(".planning/config.json"), serde_json::to_vec(&json!({
+        "review":{"mode":"single","reviewers":["claude-subagent"],
+            "triggers":{"risk_surface":{"surfaces":["auth"],"gate":"blocking"}}}
+    })).unwrap()).unwrap();
+    let mut client = Client::open(temp.path());
+    client.call("cadence_query", json!({"operation":"progress"}));
+    client.finish();
+    phase13::reopened(temp.path());
+    temp
+}
+
+pub fn change(project: &Path, path: &str, bytes: &[u8], staged: bool) {
+    let target = project.join(path);
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(target, bytes).unwrap();
+    if staged { phase13::git(project, &["add", "--", path]); }
+}
+
 pub fn documents(project: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     phase13::tree(project).into_iter().filter_map(|(path, bytes)| {
         let document = path.extension().is_some_and(|ext| ext == "md")
