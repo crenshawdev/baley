@@ -2,6 +2,7 @@
 use super::{effects::Invocation, model::{ExternalInput, Forge, Landing}};
 use crate::store::{Error, Result};
 use serde_json::Value;
+use std::path::Path;
 
 pub fn validate(forge: &Forge) -> Result<()> {
     let safe = |part: &str| !part.is_empty() && part != "." && part != ".." && !part.starts_with('-')
@@ -72,4 +73,85 @@ pub fn tracker(forge: &Forge) -> Invocation {
         format!("projects/{}/issues?state=opened&per_page=100", forge.repo.replace('/', "%2F"))
     } else { format!("repos/{}/issues?state=open&limit=100", forge.repo) };
     api(forge, "GET", endpoint, vec![])
+}
+
+fn parameter(value: &str) -> String {
+    value.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+        (b as char).to_string()
+    } else { format!("%{b:02X}") }).collect()
+}
+
+fn pulls(forge: &Forge) -> String {
+    if forge.provider == "gitlab" { format!("projects/{}/merge_requests", parameter(&forge.repo)) }
+    else { format!("repos/{}/pulls", forge.repo) }
+}
+
+fn get(root: &Path, forge: &Forge, endpoint: String) -> Result<Value> {
+    serde_json::from_str(&super::effects::run(root, &api(forge, "GET", endpoint, vec![]))?).map_err(Into::into)
+}
+
+pub fn number(forge: &Forge, value: &Value) -> Result<u64> {
+    let key = if forge.provider == "gitlab" { "iid" } else { "number" };
+    value[key].as_u64().filter(|n| *n > 0).ok_or_else(|| Error::Invalid(format!("remote PR has invalid {key}: {}", value[key])))
+}
+
+/// Discover across all states: a closed or moved PR is a discrepancy, not absence.
+pub fn read_pull(root: &Path, landing: &Landing, forge: &Forge, identity: Option<u64>) -> Result<Option<Value>> {
+    let endpoint = pulls(forge);
+    let identity = if let Some(identity) = identity { identity } else {
+        let filter = match forge.provider.as_str() {
+            "github" => format!("&head={}", parameter(&format!("{}:{}", forge.repo.split('/').next().unwrap(), landing.source.branch))),
+            "gitlab" => format!("&source_branch={}", parameter(&landing.source.branch)),
+            // Gitea has no head filter. Inspect every returned head locally.
+            _ => String::new(),
+        };
+        let limit = if forge.provider == "forgejo" { "limit" } else { "per_page" };
+        let mut candidates = Vec::new();
+        let mut complete = false;
+        for page in 1..=10 {
+            let values = get(root, forge, format!("{endpoint}?state=all&{limit}=100&page={page}{filter}"))?;
+            let values = values.as_array().ok_or_else(|| Error::Invalid("remote PR list is not an array".into()))?;
+            for value in values {
+                if forge.provider == "forgejo" {
+                    let head = value["head"]["ref"].as_str().ok_or_else(|| Error::Invalid("remote PR list has no head ref".into()))?;
+                    if head != landing.source.branch { continue; }
+                }
+                candidates.push(number(forge, value)?);
+            }
+            if values.len() < 100 { complete = true; break; }
+        }
+        if !complete || candidates.len() > 1 {
+            return Err(Error::Invalid(format!("ambiguous remote PR list; complete={complete}, identities={candidates:?}")));
+        }
+        let Some(identity) = candidates.first() else { return Ok(None); };
+        *identity
+    };
+    let value = get(root, forge, format!("{endpoint}/{identity}"))?;
+    if number(forge, &value)? != identity {
+        return Err(Error::Invalid(format!("remote PR identity differs from {identity}: {value}")));
+    }
+    Ok(Some(value))
+}
+
+pub fn pull_state(root: &Path, landing: &Landing, forge: &Forge, value: &Value) -> Result<&'static str> {
+    let matches = if forge.provider == "gitlab" {
+        let project = get(root, forge, format!("projects/{}", parameter(&forge.repo)))?;
+        project["path_with_namespace"] == forge.repo && project["id"].as_u64().is_some_and(|id| id > 0)
+            && value["source_project_id"] == project["id"] && value["target_project_id"] == project["id"]
+            && value["source_branch"] == landing.source.branch && value["sha"] == landing.source.head
+            && value["target_branch"] == landing.base.branch
+    } else {
+        value["head"]["repo"]["full_name"] == forge.repo && value["base"]["repo"]["full_name"] == forge.repo
+            && value["head"]["ref"] == landing.source.branch && value["head"]["sha"] == landing.source.head
+            && value["base"]["ref"] == landing.base.branch && value["base"]["sha"] == landing.base.head
+    };
+    if !matches {
+        return Err(Error::Invalid(format!("remote PR repository/head/base mismatch; expected repo {}, source {:?}, base {:?}; observed {value}",
+            forge.repo, landing.source, landing.base)));
+    }
+    match (forge.provider.as_str(), value["state"].as_str(), value["merged"].as_bool()) {
+        ("gitlab", Some("merged"), _) | (_, Some("closed"), Some(true)) => Ok("MERGED"),
+        ("gitlab", Some("opened"), _) | (_, Some("open"), Some(false)) => Ok("OPEN"),
+        _ => Err(Error::Invalid(format!("remote PR state is unknown or closed-unmerged: {value}"))),
+    }
 }

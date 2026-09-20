@@ -67,6 +67,8 @@ pub struct Authorization { pub id: String, #[serde(flatten)] pub request: Author
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Intent {
     pub request: Publish,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
     pub authorization: Authorization,
     pub invocation: super::effects::Invocation,
     pub failure: Option<String>,
@@ -86,6 +88,8 @@ pub enum Apply {
     Merge { request: Publish },
     #[serde(rename = "land-tag-push")]
     TagPush { request: Publish },
+    #[serde(rename = "land-resume")]
+    Resume { request: Publish },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

@@ -73,10 +73,18 @@ pub fn source_matches(root: &Path, landing: &Landing) -> Result<bool> {
 
 pub fn remote_head(root: &Path, landing: &Landing, reference: &str) -> Result<Option<String>> {
     let output = observe(root, &["ls-remote", "--refs", "--", &landing.remote.url, reference])?;
-    Ok(output.lines().find_map(|line| line.split_once('\t').filter(|(_, name)| *name == reference).map(|(sha, _)| sha.to_owned())))
+    let mut found = None;
+    for line in output.lines() {
+        let (sha, name) = line.split_once('\t').ok_or_else(|| Error::Invalid(format!("malformed remote ref: {line}")))?;
+        if name != reference || found.is_some() || !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(Error::Invalid(format!("ambiguous remote ref {reference}: {output}")));
+        }
+        found = Some(sha.to_owned());
+    }
+    Ok(found)
 }
 
-pub fn prepare(root: &Path, landing: &Landing, inputs: &ExternalInput, config: &Value) -> Result<Invocation> {
+pub fn policy(landing: &Landing, inputs: &ExternalInput, config: &Value) -> Result<()> {
     let step = inputs.step();
     let target = if step == Step::Merge { &landing.base.branch } else { &landing.source.branch };
     let protected = branch::protected_branches(config.pointer("/git/protected_branches"));
@@ -88,6 +96,11 @@ pub fn prepare(root: &Path, landing: &Landing, inputs: &ExternalInput, config: &
     for branch in [&landing.source.branch, &landing.base.branch] {
         if !valid_ref(&format!("refs/heads/{branch}")) { return Err(Error::Invalid("invalid landing branch".into())); }
     }
+    Ok(())
+}
+
+pub fn prepare(root: &Path, landing: &Landing, inputs: &ExternalInput, config: &Value) -> Result<Invocation> {
+    policy(landing, inputs, config)?;
     match inputs {
         ExternalInput::Push => Ok(Invocation { program: "git".into(), args: vec!["push".into(), "--porcelain".into(), "--".into(),
             landing.remote.url.clone(), format!("{}:refs/heads/{}", landing.source.head, landing.source.branch)] }),

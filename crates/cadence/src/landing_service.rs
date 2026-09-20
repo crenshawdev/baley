@@ -1,5 +1,5 @@
 use crate::{config::reload::ConfigIo, import::SessionFactory};
-use cadence::{envelope::Refusal, landing::{authorization, effects, report, model::{Apply, Authorization, Intent, Landing, Publish, Step}},
+use cadence::{envelope::Refusal, landing::{authorization, effects, reconcile, report, model::{Apply, Authorization, Intent, Landing, Publish, Step}},
     milestone::model::{self, Receipt, Records}, store::{Error, Result, transaction::Transaction, writer::{Operation, Store, View}}};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -47,12 +47,12 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
     let request_id = match &apply {
         Apply::Start { request } => &request.request_id,
         Apply::Authorize { request } => &request.request_id,
-        Apply::Publish { request } | Apply::Open { request } | Apply::Merge { request } | Apply::TagPush { request } => &request.request_id,
+        Apply::Publish { request } | Apply::Open { request } | Apply::Merge { request } | Apply::TagPush { request } | Apply::Resume { request } => &request.request_id,
     };
     if let Some(answer) = model::replay(&records, &binding, request_id, &raw)? { return Ok(answer); }
     let intent_reused = records.records.values().flat_map(|l| &l.steps).filter_map(|s| s.intent.as_ref())
         .any(|i| i.request.request_id == *request_id && (serde_json::to_value(&i.request).ok().as_ref() != raw.get("request")
-            || i.authorization.request.inputs.step().operation() != raw["operation"]));
+            || i.operation.as_deref().unwrap_or(i.authorization.request.inputs.step().operation()) != raw["operation"]));
     let answer = if model::reused(&records, &binding, request_id) || intent_reused {
         model::refuse("request-reused", "request_id already binds different landing inputs")
     } else if model::name(request_id).is_err() {
@@ -89,9 +89,10 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                 }
             },
         },
-        Apply::Publish { request } | Apply::Open { request } | Apply::Merge { request } | Apply::TagPush { request } => {
+        Apply::Publish { request } | Apply::Open { request } | Apply::Merge { request } | Apply::TagPush { request } | Apply::Resume { request } => {
             let step = match &apply { Apply::Publish { .. } => Step::Publish, Apply::Open { .. } => Step::Open,
-                Apply::Merge { .. } => Step::Merge, _ => Step::TagPush };
+                Apply::Merge { .. } => Step::Merge, Apply::Resume { .. } => request.inputs.as_ref().map(|i| i.step()).unwrap_or(Step::Publish),
+                _ => Step::TagPush };
             // No Git or forge observation happens before this all-home gate.
             let unsettled = cadence::review::consumers::unruled_members(store).await?;
             if !unsettled.is_empty() {
@@ -101,7 +102,8 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                 refusal
             } else {
                 let config = session.config()?;
-                effect(store, &mut view, &mut records, project, request, &step, &config.effective.values).await?
+                effect(store, &mut view, &mut records, project,
+                    StepRequest { request, step: &step, resume: matches!(&apply, Apply::Resume { .. }) }, &config.effective.values).await?
             }
         }
     }};
@@ -124,17 +126,33 @@ async fn persist_intent(store: &Store, view: &View, records: &Records<Landing>, 
     store.request(Operation::ReadVerified).await
 }
 
+struct StepRequest<'a> { request: &'a Publish, step: &'a Step, resume: bool }
+
 async fn effect(store: &Store, view: &mut View, records: &mut Records<Landing>, project: &Path,
-    request: &Publish, step: &Step, config: &Value) -> Result<Value> {
+    input: StepRequest<'_>, config: &Value) -> Result<Value> {
+    let StepRequest { request, step, resume } = input;
     let refuse = |code, reason| authorization::refuse(code, reason, &request.landing, step);
     let Some(landing) = records.records.get(&request.landing) else {
         return Ok(refuse("landing-unknown", "landing does not exist".to_owned()));
     };
+    let slot = landing.steps.iter().position(|s| s.step == *step).ok_or_else(|| Error::Invalid("landing step missing".into()))?;
+    // A completed step keeps its original grant, even though completion advanced
+    // the landing generation. This path can only return that existing receipt.
+    if resume && let Some(receipt) = &landing.steps[slot].receipt {
+        let mut original = landing.clone();
+        original.generation = receipt["generation"].as_u64().ok_or_else(|| Error::Invalid("step receipt generation missing".into()))?;
+        let mut bound = request.clone();
+        bound.expected_generation = original.generation;
+        if request.expected_generation != landing.generation
+            || authorization::matching(&original, &bound, step).is_none_or(|a| receipt["authorization"] != a.id) {
+            return Ok(refuse("landing-authorization-required", "completed step requires its retained exact authorization and current landing version".into()));
+        }
+        return Ok(json!({"status":"ok","landing":landing,"receipt":receipt,"next_step":reconcile::next_step(landing)}));
+    }
     let Some(auth) = authorization::matching(landing, request, step).cloned() else {
         return Ok(refuse("landing-authorization-required", "an exact owner authorization for this landing version and step is required".into()));
     };
-    let slot = landing.steps.iter().position(|s| s.step == *step).ok_or_else(|| Error::Invalid("landing step missing".into()))?;
-    if landing.steps[slot].intent.is_some() && landing.steps[slot].receipt.is_none() {
+    if !resume && landing.steps[slot].intent.is_some() && landing.steps[slot].receipt.is_none() {
         return Ok(refuse("landing-reconciliation-required", "a retained step intent may already have run; do not retry it".into()));
     }
     if landing.steps[slot].receipt.is_some() {
@@ -145,12 +163,37 @@ async fn effect(store: &Store, view: &mut View, records: &mut Records<Landing>, 
         Ok(false) => return Ok(refuse("landing-source-changed", "source branch, head or remote differs from authorization".into())),
         Err(error) => return Ok(refuse("landing-source-changed", error.to_string())),
     }
+    let mut absence = None;
+    if resume {
+        if let Some(intent) = &landing.steps[slot].intent
+            && intent.authorization != auth {
+            return Ok(refuse("landing-authorization-required", "resume must retain the exact authorization of the interrupted step".into()));
+        }
+        if let Err(error) = effects::policy(landing, &auth.request.inputs, config) {
+            return Ok(refuse("landing-preflight", error.to_string()));
+        }
+        match reconcile::read(project, landing, &auth.request.inputs, config) {
+            Err(error) => return Ok(refuse("landing-reconciliation-discrepancy", error.to_string())),
+            Ok(reconcile::Observation::Present { result, proof }) => {
+                let landing = records.records.get_mut(&request.landing).unwrap();
+                let provenance = json!({"kind":"reconciled","request_id":request.request_id,
+                    "intent_request_id":landing.steps[slot].intent.as_ref().map(|i| &i.request.request_id)});
+                return Ok(complete(landing, slot, &auth, result, proof, provenance));
+            }
+            Ok(reconcile::Observation::Absent { proof }) => absence = Some(proof),
+        }
+    }
     let invocation = match effects::prepare(project, landing, &auth.request.inputs, config) {
         Ok(invocation) => invocation,
         Err(error) => return Ok(refuse("landing-preflight", error.to_string())),
     };
+    if let Some(intent) = &landing.steps[slot].intent
+        && intent.invocation != invocation {
+        return Ok(refuse("landing-reconciliation-discrepancy", "prepared command differs from the retained intent".into()));
+    }
     records.records.get_mut(&request.landing).unwrap().steps[slot].intent = Some(Intent {
-        request:request.clone(), authorization:auth.clone(), invocation:invocation.clone(), failure:None });
+        request:request.clone(), operation:Some(if resume { "land-resume" } else { step.operation() }.into()),
+        authorization:auth.clone(), invocation:invocation.clone(), failure:None });
     *view = persist_intent(store, view, records, request).await?;
     let result = effects::perform(project, &invocation, &auth.request);
     let landing = records.records.get_mut(&request.landing).unwrap();
@@ -160,12 +203,22 @@ async fn effect(store: &Store, view: &mut View, records: &mut Records<Landing>, 
             Ok(refuse("landing-reconciliation-required", error.to_string()))
         }
         Ok(result) => {
-            let receipt = json!({"id":model::identity("landing-step-receipt", &landing.root_binding, &request.request_id),
-                "landing":landing.id,"generation":landing.generation,"authorization":auth.id,"step":step.name(),
-                "source":landing.source,"base":landing.base,"remote":landing.remote,"inputs":auth.request.inputs,"result":result});
-            landing.steps[slot].receipt = Some(receipt.clone());
-            landing.generation += 1;
-            Ok(json!({"status":"ok","landing":landing,"receipt":receipt}))
+            if std::env::var("CADENCE_LANDING_EXIT_AFTER_EFFECT").ok().as_deref() == Some(step.name()) {
+                std::process::exit(86);
+            }
+            Ok(complete(landing, slot, &auth, result, Value::Null,
+                json!({"kind":"executed","request_id":request.request_id,"prior_remote_observation":absence})))
         }
     }
+}
+
+fn complete(landing: &mut Landing, slot: usize, auth: &Authorization, result: Value, proof: Value, provenance: Value) -> Value {
+    let step = landing.steps[slot].step.name();
+    let receipt = json!({"id":model::identity("landing-step-receipt", &landing.root_binding, &format!("{}:{step}", landing.id)),
+        "landing":landing.id,"generation":landing.generation,"authorization":auth.id,"step":step,
+        "source":landing.source,"base":landing.base,"remote":landing.remote,"inputs":auth.request.inputs,
+        "result":result,"proof":proof,"provenance":provenance});
+    landing.steps[slot].receipt = Some(receipt.clone());
+    landing.generation += 1;
+    json!({"status":"ok","landing":landing,"receipt":receipt,"next_step":reconcile::next_step(landing)})
 }
