@@ -170,14 +170,14 @@ fn phase15_interrupted_landing_reconciles_against_the_remote() {
     fixture.durable_forge();
     let mut client = fixture.client();
     let mut landing = fixture.start(&mut client, "resume-absent");
-    for index in 0..3 {
-        let auth = Publishing::authorize(&mut client, &landing, &format!("resume-absent-grant-{index}"), inputs[index].clone());
-        let mut missing = request("land-resume", &format!("resume-no-grant-{index}"), &landing, &auth, &inputs[index]);
+    for (index, input) in inputs.iter().enumerate() {
+        let auth = Publishing::authorize(&mut client, &landing, &format!("resume-absent-grant-{index}"), input.clone());
+        let mut missing = request("land-resume", &format!("resume-no-grant-{index}"), &landing, &auth, input);
         missing["request"]["authorization"] = Value::Null;
         let calls = fixture.invocations();
         assert_eq!(client.call("cadence_apply", missing)["code"], "landing-authorization-required");
         assert_eq!(fixture.invocations(), calls, "permission precedes remote reads");
-        let answer = client.call("cadence_apply", request("land-resume", &format!("resume-absent-effect-{index}"), &landing, &auth, &inputs[index]));
+        let answer = client.call("cadence_apply", request("land-resume", &format!("resume-absent-effect-{index}"), &landing, &auth, input));
         assert_eq!(answer["status"], "ok", "{answer}");
         landing = answer["landing"].clone();
         assert_eq!(landing["steps"].as_array().unwrap().iter().filter(|s| !s["receipt"].is_null()).count(), index + 1);
