@@ -64,6 +64,44 @@ pub struct Authorize {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Authorization { pub id: String, #[serde(flatten)] pub request: Authorize }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Merged { pub forge: Forge, pub pr: u64, pub commit: String }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Tag { pub name: String, pub message: String }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmMerge {
+    pub request_id: String,
+    pub landing: String,
+    pub expected_generation: u64,
+    pub source: Revision,
+    pub base: Revision,
+    pub remote: Remote,
+    pub merged: Merged,
+    pub tag: Option<Tag>,
+    pub reap: bool,
+    pub owner: String,
+    pub at: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Confirmation { pub id: String, #[serde(flatten)] pub request: ConfirmMerge }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LocalRequest { pub request_id: String, pub landing: String, pub expected_generation: u64 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalIntent {
+    pub request: LocalRequest,
+    pub step: Step,
+    pub confirmation: String,
+    pub invocation: super::effects::Invocation,
+    pub before: super::cleanup::State,
+    pub intended: super::cleanup::State,
+    pub actual: Option<super::cleanup::State>,
+    pub failure: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Intent {
     pub request: Publish,
@@ -90,6 +128,16 @@ pub enum Apply {
     TagPush { request: Publish },
     #[serde(rename = "land-resume")]
     Resume { request: Publish },
+    #[serde(rename = "land-confirm-merge")]
+    ConfirmMerge { request: ConfirmMerge },
+    #[serde(rename = "land-checkout")]
+    Checkout { request: LocalRequest },
+    #[serde(rename = "land-pull")]
+    Pull { request: LocalRequest },
+    #[serde(rename = "land-tag")]
+    Tag { request: LocalRequest },
+    #[serde(rename = "land-reap")]
+    Reap { request: LocalRequest },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -101,7 +149,8 @@ impl Step {
     }
     pub fn operation(&self) -> &'static str {
         match self { Self::Publish => "land-publish", Self::Open => "land-open", Self::Merge => "land-merge",
-            Self::TagPush => "land-tag-push", _ => "land-read" }
+            Self::TagPush => "land-tag-push", Self::Checkout => "land-checkout", Self::Pull => "land-pull",
+            Self::Tag => "land-tag", Self::Reap => "land-reap" }
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +159,8 @@ pub struct StepSlot {
     pub receipt: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<Intent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_intent: Option<LocalIntent>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -124,12 +175,15 @@ pub struct Landing {
     pub steps: Vec<StepSlot>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub authorizations: Vec<Authorization>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_confirmation: Option<Confirmation>,
 }
 impl Landing {
     pub fn new(root: String, request: &Start) -> Self {
         Self { id: crate::milestone::model::identity("landing", &root, &request.occurrence), root_binding: root,
             occurrence: request.occurrence.clone(), generation: 1, source: request.source.clone(), base: request.base.clone(), remote: request.remote.clone(),
             steps: [Step::Publish, Step::Open, Step::Merge, Step::Checkout, Step::Pull, Step::Tag, Step::TagPush, Step::Reap]
-                .into_iter().map(|step| StepSlot { step, receipt: None, intent: None }).collect(), authorizations: vec![] }
+                .into_iter().map(|step| StepSlot { step, receipt: None, intent: None, local_intent: None }).collect(),
+            authorizations: vec![], merge_confirmation: None }
     }
 }

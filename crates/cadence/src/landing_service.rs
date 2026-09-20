@@ -1,5 +1,5 @@
 use crate::{config::reload::ConfigIo, import::SessionFactory};
-use cadence::{envelope::Refusal, landing::{authorization, effects, reconcile, report, model::{Apply, Authorization, Intent, Landing, Publish, Step}},
+use cadence::{envelope::Refusal, landing::{authorization, cleanup, effects, reconcile, report, model::{Apply, Authorization, Intent, Landing, LocalRequest, Publish, Step}},
     milestone::model::{self, Receipt, Records}, store::{Error, Result, transaction::Transaction, writer::{Operation, Store, View}}};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -38,6 +38,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                 json!({"status":"ok","read_only":true,"landing":record,"git":git,
                     "done":report::done(record),"next_step":reconcile::next_step(record),
                     "resume":report::resume(record, view.snapshot.generation),
+                    "cleanup":report::cleanup_action(record, view.snapshot.generation),
                     "tracker":report::tracker(project, &config.effective.values),"actions":actions,
                     "unsettled":cadence::review::consumers::unruled_members(store).await?,
                     "refusals":records.receipts.values().filter(|r| r.answer["status"] == "refused"
@@ -50,13 +51,18 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
     let request_id = match &apply {
         Apply::Start { request } => &request.request_id,
         Apply::Authorize { request } => &request.request_id,
+        Apply::ConfirmMerge { request } => &request.request_id,
+        Apply::Checkout { request } | Apply::Pull { request } | Apply::Tag { request } | Apply::Reap { request } => &request.request_id,
         Apply::Publish { request } | Apply::Open { request } | Apply::Merge { request } | Apply::TagPush { request } | Apply::Resume { request } => &request.request_id,
     };
     if let Some(answer) = model::replay(&records, &binding, request_id, &raw)? { return Ok(answer); }
     let intent_reused = records.records.values().flat_map(|l| &l.steps).filter_map(|s| s.intent.as_ref())
         .any(|i| i.request.request_id == *request_id && (serde_json::to_value(&i.request).ok().as_ref() != raw.get("request")
             || i.operation.as_deref().unwrap_or(i.authorization.request.inputs.step().operation()) != raw["operation"]));
-    let answer = if model::reused(&records, &binding, request_id) || intent_reused {
+    let local_reused = records.records.values().flat_map(|l| &l.steps).filter_map(|s| s.local_intent.as_ref())
+        .any(|i| i.request.request_id == *request_id && (serde_json::to_value(&i.request).ok().as_ref() != raw.get("request")
+            || i.step.operation() != raw["operation"]));
+    let answer = if model::reused(&records, &binding, request_id) || intent_reused || local_reused {
         model::refuse("request-reused", "request_id already binds different landing inputs")
     } else if model::name(request_id).is_err() {
         model::refuse("invalid-arguments", "request_id must be nonblank bounded text")
@@ -92,6 +98,22 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                 }
             },
         },
+        Apply::ConfirmMerge { request } => match records.records.get_mut(&request.landing) {
+            None => model::refuse("landing-unknown", &request.landing),
+            Some(landing) => {
+                let config = session.config()?;
+                match cleanup::confirm(project, landing, request, &config.effective.values) {
+                    Ok(answer) => answer,
+                    Err(error) => model::refuse("landing-confirmation-inputs", error.to_string()),
+                }
+            }
+        },
+        Apply::Checkout { request } | Apply::Pull { request } | Apply::Tag { request } | Apply::Reap { request } => {
+            let step = match &apply { Apply::Checkout { .. } => Step::Checkout, Apply::Pull { .. } => Step::Pull,
+                Apply::Tag { .. } => Step::Tag, _ => Step::Reap };
+            let config = session.config()?;
+            local_effect(store, &mut view, &mut records, project, request, &step, &config.effective.values).await?
+        }
         Apply::Publish { request } | Apply::Open { request } | Apply::Merge { request } | Apply::TagPush { request } | Apply::Resume { request } => {
             let step = match &apply { Apply::Publish { .. } => Step::Publish, Apply::Open { .. } => Step::Open,
                 Apply::Merge { .. } => Step::Merge, Apply::Resume { .. } => request.inputs.as_ref().map(|i| i.step()).unwrap_or(Step::Publish),
@@ -120,16 +142,71 @@ fn action(landing: &Landing, authorization: &Authorization) -> Value {
         "landing":landing.id,"expected_generation":landing.generation,"authorization":authorization.id,"inputs":authorization.request.inputs}})
 }
 
-async fn persist_intent(store: &Store, view: &View, records: &Records<Landing>, request: &Publish) -> Result<View> {
+async fn persist_intent(store: &Store, view: &View, records: &Records<Landing>, landing: &str, request_id: &str) -> Result<View> {
     let mut data = view.snapshot.data.clone();
     data["landings"] = serde_json::to_value(records)?;
     store.request(Operation::CompareTransact { expected_generation:view.snapshot.generation, expected_integrity:view.snapshot.integrity.clone(),
-        transaction:Transaction { id:format!("landing-intent:{}:{}", request.landing, request.request_id),
+        transaction:Transaction { id:format!("landing-intent:{landing}:{request_id}"),
             items:vec![], decisions:vec![], snapshot:Some(data), external:vec![] } }).await?;
     store.request(Operation::ReadVerified).await
 }
 
 struct StepRequest<'a> { request: &'a Publish, step: &'a Step, resume: bool }
+
+async fn local_effect(store: &Store, view: &mut View, records: &mut Records<Landing>, project: &Path,
+    request: &LocalRequest, step: &Step, config: &Value) -> Result<Value> {
+    let Some(landing) = records.records.get(&request.landing) else { return Ok(model::refuse("landing-unknown", &request.landing)); };
+    if let Some(refusal) = cleanup::gate(landing, request, step) { return Ok(refusal); }
+    let slot = landing.steps.iter().position(|slot| slot.step == *step).unwrap();
+    if cleanup::skipped(landing, step) {
+        let state = match cleanup::observe(project, landing) {
+            Ok(state) => state, Err(error) => return Ok(cleanup::failure(project, landing, step, &error)),
+        };
+        return Ok(cleanup::complete(records.records.get_mut(&request.landing).unwrap(), step, &state, &state, "explicit-skip"));
+    }
+    let intent = if let Some(intent) = &landing.steps[slot].local_intent {
+        if intent.request != *request && (intent.failure.is_none() || intent.request.landing != request.landing
+            || intent.request.expected_generation != request.expected_generation) {
+            return Ok(cleanup::refuse(landing, step, "landing-cleanup-intent", "retry the exact retained local request"));
+        }
+        match cleanup::retry(project, landing, intent, config) {
+            Ok((actual, true)) => {
+                let intended = intent.intended.clone();
+                records.records.get_mut(&request.landing).unwrap().steps[slot].local_intent.as_mut().unwrap().actual = Some(actual.clone());
+                return Ok(cleanup::complete(records.records.get_mut(&request.landing).unwrap(), step, &intended, &actual, "reconciled"));
+            }
+            Ok((_, false)) => intent.clone(),
+            Err(error) => return Ok(cleanup::failure(project, landing, step, &error)),
+        }
+    } else {
+        match cleanup::prepare(project, landing, request, step, config) {
+            Ok(intent) => intent, Err(error) => return Ok(cleanup::failure(project, landing, step, &error)),
+        }
+    };
+    records.records.get_mut(&request.landing).unwrap().steps[slot].local_intent = Some(intent.clone());
+    *view = persist_intent(store, view, records, &request.landing, &request.request_id).await?;
+    let landing = records.records.get_mut(&request.landing).unwrap();
+    // Re-observe after journaling: a changed branch/index cannot ride the intent.
+    let before = cleanup::observe(project, landing)?;
+    if before != intent.before { return Ok(cleanup::failure(project, landing, step, &Error::Invalid("local state changed before invocation".into()))); }
+    if *step == Step::Reap && let Err(error) = cleanup::reap_gate(project, landing, &before, config) {
+        return Ok(cleanup::failure(project, landing, step, &error));
+    }
+    if let Err(error) = effects::run(project, &intent.invocation) {
+        landing.steps[slot].local_intent.as_mut().unwrap().failure = Some(error.to_string());
+        landing.steps[slot].local_intent.as_mut().unwrap().actual = cleanup::observe(project, landing).ok();
+        return Ok(cleanup::failure(project, landing, step, &error));
+    }
+    if std::env::var("CADENCE_LANDING_EXIT_AFTER_EFFECT").ok().as_deref() == Some(step.name()) { std::process::exit(86); }
+    let actual = cleanup::observe(project, landing)?;
+    landing.steps[slot].local_intent.as_mut().unwrap().actual = Some(actual.clone());
+    if !cleanup::present(&intent, &actual) {
+        let error = Error::Invalid("actual local effect differs from intended refs".into());
+        landing.steps[slot].local_intent.as_mut().unwrap().failure = Some(error.to_string());
+        return Ok(cleanup::failure(project, landing, step, &error));
+    }
+    Ok(cleanup::complete(landing, step, &intent.intended, &actual, "executed"))
+}
 
 async fn effect(store: &Store, view: &mut View, records: &mut Records<Landing>, project: &Path,
     input: StepRequest<'_>, config: &Value) -> Result<Value> {
@@ -162,7 +239,10 @@ async fn effect(store: &Store, view: &mut View, records: &mut Records<Landing>, 
     if landing.steps[slot].receipt.is_some() {
         return Ok(refuse("landing-step-complete", "this step already has a receipt; read or replay its original request".into()));
     }
-    match effects::source_matches(project, landing) {
+    let source_matches = if *step == Step::TagPush && landing.merge_confirmation.is_some() {
+        cleanup::tag_push_matches(project, landing, &auth.request.inputs)
+    } else { effects::source_matches(project, landing) };
+    match source_matches {
         Ok(true) => {},
         Ok(false) => return Ok(refuse("landing-source-changed", "source branch, head or remote differs from authorization".into())),
         Err(error) => return Ok(refuse("landing-source-changed", error.to_string())),
@@ -198,7 +278,7 @@ async fn effect(store: &Store, view: &mut View, records: &mut Records<Landing>, 
     records.records.get_mut(&request.landing).unwrap().steps[slot].intent = Some(Intent {
         request:request.clone(), operation:Some(if resume { "land-resume" } else { step.operation() }.into()),
         authorization:auth.clone(), invocation:invocation.clone(), failure:None });
-    *view = persist_intent(store, view, records, request).await?;
+    *view = persist_intent(store, view, records, &request.landing, &request.request_id).await?;
     let result = effects::perform(project, &invocation, &auth.request);
     let landing = records.records.get_mut(&request.landing).unwrap();
     match result {

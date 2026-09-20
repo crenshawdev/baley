@@ -8,6 +8,20 @@ pub fn done(landing: &Landing) -> Vec<&Value> {
     landing.steps.iter().filter_map(|slot| slot.receipt.as_ref()).collect()
 }
 
+pub fn cleanup_action(landing: &Landing, snapshot_generation: u64) -> Option<Value> {
+    landing.merge_confirmation.as_ref()?;
+    let step = super::cleanup::ORDER.into_iter().find(|step| step.name() == reconcile::next_step(landing))?;
+    let slot = landing.steps.iter().find(|slot| slot.step == step)?;
+    let request = match &slot.local_intent {
+        Some(intent) if intent.failure.is_none() => intent.request.clone(),
+        _ => super::model::LocalRequest {
+            request_id:crate::milestone::model::identity("landing-local", &landing.root_binding, &format!("{}:{}:{}:{snapshot_generation}", landing.id, step.name(), landing.generation)),
+            landing:landing.id.clone(), expected_generation:landing.generation,
+        },
+    };
+    Some(json!({"operation":step.operation(),"request":request}))
+}
+
 /// The snapshot generation changes after a retained refusal. A fresh read can
 /// then offer a new observation request without changing an effect's identity.
 pub fn resume(landing: &Landing, snapshot_generation: u64) -> Option<Value> {

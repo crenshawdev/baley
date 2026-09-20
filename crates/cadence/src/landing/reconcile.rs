@@ -71,5 +71,9 @@ pub fn next_step(landing: &Landing) -> &'static str {
         if landing.steps.iter().any(|slot| slot.step == step && slot.receipt.is_none()) { return step.name(); }
     }
     // Observing MERGED is not the owner's merge-confirmation record.
-    "confirm-merge"
+    if landing.merge_confirmation.is_none() { return "confirm-merge"; }
+    for step in super::cleanup::ORDER {
+        if super::cleanup::receipt(landing, &step).is_none() { return step.name(); }
+    }
+    "complete"
 }
