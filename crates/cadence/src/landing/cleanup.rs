@@ -126,12 +126,11 @@ pub fn observe(root: &Path, landing: &Landing) -> Result<State> {
     if let Some(tag) = landing.merge_confirmation.as_ref().and_then(|c| c.request.tag.as_ref()) {
         let name = format!("refs/tags/{}", tag.name);
         state.tag = reference(root, &name)?;
-        if let Some(object) = &state.tag {
-            if effects::observe(root, &["cat-file", "-t", object])? == "tag" {
-                state.tag_target = Some(effects::observe(root, &["rev-parse", "--verify", &format!("{object}^{{commit}}")])?);
-                let annotation = effects::observe(root, &["cat-file", "-p", object])?;
-                state.tag_message = annotation.split_once("\n\n").map(|(_, message)| message.into());
-            }
+        if let Some(object) = &state.tag
+            && effects::observe(root, &["cat-file", "-t", object])? == "tag" {
+            state.tag_target = Some(effects::observe(root, &["rev-parse", "--verify", &format!("{object}^{{commit}}")])?);
+            let annotation = effects::observe(root, &["cat-file", "-p", object])?;
+            state.tag_message = annotation.split_once("\n\n").map(|(_, message)| message.into());
         }
     }
     Ok(state)
