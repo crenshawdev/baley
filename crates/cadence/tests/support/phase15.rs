@@ -297,6 +297,53 @@ pub fn imported_auto_close(data: &Value) -> bool {
     }
 }
 
+impl Publishing {
+    /// Merge in a separate real clone, leaving the landing worktree and base stale.
+    pub fn cleanup_ready(&self, contained: bool) -> (Value, String) {
+        self.durable_forge();
+        git(self.project.path(), &["branch", "main", &self.base]);
+        let mut client = self.client();
+        let mut landing = self.start(&mut client, "cleanup-landing");
+        let forge = json!({"provider":"github","repo":"fixture/repo","host":"github.com"});
+        for (index, (operation, inputs)) in [
+            ("land-publish", json!({"step":"push"})),
+            ("land-open", json!({"step":"open","forge":forge,"title":"Cleanup","body":"Merged identity"})),
+            ("land-merge", json!({"step":"merge","forge":forge,"pr":7})),
+        ].into_iter().enumerate() {
+            let auth = Self::authorize(&mut client, &landing, &format!("cleanup-grant-{index}"), inputs.clone());
+            landing = ok(&mut client, json!({"operation":operation,"request":{
+                "request_id":format!("cleanup-external-{index}"),"landing":landing["id"],
+                "expected_generation":landing["generation"],"authorization":auth["id"],"inputs":inputs
+            }}))["landing"].clone();
+        }
+        client.finish();
+        let clone = self.project.path().join(".run/merge");
+        git(self.project.path(), &["clone", "--branch", "main", self.remote.path().to_str().unwrap(), clone.to_str().unwrap()]);
+        if contained {
+            git(&clone, &["merge", "--no-ff", "origin/fixture/execution", "-m", "Fixture real merge"]);
+        } else {
+            git(&clone, &["commit", "--allow-empty", "-m", "Fixture unrelated base advance"]);
+        }
+        let merged = git_value(&clone, &["rev-parse", "HEAD"]);
+        git(&clone, &["push", "origin", "main"]);
+        let mut state = self.pr_state();
+        state[0]["merge_commit_sha"] = json!(merged);
+        self.set_pr_state(&state);
+        assert_eq!(git_value(self.project.path(), &["rev-parse", "main"]), self.base);
+        assert_eq!(git_value(self.project.path(), &["rev-parse", "HEAD"]), self.head);
+        (landing, merged)
+    }
+
+    pub fn cleanup_commands(&self) -> Vec<Vec<String>> {
+        self.trace().into_iter().filter(|event| event["event"] == "start")
+            .filter_map(|event| serde_json::from_value::<Vec<String>>(event["argv"].clone()).ok())
+            .filter(|args| matches!(args.get(1).map(String::as_str), Some("checkout" | "pull"))
+                || (args.get(1).is_some_and(|s| s == "tag") && args.iter().any(|s| s == "-a"))
+                || (args.get(1).is_some_and(|s| s == "branch") && args.iter().any(|s| s == "-d" || s == "-D")))
+            .collect()
+    }
+}
+
 // A real serve child exits only after its external command has returned.
 pub fn effect_exit(mut client: Client, request: Value) {
     let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| client.call("cadence_apply", request)));

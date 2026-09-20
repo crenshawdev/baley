@@ -382,3 +382,134 @@ fn phase15_close_refuses_unsettled_records_and_land_refuses_unruled_deferred() {
     let queue = query(project, json!({"operation":"review-deferred"}));
     assert!(queue["result"]["members"].as_array().unwrap().iter().any(|m| m["member"] == member));
 }
+#[test]
+fn phase15_confirmed_merge_orders_cleanup_and_reap_checks_containment() {
+    use phase15::{Publishing, effect_exit};
+    use serde_json::Value;
+    let operations = ["land-checkout", "land-pull", "land-tag", "land-reap"];
+    let steps = ["checkout", "pull", "tag", "reap"];
+    let request = |operation: &str, id: &str, landing: &Value| json!({"operation":operation,"request":{
+        "request_id":id,"landing":landing["id"],"expected_generation":landing["generation"]}});
+    let confirmation = |landing: &Value, commit: &str, tag: bool, reap: bool| json!({"operation":"land-confirm-merge","request":{
+        "request_id":"cleanup-owner-confirmation","landing":landing["id"],"expected_generation":landing["generation"],
+        "source":landing["source"],"base":landing["base"],"remote":landing["remote"],
+        "merged":{"forge":{"provider":"github","repo":"fixture/repo","host":"github.com"},"pr":7,"commit":commit},
+        "tag":if tag { json!({"name":"v15.5.0","message":"Release 15.5.0"}) } else { Value::Null },
+        "reap":reap,"owner":"Fixture Owner","at":"2026-09-19T15:00:00Z"}});
+    // Each local effect is also interrupted after success, before its receipt.
+    for interrupted in [None, Some(0), Some(1), Some(2), Some(3)] {
+        let fixture = Publishing::new(false);
+        let (mut landing, merged) = fixture.cleanup_ready(true);
+        let project = fixture.project.path();
+        let trace = project.join(".run/resume.trace");
+        let mut client = fixture.client_with_env(&[("GIT_TRACE2_EVENT", trace.as_os_str())]);
+        let refs = git_value(project, &["show-ref"]);
+        let documents = phase14::documents(project);
+        let records = reopened(project).snapshot.data;
+        for operation in operations {
+            let refused = client.call("cadence_apply", request(operation, &format!("cleanup-before-{operation}"), &landing));
+            assert_eq!(refused["code"], "landing-merge-confirmation-required", "{refused}");
+            assert!(refused["reason"].as_str().unwrap().contains("confirmation"));
+        }
+        assert!(fixture.cleanup_commands().is_empty());
+        assert_eq!(git_value(project, &["show-ref"]), refs);
+        assert_eq!(git_value(project, &["branch", "--show-current"]), "fixture/execution");
+        let confirm = confirmation(&landing, &merged, true, true);
+        let confirmed = client.call("cadence_apply", confirm.clone());
+        assert_eq!(confirmed["status"], "ok", "{confirmed}");
+        let owner_record = confirmed["confirmation"].clone();
+        assert_eq!(owner_record["owner"], "Fixture Owner");
+        assert_eq!(owner_record["merged"]["commit"], merged);
+        assert_eq!(owner_record["source"], landing["source"]);
+        assert_eq!(owner_record["base"], landing["base"]);
+        assert_eq!(owner_record["expected_generation"], landing["generation"]);
+        landing = confirmed["landing"].clone();
+        assert_eq!(client.call("cadence_apply", confirm.clone()), confirmed);
+        let mut changed = confirm;
+        changed["request"]["reap"] = json!(false);
+        assert_eq!(client.call("cadence_apply", changed)["code"], "request-reused");
+        let refused = client.call("cadence_apply", request("land-tag", "cleanup-out-of-order", &landing));
+        assert_eq!(refused["code"], "landing-predecessor-required", "{refused}");
+        assert_eq!(refused["details"]["predecessor"], "checkout");
+        assert!(fixture.cleanup_commands().is_empty());
+        let mut receipts: Vec<Value> = Vec::new();
+        for index in 0..4 {
+            let call = request(operations[index], &format!("cleanup-local-{index}"), &landing);
+            if interrupted == Some(index) {
+                client.finish();
+                let child = fixture.client_with_env(&[("GIT_TRACE2_EVENT", trace.as_os_str()),
+                    ("CADENCE_LANDING_EXIT_AFTER_EFFECT", steps[index].as_ref())]);
+                effect_exit(child, call.clone());
+                let saved = reopened(project).snapshot.data;
+                assert!(saved["landings"]["records"][landing["id"].as_str().unwrap()]["steps"][[3, 4, 5, 7][index]]["receipt"].is_null());
+                client = fixture.client_with_env(&[("GIT_TRACE2_EVENT", trace.as_os_str())]);
+            }
+            let answer = client.call("cadence_apply", call.clone());
+            assert_eq!(answer["status"], "ok", "{answer}");
+            assert_eq!(answer["receipt"]["confirmation"], owner_record["id"]);
+            assert_eq!(answer["receipt"]["step"], steps[index]);
+            assert_eq!(answer["receipt"]["state"], "done");
+            assert!(answer["receipt"]["intended"].is_object());
+            assert!(answer["receipt"]["actual"].is_object());
+            if index > 0 { assert_eq!(answer["receipt"]["predecessors"][index - 1], receipts[index - 1]["id"]); }
+            receipts.push(answer["receipt"].clone());
+            landing = answer["landing"].clone();
+            assert_eq!(client.call("cadence_apply", call), answer);
+        }
+        client.finish();
+        let commands = fixture.cleanup_commands();
+        assert_eq!(commands.iter().map(|args| args[1].as_str()).collect::<Vec<_>>(), ["checkout", "pull", "tag", "branch"]);
+        assert!(commands[0].contains(&"main".to_owned()));
+        assert!(commands[1].contains(&"--ff-only".to_owned()));
+        assert!(commands[1].contains(&fixture.remote.path().to_str().unwrap().to_owned()));
+        assert!(commands[1].contains(&"main".to_owned()));
+        assert!(commands[3].contains(&"-d".to_owned()));
+        assert!(!commands[3].contains(&"-D".to_owned()));
+        assert_eq!(git_value(project, &["branch", "--show-current"]), "main");
+        assert_eq!(git_value(project, &["rev-parse", "main"]), merged);
+        assert_eq!(git_value(project, &["cat-file", "-t", "refs/tags/v15.5.0"]), "tag");
+        assert_eq!(git_value(project, &["rev-parse", "v15.5.0^{}"]), merged);
+        assert_eq!(git_value(project, &["for-each-ref", "--format=%(objectname)", "refs/heads/fixture/execution"]), "");
+        let reflog = git_value(project, &["reflog", "show", "--format=%H %gs", "HEAD"]);
+        assert!(reflog.contains("checkout: moving from fixture/execution to main"));
+        assert!(reflog.lines().next().unwrap().starts_with(&merged));
+        let mut client = fixture.client();
+        let read = client.call("cadence_query", json!({"operation":"land-read","landing":landing["id"]}));
+        assert_eq!(read["landing"], landing);
+        assert_eq!(read["landing"]["merge_confirmation"], owner_record);
+        for receipt in &receipts { assert!(read["done"].as_array().unwrap().contains(receipt)); }
+        client.finish();
+        assert_eq!(phase14::documents(project), documents);
+        let after = reopened(project).snapshot.data;
+        for key in ["rail_observations", "rail_receipts", "deferred"] { assert_eq!(after[key], records[key]); }
+        assert_eq!(fixture.mutations().len(), 2, "cleanup must not mutate a tracker");
+    }
+    for contained in [false, true] {
+        let fixture = Publishing::new(false);
+        let (landing, merged) = fixture.cleanup_ready(contained);
+        let project = fixture.project.path();
+        let trace = project.join(".run/resume.trace");
+        let mut client = fixture.client_with_env(&[("GIT_TRACE2_EVENT", trace.as_os_str())]);
+        let confirmed = client.call("cadence_apply", confirmation(&landing, &merged, false, !contained));
+        assert_eq!(confirmed["status"], "ok", "{confirmed}");
+        let mut landing = confirmed["landing"].clone();
+        for operation in &operations[..3] {
+            let answer = client.call("cadence_apply", request(operation, &format!("cleanup-skip-{operation}"), &landing));
+            assert_eq!(answer["status"], "ok", "{answer}");
+            if *operation == "land-tag" { assert_eq!(answer["receipt"]["state"], "skipped"); }
+            landing = answer["landing"].clone();
+        }
+        let answer = client.call("cadence_apply", request("land-reap", "cleanup-final-reap", &landing));
+        if contained { assert_eq!(answer["receipt"]["state"], "skipped", "{answer}"); }
+        else {
+            assert_eq!(answer["code"], "landing-reap-uncontained", "{answer}");
+            assert_eq!(answer["details"]["source"], json!({"branch":"fixture/execution","head":fixture.head}));
+            assert_eq!(answer["details"]["base"], json!({"branch":"main","head":merged}));
+            assert!(answer["reason"].as_str().unwrap().contains("fixture/execution"));
+            assert!(answer["reason"].as_str().unwrap().contains("main"));
+        }
+        client.finish();
+        assert_eq!(fixture.cleanup_commands().iter().map(|args| args[1].as_str()).collect::<Vec<_>>(), ["checkout", "pull"]);
+        assert_eq!(git_value(project, &["rev-parse", "fixture/execution"]), fixture.head);
+    }
+}
