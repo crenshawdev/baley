@@ -95,6 +95,58 @@ pub fn query(client: &mut Client, operation: &str, slug: &str) -> Value {
     client.call("cadence_query", json!({"operation":operation,"slug":slug}))
 }
 
+pub fn resolve(client: &mut Client, slug: &str, id: &str, passed: bool) -> Value {
+    let status = query(client, "debug-status", slug);
+    client.call("cadence_apply", json!({"operation":"debug-resolve","request":{
+        "request_id":id,"slug":slug,"expected_version":status["record"]["version"],
+        "resolution":"repair token checks","reproduction":{"test":"repeat login",
+        "result":"fixture reproduction","passed":passed}}}))
+}
+
+/// Play the caller over the issued H3 identity; no reviewer or saved record is faked.
+pub fn return_findings(client: &mut Client, fire: &str, key: &str, findings: Value) -> Value {
+    let next = client.call("cadence_query", json!({"operation":"review-next","fire":fire}));
+    assert_eq!(next["result"]["state"], "dispatch", "{next}");
+    let attempt = &next["result"]["attempt"];
+    let launch = format!("{key}-launch");
+    let returned = format!("{key}-return");
+    for (kind, host_return) in [("launch", Value::Null), ("return", json!(returned))] {
+        let answer = client.call("cadence_apply", json!({"operation":"review-observation","observation":{
+            "observation":format!("{key}-{kind}-observation"),"attempt":attempt["attempt"],
+            "launch":launch,"host_return":host_return,"kind":kind,"reference":format!("event:{key}-{kind}"),
+            "observed_at":1,"host":"fixture","model":null,
+            "usage":{"input":null,"output":null,"cost":null,"currency":null},"contract":attempt["contract"]}}));
+        assert_eq!(answer["status"], "ok", "{answer}");
+    }
+    let answer = client.call("cadence_apply", json!({"operation":"review-return","identity":{
+        "fire":attempt["fire"],"occurrence":attempt["occurrence"],"artifact":attempt["view"]["manifest"],
+        "view":attempt["view"]["view"],"attempt":attempt["attempt"],"round":attempt["round"]},
+        "launch":launch,"host_return":returned,"citations":[],"findings":findings}));
+    assert_eq!(answer["result"]["terminal"], "accepted", "{answer}");
+    let saved = client.call("cadence_query", json!({"operation":"review-attempt","attempt":attempt["attempt"]}));
+    let original = client.call("cadence_query", json!({"operation":"review-original","original":saved["result"]["original"]}));
+    assert_eq!(original["result"]["findings"], findings, "{original}");
+    original["result"].clone()
+}
+
+pub fn consequence(client: &mut Client, id: &str, fire: &cadence::rail::receipts::Fire, consequence: Value) -> Value {
+    client.call("cadence_apply", json!({"operation":"risk-consequence","request_id":format!("request-{id}"),
+        "receipt":{"id":id,"fire":fire,"consequence":consequence}}))
+}
+
+pub fn debug_readback(client: &mut Client, project: &Path, slug: &str, needles: &[&str]) -> Value {
+    let status = query(client, "debug-status", slug);
+    assert_eq!(status["status"], "ok", "{status}");
+    assert_eq!(query(client, "debug-continue", slug), status);
+    let projection = fs::read_to_string(project.join(format!(".planning/debug/{slug}.md"))).unwrap();
+    assert_eq!(status["projection"], projection);
+    for needle in needles {
+        assert!(status["record"]["review"].to_string().contains(needle), "missing {needle}: {status}");
+        assert!(projection.contains(needle), "missing {needle}: {projection}");
+    }
+    status
+}
+
 pub fn recall_fixture(backend: Option<&str>) -> tempfile::TempDir {
     let temp = phase13::fixture();
     let root = temp.path().join(".planning");
