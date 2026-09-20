@@ -33,7 +33,7 @@ Parse $ARGUMENTS:
 - Otherwise the remaining text is a new symptom.
 
 Use cadence_query schema with tool apply or query and for set to the operation
-name for its exact request shape. All mutations carry request.request_id, slug
+name for its exact request shape. Debug mutations carry request.request_id, slug
 and expected_version. Open uses expected_version 0; later steps copy the last
 returned record.version. Slugs contain 1..80 lowercase letters, digits or
 hyphens, start with a letter and do not end with a hyphen. Supply no document
@@ -142,6 +142,44 @@ substitute reviewer and no host-written review records. Wait for the durable
 return and satisfy its deferred obligations. Raw findings grant no permission
 and do not settle the receipts rail. Preserve any refusal and its exact next
 action; a pending blocking fire is not a resolved debug session.
+
+Show every pending fire ID, returned original and finding identity, and the
+actual findings from record.review.history. review-original reads the retained
+return by its original identity. Show accepted receipt IDs and consequences
+beside the exact fire, base, index, surfaces and review_scope they name. Never
+turn report prose into a review-return, adjudication or settlement record.
+
+For a blocking fire, present the owner's choices: a real gate-pass supported by
+its evidence_id, an explicit reasoned override, or one narrowed re-arm. Use the
+risk-consequence schema: request_id and receipt {id, fire, consequence}, copying
+the entire exact fire from record.review.history. Gate-pass uses consequence
+{kind:"gate-pass", evidence_id}; override uses {kind:"override", reason} with
+the owner's actual nonblank reason. A blank override is refused. Neither raw
+findings, an adjudication nor a deferral permission clears this debug gate.
+Wait for durable acknowledgment, then read debug-status/continue to confirm the
+accepted receipt. Retry an uncertain delivery with the identical inputs and ID.
+
+For the one re-arm, obtain approval for the narrowed fix and stage only its
+approved paths. Keep the same base, root-debug boundary and surfaces. Record a
+new risk-check on the actual index, then read risk-status for its later confirmed
+observation, requirement and actual nonempty review_scope. Admit the shared
+review with caller debug, the same occurrence and home, round 2, that exact
+staged-tree target and risk_observation request ID. Copy the issued child fire
+ID into next_fire, binding it to that observation and requirement; retain the
+actual narrowed paths and rearm_of naming the parent. Submit the parent's
+risk-consequence {kind:"rearm", next_fire}, wait for acknowledgment, then submit
+risk-fire for that exact child. Drive review-next and the actual child return
+through the same delivery contract. A parent re-arm is not clearance: its child
+still needs its own gate-pass or explicit reasoned override receipt.
+
+After the narrowed round still fails, stop for the owner. Do not auto-loop or
+re-arm the child. validate_rearm caps the child at one narrowed round; the
+one-consequence rule separately refuses another consequence on the parent.
+A newer clear scan does not erase an outstanding fire. Changed material cannot
+reuse an earlier receipt. Only exact accepted settlement reaches reproduction
+verification; preserve any pending findings and refusal until the owner acts.
+Use no trace-count script. Shared triage-gate.md, review-triggers.md and the
+historical re-arm cases remain for the workflows that still consume them.
 
 @${CLAUDE_PLUGIN_ROOT}/skills/cad-review-delivery/SKILL.md
 </resolve>

@@ -85,8 +85,7 @@ review lifecycle records, traces or queue members.
 Then query review-next again. Follow its saved next choice or wait state.
 Advisory findings remain raw and unruled regardless of severity or combination.
 Before continuation under deferred, call review-enqueue and wait for its durable
-member receipt. Blocking/adjudicated settlement stays pending for phase 10;
-receiving raw findings cannot grant clearance. Do not announce completion,
+member receipt. Blocking/adjudicated settlement stays pending for phase 10 for other callers; debug consumes exact receipts through the receipts rail, and receiving raw findings cannot grant clearance. Do not announce completion,
 prepare a commit or dispatch the next plan while delivery/enqueue is owed.
 
 Consumers use review-inventory/review-deferred for saved identities and

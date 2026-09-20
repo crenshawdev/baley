@@ -1581,7 +1581,14 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
         "record.review", "without a second scan\nor fire", "reviews/<fire>", "staged/null-head",
         "review-next", "actual host Task once", "no Rust\nsubstitute reviewer",
         "no host-written review records", "do not settle the receipts rail",
-        "pending blocking fire is not a resolved debug session"] {
+        "pending blocking fire is not a resolved debug session",
+        "record.review.history", "every pending fire ID", "review-original", "finding identity",
+        "risk-consequence", "real gate-pass", "owner's actual nonblank reason",
+        "Wait for durable acknowledgment", "same base, root-debug boundary and surfaces",
+        "actual nonempty review_scope", "round 2", "rearm_of", "risk-fire",
+        "A parent re-arm is not clearance", "After the narrowed round still fails, stop for the owner",
+        "Do not auto-loop", "validate_rearm", "one-consequence rule", "newer clear scan",
+        "Use no trace-count script"] {
         assert!(body.contains(required), "{required}");
     }
     for retired in ["workflows/debug.md", "references/bug-patterns.md", "references/recall.md", "planning.mjs", "grep "] {
