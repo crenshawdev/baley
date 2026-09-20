@@ -15,6 +15,111 @@ use std::{fs, path::Path};
 mod phase15_prune;
 
 #[test]
+fn phase15_publish_steps_refuse_without_a_landing_authorization() {
+    use phase15::{Publishing, imported_auto_close};
+    let forge = json!({"provider":"github","repo":"fixture/repo","host":"github.com"});
+    let inputs = [json!({"step":"push"}), json!({"step":"open","forge":forge,"title":"Confirmed title","body":"Confirmed body\nSecond line"}),
+        json!({"step":"merge","forge":forge,"pr":7}), json!({"step":"tag-push","tag":"v1.0.0","head":"0000000000000000000000000000000000000000"})];
+    let operations = ["land-publish", "land-open", "land-merge", "land-tag-push"];
+    let steps = ["push", "open", "merge", "tag-push"];
+    for auto_close in [false, true] {
+        let fixture = Publishing::new(auto_close);
+        let project = fixture.project.path();
+        let mut client = fixture.client();
+        let landing = fixture.start(&mut client, "clear");
+        let other = fixture.start(&mut client, "other");
+        let local_refs = git_value(project, &["show-ref"]);
+        let remote_refs = git_value(fixture.remote.path(), &["show-ref"]);
+        if auto_close { assert!(imported_auto_close(&reopened(project).snapshot.data)); }
+        for (index, operation) in operations.iter().enumerate() {
+            let other_auth = Publishing::authorize(&mut client, &other, &format!("other-{index}"), inputs[index].clone());
+            let wrong_step = Publishing::authorize(&mut client, &landing, &format!("wrong-{index}"), inputs[(index + 1) % inputs.len()].clone());
+            for (case, authorization) in [("absent", json!(null)), ("other", other_auth["id"].clone()), ("step", wrong_step["id"].clone())] {
+                let refused = client.call("cadence_apply", json!({"operation":operation,"request":{
+                    "request_id":format!("{case}-{index}"),"landing":landing["id"],"expected_generation":1,
+                    "authorization":authorization,"inputs":inputs[index]}}));
+                assert_eq!(refused["status"], "refused", "{refused}");
+                assert_eq!(refused["code"], "landing-authorization-required", "{refused}");
+                assert_eq!(refused["details"]["landing"], landing["id"]);
+                assert_eq!(refused["details"]["step"], steps[index]);
+            }
+        }
+        assert_eq!(git_value(project, &["show-ref"]), local_refs);
+        assert_eq!(git_value(fixture.remote.path(), &["show-ref"]), remote_refs);
+        assert!(fixture.invocations().is_empty());
+        let auth = Publishing::authorize(&mut client, &landing, "push-authorization", inputs[0].clone());
+        let request = json!({"operation":"land-publish","request":{"request_id":"push-authorized","landing":landing["id"],
+            "expected_generation":1,"authorization":auth["id"],"inputs":inputs[0]}});
+        let pushed = client.call("cadence_apply", request.clone());
+        assert_eq!(pushed["status"], "ok", "{pushed}");
+        assert_eq!(pushed["receipt"]["landing"], landing["id"]);
+        assert_eq!(pushed["receipt"]["authorization"], auth["id"]);
+        assert_eq!(pushed["receipt"]["step"], "push");
+        assert_eq!(git_value(fixture.remote.path(), &["rev-parse", "refs/heads/fixture/execution"]), fixture.head);
+        client.finish();
+        let mut client = fixture.client();
+        assert_eq!(client.call("cadence_apply", request.clone()), pushed);
+        let mut changed = request;
+        changed["request"]["authorization"] = json!("changed");
+        assert_eq!(client.call("cadence_apply", changed)["code"], "request-reused");
+        let read = client.call("cadence_query", json!({"operation":"land-read","landing":landing["id"]}));
+        assert!(read["landing"]["authorizations"].as_array().unwrap().contains(&auth));
+        let receipts: Vec<_> = read["landing"]["steps"].as_array().unwrap().iter().filter(|s| !s["receipt"].is_null()).collect();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0]["receipt"], pushed["receipt"]);
+        assert_eq!(read["git"]["branch"], "fixture/execution");
+        assert_eq!(read["git"]["ahead"], 0);
+        assert_eq!(read["git"]["dirty"], false);
+        assert_eq!(read["git"]["remote"]["source_head"], fixture.head);
+        assert_eq!(read["tracker"]["issues"], json!([]));
+        let current = read["landing"].clone();
+        let open_auth = Publishing::authorize(&mut client, &current, "open-authorized", inputs[1].clone());
+        let opened = client.call("cadence_apply", json!({"operation":"land-open","request":{"request_id":"open-effect",
+            "landing":current["id"],"expected_generation":current["generation"],"authorization":open_auth["id"],"inputs":inputs[1]}}));
+        assert_eq!(opened["status"], "ok", "{opened}");
+        assert_eq!(opened["receipt"]["result"]["number"], 7);
+        let merge_auth = Publishing::authorize(&mut client, &opened["landing"], "merge-authorized", inputs[2].clone());
+        let merged = client.call("cadence_apply", json!({"operation":"land-merge","request":{"request_id":"merge-effect",
+            "landing":current["id"],"expected_generation":opened["landing"]["generation"],"authorization":merge_auth["id"],"inputs":inputs[2]}}));
+        assert_eq!(merged["status"], "ok", "{merged}");
+        assert_eq!(git_value(project, &["branch", "--show-current"]), "fixture/execution");
+        let calls = fixture.invocations();
+        assert_eq!(calls.iter().filter(|args| args.as_array().unwrap().contains(&json!("POST"))).count(), 1);
+        assert_eq!(calls.iter().filter(|args| args.as_array().unwrap().contains(&json!("PUT"))).count(), 1);
+        assert!(calls.iter().any(|args| args.as_array().unwrap().contains(&json!("title=Confirmed title"))));
+        assert!(calls.iter().any(|args| args.as_array().unwrap().contains(&json!("body=Confirmed body\nSecond line"))));
+        // A grant recorded before HEAD changes does not cover that new commit.
+        let stale_auth = Publishing::authorize(&mut client, &other, "stale-head", inputs[0].clone());
+        git(project, &["commit", "--allow-empty", "-m", "Fixture changed head"]);
+        let refused = client.call("cadence_apply", json!({"operation":"land-publish","request":{"request_id":"changed-head",
+            "landing":other["id"],"expected_generation":1,"authorization":stale_auth["id"],"inputs":inputs[0]}}));
+        assert_eq!(refused["code"], "landing-source-changed", "{refused}");
+        assert_eq!(git_value(fixture.remote.path(), &["rev-parse", "refs/heads/fixture/execution"]), fixture.head);
+        client.finish();
+    }
+    let native = Fixture::new(&[16]);
+    let member = deferred(native.project(), 16);
+    let fixture = Publishing::attach(native.temp);
+    let mut client = fixture.client();
+    let landing = fixture.start(&mut client, "unruled");
+    let local_refs = git_value(fixture.project.path(), &["show-ref"]);
+    let remote_refs = git_value(fixture.remote.path(), &["show-ref"]);
+    for (index, operation) in operations.iter().enumerate() {
+        let auth = Publishing::authorize(&mut client, &landing, &format!("unruled-{index}"), inputs[index].clone());
+        let refused = client.call("cadence_apply", json!({"operation":operation,"request":{
+            "request_id":format!("unruled-effect-{index}"),"landing":landing["id"],"expected_generation":1,"authorization":auth["id"],"inputs":inputs[index]}}));
+        assert_eq!(refused["code"], "landing-unsettled", "{refused}");
+        assert_eq!(refused["details"]["landing"], landing["id"]);
+        assert_eq!(refused["details"]["step"], steps[index]);
+        assert_eq!(refused["unsettled"], json!([{"kind":"deferred","phase":16,"identity":member}]));
+    }
+    assert_eq!(git_value(fixture.project.path(), &["show-ref"]), local_refs);
+    assert_eq!(git_value(fixture.remote.path(), &["show-ref"]), remote_refs);
+    assert!(fixture.invocations().is_empty());
+    client.finish();
+}
+
+#[test]
 fn phase15_prune_retries_to_one_result_from_every_write_point() {
     phase15_prune::exercise();
 }

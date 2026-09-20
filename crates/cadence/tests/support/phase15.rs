@@ -202,3 +202,91 @@ pub fn close(id: &str, phases: &[u32]) -> Value {
     json!({"operation":"milestone-close","request":{"request_id":id,"occurrence":"phase15-test","expected_generation":0,
         "selection":{"phases":phases,"label":"Fixture milestone"}}})
 }
+
+pub struct Publishing {
+    pub project: tempfile::TempDir,
+    pub remote: tempfile::TempDir,
+    pub head: String,
+    pub base: String,
+}
+
+impl Publishing {
+    pub fn new(auto_close: bool) -> Self {
+        let project = phase13::fixture();
+        fs::write(project.path().join(".planning/config.json"), serde_json::to_vec(&json!({
+            "git":{"auto_close":auto_close,"forge_provider":"github","forge_repo":"fixture/repo"}
+        })).unwrap()).unwrap();
+        Self::attach(project)
+    }
+
+    pub fn attach(project: tempfile::TempDir) -> Self {
+        let remote = tempfile::tempdir().unwrap();
+        git(remote.path(), &["init", "--bare"]);
+        git(project.path(), &["remote", "add", "origin", remote.path().to_str().unwrap()]);
+        git(project.path(), &["push", "origin", "HEAD:refs/heads/main"]);
+        let base = git_value(project.path(), &["rev-parse", "HEAD"]);
+        fs::write(project.path().join("published.txt"), "publish this exact commit\n").unwrap();
+        git(project.path(), &["add", "published.txt"]);
+        git(project.path(), &["commit", "-m", "Fixture source"]);
+        let head = git_value(project.path(), &["rev-parse", "HEAD"]);
+        fs::create_dir_all(project.path().join(".run/bin")).unwrap();
+        for program in ["gh", "glab", "tea"] {
+            let path = project.path().join(".run/bin").join(program);
+            let script = format!(r#"#!/usr/bin/env python3
+import json, pathlib, sys
+with pathlib.Path('.run/forge.log').open('a') as log:
+    log.write(json.dumps(sys.argv) + '\n')
+if 'GET' in sys.argv:
+    print('[]')
+elif any(arg.endswith('/merge') for arg in sys.argv):
+    print('{{"merged":true,"sha":"{head}"}}')
+else:
+    print('{{"number":7,"iid":7,"html_url":"https://example.invalid/fixture/repo/pull/7","head":{{"sha":"{head}"}},"base":{{"ref":"main"}}}}')
+"#);
+            fs::write(&path, script).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        Self { project, remote, head, base }
+    }
+
+    pub fn client(&self) -> Client {
+        let mut paths = vec![self.project.path().join(".run/bin")];
+        paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+        let path = std::env::join_paths(paths).unwrap();
+        Client::open_with_env(self.project.path(), Path::new(env!("CARGO_BIN_EXE_cadence")), &[("PATH", &path)])
+    }
+
+    pub fn start(&self, client: &mut Client, occurrence: &str) -> Value {
+        ok(client, json!({"operation":"land-start","request":{
+            "request_id":format!("start-{occurrence}"),"occurrence":occurrence,"expected_generation":0,
+            "source":{"branch":git_value(self.project.path(), &["branch", "--show-current"]),"head":self.head},
+            "base":{"branch":"main","head":self.base},
+            "remote":{"name":"origin","url":self.remote.path().to_str().unwrap()}
+        }}))["landing"].clone()
+    }
+
+    pub fn authorize(client: &mut Client, landing: &Value, id: &str, inputs: Value) -> Value {
+        ok(client, json!({"operation":"land-authorize","request":{
+            "request_id":id,"landing":landing["id"],"expected_generation":landing["generation"],
+            "source":landing["source"],"base":landing["base"],"remote":landing["remote"],"inputs":inputs,
+            "owner":"Fixture Owner","at":"2026-09-19T12:00:00Z"
+        }}))["authorization"].clone()
+    }
+
+    pub fn invocations(&self) -> Vec<Value> {
+        fs::read_to_string(self.project.path().join(".run/forge.log")).unwrap_or_default()
+            .lines().map(|line| serde_json::from_str(line).unwrap()).collect()
+    }
+}
+
+pub fn imported_auto_close(data: &Value) -> bool {
+    match data {
+        Value::Object(fields) => fields.iter().any(|(key, value)| {
+            (key == "bytes" && serde_json::from_value::<Vec<u8>>(value.clone()).ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .is_some_and(|raw| raw["git"]["auto_close"] == true)) || imported_auto_close(value)
+        }),
+        Value::Array(values) => values.iter().any(imported_auto_close),
+        _ => false,
+    }
+}
