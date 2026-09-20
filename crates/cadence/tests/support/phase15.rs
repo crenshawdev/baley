@@ -250,10 +250,16 @@ else:
     }
 
     pub fn client(&self) -> Client {
+        self.client_with_env(&[])
+    }
+
+    pub fn client_with_env(&self, env: &[(&str, &std::ffi::OsStr)]) -> Client {
         let mut paths = vec![self.project.path().join(".run/bin")];
         paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
         let path = std::env::join_paths(paths).unwrap();
-        Client::open_with_env(self.project.path(), Path::new(env!("CARGO_BIN_EXE_cadence")), &[("PATH", &path)])
+        let mut vars = vec![("PATH", path.as_os_str())];
+        vars.extend_from_slice(env);
+        Client::open_with_env(self.project.path(), Path::new(env!("CARGO_BIN_EXE_cadence")), &vars)
     }
 
     pub fn start(&self, client: &mut Client, occurrence: &str) -> Value {
@@ -288,5 +294,94 @@ pub fn imported_auto_close(data: &Value) -> bool {
         }),
         Value::Array(values) => values.iter().any(imported_auto_close),
         _ => false,
+    }
+}
+
+// A real serve child exits only after its external command has returned.
+pub fn effect_exit(mut client: Client, request: Value) {
+    let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| client.call("cadence_apply", request)));
+    if answer.is_ok() {
+        client.child.kill().unwrap();
+    }
+    assert_eq!(client.child.wait().unwrap().code(), Some(86), "serve must exit between effect and receipt");
+    assert!(answer.is_err(), "an interrupted effect cannot return a receipt");
+}
+
+impl Publishing {
+    pub fn durable_forge(&self) {
+        git(self.remote.path(), &["config", "core.logAllRefUpdates", "true"]);
+        let script = r#"#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv
+endpoint = args[-1]
+method = args[args.index('--method') + 1]
+root = pathlib.Path('.run')
+def durable(path, value):
+    with path.open('w') as stream:
+        json.dump(value, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+with (root / 'forge.log').open('a') as log:
+    log.write(json.dumps(args) + '\n')
+    log.flush()
+    os.fsync(log.fileno())
+state_path = root / 'pr.json'
+state = json.loads(state_path.read_text()) if state_path.exists() else []
+if method == 'GET':
+    if (root / 'read-fails').exists():
+        sys.exit('fixture remote read unavailable')
+    if '/issues' in endpoint:
+        print('[]')
+    elif endpoint.split('?')[0].endswith('/7'):
+        if len(state) != 1:
+            sys.exit('fixture PR identity unavailable')
+        print(json.dumps(state[0]))
+    elif '/pulls?' in endpoint:
+        print(json.dumps(state))
+    else:
+        sys.exit('unexpected fixture read: ' + endpoint)
+elif endpoint.endswith('/merge'):
+    if (root / 'merged-once').exists():
+        sys.exit('second merge forbidden')
+    assert len(state) == 1 and state[0]['state'] == 'open'
+    state[0]['state'] = 'closed'
+    state[0]['merged'] = True
+    state[0]['merged_at'] = '2026-09-19T12:00:00Z'
+    durable(state_path, state)
+    durable(root / 'merged-once', True)
+    print('{"merged":true}')
+elif method == 'POST' and endpoint.endswith('/pulls'):
+    if (root / 'created-once').exists():
+        sys.exit('second create forbidden')
+    assert state == []
+    state = [{"number":7,"state":"open","merged":False,"merged_at":None,
+              "head":{"sha":"@HEAD@","ref":"fixture/execution","repo":{"full_name":"fixture/repo"}},
+              "base":{"sha":"@BASE@","ref":"main","repo":{"full_name":"fixture/repo"}}}]
+    durable(state_path, state)
+    durable(root / 'created-once', True)
+    print(json.dumps(state[0]))
+else:
+    sys.exit('unexpected fixture mutation: ' + endpoint)
+"#.replace("@HEAD@", &self.head).replace("@BASE@", &self.base);
+        for program in ["gh", "glab", "tea"] {
+            fs::write(self.project.path().join(".run/bin").join(program), &script).unwrap();
+        }
+    }
+
+    pub fn pr_state(&self) -> Value {
+        serde_json::from_slice(&fs::read(self.project.path().join(".run/pr.json")).unwrap()).unwrap()
+    }
+
+    pub fn set_pr_state(&self, state: &Value) {
+        fs::write(self.project.path().join(".run/pr.json"), serde_json::to_vec(state).unwrap()).unwrap();
+    }
+
+    pub fn mutations(&self) -> Vec<Value> {
+        self.invocations().into_iter().filter(|args| !args.as_array().unwrap().contains(&json!("GET"))).collect()
+    }
+
+    pub fn trace(&self) -> Vec<Value> {
+        fs::read_to_string(self.project.path().join(".run/resume.trace")).unwrap_or_default()
+            .lines().map(|line| serde_json::from_str(line).unwrap()).collect()
     }
 }

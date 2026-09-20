@@ -15,6 +15,179 @@ use std::{fs, path::Path};
 mod phase15_prune;
 
 #[test]
+fn phase15_interrupted_landing_reconciles_against_the_remote() {
+    use phase15::{Publishing, effect_exit};
+    use serde_json::Value;
+    let forge = json!({"provider":"github","repo":"fixture/repo","host":"github.com"});
+    let inputs = [json!({"step":"push"}),
+        json!({"step":"open","forge":forge,"title":"Resume title","body":"Resume body"}),
+        json!({"step":"merge","forge":forge,"pr":7})];
+    let operations = ["land-publish", "land-open", "land-merge"];
+    let steps = ["push", "open", "merge"];
+    let request = |operation: &str, id: &str, landing: &Value, auth: &Value, input: &Value| {
+        json!({"operation":operation,"request":{"request_id":id,"landing":landing["id"],
+            "expected_generation":landing["generation"],"authorization":auth["id"],"inputs":input}})
+    };
+    let saved = |fixture: &Publishing, landing: &Value| {
+        reopened(fixture.project.path()).snapshot.data["landings"]["records"][landing["id"].as_str().unwrap()].clone()
+    };
+    // An owner-authorized push can already exist without a local invocation or receipt.
+    let fixture = Publishing::new(false);
+    fixture.durable_forge();
+    let mut client = fixture.client();
+    let landing = fixture.start(&mut client, "resume-external");
+    let auth = Publishing::authorize(&mut client, &landing, "resume-external-push", inputs[0].clone());
+    client.finish();
+    git(fixture.project.path(), &["push", "origin", "HEAD:refs/heads/fixture/execution"]);
+    let trace = fixture.project.path().join(".run/resume.trace");
+    let mut client = fixture.client_with_env(&[("GIT_TRACE2_EVENT", trace.as_os_str())]);
+    let answer = client.call("cadence_apply", request("land-resume", "resume-external-effect", &landing, &auth, &inputs[0]));
+    assert_eq!(answer["status"], "ok", "land-resume must reconcile the actual remote: {answer}");
+    assert_eq!(answer["receipt"]["proof"]["object"], fixture.head);
+    assert_eq!(answer["receipt"]["provenance"]["kind"], "reconciled");
+    client.finish();
+    assert!(!fixture.trace().iter().any(|event| event["event"] == "cmd_name" && event["name"] == "push"));
+
+    for interrupted in 0..3 {
+        let fixture = Publishing::new(false);
+        fixture.durable_forge();
+        let mut client = fixture.client();
+        let mut landing = fixture.start(&mut client, "resume-interrupted");
+        for index in 0..interrupted {
+            let auth = Publishing::authorize(&mut client, &landing, &format!("resume-prerequisite-{index}"), inputs[index].clone());
+            let answer = client.call("cadence_apply", request(operations[index], &format!("resume-prerequisite-effect-{index}"), &landing, &auth, &inputs[index]));
+            assert_eq!(answer["status"], "ok", "{answer}");
+            landing = answer["landing"].clone();
+        }
+        let auth = Publishing::authorize(&mut client, &landing, "resume-interrupted-grant", inputs[interrupted].clone());
+        client.finish();
+        let child = fixture.client_with_env(&[("CADENCE_LANDING_EXIT_AFTER_EFFECT", steps[interrupted].as_ref())]);
+        effect_exit(child, request(operations[interrupted], "resume-interrupted-effect", &landing, &auth, &inputs[interrupted]));
+        let pending = saved(&fixture, &landing);
+        assert!(pending["steps"][interrupted]["receipt"].is_null(), "{pending}");
+        assert_eq!(pending["steps"][interrupted]["intent"]["authorization"], auth);
+        let mutations = fixture.mutations();
+        assert_eq!(mutations.len(), interrupted);
+        let good_pr = if interrupted > 0 { fixture.pr_state() } else { Value::Null };
+        // A stale tracking ref must never supply the reconciliation proof.
+        git(fixture.project.path(), &["update-ref", "refs/remotes/origin/fixture/execution", &fixture.base]);
+        let trace = fixture.project.path().join(".run/resume.trace");
+        let cases: &[&str] = if interrupted == 0 { &["unavailable", "moved"] }
+            else { &["unavailable", "head", "base", "repo", "identity", "closed", "unknown", "ambiguous"] };
+        for case in cases {
+            let unavailable = fixture.remote.path().with_extension("unavailable");
+            if interrupted == 0 {
+                if *case == "unavailable" { fs::rename(fixture.remote.path(), &unavailable).unwrap(); }
+                else { git(fixture.remote.path(), &["update-ref", "refs/heads/fixture/execution", &fixture.base]); }
+            } else if *case == "unavailable" {
+                fs::write(fixture.project.path().join(".run/read-fails"), "fail").unwrap();
+            } else {
+                let mut bad = good_pr.clone();
+                match *case {
+                    "head" => bad[0]["head"]["sha"] = json!(fixture.base),
+                    "base" => bad[0]["base"]["ref"] = json!("different"),
+                    "repo" => bad[0]["head"]["repo"]["full_name"] = json!("other/repo"),
+                    "identity" => bad[0]["number"] = json!(8),
+                    "closed" => { bad[0]["state"] = json!("closed"); bad[0]["merged"] = json!(false); bad[0]["merged_at"] = Value::Null; },
+                    "unknown" => bad[0]["state"] = json!("unknown"),
+                    "ambiguous" => { let duplicate = bad[0].clone(); bad.as_array_mut().unwrap().push(duplicate); },
+                    _ => unreachable!(),
+                }
+                // Before create has a receipt, any single positive identity is valid.
+                if interrupted == 1 && *case == "identity" { bad[0]["number"] = json!(0); }
+                fixture.set_pr_state(&bad);
+            }
+            let mut child = fixture.client_with_env(&[("GIT_TRACE2_EVENT", trace.as_os_str())]);
+            let refused = child.call("cadence_apply", request("land-resume", &format!("resume-refused-{case}"), &landing, &auth, &inputs[interrupted]));
+            assert_eq!(refused["status"], "refused", "{case}: {refused}");
+            assert_eq!(refused["code"], "landing-reconciliation-discrepancy", "{case}: {refused}");
+            assert_eq!(refused["details"]["landing"], landing["id"]);
+            assert_eq!(refused["details"]["step"], steps[interrupted]);
+            assert!(refused["reason"].as_str().is_some_and(|s| !s.is_empty()));
+            child.finish();
+            assert!(saved(&fixture, &landing)["steps"][interrupted]["receipt"].is_null());
+            assert_eq!(fixture.mutations(), mutations);
+            if interrupted == 0 {
+                if *case == "unavailable" { fs::rename(&unavailable, fixture.remote.path()).unwrap(); }
+                else { git(fixture.remote.path(), &["update-ref", "refs/heads/fixture/execution", &fixture.head]); }
+            } else {
+                if *case == "unavailable" { fs::remove_file(fixture.project.path().join(".run/read-fails")).unwrap(); }
+                fixture.set_pr_state(&good_pr);
+            }
+        }
+        let remote_refs = git_value(fixture.remote.path(), &["show-ref"]);
+        let reflog = git_value(fixture.remote.path(), &["reflog", "show", "--format=%H", "refs/heads/fixture/execution"]);
+        assert!(!reflog.is_empty(), "the bare reflog oracle must be enabled");
+        let before_reads = fixture.invocations().len();
+        let resume = request("land-resume", "resume-reconcile", &landing, &auth, &inputs[interrupted]);
+        let mut child = fixture.client_with_env(&[("GIT_TRACE2_EVENT", trace.as_os_str())]);
+        let answer = child.call("cadence_apply", resume.clone());
+        assert_eq!(answer["status"], "ok", "{answer}");
+        let receipt = &answer["receipt"];
+        assert_eq!(receipt["step"], steps[interrupted]);
+        assert_eq!(receipt["authorization"], auth["id"]);
+        assert_eq!(receipt["provenance"]["kind"], "reconciled");
+        assert_eq!(receipt["provenance"]["request_id"], "resume-reconcile");
+        assert_eq!(answer["next_step"], ["open", "merge", "confirm-merge"][interrupted]);
+        if interrupted == 0 {
+            assert_eq!(receipt["proof"]["reference"], "refs/heads/fixture/execution");
+            assert_eq!(receipt["proof"]["object"], fixture.head);
+            assert_eq!(receipt["proof"]["remote"], landing["remote"]);
+        } else {
+            assert_eq!(receipt["proof"]["forge"], forge);
+            assert_eq!(receipt["proof"]["number"], 7);
+            assert_eq!(receipt["proof"]["state"], if interrupted == 1 { "OPEN" } else { "MERGED" });
+            assert_eq!(receipt["proof"]["source"], landing["source"]);
+            assert_eq!(receipt["proof"]["base"], landing["base"]);
+            assert!(fixture.invocations()[before_reads..].iter().any(|args| args.as_array().unwrap().contains(&json!("GET"))));
+        }
+        let read = child.call("cadence_query", json!({"operation":"land-read","landing":landing["id"]}));
+        assert_eq!(read["landing"], answer["landing"]);
+        assert!(read["landing"]["merge_confirmation"].is_null());
+        child.finish();
+        let persisted = saved(&fixture, &landing);
+        assert_eq!(persisted["steps"][interrupted]["receipt"], *receipt);
+        assert_eq!(persisted["generation"], landing["generation"].as_u64().unwrap() + 1);
+        let mut child = fixture.client_with_env(&[("GIT_TRACE2_EVENT", trace.as_os_str())]);
+        assert_eq!(child.call("cadence_apply", resume.clone()), answer);
+        let again = child.call("cadence_apply", request("land-resume", "resume-again", &persisted, &auth, &inputs[interrupted]));
+        assert_eq!(again["receipt"], *receipt, "{again}");
+        let mut changed = resume;
+        changed["request"]["authorization"] = json!("different");
+        assert_eq!(child.call("cadence_apply", changed)["code"], "request-reused");
+        child.finish();
+        assert_eq!(saved(&fixture, &landing), persisted, "resume must not append a second step receipt or confirm merge");
+        assert_eq!(fixture.mutations(), mutations);
+        assert_eq!(git_value(fixture.remote.path(), &["show-ref"]), remote_refs);
+        assert_eq!(git_value(fixture.remote.path(), &["reflog", "show", "--format=%H", "refs/heads/fixture/execution"]), reflog);
+        let events = fixture.trace();
+        assert!(events.iter().any(|e| e["event"] == "cmd_name" && e["name"] == "ls-remote"));
+        assert!(!events.iter().any(|e| e["event"] == "cmd_name" && e["name"] == "push"), "even a no-op push is forbidden on resume: {events:?}");
+    }
+
+    // Definitive absence permits only the retained, exactly authorized step.
+    let fixture = Publishing::new(false);
+    fixture.durable_forge();
+    let mut client = fixture.client();
+    let mut landing = fixture.start(&mut client, "resume-absent");
+    for index in 0..3 {
+        let auth = Publishing::authorize(&mut client, &landing, &format!("resume-absent-grant-{index}"), inputs[index].clone());
+        let mut missing = request("land-resume", &format!("resume-no-grant-{index}"), &landing, &auth, &inputs[index]);
+        missing["request"]["authorization"] = Value::Null;
+        let calls = fixture.invocations();
+        assert_eq!(client.call("cadence_apply", missing)["code"], "landing-authorization-required");
+        assert_eq!(fixture.invocations(), calls, "permission precedes remote reads");
+        let answer = client.call("cadence_apply", request("land-resume", &format!("resume-absent-effect-{index}"), &landing, &auth, &inputs[index]));
+        assert_eq!(answer["status"], "ok", "{answer}");
+        landing = answer["landing"].clone();
+        assert_eq!(landing["steps"].as_array().unwrap().iter().filter(|s| !s["receipt"].is_null()).count(), index + 1);
+    }
+    assert_eq!(fixture.mutations().len(), 2);
+    assert!(landing["merge_confirmation"].is_null());
+    client.finish();
+}
+
+#[test]
 fn phase15_publish_steps_refuse_without_a_landing_authorization() {
     use phase15::{Publishing, imported_auto_close};
     let forge = json!({"provider":"github","repo":"fixture/repo","host":"github.com"});
