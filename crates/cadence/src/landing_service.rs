@@ -1,6 +1,6 @@
 use crate::{config::reload::ConfigIo, import::SessionFactory};
-use cadence::envelope::Refusal;
-use cadence::{landing::model::{Apply, Landing}, milestone::model::{self, Receipt}, store::{Error, Result}};
+use cadence::{envelope::Refusal, landing::{authorization, effects, report, model::{Apply, Authorization, Intent, Landing, Publish, Step}},
+    milestone::model::{self, Receipt, Records}, store::{Error, Result, transaction::Transaction, writer::{Operation, Store, View}}};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -16,8 +16,9 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, ro
 async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command) -> Result<Value> {
     let session = factory.first_touch(root).await?;
     let store = session.review_store();
-    let view = session.derivation_view().await?;
+    let mut view = session.derivation_view().await?;
     let binding = cadence::verification::inputs::root_binding(root)?;
+    let project = root.parent().ok_or_else(|| Error::Invalid("planning root lacks project".into()))?;
     let mut records = model::records::<Landing>(&view.snapshot.data, "landings")?;
     for (id, landing) in &records.records {
         if landing.id != *id || landing.root_binding != binding || landing.id != model::identity("landing", &binding, &landing.occurrence) {
@@ -27,15 +28,32 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
     let apply = match command {
         Command::Read { landing } => return Ok(match records.records.get(&landing) {
             None => model::refuse("landing-unknown", landing),
-            Some(record) => json!({"status":"ok","landing":record,"refusals":records.receipts.values()
-                .filter(|r| r.answer["status"] == "refused" && r.request["request"]["landing"] == landing).collect::<Vec<_>>()}),
+            Some(record) => {
+                let config = session.config()?;
+                let git = match report::git(project, record) { Ok(value) => value,
+                    Err(error) => json!({"status":"unavailable","reason":error.to_string()}) };
+                let actions: Vec<_> = record.authorizations.iter().filter(|a| a.request.expected_generation == record.generation)
+                    .map(|a| action(record, a)).collect();
+                json!({"status":"ok","read_only":true,"landing":record,"git":git,
+                    "tracker":report::tracker(project, &config.effective.values),"actions":actions,
+                    "unsettled":cadence::review::consumers::unruled_members(store).await?,
+                    "refusals":records.receipts.values().filter(|r| r.answer["status"] == "refused"
+                        && r.request["request"]["landing"] == landing).collect::<Vec<_>>()})
+            }
         }),
         Command::Apply(apply) => apply,
     };
     let raw = serde_json::to_value(&apply)?;
-    let request_id = match &apply { Apply::Start { request } => &request.request_id, Apply::Publish { request } => &request.request_id };
+    let request_id = match &apply {
+        Apply::Start { request } => &request.request_id,
+        Apply::Authorize { request } => &request.request_id,
+        Apply::Publish { request } | Apply::Open { request } | Apply::Merge { request } | Apply::TagPush { request } => &request.request_id,
+    };
     if let Some(answer) = model::replay(&records, &binding, request_id, &raw)? { return Ok(answer); }
-    let answer = if model::reused(&records, &binding, request_id) {
+    let intent_reused = records.records.values().flat_map(|l| &l.steps).filter_map(|s| s.intent.as_ref())
+        .any(|i| i.request.request_id == *request_id && (serde_json::to_value(&i.request).ok().as_ref() != raw.get("request")
+            || i.authorization.request.inputs.step().operation() != raw["operation"]));
+    let answer = if model::reused(&records, &binding, request_id) || intent_reused {
         model::refuse("request-reused", "request_id already binds different landing inputs")
     } else if model::name(request_id).is_err() {
         model::refuse("invalid-arguments", "request_id must be nonblank bounded text")
@@ -60,30 +78,94 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                 json!({"status":"ok","landing":candidate})
             }
         }
-        Apply::Publish { request } => {
-            // This is deliberately the first preflight, before even inspecting
-            // repository refs. An unruled member in ANY home forbids effects.
-            match cadence::review::consumers::unruled_members(store).await {
-                Err(error) => model::refuse("landing-unavailable", error.to_string()),
-                Ok(unsettled) if !unsettled.is_empty() => {
-                    let mut refusal = Refusal::new("landing-unsettled", "unruled deferred members forbid publishing")
-                        .details(json!({"landing":request.landing,"step":"publish","unsettled":unsettled})).value();
-                    // Keep the plan 1 caller's top-level unsettled list available.
-                    refusal["unsettled"] = refusal["details"]["unsettled"].clone();
-                    refusal
-                },
-                Ok(_) => match records.records.get(&request.landing) {
-                    None => model::refuse("landing-unknown", &request.landing),
-                    Some(landing) if landing.generation != request.expected_generation =>
-                        Refusal::new("landing-generation", "expected generation does not match the current landing generation")
-                            .details(json!({"landing":landing.id,"generation":landing.generation,"expected_generation":request.expected_generation})).value(),
-                    Some(landing) => Refusal::new("landing-authorization-required",
-                        "an explicit landing step authorization is required; publication is not available in this plan")
-                        .details(json!({"landing":landing.id,"step":"publish"})).value(),
-                },
+        Apply::Authorize { request } => match records.records.get_mut(&request.landing) {
+            None => authorization::refuse("landing-unknown", "landing does not exist", &request.landing, &request.inputs.step()),
+            Some(landing) => match authorization::validate(request, landing) {
+                Err(error) => authorization::refuse("landing-authorization-inputs", error.to_string(), &landing.id, &request.inputs.step()),
+                Ok(()) => {
+                    let authorization = Authorization { id: model::identity("landing-authorization", &binding, &request.request_id), request: request.clone() };
+                    landing.authorizations.push(authorization.clone());
+                    json!({"status":"ok","authorization":authorization,"landing":landing,"action":action(landing, &authorization)})
+                }
+            },
+        },
+        Apply::Publish { request } | Apply::Open { request } | Apply::Merge { request } | Apply::TagPush { request } => {
+            let step = match &apply { Apply::Publish { .. } => Step::Publish, Apply::Open { .. } => Step::Open,
+                Apply::Merge { .. } => Step::Merge, _ => Step::TagPush };
+            // No Git or forge observation happens before this all-home gate.
+            let unsettled = cadence::review::consumers::unruled_members(store).await?;
+            if !unsettled.is_empty() {
+                let mut refusal = authorization::refuse("landing-unsettled", "unruled deferred members forbid external steps", &request.landing, &step);
+                refusal["details"]["unsettled"] = json!(unsettled);
+                refusal["unsettled"] = refusal["details"]["unsettled"].clone();
+                refusal
+            } else {
+                let config = session.config()?;
+                effect(store, &mut view, &mut records, project, request, &step, &config.effective.values).await?
             }
         }
     }};
     let receipt = Receipt { root_binding: binding, request_id: request_id.clone(), request: raw, answer };
     model::persist(store, &view, "landings", &mut records, receipt).await
+}
+
+fn action(landing: &Landing, authorization: &Authorization) -> Value {
+    json!({"operation":authorization.request.inputs.step().operation(),"request":{
+        "request_id":model::identity("landing-step", &landing.root_binding, &authorization.id),
+        "landing":landing.id,"expected_generation":landing.generation,"authorization":authorization.id,"inputs":authorization.request.inputs}})
+}
+
+async fn persist_intent(store: &Store, view: &View, records: &Records<Landing>, request: &Publish) -> Result<View> {
+    let mut data = view.snapshot.data.clone();
+    data["landings"] = serde_json::to_value(records)?;
+    store.request(Operation::CompareTransact { expected_generation:view.snapshot.generation, expected_integrity:view.snapshot.integrity.clone(),
+        transaction:Transaction { id:format!("landing-intent:{}:{}", request.landing, request.request_id),
+            items:vec![], decisions:vec![], snapshot:Some(data), external:vec![] } }).await?;
+    store.request(Operation::ReadVerified).await
+}
+
+async fn effect(store: &Store, view: &mut View, records: &mut Records<Landing>, project: &Path,
+    request: &Publish, step: &Step, config: &Value) -> Result<Value> {
+    let refuse = |code, reason| authorization::refuse(code, reason, &request.landing, step);
+    let Some(landing) = records.records.get(&request.landing) else {
+        return Ok(refuse("landing-unknown", "landing does not exist".to_owned()));
+    };
+    let Some(auth) = authorization::matching(landing, request, step).cloned() else {
+        return Ok(refuse("landing-authorization-required", "an exact owner authorization for this landing version and step is required".into()));
+    };
+    let slot = landing.steps.iter().position(|s| s.step == *step).ok_or_else(|| Error::Invalid("landing step missing".into()))?;
+    if landing.steps[slot].intent.is_some() && landing.steps[slot].receipt.is_none() {
+        return Ok(refuse("landing-reconciliation-required", "a retained step intent may already have run; do not retry it".into()));
+    }
+    if landing.steps[slot].receipt.is_some() {
+        return Ok(refuse("landing-step-complete", "this step already has a receipt; read or replay its original request".into()));
+    }
+    match effects::source_matches(project, landing) {
+        Ok(true) => {},
+        Ok(false) => return Ok(refuse("landing-source-changed", "source branch, head or remote differs from authorization".into())),
+        Err(error) => return Ok(refuse("landing-source-changed", error.to_string())),
+    }
+    let invocation = match effects::prepare(project, landing, &auth.request.inputs, config) {
+        Ok(invocation) => invocation,
+        Err(error) => return Ok(refuse("landing-preflight", error.to_string())),
+    };
+    records.records.get_mut(&request.landing).unwrap().steps[slot].intent = Some(Intent {
+        request:request.clone(), authorization:auth.clone(), invocation:invocation.clone(), failure:None });
+    *view = persist_intent(store, view, records, request).await?;
+    let result = effects::perform(project, &invocation, &auth.request);
+    let landing = records.records.get_mut(&request.landing).unwrap();
+    match result {
+        Err(error) => {
+            landing.steps[slot].intent.as_mut().unwrap().failure = Some(error.to_string());
+            Ok(refuse("landing-reconciliation-required", error.to_string()))
+        }
+        Ok(result) => {
+            let receipt = json!({"id":model::identity("landing-step-receipt", &landing.root_binding, &request.request_id),
+                "landing":landing.id,"generation":landing.generation,"authorization":auth.id,"step":step.name(),
+                "source":landing.source,"base":landing.base,"remote":landing.remote,"inputs":auth.request.inputs,"result":result});
+            landing.steps[slot].receipt = Some(receipt.clone());
+            landing.generation += 1;
+            Ok(json!({"status":"ok","landing":landing,"receipt":receipt}))
+        }
+    }
 }
