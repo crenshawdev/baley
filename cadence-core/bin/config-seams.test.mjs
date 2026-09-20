@@ -356,7 +356,7 @@ test('route: the rung it routes on is what config.mjs get reports (global layer)
   assert.equal(r2.effort, 'low');
 });
 
-// --- the three --dir git seams ----------------------------------------------
+// --- the remaining git seams ------------------------------------------------
 
 test('git-branch: the integration_branch mode it DECIDES on is what get reports', () => {
   // git-branch.mjs:43 reads the key off the merged config, feeds it to
@@ -395,63 +395,7 @@ test('git-branch: the integration_branch mode it DECIDES on is what get reports'
   assert.equal(m.branch, 'cadence/v9.9.9');
 });
 
-test('land-cleanup: the base branch it resolves is what get reports', () => {
-  // land-cleanup.mjs:71-76 reads git.base_branch off the merged config. The
-  // fixture needs no git repo: readMergedBranches degrades to [] when git
-  // cannot read the directory, which is the ordinary advisory path.
-  const fx = layers({
-    global: { git: { base_branch: 'release-2' } },
-    repo: { git: { on_land_cleanup: true } },
-  });
-  const d = seam('land-cleanup.mjs', ['cleanup', '--dir', fx.root], fx);
-  assert.equal(d.ok, true);
-  assert.equal(d.base, getValue('git.base_branch', fx));
-  // Not the fallback: with the key unset, base would be protected_branches[0],
-  // i.e. `main`.
-  assert.equal(d.base, 'release-2');
 
-  // The contrasting value, so a hardcoded base fails this arm: neither
-  // `release-2` nor the `main` fallback satisfies both halves.
-  const other = layers({
-    global: { git: { base_branch: 'stable' } },
-    repo: { git: { on_land_cleanup: true } },
-  });
-  const d2 = seam('land-cleanup.mjs', ['cleanup', '--dir', other.root], other);
-  assert.equal(d2.ok, true);
-  assert.equal(d2.base, getValue('git.base_branch', other));
-  assert.equal(d2.base, 'stable');
-});
-
-test('land-cleanup: with git.base_branch unset, get says null and the seam says main', () => {
-  // The THIRD expected divergence in this file, and the only one that is the
-  // default state of every unconfigured install rather than a deliberate
-  // narrowing: `git.base_branch` defaults to null in the schema, and
-  // land-cleanup.mjs:76 falls back to `protectedBranches[0]` rather than
-  // landing a null base. So `get` answers null and the seam acts on `main`.
-  //
-  // Recorded rather than asserted equal, for the same reason as the two layer
-  // narrowings: a future change that made the seam honour the null - or moved
-  // the fallback off the protected list - would then fail a test instead of
-  // passing silently. It is a fallback DEFAULT, not a layer disagreement, which
-  // is why it sits with its own seam rather than in the narrowings section.
-  const bare = layers({ repo: { git: { on_land_cleanup: true } } });
-  assert.equal(getValue('git.base_branch', bare), null, 'get: unset resolves to the schema default');
-  const d = seam('land-cleanup.mjs', ['cleanup', '--dir', bare.root], bare);
-  assert.equal(d.ok, true);
-  assert.equal(d.base, 'main');
-  assert.deepEqual(getValue('git.protected_branches', bare), ['main', 'master'],
-    'and `main` is protected_branches[0], not a constant of its own');
-
-  // Which is what the fallback follows, not the literal `main`: move the
-  // protected list and the base moves with it, still with `get` reporting null.
-  const listed = layers({
-    global: { git: { protected_branches: ['release-2', 'main'] } },
-    repo: { git: { on_land_cleanup: true } },
-  });
-  assert.equal(getValue('git.base_branch', listed), null);
-  const d2 = seam('land-cleanup.mjs', ['cleanup', '--dir', listed.root], listed);
-  assert.equal(d2.base, 'release-2');
-});
 
 test('git-guard: the on_protected value it acts on is what get reports', () => {
   // The silent/ask pair rather than `refuse`: whether a refuse hard-blocks
@@ -539,40 +483,9 @@ test('git-guard: the two inert hostile spellings, as regression pins only', () =
 //
 // These seams deliberately read NARROWER than the merged config, so their arms
 // assert the divergence rather than equality. Widening either narrowing later
-// fails a test instead of passing silently. (The file's third divergence is not
-// a narrowing at all - it is land-cleanup's `base_branch` fallback default, and
-// it is recorded with that seam's own arm above.)
+// fails a test instead of passing silently.
 
-/**
- * A `{findings}` stdin payload carrying one GENUINELY-UNFIXED blocker: an
- * ADJUDICATION record entry ruled `survived` at `blocker`, naming no fix commit
- * and no override, which is what land-cleanup's gate halts on since LND-02.
- * The `ruling` is load-bearing and must stay: a RAW review finding - a severity
- * with nothing ruled over it - is deliberately no longer a live blocker to that
- * gate, so without it these arms would stop being about the config LAYER and
- * start failing over the payload SHAPE instead.
- */
-const BLOCKER = JSON.stringify({ findings: [{ ruling: 'survived', severity: 'blocker' }] });
 
-test('land-cleanup: the gate reads the merged git.auto_close value', () => {
-  const fx = gitLayers({
-    branch: 'cadence/v9.9.9', origin: true,
-    global: { git: { auto_close: true } },
-    repo: { git: { on_land_cleanup: true } },
-  });
-  assert.equal(getValue('git.auto_close', fx), true);
-  const g = seam('land-cleanup.mjs', ['gate', '--dir', fx.root], { ...fx, stdin: BLOCKER });
-  assert.equal(g.action, 'halt');
-  assert.match(g.reason, /auto_close on/);
-
-  const repoFx = gitLayers({
-    branch: 'cadence/v9.9.9', origin: true,
-    global: { git: { auto_close: false } },
-    repo: { git: { auto_close: true } },
-  });
-  const g2 = seam('land-cleanup.mjs', ['gate', '--dir', repoFx.root], { ...repoFx, stdin: BLOCKER });
-  assert.equal(g2.action, 'halt');
-});
 
 test('route: a retired risk.override is named by both faces, and routes nothing', () => {
   // The eight `risk.override.*` keys were retired with the dispatch-time floor

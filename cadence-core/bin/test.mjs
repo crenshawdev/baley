@@ -47,8 +47,8 @@ const GROUPS = Object.freeze({
     'config', 'config-seams', 'dispatch-phrasing', 'phase-plans'],
   // Everything that touches a real repository.
   git: ['git-guard', 'git-branch', 'git-segments', 'worktree-base',
-    'branch-decision', 'close-decision', 'release-decision',
-    'release-bump', 'land-cleanup', 'redact-url', 'issue-check', 'issue-decision'],
+    'branch-decision', 'release-decision',
+    'release-bump', 'redact-url', 'issue-check', 'issue-decision'],
   // The .planning grammar and the run record. The seam's own arms are one stem
   // per subcommand since phase 4 split planning.test.mjs; `planning` itself is
   // now just the shared fixture harness plus the arms that span several

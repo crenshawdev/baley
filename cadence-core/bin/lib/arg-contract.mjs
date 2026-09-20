@@ -1134,17 +1134,6 @@ export const CONTRACTS = {
     // the upward discovery the bound closed.
     tags: {},
   },
-  'land-cleanup.mjs': {
-    '*': {
-      '--dir': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
-    },
-    cleanup: {
-      '--branch': { required: false, type: 'string', value: 'fallback', bare: 'fallback' },
-      '--base': { required: false, type: 'string', value: 'fallback', bare: 'fallback' },
-      '--merged': { required: false, type: 'string', value: 'fallback', bare: 'fallback' },
-    },
-    gate: {},
-  },
   // The setup-time half of the forge pair: `forge.mjs` decides where issue
   // writes will go, `issue-check.mjs` reads that decision back at land time.
   // `--dir` is spelled IDENTICALLY on both, deliberately - the same workflow

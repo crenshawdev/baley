@@ -420,10 +420,10 @@ test('every flag in every row declares a complete grammar', () => {
     }
   }
   // The walk reached the whole table, so no arm above is vacuous.
-  // CADENCE-CENSUS: arg-contract-flag-entries | asserts: the CONTRACTS table declares 193 flag entries across 17 top-level rows
-  // 193 after removing the frozen publishing helper's three flags.
-  assert.equal(entries, 193, `the table declares ${entries} flag entries`);
-  assert.equal(Object.keys(CONTRACTS).length, 17, 'one row per top-level bin script');
+  // CADENCE-CENSUS: arg-contract-flag-entries | asserts: the CONTRACTS table declares 189 flag entries across 16 top-level rows
+  // 189 after removing the frozen cleanup helper's four flags.
+  assert.equal(entries, 189, `the table declares ${entries} flag entries`);
+  assert.equal(Object.keys(CONTRACTS).length, 16, 'one row per top-level bin script');
 });
 
 test('the declarations the CONTEXT decisions bind are the ones in the table', () => {
@@ -444,8 +444,6 @@ test('the declarations the CONTEXT decisions bind are the ones in the table', ()
       'CER-01 D-06: a valueless plan flag silently takes the phase UNION for a caller that asked about one plan'],
     ['issue-check.mjs', 'check', '--timeout-ms', { value: 'fallback', bare: 'fallback' },
       "D-04: this seam's whole contract is that it never fails a land"],
-    ['land-cleanup.mjs', 'cleanup', '--merged', { value: 'fallback', bare: 'fallback' },
-      "D-12: its seam's || fallback absorbs the valueless spelling today"],
     ['release-bump.mjs', 'bump', '--version', { bare: 'fallback' }, 'D-12'],
     ['release-bump.mjs', 'bump', '--date', { bare: 'refuse' },
       'a valueless --date must refuse rather than silently date today'],
