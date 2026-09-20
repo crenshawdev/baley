@@ -630,3 +630,160 @@ fn phase15_undo_reverts_exact_hashes_and_marks_the_record() {
         restarted.finish();
     }
 }
+
+#[test]
+fn phase15_version_drift_is_reported_before_bump_or_tag() {
+    use serde_json::Value;
+    let propose = |landing: &Value, version: &str, id: &str| json!({"operation":"milestone-release","request":{
+        "request_id":id,"landing":landing["id"],"expected_generation":landing["generation"],
+        "version":version,"tag":format!("v{version}"),"manifest":{"path":"release.json","format":"json"}}});
+    let confirm = |report: &Value, id: &str| json!({"operation":"milestone-release-confirm","request":{
+        "request_id":id,"release":report["id"],"digest":report["digest"],
+        "owner":"Fixture Owner","at":"2026-09-20T12:00:00Z"}});
+    let snapshot = |project: &std::path::Path| (
+        std::fs::read(project.join("release.json")).unwrap(),
+        git_value(project, &["rev-parse", "HEAD"]),
+        std::fs::read(project.join(".git/index")).unwrap(),
+        git_value(project, &["show-ref", "--tags"]),
+    );
+    let mut fixture = phase15::release_fixture();
+    let project = fixture.project.path().to_owned();
+    let mut client = fixture.client();
+    let landing = fixture.start(&mut client, "release-main");
+    let before = snapshot(&project);
+    let refused = client.call("cadence_apply", propose(&landing, "1.2.0", "release-collision"));
+    assert_eq!(refused["code"], "release-collision", "{refused}");
+    assert_eq!(refused["details"]["collision"]["tag"], "v1.2.0");
+    assert_eq!(snapshot(&project), before);
+    let request = propose(&landing, "1.3.0", "release-proposal");
+    let answer = client.call("cadence_apply", request.clone());
+    assert_eq!(answer["status"], "ok", "{answer}");
+    let report = answer["release"].clone();
+    assert_eq!(report["state"], "awaiting-confirmation");
+    assert_eq!(report["manifest_version"], "1.1.0");
+    assert_eq!(report["newest"]["tag"], "v1.2.0");
+    assert_eq!(report["newest"]["version"], "1.2.0");
+    assert_eq!(report["newest"]["commit"], fixture.head);
+    assert_eq!(report["drift"], true);
+    assert_eq!(report["head"], fixture.head);
+    assert_eq!(report["request"]["manifest"], json!({"path":"release.json","format":"json"}));
+    assert_eq!(report["manifest_bytes"], json!(before.0));
+    assert_eq!(report["tags"].as_array().unwrap().len(), 4);
+    assert_eq!(snapshot(&project), before);
+    client.finish();
+    client = fixture.client();
+    assert_eq!(client.call("cadence_apply", request), answer);
+    let mut wrong = confirm(&report, "release-wrong-digest");
+    wrong["request"]["digest"] = json!("wrong");
+    assert_eq!(client.call("cadence_apply", wrong)["code"], "release-confirmation");
+    assert_eq!(snapshot(&project), before);
+    let confirmation = confirm(&report, "release-confirm");
+    let bumped = client.call("cadence_apply", confirmation.clone());
+    assert_eq!(bumped["status"], "ok", "{bumped}");
+    let commit = bumped["commit"].as_str().unwrap();
+    assert_eq!(git_value(&project, &["rev-parse", "HEAD"]), commit);
+    assert_eq!(git_value(&project, &["rev-list", "--count", &format!("{}..HEAD", before.1)]), "1");
+    assert_eq!(git_value(&project, &["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]), "release.json");
+    let manifest: Value = serde_json::from_slice(&std::fs::read(project.join("release.json")).unwrap()).unwrap();
+    assert_eq!(manifest, json!({"version":"1.3.0","keep":true}));
+    assert_eq!(std::fs::read(project.join("sibling.json")).unwrap(), b"{\"version\":\"9.0.0\"}\n");
+    assert_eq!(git_value(&project, &["tag", "--list", "v1.3.0"]), "");
+    assert_eq!(git_value(fixture.remote.path(), &["tag", "--list", "v1.3.0"]), "");
+    client.finish();
+    client = fixture.client();
+    assert_eq!(client.call("cadence_apply", confirmation), bumped);
+    assert_eq!(git_value(&project, &["rev-parse", "HEAD"]), commit);
+    let bound = client.call("cadence_query", json!({"operation":"land-read","landing":landing["id"]}))["landing"].clone();
+    assert_eq!(bound["source"]["head"], commit);
+    assert_eq!(bound["release"]["version"], "1.3.0");
+    assert_eq!(bound["release"]["tag"], "v1.3.0");
+    let early = client.call("cadence_apply", json!({"operation":"land-tag","request":{
+        "request_id":"release-early-tag","landing":bound["id"],"expected_generation":bound["generation"]}}));
+    assert_eq!(early["code"], "landing-merge-confirmation-required", "{early}");
+    client.finish();
+    // Drive the separately authorized publish/merge path on this same release.
+    fixture.head = commit.to_owned();
+    fixture.durable_forge();
+    git(&project, &["branch", "main", &fixture.base]);
+    client = fixture.client();
+    let forge = json!({"provider":"github","repo":"fixture/repo","host":"github.com"});
+    let mut bound = bound;
+    for (index, (operation, inputs)) in [
+        ("land-publish", json!({"step":"push"})),
+        ("land-open", json!({"step":"open","forge":forge,"title":"Release","body":"Release 1.3.0"})),
+        ("land-merge", json!({"step":"merge","forge":forge,"pr":7})),
+    ].into_iter().enumerate() {
+        let auth = phase15::Publishing::authorize(&mut client, &bound, &format!("release-publish-{index}"), inputs.clone());
+        let result = client.call("cadence_apply", json!({"operation":operation,"request":{
+            "request_id":format!("release-effect-{index}"),"landing":bound["id"],"expected_generation":bound["generation"],
+            "authorization":auth["id"],"inputs":inputs}}));
+        assert_eq!(result["status"], "ok", "{result}");
+        bound = result["landing"].clone();
+    }
+    git(&project, &["push", "origin", "HEAD:main"]);
+    let confirmed = client.call("cadence_apply", json!({"operation":"land-confirm-merge","request":{
+        "request_id":"release-merge-confirm","landing":bound["id"],"expected_generation":bound["generation"],
+        "source":bound["source"],"base":bound["base"],"remote":bound["remote"],
+        "merged":{"forge":forge,"pr":7,"commit":commit},"tag":{"name":"v1.3.0","message":"Release 1.3.0"},
+        "reap":false,"owner":"Fixture Owner","at":"2026-09-20T13:00:00Z"}}));
+    assert_eq!(confirmed["status"], "ok", "{confirmed}");
+    bound = confirmed["landing"].clone();
+    for operation in ["land-checkout", "land-pull"] {
+        let result = client.call("cadence_apply", json!({"operation":operation,"request":{
+            "request_id":format!("release-{operation}"),"landing":bound["id"],"expected_generation":bound["generation"]}}));
+        assert_eq!(result["status"], "ok", "{result}");
+        bound = result["landing"].clone();
+    }
+    git(&project, &["tag", "1.3.0"]);
+    let refused = client.call("cadence_apply", json!({"operation":"land-tag","request":{
+        "request_id":"release-alias-tag","landing":bound["id"],"expected_generation":bound["generation"]}}));
+    assert_eq!(refused["status"], "refused", "{refused}");
+    assert!(refused["reason"].as_str().unwrap().contains("1.3.0"));
+    assert_eq!(git_value(&project, &["tag", "--list", "v1.3.0"]), "");
+    git(&project, &["tag", "-d", "1.3.0"]);
+    let tagged = client.call("cadence_apply", json!({"operation":"land-tag","request":{
+        "request_id":"release-final-tag","landing":bound["id"],"expected_generation":bound["generation"]}}));
+    assert_eq!(tagged["status"], "ok", "{tagged}");
+    assert_eq!(git_value(&project, &["rev-parse", "v1.3.0^{commit}"]), commit);
+    assert_eq!(git_value(fixture.remote.path(), &["tag", "--list", "v1.3.0"]), "");
+    client.finish();
+    // Every observed basis component is independently stale; no changed basis bumps.
+    for change in ["manifest", "tags", "head"] {
+        let fixture = phase15::release_fixture();
+        let project = fixture.project.path();
+        let mut client = fixture.client();
+        let landing = fixture.start(&mut client, "release-stale");
+        let report = client.call("cadence_apply", propose(&landing, "1.3.0", "release-stale-proposal"))["release"].clone();
+        match change {
+            "manifest" => std::fs::write(project.join("release.json"), "{\"version\":\"1.1.1\"}\n").unwrap(),
+            "tags" => git(project, &["tag", "another-label"]),
+            _ => git(project, &["commit", "--allow-empty", "-m", "Fixture head advance"]),
+        }
+        let before = snapshot(project);
+        let refused = client.call("cadence_apply", confirm(&report, "release-stale-confirm"));
+        assert_eq!(refused["code"], "release-basis-changed", "{change}: {refused}");
+        assert_eq!(snapshot(project), before);
+        assert_eq!(git_value(project, &["tag", "--list", "v1.3.0"]), "");
+        client.finish();
+    }
+    let fixture = phase15::release_fixture();
+    let project = fixture.project.path();
+    let mut client = fixture.client();
+    let landing = fixture.start(&mut client, "release-inputs");
+    git(project, &["tag", "1.3.0+build.7"]);
+    let refused = client.call("cadence_apply", propose(&landing, "1.3.0", "release-alias-collision"));
+    assert_eq!(refused["code"], "release-collision", "{refused}");
+    assert_eq!(refused["details"]["collision"]["tag"], "1.3.0+build.7");
+    git(project, &["tag", "v1.10.0"]);
+    git(project, &["tag", "v1.9.0"]);
+    let report = client.call("cadence_apply", propose(&landing, "2.0.0", "release-semver"));
+    assert_eq!(report["release"]["newest"]["tag"], "v1.10.0", "{report}");
+    let mut unsupported = propose(&landing, "2.0.0", "release-unsupported");
+    unsupported["request"]["manifest"]["format"] = json!("toml");
+    assert_eq!(client.call("cadence_apply", unsupported)["code"], "release-input");
+    std::fs::remove_file(project.join("release.json")).unwrap();
+    let refused = client.call("cadence_apply", propose(&landing, "2.0.0", "release-unreadable"));
+    assert_eq!(refused["code"], "release-input", "{refused}");
+    assert!(refused["reason"].as_str().unwrap().contains("release.json"));
+    client.finish();
+}

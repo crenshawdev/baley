@@ -638,6 +638,27 @@ fn complete_undo_phase(project: &Path) -> Vec<String> {
     hashes
 }
 
+pub fn release_fixture() -> Publishing {
+    let mut fixture = Publishing::new(false);
+    let project = fixture.project.path();
+    git(project, &["config", "commit.gpgsign", "false"]);
+    git(project, &["config", "user.name", "Release Fixture"]);
+    git(project, &["config", "user.email", "release@example.invalid"]);
+    fs::write(project.join("release.json"), "{\"version\":\"1.1.0\",\"keep\":true}\n").unwrap();
+    fs::write(project.join("sibling.json"), "{\"version\":\"9.0.0\"}\n").unwrap();
+    git(project, &["add", "release.json", "sibling.json"]);
+    git(project, &["commit", "-m", "Fixture explicit release manifest"]);
+    fixture.head = git_value(project, &["rev-parse", "HEAD"]);
+    git(project, &["tag", "-a", "v1.2.0", "-m", "Release 1.2.0"]);
+    git(project, &["tag", "v1.2.0-rc.10"]);
+    git(project, &["tag", "v1.2.0-rc.2"]);
+    git(project, &["tag", "nightly"]);
+    let mut client = fixture.client();
+    assert_eq!(client.call("cadence_query", json!({"operation":"progress"}))["status"], "ok");
+    client.finish();
+    fixture
+}
+
 fn undo_base() -> Fixture {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path();
