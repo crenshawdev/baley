@@ -171,7 +171,7 @@ fn scope_run_signoff_and_scan_generation_are_required_before_material() {
     let original = wanted(&record);
     for change in 0..9 {
         let mut wanted = original.clone();
-        let risk::Scope::Phase { project, planning_root, cycle, occurrence, phase, worker, plan } = &mut wanted.boundary.scope else { panic!("phase fixture"); };
+        let cadence::rail::risk::Scope::Phase { project, planning_root, cycle, occurrence, phase, worker, plan } = &mut wanted.boundary.scope else { panic!("phase fixture"); };
         match change {
             0 => project.push('x'),
             1 => planning_root.push('x'),
