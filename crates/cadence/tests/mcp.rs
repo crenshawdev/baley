@@ -1577,6 +1577,7 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
         assert!(!cadence::undo::instructions::markdown().contains(forbidden), "{forbidden}");
     }
     let (land, body) = markdown_parts("skills/cad-land/SKILL.md");
+    assert_eq!(body, cadence::landing::instructions::markdown().split_once("\n---\n").unwrap().1);
     assert_eq!(land["name"], "cad-land");
     assert_eq!(land["allowed-tools"], json!(["mcp__cadence__cadence_query", "mcp__cadence__cadence_apply"]));
     assert!(body.contains("land-read") && body.contains("land-authorize"));
@@ -1594,10 +1595,14 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     assert!(body.contains("explicit skipped receipt") && body.contains("retry the identical local request"));
     assert!(body.contains("refusal naming the uncontained source branch and base"));
     assert!(body.contains("Tag push remains a separate external step"));
+    assert!(body.contains("landing.release") && body.contains("release id/digest"));
+    assert!(body.contains("normalized version aliases on the pulled base"));
+    assert!(body.contains("version confirmation does not confirm this"));
     for forbidden in ["Bash", "git.auto_close", "git-publish.mjs", "CLAUDE_PLUGIN_ROOT", "SlashCommand"] {
         assert!(!cadence::landing::instructions::markdown().contains(forbidden), "{forbidden}");
     }
     let (milestone, body) = markdown_parts("skills/cad-milestone/SKILL.md");
+    assert_eq!(body, cadence::milestone::instructions::markdown().split_once("\n---\n").unwrap().1);
     assert_eq!(milestone["name"], "cad-milestone");
     assert_eq!(milestone["allowed-tools"], json!(["mcp__cadence__cadence_query", "mcp__cadence__cadence_apply"]));
     assert!(body.contains("milestone-read") && body.contains("verification-audit"));
@@ -1609,6 +1614,10 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     assert!(body.contains("durable id, state, commit") && body.contains("single-parent commit"));
     assert!(body.contains("ready close records readiness only; it changes no documents"));
     assert!(body.contains("output grants no permission"));
+    assert!(body.contains("milestone-release-confirm") && body.contains("manifest {path, format:\"json\"}"));
+    assert!(body.contains("both drift values: manifest_version and newest.tag/version/commit"));
+    assert!(body.contains("confirm this exact\n   report before bumping"));
+    assert!(body.contains("actual bump commit") && body.contains("Version confirmation grants no publish permission"));
     for forbidden in ["Bash", "Write", "Edit", "planning.mjs", "CLAUDE_PLUGIN_ROOT", "git ", "carry moves"] {
         assert!(!cadence::milestone::instructions::markdown().contains(forbidden), "{forbidden}");
     }

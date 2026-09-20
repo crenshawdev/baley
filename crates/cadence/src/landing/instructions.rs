@@ -25,6 +25,9 @@ allowed-tools:
    discrepancy, then land-read again. A failed or ambiguous read stops without
    a success receipt or a repeated mutation. Reuse the same request on transport
    interruption; after resolving a retained discrepancy, read a fresh `resume`.
+   If `landing.release` is present, display its release id/digest, named manifest,
+   version, exact tag and bump commit. Release confirmation grants no external
+   authorization and creates no tag; use the updated source commit from this read.
 2. For an external step, show the proposed exact step: push, open, merge or tag-push. Obtain its request
    schema through cadence_query `{"operation":"schema","tool":"apply","for":"land-authorize"}`.
    Show every input before asking: source and destination refs; for open, configured
@@ -57,6 +60,9 @@ allowed-tools:
    choices. Record only the owner's actual name and confirmation time; obtain
    missing attribution. A merge receipt or forge MERGED result grants no local
    cleanup permission. Declining leaves the confirmation absent.
+   A bound release requires its exact release tag; show that name with the
+   owner's annotation message. Its version confirmation does not confirm this
+   merge or authorize cleanup. The binary refuses a changed or omitted release tag.
 6. After explicit owner confirmation, call land-confirm-merge with a fresh
    request_id, landing id and expected_generation, copied source/base/remote,
    the exact `merged` forge/PR/commit identity, `tag` (name/message or null),
@@ -73,6 +79,10 @@ allowed-tools:
    refusal naming the uncontained source branch and base, including both tips;
    stop without suggesting forced deletion. Local cleanup preserves risk and
    deferred records and never files or changes tracker issues.
+   For a bound release, land-tag rechecks the named manifest bytes/version and
+   normalized version aliases on the pulled base before creating its tag.
+   Report a collision or changed release basis exactly and stop. Never invoke
+   release-bump.mjs or a raw tag command to bypass this refusal.
 8. Tag push remains a separate external step. Show the exact annotated tag object
    from its receipt and obtain its own land-authorize grant through steps 2-4;
    the deferred-member gate still applies. A local tag or merge confirmation is
