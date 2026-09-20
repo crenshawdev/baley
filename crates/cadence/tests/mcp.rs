@@ -1559,7 +1559,23 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
 
     // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
-    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 19);
+    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 20);
+    let (undo, body) = markdown_parts("skills/cad-undo/SKILL.md");
+    assert_eq!(undo["name"], "cad-undo");
+    assert_eq!(undo["argument-hint"], "<phase> [--no-commit]");
+    assert_eq!(undo["allowed-tools"], json!(["mcp__cadence__cadence_query", "mcp__cadence__cadence_apply"]));
+    assert!(body.contains("undo-read") && body.contains("undo-phase"));
+    assert!(body.contains("source, occurrence and provenance") && body.contains("exact ordered hash manifest"));
+    assert!(body.contains("committed by default") && body.contains("--no-commit stages the exact reverse reverts"));
+    assert!(body.contains("marks\n   nothing undone and leaves phase documents and the cursor unchanged"));
+    assert!(body.contains("Only absent native execution") && body.contains("including the docs task"));
+    assert!(body.contains("owner's explicit confirmation of this exact manifest and mode"));
+    assert!(body.contains("exact stopped hash, conflict paths and completed set"));
+    assert!(body.contains("retry the identical request_id and inputs"));
+    assert!(body.contains("run no later hash, reset, abort or forced continuation"));
+    for forbidden in ["Bash", "Write", "Edit", "planning.mjs", "CLAUDE_PLUGIN_ROOT", "SlashCommand"] {
+        assert!(!cadence::undo::instructions::markdown().contains(forbidden), "{forbidden}");
+    }
     let (land, body) = markdown_parts("skills/cad-land/SKILL.md");
     assert_eq!(land["name"], "cad-land");
     assert_eq!(land["allowed-tools"], json!(["mcp__cadence__cadence_query", "mcp__cadence__cadence_apply"]));

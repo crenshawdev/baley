@@ -117,6 +117,7 @@ pub struct RenderedProjectFile {
 }
 
 pub const RENDERED_PROJECT_FILES: &[RenderedProjectFile] = &[
+    RenderedProjectFile { path: "skills/cad-undo/SKILL.md", command: &["undo-instructions"] },
     RenderedProjectFile { path: "skills/cad-land/SKILL.md", command: &["land-instructions"] },
     RenderedProjectFile { path: "skills/cad-milestone/SKILL.md", command: &["milestone-instructions"] },
     RenderedProjectFile { path: "skills/cad-suggest/SKILL.md", command: &["suggest-instructions"] },
