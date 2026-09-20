@@ -409,7 +409,11 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
     } else {
         None
     };
-    admit_with_policy(request.trigger.clone(), gate.clone(), observed, || async {
+    let debug_dispatch = matches!((&gate, &observed), (Some(gate), Some((observation, true)))
+        if review::policy::debug_risk_review_action(gate, observation, true) == review::policy::RiskAction::Dispatch);
+    let policy_trigger = request.trigger.clone();
+    let policy_gate = gate.clone();
+    let admission = || async {
         let project_root = root
             .parent()
             .ok_or_else(|| Error::Invalid("project root unavailable".into()))?;
@@ -636,8 +640,9 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
             admission::acknowledge_admission,
         )
         .await
-    })
-    .await
+    };
+    if debug_dispatch { admission().await }
+    else { admit_with_policy(policy_trigger, policy_gate, observed.map(|(observation, _)| observation), admission).await }
 }
 
 fn requested_voice(
@@ -671,24 +676,17 @@ fn admission_risk_observation(
     root: &Path,
     view: &cadence::store::writer::View,
     answer: &crate::config::policy::SurfaceAnswer,
-) -> Result<review::policy::DetectorObservation> {
+) -> Result<(review::policy::DetectorObservation, bool)> {
     use cadence::rail::risk;
     use review::policy::DetectorObservation;
     let surfaces = match answer {
         crate::config::policy::SurfaceAnswer::Unanswered => {
-            return Ok(DetectorObservation::Unanswered);
+            return Ok((DetectorObservation::Unanswered, false));
         }
         crate::config::policy::SurfaceAnswer::Invalid { reason } => {
             return Err(Error::Policy(reason.clone()));
         }
         crate::config::policy::SurfaceAnswer::Answered { categories } => categories,
-    };
-    let Some(phase) = request.phase else {
-        return if request.risk_observation.is_some() {
-            Err(Error::Invalid("foreign-risk-evidence".into()))
-        } else {
-            Ok(DetectorObservation::Inconclusive)
-        };
     };
     let material = match &request.target {
         Target::CommittedRange { base, head } | Target::PhaseRange { base, head, .. } => {
@@ -701,16 +699,32 @@ fn admission_risk_observation(
             base_id: base.clone(),
             index_id: index.clone(),
         },
-        _ => return Ok(DetectorObservation::Inconclusive),
+        _ => return Ok((DetectorObservation::Inconclusive, false)),
     };
-    let scope = risk::Scope {
-        project: request.project.clone(),
-        planning_root: root.to_string_lossy().into(),
-        cycle: request.cycle.clone(),
-        occurrence: request.discriminator.clone(),
-        phase,
-        worker: request.plan.map(|n| n.to_string()),
-        plan: request.plan,
+    let scope = if let Some(phase) = request.phase {
+        risk::Scope::Phase {
+            project: request.project.clone(), planning_root: root.to_string_lossy().into(),
+            cycle: request.cycle.clone(), occurrence: request.discriminator.clone(),
+            phase, worker: request.plan.map(|n| n.to_string()), plan: request.plan,
+        }
+    } else if request.caller == "debug" && request.home.kind == HomeKind::RootDebug
+        && request.home.id == request.discriminator && request.plan.is_none()
+        && matches!(request.target, Target::StagedTree { head: None, .. }) {
+        let records = cadence::debug::model::namespace(&view.snapshot.data)?;
+        let record = records.records.get(&request.discriminator)
+            .ok_or_else(|| Error::Invalid("foreign-risk-evidence".into()))?;
+        if record.root_binding != cadence::verification::inputs::root_binding(root)?
+            || root.parent().is_none_or(|project| project.to_string_lossy() != request.project) {
+            return Err(Error::Invalid("foreign-risk-evidence".into()));
+        }
+        risk::Scope::RootDebug {
+            project: request.project.clone(), planning_root: root.to_string_lossy().into(),
+            cycle: request.cycle.clone(), occurrence: request.discriminator.clone(),
+            kind: risk::RootDebugKind::RootDebug,
+        }
+    } else {
+        return if request.risk_observation.is_some() { Err(Error::Invalid("foreign-risk-evidence".into())) }
+            else { Ok((DetectorObservation::Inconclusive, false)) };
     };
     let records = risk::read(&view.snapshot.data)?;
     let latest = records
@@ -742,8 +756,13 @@ fn admission_risk_observation(
             == Some(record),
         current: latest.is_some_and(|latest| latest.confirmation == record.confirmation),
     });
-    review::policy::detector_observation(&scope, &material, Some(surfaces), evidence)
-        .map_err(|e| Error::Invalid(e.into()))
+    let checked_debug = matches!(scope, risk::Scope::RootDebug { .. }) && evidence.as_ref().is_some_and(|e|
+        e.confirmed && e.current && e.observation.surfaces == *surfaces
+        && e.observation.outcome == risk::ObservationOutcome::Checked
+        && e.observation.scan.as_ref().is_some_and(|scan| scan.checked));
+    let observed = review::policy::detector_observation(&scope, &material, Some(surfaces), evidence)
+        .map_err(|e| Error::Invalid(e.into()))?;
+    Ok((observed, checked_debug))
 }
 
 async fn commit_admission<C, V>(

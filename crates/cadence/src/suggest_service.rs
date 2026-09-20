@@ -80,7 +80,7 @@ fn fires(view: &View, selected: Option<u32>) -> Result<BTreeMap<String, Vec<Gate
     receipts::confirmed_history(view)?;
     let (_, fires, outcomes) = receipts::history(&view.snapshot.data)?;
     for fire in fires {
-        if selected.is_some_and(|phase| phase != fire.binding.boundary.scope.phase.get()) { continue; }
+        if selected.is_some() && selected != fire.binding.boundary.scope.phase().map(|p| p.get()) { continue; }
         let failed = outcomes.iter().any(|outcome| outcome.fire == fire
             && matches!(outcome.consequence, receipts::Consequence::Adjudication { passed: false, .. }));
         groups.entry("risk_surface".into()).or_default().push(GateFire { id: fire.id, failed });

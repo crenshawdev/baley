@@ -1209,8 +1209,8 @@ pub fn plan_contribute(data: &Value, root: &str, request: &PlanRequest) -> Resul
                 .or_else(|| bases.last().map(|basis| basis.source.completion.clone()))
                 .ok_or_else(|| refuse("risk-pending", "no native risk material is retained for the plan's dispatch"))?;
             let material = crate::rail::risk::MaterialIdentity::Committed { base_id: base, head_id: head };
-            if settlement.boundary.run_id != active.id || scope.phase.get() != plan.phase || scope.plan.map(|p| p.get()) != Some(plan.plan)
-                || scope.occurrence != format!("phase-{}-execution", plan.phase) || settlement.material != material
+            if settlement.boundary.run_id != active.id || scope.phase().map(|p| p.get()) != Some(plan.phase) || scope.plan().map(|p| p.get()) != Some(plan.plan)
+                || scope.occurrence() != format!("phase-{}-execution", plan.phase) || settlement.material != material
                 || !crate::rail::receipts::assess(settlement, data)?.permits_continuation {
                 return Err(refuse("risk-pending", "the plan's exact risk settlement is pending; the suite receipt is retained and completion waits for both"));
             }

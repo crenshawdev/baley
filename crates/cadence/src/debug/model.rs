@@ -60,6 +60,18 @@ pub struct Record {
     pub attempts: Vec<Attempt>, pub attempt_count: u64, pub status: Status, pub resolution: Option<Resolution>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recall: Option<RecallSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<Review>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Review {
+    pub occurrence: String,
+    pub material: crate::rail::risk::MaterialIdentity,
+    pub observation: String,
+    pub admission_request_id: String,
+    pub fire: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -141,6 +153,11 @@ pub struct Write {
     pub apply: Apply,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recall: Option<RecallSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<Review>,
+    /// Persist coordination before admission without completing the caller request.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub coordinating: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -153,10 +170,12 @@ pub struct Namespace {
     pub schema: String,
     pub records: BTreeMap<String, Record>,
     pub requests: BTreeMap<String, Receipt>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pending_requests: BTreeMap<String, Apply>,
 }
 pub fn namespace(data: &Value) -> Result<Namespace> {
     let Some(raw) = data.get("debug") else {
-        return Ok(Namespace { schema: "debug-1".into(), records: BTreeMap::new(), requests: BTreeMap::new() });
+        return Ok(Namespace { schema: "debug-1".into(), records: BTreeMap::new(), requests: BTreeMap::new(), pending_requests: BTreeMap::new() });
     };
     let saved: Namespace = serde_json::from_value(raw.clone())?;
     if saved.schema != "debug-1" { return Err(Error::Invalid("unsupported debug namespace".into())); }
@@ -189,6 +208,9 @@ pub fn unknown(slug: &str) -> Value {
 }
 pub fn replay(data: &Value, write: &Write) -> Result<Option<Value>> {
     let (id, _, _) = write.apply.identity();
+    if namespace(data)?.pending_requests.get(id).is_some_and(|pending| *pending != write.apply) {
+        return Ok(Some(Refusal::new("request-reused", "debug request identity binds different inputs").slot("request.request_id").value()));
+    }
     if let Some(saved) = namespace(data)?.requests.get(id) {
         return Ok(Some(if saved.root_binding == write.root_binding && saved.apply == write.apply { saved.answer.clone() }
             else { Refusal::new("request-reused", "debug request identity binds different inputs").slot("request.request_id").value() }));
@@ -209,7 +231,7 @@ pub fn transition(data: &Value, write: &Write) -> Result<std::result::Result<Rec
             text(&request.symptom)?;
             Record { slug: slug.into(), root_binding: write.root_binding.clone(), version: 0,
                 symptom: request.symptom.clone(), hypotheses: vec![], observations: vec![], attempts: vec![],
-                attempt_count: 0, status: Status::Open, resolution: None, recall: write.recall.clone() }
+                attempt_count: 0, status: Status::Open, resolution: None, recall: write.recall.clone(), review: None }
         }
         _ => match saved.records.get(slug) { Some(record) => record.clone(), None => return Ok(Err(unknown(slug))) },
     };
@@ -219,6 +241,14 @@ pub fn transition(data: &Value, write: &Write) -> Result<std::result::Result<Rec
             .details(json!({"slug":slug,"expected":record.version,"supplied":expected})).value()));
     }
     if record.status != Status::Open { return Ok(Err(Refusal::new("debug-resolved", "debug session is already resolved").slot("request.slug").value())); }
+    if let Some(review) = &write.review {
+        review.material.validate()?;
+        if review.occurrence != slug || !matches!(write.apply, Apply::Resolve { .. }) {
+            return Err(Error::Invalid("debug review requires its resolve occurrence".into()));
+        }
+        record.review = Some(review.clone());
+    }
+    if write.coordinating { return Ok(Ok(record)); }
     match &write.apply {
         Apply::Open { .. } => {},
         Apply::Hypothesis { request } => {
@@ -249,6 +279,10 @@ pub fn transition(data: &Value, write: &Write) -> Result<std::result::Result<Rec
         }
         Apply::Resolve { request } => {
             text(&request.resolution)?; text(&request.reproduction.test)?; text(&request.reproduction.result)?;
+            if record.review.as_ref().is_some_and(|review| review.fire.is_some()) {
+                record.version = record.version.checked_add(1).ok_or_else(|| Error::Invalid("debug version exhausted".into()))?;
+                return Ok(Ok(record));
+            }
             if request.reproduction.passed {
                 record.status = Status::Resolved;
                 record.resolution = Some(Resolution { description: request.resolution.clone(), reproduction: request.reproduction.clone() });
@@ -269,16 +303,30 @@ pub fn contribute(data: &Value, write: &Write) -> Result<Value> {
     let mut saved = namespace(data)?;
     let response = match outcome(data, write) {
         Ok(record) => {
-            let response = answer(&record);
+            let response = response(&record, write);
             saved.records.insert(record.slug.clone(), record);
             response
         }
         Err(refusal) => refusal,
     };
-    saved.requests.insert(id.into(), Receipt { root_binding: write.root_binding.clone(), apply: write.apply.clone(), answer: response });
+    if write.coordinating {
+        saved.pending_requests.insert(id.into(), write.apply.clone());
+    } else {
+        saved.pending_requests.remove(id);
+        saved.requests.insert(id.into(), Receipt { root_binding: write.root_binding.clone(), apply: write.apply.clone(), answer: response });
+    }
     let mut next = data.clone();
     next["debug"] = serde_json::to_value(saved)?;
     Ok(next)
+}
+
+pub fn response(record: &Record, write: &Write) -> Value {
+    if !write.coordinating && matches!(write.apply, Apply::Resolve { .. })
+        && let Some(fire) = record.review.as_ref().and_then(|review| review.fire.as_ref()) {
+        return Refusal::new("debug-review-pending", format!("debug resolve waits for risk fire {fire}"))
+            .slot("fire").details(json!({"slug":record.slug,"fire":fire,"record":record})).value();
+    }
+    answer(record)
 }
 
 pub fn outcome(data: &Value, write: &Write) -> std::result::Result<Record, Value> {

@@ -24,6 +24,11 @@ pub fn render(record: &Record) -> String {
     }
     out.push_str("\n## Failed attempts\n");
     for attempt in &record.attempts { out.push_str(&format!("\nAttempt: {}\nResult: {}\n", attempt.description, attempt.result)); }
+    if let Some(review) = &record.review {
+        out.push_str(&format!("\n## Risk review\n\nScope: root-debug {}\nBase: {}\nIndex: {}\nHead: null\nObservation: {}\nAdmission request: {}\n",
+            review.occurrence, review.material.base_id(), review.material.tip_id(), review.observation, review.admission_request_id));
+        if let Some(fire) = &review.fire { out.push_str(&format!("Fire: {fire}\nHome: reviews/{fire}\nResolve: pending review\n")); }
+    }
     if let Some(resolution) = &record.resolution {
         out.push_str(&format!("\n## Resolution\n\n{}\nTest: {}\nResult: {}\n", resolution.description, resolution.reproduction.test, resolution.reproduction.result));
     }

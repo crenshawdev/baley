@@ -30,10 +30,8 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
         surfaces,
     } = &request;
     if risk::validate_name(request_id).is_err()
-        || risk::validate_name(&selection.occurrence).is_err()
-        || selection
-            .worker
-            .as_deref()
+        || risk::validate_name(selection.occurrence()).is_err()
+        || selection.worker()
             .is_some_and(|worker| risk::validate_name(worker).is_err())
     {
         return Ok(refused(
@@ -42,12 +40,6 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
         ));
     }
     let root = reload::identity(selected)?;
-    if !root.join(format!("phases/{}", selection.phase)).is_dir() {
-        return Ok(refused(
-            "invalid-scope",
-            "requested phase directory is unavailable",
-        ));
-    }
     let session = match factory.first_touch(&root).await {
         Ok(session) => session,
         Err(error) if factory.guard_config(&root).is_err() => {
@@ -79,43 +71,30 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
         Err(error) => return Ok(refused("invalid-surfaces", &error.to_string())),
     };
     let view = session.derivation_view().await?;
+    if let Err(error) = validate_scope(&root, &view, selection, source) {
+        return Ok(refused("invalid-scope", &error.to_string()));
+    }
     let project = root
         .parent()
         .ok_or_else(|| Error::Invalid("planning root lacks project".into()))?
         .to_path_buf();
-    let mut scope = Scope {
-        project: project.to_string_lossy().into_owned(),
-        planning_root: root.to_string_lossy().into_owned(),
-        cycle: "live".into(),
-        occurrence: selection.occurrence.clone(),
-        phase: selection.phase,
-        worker: selection.worker.clone(),
-        plan: None,
-    };
+    let mut scope = selection.bind(project.to_string_lossy().into_owned(), root.to_string_lossy().into_owned());
     let material_source = if let risk::Source::Execution { plan, dispatch_id } = source {
-        if selection
-            .worker
-            .as_deref()
-            .is_some_and(|worker| worker != plan.to_string())
-        {
-            return Ok(refused(
-                "invalid-scope",
-                "execution worker must name the selected plan",
-            ));
-        }
+        let phase = match scope.execution(*plan) {
+            Ok(phase) => phase,
+            Err(error) => return Ok(refused("invalid-scope", &error.to_string())),
+        };
         let material = match super::execution_service::risk_material(
             &view,
             &root,
-            selection.phase.get(),
-            &selection.occurrence,
+            phase.get(),
+            selection.occurrence(),
             plan.get(),
             dispatch_id,
         ) {
             Ok(material) => material,
             Err(reason) => return Ok(refused("missing-execution-material", &reason)),
         };
-        scope.plan = Some(*plan);
-        scope.worker = Some(plan.to_string());
         risk::Source::Committed {
             base: material.base_id().into(),
             head: material.tip_id().into(),
@@ -258,16 +237,17 @@ pub fn receipt_boundary(
 ) -> Result<receipts::Boundary> {
     let (run_id, after_generation) = match source {
         risk::Source::Execution { dispatch_id, .. } => {
+            let phase = scope.phase().ok_or_else(|| Error::Invalid("execution requires a phase scope".into()))?.get();
             let generation = view.decisions.iter().filter_map(|record| match &record.decision {
                 cadence::store::model::Decision::BoundaryV1(value)
-                    if value.boundary.scope == (cadence::execution::boundary::BoundaryScope::Execution {phase:scope.phase.get()})
+                    if value.boundary.scope == (cadence::execution::boundary::BoundaryScope::Execution {phase})
                         && matches!(&value.boundary.receipt, cadence::execution::boundary::Receipt::Dispatch { dispatch_id: id, .. } if id == dispatch_id)
                         && cadence::store::writer::confirmed_boundary(view, &value.boundary).is_ok() => Some(value.store_generation),
                 _ => None,
             }).min().ok_or_else(|| Error::Invalid("risk boundary lacks native dispatch admission".into()))?;
             (dispatch_id.clone(), generation)
         }
-        _ => (scope.occurrence.clone(), 0),
+        _ => (scope.occurrence().to_owned(), 0),
     };
     Ok(receipts::Boundary {
         scope,
@@ -328,28 +308,14 @@ pub async fn receipt<I: ConfigIo + Clone + Sync>(
                 ));
             };
             receipts::Query {
-                scope: risk::ScopeSelection {
-                    phase: record.observation.scope.phase,
-                    occurrence: record.observation.scope.occurrence,
-                    worker: record.observation.scope.worker,
-                },
+                scope: record.observation.scope.selection(),
                 source: record.observation.source,
                 surfaces: Some(record.observation.surfaces),
             }
         }
     };
-    if !root.join(format!("phases/{}", query.scope.phase)).is_dir()
-        || risk::validate_name(&query.scope.occurrence).is_err()
-        || query
-            .scope
-            .worker
-            .as_deref()
-            .is_some_and(|worker| risk::validate_name(worker).is_err())
-    {
-        return Ok(refused(
-            "invalid-scope",
-            "requested risk scope is unavailable or invalid",
-        ));
+    if let Err(error) = validate_scope(&root, &view, &query.scope, &query.source) {
+        return Ok(refused("invalid-scope", &error.to_string()));
     }
     let surfaces = match query.surfaces {
         Some(values) => risk::validate_surfaces(values).map(Some),
@@ -370,34 +336,18 @@ pub async fn receipt<I: ConfigIo + Clone + Sync>(
         }
         Err(error) => return Ok(refused("invalid-surfaces", &error.to_string())),
     };
-    let mut scope = Scope {
-        project: project.to_string_lossy().into_owned(),
-        planning_root: root.to_string_lossy().into_owned(),
-        cycle: "live".into(),
-        occurrence: query.scope.occurrence.clone(),
-        phase: query.scope.phase,
-        worker: query.scope.worker,
-        plan: None,
-    };
+    let mut scope = query.scope.bind(project.to_string_lossy().into_owned(), root.to_string_lossy().into_owned());
     let material = match &query.source {
         risk::Source::Execution { plan, dispatch_id } => {
-            if scope
-                .worker
-                .as_deref()
-                .is_some_and(|worker| worker != plan.to_string())
-            {
-                return Ok(refused(
-                    "invalid-scope",
-                    "execution worker must name the selected plan",
-                ));
-            }
-            scope.plan = Some(*plan);
-            scope.worker = Some(plan.to_string());
+            let phase = match scope.execution(*plan) {
+                Ok(phase) => phase,
+                Err(error) => return Ok(refused("invalid-scope", &error.to_string())),
+            };
             match super::execution_service::risk_material(
                 &view,
                 &root,
-                scope.phase.get(),
-                &scope.occurrence,
+                phase.get(),
+                scope.occurrence(),
                 plan.get(),
                 dispatch_id,
             ) {
@@ -557,13 +507,13 @@ pub fn execution_requirements(
     .ok_or_else(|| format!("{pending}: risk surfaces are unanswered"))?;
     receipts::confirmed_history(view).map_err(|e| format!("{pending}: {e}"))?;
     completed.into_iter().map(|outcome| {
-        let scope = Scope {
+        let scope = Scope::Phase {
             project: root.parent().ok_or("planning root lacks project")?.to_string_lossy().into_owned(),
             planning_root: root.to_string_lossy().into_owned(), cycle: "live".into(),
             occurrence: pending.clone(), phase: phase.try_into().map_err(|_| "invalid phase")?,
             worker: Some(outcome.plan.to_string()), plan: Some(outcome.plan.try_into().map_err(|_| "invalid plan")?),
         };
-        let source = risk::Source::Execution { plan: scope.plan.unwrap(), dispatch_id: outcome.dispatch_id.clone() };
+        let source = risk::Source::Execution { plan: scope.plan().unwrap(), dispatch_id: outcome.dispatch_id.clone() };
         let material = super::execution_service::risk_material(view, root, phase, &pending, outcome.plan, &outcome.dispatch_id)?;
         let wanted = receipts::Requirement {
             boundary: receipt_boundary(view, scope, &source).map_err(|e| e.to_string())?, material, surfaces: surfaces.clone(),
@@ -574,4 +524,22 @@ pub fn execution_requirements(
         }
         Ok(wanted)
     }).collect()
+}
+
+fn validate_scope(root: &Path, view: &View, selection: &risk::ScopeSelection, source: &risk::Source) -> Result<()> {
+    risk::validate_name(selection.occurrence())?;
+    if let Some(worker) = selection.worker() { risk::validate_name(worker)?; }
+    match selection {
+        risk::ScopeSelection::Phase { phase, .. } if root.join(format!("phases/{phase}")).is_dir() => Ok(()),
+        risk::ScopeSelection::RootDebug { occurrence, .. } if matches!(source, risk::Source::Staged { .. }) => {
+            let records = cadence::debug::model::namespace(&view.snapshot.data)?;
+            let record = records.records.get(occurrence)
+                .ok_or_else(|| Error::Invalid("root-debug scope requires an existing debug record".into()))?;
+            if record.root_binding != cadence::verification::inputs::root_binding(root)? {
+                return Err(Error::Invalid("root-debug scope belongs to another root".into()));
+            }
+            Ok(())
+        }
+        _ => Err(Error::Invalid("requested scope is unavailable or requires staged material".into())),
+    }
 }

@@ -171,14 +171,15 @@ fn scope_run_signoff_and_scan_generation_are_required_before_material() {
     let original = wanted(&record);
     for change in 0..9 {
         let mut wanted = original.clone();
+        let risk::Scope::Phase { project, planning_root, cycle, occurrence, phase, worker, plan } = &mut wanted.boundary.scope else { panic!("phase fixture"); };
         match change {
-            0 => wanted.boundary.scope.project.push('x'),
-            1 => wanted.boundary.scope.planning_root.push('x'),
-            2 => wanted.boundary.scope.cycle = "archived".into(),
-            3 => wanted.boundary.scope.occurrence = "different".into(),
-            4 => wanted.boundary.scope.phase = 8.try_into().unwrap(),
-            5 => wanted.boundary.scope.worker = Some("5".into()),
-            6 => wanted.boundary.scope.plan = Some(5.try_into().unwrap()),
+            0 => project.push('x'),
+            1 => planning_root.push('x'),
+            2 => *cycle = "archived".into(),
+            3 => *occurrence = "different".into(),
+            4 => *phase = 8.try_into().unwrap(),
+            5 => *worker = Some("5".into()),
+            6 => *plan = Some(5.try_into().unwrap()),
             7 => wanted.boundary.run_id = "run-two".into(),
             _ => wanted.boundary.after_generation = 2,
         }

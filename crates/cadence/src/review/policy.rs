@@ -135,6 +135,14 @@ pub fn risk_review_action(gate: &Gate, observation: &DetectorObservation) -> Ris
     }
 }
 
+/// Debug alone dispatches a checked inconclusive scan. Missing acquisition,
+/// stale evidence and unanswered configuration retain the ordinary policy.
+pub fn debug_risk_review_action(gate: &Gate, observation: &DetectorObservation, checked: bool) -> RiskAction {
+    if *gate != Gate::Off && checked && *observation == DetectorObservation::Inconclusive {
+        RiskAction::Dispatch
+    } else { risk_review_action(gate, observation) }
+}
+
 /// Only an independently supplied settlement can change this state. Delivery
 /// is deliberately not evidence for a transition to Verified.
 pub fn settlement_state(settlement: Option<&Settlement>) -> Settlement {
@@ -223,7 +231,7 @@ mod gap154_tests {
             version: 1,
             request_id: "scan1".into(),
             request_digest: "d".repeat(64),
-            scope: risk::Scope {
+            scope: risk::Scope::Phase {
                 project: "p1".into(),
                 planning_root: "p1/.planning".into(),
                 cycle: "live".into(),
@@ -304,7 +312,8 @@ mod gap154_tests {
             head_id: "h1".into(),
         };
         let mut foreign = observation();
-        foreign.scope.occurrence = "foreign".into();
+        let risk::Scope::Phase { occurrence, .. } = &mut foreign.scope else { panic!("phase fixture"); };
+        *occurrence = "foreign".into();
         assert_eq!(
             detector_observation(
                 &base.scope,

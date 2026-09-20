@@ -97,11 +97,33 @@ pub const NAMESPACE: &str = "rail_observations";
 const MARKER: &str = "cadence.rail.observation.v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ScopeSelection {
-    pub phase: NonZeroU32,
-    pub occurrence: String,
-    pub worker: Option<String>,
+#[serde(untagged, deny_unknown_fields)]
+pub enum ScopeSelection {
+    Phase { phase: NonZeroU32, occurrence: String, worker: Option<String> },
+    RootDebug { kind: RootDebugKind, occurrence: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum RootDebugKind { #[serde(rename = "root-debug")] RootDebug }
+
+impl ScopeSelection {
+    pub fn occurrence(&self) -> &str {
+        match self { Self::Phase { occurrence, .. } | Self::RootDebug { occurrence, .. } => occurrence }
+    }
+    pub fn phase(&self) -> Option<NonZeroU32> {
+        match self { Self::Phase { phase, .. } => Some(*phase), Self::RootDebug { .. } => None }
+    }
+    pub fn worker(&self) -> Option<&str> {
+        match self { Self::Phase { worker, .. } => worker.as_deref(), Self::RootDebug { .. } => None }
+    }
+    pub fn bind(&self, project: String, planning_root: String) -> Scope {
+        match self {
+            Self::Phase { phase, occurrence, worker } => Scope::Phase { project, planning_root,
+                cycle: "live".into(), occurrence: occurrence.clone(), phase: *phase, worker: worker.clone(), plan: None },
+            Self::RootDebug { kind, occurrence } => Scope::RootDebug { project, planning_root,
+                cycle: "live".into(), occurrence: occurrence.clone(), kind: kind.clone() },
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -144,15 +166,68 @@ impl Apply {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Scope {
-    pub project: String,
-    pub planning_root: String,
-    pub cycle: String,
-    pub occurrence: String,
-    pub phase: NonZeroU32,
-    pub worker: Option<String>,
-    pub plan: Option<NonZeroU32>,
+#[serde(untagged, deny_unknown_fields)]
+pub enum Scope {
+    // Keep the legacy field order: these bytes are part of immutable digests.
+    Phase {
+        project: String,
+        planning_root: String,
+        cycle: String,
+        occurrence: String,
+        phase: NonZeroU32,
+        worker: Option<String>,
+        plan: Option<NonZeroU32>,
+    },
+    RootDebug {
+        project: String,
+        planning_root: String,
+        cycle: String,
+        occurrence: String,
+        kind: RootDebugKind,
+    },
+}
+
+impl Scope {
+    pub fn project(&self) -> &str {
+        match self { Self::Phase { project, .. } | Self::RootDebug { project, .. } => project }
+    }
+    pub fn planning_root(&self) -> &str {
+        match self { Self::Phase { planning_root, .. } | Self::RootDebug { planning_root, .. } => planning_root }
+    }
+    pub fn cycle(&self) -> &str {
+        match self { Self::Phase { cycle, .. } | Self::RootDebug { cycle, .. } => cycle }
+    }
+    pub fn occurrence(&self) -> &str {
+        match self { Self::Phase { occurrence, .. } | Self::RootDebug { occurrence, .. } => occurrence }
+    }
+    pub fn phase(&self) -> Option<NonZeroU32> {
+        match self { Self::Phase { phase, .. } => Some(*phase), Self::RootDebug { .. } => None }
+    }
+    pub fn worker(&self) -> Option<&str> {
+        match self { Self::Phase { worker, .. } => worker.as_deref(), Self::RootDebug { .. } => None }
+    }
+    pub fn plan(&self) -> Option<NonZeroU32> {
+        match self { Self::Phase { plan, .. } => *plan, Self::RootDebug { .. } => None }
+    }
+    pub fn selection(&self) -> ScopeSelection {
+        match self {
+            Self::Phase { phase, occurrence, worker, .. } => ScopeSelection::Phase {
+                phase: *phase, occurrence: occurrence.clone(), worker: worker.clone() },
+            Self::RootDebug { kind, occurrence, .. } => ScopeSelection::RootDebug {
+                kind: kind.clone(), occurrence: occurrence.clone() },
+        }
+    }
+    pub fn execution(&mut self, selected: NonZeroU32) -> Result<NonZeroU32> {
+        match self {
+            Self::Phase { phase, plan, worker, .. } => {
+                if worker.as_deref().is_some_and(|worker| worker != selected.to_string()) {
+                    return Err(Error::Invalid("execution worker must name the selected plan".into()));
+                }
+                *plan = Some(selected); *worker = Some(selected.to_string()); Ok(*phase)
+            }
+            Self::RootDebug { .. } => Err(Error::Invalid("root-debug requires staged material".into())),
+        }
+    }
 }
 
 pub fn validate_name(value: &str) -> Result<()> {
@@ -260,14 +335,14 @@ impl Observation {
     }
     pub fn validate(&self) -> Result<()> {
         validate_name(&self.request_id)?;
-        validate_name(&self.scope.occurrence)?;
-        if let Some(worker) = &self.scope.worker {
+        validate_name(self.scope.occurrence())?;
+        if let Some(worker) = self.scope.worker() {
             validate_name(worker)?;
         }
         if self.version != 1
-            || self.scope.project.is_empty()
-            || self.scope.planning_root.is_empty()
-            || self.scope.cycle != "live"
+            || self.scope.project().is_empty()
+            || self.scope.planning_root().is_empty()
+            || self.scope.cycle() != "live"
             || (self.request_digest.len() != 64
                 || !self.request_digest.bytes().all(|b| b.is_ascii_hexdigit()))
         {
@@ -284,13 +359,16 @@ impl Observation {
             return Err(Error::Invalid("source and resolution kinds differ".into()));
         }
         if let Source::Execution { plan, .. } = &self.source
-            && (self.scope.plan != Some(*plan)
-                || self.scope.worker.as_deref() != Some(plan.to_string().as_str())
-                || self.scope.occurrence != format!("phase-{}-execution", self.scope.phase))
+            && (self.scope.plan() != Some(*plan)
+                || self.scope.worker() != Some(plan.to_string().as_str())
+                || self.scope.phase().is_none_or(|phase| self.scope.occurrence() != format!("phase-{phase}-execution")))
         {
             return Err(Error::Invalid(
                 "execution observation scope mismatch".into(),
             ));
+        }
+        if matches!(self.scope, Scope::RootDebug { .. }) && !matches!(self.source, Source::Staged { .. }) {
+            return Err(Error::Invalid("root-debug requires staged material".into()));
         }
         let material = self.resolution.material();
         let no_range = material.as_ref().is_some_and(MaterialIdentity::no_range);

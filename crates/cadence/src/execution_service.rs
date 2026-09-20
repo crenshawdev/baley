@@ -2010,7 +2010,7 @@ pub(super) fn native_settlement<I: ConfigIo>(
     let (Some(phase_id), Some(plan_id)) = (std::num::NonZeroU32::new(phase), std::num::NonZeroU32::new(plan)) else {
         return Err("settlement needs a positive phase and plan".into());
     };
-    let scope = risk::Scope {
+    let scope = risk::Scope::Phase {
         project: root.parent().ok_or("planning root lacks project")?.to_string_lossy().into_owned(),
         planning_root: root.to_string_lossy().into_owned(), cycle: "live".into(), occurrence: pending.clone(),
         phase: phase_id, worker: Some(plan.to_string()), plan: Some(plan_id),

@@ -18,7 +18,7 @@ impl Boundary {
     pub fn contains(&self, record: &Recorded) -> bool {
         let run = match &record.observation.source {
             risk::Source::Execution { dispatch_id, .. } => dispatch_id,
-            _ => &record.observation.scope.occurrence,
+            _ => record.observation.scope.occurrence(),
         };
         record.observation.scope == self.scope
             && *run == self.run_id
@@ -638,11 +638,11 @@ pub fn finalize_execution(
             base_id: basis.base_id.clone(),
             head_id: basis.commits.last().unwrap_or(&basis.base_id).clone(),
         };
-        if scope.phase.get() != phase
-            || scope.plan.map(|p| p.get()) != Some(outcome.plan)
-            || scope.worker.as_deref() != Some(outcome.plan.to_string().as_str())
-            || scope.cycle != "live"
-            || scope.occurrence != format!("phase-{phase}-execution")
+        if scope.phase().map(|p| p.get()) != Some(phase)
+            || scope.plan().map(|p| p.get()) != Some(outcome.plan)
+            || scope.worker() != Some(outcome.plan.to_string().as_str())
+            || scope.cycle() != "live"
+            || scope.occurrence() != format!("phase-{phase}-execution")
             || basis.phase != phase
             || basis.plan != outcome.plan
             || basis.plan_set_fingerprint != occurrence.plan_set_fingerprint

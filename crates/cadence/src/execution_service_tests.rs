@@ -295,7 +295,7 @@ async fn scan_execution(
     id: &str,
 ) -> cadence::rail::receipts::Report {
     use cadence::rail::{receipts, risk};
-    let scope = risk::ScopeSelection {
+    let scope = risk::ScopeSelection::Phase {
         phase: dispatch.phase.try_into().unwrap(),
         occurrence: format!("phase-{}-execution", dispatch.phase),
         worker: Some(dispatch.plan.to_string()),

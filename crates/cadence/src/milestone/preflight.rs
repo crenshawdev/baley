@@ -23,7 +23,7 @@ pub async fn collect(store: &Store, view: &View, selection: &Selection) -> Resul
     let (observations, fires, receipts) = receipts::history(&view.snapshot.data)?;
     let mut unsettled = Vec::new();
     for record in observations {
-        let phase = record.observation.scope.phase;
+        let Some(phase) = record.observation.scope.phase() else { continue; };
         if !selection.phases.contains(&phase) || !receipts::requires_review(&record) { continue; }
         let bound: Vec<_> = fires.iter().filter(|f| f.binding.matches(&record)).collect();
         if bound.is_empty() || bound.iter().any(|f| !settled(f, &receipts, 0)) {

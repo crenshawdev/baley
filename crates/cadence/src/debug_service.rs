@@ -1,5 +1,6 @@
 use crate::{config::reload::ConfigIo, import::SessionFactory};
-use cadence::{debug::model::{self, Apply, Status}, envelope::Refusal, store::{Result, writer::Operation}};
+use cadence::{debug::model::{self, Apply, Status}, envelope::{Envelope, Refusal}, rail::{git, receipts, risk},
+    store::{Error, Result, writer::{Operation, Store}}};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -45,7 +46,8 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
     match command {
         Command::List | Command::Read { .. } => unreachable!("read before config"),
         Command::Apply(apply) => {
-            let mut write = model::Write { root_binding: cadence::verification::inputs::root_binding(root)?, apply, recall: None };
+            let mut write = model::Write { root_binding: cadence::verification::inputs::root_binding(root)?, apply,
+                recall: None, review: None, coordinating: false };
             if let Some(answer) = model::replay(data, &write)? { return Ok(answer); }
             cadence::milestone::model::name(write.apply.identity().0)?;
             if let Apply::Open { request } = &write.apply
@@ -53,10 +55,140 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                 let recalled = super::recall::resident::answer(&session, root, &request.symptom, None, None, &mut None).await?;
                 write.recall = Some(serde_json::from_value(serde_json::to_value(recalled)?)?);
             }
-            let response = match model::outcome(data, &write) { Ok(record) => model::answer(&record), Err(refusal) => refusal };
-            store.request(Operation::DebugV1 { expected_generation: view.snapshot.generation,
-                expected_integrity: view.snapshot.integrity.clone(), write: Box::new(write) }).await?;
-            Ok(response)
+            if matches!(write.apply, Apply::Resolve { .. }) && model::outcome(data, &write).is_ok()
+                && let Some(refusal) = coordinate(factory, root, store, &mut write).await? {
+                return Ok(refusal);
+            }
+            persist(store, write).await
         }
     }
+}
+
+async fn persist(store: &Store, write: model::Write) -> Result<Value> {
+    let view = store.request(Operation::ReadVerified).await?;
+    let response = match model::outcome(&view.snapshot.data, &write) {
+        Ok(record) => model::response(&record, &write), Err(refusal) => refusal,
+    };
+    store.request(Operation::DebugV1 { expected_generation: view.snapshot.generation,
+        expected_integrity: view.snapshot.integrity.clone(), write: Box::new(write) }).await?;
+    Ok(response)
+}
+
+fn refusal(code: &str, reason: impl Into<String>, slug: &str) -> Value {
+    Refusal::new(code, reason).slot("slug").details(json!({"slug":slug})).value()
+}
+
+/// Each side effect has an immutable request identity. The debug coordination
+/// write reserves the caller input and admission key before the shared service
+/// allocates a fire; a restart can finish either journal join without rescanning.
+async fn coordinate<I: ConfigIo + Clone + Sync>(
+    factory: &SessionFactory<I>, root: &Path, store: &Store, write: &mut model::Write,
+) -> Result<Option<Value>> {
+    let slug = write.apply.identity().1.to_owned();
+    let project = root.parent().ok_or_else(|| Error::Invalid("planning root lacks project".into()))?;
+    let (resolved, diagnostics) = git::resolve(project, &risk::Source::Staged { base: "HEAD".into() });
+    let Some(material) = resolved.material() else {
+        return Ok(Some(refusal("unresolved-material", diagnostics.join("; "), &slug)));
+    };
+    let paths = git::changed_paths(project, &material)?;
+    if paths.is_empty() {
+        return Ok(Some(refusal("debug-empty-index", "empty index: stage the approved fix before resolve", &slug)));
+    }
+    let session = factory.first_touch(root).await?;
+    let config = session.config()?;
+    let surfaces = crate::config::merge::get(&config.effective.values, "review.triggers.risk_surface.surfaces")
+        .ok_or_else(|| Error::Policy("missing risk selection".into())).and_then(risk::configured_surfaces)?;
+    let Some(surfaces) = surfaces else {
+        return Ok(Some(refusal("unanswered-surfaces", "risk surface selection is unanswered", &slug)));
+    };
+    let view = store.request(Operation::ReadVerified).await?;
+    let saved = model::namespace(&view.snapshot.data)?;
+    let record = saved.records.get(&slug).ok_or_else(|| Error::Invalid("debug record disappeared".into()))?;
+    if record.review.as_ref().is_some_and(|review| review.material != material
+        && (review.fire.is_some() || view.snapshot.data["review"]["replays"].get(&review.admission_request_id).is_some())) {
+        return Ok(Some(refusal("debug-material-changed", "staged material differs from the pending debug fire", &slug)));
+    }
+    let identity = cadence::store::model::digest(&serde_json::to_vec(&(&write.root_binding, &slug, &material, &surfaces))?);
+    let source = risk::Source::Staged { base: material.base_id().into() };
+    let selection = risk::ScopeSelection::RootDebug { kind: risk::RootDebugKind::RootDebug, occurrence: slug.clone() };
+    let observation_id = format!("debug-risk-{identity}");
+    let scan = match super::rail_service::apply(factory, root, risk::Apply::RiskCheck {
+        request_id: observation_id.clone(), scope: selection, source: source.clone(), surfaces: None,
+    }).await? {
+        Envelope::Ok(record) => record,
+        Envelope::Refused { code, reason } => return Ok(Some(refusal(&code, reason, &slug))),
+        other => return Ok(Some(refusal("debug-risk-unavailable", serde_json::to_string(&other)?, &slug))),
+    };
+    if scan.observation.resolution.material().as_ref() != Some(&material)
+        || scan.observation.surfaces != surfaces {
+        return Ok(Some(refusal("debug-material-changed", "risk observation differs from current staged material or surfaces", &slug)));
+    }
+    if scan.observation.outcome != risk::ObservationOutcome::Checked {
+        return Ok(Some(refusal("debug-risk-unchecked", "staged material could not be risk-checked", &slug)));
+    }
+    if scan.observation.scan.as_ref().is_none_or(|scan| scan.empty) {
+        return Ok(Some(refusal("debug-empty-index", "empty index: no scannable staged fix", &slug)));
+    }
+    let mut review = model::Review { occurrence: slug.clone(), material: material.clone(),
+        observation: observation_id, admission_request_id: format!("debug-review-{identity}"), fire: None };
+    if let Some(prior) = &record.review {
+        review.fire = prior.fire.clone();
+    }
+    if receipts::requires_review(&scan) {
+        // Save the exact admission key before crossing the shared admission boundary.
+        write.review = Some(review.clone());
+        write.coordinating = true;
+        let staged = persist(store, write.clone()).await?;
+        write.coordinating = false;
+        if staged["status"] != "ok" { return Ok(Some(staged)); }
+        let request = json!({"replay_key":review.admission_request_id,"caller":"debug","trigger":"risk_surface",
+            "specialist":null,"project":project.to_string_lossy(),"cycle":"live",
+            "home":{"kind":"root-debug","id":slug},"discriminator":review.occurrence,
+            "phase":null,"plan":null,"anchor":null,"round":1,
+            "target":{"kind":"staged-tree","base":material.base_id(),"index":material.tip_id(),"head":null},
+            "risk_observation":review.observation});
+        let admitted = super::review_service::admit(factory, root, request,
+            super::review_service::AdmissionResolution::Refresh).await?;
+        let fire = match admitted {
+            Envelope::Ok(output) if output.result["fire"].is_string() => output.result["fire"].as_str().unwrap().to_owned(),
+            Envelope::Ok(output) => return Ok(Some(Refusal::new("debug-review-unavailable", "risk review has not admitted a fire")
+                .slot("slug").details(json!({"slug":slug,"admission":output.result})).value())),
+            Envelope::Refused { code, reason } => return Ok(Some(refusal(&code, reason, &slug))),
+            other => return Ok(Some(refusal("debug-review-unavailable", serde_json::to_string(&other)?, &slug))),
+        };
+        review.fire = Some(fire.clone());
+        write.review = Some(review.clone());
+        write.coordinating = true;
+        let joined = persist(store, write.clone()).await?;
+        write.coordinating = false;
+        if joined["status"] != "ok" { return Ok(Some(joined)); }
+        let view = store.request(Operation::ReadVerified).await?;
+        let boundary = super::rail_service::receipt_boundary(&view, scan.observation.scope.clone(), &source)?;
+        let fire_record = receipts::Fire { id: fire.clone(), binding: receipts::Binding::new(boundary, &scan)?,
+            review_scope: paths.into_iter().map(|p| p.into_os_string().into_string()
+                .map_err(|_| Error::Invalid("non-UTF-8 risk path".into())))
+                .collect::<Result<std::collections::BTreeSet<_>>>()?.into_iter().collect(), rearm_of: None };
+        match super::rail_service::receipt(factory, root, super::rail_service::ReceiptCommand::Submit(
+            receipts::Apply::Fire { request_id: format!("debug-fire-{identity}"), fire: Box::new(fire_record) }
+        )).await? {
+            Envelope::Ok(_) => review.fire = Some(fire),
+            Envelope::Refused { code, reason } => return Ok(Some(refusal(&code, reason, &slug))),
+            other => return Ok(Some(refusal("debug-risk-unavailable", serde_json::to_string(&other)?, &slug))),
+        }
+    } else {
+        let view = store.request(Operation::ReadVerified).await?;
+        let boundary = super::rail_service::receipt_boundary(&view, scan.observation.scope.clone(), &source)?;
+        let assessment = receipts::assess(&receipts::Requirement { boundary, material: material.clone(),
+            surfaces: surfaces.clone() }, &view.snapshot.data)?;
+        if !assessment.permits_continuation {
+            return Ok(Some(Refusal::new("debug-risk-pending", "current staged risk evidence has not cleared")
+                .slot("slug").details(json!({"slug":slug,"assessment":assessment})).value()));
+        }
+    }
+    let (current, _) = git::resolve(project, &risk::Source::Staged { base: "HEAD".into() });
+    if current.material().as_ref() != Some(&material) || session.config()? != config {
+        return Ok(Some(refusal("debug-material-changed", "staged material or risk configuration changed during resolve", &slug)));
+    }
+    write.review = Some(review);
+    Ok(None)
 }
