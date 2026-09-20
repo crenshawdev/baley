@@ -55,9 +55,14 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
         Command::List | Command::Read { .. } => unreachable!("read before config"),
         Command::Apply(apply) => {
             let mut write = model::Write { root_binding: cadence::verification::inputs::root_binding(root)?, apply,
-                recall: None, review: None, coordinating: false };
+                recall: None, review: None, coordinating: false, consult_policy: None, consult_situation: None, consult_result: None };
             if let Some(answer) = model::replay(data, &write)? { return Ok(answer); }
             cadence::milestone::model::name(write.apply.identity().0)?;
+            let generation = session.config()?;
+            write.consult_policy = consult_policy(&generation.effective.values);
+            if matches!(write.apply, Apply::Consult { .. }) {
+                return consult(store, &generation.effective.values, write).await;
+            }
             if let Apply::Open { request } = &write.apply
                 && model::outcome(data, &write).is_ok() {
                 let recalled = super::recall::resident::answer(&session, root, &request.symptom, None, None, &mut None).await?;
@@ -216,4 +221,57 @@ async fn coordinate<I: ConfigIo + Clone + Sync>(
     }
     write.review = Some(review);
     Ok(None)
+}
+
+fn consult_policy(values: &Value) -> Option<model::ConsultPolicy> {
+    let get = |key: &str| crate::config::merge::get(values, key);
+    if get("review.consult.enabled").and_then(Value::as_bool) != Some(true) { return None; }
+    let tier = get("review.consult.tier").and_then(Value::as_str).unwrap_or("flagship");
+    let preferred = get("review.reviewers").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
+    for provider in preferred.chain(["openai", "gemini", "deepseek"]) {
+        if cadence::review::provider::Provider::parse(provider).is_none() { continue; }
+        if let Some(model) = get(&format!("review.providers.{provider}.tiers.{tier}"))
+            .and_then(Value::as_str).filter(|m| !m.trim().is_empty()) {
+            return Some(model::ConsultPolicy { threshold: get("review.consult.attempt_threshold").and_then(Value::as_u64).unwrap_or(3),
+                provider: provider.into(), model: model.into(),
+                effort: get("review.consult.effort").and_then(Value::as_str).unwrap_or("high").into() });
+        }
+    }
+    None
+}
+
+async fn consult(store: &Store, values: &Value, mut write: model::Write) -> Result<Value> {
+    use cadence::review::provider;
+    let Apply::Consult { request } = &write.apply else { unreachable!("consult route") };
+    if request.decision == model::ConsultDecision::Decline { return persist(store, write).await; }
+    let slug = request.slug.clone();
+    let offer_id = request.offer.clone();
+    let view = store.request(Operation::ReadVerified).await?;
+    if let Some(replay) = model::replay(&view.snapshot.data, &write)? { return Ok(replay); }
+    let saved = model::namespace(&view.snapshot.data)?;
+    let Some(record) = saved.records.get(&slug) else { return Ok(model::unknown(&slug)); };
+    write.coordinating = true;
+    write.consult_situation = Some(provider::consult::situation(record).map_err(Error::Invalid)?);
+    if let Err(refusal) = model::outcome(&view.snapshot.data, &write) { return Ok(refusal); }
+    // The accepted intent is the single spend reservation. It remains pending
+    // if work is canceled, the process exits or result persistence fails.
+    let intent = persist(store, write.clone()).await?;
+    if intent["status"] != "ok" { return Ok(intent); }
+    let record: model::Record = serde_json::from_value(intent["record"].clone())?;
+    let offer = record.consults.iter().find(|offer| offer.id == offer_id).ok_or_else(|| Error::Invalid("missing accepted consult".into()))?;
+    let get = |key: &str| crate::config::merge::get(values, key);
+    let defaults = provider::Settings::default();
+    let settings = provider::Settings {
+        key_file: get("review.key_file").and_then(Value::as_str).map(str::to_owned),
+        max_prompt_tokens: get("review.max_prompt_tokens").and_then(Value::as_u64).unwrap_or(defaults.max_prompt_tokens),
+        request_timeout_ms: get("review.request_timeout_ms").and_then(Value::as_u64).unwrap_or(defaults.request_timeout_ms),
+    };
+    #[cfg(test)]
+    let environment = debug_consult_tests::ENVIRONMENT.try_with(Clone::clone)
+        .unwrap_or_else(|_| std::sync::Arc::new(provider::delivery::Environment::default()));
+    #[cfg(not(test))]
+    let environment = provider::delivery::Environment::default();
+    write.consult_result = Some(provider::consult::run(offer, &settings, &environment).await);
+    write.coordinating = false;
+    persist(store, write).await
 }

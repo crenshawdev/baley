@@ -37,3 +37,14 @@ pub async fn save_response(store: &Store, attempt: &Attempt, provider: Provider,
     persistence::update(store, &view, &format!("provider-evidence:{}", attempt.attempt), records).await?;
     Ok(())
 }
+
+/// Consult retains the same sanitized observed identity and normalized accounting
+/// under its debug offer, without creating a review finding or receipt.
+pub fn consult_response(provider: Provider, response: &Acquired, extracted: &Extracted) -> serde_json::Value {
+    json!({"accounting":usage::normalize(provider, extracted.usage.as_ref()),
+        "status":response.status,
+        "identity":{"provider":provider.name(),"response_model":safe_identity(extracted.model.as_deref()),
+            "response_id":safe_identity(response.json.as_ref().and_then(|j|
+                j[if provider == Provider::Gemini { "responseId" } else { "id" }].as_str())),
+            "request_id":safe_identity(response.headers.get("x-request-id").or_else(|| response.headers.get("request-id")).map(String::as_str))}})
+}

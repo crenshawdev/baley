@@ -1,4 +1,5 @@
 //! Native cross-model review adapters on the existing delivery lifecycle.
+pub mod consult;
 pub mod credentials;
 pub mod deepseek;
 pub mod delivery;

@@ -3,7 +3,15 @@ use super::{Extracted, credentials::Key, openai::finding_schema, transport::Requ
 use serde_json::{Value, json};
 
 pub fn request(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key) -> Request {
-    let system = format!("{system}\n\nRespond with ONLY a single JSON object that conforms to this JSON schema - the object itself is the result, not the schema; no prose, no markdown fences:\n{}", finding_schema());
+    request_with_schema(model, effort, system, user, key, finding_schema())
+}
+
+pub fn consult_request(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key) -> Request {
+    request_with_schema(model, effort, system, user, key, super::consult::schema())
+}
+
+fn request_with_schema(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key, schema: Value) -> Request {
+    let system = format!("{system}\n\nRespond with ONLY a single JSON object that conforms to this JSON schema - the object itself is the result, not the schema; no prose, no markdown fences:\n{}", schema);
     let mut body = json!({"model":model,
         "messages":[{"role":"system","content":system},{"role":"user","content":user}],
         "response_format":{"type":"json_object"}});

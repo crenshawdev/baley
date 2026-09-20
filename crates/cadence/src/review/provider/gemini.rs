@@ -16,7 +16,15 @@ fn strip_additional_properties(value: &mut Value) {
 }
 
 pub fn request(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key) -> Request {
-    let mut schema = finding_schema();
+    request_with_schema(model, effort, system, user, key, finding_schema())
+}
+
+pub fn consult_request(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key) -> Request {
+    request_with_schema(model, effort, system, user, key, super::consult::schema())
+}
+
+fn request_with_schema(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key, schema: Value) -> Request {
+    let mut schema = schema;
     strip_additional_properties(&mut schema);
     let mut config = json!({"responseMimeType":"application/json","responseSchema":schema});
     if let Some(effort) = effort.filter(|effort| !effort.is_empty()) {

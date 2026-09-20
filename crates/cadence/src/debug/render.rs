@@ -45,6 +45,16 @@ pub fn render(record: &Record) -> String {
         }
         if !review.pending_fires.is_empty() { out.push_str(&format!("Pending fires: {}\n", review.pending_fires.join(", "))); }
     }
+    for consult in &record.consults {
+        out.push_str(&format!("\n## Consult {} (investigative suggestions)\n\nEpoch: {}\nProvider: {}/{}\nEffort: {}\nState: {:?}\n",
+            consult.id, consult.epoch, consult.provider, consult.model, consult.effort, consult.state));
+        if let Some(request) = &consult.request_id { out.push_str(&format!("Request: {request}\n")); }
+        if let Some(situation) = &consult.situation { out.push_str(&format!("Situation: {situation}\n")); }
+        for angle in &consult.angles {
+            out.push_str(&format!("\nHypothesis: {}\nRationale: {}\nHow to check: {}\n", angle.hypothesis, angle.rationale, angle.how_to_check));
+        }
+        if let Some(failure) = &consult.failure { out.push_str(&format!("Failure: {failure}\n")); }
+    }
     if let Some(resolution) = &record.resolution {
         out.push_str(&format!("\n## Resolution\n\n{}\nTest: {}\nResult: {}\n", resolution.description, resolution.reproduction.test, resolution.reproduction.result));
     }

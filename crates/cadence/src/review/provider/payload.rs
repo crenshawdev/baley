@@ -70,12 +70,7 @@ pub fn prepare(records: &Value, admission: &Admission, attempt: &Attempt, settin
     if diagnostics::fence(&artifact) != artifact {
         return Err(Error::Invalid("provider material cannot preserve its fenced entry mapping".into()));
     }
-    let units = fenced_instruction.encode_utf16().count().checked_add(artifact.encode_utf16().count())
-        .ok_or_else(|| Error::Invalid("provider prompt size overflow".into()))?;
-    let prompt_tokens = u64::try_from(units.div_ceil(4)).map_err(|_| Error::Invalid("provider prompt size overflow".into()))?;
-    if prompt_tokens > settings.max_prompt_tokens {
-        return Err(Error::Invalid(format!("provider prompt over cap: {prompt_tokens} estimated tokens exceeds {}", settings.max_prompt_tokens)));
-    }
+    let prompt_tokens = check_cap(&fenced_instruction, &artifact, settings.max_prompt_tokens)?;
     Ok(Prepared { instruction: fenced_instruction, artifact, source_view: attempt.view.clone(), mapping, redactions, prompt_tokens })
 }
 
@@ -122,4 +117,13 @@ pub async fn retain(store: &Store, attempt: &Attempt, payload: Prepared) -> Resu
     persistence::update(store, &view, &format!("provider-payload:{}", saved.attempt), records).await?;
     let delivery = MaterialDelivery { fire: saved.fire.clone(), view: saved.view.clone(), contents };
     Ok((saved, delivery))
+}
+
+/// The same UTF-16 estimate and cap apply to review and consult payloads.
+pub fn check_cap(instruction: &str, artifact: &str, cap: u64) -> Result<u64> {
+    let units = instruction.encode_utf16().count().checked_add(artifact.encode_utf16().count())
+        .ok_or_else(|| Error::Invalid("provider prompt size overflow".into()))?;
+    let tokens = u64::try_from(units.div_ceil(4)).map_err(|_| Error::Invalid("provider prompt size overflow".into()))?;
+    if tokens > cap { return Err(Error::Invalid(format!("provider prompt over cap: {tokens} estimated tokens exceeds {cap}"))); }
+    Ok(tokens)
 }

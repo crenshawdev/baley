@@ -18,9 +18,17 @@ pub fn finding_schema() -> Value {
 }
 
 pub fn request(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key) -> Request {
+    request_with_schema(model, effort, system, user, key, "review_findings", finding_schema())
+}
+
+pub fn consult_request(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key) -> Request {
+    request_with_schema(model, effort, system, user, key, "consult_angles", super::consult::schema())
+}
+
+fn request_with_schema(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key, name: &str, schema: Value) -> Request {
     let mut body = json!({"model":model,
         "input":[{"role":"system","content":system},{"role":"user","content":user}],
-        "text":{"format":{"type":"json_schema","name":"review_findings","strict":true,"schema":finding_schema()}}});
+        "text":{"format":{"type":"json_schema","name":name,"strict":true,"schema":schema}}});
     if let Some(effort) = effort.filter(|value| !value.is_empty()) {
         body["reasoning"] = json!({"effort":effort});
     }

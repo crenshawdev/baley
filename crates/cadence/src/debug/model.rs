@@ -62,6 +62,49 @@ pub struct Record {
     pub recall: Option<RecallSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<Review>,
+    #[serde(default)]
+    pub epoch: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consults: Vec<Consult>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Angle { pub hypothesis: String, pub rationale: String, pub how_to_check: String }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConsultState { Offered, Declined, Accepted, Completed, Failed }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Consult {
+    pub id: String, pub epoch: u64, pub offered_by: String,
+    pub provider: String, pub model: String, pub effort: String,
+    pub state: ConsultState, pub request_id: Option<String>,
+    pub situation: Option<String>, pub angles: Vec<Angle>,
+    pub evidence: Option<Value>, pub failure: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsultPolicy {
+    pub threshold: u64, pub provider: String, pub model: String, pub effort: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsultResult { pub angles: Vec<Angle>, pub evidence: Option<Value>, pub failure: Option<String> }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ConsultDecision { Accept, Decline }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConsultRequest {
+    pub request_id: String, pub slug: String, pub expected_version: u64,
+    pub offer: String, pub epoch: u64, pub decision: ConsultDecision,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +180,8 @@ pub enum Apply {
     Observation { request: ObservationRequest },
     #[serde(rename = "debug-attempt")]
     Attempt { request: AttemptRequest },
+    #[serde(rename = "debug-consult")]
+    Consult { request: ConsultRequest },
     #[serde(rename = "debug-resolve")]
     Resolve { request: Resolve },
 }
@@ -147,6 +192,7 @@ impl Apply {
             Self::Hypothesis { request } => (&request.request_id, &request.slug, request.expected_version),
             Self::Observation { request } => (&request.request_id, &request.slug, request.expected_version),
             Self::Attempt { request } => (&request.request_id, &request.slug, request.expected_version),
+            Self::Consult { request } => (&request.request_id, &request.slug, request.expected_version),
             Self::Resolve { request } => (&request.request_id, &request.slug, request.expected_version),
         }
     }
@@ -164,6 +210,12 @@ pub struct Write {
     /// Persist coordination before admission without completing the caller request.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub coordinating: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consult_policy: Option<ConsultPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consult_situation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consult_result: Option<ConsultResult>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -217,6 +269,11 @@ pub fn replay(data: &Value, write: &Write) -> Result<Option<Value>> {
     if namespace(data)?.pending_requests.get(id).is_some_and(|pending| *pending != write.apply) {
         return Ok(Some(Refusal::new("request-reused", "debug request identity binds different inputs").slot("request.request_id").value()));
     }
+    if matches!(write.apply, Apply::Consult { .. }) && write.consult_result.is_none()
+        && namespace(data)?.pending_requests.contains_key(id) {
+        return Ok(Some(Refusal::new("debug-consult-pending", "accepted consult has no durable result; do not repeat the external spend")
+            .slot("request.request_id").value()));
+    }
     if let Some(saved) = namespace(data)?.requests.get(id) {
         return Ok(Some(if saved.root_binding == write.root_binding && saved.apply == write.apply { saved.answer.clone() }
             else { Refusal::new("request-reused", "debug request identity binds different inputs").slot("request.request_id").value() }));
@@ -237,11 +294,14 @@ pub fn transition(data: &Value, write: &Write) -> Result<std::result::Result<Rec
             text(&request.symptom)?;
             Record { slug: slug.into(), root_binding: write.root_binding.clone(), version: 0,
                 symptom: request.symptom.clone(), hypotheses: vec![], observations: vec![], attempts: vec![],
-                attempt_count: 0, status: Status::Open, resolution: None, recall: write.recall.clone(), review: None }
+                attempt_count: 0, status: Status::Open, resolution: None, recall: write.recall.clone(), review: None, epoch: 0, consults: vec![] }
         }
         _ => match saved.records.get(slug) { Some(record) => record.clone(), None => return Ok(Err(unknown(slug))) },
     };
     if record.root_binding != write.root_binding { return Ok(Err(Refusal::new("debug-root", "debug mutation belongs to another project root").slot("request.slug").value())); }
+    if write.consult_result.is_some() {
+        return finish_consult(record, write, &saved);
+    }
     if expected != record.version {
         return Ok(Err(Refusal::new("debug-version", "debug version changed").slot("request.expected_version")
             .details(json!({"slug":slug,"expected":record.version,"supplied":expected})).value()));
@@ -265,7 +325,7 @@ pub fn transition(data: &Value, write: &Write) -> Result<std::result::Result<Rec
         let refreshed = super::review::contribute(&projected, &write.root_binding)?;
         record = namespace(&refreshed)?.records.remove(slug).ok_or_else(|| Error::Invalid("debug record disappeared".into()))?;
     }
-    if write.coordinating { return Ok(Ok(record)); }
+    if write.coordinating && !matches!(write.apply, Apply::Consult { .. }) { return Ok(Ok(record)); }
     match &write.apply {
         Apply::Open { .. } => {},
         Apply::Hypothesis { request } => {
@@ -288,11 +348,33 @@ pub fn transition(data: &Value, write: &Write) -> Result<std::result::Result<Rec
                 if observation.rules_in.contains(&hypothesis.id) { hypothesis.state = HypothesisState::Confirmed; }
                 if observation.rules_out.contains(&hypothesis.id) { hypothesis.state = HypothesisState::Refuted; }
             }
+            if !record.observations.contains(observation) {
+                record.epoch = record.epoch.checked_add(1).ok_or_else(|| Error::Invalid("debug epoch exhausted".into()))?;
+            }
             record.observations.push(observation.clone());
         }
         Apply::Attempt { request } => {
             text(&request.attempt.description)?; text(&request.attempt.result)?;
             record.attempts.push(request.attempt.clone());
+        }
+        Apply::Consult { request } => {
+            let Some(offer) = record.consults.iter_mut().find(|o| o.id == request.offer && o.epoch == request.epoch) else {
+                return Ok(Err(Refusal::new("debug-consult-offer", "unknown consult offer").slot("request.offer").value()));
+            };
+            if offer.epoch != record.epoch || offer.state != ConsultState::Offered {
+                return Ok(Err(Refusal::new("debug-consult-offer", "consult offer is no longer available in this epoch").slot("request.offer").value()));
+            }
+            offer.request_id = Some(request.request_id.clone());
+            match request.decision {
+                ConsultDecision::Decline => offer.state = ConsultState::Declined,
+                ConsultDecision::Accept => {
+                    if !write.coordinating || write.consult_situation.is_none() {
+                        return Err(Error::Invalid("consult acceptance requires retained intent and payload".into()));
+                    }
+                    offer.state = ConsultState::Accepted;
+                    offer.situation = write.consult_situation.clone();
+                }
+            }
         }
         Apply::Resolve { request } => {
             text(&request.resolution)?; text(&request.reproduction.test)?; text(&request.reproduction.result)?;
@@ -310,6 +392,17 @@ pub fn transition(data: &Value, write: &Write) -> Result<std::result::Result<Rec
         }
     }
     record.attempt_count = record.attempts.len() as u64;
+    if let Some(policy) = &write.consult_policy
+        && record.status == Status::Open
+        && !matches!(write.apply, Apply::Consult { .. })
+        && !record.consults.iter().any(|offer| offer.epoch == record.epoch)
+        && (record.attempt_count >= policy.threshold || (!record.hypotheses.is_empty()
+            && record.hypotheses.iter().all(|h| h.state == HypothesisState::Refuted))) {
+        let id = format!("consult-{}-{}", record.slug, record.epoch);
+        record.consults.push(Consult { id, epoch: record.epoch, offered_by: write.apply.identity().0.into(),
+            provider: policy.provider.clone(), model: policy.model.clone(), effort: policy.effort.clone(),
+            state: ConsultState::Offered, request_id: None, situation: None, angles: vec![], evidence: None, failure: None });
+    }
     record.version = record.version.checked_add(1).ok_or_else(|| Error::Invalid("debug version exhausted".into()))?;
     Ok(Ok(record))
 }
@@ -350,4 +443,19 @@ pub fn response(record: &Record, write: &Write) -> Value {
 pub fn outcome(data: &Value, write: &Write) -> std::result::Result<Record, Value> {
     transition(data, write).unwrap_or_else(|error| Err(Refusal::new("debug-invalid", error.to_string())
         .slot("request").details(json!({"slug":write.apply.identity().1})).value()))
+}
+
+fn finish_consult(mut record: Record, write: &Write, saved: &Namespace) -> Result<std::result::Result<Record, Value>> {
+    let Apply::Consult { request } = &write.apply else { return Err(Error::Invalid("consult result requires acceptance".into())); };
+    if saved.pending_requests.get(&request.request_id) != Some(&write.apply) {
+        return Err(Error::Invalid("consult result requires exact accepted intent".into()));
+    }
+    let offer = record.consults.iter_mut().find(|o| o.id == request.offer && o.epoch == request.epoch
+        && o.state == ConsultState::Accepted && o.request_id.as_ref() == Some(&request.request_id))
+        .ok_or_else(|| Error::Invalid("consult result has no accepted offer".into()))?;
+    let result = write.consult_result.as_ref().unwrap();
+    offer.angles = result.angles.clone(); offer.evidence = result.evidence.clone(); offer.failure = result.failure.clone();
+    offer.state = if result.failure.is_some() { ConsultState::Failed } else { ConsultState::Completed };
+    record.version = record.version.checked_add(1).ok_or_else(|| Error::Invalid("debug version exhausted".into()))?;
+    Ok(Ok(record))
 }
