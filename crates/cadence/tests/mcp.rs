@@ -1559,7 +1559,22 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
 
     // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
-    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 20);
+    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 21);
+    let (debug, body) = markdown_parts("skills/cad-debug/SKILL.md");
+    assert_eq!(body, cadence::debug::instructions::markdown().split_once("\n---\n").unwrap().1);
+    assert_eq!(debug["name"], "cad-debug");
+    assert_eq!(debug["description"], "Investigate symptoms with ranked hypotheses and durable evidence; resume from the binary debug record.");
+    assert_eq!(debug["argument-hint"], "[list | status <slug> | continue <slug> | --diagnose] [symptom]");
+    assert_eq!(debug["allowed-tools"], json!(["Task", "mcp__cadence__cadence_apply", "mcp__cadence__cadence_query", "Write", "Edit", "Bash", "AskUserQuestion"]));
+    for required in ["debug-open", "debug-hypothesis", "debug-observation", "debug-attempt", "debug-resolve",
+        "debug-list", "debug-status", "debug-continue", "rank_reason", "cheapest discriminating test",
+        "Root Cause Report", "git add", "explicit approval", "single deliberate step", "cad-review-delivery",
+        "identical request_id and inputs", "record even if its Markdown is absent or misleading"] {
+        assert!(body.contains(required), "{required}");
+    }
+    for retired in ["workflows/debug.md", "references/bug-patterns.md", "planning.mjs", "grep "] {
+        assert!(!body.contains(retired), "{retired}");
+    }
     let (undo, body) = markdown_parts("skills/cad-undo/SKILL.md");
     assert_eq!(undo["name"], "cad-undo");
     assert_eq!(undo["argument-hint"], "<phase> [--no-commit]");

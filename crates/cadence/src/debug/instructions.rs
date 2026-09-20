@@ -1,4 +1,6 @@
----
+//! Compiled debug role; the installed skill is only its rendering.
+pub fn markdown() -> &'static str {
+    r#"---
 name: cad-debug
 description: "Investigate symptoms with ranked hypotheses and durable evidence; resume from the binary debug record."
 argument-hint: "[list | status <slug> | continue <slug> | --diagnose] [symptom]"
@@ -118,3 +120,5 @@ On an uncertain write, retry its identical request ID and inputs; never invent
 a successful result. On a pending journal or unavailable record, report the
 located refusal and preserve the stopped state for recovery.
 </recovery>
+"#
+}

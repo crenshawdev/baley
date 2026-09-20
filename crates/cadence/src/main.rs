@@ -24,6 +24,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Render the debug front door without opening a project.
+    DebugInstructions,
     /// Render the undo front door without opening a project.
     UndoInstructions,
     /// Render the landing front door without opening a project.
@@ -86,6 +88,13 @@ fn main() -> std::process::ExitCode {
 
 fn run_command(command: Command) -> std::process::ExitCode {
     match command {
+        Command::DebugInstructions => {
+            use std::io::Write;
+            match std::io::stdout().lock().write_all(cadence::debug::instructions::markdown().as_bytes()) {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(_) => std::process::ExitCode::FAILURE,
+            }
+        }
         Command::UndoInstructions => {
             use std::io::Write;
             match std::io::stdout().lock().write_all(cadence::undo::instructions::markdown().as_bytes()) {
