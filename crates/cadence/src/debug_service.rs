@@ -4,6 +4,10 @@ use cadence::{debug::model::{self, Apply, Status}, envelope::{Envelope, Refusal}
 use serde_json::{Value, json};
 use std::path::Path;
 
+#[cfg(test)]
+#[path = "debug_consult_tests.rs"]
+mod debug_consult_tests;
+
 pub enum Command { List, Read { slug: String }, Apply(Apply) }
 
 pub async fn execute<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command) -> Result<Value> {
