@@ -11,6 +11,7 @@ pub const INTENT: &str = ".store-intent.json";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum IntentKind {
+    DebugReviewV1 { root_binding: String },
     DebugV1 { write: Box<crate::debug::model::Write> },
     MilestoneReleaseV1 { write: Box<crate::milestone::release::WriteSeal> },
     UndoV1 { write: Box<crate::undo::model::Write> },
@@ -616,7 +617,7 @@ impl Intent {
                 ));
             }
         }
-        if !debug_targets.is_empty() && !matches!(self.kind, IntentKind::DebugV1 { .. }) {
+        if !debug_targets.is_empty() && !matches!(self.kind, IntentKind::DebugV1 { .. } | IntentKind::DebugReviewV1 { .. }) {
             return Err(Error::Invalid("debug projection requires its owning intent".into()));
         }
         match &self.kind {
@@ -743,7 +744,7 @@ impl Intent {
         // documents, and no other write may add, drop or edit one.
         let before = self.participants.last().and_then(|p| p.expected.bytes.as_deref())
             .map(parse_previous).transpose()?;
-        if !matches!(self.kind, IntentKind::DebugV1 { .. })
+        if !matches!(self.kind, IntentKind::DebugV1 { .. } | IntentKind::DebugReviewV1 { .. })
             && before.as_ref().and_then(|p| p.data.get("debug")) != snapshot.data.get("debug") {
             return Err(Error::Invalid("debug namespace requires its owning intent".into()));
         }
@@ -804,6 +805,29 @@ impl Intent {
                     || self.participants.iter().filter(|p| p.target != STATE).any(|p| p.expected.bytes.as_deref() != Some(&p.bytes)) {
                     return Err(Error::Invalid("undo intent differs from its immutable transition".into()));
                 }
+            }
+            IntentKind::DebugReviewV1 { root_binding } => {
+                let previous = previous_snapshot(&self.participants, "debug review")?;
+                let expected = crate::debug::review::contribute(&previous.data, &root_binding)?;
+                let changed = crate::debug::review::changed(&previous.data, &expected)?;
+                for slug in &changed {
+                    let (target, projection) = crate::execution::render::project_debug(&expected, slug)?;
+                    if self.participants.iter().find(|p| p.target == target).map(|p| &p.bytes) != Some(&projection) {
+                        return Err(Error::Invalid("debug review projection differs from authority".into()));
+                    }
+                }
+                if names.len() != 3 + changed.len()
+                    || debug_targets != changed.iter().map(String::as_str).collect::<Vec<_>>()
+                    || snapshot.data != expected || snapshot.operations != previous.operations
+                    || snapshot.generation != previous.generation.checked_add(1).ok_or_else(|| Error::Invalid("generation exhausted".into()))?
+                    || self.participants.iter().filter(|p| p.target == ITEMS || p.target == DECISIONS)
+                        .any(|p| p.expected.bytes.as_deref() != Some(&p.bytes)) {
+                    return Err(Error::Invalid("debug review differs from its confirmed authority".into()));
+                }
+                let prior_decisions = model::parse_lines::<DecisionRecord>(decisions)?;
+                crate::rail::receipts::confirmed_history(&super::writer::View {
+                    snapshot: previous, decisions: prior_decisions, items: model::parse_lines(items)?,
+                })?;
             }
             IntentKind::DebugV1 { write } => {
                 let previous = previous_snapshot(&self.participants, "debug")?;
@@ -1760,6 +1784,10 @@ fn validate_all<S: Storage>(
     kind: &IntentKind,
     encoding: Encoding,
 ) -> Result<()> {
+    if let IntentKind::DebugReviewV1 { root_binding } = kind
+        && storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(root_binding) {
+        return Err(Error::Invalid("debug review recovery root binding changed".into()));
+    }
     if let IntentKind::UndoV1 { write } = kind { storage.validate_undo(write, replay)?; }
     if let IntentKind::DebugV1 { write } = kind
         && storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(&write.root_binding) {

@@ -468,6 +468,7 @@ pub async fn receipt<I: ConfigIo + Clone + Sync>(
             "receipt persistence was not confirmed".into(),
         ));
     }
+    cadence::debug::review::synchronize(session.review_store(), &root).await?;
     Ok(Envelope::Ok(ReceiptOutput::Recorded(Box::new(recorded))))
 }
 

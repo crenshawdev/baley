@@ -27,8 +27,12 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
         pending()?;
         let snapshot = cadence::store::cache::read(root)?;
         pending()?;
-        let empty = json!({});
-        let data = snapshot.as_ref().map(|s| &s.data).unwrap_or(&empty);
+        let mut data = snapshot.map(|s| s.data.clone()).unwrap_or_else(|| json!({}));
+        if model::namespace(&data)?.records.values().any(|r| r.review.as_ref().is_some_and(|r| r.fire.is_some())) {
+            let session = factory.first_touch(root).await?;
+            data = cadence::debug::review::synchronize(session.review_store(), root).await?.snapshot.data;
+        }
+        let data = &data;
         return match command {
             Command::List => Ok(json!({"status":"ok","records":model::namespace(data)?.records.into_values()
                 .filter(|r| r.status == Status::Open).collect::<Vec<_>>()})),
@@ -41,7 +45,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
     }
     let session = factory.first_touch(root).await?;
     let store = session.review_store();
-    let view = store.request(Operation::ReadVerified).await?;
+    let view = cadence::debug::review::synchronize(store, root).await?;
     let data = &view.snapshot.data;
     match command {
         Command::List | Command::Read { .. } => unreachable!("read before config"),
@@ -104,6 +108,17 @@ async fn coordinate<I: ConfigIo + Clone + Sync>(
     let view = store.request(Operation::ReadVerified).await?;
     let saved = model::namespace(&view.snapshot.data)?;
     let record = saved.records.get(&slug).ok_or_else(|| Error::Invalid("debug record disappeared".into()))?;
+    if let Some(review) = record.review.as_ref().filter(|r| !r.history.is_empty()) {
+        if !cadence::debug::review::current(review, &material, &surfaces) {
+            return Ok(Some(refusal("debug-material-changed", "staged material differs from the exact debug review receipt", &slug)));
+        }
+        let (current, _) = git::resolve(project, &risk::Source::Staged { base: "HEAD".into() });
+        if current.material().as_ref() != Some(&material) || session.config()? != config {
+            return Ok(Some(refusal("debug-material-changed", "staged material or risk configuration changed during resolve", &slug)));
+        }
+        write.review = Some(review.clone());
+        return Ok(None);
+    }
     if record.review.as_ref().is_some_and(|review| review.material != material
         && (review.fire.is_some() || view.snapshot.data["review"]["replays"].get(&review.admission_request_id).is_some())) {
         return Ok(Some(refusal("debug-material-changed", "staged material differs from the pending debug fire", &slug)));
@@ -130,7 +145,8 @@ async fn coordinate<I: ConfigIo + Clone + Sync>(
         return Ok(Some(refusal("debug-empty-index", "empty index: no scannable staged fix", &slug)));
     }
     let mut review = model::Review { occurrence: slug.clone(), material: material.clone(),
-        observation: observation_id, admission_request_id: format!("debug-review-{identity}"), fire: None };
+        observation: observation_id, admission_request_id: format!("debug-review-{identity}"), fire: None,
+        history: vec![], pending_fires: vec![], settled: false };
     if let Some(prior) = &record.review {
         review.fire = prior.fire.clone();
     }
@@ -188,6 +204,11 @@ async fn coordinate<I: ConfigIo + Clone + Sync>(
     let (current, _) = git::resolve(project, &risk::Source::Staged { base: "HEAD".into() });
     if current.material().as_ref() != Some(&material) || session.config()? != config {
         return Ok(Some(refusal("debug-material-changed", "staged material or risk configuration changed during resolve", &slug)));
+    }
+    if review.fire.is_some() {
+        let view = cadence::debug::review::synchronize(store, root).await?;
+        review = model::namespace(&view.snapshot.data)?.records[&slug].review.clone()
+            .ok_or_else(|| Error::Invalid("debug review disappeared".into()))?;
     }
     write.review = Some(review);
     Ok(None)

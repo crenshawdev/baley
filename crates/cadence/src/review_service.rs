@@ -1046,7 +1046,10 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(
                 citations: serde_json::from_value(json!(citations))?,
             };
             match review::returns::accept_return(store, submitted, &mut clock).await {
-                Ok(receipt) => output("review-return", receipt),
+                Ok(receipt) => {
+                    cadence::debug::review::synchronize(store, root).await?;
+                    output("review-return", receipt)
+                },
                 Err(error) => output("review-return", error),
             }
         }

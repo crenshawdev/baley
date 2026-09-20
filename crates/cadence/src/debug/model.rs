@@ -72,6 +72,12 @@ pub struct Review {
     pub observation: String,
     pub admission_request_id: String,
     pub fire: Option<String>,
+    #[serde(default)]
+    pub history: Vec<super::review::FireReview>,
+    #[serde(default)]
+    pub pending_fires: Vec<String>,
+    #[serde(default)]
+    pub settled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -248,6 +254,17 @@ pub fn transition(data: &Value, write: &Write) -> Result<std::result::Result<Rec
         }
         record.review = Some(review.clone());
     }
+    // Resolve re-derives its gate from this transaction's preimage. A fire or
+    // consequence arriving after service coordination cannot be overwritten by
+    // an earlier projection supplied in the internal write.
+    if matches!(write.apply, Apply::Resolve { .. }) && record.review.as_ref().is_some_and(|r| r.fire.is_some()) {
+        let mut current = saved;
+        current.records.insert(slug.into(), record);
+        let mut projected = data.clone();
+        projected["debug"] = serde_json::to_value(current)?;
+        let refreshed = super::review::contribute(&projected, &write.root_binding)?;
+        record = namespace(&refreshed)?.records.remove(slug).ok_or_else(|| Error::Invalid("debug record disappeared".into()))?;
+    }
     if write.coordinating { return Ok(Ok(record)); }
     match &write.apply {
         Apply::Open { .. } => {},
@@ -279,7 +296,7 @@ pub fn transition(data: &Value, write: &Write) -> Result<std::result::Result<Rec
         }
         Apply::Resolve { request } => {
             text(&request.resolution)?; text(&request.reproduction.test)?; text(&request.reproduction.result)?;
-            if record.review.as_ref().is_some_and(|review| review.fire.is_some()) {
+            if record.review.as_ref().is_some_and(|review| review.fire.is_some() && !review.settled) {
                 record.version = record.version.checked_add(1).ok_or_else(|| Error::Invalid("debug version exhausted".into()))?;
                 return Ok(Ok(record));
             }
@@ -322,9 +339,10 @@ pub fn contribute(data: &Value, write: &Write) -> Result<Value> {
 
 pub fn response(record: &Record, write: &Write) -> Value {
     if !write.coordinating && matches!(write.apply, Apply::Resolve { .. })
-        && let Some(fire) = record.review.as_ref().and_then(|review| review.fire.as_ref()) {
+        && let Some(review) = record.review.as_ref().filter(|review| !review.settled)
+        && let Some(fire) = review.fire.as_ref() {
         return Refusal::new("debug-review-pending", format!("debug resolve waits for risk fire {fire}"))
-            .slot("fire").details(json!({"slug":record.slug,"fire":fire,"record":record})).value();
+            .slot("fire").details(json!({"slug":record.slug,"fire":fire,"pending_fires":review.pending_fires,"record":record})).value();
     }
     answer(record)
 }

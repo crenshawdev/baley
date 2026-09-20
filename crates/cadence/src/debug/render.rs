@@ -27,7 +27,23 @@ pub fn render(record: &Record) -> String {
     if let Some(review) = &record.review {
         out.push_str(&format!("\n## Risk review\n\nScope: root-debug {}\nBase: {}\nIndex: {}\nHead: null\nObservation: {}\nAdmission request: {}\n",
             review.occurrence, review.material.base_id(), review.material.tip_id(), review.observation, review.admission_request_id));
-        if let Some(fire) = &review.fire { out.push_str(&format!("Fire: {fire}\nHome: reviews/{fire}\nResolve: pending review\n")); }
+        if let Some(fire) = &review.fire {
+            out.push_str(&format!("Fire: {fire}\nHome: reviews/{fire}\nResolve: {}\n",
+                if review.settled { "receipt accepted; verify reproduction" } else { "pending review" }));
+        }
+        for entry in &review.history {
+            out.push_str(&format!("\nFire: {}\nScope: {}\n", entry.fire.id, entry.fire.review_scope.join(", ")));
+            if let Some(parent) = &entry.fire.rearm_of { out.push_str(&format!("Re-arm of: {parent}\n")); }
+            for returned in &entry.returns {
+                out.push_str(&format!("Original: {}\nFinding identities: {}\nFindings: {}\n",
+                    returned.original, returned.finding_ids.join(", "), returned.findings));
+            }
+            if let Some(receipt) = &entry.receipt {
+                out.push_str(&format!("Receipt: {}\nConsequence: {}\n", receipt.id,
+                    serde_json::to_string(&receipt.consequence).unwrap()));
+            }
+        }
+        if !review.pending_fires.is_empty() { out.push_str(&format!("Pending fires: {}\n", review.pending_fires.join(", "))); }
     }
     if let Some(resolution) = &record.resolution {
         out.push_str(&format!("\n## Resolution\n\n{}\nTest: {}\nResult: {}\n", resolution.description, resolution.reproduction.test, resolution.reproduction.result));

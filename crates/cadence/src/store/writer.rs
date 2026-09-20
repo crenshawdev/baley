@@ -60,6 +60,11 @@ pub enum BoundaryChange {
 pub type InputCheck = Box<dyn FnMut() -> Result<()> + Send>;
 
 pub enum Operation {
+    DebugReviewV1 {
+        expected_generation: u64,
+        expected_integrity: String,
+        root_binding: String,
+    },
     DebugV1 {
         expected_generation: u64,
         expected_integrity: String,
@@ -522,8 +527,27 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let _ownership = self.storage.acquire()?;
         self.refresh_owned()?;
         match operation {
+            Operation::DebugReviewV1 { expected_generation, expected_integrity, root_binding } => {
+                self.check_expected(expected_generation, &expected_integrity)?;
+                if self.storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(&root_binding) {
+                    return Err(Error::Invalid("debug review root binding changed".into()));
+                }
+                crate::rail::receipts::confirmed_history(&self.view)?;
+                let mut next = self.view.as_ref().clone();
+                next.snapshot.data = crate::debug::review::contribute(&next.snapshot.data, &root_binding)?;
+                let mut participants = Vec::new();
+                for slug in crate::debug::review::changed(&self.view.snapshot.data, &next.snapshot.data)? {
+                    let (target, bytes) = crate::execution::render::project_debug(&next.snapshot.data, &slug)?;
+                    let expected = self.storage.read(&target)?;
+                    participants.push(super::transaction::Participant { target, expected, bytes });
+                }
+                let operations = next.snapshot.operations.clone();
+                self.persist(next, operations, participants, "debug_review",
+                    super::transaction::IntentKind::DebugReviewV1 { root_binding })
+            },
             Operation::DebugV1 { expected_generation, expected_integrity, write } => {
                 self.check_expected(expected_generation, &expected_integrity)?;
+                crate::rail::receipts::confirmed_history(&self.view)?;
                 if self.storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(&write.root_binding) {
                     return Err(Error::Invalid("debug root binding changed".into()));
                 }
@@ -780,6 +804,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 "rewrite_snapshot"
             }
             Operation::CheckedTransact { .. }
+            | Operation::DebugReviewV1 { .. }
             | Operation::DebugV1 { .. }
             | Operation::UndoV1 { .. }
             | Operation::MilestonePruneV1 { .. }
