@@ -575,7 +575,10 @@ fn phase15_undo_reverts_exact_hashes_and_marks_the_record() {
         assert_eq!(fs::read_to_string(project.join("decoy.txt")).unwrap(), "keep this unrelated commit\n");
         client.finish();
         let after = reopened(project).snapshot.data;
-        assert_eq!(after["execution"]["history"], before_store["execution"]["history"]);
+        for namespace in [cadence::execution::history::NAMESPACE, cadence::execution::history::PLAN_NAMESPACE,
+            cadence::execution::admission::NAMESPACE, cadence::verification::persistence::NAMESPACE] {
+            assert_eq!(after[namespace], before_store[namespace], "retained {namespace}");
+        }
         assert_eq!(after["verification"], before_store["verification"], "verification evidence is retained");
         if mode == "no-commit" || mode == "conflict" {
             assert_eq!(after["execution"]["occurrences"]["13"], before_store["execution"]["occurrences"]["13"]);

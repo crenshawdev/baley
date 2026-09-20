@@ -475,6 +475,10 @@ impl UndoFixture {
         fs::write(project.join(".planning/phases/13/UAT.md"), "### 1. Fixture\nstatus: pass\n").unwrap();
         git(project, &["add", ".planning"]);
         git(project, &["commit", "-m", "Fixture completed phase documents"]);
+        if !native {
+            let imported = query(project, json!({"operation":"progress"}));
+            assert_eq!(imported["status"], "ok", "{imported}");
+        }
         Self { fixture, hashes, decoy }
     }
     pub fn project(&self) -> &Path { self.fixture.project() }
@@ -653,4 +657,3 @@ fn undo_base() -> Fixture {
         "plan":{"gate":"deferred"},"risk_surface":{"surfaces":cadence::rail::risk::CATEGORIES}}}})).unwrap()).unwrap();
     Fixture { temp }
 }
-
