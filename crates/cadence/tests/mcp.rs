@@ -1569,10 +1569,14 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     for required in ["debug-open", "debug-hypothesis", "debug-observation", "debug-attempt", "debug-resolve",
         "debug-list", "debug-status", "debug-continue", "rank_reason", "cheapest discriminating test",
         "Root Cause Report", "git add", "explicit approval", "single deliberate step", "cad-review-delivery",
-        "identical request_id and inputs", "record even if its Markdown is absent or misleading"] {
+        "identical request_id and inputs", "record even if its Markdown is absent or misleading",
+        "record.recall", "source and phase when present", "Recall is candidate evidence",
+        "never a confirmed hypothesis", "memory.backend none", "schema default builtin",
+        "Continue presents the retained snapshot", r#"{"operation":"recall","query":"<words>","limit":5,"phase":1}"#,
+        "A fresh query does not replace the snapshot"] {
         assert!(body.contains(required), "{required}");
     }
-    for retired in ["workflows/debug.md", "references/bug-patterns.md", "planning.mjs", "grep "] {
+    for retired in ["workflows/debug.md", "references/bug-patterns.md", "references/recall.md", "planning.mjs", "grep "] {
         assert!(!body.contains(retired), "{retired}");
     }
     let (undo, body) = markdown_parts("skills/cad-undo/SKILL.md");

@@ -27,7 +27,7 @@ Parse $ARGUMENTS:
 - status <slug>: call debug-status with slug, show the returned record, then stop.
 - continue <slug>: call debug-continue with slug and resume from its record
   alone. Keep the recorded symptom, hypothesis identities, states, rank reasons,
-  observations and attempt count; do not ask the owner to repeat them.
+  observations, attempt count and retained recall; do not ask the owner to repeat them.
 - --diagnose: remove the flag and investigate the remaining symptom without
   applying a fix.
 - Otherwise the remaining text is a new symptom.
@@ -49,6 +49,17 @@ from it. Read project code through Cadence search/read using issued references.
 1. For a new session, capture the exact failing signal, reproduction and what
    success looks like. Ask only for missing information. Call debug-open with
    that symptom; it initializes status open and attempt_count 0.
+   Show record.recall's backend, total and bounded results, with each snippet's
+   source and phase when present. Preserve provenance and incomplete coverage;
+   never invent a phase for a phaseless hit. Recall is candidate evidence,
+   never a confirmed hypothesis. Under memory.backend none, the answer has no
+   hits and reads no corpus; an unset key uses the schema default builtin.
+   Continue presents the retained snapshot, even if the corpus or backend changed.
+   For an explicit recall request, call cadence_query
+   {"operation":"recall","query":"<words>","limit":5,"phase":1}, replacing
+   the words and optional positive integer limit/phase with the owner's request.
+   Omit phase for unfiltered recall. A phase filter excludes phaseless hits and
+   applies before the result limit. A fresh query does not replace the snapshot.
 2. Before the first hypothesis, consider the diagnostic patterns below.
    Record 2-5 plausible hypotheses through debug-hypothesis, each with a stable
    id, description, state and rank_reason. States are untested, testing,
