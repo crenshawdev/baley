@@ -584,13 +584,13 @@ test('planning recall: the memory.backend it gates on is what get reports', () =
  * @param {{root: string, repoFile: string, globalFile: string}} fx
  * @param {number} cap
  */
-function consultOverCap(fx, cap) {
+function reviewOverCap(fx, cap) {
   const keyFile = join(fx.root, 'providers.env');
   writeFileSync(keyFile, 'OPENAI_API_KEY="from-file"\n');
-  const situation = 'x'.repeat(4 * cap + 8);   // chars/4 proxy: est > cap
+  const artifact = 'x'.repeat(4 * cap + 8);   // chars/4 proxy: est > cap
   return seam('review-provider.mjs',
-    ['consult', '--provider', 'openai', '--model', 'gpt-test', '--key-file', keyFile],
-    { ...fx, cwd: fx.root, stdin: JSON.stringify({ situation }) });
+    ['review', '--provider', 'openai', '--model', 'gpt-test', '--key-file', keyFile],
+    { ...fx, cwd: fx.root, stdin: JSON.stringify({ instruction: 'review this artifact', artifact }) });
 }
 
 /** The cap named in an `over-cap` refusal's detail, or null. */
@@ -613,7 +613,7 @@ test('review-provider: a GLOBAL-layer prompt cap is the one it refuses on', () =
   });
   const cap = getValue('review.max_prompt_tokens', fx);
   assert.equal(cap, 48, 'the global layer alone carries it - not the 120000 default');
-  const r = consultOverCap(fx, cap);
+  const r = reviewOverCap(fx, cap);
   assert.equal(r.ok, false);
   // No network: the over-cap reason is itself the proof nothing was sent.
   assert.equal(r.reason, 'over-cap', JSON.stringify(r));
@@ -658,7 +658,7 @@ test('review-provider: the prompt cap it refuses on is what get reports (cwd-rel
   });
   const cap = getValue('review.max_prompt_tokens', fx);
   assert.equal(cap, 64, 'the repo layer wins the merge over the global one');
-  const r = consultOverCap(fx, cap);
+  const r = reviewOverCap(fx, cap);
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'over-cap', JSON.stringify(r));
   assert.equal(capInDetail(r.detail), cap, r.detail);

@@ -1246,19 +1246,12 @@ export const CONTRACTS = {
     // provider trace event so a cross-model fire JOINS to its trigger through
     // the correlation id, which is what makes it distinguishable from the
     // subagent fire of the same trigger (RVW-02). Optional and review-only: a
-    // consult has no trigger.
     review: {
       '--provider': { required: true, type: 'string', value: 'refuse', bare: 'refuse' },
       '--model': { required: true, type: 'string', value: 'refuse', bare: 'refuse' },
       '--effort': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
       '--payload': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
       '--trigger': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
-    },
-    consult: {
-      '--provider': { required: true, type: 'string', value: 'refuse', bare: 'refuse' },
-      '--model': { required: true, type: 'string', value: 'refuse', bare: 'refuse' },
-      '--effort': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
-      '--payload': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
     },
     'detect-models': {
       '--provider': { required: true, type: 'string', value: 'refuse', bare: 'refuse' },
