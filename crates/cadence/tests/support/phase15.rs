@@ -267,7 +267,7 @@ else:
 
     pub fn authorize(client: &mut Client, landing: &Value, id: &str, inputs: Value) -> Value {
         ok(client, json!({"operation":"land-authorize","request":{
-            "request_id":id,"landing":landing["id"],"expected_generation":landing["generation"],
+            "request_id":format!("authorize-{id}"),"landing":landing["id"],"expected_generation":landing["generation"],
             "source":landing["source"],"base":landing["base"],"remote":landing["remote"],"inputs":inputs,
             "owner":"Fixture Owner","at":"2026-09-19T12:00:00Z"
         }}))["authorization"].clone()
