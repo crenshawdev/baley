@@ -112,7 +112,7 @@ impl UnreadableFile {
         assert!(uid.status.success());
         if String::from_utf8(uid.stdout).unwrap().trim() == "0" { return None; }
         let permissions = fs::metadata(&path).unwrap().permissions();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0)).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
         Some(Self { path, permissions })
     }
 }
