@@ -420,10 +420,10 @@ test('every flag in every row declares a complete grammar', () => {
     }
   }
   // The walk reached the whole table, so no arm above is vacuous.
-  // CADENCE-CENSUS: arg-contract-flag-entries | asserts: the CONTRACTS table declares 196 flag entries across 18 top-level rows
-  // 196 after removing the frozen prune operation's three flags.
-  assert.equal(entries, 196, `the table declares ${entries} flag entries`);
-  assert.equal(Object.keys(CONTRACTS).length, 18, 'one row per top-level bin script');
+  // CADENCE-CENSUS: arg-contract-flag-entries | asserts: the CONTRACTS table declares 193 flag entries across 17 top-level rows
+  // 193 after removing the frozen publishing helper's three flags.
+  assert.equal(entries, 193, `the table declares ${entries} flag entries`);
+  assert.equal(Object.keys(CONTRACTS).length, 17, 'one row per top-level bin script');
 });
 
 test('the declarations the CONTEXT decisions bind are the ones in the table', () => {
