@@ -4,7 +4,7 @@ use cadence::{envelope::Refusal, landing::{authorization, effects, report, model
 use serde_json::{Value, json};
 use std::path::Path;
 
-pub enum Command { Read { landing: String }, Apply(Apply) }
+pub enum Command { Read { landing: String }, Apply(Box<Apply>) }
 
 pub async fn execute<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command) -> Result<Value> {
     match execute_inner(factory, root, command).await {
@@ -41,7 +41,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                         && r.request["request"]["landing"] == landing).collect::<Vec<_>>()})
             }
         }),
-        Command::Apply(apply) => apply,
+        Command::Apply(apply) => *apply,
     };
     let raw = serde_json::to_value(&apply)?;
     let request_id = match &apply {

@@ -1310,7 +1310,7 @@ impl ServerHandler for PublicServer {
                     }
                     ApplyGroup::Landing => {
                         let answer = match serde_json::from_value::<cadence::landing::model::Apply>(raw.unwrap()) {
-                            Ok(apply) => self.server.service.landing(&self.root, landing_service::Command::Apply(apply)).await,
+                            Ok(apply) => self.server.service.landing(&self.root, landing_service::Command::Apply(Box::new(apply))).await,
                             Err(error) => Ok(Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value()),
                         };
                         structured_result(answer.map(ApplyOutput::NativeExecution))
