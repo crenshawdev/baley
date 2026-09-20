@@ -49,7 +49,7 @@ fn debug_resolve_risk_checks_the_index_without_a_phase() {
         let risk_status = client.call("cadence_query", json!({"operation":"risk-status",
             "scope":{"kind":"root-debug","occurrence":occurrence},"source":{"kind":"staged","base":base}}));
         assert_eq!(risk_status["status"], "ok", "{case}: {risk_status}");
-        let checked = &risk_status["data"]["current_observation"];
+        let checked = &risk_status["current_observation"];
         assert_eq!(checked["observation"]["scope"]["kind"], "root-debug");
         assert!(checked["observation"]["scope"]["phase"].is_null());
         assert_eq!(checked["observation"]["scope"]["occurrence"], occurrence);
@@ -64,16 +64,16 @@ fn debug_resolve_risk_checks_the_index_without_a_phase() {
             let fire = review["fire"].as_str().unwrap();
             assert!(answer.to_string().contains(fire));
             let admission = client.call("cadence_query", json!({"operation":"review-admission","fire":fire}));
-            assert_eq!(admission["data"]["caller"], "debug", "{admission}");
-            assert_eq!(admission["data"]["home"]["kind"], "root-debug");
-            assert_eq!(admission["data"]["discriminator"], occurrence);
-            assert!(admission["data"]["phase"].is_null());
-            assert!(admission["data"]["plan"].is_null());
+            assert_eq!(admission["result"]["caller"], "debug", "{admission}");
+            assert_eq!(admission["result"]["home"]["kind"], "root-debug");
+            assert_eq!(admission["result"]["discriminator"], occurrence);
+            assert!(admission["result"]["phase"].is_null());
+            assert!(admission["result"]["plan"].is_null());
             let next = client.call("cadence_query", json!({"operation":"review-next","fire":fire}));
-            assert_eq!(next["data"]["state"], "dispatch", "{case}: {next}");
-            assert!(next["data"]["dispatch"].is_object());
-            let attempt = next["data"]["attempt"]["attempt"].as_str().unwrap();
-            for entry in next["data"]["attempt"]["view"]["entries"].as_array().unwrap() {
+            assert_eq!(next["result"]["state"], "dispatch", "{case}: {next}");
+            assert!(next["result"]["dispatch"].is_object());
+            let attempt = next["result"]["attempt"]["attempt"].as_str().unwrap();
+            for entry in next["result"]["attempt"]["view"]["entries"].as_array().unwrap() {
                 let read = client.call("cadence_query", json!({"operation":"review-material","attempt":attempt,"entry":entry}));
                 assert_eq!(read["status"], "ok", "{read}");
             }
