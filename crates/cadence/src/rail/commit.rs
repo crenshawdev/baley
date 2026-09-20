@@ -93,6 +93,10 @@ struct Temporary(PathBuf);
 impl Drop for Temporary { fn drop(&mut self) { let _ = fs::remove_file(&self.0); } }
 
 pub fn freeze(root: &Path, changes: &BTreeMap<String, Option<Vec<u8>>>, phases: &[u32]) -> Result<Seal> {
+    freeze_message(root, changes, phases, &format!("chore: prune milestone phases {}\n\nRetain completed phase evidence in the single parent tree.\n", phases.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")))
+}
+
+pub fn freeze_message(root: &Path, changes: &BTreeMap<String, Option<Vec<u8>>>, phases: &[u32], message: &str) -> Result<Seal> {
     let parent = git::resolve_commit(root,"HEAD")?;
     let reference = text(root,&["symbolic-ref","-q","HEAD"])?;
     if !reference.starts_with("refs/heads/") { return Err(Error::Policy("prune needs a branch ref".into())); }
@@ -132,7 +136,7 @@ pub fn freeze(root: &Path, changes: &BTreeMap<String, Option<Vec<u8>>>, phases: 
     let tree = tree(root,&entries,"",&mut objects)?;
     let author = text(root,&["var","GIT_AUTHOR_IDENT"])?;
     let committer = text(root,&["var","GIT_COMMITTER_IDENT"])?;
-    let commit = object(root,"commit",sign(root,format!("tree {tree}\nparent {parent}\nauthor {author}\ncommitter {committer}\n\nchore: prune milestone phases {}\n\nRetain completed phase evidence in the single parent tree.\n",phases.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")).into_bytes())?)?;
+    let commit = object(root,"commit",sign(root,format!("tree {tree}\nparent {parent}\nauthor {author}\ncommitter {committer}\n\n{message}").into_bytes())?)?;
     let index_path = root.join(text(root,&["rev-parse","--git-path","index"])?);
     let index_before = fs::read(&index_path)?;
     let temporary = Temporary(index_path.with_file_name(format!(".cadence-prune-index-{}",std::process::id())));

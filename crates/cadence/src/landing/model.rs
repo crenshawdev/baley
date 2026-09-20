@@ -165,6 +165,8 @@ pub struct StepSlot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Landing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<crate::milestone::release::Intent>,
     pub id: String,
     pub root_binding: String,
     pub occurrence: String,
@@ -184,6 +186,6 @@ impl Landing {
             occurrence: request.occurrence.clone(), generation: 1, source: request.source.clone(), base: request.base.clone(), remote: request.remote.clone(),
             steps: [Step::Publish, Step::Open, Step::Merge, Step::Checkout, Step::Pull, Step::Tag, Step::TagPush, Step::Reap]
                 .into_iter().map(|step| StepSlot { step, receipt: None, intent: None, local_intent: None }).collect(),
-            authorizations: vec![], merge_confirmation: None }
+            authorizations: vec![], merge_confirmation: None, release: None }
     }
 }

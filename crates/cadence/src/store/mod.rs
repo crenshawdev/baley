@@ -64,6 +64,12 @@ pub struct Observed {
 /// and confirm must check the installed bytes before the writer acknowledges.
 pub trait Storage: Send + 'static {
     type Prepared;
+    fn validate_release(&mut self, _write: &crate::milestone::release::WriteSeal, _replay: bool) -> Result<()> {
+        Err(Error::Invalid("storage does not support release bumps".into()))
+    }
+    fn install_release(&mut self, _write: &crate::milestone::release::WriteSeal) -> Result<()> {
+        Err(Error::Invalid("storage does not support release bumps".into()))
+    }
     fn validate_undo(&mut self, _write: &crate::undo::model::Write, _replay: bool) -> Result<()> {
         Err(Error::Invalid("storage does not support phase undo".into()))
     }

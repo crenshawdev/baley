@@ -29,6 +29,10 @@ pub fn confirm(root: &Path, landing: &mut Landing, request: &ConfirmMerge, confi
         return Err(Error::Invalid("merged PR/commit identity differs from the landing merge".into()));
     }
     validate_refs(landing)?;
+    if let Some(release) = &landing.release
+        && request.tag.as_ref().is_none_or(|tag| tag.name != release.tag) {
+        return Err(Error::Invalid("merge confirmation must retain the confirmed release tag".into()));
+    }
     if let Some(tag) = &request.tag {
         model::name(&tag.name)?;
         model::name(&tag.message)?;
@@ -198,6 +202,7 @@ pub fn prepare(root: &Path, landing: &Landing, request: &LocalRequest, step: &St
             let tag = confirmation.request.tag.as_ref().ok_or_else(|| Error::Invalid("tag selection is an explicit skip".into()))?;
             effects::observe(root, &["check-ref-format", &format!("refs/tags/{}", tag.name)])?;
             if before.tag.is_some() { return Err(Error::Invalid(format!("tag {} already exists", tag.name))); }
+            if let Some(release) = &landing.release { crate::milestone::release::validate_tag(root, release, &tag.name)?; }
             intended.tag_target = Some(merged.clone()); intended.tag_message = Some(tag.message.trim_end().into());
             vec!["tag".into(), "-a".into(), "--cleanup=verbatim".into(), "-m".into(), tag.message.clone(), "--".into(), tag.name.clone(), merged.clone()]
         }

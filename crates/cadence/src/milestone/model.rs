@@ -39,6 +39,10 @@ pub struct CloseRequest {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", deny_unknown_fields)]
 pub enum Apply {
+    #[serde(rename = "milestone-release")]
+    Release { request: super::release::Request },
+    #[serde(rename = "milestone-release-confirm")]
+    ReleaseConfirm { request: super::release::Confirm },
     #[serde(rename = "milestone-close")]
     Close { request: CloseRequest },
     #[serde(rename = "milestone-prune")]

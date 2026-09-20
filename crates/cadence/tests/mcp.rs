@@ -302,8 +302,8 @@ fn tool_schemas_list_exactly_three_tools_with_minimal_inputs() {
     }
     let tools_bytes = serde_json::to_vec(tools).unwrap().len();
     assert!(
-        tools_bytes < 10_248,
-        "tools/list result.tools is {tools_bytes} bytes; bound includes confirmed local cleanup"
+        tools_bytes < 10_304,
+        "tools/list result.tools is {tools_bytes} bytes; bound includes confirmed release preparation"
     );
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
     for (tool, names) in [("query", query_operation_names()), ("apply", apply_operation_names())] {
@@ -1614,7 +1614,7 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     }
     let tools_bytes = serde_json::to_vec(&listed["result"]["tools"]).unwrap().len();
     println!("tools/list result.tools: {tools_bytes} bytes");
-    assert!(tools_bytes < 10_248);
+    assert!(tools_bytes < 10_304);
     let (why, body) = markdown_parts("skills/cad-why/SKILL.md");
     assert_eq!(why["name"], "cad-why");
     assert_eq!(why["argument-hint"], "<path>[:<line>]");

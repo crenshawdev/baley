@@ -29,6 +29,11 @@ async fn audits<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &
 }
 
 async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command) -> Result<Value> {
+    match &command {
+        Command::Apply(Apply::Release { request }) => return release_propose(factory, root, request.clone()).await,
+        Command::Apply(Apply::ReleaseConfirm { request }) => return release_confirm(factory, root, request.clone()).await,
+        _ => {},
+    }
     if let Command::Apply(Apply::Prune { request }) = command {
         return execute_prune(factory, root, request).await;
     }
@@ -47,6 +52,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
         Command::Read { occurrence, selection } => (occurrence, selection, None),
         Command::Apply(Apply::Close { request }) => (request.occurrence.clone(), request.selection.clone(), Some(request)),
         Command::Apply(Apply::Prune { .. }) => unreachable!("prune is routed before document derivation"),
+        Command::Apply(Apply::Release { .. } | Apply::ReleaseConfirm { .. }) => unreachable!("release routed before derivation"),
     };
     let id = model::identity("milestone", &binding, &occurrence);
     let prior = records.records.get(&id).cloned();
@@ -180,4 +186,73 @@ async fn execute_prune<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
     };
     model::persist(store, &view, NAMESPACE, &mut records, Receipt {root_binding:binding,
         request_id:request.request_id,request:raw,answer:refusal.expect("all successful branches return")}).await
+}
+
+async fn release_propose<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, request: cadence::milestone::release::Request) -> Result<Value> {
+    use cadence::{milestone::release::{self, Report, NAMESPACE}, store::writer::Operation};
+    let session = factory.first_touch(root).await?;
+    let store = session.review_store();
+    let view = store.request(Operation::ReadVerified).await?;
+    let binding = cadence::verification::inputs::root_binding(root)?;
+    let raw = serde_json::to_value(&request)?;
+    let mut records = model::records::<Report>(&view.snapshot.data,NAMESPACE)?;
+    if let Some(answer) = model::replay(&records,&binding,&request.request_id,&raw)? { return Ok(answer); }
+    let answer = if model::reused(&records,&binding,&request.request_id) {
+        model::refuse("request-reused","request_id already binds different release inputs")
+    } else {
+        match release::observe(root.parent().ok_or_else(|| Error::Invalid("missing project".into()))?,&binding,request.clone()) {
+            Err(error) => Refusal::new("release-input",error.to_string()).slot("request").details(json!({"manifest":request.manifest})).value(),
+            Ok(report) => {
+                if let Some(collision) = release::collision(&report.tags,&request.version,&request.tag) {
+                    Refusal::new("release-collision",format!("release version {} already has tag {}",request.version,collision.tag))
+                        .slot("request.version").details(json!({"collision":collision,"release":report})).value()
+                } else if let Err(error) = release::landing(&view.snapshot.data,&binding,&request,&report.head) {
+                    model::refuse("release-landing",error.to_string())
+                } else {
+                    records.records.insert(report.id.clone(),report.clone());
+                    json!({"status":"ok","release":report,"next":"milestone-release-confirm with owner, at, release and digest"})
+                }
+            }
+        }
+    };
+    model::persist(store,&view,NAMESPACE,&mut records,Receipt {root_binding:binding,request_id:request.request_id,request:raw,answer}).await
+}
+
+async fn release_confirm<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, request: cadence::milestone::release::Confirm) -> Result<Value> {
+    use cadence::{milestone::release::{self, Report, NAMESPACE}, store::writer::Operation};
+    let session = factory.first_touch(root).await?;
+    let store = session.review_store();
+    let view = store.request(Operation::ReadVerified).await?;
+    let binding = cadence::verification::inputs::root_binding(root)?;
+    let mut records = model::records::<Report>(&view.snapshot.data,NAMESPACE)?;
+    let raw = serde_json::to_value(&request)?;
+    if let Some(answer) = model::replay(&records,&binding,&request.request_id,&raw)? { return Ok(answer); }
+    let report = records.records.get(&request.release).cloned();
+    let answer = if model::reused(&records,&binding,&request.request_id) {
+        model::refuse("request-reused","request_id already binds different release inputs")
+    } else if [&request.request_id,&request.owner,&request.at].iter().any(|s| model::name(s).is_err())
+        || report.as_ref().is_none_or(|r| r.root_binding != binding || r.digest != request.digest) {
+        model::refuse("release-confirmation","attributed confirmation must name the exact release id and digest")
+    } else {
+        let report = report.unwrap();
+        let project = root.parent().ok_or_else(|| Error::Invalid("missing project".into()))?;
+        match release::reobserve(project,&report).and_then(|()| release::landing(&view.snapshot.data,&binding,&report.request,&report.head).map(|_| ())) {
+            Err(error) => model::refuse("release-basis-changed",error.to_string()),
+            Ok(()) => {
+                let config = session.config()?;
+                let protected = cadence::rail::branch::protected_branches(config.effective.values.pointer("/git/protected_branches"));
+                let on_protected = config.effective.values.pointer("/git/on_protected").and_then(Value::as_str).unwrap_or("ask").to_owned();
+                match release::freeze(root,report,request.clone(),protected,on_protected) {
+                    Err(error) => model::refuse("release-preflight",error.to_string()),
+                    Ok(write) => {
+                        let answer = release::answer(&write);
+                        store.request(Operation::MilestoneReleaseV1 {expected_generation:view.snapshot.generation,
+                            expected_integrity:view.snapshot.integrity.clone(),write:Box::new(write)}).await?;
+                        return Ok(answer);
+                    }
+                }
+            }
+        }
+    };
+    model::persist(store,&view,NAMESPACE,&mut records,Receipt {root_binding:binding,request_id:request.request_id,request:raw,answer}).await
 }

@@ -60,6 +60,11 @@ pub enum BoundaryChange {
 pub type InputCheck = Box<dyn FnMut() -> Result<()> + Send>;
 
 pub enum Operation {
+    MilestoneReleaseV1 {
+        expected_generation: u64,
+        expected_integrity: String,
+        write: Box<crate::milestone::release::WriteSeal>,
+    },
     UndoV1 {
         expected_generation: u64,
         expected_integrity: String,
@@ -520,6 +525,14 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 let operations = next.snapshot.operations.clone();
                 self.persist(next, operations, vec![], "phase_undo", super::transaction::IntentKind::UndoV1 { write })
             },
+            Operation::MilestoneReleaseV1 { expected_generation, expected_integrity, write } => {
+                self.check_expected(expected_generation, &expected_integrity)?;
+                self.storage.validate_release(&write, false)?;
+                let mut next = self.view.as_ref().clone();
+                next.snapshot.data = crate::milestone::release::contribute(&next.snapshot.data, &write)?;
+                let operations = next.snapshot.operations.clone();
+                self.persist(next, operations, vec![], "milestone_release", super::transaction::IntentKind::MilestoneReleaseV1 { write })
+            },
             Operation::MilestonePruneV1 { expected_generation, expected_integrity, prune } => {
                 self.check_expected(expected_generation, &expected_integrity)?;
                 self.storage.validate_prune(&prune, false)?;
@@ -748,6 +761,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             Operation::CheckedTransact { .. }
             | Operation::UndoV1 { .. }
             | Operation::MilestonePruneV1 { .. }
+            | Operation::MilestoneReleaseV1 { .. }
             | Operation::VerificationRunV1 { .. }
             | Operation::VerificationV1 { .. }
             | Operation::AdoptionDeclareV1 { .. }
