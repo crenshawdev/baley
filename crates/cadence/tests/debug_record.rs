@@ -9,6 +9,73 @@ use serde_json::{Value, json};
 use std::fs;
 use support_records::{apply, query};
 
+#[test]
+fn debug_open_reads_recall_by_the_effective_backend() {
+    let empty = json!({"backend":"none","results":[],"total":0,"incomplete":[]});
+    for backend in [Some("builtin"), Some("none"), None] {
+        let repo = support_records::recall_fixture(backend);
+        let mut client = Client::open(repo.path());
+        let request = json!({"request_id":"recall-debug-open","slug":"stale-token",
+            "expected_version":0,"symptom":"cache stale token"});
+        let opened = apply(&mut client, "debug-open", request.clone());
+        let retained = &opened["record"]["recall"];
+        assert_eq!(retained["backend"], backend.unwrap_or("builtin"), "{opened}");
+        let recalled = client.call("cadence_query", json!({"operation":"recall","query":"cache stale token"}));
+        assert_eq!(&recalled, retained);
+        let filtered = client.call("cadence_query", json!({"operation":"recall","query":"cache stale token","phase":1,"limit":10}));
+        let limited = client.call("cadence_query", json!({"operation":"recall","query":"cache stale token","phase":1,"limit":1}));
+        if backend == Some("none") {
+            for answer in [retained, &filtered, &limited] { assert_eq!(answer, &empty); }
+        } else {
+            let hits = retained["results"].as_array().unwrap();
+            assert_eq!(retained["total"], 5);
+            assert!(hits.iter().any(|hit| hit["source"] == "phases/1/SUMMARY.md" && hit["phase"] == 1));
+            assert!(hits.iter().any(|hit| hit["source"] == "phases/2/SUMMARY.md" && hit["phase"] == 2));
+            assert!(hits.iter().any(|hit| hit["provenance"]["kind"] == "record" && hit["phase"] == 1));
+            assert!(hits.iter().any(|hit| hit["source"] == "phases/1.1/SUMMARY.md" && hit["phase"].is_null()));
+            assert_eq!(filtered["total"], 2, "{filtered}");
+            let hits = filtered["results"].as_array().unwrap();
+            assert_eq!(hits.len(), 2);
+            assert!(hits.iter().all(|hit| hit["phase"] == 1));
+            assert!(hits.iter().any(|hit| hit["provenance"]["kind"] == "record"));
+            assert!(hits.iter().any(|hit| hit["source"] == "phases/1/SUMMARY.md"));
+            assert_eq!(limited["total"], 2);
+            assert_eq!(limited["results"], json!([hits[0]]));
+            let projection = opened["projection"].as_str().unwrap();
+            assert!(projection.contains("phases/1/SUMMARY.md") && projection.contains("phase 1"));
+        }
+        client.finish();
+        assert_eq!(phase13::reopened(repo.path()).snapshot.data["debug"]["records"]["stale-token"]["recall"], *retained);
+        // Changed corpus and backend cannot rewrite the retained snapshot on restart or replay.
+        fs::write(repo.path().join(".planning/phases/1/SUMMARY.md"), "## Deviations\n- replacement\n").unwrap();
+        fs::write(repo.path().join(".planning/config.json"), r#"{"memory":{"backend":"none"}}"#).unwrap();
+        let mut client = Client::open(repo.path());
+        for operation in ["debug-status", "debug-continue"] {
+            let answer = query(&mut client, operation, "stale-token");
+            assert_eq!(answer["record"]["recall"], *retained);
+            assert_eq!(answer["projection"], opened["projection"]);
+        }
+        assert_eq!(apply(&mut client, "debug-open", request), opened);
+        client.finish();
+    }
+    #[cfg(unix)]
+    for backend in ["builtin", "none"] {
+        let repo = support_records::recall_fixture(Some(backend));
+        let Some(_permissions) = support_records::UnreadableFile::new(repo.path().join(".planning/phases/1/SUMMARY.md")) else { continue; };
+        let mut client = Client::open(repo.path());
+        let opened = apply(&mut client, "debug-open", json!({"request_id":"recall-unreadable-open","slug":"unreadable",
+            "expected_version":0,"symptom":"cache stale token"}));
+        let recalled = client.call("cadence_query", json!({"operation":"recall","query":"cache stale token"}));
+        assert_eq!(opened["record"]["recall"], recalled);
+        if backend == "none" { assert_eq!(recalled, empty); }
+        else {
+            assert!(recalled["incomplete"].as_array().unwrap().iter().any(|v| v.as_str().unwrap().contains("phases/1/SUMMARY.md: source unavailable")), "{recalled}");
+            assert!(recalled["results"].as_array().unwrap().iter().any(|hit| hit["source"] == "phases/2/SUMMARY.md" && hit["phase"] == 2));
+        }
+        client.finish();
+    }
+}
+
 fn recorded(answer: &Value) {
     assert_eq!(answer["status"], "ok", "{answer}");
     let record = &answer["record"];

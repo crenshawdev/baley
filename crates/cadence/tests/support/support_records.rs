@@ -74,3 +74,50 @@ pub fn apply(client: &mut Client, operation: &str, request: Value) -> Value {
 pub fn query(client: &mut Client, operation: &str, slug: &str) -> Value {
     client.call("cadence_query", json!({"operation":operation,"slug":slug}))
 }
+
+pub fn recall_fixture(backend: Option<&str>) -> tempfile::TempDir {
+    let temp = phase13::fixture();
+    let root = temp.path().join(".planning");
+    fs::write(root.join("ROADMAP.md"), "## Phases\n- [ ] **Phase 1: First**\n- [ ] **Phase 2: Second**\n- [ ] **Phase 13: Plan publication**\n- [ ] **Phase 28: Next phase**\n").unwrap();
+    let config = backend.map_or_else(|| json!({}), |backend| json!({"memory":{"backend":backend}}));
+    fs::write(root.join("config.json"), serde_json::to_vec(&config).unwrap()).unwrap();
+    let mut client = Client::open(temp.path());
+    client.call("cadence_query", json!({"operation":"progress"}));
+    for (id, kind, phase) in [("recall-phase-todo", "todo", Some(1)), ("recall-global-note", "note", None)] {
+        let mut request = json!({"operation":"capture","request_id":id,"kind":kind,"text":"cache stale token"});
+        if let Some(phase) = phase { request["phase"] = json!(phase); }
+        let answer = client.call("cadence_apply", request);
+        assert_eq!(answer["status"], "ok", "{answer}");
+    }
+    client.finish();
+    phase13::reopened(temp.path());
+    for (phase, reason) in [("1", "reused"), ("2", "changed"), ("1.1", "decimal")] {
+        fs::create_dir_all(root.join(format!("phases/{phase}"))).unwrap();
+        fs::write(root.join(format!("phases/{phase}/SUMMARY.md")), format!("## Deviations\n- cache stale token from {reason} key\n")).unwrap();
+    }
+    temp
+}
+
+#[cfg(unix)]
+pub struct UnreadableFile {
+    path: PathBuf,
+    permissions: fs::Permissions,
+}
+
+#[cfg(unix)]
+impl UnreadableFile {
+    pub fn new(path: PathBuf) -> Option<Self> {
+        use std::os::unix::fs::PermissionsExt;
+        let uid = Command::new("id").arg("-u").output().unwrap();
+        assert!(uid.status.success());
+        if String::from_utf8(uid.stdout).unwrap().trim() == "0" { return None; }
+        let permissions = fs::metadata(&path).unwrap().permissions();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0)).unwrap();
+        Some(Self { path, permissions })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for UnreadableFile {
+    fn drop(&mut self) { fs::set_permissions(&self.path, self.permissions.clone()).unwrap(); }
+}
