@@ -35,6 +35,19 @@ pub fn project_native_summary(data: &mut Value, phase: u32, receipt: &str) -> Re
     Ok(())
 }
 
+/// Debug projections are installed as participants beside the owning record.
+pub fn project_debug(data: &Value, slug: &str) -> Result<(String, Vec<u8>)> {
+    crate::debug::model::validate_slug(slug)?;
+    let records = crate::debug::model::namespace(data)?;
+    let record = records.records.get(slug).ok_or_else(|| Error::Invalid("missing debug projection record".into()))?;
+    Ok((format!("debug:{slug}"), crate::debug::render::render(record).into_bytes()))
+}
+
+pub fn installed_debug(data: &Value) -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
+    Ok(crate::debug::model::namespace(data)?.records.into_iter().map(|(slug, record)|
+        (format!(".planning/debug/{slug}.md"), crate::debug::render::render(&record).into_bytes())).collect())
+}
+
 pub fn render_native_phase_summary(
     records: &[super::history::Record], plan_records: &[super::history::PlanRecord],
     admissions: &[super::admission::Record], phase: u32,

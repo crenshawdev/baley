@@ -60,6 +60,11 @@ pub enum BoundaryChange {
 pub type InputCheck = Box<dyn FnMut() -> Result<()> + Send>;
 
 pub enum Operation {
+    DebugV1 {
+        expected_generation: u64,
+        expected_integrity: String,
+        write: Box<crate::debug::model::Write>,
+    },
     MilestoneReleaseV1 {
         expected_generation: u64,
         expected_integrity: String,
@@ -517,6 +522,22 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let _ownership = self.storage.acquire()?;
         self.refresh_owned()?;
         match operation {
+            Operation::DebugV1 { expected_generation, expected_integrity, write } => {
+                self.check_expected(expected_generation, &expected_integrity)?;
+                if self.storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(&write.root_binding) {
+                    return Err(Error::Invalid("debug root binding changed".into()));
+                }
+                let mut next = self.view.as_ref().clone();
+                next.snapshot.data = crate::debug::model::contribute(&next.snapshot.data, &write)?;
+                let slug = write.apply.identity().1;
+                let participants = if crate::debug::model::outcome(&self.view.snapshot.data, &write).is_ok() {
+                    let (target, bytes) = crate::execution::render::project_debug(&next.snapshot.data, slug)?;
+                    let expected = self.storage.read(&target)?;
+                    vec![super::transaction::Participant { target, expected, bytes }]
+                } else { vec![] };
+                let operations = next.snapshot.operations.clone();
+                self.persist(next, operations, participants, "debug", super::transaction::IntentKind::DebugV1 { write })
+            },
             Operation::UndoV1 { expected_generation, expected_integrity, write } => {
                 self.check_expected(expected_generation, &expected_integrity)?;
                 self.storage.validate_undo(&write, false)?;
@@ -759,6 +780,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 "rewrite_snapshot"
             }
             Operation::CheckedTransact { .. }
+            | Operation::DebugV1 { .. }
             | Operation::UndoV1 { .. }
             | Operation::MilestonePruneV1 { .. }
             | Operation::MilestoneReleaseV1 { .. }

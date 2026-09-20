@@ -11,6 +11,7 @@ pub const INTENT: &str = ".store-intent.json";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum IntentKind {
+    DebugV1 { write: Box<crate::debug::model::Write> },
     MilestoneReleaseV1 { write: Box<crate::milestone::release::WriteSeal> },
     UndoV1 { write: Box<crate::undo::model::Write> },
     MilestonePruneV1 {
@@ -571,6 +572,7 @@ impl Intent {
         let mut plan_targets = Vec::new();
         let mut uat_phase = None;
         let mut projections: Vec<&str> = Vec::new();
+        let mut debug_targets = Vec::new();
         for participant in &self.participants {
             let known = matches!(
                 participant.target.as_str(),
@@ -581,6 +583,8 @@ impl Intent {
             let plan = super::filesystem::phase_plan_target(&participant.target)?;
             let uat = super::filesystem::phase_uat_target(&participant.target)?;
             let projection = super::filesystem::projection_target(&participant.target);
+            let debug = super::filesystem::debug_target(&participant.target)?;
+            if let Some(slug) = debug { debug_targets.push(slug); }
             if projection.is_some() {
                 projections.push(participant.target.as_str());
             }
@@ -597,7 +601,7 @@ impl Intent {
             {
                 return Err(Error::Invalid("duplicate UAT participant".into()));
             }
-            if (!known && phase.is_none() && context.is_none() && plan.is_none() && uat.is_none() && projection.is_none())
+            if (!known && phase.is_none() && context.is_none() && plan.is_none() && uat.is_none() && projection.is_none() && debug.is_none())
                 || !names.insert(participant.target.as_str())
             {
                 return Err(Error::Invalid(
@@ -611,6 +615,9 @@ impl Intent {
                     "invalid or duplicate intent participant".into(),
                 ));
             }
+        }
+        if !debug_targets.is_empty() && !matches!(self.kind, IntentKind::DebugV1 { .. }) {
+            return Err(Error::Invalid("debug projection requires its owning intent".into()));
         }
         match &self.kind {
             IntentKind::PlanPublication { phase, requirements, .. }
@@ -736,6 +743,10 @@ impl Intent {
         // documents, and no other write may add, drop or edit one.
         let before = self.participants.last().and_then(|p| p.expected.bytes.as_deref())
             .map(parse_previous).transpose()?;
+        if !matches!(self.kind, IntentKind::DebugV1 { .. })
+            && before.as_ref().and_then(|p| p.data.get("debug")) != snapshot.data.get("debug") {
+            return Err(Error::Invalid("debug namespace requires its owning intent".into()));
+        }
         let completes_import = before.as_ref().is_none_or(|p| p.data.get("import").is_none())
             && snapshot.data.get("import").is_some();
         if !completes_import
@@ -792,6 +803,24 @@ impl Intent {
                     || snapshot.generation != previous.generation.checked_add(1).ok_or_else(|| Error::Invalid("generation exhausted".into()))?
                     || self.participants.iter().filter(|p| p.target != STATE).any(|p| p.expected.bytes.as_deref() != Some(&p.bytes)) {
                     return Err(Error::Invalid("undo intent differs from its immutable transition".into()));
+                }
+            }
+            IntentKind::DebugV1 { write } => {
+                let previous = previous_snapshot(&self.participants, "debug")?;
+                let expected = crate::debug::model::contribute(&previous.data, &write)?;
+                let projects = crate::debug::model::outcome(&previous.data, &write).is_ok();
+                if projects {
+                    let (target, projection) = crate::execution::render::project_debug(&expected, write.apply.identity().1)?;
+                    if bytes(&target)? != projection { return Err(Error::Invalid("debug projection differs from its record".into())); }
+                }
+                if names.len() != 3 + usize::from(projects)
+                    || debug_targets != if projects { vec![write.apply.identity().1] } else { vec![] }
+                    || snapshot.data != expected
+                    || snapshot.operations != previous.operations
+                    || snapshot.generation != previous.generation.checked_add(1).ok_or_else(|| Error::Invalid("generation exhausted".into()))?
+                    || self.participants.iter().filter(|p| p.target == ITEMS || p.target == DECISIONS)
+                        .any(|p| p.expected.bytes.as_deref() != Some(&p.bytes)) {
+                    return Err(Error::Invalid("debug intent differs from its recorded transition".into()));
                 }
             }
             IntentKind::VerificationSubmitV1 { claim, root_binding } => {
@@ -1732,6 +1761,10 @@ fn validate_all<S: Storage>(
     encoding: Encoding,
 ) -> Result<()> {
     if let IntentKind::UndoV1 { write } = kind { storage.validate_undo(write, replay)?; }
+    if let IntentKind::DebugV1 { write } = kind
+        && storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(&write.root_binding) {
+        return Err(Error::Invalid("debug recovery root binding changed".into()));
+    }
     if let IntentKind::MilestoneReleaseV1 { write } = kind { storage.validate_release(write, replay)?; }
     if let IntentKind::MilestonePruneV1 { prune } = kind {
         storage.validate_prune(prune, replay)?;
