@@ -9,7 +9,7 @@ impl credentials::Inputs for Credentials {
     fn env(&self, name: &str) -> Option<String> {
         (name == "OPENAI_API_KEY").then(|| "fixture-key".into())
     }
-    fn read(&self, _: &Path) -> std::io::Result<Vec<u8>> { unreachable!("no credential files") }
+    fn read(&self, _: &Path) -> Option<String> { unreachable!("no credential files") }
 }
 struct Chunks(VecDeque<Vec<u8>>);
 impl transport::Body for Chunks {
