@@ -527,6 +527,7 @@ fn writer_input(lease: &str, blocked: bool) -> (Value, cadence::execution::model
     candidate.prompt_digest = digest(candidate.prompt.as_bytes());
     let occurrence = ExecutionOccurrence {
         phase: 7,
+        undone: None,
         plan_set_fingerprint: set,
         version: 0,
         active: None,

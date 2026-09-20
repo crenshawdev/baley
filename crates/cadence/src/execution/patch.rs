@@ -572,6 +572,7 @@ mod tests {
         let candidate = build_dispatch(&plan, &set, 0, BASE).unwrap();
         let occurrence = ExecutionOccurrence {
             phase: 6,
+            undone: None,
             plan_set_fingerprint: set,
             version: 0,
             active: None,
@@ -644,6 +645,7 @@ mod tests {
         assert_eq!(first.id, second.id);
         let occurrence = ExecutionOccurrence {
             phase: 6,
+            undone: None,
             plan_set_fingerprint: set,
             version: 0,
             active: None,

@@ -11,6 +11,7 @@ pub const INTENT: &str = ".store-intent.json";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) enum IntentKind {
+    UndoV1 { write: Box<crate::undo::model::Write> },
     MilestonePruneV1 {
         prune: Box<crate::milestone::prune::Prune>,
     },
@@ -746,6 +747,15 @@ impl Intent {
             cadence::plan::persistence::require_legacy_execution(&snapshot.data,*phase)?;
         }
         if let Some(previous) = before {
+            if !matches!(self.kind, IntentKind::UndoV1 { .. }) {
+                let markers = |data: &Value| -> std::collections::BTreeMap<String, Value> {
+                    data["execution"]["occurrences"].as_object().into_iter().flatten()
+                        .filter_map(|(key, value)| value.get("undone").filter(|v| !v.is_null()).map(|v| (key.clone(), v.clone()))).collect()
+                };
+                if previous.data.get("undos") != snapshot.data.get("undos") || markers(&previous.data) != markers(&snapshot.data) {
+                    return Err(Error::Invalid("undo receipts and execution markers require their owning intent".into()));
+                }
+            }
             if !matches!(self.kind, IntentKind::NativeTaskV1 { .. } | IntentKind::NativePlanV1 { .. })
                 && previous.data.get(cadence::execution::render::NATIVE_SUMMARIES) != snapshot.data.get(cadence::execution::render::NATIVE_SUMMARIES) {
                 return Err(Error::Invalid("native summary changes require their owning intent".into()));
@@ -773,6 +783,16 @@ impl Intent {
             }
         }
         match self.kind.clone() {
+            IntentKind::UndoV1 { write } => {
+                if names.len() != 3 { return Err(Error::Invalid("undo has only its sealed Git/projection participant and store record".into())); }
+                let previous = previous_snapshot(&self.participants, "phase undo")?;
+                if snapshot.data != crate::undo::model::contribute(&previous.data, &write)?
+                    || snapshot.operations != previous.operations
+                    || snapshot.generation != previous.generation.checked_add(1).ok_or_else(|| Error::Invalid("generation exhausted".into()))?
+                    || self.participants.iter().filter(|p| p.target != STATE).any(|p| p.expected.bytes.as_deref() != Some(&p.bytes)) {
+                    return Err(Error::Invalid("undo intent differs from its immutable transition".into()));
+                }
+            }
             IntentKind::VerificationSubmitV1 { claim, root_binding } => {
                 use cadence::verification::verdicts;
                 if names.len() != 3 { return Err(Error::Invalid("verification patch cannot change external participants".into())); }
@@ -1700,6 +1720,7 @@ fn validate_all<S: Storage>(
     kind: &IntentKind,
     encoding: Encoding,
 ) -> Result<()> {
+    if let IntentKind::UndoV1 { write } = kind { storage.validate_undo(write, replay)?; }
     if let IntentKind::MilestonePruneV1 { prune } = kind {
         storage.validate_prune(prune, replay)?;
     }
@@ -1906,6 +1927,7 @@ pub(crate) fn commit<S: Storage, P: Policy>(
     if let IntentKind::MilestonePruneV1 { prune } = &intent.kind {
         storage.install_prune(prune)?;
     }
+    if let IntentKind::UndoV1 { write } = &intent.kind { storage.install_undo(write)?; }
     let mut remaining = prepared.into_iter();
     while let Some((target, bytes, file)) = remaining.next() {
         // Check all participants again immediately before each replacement.
@@ -1980,6 +2002,7 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) ->
     if let IntentKind::MilestonePruneV1 { prune } = &intent.kind {
         storage.install_prune(prune)?;
     }
+    if let IntentKind::UndoV1 { write } = &intent.kind { storage.install_undo(write)?; }
     for participant in &intent.participants {
         validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)?;
         let current = storage.read(&participant.target)?;

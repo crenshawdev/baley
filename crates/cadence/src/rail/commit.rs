@@ -144,6 +144,45 @@ pub fn freeze(root: &Path, changes: &BTreeMap<String, Option<Vec<u8>>>, phases: 
     Ok(Seal {parent,reference,tree,commit,objects,index_path,index_before,index_after})
 }
 
+/// Seal the real staged revert plus the final phase projections. The store
+/// installs this exact object and index under the same intent as the receipt.
+pub fn freeze_staged(root: &Path, changes: &BTreeMap<String, Vec<u8>>, subject: &str) -> Result<Seal> {
+    let parent = git::resolve_commit(root, "HEAD")?;
+    let reference = text(root, &["symbolic-ref", "-q", "HEAD"])?;
+    if !reference.starts_with("refs/heads/") { return Err(Error::Policy("undo requires a branch ref".into())); }
+    let mut entries = BTreeMap::new();
+    for row in git::run(root, ["ls-files", "--stage", "-z"])?.split(|b| *b == 0).filter(|b| !b.is_empty()) {
+        let row = std::str::from_utf8(row).map_err(|_| Error::Invalid("undecodable index entry".into()))?;
+        let (header, path) = row.split_once('\t').ok_or_else(|| Error::Invalid("invalid index entry".into()))?;
+        let fields: Vec<_> = header.split(' ').collect();
+        if fields.len() != 3 || fields[2] != "0" { return Err(Error::Conflict("undo index has conflicts".into())); }
+        entries.insert(path.to_owned(), (fields[0].to_owned(), fields[1].to_owned()));
+    }
+    let index_path = root.join(text(root, &["rev-parse", "--git-path", "index"])?);
+    let index_before = fs::read(&index_path)?;
+    let temporary = Temporary(index_path.with_file_name(format!(".cadence-undo-index-{}", std::process::id())));
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary.0)?;
+    file.write_all(&index_before)?;
+    drop(file);
+    let mut objects = Vec::new();
+    let mut index_input = Vec::new();
+    for (path, bytes) in changes {
+        let mode = entries.get(path).map_or("100644", |e| e.0.as_str()).to_owned();
+        if !matches!(mode.as_str(), "100644" | "100755") { return Err(Error::Invalid(format!("undo projection is not a regular file: {path}"))); }
+        let blob = object(root, "blob", bytes.clone())?;
+        index_input.extend_from_slice(format!("{mode} {}\t{path}\0", blob.id).as_bytes());
+        entries.insert(path.clone(), (mode, blob.id.clone()));
+        objects.push(blob);
+    }
+    if !index_input.is_empty() { input(root, &["update-index", "-z", "--index-info"], &index_input, Some(&temporary.0))?; }
+    let tree = tree(root, &entries, "", &mut objects)?;
+    let author = text(root, &["var", "GIT_AUTHOR_IDENT"])?;
+    let committer = text(root, &["var", "GIT_COMMITTER_IDENT"])?;
+    let commit = object(root, "commit", sign(root, format!("tree {tree}\nparent {parent}\nauthor {author}\ncommitter {committer}\n\n{subject}\n\nUndo only the accepted recorded phase material.\n").into_bytes())?)?;
+    let index_after = fs::read(&temporary.0)?;
+    Ok(Seal { parent, reference, tree, commit, objects, index_path, index_before, index_after })
+}
+
 pub fn validate(root: &Path, seal: &Seal, replay: bool) -> Result<()> {
     if text(root,&["symbolic-ref","-q","HEAD"])? != seal.reference { return Err(Error::Conflict("prune branch ref changed".into())); }
     let actual = git::resolve_commit(root,&seal.reference)?;

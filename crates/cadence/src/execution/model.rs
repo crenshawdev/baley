@@ -224,6 +224,8 @@ pub struct AppliedReceipt {
 #[serde(deny_unknown_fields)]
 pub struct ExecutionOccurrence {
     pub phase: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undone: Option<crate::undo::model::Undone>,
     pub plan_set_fingerprint: String,
     pub version: u64,
     pub active: Option<ActiveDispatch>,

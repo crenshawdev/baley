@@ -80,10 +80,16 @@ pub fn acceptance_overlay(data: &serde_json::Value) -> Result<AcceptanceOverlay,
         .and_then(|p| p.as_object()).map(|p| p.keys().cloned().collect()).unwrap_or_default();
     overlay.contexted = keys.clone();
     keys.extend(adoption::records(data).map_err(store_failure)?.iter().map(|r| r.phase.to_string()));
+    keys.extend(crate::undo::model::records(data).map_err(store_failure)?.values()
+        .filter(|r| r.state == "committed").map(|r| r.manifest.phase.to_string()));
     for key in &keys {
         let Ok(phase) = key.parse::<u32>() else { continue };
         if phase == 0 || phase.to_string() != *key { continue }
         let native = (|| -> crate::store::Result<AcceptancePhase> {
+            if crate::undo::model::undone(data, phase)? {
+                return Ok(AcceptancePhase { published: true, executed: false, completion: None,
+                    label: None, met: 0, waived: 0, disagreement: None });
+            }
             if let Some(declared) = adoption::applicable(data, phase)? {
                 return Ok(AcceptancePhase { published: false, executed: false, completion: Some(declared.id),
                     label: Some(declared.provenance), met: 0, waived: 0, disagreement: None });

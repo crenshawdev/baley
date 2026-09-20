@@ -64,6 +64,12 @@ pub struct Observed {
 /// and confirm must check the installed bytes before the writer acknowledges.
 pub trait Storage: Send + 'static {
     type Prepared;
+    fn validate_undo(&mut self, _write: &crate::undo::model::Write, _replay: bool) -> Result<()> {
+        Err(Error::Invalid("storage does not support phase undo".into()))
+    }
+    fn install_undo(&mut self, _write: &crate::undo::model::Write) -> Result<()> {
+        Err(Error::Invalid("storage does not support phase undo".into()))
+    }
     fn validate_prune(&mut self, _prune: &crate::milestone::prune::Prune, _replay: bool) -> Result<()> {
         Err(Error::Invalid("storage does not support milestone prune".into()))
     }

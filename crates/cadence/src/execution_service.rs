@@ -944,6 +944,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
         .cloned()
         .unwrap_or_else(|| ExecutionOccurrence {
             phase,
+            undone: None,
             plan_set_fingerprint: plans.fingerprint.clone(),
             version: 0,
             active: None,
@@ -1281,7 +1282,7 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         Err(error) => return refuse("invalid-execution-store", error, None).await,
     };
     let occurrence = execution.occurrences.get(&phase.to_string()).cloned().unwrap_or_else(|| ExecutionOccurrence {
-        phase, plan_set_fingerprint: plans.fingerprint.clone(), version: 0, active: None, plans: Vec::new(), terminal: None, receipts: BTreeMap::new(), issues: BTreeMap::new(),
+        phase, undone: None, plan_set_fingerprint: plans.fingerprint.clone(), version: 0, active: None, plans: Vec::new(), terminal: None, receipts: BTreeMap::new(), issues: BTreeMap::new(),
     });
     if occurrence.plan_set_fingerprint != plans.fingerprint {
         return refuse("plan-set-changed", "native plan inputs differ from the admitted execution occurrence".into(), None).await;

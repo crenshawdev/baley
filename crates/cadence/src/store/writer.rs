@@ -60,6 +60,11 @@ pub enum BoundaryChange {
 pub type InputCheck = Box<dyn FnMut() -> Result<()> + Send>;
 
 pub enum Operation {
+    UndoV1 {
+        expected_generation: u64,
+        expected_integrity: String,
+        write: Box<crate::undo::model::Write>,
+    },
     MilestonePruneV1 {
         expected_generation: u64,
         expected_integrity: String,
@@ -507,6 +512,14 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let _ownership = self.storage.acquire()?;
         self.refresh_owned()?;
         match operation {
+            Operation::UndoV1 { expected_generation, expected_integrity, write } => {
+                self.check_expected(expected_generation, &expected_integrity)?;
+                self.storage.validate_undo(&write, false)?;
+                let mut next = self.view.as_ref().clone();
+                next.snapshot.data = crate::undo::model::contribute(&next.snapshot.data, &write)?;
+                let operations = next.snapshot.operations.clone();
+                self.persist(next, operations, vec![], "phase_undo", super::transaction::IntentKind::UndoV1 { write })
+            },
             Operation::MilestonePruneV1 { expected_generation, expected_integrity, prune } => {
                 self.check_expected(expected_generation, &expected_integrity)?;
                 self.storage.validate_prune(&prune, false)?;
@@ -733,6 +746,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 "rewrite_snapshot"
             }
             Operation::CheckedTransact { .. }
+            | Operation::UndoV1 { .. }
             | Operation::MilestonePruneV1 { .. }
             | Operation::VerificationRunV1 { .. }
             | Operation::VerificationV1 { .. }
@@ -1282,6 +1296,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     .entry(phase.to_string())
                     .or_insert_with(|| ExecutionOccurrence {
                         phase,
+                        undone: None,
                         plan_set_fingerprint,
                         version: dispatch.expected_execution_version,
                         active: None,
@@ -1522,6 +1537,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             .entry(key)
             .or_insert_with(|| ExecutionOccurrence {
                 phase: dispatch.phase,
+                undone: None,
                 plan_set_fingerprint: plan_set_fingerprint.to_owned(),
                 version: dispatch.expected_execution_version,
                 active: None,

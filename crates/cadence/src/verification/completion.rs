@@ -98,6 +98,9 @@ pub fn authority(data: &Value, phase: u32) -> Result<String> {
 /// The latest completion of a phase and whether it still applies.
 pub fn applicable(data: &Value, phase: u32) -> Result<Option<(Record, bool, String)>> {
     let Some(record) = records(data)?.into_iter().rev().find(|r| r.phase == phase) else { return Ok(None) };
+    if crate::undo::model::undone(data, phase)? {
+        return Ok(Some((record, false, "execution was undone by its recorded exact manifest".into())));
+    }
     let current = authority(data, phase)?;
     let (applies, reason) = if record.authority == current { (true, "native inputs unchanged since completion".to_owned()) }
         else { (false, format!("native inputs changed since completion: {}", disagreement(data, &record)?.join(", "))) };
@@ -214,6 +217,9 @@ fn assess(data: &Value, claim: &Claim) -> Result<Value> {
     let denied = |rule: &str, slot: &str, id: &str, reason: &str, requested: Value, current: Value| {
         Ok(verdicts::refusal(rule, slot, id, reason, requested, current))
     };
+    if crate::undo::model::undone(data, phase)? {
+        return denied("execution-undone", "basis.phase", "", "the retained execution was undone", json!(phase), Value::Null);
+    }
     if request.request_id.trim().is_empty() || request.request_id.len() > 256 {
         return denied("verification-request", "request_id", "", "bounded nonblank request identity required", json!(request.request_id.len()), json!(256));
     }

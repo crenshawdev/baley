@@ -340,6 +340,15 @@ impl Storage for Filesystem {
         crate::milestone::prune::validate(&self.root, prune, replay)
     }
 
+    fn validate_undo(&mut self, write: &crate::undo::model::Write, replay: bool) -> Result<()> {
+        crate::undo::revert::validate(&self.root, write, replay)
+    }
+
+    fn install_undo(&mut self, write: &crate::undo::model::Write) -> Result<()> {
+        super::cache::invalidate(&self.root);
+        crate::undo::revert::install(&self.root, write)
+    }
+
     fn install_prune(&mut self, prune: &crate::milestone::prune::Prune) -> Result<()> {
         super::cache::invalidate(&self.root);
         crate::milestone::prune::install(&self.root, prune)

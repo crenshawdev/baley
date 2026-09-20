@@ -209,6 +209,11 @@ mod resident {
     };
 
     enum Request {
+        Undo {
+            root: PathBuf,
+            command: crate::server::undo_service::Command,
+            reply: oneshot::Sender<Result<serde_json::Value>>,
+        },
         Milestone {
             root: PathBuf,
             command: crate::server::milestone_service::Command,
@@ -471,6 +476,9 @@ mod resident {
                         }
                         Request::Landing { root, command, reply } => {
                             let _ = reply.send(crate::server::landing_service::execute(&factory, &root, command).await);
+                        }
+                        Request::Undo { root, command, reply } => {
+                            let _ = reply.send(crate::server::undo_service::execute(&factory, &root, command).await);
                         }
                         Request::Suggest { root, phase, reply } => {
                             let result = crate::server::suggest_service::query(&factory, &root, phase).await;
@@ -850,6 +858,12 @@ mod resident {
         pub async fn landing(&self, root: &Path, command: crate::server::landing_service::Command) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
             self.requests.send(Request::Landing { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
+            receive.await.map_err(|_| Error::Closed)?
+        }
+
+        pub async fn undo(&self, root: &Path, command: crate::server::undo_service::Command) -> Result<serde_json::Value> {
+            let (reply, receive) = oneshot::channel();
+            self.requests.send(Request::Undo { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
             receive.await.map_err(|_| Error::Closed)?
         }
 

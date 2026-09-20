@@ -92,6 +92,20 @@ pub async fn checked_progress<I: ConfigIo + Clone + Sync>(
     checked(factory, root, driver, true).await
 }
 
+/// Derive the prospective undo mirror from the same captured lifecycle inputs.
+/// Publication still happens through the normal checked service after the
+/// journal installs the marker and the sealed final commit.
+pub fn undo_lifecycle(root: &Path, data: &serde_json::Value, phase: u32, roadmap: Vec<u8>) -> cadence::store::Result<Lifecycle> {
+    let invalid = |error: DerivationError| Error::Invalid(error.to_string());
+    let mut capture = capture_inputs(root, &mut ArtifactFiles).map_err(invalid)?;
+    capture.declarations = Some(parse_roadmap(std::str::from_utf8(&roadmap).map_err(|e| Error::Invalid(e.to_string()))?));
+    capture.roadmap = Observation::Present(roadmap);
+    let mut overlay = acceptance_overlay(data).map_err(invalid)?;
+    overlay.phases.insert(phase.to_string(), AcceptancePhase { published: true, executed: false,
+        completion: None, label: None, met: 0, waived: 0, disagreement: None });
+    derive_with(&capture, &overlay).map_err(invalid)
+}
+
 /// One observation of the artifacts on the blocking pool; the test event
 /// fires for the request's first observation only.
 async fn observe(
