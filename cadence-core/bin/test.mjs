@@ -48,7 +48,7 @@ const GROUPS = Object.freeze({
   // Everything that touches a real repository.
   git: ['git-guard', 'git-branch', 'git-segments', 'worktree-base',
     'branch-decision', 'release-decision',
-    'release-bump', 'redact-url', 'issue-check', 'issue-decision'],
+    'redact-url', 'issue-check', 'issue-decision'],
   // The .planning grammar and the run record. The seam's own arms are one stem
   // per subcommand since phase 4 split planning.test.mjs; `planning` itself is
   // now just the shared fixture harness plus the arms that span several

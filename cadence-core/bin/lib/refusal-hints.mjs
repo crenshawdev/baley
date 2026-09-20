@@ -89,8 +89,8 @@
 //                              that names the action, and it runs on the
 //                              PreToolUse hot path (phase-1 D-06).
 //   `lib/bulk-output.mjs`      \
-//   `lib/text-transport.mjs`    > static classification rows self-verify READS;
-//   `lib/release-decision.mjs` /  no user ever sees one as a refusal (D-05).
+//   `lib/text-transport.mjs`   /  static classification rows self-verify READS;
+//                              no user ever sees one as a refusal (D-05).
 //   `lib/why-query.mjs`        \
 //                              > sub-envelope RETURNS a caller re-wraps or
 //   `lib/trace.mjs`            /  swallows before anything is emitted (D-07).
@@ -145,10 +145,6 @@ export const REGISTER = Object.freeze({
     }),
     Object.freeze({
       file: 'lib/text-transport.mjs',
-      reason: 'static classification rows self-verify READS, never an envelope a user sees (D-05)',
-    }),
-    Object.freeze({
-      file: 'lib/release-decision.mjs',
       reason: 'static classification rows self-verify READS, never an envelope a user sees (D-05)',
     }),
     Object.freeze({

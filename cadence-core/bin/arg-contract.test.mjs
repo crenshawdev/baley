@@ -420,10 +420,10 @@ test('every flag in every row declares a complete grammar', () => {
     }
   }
   // The walk reached the whole table, so no arm above is vacuous.
-  // CADENCE-CENSUS: arg-contract-flag-entries | asserts: the CONTRACTS table declares 189 flag entries across 16 top-level rows
-  // 189 after removing the frozen cleanup helper's four flags.
-  assert.equal(entries, 189, `the table declares ${entries} flag entries`);
-  assert.equal(Object.keys(CONTRACTS).length, 16, 'one row per top-level bin script');
+  // CADENCE-CENSUS: arg-contract-flag-entries | asserts: the CONTRACTS table declares 186 flag entries across 15 top-level rows
+  // 186 after removing the frozen release helper's three flags.
+  assert.equal(entries, 186, `the table declares ${entries} flag entries`);
+  assert.equal(Object.keys(CONTRACTS).length, 15, 'one row per top-level bin script');
 });
 
 test('the declarations the CONTEXT decisions bind are the ones in the table', () => {
@@ -444,9 +444,6 @@ test('the declarations the CONTEXT decisions bind are the ones in the table', ()
       'CER-01 D-06: a valueless plan flag silently takes the phase UNION for a caller that asked about one plan'],
     ['issue-check.mjs', 'check', '--timeout-ms', { value: 'fallback', bare: 'fallback' },
       "D-04: this seam's whole contract is that it never fails a land"],
-    ['release-bump.mjs', 'bump', '--version', { bare: 'fallback' }, 'D-12'],
-    ['release-bump.mjs', 'bump', '--date', { bare: 'refuse' },
-      'a valueless --date must refuse rather than silently date today'],
     // The three UAT item 8 reproduced: each declared `refuse` while the CLI
     // wrote the boolean `true` through. Pinned here as well as exercised live
     // by arg-contract-adoption.test.mjs, because the census SKIPS an axis that

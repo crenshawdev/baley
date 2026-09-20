@@ -536,9 +536,6 @@ export function evaluatePresence(argv, table, key) {
 //     forever - a recording error escalated into loss of the bracket it was
 //     recording. The BARE axis still refuses: that spelling has no grammar to
 //     be wider than.
-//   `--date` refuses the bare form, which release-bump.mjs hand-writes today by
-//     testing the flag's own appearance in argv beside the permissive reader: a
-//     valueless `--date` must refuse rather than silently date today.
 //
 // A `boolean` row's two dispositions are INERT by construction - presence is
 // the whole grammar, so neither axis can fire - and they are declared
@@ -1201,15 +1198,6 @@ export const CONTRACTS = {
     },
     file: {
       '--payload': { required: true, type: 'string', value: 'refuse', bare: 'refuse' },
-    },
-  },
-  'release-bump.mjs': {
-    '*': {
-      '--dir': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
-    },
-    bump: {
-      '--version': { required: false, type: 'string', value: 'refuse', bare: 'fallback' },
-      '--date': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
     },
   },
   'route.mjs': {
