@@ -32,6 +32,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..');
 const ROUTE = join(HERE, 'route.mjs');
 
+/** A repo-relative, forward-slashed path for an absolute one under REPO. */
+const repoPath = (abs) => abs.slice(REPO.length + 1).split(sep).join('/');
+
 /** A repo file as text. */
 const doc = (...parts) => readFileSync(join(REPO, ...parts), 'utf8');
 
