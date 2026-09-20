@@ -1134,18 +1134,6 @@ export const CONTRACTS = {
     // the upward discovery the bound closed.
     tags: {},
   },
-  'git-publish.mjs': {
-    '*': {
-      '--dir': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
-    },
-    publish: {
-      '--remote': { required: false, type: 'string', value: 'fallback', bare: 'fallback' },
-    },
-    reap: {
-      '--branch': { required: false, type: 'string', value: 'fallback', bare: 'fallback' },
-    },
-    authorized: {},
-  },
   'land-cleanup.mjs': {
     '*': {
       '--dir': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },

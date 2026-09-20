@@ -46,8 +46,8 @@ const GROUPS = Object.freeze({
   routing: ['route', 'route-relay', 'rung-agent', 'retired-keys',
     'config', 'config-seams', 'dispatch-phrasing', 'phase-plans'],
   // Everything that touches a real repository.
-  git: ['git-guard', 'git-publish', 'git-branch', 'git-segments', 'worktree-base',
-    'branch-decision', 'publish-decision', 'close-decision', 'release-decision',
+  git: ['git-guard', 'git-branch', 'git-segments', 'worktree-base',
+    'branch-decision', 'close-decision', 'release-decision',
     'release-bump', 'land-cleanup', 'redact-url', 'issue-check', 'issue-decision'],
   // The .planning grammar and the run record. The seam's own arms are one stem
   // per subcommand since phase 4 split planning.test.mjs; `planning` itself is

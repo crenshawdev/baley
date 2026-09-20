@@ -105,11 +105,11 @@ export const CENSUSES = Object.freeze([
     // check 12 red at seventeen over thirteen. The fix belongs at the MENTION,
     // which is the discipline lib/merge-warnings.mjs states and the same one
     // that keeps this file's own marker head built rather than written.
-    counts: 'eighteen `mergeLayers` callsites over fourteen files, each in one '
+    counts: 'eighteen `mergeLayers` callsites over thirteen files, each in one '
       + 'of the two warning-surfacing arms',
-    asserted_by: 'the test named `check 12: the live tree is SEVENTEEN callsites '
+    asserted_by: 'the test named `check 12: the live tree is EIGHTEEN callsites '
       + 'over THIRTEEN files, each in an arm`',
-    // The fourteen files that carry a callsite today. lib/config-merge.mjs is
+    // The thirteen files that carry a callsite today. lib/config-merge.mjs is
     // deliberately NOT a subject: that test's own `skip` excludes it, so
     // editing it cannot move the count.
     subjects: [
@@ -117,7 +117,6 @@ export const CENSUSES = Object.freeze([
       'cadence-core/bin/forge.mjs',
       'cadence-core/bin/git-branch.mjs',
       'cadence-core/bin/git-guard.mjs',
-      'cadence-core/bin/git-publish.mjs',
       'cadence-core/bin/issue-check.mjs',
       'cadence-core/bin/issue-filing.mjs',
       'cadence-core/bin/land-cleanup.mjs',
@@ -204,7 +203,7 @@ export const CENSUSES = Object.freeze([
   entry({
     id: 'deferred-reads-register',
     holder: 'cadence-core/bin/deferred-reads.test.mjs',
-    counts: "the register's 10 rows, pinned alongside a byte-identical slice of "
+    counts: "the register's 9 rows, pinned alongside a byte-identical slice of "
       + "the export's own source",
     asserted_by: 'the test named `register: the surviving cut rows are '
       + 'byte-identical, and the register is exactly the rows the cuts made`',
