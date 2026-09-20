@@ -1559,7 +1559,18 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
 
     // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
-    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 18);
+    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 19);
+    let (land, body) = markdown_parts("skills/cad-land/SKILL.md");
+    assert_eq!(land["name"], "cad-land");
+    assert_eq!(land["allowed-tools"], json!(["mcp__cadence__cadence_query", "mcp__cadence__cadence_apply"]));
+    assert!(body.contains("land-read") && body.contains("land-authorize"));
+    assert!(body.contains("Only after the owner's explicit choice"));
+    assert!(body.contains("`action` typed payload unchanged"));
+    assert!(body.contains("actual owner's name and authorization time"));
+    assert!(body.contains("An uncertain intent requires reconciliation"));
+    for forbidden in ["Bash", "git.auto_close", "git-publish.mjs", "CLAUDE_PLUGIN_ROOT", "SlashCommand"] {
+        assert!(!cadence::landing::instructions::markdown().contains(forbidden), "{forbidden}");
+    }
     let (milestone, body) = markdown_parts("skills/cad-milestone/SKILL.md");
     assert_eq!(milestone["name"], "cad-milestone");
     assert_eq!(milestone["allowed-tools"], json!(["mcp__cadence__cadence_query", "mcp__cadence__cadence_apply"]));

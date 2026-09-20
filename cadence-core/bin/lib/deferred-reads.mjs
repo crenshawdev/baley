@@ -162,15 +162,6 @@ export const CODES = Object.freeze({
  */
 export const DEFERRED_READS = Object.freeze([
   Object.freeze({
-    // ONE consult site under seams.md's rule (step 3a or step 3b, never both),
-    // but TWO anchors here - each arm carries its own Read and deleting either
-    // silently loses that arm's rails.
-    skill: 'cad-land',
-    reference: 'references/git-publish.md',
-    anchors: Object.freeze(['3(a)', '3(b)']),
-    read_paragraphs: 2,
-  }),
-  Object.freeze({
     skill: 'cad-plan-review',
     reference: 'references/review-triggers.md',
     anchors: Object.freeze(['2']),

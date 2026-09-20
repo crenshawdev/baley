@@ -58,15 +58,6 @@ function copyReal(root, rel, edit = (t) => t) {
 /** The register block as it must appear in the lib source, byte for byte. */
 const REGISTER_SOURCE = `export const DEFERRED_READS = Object.freeze([
   Object.freeze({
-    // ONE consult site under seams.md's rule (step 3a or step 3b, never both),
-    // but TWO anchors here - each arm carries its own Read and deleting either
-    // silently loses that arm's rails.
-    skill: 'cad-land',
-    reference: 'references/git-publish.md',
-    anchors: Object.freeze(['3(a)', '3(b)']),
-    read_paragraphs: 2,
-  }),
-  Object.freeze({
     skill: 'cad-plan-review',
     reference: 'references/review-triggers.md',
     anchors: Object.freeze(['2']),
@@ -150,8 +141,8 @@ test('register: the surviving cut rows are byte-identical, and the register is e
   const end = src.indexOf(']);', start);
   assert.ok(end > start, 'the register export must close with `]);`');
   assert.equal(src.slice(start, end + 3), REGISTER_SOURCE);
-  // CADENCE-CENSUS: deferred-reads-register | asserts: the register is exactly 10 rows, byte-identical to the export's own source
-  assert.equal(DEFERRED_READS.length, 10);
+  // CADENCE-CENSUS: deferred-reads-register | asserts: the register is exactly 9 rows, byte-identical to the export's own source
+  assert.equal(DEFERRED_READS.length, 9);
 });
 
 // --- AC3: a contract skill's own step ------------------------------------------

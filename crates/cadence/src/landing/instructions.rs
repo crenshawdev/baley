@@ -1,4 +1,6 @@
----
+//! The landing front door delegates permission and effects to the binary.
+pub fn markdown() -> &'static str {
+    r#"---
 name: cad-land
 description: "Read a landing and request one explicitly authorized external step."
 argument-hint: "<landing id>"
@@ -36,3 +38,5 @@ allowed-tools:
    grants no checkout, pull, local tag or cleanup permission. Each later external
    step requires its own explicit owner choice and authorization record.
 </process>
+"#
+}
