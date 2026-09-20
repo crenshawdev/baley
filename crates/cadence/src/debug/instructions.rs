@@ -106,19 +106,44 @@ State the root cause with the confirming observation and the minimal proposed
 fix. For diagnose-only, record the Root Cause Report using debug-observation,
 leave the session open and stop without source edits or staging.
 
-For a fix, obtain the owner's explicit approval for the proposed source edits
-and staging. Apply that fix, then run git add with exactly its touched paths.
+For a fix, show the exact source files and proposed edits. Obtain the owner's
+explicit approval for those source edits and staging. Apply the owner-approved
+fix, then have the host run git add -- with only those exact source paths.
 Re-run the original reproduction and retain the actual test and result.
 Call debug-resolve with resolution and reproduction {test, result, passed}.
-A successful reproduction marks resolved. A failed reproduction records a
-failed attempt and keeps the session open. debug-attempt separately records
-a failed attempt {description, result}; do not count the same failure twice.
 Every fix attempt is a single deliberate step. Never loop fixes automatically.
 
-At a reviewer boundary, follow cad-review-delivery with caller debug, preserve
-the actual staged target, dispatch its host reviewer through Task, wait for the
-durable return and satisfy its deferred obligations. Raw findings grant no
-permission. Preserve any refusal and its exact next action.
+Resolve risk-checks the actual index against HEAD under root-debug, with no
+phase or plan. It retains Staged {base_id, index_id}: base_id is the actual
+HEAD and index_id is git write-tree. The shared target is staged-tree with
+the same base and index and head: null; never substitute a committed head.
+A clean index or unstaged-only edit returns an empty index refusal. Show that
+refusal, or any unanswered-surfaces, unavailable acquisition or changed-material
+refusal, unchanged; none is a pass. Stage only the approved fix before retrying.
+
+A confirmed checked match or checked inconclusive staged scan admits the shared
+risk-surface reviewer. Inconclusive binary material dispatches; missing or
+unchecked evidence does not. A conclusive nonmatch needs no fire and reaches
+reproduction verification. Only after risk clearance does a successful
+reproduction mark resolved; a failed reproduction records a failed attempt and
+keeps the session open. debug-attempt separately records a failed attempt
+{description, result}; do not count the same failure twice.
+
+Read the retained record.review join through debug-status or debug-continue:
+it names the occurrence, exact material, observation, admission request and
+issued fire. A same-fix retry resumes this coordination without a second scan
+or fire. A blocking admitted fire keeps resolve pending; changed material
+cannot inherit its clearance. Preserve the fire and refusal as pending.
+
+For the issued fire, call cadence_query review-next with fire and follow
+cad-review-delivery with caller debug and home reviews/<fire>. Preserve the
+actual staged/null-head target. When review-next answers a host dispatch, run
+that actual host Task once, wait, and forward the actual observations and
+unchanged return through the shared delivery operations. There is no Rust
+substitute reviewer and no host-written review records. Wait for the durable
+return and satisfy its deferred obligations. Raw findings grant no permission
+and do not settle the receipts rail. Preserve any refusal and its exact next
+action; a pending blocking fire is not a resolved debug session.
 
 @${CLAUDE_PLUGIN_ROOT}/skills/cad-review-delivery/SKILL.md
 </resolve>

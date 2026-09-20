@@ -1573,7 +1573,15 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
         "record.recall", "source and phase when present", "Recall is candidate evidence",
         "never a confirmed hypothesis", "memory.backend none", "schema default builtin",
         "Continue presents the retained snapshot", r#"{"operation":"recall","query":"<words>","limit":5,"phase":1}"#,
-        "A fresh query does not replace the snapshot"] {
+        "A fresh query does not replace the snapshot",
+        "exact source files", "owner-approved", "git add --", "only those exact source paths",
+        "root-debug", "with no\nphase or plan", "Staged {base_id, index_id}", "head: null",
+        "empty index refusal", "unstaged-only", "unanswered-surfaces", "none is a pass",
+        "checked inconclusive staged scan", "missing or\nunchecked evidence does not",
+        "record.review", "without a second scan\nor fire", "reviews/<fire>", "staged/null-head",
+        "review-next", "actual host Task once", "no Rust\nsubstitute reviewer",
+        "no host-written review records", "do not settle the receipts rail",
+        "pending blocking fire is not a resolved debug session"] {
         assert!(body.contains(required), "{required}");
     }
     for retired in ["workflows/debug.md", "references/bug-patterns.md", "references/recall.md", "planning.mjs", "grep "] {
