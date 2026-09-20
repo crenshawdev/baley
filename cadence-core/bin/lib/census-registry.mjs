@@ -186,7 +186,7 @@ export const CENSUSES = Object.freeze([
   entry({
     id: 'bulk-output-register',
     holder: 'cadence-core/bin/bulk-output.test.mjs',
-    counts: "the register's row count and its two transport splits - 18, 4 "
+    counts: "the register's row count and its two transport splits - 16, 4 "
       + 'redirect and 3 file',
     asserted_by: 'the test named `the register pins its row count`',
     subjects: ['cadence-core/bin/lib/bulk-output.mjs'],
@@ -202,7 +202,7 @@ export const CENSUSES = Object.freeze([
   entry({
     id: 'deferred-reads-register',
     holder: 'cadence-core/bin/deferred-reads.test.mjs',
-    counts: "the register's 9 rows, pinned alongside a byte-identical slice of "
+    counts: "the register's 8 rows, pinned alongside a byte-identical slice of "
       + "the export's own source",
     asserted_by: 'the test named `register: the surviving cut rows are '
       + 'byte-identical, and the register is exactly the rows the cuts made`',

@@ -3261,13 +3261,6 @@ test('RSK-10: every risk-check run invocation names --base and exactly one scope
     "verify.md's route_failures step no longer asks the seam over the staged set with "
     + '`--staged`, which is the gap a coordinator filled with `HEAD..STAGED`');
 
-  const debug = doc('cadence-core', 'workflows', 'debug.md');
-  assert.ok(debug.split('\n').some((l) => l.includes('risk-check run')
-    && /--staged\b/.test(l) && /--phase 0\b/.test(l)),
-    "debug.md's fix step no longer asks the seam over the staged set with `--staged --phase 0` "
-    + '- a debug session sits outside the phase spine, so any other phase number files its '
-    + "range against a real phase's records");
-
   // THE STAGING HAS TO BE AN INSTRUCTION, AHEAD OF THE CALL (diff-review
   // finding, 2026-09-02). Both sites said "the fix is staged in THIS tree",
   // which describes a state nothing performs. A coordinator following either
@@ -3280,7 +3273,6 @@ test('RSK-10: every risk-check run invocation names --base and exactly one scope
   // and `empty: true` named as the not-a-pass it is on this arm.
   const stagedSites = [
     { where: 'workflows/verify.md', body: verify },
-    { where: 'workflows/debug.md', body: debug.slice(debug.indexOf('## Resolve')) },
   ];
   for (const { where, body } of stagedSites) {
     const call = body.split('\n').findIndex((l) => l.includes('risk-check run')

@@ -175,11 +175,7 @@ export const DEFERRED_READS = Object.freeze([
     file: 'cadence-core/workflows/context.md',
   }),
   Object.freeze({
-    // TWO rows, one reference. seams.md's "consulted at more than one distinct
-    // STEP stays eager" rule is per COMMAND: `/cad-context` and `/cad-debug`
-    // each reach recall at exactly one step of their own, so these are two
-    // independent one-site deferrals rather than one two-site reference. A
-    // maintainer who merges them into a single row loses one command's anchor.
+    // Context consumes this reference at one step; debug now uses its compiled record role.
     skill: 'cad-context',
     reference: 'references/recall.md',
     // Anchored at `spend_gate`, not `analyze`: the recall substep moved ahead of
@@ -188,13 +184,6 @@ export const DEFERRED_READS = Object.freeze([
     anchors: Object.freeze(['spend_gate']),
     read_paragraphs: 1,
     file: 'cadence-core/workflows/context.md',
-  }),
-  Object.freeze({
-    skill: 'cad-debug',
-    reference: 'references/recall.md',
-    anchors: Object.freeze(['The method loop/1']),
-    read_paragraphs: 1,
-    file: 'cadence-core/workflows/debug.md',
   }),
   Object.freeze({
     skill: 'cad-execute',

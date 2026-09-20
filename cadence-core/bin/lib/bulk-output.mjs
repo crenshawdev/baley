@@ -207,7 +207,7 @@ export const BULK_OUTPUT = Object.freeze([
     bytes: 68044, measured: '2026-08-17', transport: 'redirect',
   }),
 
-  // --- recall: three consumers and the reference that documents the envelope -
+  // --- recall: two consumers and the reference that documents the envelope ---
   Object.freeze({
     surface: 'cadence-core/workflows/context.md',
     shape: 'recall', call: 'recall "<key terms from the phase goal>"',
@@ -219,12 +219,6 @@ export const BULK_OUTPUT = Object.freeze([
     shape: 'recall', call: 'recall "<key terms from the phase goal>"',
     bytes: 8617, measured: '2026-08-17', transport: 'none',
     reason: 'under the threshold, same call and same reason as the context.md site',
-  }),
-  Object.freeze({
-    surface: 'cadence-core/workflows/debug.md',
-    shape: 'recall', call: 'recall "<key terms from the symptom / bug description>"',
-    bytes: 8617, measured: '2026-08-17', transport: 'none',
-    reason: 'under the threshold, same reason as the other two consumers',
   }),
   Object.freeze({
     surface: 'cadence-core/references/recall.md',
@@ -261,7 +255,7 @@ export const BULK_OUTPUT = Object.freeze([
     reason: 'the step writes it to `.planning/tasks/{slug}/risk-task-{slug}.diff` and fires with that path, exactly as execute.md does',
   }),
 
-  // --- git diff: the three that describe a call ANOTHER agent runs -----------
+  // --- git diff: the surviving descriptions of calls ANOTHER agent runs ------
   // A Task-dispatched reviewer inherits the parent's cwd and re-runs the
   // command in its OWN context, so the bytes never enter this side's
   // transcript at all. They are registered rather than omitted precisely
@@ -284,12 +278,6 @@ export const BULK_OUTPUT = Object.freeze([
     shape: 'git diff', call: 'git diff --cached',
     bytes: 'unbounded', measured: '2026-08-17', transport: 'none',
     reason: 'the arm names the command the REVIEWER re-runs in the cwd it inherits, and where shape (b) redirects it into the payload scratch file it is that same prescription written again, so this surface issues nothing of its own',
-  }),
-  Object.freeze({
-    surface: 'cadence-core/workflows/debug.md',
-    shape: 'git diff', call: 'git diff --cached',
-    bytes: 'unbounded', measured: '2026-08-17', transport: 'none',
-    reason: 'a description of the command the reviewer runs in the cwd it inherits, never one this workflow issues',
   }),
   Object.freeze({
     surface: 'cadence-core/workflows/verify.md',
