@@ -32,12 +32,34 @@ pub struct Resolution { pub description: String, pub reproduction: Reproduction 
 #[serde(rename_all = "lowercase")]
 pub enum Status { Open, Resolved }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecallSnapshot {
+    pub backend: String,
+    pub results: Vec<RecallHit>,
+    pub total: usize,
+    pub incomplete: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecallHit {
+    pub score: f64,
+    pub snippet: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<u32>,
+    pub provenance: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Record {
     pub slug: String, pub root_binding: String, pub version: u64,
     pub symptom: String, pub hypotheses: Vec<Hypothesis>, pub observations: Vec<Observation>,
     pub attempts: Vec<Attempt>, pub attempt_count: u64, pub status: Status, pub resolution: Option<Resolution>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recall: Option<RecallSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -114,7 +136,12 @@ impl Apply {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Write { pub root_binding: String, pub apply: Apply }
+pub struct Write {
+    pub root_binding: String,
+    pub apply: Apply,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recall: Option<RecallSnapshot>,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -182,7 +209,7 @@ pub fn transition(data: &Value, write: &Write) -> Result<std::result::Result<Rec
             text(&request.symptom)?;
             Record { slug: slug.into(), root_binding: write.root_binding.clone(), version: 0,
                 symptom: request.symptom.clone(), hypotheses: vec![], observations: vec![], attempts: vec![],
-                attempt_count: 0, status: Status::Open, resolution: None }
+                attempt_count: 0, status: Status::Open, resolution: None, recall: write.recall.clone() }
         }
         _ => match saved.records.get(slug) { Some(record) => record.clone(), None => return Ok(Err(unknown(slug))) },
     };

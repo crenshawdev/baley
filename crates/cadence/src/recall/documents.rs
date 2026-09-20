@@ -41,6 +41,19 @@ fn unarchive<'a>(parts: &'a [&'a str]) -> &'a [&'a str] {
     }
 }
 
+pub(super) fn canonical_phase(value: &str) -> Option<u32> {
+    let phase: u32 = value.parse().ok()?;
+    (phase > 0 && phase.to_string() == value).then_some(phase)
+}
+
+pub(super) fn phase_of(path: &str) -> Option<u32> {
+    let parts = relative_parts(path);
+    match unarchive(&parts) {
+        ["phases", phase, _] | [phase, _] => canonical_phase(phase),
+        _ => None,
+    }
+}
+
 pub fn eligible(path: &str) -> bool {
     let parts = relative_parts(path);
     if parts.iter().any(|p| matches!(*p, "" | "." | "..")) {

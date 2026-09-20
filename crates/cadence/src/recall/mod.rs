@@ -110,7 +110,28 @@ pub fn current(view: &View) -> Vec<Candidate> {
 pub struct Hit {
     pub score: f64,
     pub snippet: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<u32>,
     pub provenance: Provenance,
+}
+
+impl Provenance {
+    fn source(&self) -> &str {
+        match self {
+            Self::Record { source, .. } => source,
+            Self::Document { path, .. } | Self::Residue { path, .. } => path,
+        }
+    }
+
+    fn phase(&self) -> Option<u32> {
+        match self {
+            Self::Record { phase, .. } => phase.filter(|phase| *phase > 0),
+            Self::Document { path, .. } => documents::phase_of(path),
+            Self::Residue { phase, .. } => documents::canonical_phase(phase),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -146,6 +167,11 @@ impl Corpus {
         Self { candidates, index }
     }
     pub fn query(&self, query: &str, limit: Option<i64>, backend: &str) -> Result<Answer, String> {
+        self.query_phase(query, limit, backend, None)
+    }
+
+    pub fn query_phase(&self, query: &str, limit: Option<i64>, backend: &str, phase: Option<u32>) -> Result<Answer, String> {
+        if phase == Some(0) { return Err("phase must be a positive integer".into()); }
         let limit = limit.unwrap_or(5);
         if limit < 1 {
             return Err("limit must be a positive integer".into());
@@ -165,7 +191,9 @@ impl Corpus {
         if backend != "builtin" {
             return Err(format!("unknown recall backend: {backend}"));
         }
-        let matched = self.index.search(query);
+        let matched: Vec<_> = self.index.search(query).into_iter()
+            .filter(|(i, _)| phase.is_none_or(|phase| self.candidates[*i].provenance.phase() == Some(phase)))
+            .collect();
         answer.total = matched.len();
         answer.results = matched
             .into_iter()
@@ -173,6 +201,8 @@ impl Corpus {
             .map(|(i, score)| Hit {
                 score: (score * 10000.0).round() / 10000.0,
                 snippet: self.candidates[i].text.clone(),
+                source: self.candidates[i].provenance.source().into(),
+                phase: self.candidates[i].provenance.phase(),
                 provenance: self.candidates[i].provenance.clone(),
             })
             .collect();
@@ -183,7 +213,7 @@ impl Corpus {
 // Runtime and filesystem work live outside the ranker and renderer. The task
 // owns every derived index; handles only send requests and await their reply.
 pub use resident::Resident;
-mod resident {
+pub(crate) mod resident {
     use super::*;
     use crate::{
         config::{
@@ -352,6 +382,7 @@ mod resident {
             root: PathBuf,
             query: String,
             limit: Option<i64>,
+            phase: Option<u32>,
             reply: oneshot::Sender<Result<Answer>>,
         },
     }
@@ -369,9 +400,10 @@ mod resident {
         history: BTreeSet<String>,
         incomplete: Vec<String>,
     }
-    struct Cached {
+    pub(crate) struct Cached {
         inputs: Inputs,
         corpus: Corpus,
+        phase: Option<u32>,
     }
 
     fn prepare(root: &Path, view: &View, config: &Generation) -> (Inputs, Vec<Candidate>) {
@@ -408,11 +440,12 @@ mod resident {
         (inputs, candidates)
     }
 
-    async fn answer<I: ConfigIo>(
+    pub(crate) async fn answer<I: ConfigIo>(
         session: &Session<I>,
         root: &Path,
         query: &str,
         limit: Option<i64>,
+        phase: Option<u32>,
         cache: &mut Option<Cached>,
     ) -> Result<Answer> {
         // Reads through the same owner as writes. Since this task serializes
@@ -425,7 +458,7 @@ mod resident {
             .ok_or_else(|| Error::Policy("recall controlling config unavailable".into()))?;
         // Validate arguments and backend before any expensive corpus read.
         let empty = Corpus::new(vec![], &BTreeSet::new());
-        let disabled = empty.query(query, limit, backend).map_err(Error::Invalid)?;
+        let disabled = empty.query_phase(query, limit, backend, phase).map_err(Error::Invalid)?;
         if backend == "none" {
             *cache = None;
             return Ok(disabled);
@@ -445,16 +478,17 @@ mod resident {
                 "recall inputs changed during preparation; retry with current generation".into(),
             ));
         }
-        if cache.as_ref().is_none_or(|cached| cached.inputs != inputs) {
+        if cache.as_ref().is_none_or(|cached| cached.inputs != inputs || cached.phase != phase) {
             *cache = Some(Cached {
                 inputs,
                 corpus: Corpus::new(candidates, &declined(&latest)),
+                phase,
             });
         }
         let cached = cache.as_ref().expect("prepared cache");
         let mut result = cached
             .corpus
-            .query(query, limit, backend)
+            .query_phase(query, limit, backend, phase)
             .map_err(Error::Invalid)?;
         result.incomplete = cached.inputs.incomplete.clone();
         Ok(result)
@@ -664,6 +698,7 @@ mod resident {
                             root,
                             query,
                             limit,
+                            phase,
                             reply,
                         } => {
                             let result = match reload::identity(&root) {
@@ -671,7 +706,7 @@ mod resident {
                                     let cache = caches.entry(root.clone()).or_default();
                                     let result = match factory.first_touch(&root).await {
                                         Ok(session) => {
-                                            answer(&session, &root, &query, limit, cache).await
+                                            answer(&session, &root, &query, limit, phase, cache).await
                                         }
                                         Err(e) => Err(e),
                                     };
@@ -946,12 +981,17 @@ mod resident {
             completion.await.map_err(|_| Error::Closed)?
         }
         pub async fn recall(&self, root: &Path, query: &str, limit: Option<i64>) -> Result<Answer> {
+            self.recall_phase(root, query, limit, None).await
+        }
+
+        pub async fn recall_phase(&self, root: &Path, query: &str, limit: Option<i64>, phase: Option<u32>) -> Result<Answer> {
             let (reply, completion) = oneshot::channel();
             self.requests
                 .send(Request::Recall {
                     root: root.into(),
                     query: query.into(),
                     limit,
+                    phase,
                     reply,
                 })
                 .await

@@ -272,6 +272,8 @@ struct VersionArguments {}
 #[derive(Deserialize, JsonSchema)]
 #[serde(tag = "operation", deny_unknown_fields)]
 enum QueryArguments {
+    #[serde(rename = "recall")]
+    Recall { query: String, limit: Option<std::num::NonZeroU32>, phase: Option<NonZeroU32> },
     #[serde(rename = "debug-list")]
     DebugList {},
     #[serde(rename = "debug-status")]
@@ -938,6 +940,18 @@ impl ServerHandler for PublicServer {
                 .into())
             }
             "cadence_query" => {
+                if raw.as_ref().is_some_and(|value| value["operation"] == "recall") {
+                    let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
+                        Ok(QueryArguments::Recall { query, limit, phase }) => match self.server.service.recall_phase(
+                            &self.root, &query, limit.map(|value| i64::from(value.get())), phase.map(NonZeroU32::get)).await {
+                            Ok(answer) => serde_json::to_value(answer).expect("recall answer"),
+                            Err(error) => Refusal::new("recall-unavailable", error.to_string()).slot("recall").value(),
+                        },
+                        Err(error) => Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value(),
+                        Ok(_) => unreachable!("recall operation selected"),
+                    };
+                    return structured_result(Ok(QueryOutput::Read(answer)));
+                }
                 if raw.as_ref().and_then(|v| v["operation"].as_str()).is_some_and(|op| matches!(op, "debug-list" | "debug-status" | "debug-continue")) {
                     let command = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
                         Ok(QueryArguments::DebugList {}) => debug_service::Command::List,
@@ -1308,7 +1322,7 @@ impl ServerHandler for PublicServer {
                             "risk-status arguments do not match the strict operation schema",
                         )));
                     }
-                    Some(QueryArguments::VerifyNext { .. } | QueryArguments::VerificationRead { .. } | QueryArguments::VerificationAudit { .. }) => unreachable!("verification routed before generic query"),
+                    Some(QueryArguments::Recall { .. } | QueryArguments::VerifyNext { .. } | QueryArguments::VerificationRead { .. } | QueryArguments::VerificationAudit { .. }) => unreachable!("recall and verification routed before generic query"),
                     None => self.refuse_raw(BoundaryTool::CadenceQuery, raw).await,
                 };
                 let envelope = answer

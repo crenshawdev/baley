@@ -45,9 +45,14 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
     match command {
         Command::List | Command::Read { .. } => unreachable!("read before config"),
         Command::Apply(apply) => {
-            let write = model::Write { root_binding: cadence::verification::inputs::root_binding(root)?, apply };
+            let mut write = model::Write { root_binding: cadence::verification::inputs::root_binding(root)?, apply, recall: None };
             if let Some(answer) = model::replay(data, &write)? { return Ok(answer); }
             cadence::milestone::model::name(write.apply.identity().0)?;
+            if let Apply::Open { request } = &write.apply
+                && model::outcome(data, &write).is_ok() {
+                let recalled = super::recall::resident::answer(&session, root, &request.symptom, None, None, &mut None).await?;
+                write.recall = Some(serde_json::from_value(serde_json::to_value(recalled)?)?);
+            }
             let response = match model::outcome(data, &write) { Ok(record) => model::answer(&record), Err(refusal) => refusal };
             store.request(Operation::DebugV1 { expected_generation: view.snapshot.generation,
                 expected_integrity: view.snapshot.integrity.clone(), write: Box::new(write) }).await?;

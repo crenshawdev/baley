@@ -4,6 +4,14 @@ use super::model::Record;
 pub fn render(record: &Record) -> String {
     let mut out = format!("# Debug: {}\n\nSymptom: {}\nStatus: {}\nAttempts: {}\nVersion: {}\n", record.slug,
         record.symptom, serde_json::to_value(&record.status).unwrap().as_str().unwrap(), record.attempt_count, record.version);
+    if let Some(recall) = &record.recall {
+        out.push_str(&format!("\n## Recall (candidate evidence)\n\nBackend: {}\nTotal: {}\n", recall.backend, recall.total));
+        for hit in &recall.results {
+            let phase = hit.phase.map(|phase| format!(", phase {phase}")).unwrap_or_default();
+            out.push_str(&format!("\nSource: {}{}\n{}\n", hit.source, phase, hit.snippet));
+        }
+        for incomplete in &recall.incomplete { out.push_str(&format!("\nIncomplete: {incomplete}\n")); }
+    }
     out.push_str("\n## Hypotheses\n");
     for h in &record.hypotheses {
         out.push_str(&format!("\n{} [{}]: {}\nRank reason: {}\n", h.id,
