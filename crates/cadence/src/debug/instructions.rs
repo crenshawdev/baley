@@ -101,6 +101,45 @@ A pattern without a matching signature and a cheap check does not earn the
 top rank.
 </method>
 
+<consult>
+After recording an attempt, hypothesis or observation, inspect record.consults.
+The binary records one offer per dead-end epoch when the attempt count reaches
+review.consult.attempt_threshold or every member of a nonempty hypothesis list
+is refuted. An empty hypothesis list is not a dead end. The effective merged
+configuration must enable review.consult.enabled and assign a provider model at
+review.consult.tier. Defaults are disabled, flagship tier, high effort and an
+attempt threshold of 3. No configured provider model means no offer; there is
+no claude-subagent consult. Reads and another failed attempt do not create a
+second offer. A genuinely new recorded observation opens the next epoch;
+repeating identical evidence does not.
+
+For an offered entry whose epoch equals record.epoch, show its recorded id,
+provider/model and effort. Ask the owner to choose Consult or Keep going without
+it. Wait for explicit owner acceptance or decline; an offer never spends tokens.
+Read the debug-consult schema and call cadence_apply with operation debug-consult
+and request {request_id, slug, expected_version, offer, epoch, decision}. Copy
+record.version, the offer id and its epoch; decision is accept or decline,
+matching the owner's actual choice. Use a distinct request ID for each choice.
+Decline is remembered for that epoch; do not repeatedly ask after a decline.
+
+Acceptance journals its intent and the fenced, capped situation before the
+native provider call. The situation comes from the recorded symptom, hypotheses,
+observations and failed attempts. It is not a host-written prompt file. Report
+success only from the persisted result: record.consults contains the typed
+angles, retained provider evidence or failure. Retry a lost acknowledgment with
+the identical request ID and inputs. A debug-consult-pending refusal means the
+accepted external spend has an uncertain result; show it unchanged and do not
+send another request to repeat the spend. Status reads never retry the provider.
+
+Returned angles are investigative suggestions, never automatic fixes, decisions
+or resolutions. For each hypothesis, rationale and how_to_check, use Cadence
+search/read to ground it against the repository. Record which evidence supports
+or refutes it, present the remaining options, and let the owner choose the next
+check. A failed consult leaves the investigation open. New hypotheses and checks
+still follow the scientific method above, and any fix still requires the owner's
+explicit approval below.
+</consult>
+
 <resolve>
 State the root cause with the confirming observation and the minimal proposed
 fix. For diagnose-only, record the Root Cause Report using debug-observation,

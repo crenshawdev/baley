@@ -1588,7 +1588,11 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
         "actual nonempty review_scope", "round 2", "rearm_of", "risk-fire",
         "A parent re-arm is not clearance", "After the narrowed round still fails, stop for the owner",
         "Do not auto-loop", "validate_rearm", "one-consequence rule", "newer clear scan",
-        "Use no trace-count script"] {
+        "Use no trace-count script", "debug-consult", "record.consults", "one offer per dead-end epoch",
+        "review.consult.attempt_threshold", "empty hypothesis list is not a dead end",
+        "explicit owner acceptance or decline", "Decline is remembered", "fenced, capped situation",
+        "debug-consult-pending", "Status reads never retry the provider",
+        "investigative suggestions", "ground it against the repository"] {
         assert!(body.contains(required), "{required}");
     }
     for retired in ["workflows/debug.md", "references/bug-patterns.md", "references/recall.md", "planning.mjs", "grep "] {
