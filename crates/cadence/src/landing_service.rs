@@ -33,8 +33,11 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                 let git = match report::git(project, record) { Ok(value) => value,
                     Err(error) => json!({"status":"unavailable","reason":error.to_string()}) };
                 let actions: Vec<_> = record.authorizations.iter().filter(|a| a.request.expected_generation == record.generation)
+                    .filter(|a| record.steps.iter().any(|s| s.step == a.request.inputs.step() && s.receipt.is_none() && s.intent.is_none()))
                     .map(|a| action(record, a)).collect();
                 json!({"status":"ok","read_only":true,"landing":record,"git":git,
+                    "done":report::done(record),"next_step":reconcile::next_step(record),
+                    "resume":report::resume(record, view.snapshot.generation),
                     "tracker":report::tracker(project, &config.effective.values),"actions":actions,
                     "unsettled":cadence::review::consumers::unruled_members(store).await?,
                     "refusals":records.receipts.values().filter(|r| r.answer["status"] == "refused"
@@ -147,7 +150,8 @@ async fn effect(store: &Store, view: &mut View, records: &mut Records<Landing>, 
             || authorization::matching(&original, &bound, step).is_none_or(|a| receipt["authorization"] != a.id) {
             return Ok(refuse("landing-authorization-required", "completed step requires its retained exact authorization and current landing version".into()));
         }
-        return Ok(json!({"status":"ok","landing":landing,"receipt":receipt,"next_step":reconcile::next_step(landing)}));
+        return Ok(json!({"status":"ok","landing":landing,"receipt":receipt,
+            "done":report::done(landing),"next_step":reconcile::next_step(landing)}));
     }
     let Some(auth) = authorization::matching(landing, request, step).cloned() else {
         return Ok(refuse("landing-authorization-required", "an exact owner authorization for this landing version and step is required".into()));
@@ -220,5 +224,6 @@ fn complete(landing: &mut Landing, slot: usize, auth: &Authorization, result: Va
         "result":result,"proof":proof,"provenance":provenance});
     landing.steps[slot].receipt = Some(receipt.clone());
     landing.generation += 1;
-    json!({"status":"ok","landing":landing,"receipt":receipt,"next_step":reconcile::next_step(landing)})
+    json!({"status":"ok","landing":landing,"receipt":receipt,
+        "done":report::done(landing),"next_step":reconcile::next_step(landing)})
 }

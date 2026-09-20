@@ -118,7 +118,12 @@ pub fn read_pull(root: &Path, landing: &Landing, forge: &Forge, identity: Option
                 }
                 candidates.push(number(forge, value)?);
             }
-            if values.len() < 100 { complete = true; break; }
+            // Gitea may cap limit below the requested size. Only an empty
+            // page proves completion there; never infer absence from its cap.
+            if values.is_empty() || (forge.provider != "forgejo" && values.len() < 100) {
+                complete = true;
+                break;
+            }
         }
         if !complete || candidates.len() > 1 {
             return Err(Error::Invalid(format!("ambiguous remote PR list; complete={complete}, identities={candidates:?}")));

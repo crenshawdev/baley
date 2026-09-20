@@ -64,6 +64,9 @@ pub fn read(root: &Path, landing: &Landing, inputs: &ExternalInput, config: &Val
 }
 
 pub fn next_step(landing: &Landing) -> &'static str {
+    if let Some(slot) = landing.steps.iter().find(|slot| slot.intent.is_some() && slot.receipt.is_none()) {
+        return slot.step.name();
+    }
     for step in [Step::Publish, Step::Open, Step::Merge] {
         if landing.steps.iter().any(|slot| slot.step == step && slot.receipt.is_none()) { return step.name(); }
     }

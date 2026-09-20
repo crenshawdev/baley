@@ -1,8 +1,31 @@
 //! Read-only Git and tracker observations; no tracker filing belongs here.
-use super::{effects, forge, model::{Forge, Landing}};
+use super::{authorization, effects, forge, reconcile, model::{Forge, Landing, Publish}};
 use crate::store::{Error, Result};
 use serde_json::{Value, json};
 use std::path::Path;
+
+pub fn done(landing: &Landing) -> Vec<&Value> {
+    landing.steps.iter().filter_map(|slot| slot.receipt.as_ref()).collect()
+}
+
+/// The snapshot generation changes after a retained refusal. A fresh read can
+/// then offer a new observation request without changing an effect's identity.
+pub fn resume(landing: &Landing, snapshot_generation: u64) -> Option<Value> {
+    let step = landing.steps.iter().find(|slot| slot.step.name() == reconcile::next_step(landing))?;
+    if step.receipt.is_some() { return None; }
+    let auth = step.intent.as_ref().map(|intent| &intent.authorization).or_else(|| {
+        landing.authorizations.iter().rev().find(|auth|
+            auth.request.inputs.step() == step.step && auth.request.expected_generation == landing.generation)
+    })?;
+    let request = Publish {
+        request_id: crate::milestone::model::identity("landing-resume", &landing.root_binding,
+            &format!("{}:{}:{snapshot_generation}", landing.id, auth.id)),
+        landing: landing.id.clone(), expected_generation: landing.generation,
+        authorization: Some(auth.id.clone()), inputs: Some(auth.request.inputs.clone()),
+    };
+    authorization::matching(landing, &request, &step.step)?;
+    Some(json!({"operation":"land-resume","request":request}))
+}
 
 pub fn git(root: &Path, landing: &Landing) -> Result<Value> {
     let branch = effects::observe(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;

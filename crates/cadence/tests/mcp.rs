@@ -302,8 +302,8 @@ fn tool_schemas_list_exactly_three_tools_with_minimal_inputs() {
     }
     let tools_bytes = serde_json::to_vec(tools).unwrap().len();
     assert!(
-        tools_bytes < 10_100,
-        "tools/list result.tools is {tools_bytes} bytes; measured 10,022 bytes with milestone and landing operations"
+        tools_bytes < 10_176,
+        "tools/list result.tools is {tools_bytes} bytes; measured 10,112 bytes with landing resume"
     );
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
     for (tool, names) in [("query", query_operation_names()), ("apply", apply_operation_names())] {
@@ -1568,6 +1568,10 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     assert!(body.contains("`action` typed payload unchanged"));
     assert!(body.contains("actual owner's name and authorization time"));
     assert!(body.contains("An uncertain intent requires reconciliation"));
+    assert!(body.contains("typed land-resume payload unchanged"));
+    assert!(body.contains("single `next_step`") && body.contains("observed remote ref/object"));
+    assert!(body.contains("Repeated resume keeps the same step receipt"));
+    assert!(body.contains("A reconciled MERGED state is not the owner's merge confirmation"));
     for forbidden in ["Bash", "git.auto_close", "git-publish.mjs", "CLAUDE_PLUGIN_ROOT", "SlashCommand"] {
         assert!(!cadence::landing::instructions::markdown().contains(forbidden), "{forbidden}");
     }
@@ -1588,7 +1592,7 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     }
     let tools_bytes = serde_json::to_vec(&listed["result"]["tools"]).unwrap().len();
     println!("tools/list result.tools: {tools_bytes} bytes");
-    assert!(tools_bytes < 10_100);
+    assert!(tools_bytes < 10_176);
     let (why, body) = markdown_parts("skills/cad-why/SKILL.md");
     assert_eq!(why["name"], "cad-why");
     assert_eq!(why["argument-hint"], "<path>[:<line>]");
