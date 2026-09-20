@@ -224,7 +224,6 @@ fn changed_binary(temp: &Path) -> PathBuf {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source = temp.join("changed-source");
     fs::create_dir_all(source.join("crates/cadence")).unwrap();
-    fs::create_dir_all(source.join("cadence-core/references")).unwrap();
     for file in ["Cargo.toml", "Cargo.lock"] {
         fs::copy(repository.join(file), source.join(file)).unwrap();
     }
@@ -241,11 +240,6 @@ fn changed_binary(temp: &Path) -> PathBuf {
         &repository.join("crates/cadence/tests/fixtures/phase9"),
         &source.join("crates/cadence/tests/fixtures/phase9"),
     );
-    fs::copy(
-        repository.join("cadence-core/references/reviewer-brief.md"),
-        source.join("cadence-core/references/reviewer-brief.md"),
-    )
-    .unwrap();
     let instructions = source.join("crates/cadence/src/execution/instructions.rs");
     let original = fs::read_to_string(&instructions).unwrap();
     let needle = "The dispatch's operational input is the binary's authority";
@@ -501,7 +495,6 @@ fn rendered_run(project: &Path, id: &str, stage: &str, check: Value) -> Value {
 fn prepare_rendered_source(project: &Path) {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     fs::create_dir_all(project.join("crates/cadence")).unwrap();
-    fs::create_dir_all(project.join("cadence-core/references")).unwrap();
     fs::create_dir_all(project.join("skills/cad-executor-contract")).unwrap();
     for file in ["Cargo.toml", "Cargo.lock"] {
         fs::copy(repository.join(file), project.join(file)).unwrap();
@@ -519,11 +512,6 @@ fn prepare_rendered_source(project: &Path) {
         &repository.join("crates/cadence/tests/fixtures/phase9"),
         &project.join("crates/cadence/tests/fixtures/phase9"),
     );
-    fs::copy(
-        repository.join("cadence-core/references/reviewer-brief.md"),
-        project.join("cadence-core/references/reviewer-brief.md"),
-    )
-    .unwrap();
     fs::copy(repository.join(RENDERED_SKILL), project.join(RENDERED_SKILL)).unwrap();
     fs::write(
         project.join(".gitignore"),
@@ -531,7 +519,7 @@ fn prepare_rendered_source(project: &Path) {
     )
     .unwrap();
     git(project, &["add", ".gitignore", "Cargo.toml", "Cargo.lock",
-        "crates/cadence", "cadence-core/references/reviewer-brief.md", RENDERED_SKILL]);
+        "crates/cadence", RENDERED_SKILL]);
     git(project, &["commit", "-S", "-m", "Fixture binary-rendered source"]);
 }
 

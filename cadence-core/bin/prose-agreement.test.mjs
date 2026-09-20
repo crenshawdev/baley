@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { activeVersion } from './lib/branch-decision.mjs';
-import { weighAll } from './lib/surface-weight.mjs';
+import { measure, weighAll } from './lib/surface-weight.mjs';
 import { DEFERRED_READS, regionLabels } from './lib/deferred-reads.mjs';
 import { CATEGORIES, scanTree, interviewOptions } from './lib/surface-scan.mjs';
 import { RUNG_ORDER } from './lib/rung-agent.mjs';
@@ -482,7 +482,7 @@ test('the reviewer brief carries the same bar the reviewer contract states', () 
   // An adjudicator merges both backends' findings blind - it cannot, if the two
   // reviewers were held to different bars. The brief is the ONE bar, restated as
   // a payload fragment; this test is what keeps the restatement from drifting.
-  const brief = doc('cadence-core', 'references', 'reviewer-brief.md');
+  const brief = doc('crates', 'cadence', 'src', 'review', 'provider', 'reviewer-brief.md');
   const contract = doc('skills', 'cad-reviewer-contract', 'SKILL.md');
   const flatBrief = flat(brief);
 
@@ -513,9 +513,7 @@ test('the reviewer brief costs under 1% of the default review.max_prompt_tokens'
   // off the same estimator the cap itself uses (chars/4) and against the
   // schema's own default rather than a copied 120000, so a changed default
   // re-prices this check instead of leaving it asserting a stale number.
-  const measured = new Map(weighAll(REPO).map((s) => [s.surface, s]));
-  const brief = measured.get('cadence-core/references/reviewer-brief.md');
-  assert.ok(brief, 'reviewer-brief.md is not a measured surface');
+  const brief = measure(doc('crates', 'cadence', 'src', 'review', 'provider', 'reviewer-brief.md'));
 
   const schema = JSON.parse(doc('cadence-core', 'config.schema.json'));
   const cap = schema.keys['review.max_prompt_tokens'].default;

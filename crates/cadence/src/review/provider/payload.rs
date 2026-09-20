@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 // Compile the frozen fragment into the executable. There is no runtime path,
 // instruction-file option or user override.
-const BRIEF: &str = include_str!("../../../../../cadence-core/references/reviewer-brief.md");
+const BRIEF: &str = include_str!("reviewer-brief.md");
 
 pub struct Prepared {
     pub instruction: String,
