@@ -1572,6 +1572,12 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     assert!(body.contains("single `next_step`") && body.contains("observed remote ref/object"));
     assert!(body.contains("Repeated resume keeps the same step receipt"));
     assert!(body.contains("A reconciled MERGED state is not the owner's merge confirmation"));
+    assert!(body.contains("explicitly confirm this merged PR/commit identity"));
+    assert!(body.contains("land-confirm-merge") && body.contains("`confirmation` id and binding"));
+    assert!(body.contains("land-checkout") && body.contains("land-pull") && body.contains("land-tag, land-reap"));
+    assert!(body.contains("explicit skipped receipt") && body.contains("retry the identical local request"));
+    assert!(body.contains("refusal naming the uncontained source branch and base"));
+    assert!(body.contains("Tag push remains a separate external step"));
     for forbidden in ["Bash", "git.auto_close", "git-publish.mjs", "CLAUDE_PLUGIN_ROOT", "SlashCommand"] {
         assert!(!cadence::landing::instructions::markdown().contains(forbidden), "{forbidden}");
     }
