@@ -121,7 +121,9 @@ fn pause_barrier(stage: &str) {
 #[cfg(not(test))]
 fn pause_barrier(_: &str) {}
 
-fn policy(config: &Generation) -> Result<Policy> {
+/// The branch policy every git-touching operation reads from the effective
+/// configuration; task-open shares it rather than reading the keys twice.
+pub(crate) fn policy(config: &Generation) -> Result<Policy> {
     let values = &config.effective.values;
     let string = |key| {
         merge::get(values, key)

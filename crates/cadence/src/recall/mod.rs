@@ -249,6 +249,11 @@ pub(crate) mod resident {
             command: crate::server::spike_service::Command,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
+        Task {
+            root: PathBuf,
+            command: crate::server::task_service::Command,
+            reply: oneshot::Sender<Result<serde_json::Value>>,
+        },
         Undo {
             root: PathBuf,
             command: crate::server::undo_service::Command,
@@ -513,6 +518,8 @@ pub(crate) mod resident {
             tokio::spawn(async move {
                 let mut caches = BTreeMap::<PathBuf, Option<Cached>>::new();
                 let mut read_domains = BTreeMap::<PathBuf, cadence::read::ReadDomain>::new();
+                // Treeless task episodes live here for the run and nowhere else (D-209).
+                let mut task_episodes = crate::server::task_service::Episodes::default();
                 while let Some(request) = receiver.recv().await {
                     match request {
                         Request::Milestone { root, command, reply } => {
@@ -529,6 +536,9 @@ pub(crate) mod resident {
                         }
                         Request::Spike { root, command, reply } => {
                             let _ = reply.send(crate::server::spike_service::execute(&factory, &root, command).await);
+                        }
+                        Request::Task { root, command, reply } => {
+                            let _ = reply.send(crate::server::task_service::execute(&factory, &root, command, &mut task_episodes).await);
                         }
                         Request::Suggest { root, phase, reply } => {
                             let result = crate::server::suggest_service::query(&factory, &root, phase).await;
@@ -927,6 +937,11 @@ pub(crate) mod resident {
         pub async fn spike(&self, root: &Path, command: crate::server::spike_service::Command) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
             self.requests.send(Request::Spike { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
+            receive.await.map_err(|_| Error::Closed)?
+        }
+        pub async fn task(&self, root: &Path, command: crate::server::task_service::Command) -> Result<serde_json::Value> {
+            let (reply, receive) = oneshot::channel();
+            self.requests.send(Request::Task { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
             receive.await.map_err(|_| Error::Closed)?
         }
 

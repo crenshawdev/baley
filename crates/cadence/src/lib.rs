@@ -19,6 +19,8 @@ pub mod landing;
 pub mod undo;
 pub mod debug;
 pub mod spike;
+/// The off-roadmap task: explicit identity, shared branch and risk policy, a record whose home the root decides.
+pub mod task;
 pub mod milestone;
 pub mod next_action;
 pub mod pause;

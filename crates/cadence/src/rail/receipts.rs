@@ -196,11 +196,13 @@ pub fn validate_rearm(original: &Fire, next: &Fire) -> Result<()> {
 
 pub fn requires_review(record: &Recorded) -> bool {
     record.observation.outcome == ObservationOutcome::Checked
-        && record
-            .observation
-            .scan
-            .as_ref()
-            .is_some_and(|scan| scan.checked && (scan.inconclusive || !scan.matches.is_empty()))
+        && record.observation.scan.as_ref().is_some_and(scan_requires_review)
+}
+
+/// The one rule for what fires: a checked scan that matched or could not
+/// conclude. A treeless task applies it to a scan it never records.
+pub fn scan_requires_review(scan: &super::risk_diff::Scan) -> bool {
+    scan.checked && (scan.inconclusive || !scan.matches.is_empty())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
