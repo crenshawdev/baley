@@ -70,6 +70,11 @@ pub enum Operation {
         expected_integrity: String,
         write: Box<crate::debug::model::Write>,
     },
+    SpikeV1 {
+        expected_generation: u64,
+        expected_integrity: String,
+        write: Box<crate::spike::model::Write>,
+    },
     MilestoneReleaseV1 {
         expected_generation: u64,
         expected_integrity: String,
@@ -562,6 +567,29 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 let operations = next.snapshot.operations.clone();
                 self.persist(next, operations, participants, "debug", super::transaction::IntentKind::DebugV1 { write })
             },
+            Operation::SpikeV1 { expected_generation, expected_integrity, write } => {
+                self.check_expected(expected_generation, &expected_integrity)?;
+                if self.storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(&write.root_binding) {
+                    return Err(Error::Invalid("spike root binding changed".into()));
+                }
+                if self.storage.root().and_then(std::path::Path::parent).map(std::path::Path::canonicalize).transpose()?.as_ref() != Some(&write.project) {
+                    return Err(Error::Invalid("spike project binding changed".into()));
+                }
+                let mut next = self.view.as_ref().clone();
+                next.snapshot.data = crate::spike::model::contribute(&next.snapshot.data, &write)?;
+                let slug = write.apply.identity().1;
+                let participants = if crate::spike::model::outcome(&self.view.snapshot.data, &write).is_ok() {
+                    let (target, bytes) = crate::execution::render::project_spike(&next.snapshot.data, slug)?;
+                    let expected = self.storage.read(&target)?;
+                    if !crate::spike::model::namespace(&self.view.snapshot.data)?.records.contains_key(slug)
+                        && expected.bytes.is_some() {
+                        return Err(Error::Invalid("historical spike projection cannot be overwritten".into()));
+                    }
+                    vec![super::transaction::Participant { target, expected, bytes }]
+                } else { vec![] };
+                let operations = next.snapshot.operations.clone();
+                self.persist(next, operations, participants, "spike", super::transaction::IntentKind::SpikeV1 { write })
+            },
             Operation::UndoV1 { expected_generation, expected_integrity, write } => {
                 self.check_expected(expected_generation, &expected_integrity)?;
                 self.storage.validate_undo(&write, false)?;
@@ -806,6 +834,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             Operation::CheckedTransact { .. }
             | Operation::DebugReviewV1 { .. }
             | Operation::DebugV1 { .. }
+            | Operation::SpikeV1 { .. }
             | Operation::UndoV1 { .. }
             | Operation::MilestonePruneV1 { .. }
             | Operation::MilestoneReleaseV1 { .. }

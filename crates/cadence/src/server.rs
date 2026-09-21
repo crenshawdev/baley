@@ -61,6 +61,8 @@ pub mod landing_service;
 pub mod undo_service;
 #[path = "debug_service.rs"]
 pub mod debug_service;
+#[path = "spike_service.rs"]
+pub mod spike_service;
 #[cfg(test)]
 #[path = "next_action_service_tests.rs"]
 mod next_action_service_tests;
@@ -407,6 +409,7 @@ enum ApplyArguments {
     Landing(cadence::landing::model::Apply),
     Undo(cadence::undo::model::Apply),
     Debug(cadence::debug::model::Apply),
+    Spike(cadence::spike::model::Apply),
 }
 
 /// Who parses and answers an apply request. `Executor` is the one group with
@@ -428,10 +431,11 @@ enum ApplyGroup {
     Landing,
     Undo,
     Debug,
+    Spike,
 }
 
 /// One group per [`ApplyArguments`] variant, in variant order.
-const APPLY_GROUPS: [ApplyGroup; 21] = [
+const APPLY_GROUPS: [ApplyGroup; 22] = [
     ApplyGroup::Verification,
     ApplyGroup::Execution,
     ApplyGroup::Execution,
@@ -453,6 +457,7 @@ const APPLY_GROUPS: [ApplyGroup; 21] = [
     ApplyGroup::Landing,
     ApplyGroup::Undo,
     ApplyGroup::Debug,
+    ApplyGroup::Spike,
 ];
 
 /// The operation names `cadence_apply` accepts, each with its routing group
@@ -1348,6 +1353,13 @@ impl ServerHandler for PublicServer {
                     ApplyGroup::Debug => {
                         let answer = match serde_json::from_value::<cadence::debug::model::Apply>(raw.unwrap()) {
                             Ok(apply) => self.server.service.debug(&self.root, debug_service::Command::Apply(apply)).await,
+                            Err(error) => Ok(Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value()),
+                        };
+                        structured_result(answer.map(ApplyOutput::NativeExecution))
+                    }
+                    ApplyGroup::Spike => {
+                        let answer = match serde_json::from_value::<cadence::spike::model::Apply>(raw.unwrap()) {
+                            Ok(apply) => self.server.service.spike(&self.root, spike_service::Command::Apply(apply)).await,
                             Err(error) => Ok(Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value()),
                         };
                         structured_result(answer.map(ApplyOutput::NativeExecution))

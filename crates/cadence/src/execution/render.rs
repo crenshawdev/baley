@@ -43,6 +43,18 @@ pub fn project_debug(data: &Value, slug: &str) -> Result<(String, Vec<u8>)> {
     Ok((format!("debug:{slug}"), crate::debug::render::render(record).into_bytes()))
 }
 
+/// Only native-owned spike records contribute projections; history is never scanned.
+pub fn project_spike(data: &Value, slug: &str) -> Result<(String, Vec<u8>)> {
+    crate::spike::model::validate_slug(slug)?;
+    let records = crate::spike::model::namespace(data)?;
+    let record = records.records.get(slug).ok_or_else(|| Error::Invalid("missing spike projection record".into()))?;
+    Ok((format!("spike:{slug}"), crate::spike::render::render(record).into_bytes()))
+}
+pub fn installed_spikes(data: &Value) -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
+    Ok(crate::spike::model::namespace(data)?.records.into_iter().map(|(slug, record)|
+        (format!(".planning/spikes/{slug}/SPIKE.md"), crate::spike::render::render(&record).into_bytes())).collect())
+}
+
 pub fn installed_debug(data: &Value) -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
     Ok(crate::debug::model::namespace(data)?.records.into_iter().map(|(slug, record)|
         (format!(".planning/debug/{slug}.md"), crate::debug::render::render(&record).into_bytes())).collect())

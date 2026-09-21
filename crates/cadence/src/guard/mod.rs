@@ -310,6 +310,7 @@ fn protected_target(target: &Path) -> Result<bool, String> {
         // never a claim over arbitrary shell writes.
         if matches!(suffix, [file] if matches!(file.as_str(), "state.json" | "decisions.jsonl" | "items.jsonl"))
             || matches!(suffix, [directory, file] if directory == "debug" && file.ends_with(".md"))
+            || matches!(suffix, [directory, ..] if directory == "spikes")
             || matches!(suffix, [phases, number, owned]
                 if phases == "phases"
                     && matches!(owned.as_str(), "SUMMARY.md" | "UAT.md")

@@ -244,6 +244,11 @@ pub(crate) mod resident {
             command: crate::server::debug_service::Command,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
+        Spike {
+            root: PathBuf,
+            command: crate::server::spike_service::Command,
+            reply: oneshot::Sender<Result<serde_json::Value>>,
+        },
         Undo {
             root: PathBuf,
             command: crate::server::undo_service::Command,
@@ -521,6 +526,9 @@ pub(crate) mod resident {
                         }
                         Request::Debug { root, command, reply } => {
                             let _ = reply.send(crate::server::debug_service::execute(&factory, &root, command).await);
+                        }
+                        Request::Spike { root, command, reply } => {
+                            let _ = reply.send(crate::server::spike_service::execute(&factory, &root, command).await);
                         }
                         Request::Suggest { root, phase, reply } => {
                             let result = crate::server::suggest_service::query(&factory, &root, phase).await;
@@ -913,6 +921,12 @@ pub(crate) mod resident {
         pub async fn debug(&self, root: &Path, command: crate::server::debug_service::Command) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
             self.requests.send(Request::Debug { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
+            receive.await.map_err(|_| Error::Closed)?
+        }
+
+        pub async fn spike(&self, root: &Path, command: crate::server::spike_service::Command) -> Result<serde_json::Value> {
+            let (reply, receive) = oneshot::channel();
+            self.requests.send(Request::Spike { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
             receive.await.map_err(|_| Error::Closed)?
         }
 
