@@ -45,6 +45,8 @@ enum Command {
     WhyInstructions,
     /// Render the capture front door without opening a project.
     CaptureInstructions,
+    /// Render the cad-task front door and task executor contract without opening a project.
+    TaskInstructions,
     /// Run the MCP stdio server.
     Serve,
     /// Guard Bash Git commands and binary-owned Write/Edit outputs.
@@ -248,6 +250,13 @@ fn run_command(command: Command) -> std::process::ExitCode {
                 cadence::execution::instructions::contract_markdown()
             };
             match std::io::stdout().lock().write_all(rendered.as_bytes()) {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(_) => std::process::ExitCode::FAILURE,
+            }
+        }
+        Command::TaskInstructions => {
+            use std::io::Write;
+            match std::io::stdout().lock().write_all(cadence::task::instructions::markdown().as_bytes()) {
                 Ok(()) => std::process::ExitCode::SUCCESS,
                 Err(_) => std::process::ExitCode::FAILURE,
             }

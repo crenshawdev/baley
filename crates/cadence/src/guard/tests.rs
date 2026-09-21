@@ -87,7 +87,7 @@ fn denied(bytes: &[u8]) -> Value {
 #[test]
 pub(crate) fn rendered_skill_files_are_protected() {
     let root = Path::new("/fixture");
-    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 23);
+    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 24);
     for rendered in cadence::execution::render::RENDERED_PROJECT_FILES {
         let relative = rendered.path;
         assert!(

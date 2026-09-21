@@ -156,6 +156,7 @@ pub const RENDERED_PROJECT_FILES: &[RenderedProjectFile] = &[
     RenderedProjectFile { path: "skills/cad-plan/SKILL.md", command: &["plan-instructions"] },
     RenderedProjectFile { path: "skills/cad-executor-contract/SKILL.md", command: &["executor-instructions"] },
     RenderedProjectFile { path: "skills/cad-execute/SKILL.md", command: &["executor-instructions", "--frontdoor"] },
+    RenderedProjectFile { path: "skills/cad-task/SKILL.md", command: &["task-instructions"] },
     RenderedProjectFile { path: "skills/cad-verifier-contract/SKILL.md", command: &["verifier-instructions"] },
     RenderedProjectFile { path: "skills/cad-verify/SKILL.md", command: &["verifier-instructions", "--frontdoor"] },
     RenderedProjectFile { path: "skills/cad-review/SKILL.md", command: &["review-instructions"] },

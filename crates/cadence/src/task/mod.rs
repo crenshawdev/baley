@@ -6,6 +6,7 @@
 //! that is gone before the answer, and nothing is created under the project
 //! (D-209). Under a planning root the record is a store record; that arm is
 //! plan 2's and is refused here by name rather than answered without a record.
+pub mod instructions;
 pub mod model;
 
 use crate::{

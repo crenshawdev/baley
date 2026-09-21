@@ -84,9 +84,9 @@ fn help_lists_the_installed_skills_from_the_compiled_table() {
             rendered_users.insert(name.to_owned());
         }
     }
-    assert_eq!(rendered_users.len(), 20);
+    assert_eq!(rendered_users.len(), 21);
     assert_eq!(shipped.difference(&rendered_users).map(String::as_str).collect::<BTreeSet<_>>(),
-        ["cad-adopt", "cad-config", "cad-docs-verify", "cad-new-project", "cad-pause", "cad-phase", "cad-task"].into_iter().collect());
+        ["cad-adopt", "cad-config", "cad-docs-verify", "cad-new-project", "cad-pause", "cad-phase"].into_iter().collect());
 
     let mut single = Value::Null;
     for name in ["debug", "cad-debug", "/cad-debug"] {

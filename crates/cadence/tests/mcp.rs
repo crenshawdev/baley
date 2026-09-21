@@ -1559,7 +1559,7 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
 
     // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
-    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 23);
+    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 24);
     let (help, body) = markdown_parts("skills/cad-help/SKILL.md");
     assert_eq!(body, cadence::help::instructions::markdown().split_once("\n---\n").unwrap().1);
     assert_eq!(help["name"], "cad-help");
@@ -1628,6 +1628,28 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
         assert!(body.contains(required), "{required}");
     }
     for retired in ["workflows/debug.md", "references/bug-patterns.md", "references/recall.md", "planning.mjs", "grep "] {
+        assert!(!body.contains(retired), "{retired}");
+    }
+    let (task, body) = markdown_parts("skills/cad-task/SKILL.md");
+    assert_eq!(body, cadence::task::instructions::markdown().split_once("\n---\n").unwrap().1);
+    assert_eq!(task["name"], "cad-task");
+    assert_eq!(task["description"], "Execute a small off-roadmap task with atomic commits - inline by default, --plan for multi-step work");
+    assert_eq!(task["argument-hint"], "[task description] [--plan]");
+    assert_eq!(task["allowed-tools"], json!(["mcp__cadence__cadence_apply", "mcp__cadence__cadence_query", "Write", "Edit", "Bash", "AskUserQuestion", "Task"]));
+    for required in ["task-open", "task-close", "`inline` or `planned`", "protected-branch", "no\n   bypass and no recorded proceed",
+        "`task.token`", "`absent` means the run is\n   ephemeral", "called\n   unrecorded", "written under the planning root\n   before done",
+        "The binary makes no commits for a task", "`missing-file`", "never read as an absent planning root",
+        "treeless run persists no answer", "`start..HEAD`", "`skipped`", "`clear`", "`advisory`", "`risk-blocked`",
+        "gone with the answer", "`unanswered-surfaces`", "A blocked\n   or refused close is reported as such, never as done",
+        "`request-reused`", "There is no dispatch, no phase and no lease", "Work on the current branch",
+        "do not push, reset, amend, revert or force-push", "Inline work is\ndone in this context", "`--plan` may dispatch one executor",
+        "Never spawn a subagent on the inline path", "Never create `.planning/`", "No next-step menu"] {
+        assert!(body.contains(required), "{required}");
+    }
+    assert!(body.contains(cadence::read::instructions::CONTRACT));
+    assert!(body.contains(cadence::execution::instructions::EXECUTOR_BLOCK));
+    for retired in ["workflows/task.md", "planning.mjs", "task-record", "trace append", "--phase 0", "phase 0", "CLAUDE_PLUGIN_ROOT",
+        "Source lease (D-170)", "lease.files", "execution-task-start", "execution-task-close", "dispatch id", "cad-review-delivery"] {
         assert!(!body.contains(retired), "{retired}");
     }
     let (undo, body) = markdown_parts("skills/cad-undo/SKILL.md");
