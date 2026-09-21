@@ -1,12 +1,12 @@
 #[allow(dead_code)]
-#[path = "support/phase13.rs"]
-mod phase13;
-#[path = "support/phase14.rs"]
-mod phase14;
+#[path = "support/serve.rs"]
+mod serve;
+#[path = "support/query_fixtures.rs"]
+mod query_fixtures;
 
 use cadence::store::model;
-use phase13::{Client, Completed, apply, digest_of, git_value, reopened};
-use phase14::{LEGACY_TICKED, TICKED, dispatched_plan, documents, legacy_fixture, natively_completed, progress_fixture, why_fixture};
+use serve::{Client, Completed, apply, digest_of, git_value, reopened};
+use query_fixtures::{LEGACY_TICKED, TICKED, dispatched_plan, documents, legacy_fixture, natively_completed, progress_fixture, why_fixture};
 use serde_json::{Value, json};
 use std::{fs, path::Path, process::{Command, Stdio}, time::{SystemTime, UNIX_EPOCH}};
 
@@ -31,7 +31,7 @@ fn journal(project: &Path) -> Vec<Value> {
 
 #[test]
 fn phase14_suggest_prices_from_routing_decisions_and_writes_nothing() {
-    let fixture = phase14::suggest_fixture();
+    let fixture = query_fixtures::suggest_fixture();
     let project = fixture.project();
     let imported: std::collections::BTreeSet<_> = reopened(project).decisions.iter()
         .filter(|r| r.origin.source == "trace.jsonl")
@@ -45,7 +45,7 @@ fn phase14_suggest_prices_from_routing_decisions_and_writes_nothing() {
     let mut client = Client::open(project);
     let facts_before = client.call("cadence_query", json!({"operation":"config-facts"}));
     assert_eq!(facts_before["status"], "ok", "{facts_before}");
-    let before = phase13::tree(project);
+    let before = serve::tree(project);
     let retained = reopened(project);
     let first = client.call("cadence_query", json!({"operation":"suggest"}));
     assert_eq!(first, json!({"status":"ok","suggestions":[
@@ -71,7 +71,7 @@ fn phase14_suggest_prices_from_routing_decisions_and_writes_nothing() {
     assert_eq!(client.call("cadence_query", json!({"operation":"suggest"})), first);
     client.finish();
     assert_eq!(fs::read(project.join(".planning/config.v4.json")).unwrap(), config_before);
-    assert_eq!(phase13::tree(project), before, "suggest retains no new receipt or other write");
+    assert_eq!(serve::tree(project), before, "suggest retains no new receipt or other write");
     let after = reopened(project);
     assert_eq!(after.snapshot, retained.snapshot);
     assert_eq!(after.decisions, retained.decisions);
@@ -488,11 +488,11 @@ fn phase14_progress_reports_status_issues_and_one_next_action() {
 
 #[test]
 fn phase14_exited_worker_without_completion_is_interrupted() {
-    use phase14::WorkerRound;
+    use query_fixtures::WorkerRound;
     let mut round = WorkerRound::new();
     let project = round.fixture.project().to_owned();
     let before_documents = documents(&project);
-    let before_tree = phase13::tree(&project);
+    let before_tree = serve::tree(&project);
     let before = seconds();
     let a = round.issue();
     let id = a["dispatch_id"].as_str().unwrap().to_owned();
@@ -556,7 +556,7 @@ fn phase14_exited_worker_without_completion_is_interrupted() {
     let verification = round.query(json!({"operation":"verification-read","phase":31,"attempt":v["attempt"]["id"]}));
     assert_eq!(verification["attempt"]["interrupted"], true, "{verification}");
     round.client.finish();
-    round.client = phase14::exit_support::Client::open(&project);
+    round.client = query_fixtures::exit_support::Client::open(&project);
     assert_eq!(round.apply(exit_request), exit_a);
     let verification = round.query(json!({"operation":"verification-read","phase":31,"attempt":v["attempt"]["id"]}));
     assert_eq!(verification["attempt"]["interrupted"], true);
@@ -581,7 +581,7 @@ fn phase14_exited_worker_without_completion_is_interrupted() {
     let mut after_documents = documents(&project);
     after_documents.remove(Path::new(".planning/phases/31/SUMMARY.md"));
     assert_eq!(after_documents, before_documents);
-    for (path, bytes) in phase13::tree(&project) {
+    for (path, bytes) in serve::tree(&project) {
         if path.starts_with(".planning") && before_tree.get(&path) != Some(&bytes) {
             assert!([".planning/state.json", ".planning/decisions.jsonl", ".planning/items.jsonl", ".planning/phases/31/SUMMARY.md"]
                 .iter().any(|allowed| path == Path::new(allowed)), "unexpected planning write: {}", path.display());

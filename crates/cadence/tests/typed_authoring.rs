@@ -1,11 +1,11 @@
-#[path = "support/phase31.rs"]
+#[path = "support/read_fixtures.rs"]
 #[allow(dead_code)]
-mod phase31;
+mod read_fixtures;
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, fs};
-use phase31::{Client, ProcessFixture, approve, tree};
+use read_fixtures::{Client, ProcessFixture, approve, tree};
 
 const PHASE: u32 = 31;
 
@@ -117,8 +117,8 @@ const PHASE32_WIRE_PLANS: &str = r###"[
       "crates/cadence/src/plan/instructions.rs",
       "crates/cadence/src/read/document.rs",
       "crates/cadence/tests/phase32_typed_authoring.rs",
-      "crates/cadence/tests/support/phase13.rs",
-      "crates/cadence/tests/support/phase31.rs",
+      "crates/cadence/tests/support/serve.rs",
+      "crates/cadence/tests/support/read_fixtures.rs",
       "crates/cadence/tests/phase27_plan.rs",
       "crates/cadence/tests/phase28_evidence.rs",
       "crates/cadence/tests/phase29_limits.rs",
@@ -165,8 +165,8 @@ const PHASE32_WIRE_PLANS: &str = r###"[
         "files": [
           "crates/cadence/src/plan/instructions.rs",
           "skills/cad-plan/SKILL.md",
-          "crates/cadence/tests/support/phase13.rs",
-          "crates/cadence/tests/support/phase31.rs",
+          "crates/cadence/tests/support/serve.rs",
+          "crates/cadence/tests/support/read_fixtures.rs",
           "crates/cadence/tests/phase27_plan.rs",
           "crates/cadence/tests/phase28_evidence.rs",
           "crates/cadence/tests/phase29_limits.rs",
@@ -208,7 +208,7 @@ const PHASE32_WIRE_PLANS: &str = r###"[
               "file": "crates/cadence/tests/phase32_typed_authoring.rs",
               "function": "phase32_typed_plan_answers_digest_and_no_document"
             },
-            "setup": "Start the real env!(CARGO_BIN_EXE_cadence) stdio server through the Client in crates/cadence/tests/support/phase31.rs on a fresh ProcessFixture project whose phase has a native approved context.",
+            "setup": "Start the real env!(CARGO_BIN_EXE_cadence) stdio server through the Client in crates/cadence/tests/support/read_fixtures.rs on a fresh ProcessFixture project whose phase has a native approved context.",
             "call": "Send plan-submit with one plan whose content is goal, context, notes, requirements, files, tasks [{id, title, files, action, verify}], suite and an attached evidence map, and no body; read the answer keys; approve by submission_digest; hash the installed file.",
             "boundary": "stdio JSON-RPC to the real binary bound to a fixture project, then the installed file on disk",
             "fakes": []
@@ -235,9 +235,9 @@ const PHASE32_WIRE_PLANS: &str = r###"[
               "file": "crates/cadence/tests/phase32_typed_authoring.rs",
               "function": "phase32_plan_body_is_refused"
             },
-            "setup": "Start the real env!(CARGO_BIN_EXE_cadence) stdio server through the Client in crates/cadence/tests/support/phase31.rs on a fresh ProcessFixture project whose phase has a native approved context.",
+            "setup": "Start the real env!(CARGO_BIN_EXE_cadence) stdio server through the Client in crates/cadence/tests/support/read_fixtures.rs on a fresh ProcessFixture project whose phase has a native approved context.",
             "call": "Send plan-submit whose first plan content carries a body string beside the typed pieces.",
-            "boundary": "stdio JSON-RPC to the real binary; the tree snapshot helper in tests/support/phase31.rs",
+            "boundary": "stdio JSON-RPC to the real binary; the tree snapshot helper in tests/support/read_fixtures.rs",
             "fakes": []
           },
           "reason": "Accepting or silently dropping the body answers ok or a different code; a write on refusal changes the tree snapshot.",
@@ -347,7 +347,7 @@ const PHASE32_WIRE_PLANS: &str = r###"[
               "file": "crates/cadence/tests/phase32_typed_authoring.rs",
               "function": "phase32_typed_context_answers_digest_and_no_document"
             },
-            "setup": "Start the real stdio server through the Client in crates/cadence/tests/support/phase31.rs on a fresh ProcessFixture project with no native context for the phase.",
+            "setup": "Start the real stdio server through the Client in crates/cadence/tests/support/read_fixtures.rs on a fresh ProcessFixture project with no native context for the phase.",
             "call": "Send context-submit with typed scope, decisions, assumptions and truth slots and no approval; read the answer keys; send the same submission with an approval carrying only owner, at and submission_digest; hash the installed file.",
             "boundary": "stdio JSON-RPC to the real binary, then the installed file on disk",
             "fakes": []
@@ -480,7 +480,7 @@ const PHASE32_WIRE_PLANS: &str = r###"[
               "file": "crates/cadence/tests/phase32_typed_authoring.rs",
               "function": "phase32_draft_read_by_identity_and_approved_by_digest_installs_same_bytes"
             },
-            "setup": "Start the real env!(CARGO_BIN_EXE_cadence) stdio server through the Client in crates/cadence/tests/support/phase31.rs on a fresh ProcessFixture project whose phase has a native approved context.",
+            "setup": "Start the real env!(CARGO_BIN_EXE_cadence) stdio server through the Client in crates/cadence/tests/support/read_fixtures.rs on a fresh ProcessFixture project whose phase has a native approved context.",
             "call": "Send a typed draft; read it back through document by the draft identity the answer names; approve by digest alone; read the installed file.",
             "boundary": "stdio JSON-RPC to the real binary; the file on disk after approval",
             "fakes": []
@@ -507,9 +507,9 @@ const PHASE32_WIRE_PLANS: &str = r###"[
               "file": "crates/cadence/tests/phase32_typed_authoring.rs",
               "function": "phase32_stale_digest_is_refused_with_identity_and_part"
             },
-            "setup": "Start the real env!(CARGO_BIN_EXE_cadence) stdio server through the Client in crates/cadence/tests/support/phase31.rs on a fresh ProcessFixture project whose phase has a native approved context.",
+            "setup": "Start the real env!(CARGO_BIN_EXE_cadence) stdio server through the Client in crates/cadence/tests/support/read_fixtures.rs on a fresh ProcessFixture project whose phase has a native approved context.",
             "call": "Send draft A; send draft B with a changed notes slot; approve with A's digest.",
-            "boundary": "stdio JSON-RPC to the real binary; the tree snapshot helper in tests/support/phase31.rs",
+            "boundary": "stdio JSON-RPC to the real binary; the tree snapshot helper in tests/support/read_fixtures.rs",
             "fakes": []
           },
           "reason": "Approving A anyway installs bytes the owner did not read; a refusal without identity and part fails the exact assertion.",
@@ -558,13 +558,13 @@ const PHASE32_WIRE_PLANS: &str = r###"[
     ],
     "files": [
       "crates/cadence/tests/phase32_typed_authoring.rs",
-      "crates/cadence/tests/support/phase31_hosts.rs",
+      "crates/cadence/tests/support/host_rounds.rs",
       "crates/cadence/tests/phase31_read_layer.rs",
-      "crates/cadence/tests/support/phase31.rs"
+      "crates/cadence/tests/support/read_fixtures.rs"
     ],
     "directories": [],
     "goal": "Two callers on one resident read the same draft slice, the phase 31 host helper is clean, and the six-plan publication cost is measured on the wire against 113KB twice.",
-    "context": "D-183 and D-184 at .planning/phases/32/CONTEXT.md. The phase 31 host helper (crates/cadence/tests/support/phase31_hosts.rs) proves T6 only by starting the installed claude, which D-172 ignores; its clippy findings were recorded at bootstrap-exception.md item 5. The mechanism T6 names is one resident shared by every caller (D-149), and that is checkable from two request streams on one stdio process. The 2026-09-12 figure is the 113KB plan set carried twice in docs/architecture/boundary-fix.md:16, so the bound is 231424 bytes.",
+    "context": "D-183 and D-184 at .planning/phases/32/CONTEXT.md. The phase 31 host helper (crates/cadence/tests/support/host_rounds.rs) proves T6 only by starting the installed claude, which D-172 ignores; its clippy findings were recorded at bootstrap-exception.md item 5. The mechanism T6 names is one resident shared by every caller (D-149), and that is checkable from two request streams on one stdio process. The 2026-09-12 figure is the 113KB plan set carried twice in docs/architecture/boundary-fix.md:16, so the bound is 231424 bytes.",
     "notes": "The observation is pending and caps T6 at concerns even when seen; the check is the non-host evidence D-183 asks for. Task 3 runs last because it needs plans 1 and 3 landed.",
     "tasks": [
       {
@@ -572,7 +572,7 @@ const PHASE32_WIRE_PLANS: &str = r###"[
         "title": "Two callers on one resident get the same draft slice",
         "files": [
           "crates/cadence/tests/phase32_typed_authoring.rs",
-          "crates/cadence/tests/support/phase31.rs"
+          "crates/cadence/tests/support/read_fixtures.rs"
         ],
         "action": "Red first: add phase32_two_callers_on_one_resident_read_the_same_draft_slice and retain its red run. The check opens one resident and drives it from two request streams that interleave (the main thread and a worker share one MCP connection in a Claude host; the support Client gains a way to send from a second caller identity on the same process), submits a draft from the first, reads each draft part from both, and asserts byte equality per part and exactly one cadence serve process. Then make it green if anything in plan 3's draft serving is caller-dependent.",
         "verify": [
@@ -583,10 +583,10 @@ const PHASE32_WIRE_PLANS: &str = r###"[
         "id": "P32-4-T2",
         "title": "Phase 31 host helper: lints clear, live probe stays ignored",
         "files": [
-          "crates/cadence/tests/support/phase31_hosts.rs",
+          "crates/cadence/tests/support/host_rounds.rs",
           "crates/cadence/tests/phase31_read_layer.rs"
         ],
-        "action": "Run clippy on the phase31_read_layer target and clear any finding in support/phase31_hosts.rs (the four D-156 record item 5 names; 2026-09-17 clippy printed none, so record the run). The ignored phase31_worker_hosts_receive_main_thread_answers stays as the live probe under D-172 with its reason updated to name D-183 and this plan's check as the non-host evidence.",
+        "action": "Run clippy on the phase31_read_layer target and clear any finding in support/host_rounds.rs (the four D-156 record item 5 names; 2026-09-17 clippy printed none, so record the run). The ignored phase31_worker_hosts_receive_main_thread_answers stays as the live probe under D-172 with its reason updated to name D-183 and this plan's check as the non-host evidence.",
         "verify": [
           "cargo clippy -p cadence --test phase31_read_layer -- -D warnings"
         ]
@@ -669,7 +669,7 @@ const PHASE32_WIRE_PLANS: &str = r###"[
               "file": "crates/cadence/tests/phase32_typed_authoring.rs",
               "function": "phase32_six_plan_publication_wire_bytes"
             },
-            "setup": "Start the real env!(CARGO_BIN_EXE_cadence) stdio server through the Client in crates/cadence/tests/support/phase31.rs on a fresh ProcessFixture project whose phase has a native approved context.",
+            "setup": "Start the real env!(CARGO_BIN_EXE_cadence) stdio server through the Client in crates/cadence/tests/support/read_fixtures.rs on a fresh ProcessFixture project whose phase has a native approved context.",
             "call": "Preview six plans with plan-read count 6 and the complete submission, send the draft, approve by digest; count bytes on both directions of the stdio pipe.",
             "boundary": "stdio JSON-RPC to the real binary, bytes counted at the pipe",
             "fakes": []
@@ -784,8 +784,8 @@ const PHASE32_WIRE_TRUTHS: &str = r###"[
 fn phase32_two_callers_on_one_resident_read_the_same_draft_slice() {
     let fixture = ProcessFixture::new();
     let mut client = Client::open(fixture.project());
-    let mut caller_a = phase31::Caller::new(0);
-    let mut caller_b = phase31::Caller::new(1);
+    let mut caller_a = read_fixtures::Caller::new(0);
+    let mut caller_b = read_fixtures::Caller::new(1);
     native_context(&mut client);
     let allocation = client.call(
         "cadence_query",

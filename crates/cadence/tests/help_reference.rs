@@ -1,10 +1,10 @@
 #[allow(dead_code)]
-#[path = "support/phase13.rs"]
-mod phase13;
+#[path = "support/serve.rs"]
+mod serve;
 #[path = "support/support_records.rs"]
 mod support_records;
 
-use phase13::Client;
+use serve::Client;
 use serde_json::{Value, json};
 use std::{collections::{BTreeMap, BTreeSet}, fs, path::Path};
 
@@ -13,7 +13,7 @@ fn help_lists_the_installed_skills_from_the_compiled_table() {
     let temp = support_records::fixture();
     let project = temp.path();
     assert!(!project.join("cadence-core/references/COMMANDS.md").exists());
-    let before = phase13::tree(project);
+    let before = serve::tree(project);
     let mut client = Client::open(project);
     let all = client.call("cadence_query", json!({"operation":"help"}));
     assert_eq!(all["status"], "ok", "{all}");
@@ -103,6 +103,6 @@ fn help_lists_the_installed_skills_from_the_compiled_table() {
     assert_eq!(missing["closest"], json!(["cad-help", "cad-adopt", "cad-audit"]));
     assert_eq!(client.call("cadence_query", json!({"operation":"help", "name":"healt"})), missing);
     client.finish();
-    assert_eq!(phase13::tree(project), before, "help writes nothing");
+    assert_eq!(serve::tree(project), before, "help writes nothing");
     assert!(!source.join("cadence-core/references/COMMANDS.md").exists());
 }

@@ -1,7 +1,7 @@
 //! A phase whose last admitted plan completed stores a Complete terminal; a
 //! later extension must reopen native selection (D-162). Real stdio, Git and
 //! durable execution state, no seeded records.
-#[path = "support/phase13.rs"]
+#[path = "support/serve.rs"]
 #[allow(dead_code)]
 mod support;
 

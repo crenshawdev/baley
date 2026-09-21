@@ -16,7 +16,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-#[path = "support/phase31.rs"]
+#[path = "support/read_fixtures.rs"]
 #[allow(dead_code)]
 mod round_support;
 

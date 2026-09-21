@@ -1,5 +1,5 @@
 //! Rejected-check acceptance crosses real stdio, Git and durable execution state.
-#[path = "support/phase13.rs"]
+#[path = "support/serve.rs"]
 #[allow(dead_code)]
 mod support;
 

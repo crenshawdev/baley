@@ -1,25 +1,25 @@
-#[path = "support/phase31.rs"]
-mod phase31;
+#[path = "support/read_fixtures.rs"]
+mod read_fixtures;
 #[allow(dead_code)]
-#[path = "support/phase13.rs"]
+#[path = "support/serve.rs"]
 mod dispatch_support;
-#[path = "support/phase31_hosts.rs"]
-mod phase31_hosts;
+#[path = "support/host_rounds.rs"]
+mod host_rounds;
 
-use phase31::{Client, Fixture, ProcessFixture, approve, git, process_plan_submission};
+use read_fixtures::{Client, Fixture, ProcessFixture, approve, git, process_plan_submission};
 use serde_json::json;
 use std::{fs, io::Write};
 
 #[test]
 #[ignore = "D-172/D-183: starts the installed claude, which this repository does not build; run with --ignored as a live probe; P32-T6-C (phase32_two_callers_on_one_resident_read_the_same_draft_slice) supplies the non-host evidence"]
 fn phase31_worker_hosts_receive_main_thread_answers() {
-    phase31_hosts::prove_worker_hosts_receive_main_thread_answers();
+    host_rounds::prove_worker_hosts_receive_main_thread_answers();
 }
 
 #[test]
 #[ignore = "D-172: starts the installed claude, which this repository does not build; run with --ignored as a live probe"]
 fn phase31_planner_round_reports_reads_and_tokens() {
-    let mut fixture = phase31_hosts::PlannerRoundFixture::new();
+    let mut fixture = host_rounds::PlannerRoundFixture::new();
     let round = fixture.run();
     assert!(round.read_count > 0, "the real planner round made no project reads: {round:?}");
     assert_eq!(round.whole_file_reads, 0, "the real planner opened a project file whole: {round:?}");

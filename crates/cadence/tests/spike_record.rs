@@ -1,10 +1,10 @@
 #[allow(dead_code)]
-#[path = "support/phase13.rs"]
-mod phase13;
+#[path = "support/serve.rs"]
+mod serve;
 #[path = "support/support_records.rs"]
 mod support_records;
 
-use phase13::Client;
+use serve::Client;
 use serde_json::{Value, json};
 use std::fs;
 use support_records::apply;
@@ -142,7 +142,7 @@ fn spike_criteria_precede_material_and_the_verdict_is_bounded() {
     assert!(!project.join("src/experiment.rs").exists());
     assert_eq!(fs::read_dir(projection_path.parent().unwrap()).unwrap().count(), 1);
     client.finish();
-    let saved = phase13::reopened(project);
+    let saved = serve::reopened(project);
     assert_eq!(saved.snapshot.data["spike"]["records"]["tenant-cache"], closed["record"]);
     let history_now = support_records::spike_history(&project.join(".planning/spikes"));
     assert_eq!(history_now.iter().filter(|(p, _)| !p.starts_with("tenant-cache")).map(|(p,b)| (p.clone(),b.clone())).collect::<std::collections::BTreeMap<_,_>>(), historical);
@@ -151,7 +151,7 @@ fn spike_criteria_precede_material_and_the_verdict_is_bounded() {
     assert_eq!(apply(&mut client, "spike-verdict", verdict), validated);
     assert_eq!(apply(&mut client, "spike-open", open), opened);
     client.finish();
-    let after = phase13::reopened(project);
+    let after = serve::reopened(project);
     assert_eq!(after.snapshot.generation, saved.snapshot.generation);
     assert_eq!(after.snapshot.data["spike"]["records"]["tenant-cache"], closed["record"]);
     assert_eq!(fs::read_to_string(&projection_path).unwrap(), closed["projection"].as_str().unwrap());

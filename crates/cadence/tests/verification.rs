@@ -1,6 +1,6 @@
-#[path = "support/phase13.rs"]
-mod phase13;
-use phase13::*;
+#[path = "support/serve.rs"]
+mod serve;
+use serve::*;
 use serde_json::{Value, json};
 
 fn inspected_patch(project: &std::path::Path, id: &str) -> (Value, Value) {
@@ -249,7 +249,7 @@ fn phase13_dispatch_carries_current_verification_inputs() {
     std::fs::write(&plan, original).unwrap();
     assert_eq!(query(project, request)["attempt"], *attempt);
     assert_eq!(tree(project), before);
-    let missing = phase13::fixture();
+    let missing = serve::fixture();
     let before = tree(missing.path());
     let refused = query(missing.path(), json!({"operation":"verify-next","phase":13,"request_id":"missing"}));
     assert_eq!(refused["status"], "refused", "{refused}");
@@ -331,7 +331,7 @@ fn phase13_snapshot_event_is_restored_from_the_log() {
     // own generation under its own operation, and says which record.
     let restored = history(project);
     assert_eq!(restored["repaired"], json!([id]), "{restored}");
-    assert_eq!(phase13::retained_history(project, 13)["events"].as_array().unwrap().iter().find(|r| r["request_digest"] == digest).unwrap()["request"]["event"]["material"]["tree"], tree);
+    assert_eq!(serve::retained_history(project, 13)["events"].as_array().unwrap().iter().find(|r| r["request_digest"] == digest).unwrap()["request"]["event"]["material"]["tree"], tree);
     assert_eq!(at_rest(project), tree);
     let repaired = snapshot(project);
     assert_eq!(repaired.generation, generation + 1);
@@ -341,7 +341,7 @@ fn phase13_snapshot_event_is_restored_from_the_log() {
     let dispatch = query(project, json!({"operation":"verify-next","phase":13,"request_id":"verify-restored"}));
     assert_eq!(dispatch["status"], "ok", "{dispatch}");
     assert!(dispatch.get("repaired").is_none(), "{dispatch}");
-    let retained = phase13::retained_history(project, 13);
+    let retained = serve::retained_history(project, 13);
     let events = retained["events"].as_array().unwrap();
     assert_eq!(events.iter().find(|r| r["request_digest"] == digest).unwrap()["request"]["event"]["material"]["tree"], tree);
     let clean = history(project);
@@ -353,7 +353,7 @@ fn report(project: &std::path::Path) -> Value {
     let mut index = client.call("cadence_query", json!({"operation":"verification-read","phase":13}));
     for row in index["history"].as_array_mut().into_iter().flatten() {
         let identity = row["identity"].clone();
-        let detail: Value = serde_json::from_str(&phase13::document_part(&mut client, &identity, "judgment")).unwrap();
+        let detail: Value = serde_json::from_str(&serve::document_part(&mut client, &identity, "judgment")).unwrap();
         row["basis"] = detail["history"][0]["basis"].clone();
         row["truths"] = detail["history"][0]["truths"].clone();
     }
@@ -1196,7 +1196,7 @@ fn phase13_review_surface_selects_target_and_intent() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entry_bytes(&entries, "src/a.py"), subject.as_slice());
     assert_eq!(entry_bytes(&entries, "src/b.py"), std::fs::read(project.join("src/b.py")).unwrap().as_slice());
-    let execution = phase13::retained_history(project, 13);
+    let execution = serve::retained_history(project, 13);
     let base = execution["events"].as_array().unwrap().iter()
         .find(|e| e["request"]["event"]["kind"] == "attempt").unwrap()["request"]["event"]["base_commit"].clone();
     let head = fixture.pairs[1]["green_commit"].clone();

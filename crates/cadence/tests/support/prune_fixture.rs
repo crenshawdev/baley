@@ -1,4 +1,4 @@
-use crate::{phase13::{Client, apply, query, git, git_value, reopened}, phase14, phase15};
+use crate::{serve::{Client, apply, query, git, git_value, reopened}, query_fixtures, landing_fixtures};
 use serde_json::{Value, json};
 use std::{fs, path::Path, process::Command, os::unix::fs::PermissionsExt};
 
@@ -72,7 +72,7 @@ fn writes(project: &Path) -> Vec<String> {
 }
 
 fn open_documents(project: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
-    phase14::documents(project).into_iter().filter(|(p, _)| p.starts_with(".planning/phases/17")).collect()
+    query_fixtures::documents(project).into_iter().filter(|(p, _)| p.starts_with(".planning/phases/17")).collect()
 }
 
 fn assert_result(project: &Path, parent: &str, answer: &Value, before: &Value, open: &std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>) -> (String, String) {
@@ -97,23 +97,23 @@ fn assert_result(project: &Path, parent: &str, answer: &Value, before: &Value, o
 }
 
 pub fn exercise() {
-    let fixture = phase15::Fixture::new(&[15,16]);
+    let fixture = landing_fixtures::Fixture::new(&[15,16]);
     let project = fixture.project();
     // Keep real risk, receipt and deferred records, on a phase outside selection.
-    let (_, fire, _) = phase15::risk(project, 15, false);
+    let (_, fire, _) = landing_fixtures::risk(project, 15, false);
     let settled = apply(project, json!({"operation":"risk-consequence","request_id":"settle-prune-risk","receipt":{
         "id":"prune-risk-settled","fire":fire,"consequence":{"kind":"gate-pass","evidence_id":"fixture-contracted-review"}}}));
     assert_eq!(settled["status"], "ok", "{settled}");
     fs::write(project.join(".planning/ROADMAP.md"), ROADMAP).unwrap();
     fs::create_dir_all(project.join(".planning/phases/17")).unwrap();
     fs::write(project.join(".planning/phases/17/NOTES.md"), "open phase stays byte exact\n").unwrap();
-    let context = apply(project, crate::phase13::approve(json!({"operation":"context-submit","submission":{
+    let context = apply(project, crate::serve::approve(json!({"operation":"context-submit","submission":{
         "phase":17,"title":"Open phase","scope":"Retain the deferred record.","durable_decisions":[],"decisions":[],"assumptions":[],
         "truths":[{"id":"T1","trigger":"the owner opens the next artifact","observer":"the owner","verb":"sees",
             "outcome":"ready","kind":"property","observable":true,"fixed_oracle":true}]}})));
     assert_eq!(context["status"], "ok", "{context}");
     let allocation = query(project, json!({"operation":"plan-read","phase":17,"count":1}));
-    let plan = apply(project, crate::phase13::approve(json!({"operation":"plan-submit","submission":{
+    let plan = apply(project, crate::serve::approve(json!({"operation":"plan-submit","submission":{
         "phase":17,"occurrence":allocation["occurrence"],"request_id":"publish-open",
         "inventory_basis":allocation["inventory"]["basis"],"plans":[{"target":allocation["targets"][0],"content":{
             "phase":17,"plan":1,"requirements":["T1"],"files":["src/p17.txt"],"directories":[],
@@ -127,9 +127,9 @@ pub fn exercise() {
                     "boundary":"real filesystem","fakes":[]},"reason":"Read ready.",
                     "associations":[{"truth_id":"T1","truth_version":1,"reason":"Read ready."}]}]}}}]}})));
     assert_eq!(plan["status"], "ok", "{plan}");
-    let _member = phase15::deferred(project, 17);
+    let _member = landing_fixtures::deferred(project, 17);
     fs::write(project.join(".planning/REQUIREMENTS.md"), REQUIREMENTS).unwrap();
-    let ready = apply(project, phase15::close("ready-prune", &[15,16]));
+    let ready = apply(project, landing_fixtures::close("ready-prune", &[15,16]));
     assert_eq!(ready["status"], "ok", "{ready}");
     for p in [15,16] {
         let summary = fs::read_to_string(project.join(format!(".planning/phases/{p}/SUMMARY.md"))).unwrap();
@@ -173,7 +173,7 @@ pub fn exercise() {
     assert!(why["text"].as_str().unwrap().contains(&format!("v4.0.0 phase 15 (recovered from {}:.planning/phases/15)", &parent[..8])), "{why}");
 
     restore(saved.path(), project);
-    let original = phase14::documents(project);
+    let original = query_fixtures::documents(project);
     fs::set_permissions(project.join(".planning/REQUIREMENTS.md"), fs::Permissions::from_mode(0o0)).unwrap();
     // This real launch verifies the open fails under the same effective uid that
     // runs serve. chmod alone is not an unreadable-input test when cargo is root.
@@ -189,7 +189,7 @@ pub fn exercise() {
     assert_eq!(refused["status"], "refused", "{refused}");
     assert!(refused.to_string().contains("REQUIREMENTS.md"), "{refused}");
     fs::set_permissions(project.join(".planning/REQUIREMENTS.md"), fs::Permissions::from_mode(0o644)).unwrap();
-    assert_eq!(phase14::documents(project), original);
+    assert_eq!(query_fixtures::documents(project), original);
     // Git's owner check is intentionally unchanged; use the child owner to read
     // HEAD on root runners through the already-authored parent object bytes.
     assert_eq!(fs::read_to_string(project.join(".git/refs/heads/fixture/landing")).unwrap().trim(), parent);

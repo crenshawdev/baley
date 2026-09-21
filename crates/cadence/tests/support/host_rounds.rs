@@ -1,5 +1,5 @@
 //! Genuine Claude Code host evidence for the phase 31 read boundary.
-use super::phase31::{Client, ProcessFixture, approve, process_plan_submission};
+use super::read_fixtures::{Client, ProcessFixture, approve, process_plan_submission};
 use cadence::read::{measurement, model::DocumentIdentity};
 use serde_json::{Value, json};
 use std::{

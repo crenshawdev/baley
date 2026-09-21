@@ -1,5 +1,5 @@
 #[allow(dead_code)]
-#[path = "support/phase31.rs"]
+#[path = "support/read_fixtures.rs"]
 mod support;
 
 use serde_json::{Value, json};

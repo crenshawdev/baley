@@ -1,6 +1,6 @@
 //! Phase 38 acceptance checks cross two real binaries, stdio, Git and durable
 //! native execution state. No store record or renderer is seeded by a check.
-#[path = "support/phase13.rs"]
+#[path = "support/serve.rs"]
 #[allow(dead_code)]
 mod support;
 

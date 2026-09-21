@@ -5,10 +5,10 @@
 //! addresses. The capability stays; the field is `phase`, and it accepts an
 //! integer or a dotted-decimal string.
 
-#[path = "support/phase13.rs"]
+#[path = "support/serve.rs"]
 #[allow(dead_code)]
-mod phase13;
-use phase13::*;
+mod serve;
+use serve::*;
 use serde_json::json;
 use std::fs;
 

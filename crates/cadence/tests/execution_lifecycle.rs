@@ -472,7 +472,7 @@ fn execution_history(project: &Path) -> Value {
     let mut answer = history_with(&mut client);
     client.finish();
     // Inspect retention separately; the operational wire answer is an index.
-    let retained = phase13::retained_history(project,12);
+    let retained = serve::retained_history(project,12);
     answer["events"] = retained["events"].clone();
     answer["plan_events"] = retained["plan_events"].clone();
     answer["checkpoint_history"] = json!(answer["events"].as_array().unwrap().iter()
@@ -624,7 +624,7 @@ impl Tiny {
         let request = json!({"operation":"execution-run","request":{"request_id":id,"task":state["task"],"attempt":attempt,
             "expected_version":state["state"]["version"],"command":command,"check":check.map(|i|self.checks[i].clone()),"stage":stage}});
         let launch = client.call("cadence_apply",request.clone()); assert_eq!(launch["status"],"ok","{launch}");
-        let result = phase13::native_result_with(|request| client.call("cadence_query",request),12,id);
+        let result = serve::native_result_with(|request| client.call("cadence_query",request),12,id);
         assert_eq!(client.call("cadence_apply",request)["receipt"],launch["receipt"],"launch replay");
         let event = &result["request"]["event"];
         assert_eq!(event["material_unchanged"],true,"{event}");
@@ -680,7 +680,7 @@ impl Tiny {
     fn classify(&self, index: usize, red: bool) -> Value {
         let task=if index<2 {"A"} else {"B"};let state=task_state(self.project(),task);
         let run=format!("{}-{index}",if red {"red"} else {"green"});
-        let history=phase13::query(self.project(),json!({"operation":"execution-history","phase":12,"run":run}));
+        let history=serve::query(self.project(),json!({"operation":"execution-history","phase":12,"run":run}));
         let result=&history["result"]["request"]["event"];
         let identity=model::digest(format!("{}\n{}",result["stdout"]["digest"].as_str().unwrap(),result["stderr"]["digest"].as_str().unwrap()).as_bytes());
         let submission=json!({"run_id":run,"output_identity":identity,"check":self.checks[index],"interpretation":if red {"red-eligible"} else {"green-eligible"}});
@@ -944,7 +944,7 @@ fn phase12_acknowledged_progress_survives_restart() {
     let mut client=Client::open(project);let b=task_state(project,"B");
     let failed=client.call("cadence_apply",json!({"operation":"execution-run","request":{"request_id":"failed-B","task":b["task"],"attempt":"attempt-B",
         "expected_version":b["state"]["version"],"command":PROGRESS_FAIL,"check":null,"stage":"verify"}}));assert_eq!(failed["status"],"ok","{failed}");
-    let record=phase13::native_result_with(|request| client.call("cadence_query",request),12,"failed-B");
+    let record=serve::native_result_with(|request| client.call("cadence_query",request),12,"failed-B");
     assert_eq!(record["request"]["event"]["disposition"],json!({"kind":"exited","code":1}));
     assert_eq!(record["request"]["event"]["observation"],json!({"class":"unknown"}));
     client.finish();
@@ -1053,7 +1053,7 @@ fn authorize(project:&Path,id:&str,checkpoint:Option<&str>,disposition:&str,resp
 
 // Read operational facts from the public bounded dispatch document.
 #[allow(dead_code)]
-#[path = "support/phase13.rs"]
+#[path = "support/serve.rs"]
 mod dispatch_support;
 fn operational(project: &std::path::Path, dispatch: &Value) -> Value {
     let mut client = Client::open(project);
@@ -1376,7 +1376,7 @@ fn plan_refused(project:&Path,request:Value,rule:&str) -> Value {
 }
 
 fn suite_events(project:&Path,plan:u32) -> Vec<Value> {
-    phase13::retained_history(project,12)["plan_events"].as_array().unwrap().iter().filter(|e|e["request"]["plan"]["plan"]==plan).cloned().collect()
+    serve::retained_history(project,12)["plan_events"].as_array().unwrap().iter().filter(|e|e["request"]["plan"]["plan"]==plan).cloned().collect()
 }
 
 // The launching server owns the suite child, so the same server reads the
@@ -1386,7 +1386,7 @@ fn suite_run(project:&Path,id:&str,plan:u32) -> (Value,Value) {
     let mut client=Client::open(project);
     let launch=client.call("cadence_apply",request);
     assert_eq!(launch["status"],"ok","the suite must be available after the last task is acknowledged: {launch}");
-    let result=phase13::native_result_with(|request| client.call("cadence_query",request),12,id)["request"]["event"].clone();
+    let result=serve::native_result_with(|request| client.call("cadence_query",request),12,id)["request"]["event"].clone();
     client.finish();
     (launch,result)
 }
@@ -1556,7 +1556,7 @@ fn phase12_runner_retains_task_commands_and_one_suite() {
         let failed=Tiny::new(mode);let project=failed.project();finish_tasks(&failed);
         let request=plan_request(project,"execution-suite","fail-1",1,json!({"proposed_paths":["src/tiny.py"]}));
         let mut client=Client::open(project);let launch=client.call("cadence_apply",request);assert_eq!(launch["status"],"ok","{launch}");
-        let result=phase13::native_result_with(|request| client.call("cadence_query",request),12,"fail-1")["request"]["event"].clone();
+        let result=serve::native_result_with(|request| client.call("cadence_query",request),12,"fail-1")["request"]["event"].clone();
         client.finish();
         assert_eq!(result["observation"],json!({"class":"results-observed","summary":expected}));
         assert_eq!(result["disposition"]["code"],if mode=="runner-failed-cargo" {101} else {1});
@@ -1658,12 +1658,12 @@ fn phase12_execution_history_reads_one_run_by_id() {
     assert_eq!(refused["code"],"document-not-found");
     assert_eq!(refused["slot"],"identity");
     assert!(refused.get("events").is_none(),"{refused}");
-    let captured=phase13::native_result_with(|request| client.call("cadence_query",request),12,"big-C");
+    let captured=serve::native_result_with(|request| client.call("cadence_query",request),12,"big-C");
     assert_eq!(captured["request"]["event"]["stdout"]["text"],String::from_utf8_lossy(&capture_bytes(&find("events","result","big-C")["request"]["event"]["stdout"])).as_ref());
     let index=client.call("cadence_query",json!({"operation":"execution-history","phase":12}));
     assert!(index.get("events").is_none() && index.get("plan_events").is_none());
     assert!(index.to_string().len() <= 65536);
-    assert_eq!(phase13::retained_history(project,12)["events"],whole["events"]);
+    assert_eq!(serve::retained_history(project,12)["events"],whole["events"]);
     client.finish();
 }
 

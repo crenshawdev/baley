@@ -1,18 +1,18 @@
-#[path = "support/phase13.rs"]
+#[path = "support/serve.rs"]
 #[allow(dead_code)]
-mod phase13;
-#[path = "support/phase14.rs"]
+mod serve;
+#[path = "support/query_fixtures.rs"]
 #[allow(dead_code)]
-mod phase14;
-#[path = "support/phase15.rs"]
-mod phase15;
-use phase13::{Client, apply, query, git, git_value, reopened};
-use phase15::{Fixture, close, deferred, risk};
+mod query_fixtures;
+#[path = "support/landing_fixtures.rs"]
+mod landing_fixtures;
+use serve::{Client, apply, query, git, git_value, reopened};
+use landing_fixtures::{Fixture, close, deferred, risk};
 use serde_json::json;
 use std::{fs, path::Path};
 
-#[path = "support/phase15_prune.rs"]
-mod phase15_prune;
+#[path = "support/prune_fixture.rs"]
+mod prune_fixture;
 #[path = "support/production_source.rs"]
 mod production_source;
 
@@ -32,7 +32,7 @@ fn fault_drivers_are_gated_to_debug_builds() {
 
 #[test]
 fn phase15_interrupted_landing_reconciles_against_the_remote() {
-    use phase15::{Publishing, effect_exit};
+    use landing_fixtures::{Publishing, effect_exit};
     use serde_json::Value;
     let forge = json!({"provider":"github","repo":"fixture/repo","host":"github.com"});
     let inputs = [json!({"step":"push"}),
@@ -205,7 +205,7 @@ fn phase15_interrupted_landing_reconciles_against_the_remote() {
 
 #[test]
 fn phase15_publish_steps_refuse_without_a_landing_authorization() {
-    use phase15::{Publishing, imported_auto_close};
+    use landing_fixtures::{Publishing, imported_auto_close};
     let forge = json!({"provider":"github","repo":"fixture/repo","host":"github.com"});
     let inputs = [json!({"step":"push"}), json!({"step":"open","forge":forge,"title":"Confirmed title","body":"Confirmed body\nSecond line"}),
         json!({"step":"merge","forge":forge,"pr":7}), json!({"step":"tag-push","tag":"v1.0.0","head":"0000000000000000000000000000000000000000"})];
@@ -310,7 +310,7 @@ fn phase15_publish_steps_refuse_without_a_landing_authorization() {
 
 #[test]
 fn phase15_prune_retries_to_one_result_from_every_write_point() {
-    phase15_prune::exercise();
+    prune_fixture::exercise();
 }
 
 #[test]
@@ -319,7 +319,7 @@ fn phase15_close_refuses_unsettled_records_and_land_refuses_unruled_deferred() {
     let project = fixture.project();
     let (scan, _, clear) = risk(project, 15, true);
     let member = deferred(project, 16);
-    let before = phase14::documents(project);
+    let before = query_fixtures::documents(project);
     let expected = json!([
         {"kind":"risk","phase":15,"identity":scan["confirmation"]["decision_id"]},
         {"kind":"deferred","phase":16,"identity":member}
@@ -329,7 +329,7 @@ fn phase15_close_refuses_unsettled_records_and_land_refuses_unruled_deferred() {
     assert_eq!(refused["status"], "refused", "{refused}");
     assert_eq!(refused["code"], "milestone-unsettled", "{refused}");
     assert_eq!(refused["unsettled"], expected);
-    assert_eq!(phase14::documents(project), before);
+    assert_eq!(query_fixtures::documents(project), before);
     assert_eq!(apply(project, request), refused, "restart replays the exact refusal");
     let report = query(project, json!({"operation":"milestone-read","occurrence":"phase15-test","selection":{"phases":[15,16],"label":"Fixture milestone"}}));
     assert_eq!(report["unsettled"], expected);
@@ -348,13 +348,13 @@ fn phase15_close_refuses_unsettled_records_and_land_refuses_unruled_deferred() {
     let settled = apply(project, json!({"operation":"risk-consequence","request_id":"settle-risk","receipt":{
         "id":"risk-settled","fire":fire,"consequence":{"kind":"gate-pass","evidence_id":"fixture-contracted-review"}}}));
     assert_eq!(settled["status"], "ok", "{settled}");
-    let before = phase14::documents(project);
+    let before = query_fixtures::documents(project);
     let ready = apply(project, close("risk-after", &[15]));
     assert_eq!(ready["status"], "ok", "{ready}");
     assert_eq!(ready["close"]["state"], "ready");
     assert_eq!(ready["close"]["generation"], 1);
     assert_eq!(ready["close"]["selection"], json!({"phases":[15],"label":"Fixture milestone"}));
-    assert_eq!(phase14::documents(project), before, "plan 1 records readiness only");
+    assert_eq!(query_fixtures::documents(project), before, "plan 1 records readiness only");
     assert_eq!(apply(project, close("risk-after", &[15])), ready);
     let mut changed = close("risk-after", &[15]);
     changed["request"]["selection"]["label"] = json!("Changed");
@@ -378,7 +378,7 @@ fn phase15_close_refuses_unsettled_records_and_land_refuses_unruled_deferred() {
     assert_eq!(start["status"], "ok", "{start}");
     let local_refs = git_value(project, &["show-ref"]);
     let remote_refs = git_value(remote.path(), &["show-ref"]);
-    let before = phase14::documents(project);
+    let before = query_fixtures::documents(project);
     let trace = project.join(".git-trace");
     let mut client = Client::open_with_env(project, Path::new(env!("CARGO_BIN_EXE_cadence")), &[("GIT_TRACE", trace.as_os_str())]);
     let publish = json!({"operation":"land-publish","request":{"request_id":"publish-refused","landing":start["landing"]["id"],"expected_generation":1}});
@@ -390,7 +390,7 @@ fn phase15_close_refuses_unsettled_records_and_land_refuses_unruled_deferred() {
     assert!(!trace.exists() || fs::read(&trace).unwrap().is_empty(), "refused publish must invoke zero Git subprocesses");
     assert_eq!(git_value(project, &["show-ref"]), local_refs);
     assert_eq!(git_value(remote.path(), &["show-ref"]), remote_refs);
-    assert_eq!(phase14::documents(project), before);
+    assert_eq!(query_fixtures::documents(project), before);
     assert_eq!(apply(project, publish), refused);
     let read = query(project, json!({"operation":"land-read","landing":start["landing"]["id"]}));
     assert_eq!(read["landing"], start["landing"]);
@@ -400,7 +400,7 @@ fn phase15_close_refuses_unsettled_records_and_land_refuses_unruled_deferred() {
 }
 #[test]
 fn phase15_confirmed_merge_orders_cleanup_and_reap_checks_containment() {
-    use phase15::{Publishing, effect_exit};
+    use landing_fixtures::{Publishing, effect_exit};
     use serde_json::Value;
     let operations = ["land-checkout", "land-pull", "land-tag", "land-reap"];
     let steps = ["checkout", "pull", "tag", "reap"];
@@ -420,7 +420,7 @@ fn phase15_confirmed_merge_orders_cleanup_and_reap_checks_containment() {
         let trace = project.join(".run/resume.trace");
         let mut client = fixture.client_with_env(&[("GIT_TRACE2_EVENT", trace.as_os_str())]);
         let refs = git_value(project, &["show-ref"]);
-        let documents = phase14::documents(project);
+        let documents = query_fixtures::documents(project);
         let records = reopened(project).snapshot.data;
         for operation in operations {
             let refused = client.call("cadence_apply", request(operation, &format!("cleanup-before-{operation}"), &landing));
@@ -495,7 +495,7 @@ fn phase15_confirmed_merge_orders_cleanup_and_reap_checks_containment() {
         assert_eq!(read["landing"]["merge_confirmation"], owner_record);
         for receipt in &receipts { assert!(read["done"].as_array().unwrap().contains(receipt)); }
         client.finish();
-        assert_eq!(phase14::documents(project), documents);
+        assert_eq!(query_fixtures::documents(project), documents);
         let after = reopened(project).snapshot.data;
         for key in ["rail_observations", "rail_receipts", "deferred"] { assert_eq!(after[key], records[key]); }
         assert_eq!(fixture.mutations().len(), 2, "cleanup must not mutate a tracker");
@@ -533,7 +533,7 @@ fn phase15_confirmed_merge_orders_cleanup_and_reap_checks_containment() {
 #[test]
 fn reap_refusal_codes_name_the_gate_that_fired() {
     use cadence::{landing::{cleanup, model::{Landing, Remote, Revision, Start, Step}}, store::Error};
-    use phase15::Publishing;
+    use landing_fixtures::Publishing;
     use serde_json::Value;
 
     let fixture = Publishing::new(false);
@@ -595,7 +595,7 @@ fn reap_refusal_codes_name_the_gate_that_fired() {
 
 #[test]
 fn phase15_undo_reverts_exact_hashes_and_marks_the_record() {
-    use phase15::UndoFixture;
+    use landing_fixtures::UndoFixture;
     use serde_json::Value;
     let request = |id: &str, manifest: &Value, mode: &str| json!({"operation":"undo-phase","request":{
         "request_id":id,"phase":13,"manifest":manifest["id"],"mode":mode}});
@@ -612,7 +612,7 @@ fn phase15_undo_reverts_exact_hashes_and_marks_the_record() {
             git(project, &["commit", "-m", "feat(99): retain later conflicting work"]);
         }
         let before_head = git_value(project, &["rev-parse", "HEAD"]);
-        let before_docs = phase14::documents(project);
+        let before_docs = query_fixtures::documents(project);
         let before_store = reopened(project).snapshot.data;
         let mut client = fixture.client();
         if mode != "legacy" {
@@ -662,7 +662,7 @@ fn phase15_undo_reverts_exact_hashes_and_marks_the_record() {
         if mode == "no-commit" || mode == "conflict" {
             assert_eq!(after["execution"]["occurrences"]["13"], before_store["execution"]["occurrences"]["13"]);
             assert_eq!(after["cursor"], before_store["cursor"]);
-            assert_eq!(phase14::documents(project), before_docs);
+            assert_eq!(query_fixtures::documents(project), before_docs);
             if mode == "no-commit" {
                 assert_eq!(git_value(project, &["rev-parse", "HEAD"]), before_head);
                 assert_eq!(git_value(project, &["diff", "--cached", "--name-only"]),
@@ -725,7 +725,7 @@ fn phase15_version_drift_is_reported_before_bump_or_tag() {
         std::fs::read(project.join(".git/index")).unwrap(),
         git_value(project, &["show-ref", "--tags"]),
     );
-    let mut fixture = phase15::release_fixture();
+    let mut fixture = landing_fixtures::release_fixture();
     let project = fixture.project.path().to_owned();
     let mut client = fixture.client();
     let landing = fixture.start(&mut client, "release-main");
@@ -792,7 +792,7 @@ fn phase15_version_drift_is_reported_before_bump_or_tag() {
         ("land-open", json!({"step":"open","forge":forge,"title":"Release","body":"Release 1.3.0"})),
         ("land-merge", json!({"step":"merge","forge":forge,"pr":7})),
     ].into_iter().enumerate() {
-        let auth = phase15::Publishing::authorize(&mut client, &bound, &format!("release-publish-{index}"), inputs.clone());
+        let auth = landing_fixtures::Publishing::authorize(&mut client, &bound, &format!("release-publish-{index}"), inputs.clone());
         let result = client.call("cadence_apply", json!({"operation":operation,"request":{
             "request_id":format!("release-effect-{index}"),"landing":bound["id"],"expected_generation":bound["generation"],
             "authorization":auth["id"],"inputs":inputs}}));
@@ -828,7 +828,7 @@ fn phase15_version_drift_is_reported_before_bump_or_tag() {
     client.finish();
     // Every observed basis component is independently stale; no changed basis bumps.
     for change in ["manifest", "tags", "head"] {
-        let fixture = phase15::release_fixture();
+        let fixture = landing_fixtures::release_fixture();
         let project = fixture.project.path();
         let mut client = fixture.client();
         let landing = fixture.start(&mut client, "release-stale");
@@ -845,7 +845,7 @@ fn phase15_version_drift_is_reported_before_bump_or_tag() {
         assert_eq!(git_value(project, &["tag", "--list", "v1.3.0"]), "");
         client.finish();
     }
-    let fixture = phase15::release_fixture();
+    let fixture = landing_fixtures::release_fixture();
     let project = fixture.project.path();
     let mut client = fixture.client();
     let landing = fixture.start(&mut client, "release-inputs");

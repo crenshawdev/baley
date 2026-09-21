@@ -1,11 +1,11 @@
 #[allow(dead_code)]
-#[path = "support/phase13.rs"]
-mod phase13;
+#[path = "support/serve.rs"]
+mod serve;
 #[path = "support/support_records.rs"]
 mod support_records;
 
 use cadence::rail::{receipts, risk};
-use phase13::Client;
+use serve::Client;
 use serde_json::json;
 use support_records::{apply, query};
 
@@ -28,7 +28,7 @@ fn debug_blocking_fire_holds_resolve_until_a_receipt() {
         let before = resolve(&mut client, "token-fix", "receipt-initial", true);
         assert_eq!(before["code"], "debug-review-pending", "{before}");
         client.finish();
-        let view = phase13::reopened(project);
+        let view = serve::reopened(project);
         receipts::confirmed_history(&view).unwrap();
         let parent = receipts::history(&view.snapshot.data).unwrap().1.remove(0);
         assert_eq!(parent.review_scope, ["src/auth/a.rs", "src/auth/b.rs"]);
@@ -63,7 +63,7 @@ fn debug_blocking_fire_holds_resolve_until_a_receipt() {
                 assert_eq!(blank["status"], "refused", "{blank}");
                 assert!(blank.to_string().contains("nonblank"), "{blank}");
                 client.finish();
-                assert!(receipts::history(&phase13::reopened(project).snapshot.data).unwrap().2.is_empty());
+                assert!(receipts::history(&serve::reopened(project).snapshot.data).unwrap().2.is_empty());
                 client = Client::open(project);
                 let accepted = consequence(&mut client, "settled-receipt", &parent,
                     json!({"kind":"override","reason":"Fixture owner accepts these two findings"}));
@@ -71,7 +71,7 @@ fn debug_blocking_fire_holds_resolve_until_a_receipt() {
                 parent.clone()
             }
             "rearm" => {
-                phase13::git(project, &["rm", "--cached", "--", "src/auth/b.rs"]);
+                serve::git(project, &["rm", "--cached", "--", "src/auth/b.rs"]);
                 let scan = client.call("cadence_apply", json!({"operation":"risk-check","request_id":"narrowed-scan",
                     "scope":{"kind":"root-debug","occurrence":"token-fix"},
                     "source":{"kind":"staged","base":parent.binding.material.base_id()}}));
@@ -136,7 +136,7 @@ fn debug_blocking_fire_holds_resolve_until_a_receipt() {
         assert_eq!(done["record"]["status"], "resolved");
         let final_status = debug_readback(&mut client, project, "token-fix", &accepted_ids);
         client.finish();
-        let view = phase13::reopened(project);
+        let view = serve::reopened(project);
         receipts::confirmed_history(&view).unwrap();
         assert!(!view.snapshot.data["review"].to_string().contains("\"verified\""));
         let mut client = Client::open(project);
@@ -157,10 +157,10 @@ fn debug_resolve_risk_checks_the_index_without_a_phase() {
         let repo = support_records::risk_fixture();
         let project = repo.path();
         if !path.is_empty() { support_records::change(project, path, bytes, staged); }
-        let base = phase13::git_value(project, &["rev-parse", "HEAD"]);
-        let index = phase13::git_value(project, &["write-tree"]);
+        let base = serve::git_value(project, &["rev-parse", "HEAD"]);
+        let index = serve::git_value(project, &["write-tree"]);
         if case == "binary" {
-            assert!(phase13::git_value(project, &["diff", "--cached"]).contains("Binary files"));
+            assert!(serve::git_value(project, &["diff", "--cached"]).contains("Binary files"));
         }
         let material = json!({"kind":"staged","base_id":base,"index_id":index});
         let mut client = Client::open(project);
@@ -174,7 +174,7 @@ fn debug_resolve_risk_checks_the_index_without_a_phase() {
             assert!(answer.to_string().contains("empty index"), "{case}: {answer}");
             assert_eq!(query(&mut client, "debug-status", "login-fix")["record"]["status"], "open");
             client.finish();
-            assert!(receipts::history(&phase13::reopened(project).snapshot.data).unwrap().1.is_empty());
+            assert!(receipts::history(&serve::reopened(project).snapshot.data).unwrap().1.is_empty());
             continue;
         }
         let status = query(&mut client, "debug-status", "login-fix");
@@ -228,7 +228,7 @@ fn debug_resolve_risk_checks_the_index_without_a_phase() {
             assert!(review["fire"].is_null());
         }
         client.finish();
-        let view = phase13::reopened(project);
+        let view = serve::reopened(project);
         receipts::confirmed_history(&view).unwrap();
         let (observations, saved_fires, _) = receipts::history(&view.snapshot.data).unwrap();
         assert_eq!(observations.len(), 1, "{case}");
@@ -250,7 +250,7 @@ fn debug_resolve_risk_checks_the_index_without_a_phase() {
             let manifest = &view.snapshot.data["review"]["manifests"][admitted["artifact"].as_str().unwrap()];
             assert_eq!(manifest["target"], json!({"kind":"staged-tree","base":base,"index":index,"head":null}));
         }
-        assert_eq!(phase13::git_value(project, &["write-tree"]), index);
+        assert_eq!(serve::git_value(project, &["write-tree"]), index);
         assert_eq!(support_records::guard(project, "Write", ".planning/debug/login-fix.md")
             ["hookSpecificOutput"]["permissionDecision"], "deny");
     }

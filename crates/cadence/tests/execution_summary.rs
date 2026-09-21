@@ -1,4 +1,4 @@
-#[path = "support/phase31.rs"]
+#[path = "support/read_fixtures.rs"]
 #[allow(dead_code)]
 mod support;
 

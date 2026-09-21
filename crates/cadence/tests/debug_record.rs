@@ -1,10 +1,10 @@
 #[allow(dead_code)]
-#[path = "support/phase13.rs"]
-mod phase13;
+#[path = "support/serve.rs"]
+mod serve;
 #[path = "support/support_records.rs"]
 mod support_records;
 
-use phase13::Client;
+use serve::Client;
 use serde_json::{Value, json};
 use std::fs;
 use support_records::{apply, query};
@@ -45,7 +45,7 @@ fn debug_open_reads_recall_by_the_effective_backend() {
             assert!(projection.contains("phases/1/SUMMARY.md") && projection.contains("phase 1"));
         }
         client.finish();
-        assert_eq!(phase13::reopened(repo.path()).snapshot.data["debug"]["records"]["stale-token"]["recall"], *retained);
+        assert_eq!(serve::reopened(repo.path()).snapshot.data["debug"]["records"]["stale-token"]["recall"], *retained);
         // Changed corpus and backend cannot rewrite the retained snapshot on restart or replay.
         fs::write(repo.path().join(".planning/phases/1/SUMMARY.md"), "## Deviations\n- replacement\n").unwrap();
         fs::write(repo.path().join(".planning/config.json"), r#"{"memory":{"backend":"none"}}"#).unwrap();
@@ -120,7 +120,7 @@ fn debug_session_resumes_from_the_record_alone() {
     let reused = client.call("cadence_apply", json!({"operation":"debug-attempt","request":changed}));
     assert_eq!(reused["code"], "request-reused");
     client.finish();
-    let view = phase13::reopened(project);
+    let view = serve::reopened(project);
     assert!(view.snapshot.data["debug"]["records"]["cache-miss"].is_object());
     let copy = support_records::copy_stopped(project);
     fs::write(copy.path().join(".planning/debug/cache-miss.md"), "# Debug\nSymptom: misleading\nAttempts: 999\n").unwrap();
@@ -159,5 +159,5 @@ fn debug_session_resumes_from_the_record_alone() {
         "reproduction":{"test":"read docs/note.txt","result":"plain note","passed":true}}));
     assert_eq!(client.call("cadence_query", json!({"operation":"debug-list"}))["records"], json!([]));
     client.finish();
-    assert_eq!(phase13::git_value(control.path(), &["write-tree"]), staged);
+    assert_eq!(serve::git_value(control.path(), &["write-tree"]), staged);
 }

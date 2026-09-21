@@ -1,6 +1,6 @@
-#[path = "support/phase13.rs"]
-mod phase13;
-use phase13::*;
+#[path = "support/serve.rs"]
+mod serve;
+use serve::*;
 use serde_json::{Value, json};
 use std::{fs, time::{Duration, Instant}};
 
@@ -15,7 +15,7 @@ fn phase13_runner_retains_independent_receipts() {
     assert_eq!((fixture.pairs.len(), fixture.statements.len(), fixture.dispatches.len()), (2, 2, 2));
     assert_eq!(fixture.admission["status"], "ok");
     let dispatch = query(project, json!({"operation":"verify-next","phase":13,"request_id":"runner-attempt"}));
-    let attempt = phase13::attempt_view(project, &dispatch);
+    let attempt = serve::attempt_view(project, &dispatch);
     assert_eq!(attempt["map"], fixture.map);
     let item = &fixture.pairs[0]["check"];
     let request = json!({"operation":"verification-run","request":{"request_id":"independent-a",
@@ -27,7 +27,7 @@ fn phase13_runner_retains_independent_receipts() {
     let launch = client.call("cadence_apply", request.clone());
     assert_eq!(launch["status"], "ok", "{launch}");
     assert_eq!(launch["receipt"]["event"]["launch"]["material"]["command"], "python3 -B tests/a.py");
-    phase13::independent_result(&mut client, 13, "independent-a");
+    serve::independent_result(&mut client, 13, "independent-a");
     let result = client.call("cadence_query", json!({"operation":"execution-history","phase":13,"run":"independent-a"}))["result"].clone();
     assert_eq!(result["event"]["result"]["disposition"], json!({"kind":"exited","code":0}));
     assert_eq!(result["event"]["result"]["material_unchanged"], true);
@@ -38,7 +38,7 @@ fn phase13_runner_retains_independent_receipts() {
     assert_eq!(read(project, &attempt)["runs"], json!([{"id":"independent-a","identity":{"kind":"run-output","phase":13,"run":"independent-a"}}]));
     assert_eq!(read(project, &attempt)["unknown_runs"], json!([]));
     assert_eq!(fs::read_to_string(project.join(".run/a-runs")).unwrap(), "run\nrun\nrun\nrun\n");
-    let reopened = phase13::reopened(project).snapshot;
+    let reopened = serve::reopened(project).snapshot;
     assert_eq!(tree(project), after);
     for key in ["native_tasks", "native_plans", "native_admissions"] {
         assert_eq!(reopened.data[key], native_before.data[key], "verification never reopens execution");
@@ -83,7 +83,7 @@ fn phase13_runner_retains_independent_receipts() {
     assert_eq!(apply(project, interrupted)["receipt"], pending["receipt"]);
     assert_eq!(fs::read_to_string(project.join(".run/a-runs")).unwrap(), "run\nrun\nrun\nrun\nrun\n");
     assert_eq!(tree(project), stopped);
-    let saved = phase13::reopened(project).snapshot;
+    let saved = serve::reopened(project).snapshot;
     assert_eq!(saved.data["native_tasks"], native_before.data["native_tasks"]);
     assert_eq!(tree(project), stopped);
 }

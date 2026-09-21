@@ -21,15 +21,15 @@ use std::{collections::BTreeSet, fs, path::Path};
 #[path = "support/signing.rs"]
 mod signing;
 
-#[path = "support/phase13.rs"]
-pub mod phase13;
-#[path = "support/phase31.rs"]
+#[path = "support/serve.rs"]
+pub mod serve;
+#[path = "support/read_fixtures.rs"]
 #[allow(dead_code)]
-mod phase31;
+mod read_fixtures;
 
 #[test]
 fn execution_index_continues_before_exceeding_its_byte_budget() {
-    let mut round = phase31::ClosedRound::admitted_with_tasks(64);
+    let mut round = read_fixtures::ClosedRound::admitted_with_tasks(64);
     let mut request = json!({"operation":"execution-history","phase":31});
     let mut task_ids = std::collections::BTreeSet::new();
     let mut pages = 0;
@@ -57,7 +57,7 @@ fn execution_index_continues_before_exceeding_its_byte_budget() {
 
 #[test]
 fn execution_index_counts_omitted_run_ids() {
-    let mut round = phase31::ClosedRound::admitted();
+    let mut round = read_fixtures::ClosedRound::admitted();
     let history = round.client.call("cadence_query", json!({"operation":"execution-history","phase":31}));
     let task = history["tasks"][0]["task"].clone();
     let started = round.client.call("cadence_apply", json!({"operation":"execution-task-start","request":{
@@ -83,16 +83,16 @@ fn execution_index_counts_omitted_run_ids() {
 
 #[test]
 fn verification_index_bounds_observations_and_preserves_attempt_parts() {
-    let fixture = phase13::Completed::new();
+    let fixture = serve::Completed::new();
     let project = fixture.project();
-    let (attempt, mut patch) = phase13::inspect(project, "bounded-observation", &[]);
+    let (attempt, mut patch) = serve::inspect(project, "bounded-observation", &[]);
     let observation = "é".repeat(7_500);
     for item in patch["items"].as_array_mut().unwrap() {
         item["observed"] = json!(observation);
     }
-    let accepted = phase13::apply(project, json!({"operation":"verification-submit","patch":patch}));
+    let accepted = serve::apply(project, json!({"operation":"verification-submit","patch":patch}));
     assert_eq!(accepted["status"], "ok", "{accepted}");
-    let mut client = phase13::Client::open(project);
+    let mut client = serve::Client::open(project);
     let index = client.call("cadence_query", json!({"operation":"verification-read","phase":13}));
     assert!(index.to_string().len() <= 65536);
     assert!(index.get("report").is_none());
@@ -106,7 +106,7 @@ fn verification_index_bounds_observations_and_preserves_attempt_parts() {
         }
     }
     let identity = &index["identity"];
-    let full: Value = serde_json::from_str(&phase13::document_part(&mut client, identity, "claim:bounded-observation-patch")).unwrap();
+    let full: Value = serde_json::from_str(&serve::document_part(&mut client, identity, "claim:bounded-observation-patch")).unwrap();
     assert_eq!(full["patch"]["items"][0]["observed"], observation);
     let history = client.call("cadence_query", json!({"operation":"execution-history","phase":13,"plan":1}));
     assert!(history.to_string().len() <= 65536);
@@ -1328,11 +1328,11 @@ fn execution_calls_refuse_noninteger_phases_and_legacy_plans_without_dispatch() 
             "checks":[{"id":"check/A","item_revision":"<saved item revision>"}]},
             {"plan":1,"task":"task-B","checks":[]}]}}}));
     }
-    let fixture = phase13::fixture();
+    let fixture = serve::fixture();
     let project = fixture.path();
-    phase13::native_context(project, &[("T1","a request arrives","the caller","a bounded answer")]);
-    let before = phase13::reopened(project).snapshot.data;
-    let mut client = phase13::Client::open(project);
+    serve::native_context(project, &[("T1","a request arrives","the caller","a bounded answer")]);
+    let before = serve::reopened(project).snapshot.data;
+    let mut client = serve::Client::open(project);
     let mut replies = Vec::new();
     for (phase, detail) in [("0","0"),("-1","-1"),("13.0","13.0"),("13.5","13.5"),
         ("13e0","13e+0"),("\"13\"","\"13\""),("null","null")] {
@@ -1353,10 +1353,10 @@ fn execution_calls_refuse_noninteger_phases_and_legacy_plans_without_dispatch() 
     assert_eq!(legacy["status"], "refused", "{legacy}");
     assert!(legacy.get("dispatch").is_none());
     client.finish();
-    let reopened = phase13::reopened(project);
+    let reopened = serve::reopened(project);
     assert_eq!(reopened.snapshot.data["execution"], before["execution"]);
     assert_eq!(reopened.snapshot.data["contexts"], before["contexts"]);
-    let mut client = phase13::Client::open(project);
+    let mut client = serve::Client::open(project);
     for (input, answer) in &replies {
         assert_eq!(client.call("cadence_query", input.clone()), *answer);
     }
@@ -1365,20 +1365,20 @@ fn execution_calls_refuse_noninteger_phases_and_legacy_plans_without_dispatch() 
     let roadmap = project.join(".planning/ROADMAP.md");
     let conflict_bytes = b"## Phases\n- [x] **Phase 13: Plan publication**\n- [ ] **Phase 28: Next phase**\n";
     fs::write(&roadmap, conflict_bytes).unwrap();
-    let mut client = phase13::Client::open(project);
+    let mut client = serve::Client::open(project);
     let conflict = client.call("cadence_query", request.clone());
     assert_eq!(conflict["code"], "state-conflict", "{conflict}");
     assert_eq!(serde_json::from_str::<Value>(conflict["reason"].as_str().unwrap()).unwrap(),
         json!({"source":"ROADMAP.md:2 entry 0","field":"complete","declared":"true","derived":"false"}));
     assert!(conflict.get("dispatch").is_none());
     client.finish();
-    let durable = phase13::tree(project);
-    assert_eq!(phase13::reopened(project).snapshot.data["execution"], before["execution"]);
-    let mut client = phase13::Client::open(project);
+    let durable = serve::tree(project);
+    assert_eq!(serve::reopened(project).snapshot.data["execution"], before["execution"]);
+    let mut client = serve::Client::open(project);
     assert_eq!(client.call("cadence_query", request), conflict);
     client.finish();
-    phase13::reopened(project);
-    assert_eq!(phase13::tree(project), durable);
+    serve::reopened(project);
+    assert_eq!(serve::tree(project), durable);
     assert_eq!(fs::read(plan).unwrap(), legacy_bytes);
     assert_eq!(fs::read(roadmap).unwrap(), conflict_bytes);
 }

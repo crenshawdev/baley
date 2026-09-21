@@ -1,5 +1,5 @@
 //! Phase 36 acceptance checks cross the real stdio, publication and retirement boundary.
-#[path = "support/phase13.rs"]
+#[path = "support/serve.rs"]
 #[allow(dead_code)]
 mod support;
 

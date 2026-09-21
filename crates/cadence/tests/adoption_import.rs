@@ -2,9 +2,9 @@
 //! derive complete is first-touched by the real binary over stdio, the import
 //! writes a declared completion for each such phase, `execute-next` is no
 //! longer refused `state-conflict` at them, and not one document byte moves.
-#[path = "support/phase13.rs"]
-pub mod phase13;
-use phase13::*;
+#[path = "support/serve.rs"]
+pub mod serve;
+use serve::*;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, path::Path};
 

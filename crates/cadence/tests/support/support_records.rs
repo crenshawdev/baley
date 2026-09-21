@@ -1,21 +1,21 @@
 #![allow(dead_code)]
 
-use crate::phase13::{self, Client};
+use crate::serve::{self, Client};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, io::Write, path::{Path, PathBuf}, process::{Command, Stdio}};
 
 pub fn fixture() -> tempfile::TempDir {
-    let temp = phase13::fixture();
+    let temp = serve::fixture();
     // Initialize the journal before any snapshot or stopped-process copy reads it.
     let mut client = Client::open(temp.path());
     client.call("cadence_query", json!({"operation":"progress"}));
     client.finish();
-    phase13::reopened(temp.path());
+    serve::reopened(temp.path());
     temp
 }
 
 pub fn risk_fixture() -> tempfile::TempDir {
-    let temp = phase13::fixture();
+    let temp = serve::fixture();
     fs::write(temp.path().join(".planning/config.json"), serde_json::to_vec(&json!({
         "review":{"mode":"single","reviewers":["claude-subagent"],
             "triggers":{"risk_surface":{"surfaces":["auth"],"gate":"blocking"}}}
@@ -23,7 +23,7 @@ pub fn risk_fixture() -> tempfile::TempDir {
     let mut client = Client::open(temp.path());
     client.call("cadence_query", json!({"operation":"progress"}));
     client.finish();
-    phase13::reopened(temp.path());
+    serve::reopened(temp.path());
     temp
 }
 
@@ -31,11 +31,11 @@ pub fn change(project: &Path, path: &str, bytes: &[u8], staged: bool) {
     let target = project.join(path);
     fs::create_dir_all(target.parent().unwrap()).unwrap();
     fs::write(target, bytes).unwrap();
-    if staged { phase13::git(project, &["add", "--", path]); }
+    if staged { serve::git(project, &["add", "--", path]); }
 }
 
 pub fn documents(project: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
-    phase13::tree(project).into_iter().filter_map(|(path, bytes)| {
+    serve::tree(project).into_iter().filter_map(|(path, bytes)| {
         let document = path.extension().is_some_and(|ext| ext == "md")
             || path == Path::new(".planning/config.json");
         document.then_some(bytes).flatten().map(|bytes| (path, bytes))
@@ -63,12 +63,12 @@ pub fn staged_note(project: &Path) -> String {
     })).unwrap()).unwrap();
     fs::create_dir_all(project.join("src")).unwrap();
     fs::write(project.join("src/session.js"), "jwt.verify(token)\n").unwrap();
-    phase13::git(project, &["add", "src/session.js"]);
-    phase13::git(project, &["commit", "-m", "Fixture auth baseline"]);
+    serve::git(project, &["add", "src/session.js"]);
+    serve::git(project, &["commit", "-m", "Fixture auth baseline"]);
     fs::create_dir_all(project.join("docs")).unwrap();
     fs::write(project.join("docs/note.txt"), "plain note").unwrap();
-    phase13::git(project, &["add", "docs/note.txt"]);
-    phase13::git_value(project, &["write-tree"])
+    serve::git(project, &["add", "docs/note.txt"]);
+    serve::git_value(project, &["write-tree"])
 }
 
 pub fn guard(project: &Path, tool: &str, target: &str) -> Value {
@@ -160,7 +160,7 @@ pub fn debug_readback(client: &mut Client, project: &Path, slug: &str, needles: 
 }
 
 pub fn recall_fixture(backend: Option<&str>) -> tempfile::TempDir {
-    let temp = phase13::fixture();
+    let temp = serve::fixture();
     let root = temp.path().join(".planning");
     fs::write(root.join("ROADMAP.md"), "## Phases\n- [ ] **Phase 1: First**\n- [ ] **Phase 2: Second**\n- [ ] **Phase 13: Plan publication**\n- [ ] **Phase 28: Next phase**\n").unwrap();
     let config = backend.map_or_else(|| json!({}), |backend| json!({"memory":{"backend":backend}}));
@@ -174,7 +174,7 @@ pub fn recall_fixture(backend: Option<&str>) -> tempfile::TempDir {
         assert_eq!(answer["status"], "ok", "{answer}");
     }
     client.finish();
-    phase13::reopened(temp.path());
+    serve::reopened(temp.path());
     for (phase, reason) in [("1", "reused"), ("2", "changed"), ("1.1", "decimal")] {
         fs::create_dir_all(root.join(format!("phases/{phase}"))).unwrap();
         fs::write(root.join(format!("phases/{phase}/SUMMARY.md")), format!("## Deviations\n- cache stale token from {reason} key\n")).unwrap();

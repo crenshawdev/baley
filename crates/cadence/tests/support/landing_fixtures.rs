@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::phase13::{self, Client, apply, query, git, git_value};
+use crate::serve::{self, Client, apply, query, git, git_value};
 use serde_json::{Value, json};
 use std::{fs, path::Path, process::{Command, Stdio}, os::unix::fs::PermissionsExt};
 
@@ -52,7 +52,7 @@ fn state(client: &mut Client, phase: u32, key: &str) -> Value {
 
 fn complete_phase(project: &Path, phase: u32) {
     let mut client = Client::open(project);
-    let context = phase13::approve(json!({"operation":"context-submit","submission":{
+    let context = serve::approve(json!({"operation":"context-submit","submission":{
         "phase":phase,"title":"Native milestone fixture","scope":"Complete one real artifact.",
         "durable_decisions":[],"decisions":[],"assumptions":[],"truths":[{
             "id":"T1","trigger":"the owner opens the artifact","observer":"the owner","verb":"sees",
@@ -61,7 +61,7 @@ fn complete_phase(project: &Path, phase: u32) {
     let allocation = client.call("cadence_query", json!({"operation":"plan-read","phase":phase,"count":1}));
     let command = format!("python3 -B tests/p{phase}.py");
     let file = format!("src/p{phase}.txt");
-    ok(&mut client, phase13::approve(json!({"operation":"plan-submit","submission":{
+    ok(&mut client, serve::approve(json!({"operation":"plan-submit","submission":{
         "phase":phase,"occurrence":allocation["occurrence"],"request_id":format!("publish-{phase}"),
         "inventory_basis":allocation["inventory"]["basis"],"plans":[{"target":allocation["targets"][0],"content":{
             "phase":phase,"plan":1,"requirements":["T1"],"files":[file],"directories":[],
@@ -99,7 +99,7 @@ fn complete_phase(project: &Path, phase: u32) {
     let red_run = format!("red-{phase}");
     ok(&mut client, json!({"operation":"execution-run","request":{"request_id":red_run,"task":task["task"],"attempt":"attempt-ready",
         "expected_version":task["state"]["version"],"command":command,"check":check,"stage":"red"}}));
-    let red = phase13::native_result_with(|v| client.call("cadence_query", v), phase, &red_run);
+    let red = serve::native_result_with(|v| client.call("cadence_query", v), phase, &red_run);
     assert_eq!(red["request"]["event"]["disposition"]["code"], 1, "{red}");
     fs::write(project.join(&file), "ready\n").unwrap();
     git(project, &["add", &file]);
@@ -109,7 +109,7 @@ fn complete_phase(project: &Path, phase: u32) {
     let run = format!("verify-{phase}");
     ok(&mut client, json!({"operation":"execution-run","request":{"request_id":run,"task":task["task"],"attempt":"attempt-ready",
         "expected_version":task["state"]["version"],"command":command,"check":check,"stage":"green"}}));
-    let result = phase13::native_result_with(|v| client.call("cadence_query", v), phase, &run);
+    let result = serve::native_result_with(|v| client.call("cadence_query", v), phase, &run);
     assert_eq!(result["request"]["event"]["disposition"]["code"], 0, "{result}");
     let launch = client.call("cadence_query", json!({"operation":"execution-history","phase":phase,"run":red_run}));
     let inspection = json!({"check":check,"test_digest":launch["launch"]["request"]["event"]["material"]["test_digest"],
@@ -125,7 +125,7 @@ fn complete_phase(project: &Path, phase: u32) {
     let plan = state(&mut client, phase, "plans");
     let suite = format!("suite-{phase}");
     ok(&mut client, json!({"operation":"execution-suite","request":{"request_id":suite,"plan":plan["plan"],"expected_version":plan["state"]["version"]}}));
-    let result = phase13::native_result_with(|v| client.call("cadence_query", v), phase, &suite);
+    let result = serve::native_result_with(|v| client.call("cadence_query", v), phase, &suite);
     assert_eq!(result["request"]["event"]["disposition"]["code"], 0, "{result}");
     ok(&mut client, json!({"operation":"risk-check","request_id":format!("execution-risk-{phase}"),
         "scope":{"phase":phase,"occurrence":format!("phase-{phase}-execution"),"worker":"1"},
@@ -134,7 +134,7 @@ fn complete_phase(project: &Path, phase: u32) {
     ok(&mut client, json!({"operation":"execution-plan-complete","request":{"request_id":format!("complete-{phase}"),"plan":plan["plan"],"expected_version":plan["state"]["version"]}}));
     let dispatch = client.call("cadence_query", json!({"operation":"verify-next","phase":phase,"request_id":format!("verification-{phase}")}));
     assert_eq!(dispatch["status"], "ok", "{dispatch}");
-    let attempt = phase13::attempt_with(&mut client, &dispatch);
+    let attempt = serve::attempt_with(&mut client, &dispatch);
     let mut items = Vec::new();
     for item in attempt["map"]["items"].as_array().unwrap() {
         let mut runs = Vec::new();
@@ -142,7 +142,7 @@ fn complete_phase(project: &Path, phase: u32) {
             let run = format!("independent-{phase}");
             ok(&mut client, json!({"operation":"verification-run","request":{"request_id":run,"attempt":attempt["id"],"basis":attempt["basis"],
                 "item":{"id":item["id"],"item_revision":item["item_revision"]}}}));
-            let result = phase13::independent_result(&mut client, phase, &run);
+            let result = serve::independent_result(&mut client, phase, &run);
             assert_eq!(result["disposition"]["code"], 0, "{result}");
             runs.push(run);
         }
@@ -152,7 +152,7 @@ fn complete_phase(project: &Path, phase: u32) {
         "items":items}}));
     let read = client.call("cadence_query", json!({"operation":"verification-read","phase":phase}));
     ok(&mut client, json!({"operation":"verification-complete","request_id":format!("verified-{phase}"),"attempt":attempt["id"],
-        "basis":read["current"]["observed"],"projections":{"roadmap":phase13::digest_of(&project.join(".planning/ROADMAP.md")),"requirements":null}}));
+        "basis":read["current"]["observed"],"projections":{"roadmap":serve::digest_of(&project.join(".planning/ROADMAP.md")),"requirements":null}}));
     client.finish();
 }
 
@@ -212,7 +212,7 @@ pub struct Publishing {
 
 impl Publishing {
     pub fn new(auto_close: bool) -> Self {
-        let project = phase13::fixture();
+        let project = serve::fixture();
         fs::write(project.path().join(".planning/config.json"), serde_json::to_vec(&json!({
             "git":{"auto_close":auto_close,"forge_provider":"github","forge_repo":"fixture/repo"}
         })).unwrap()).unwrap();
@@ -507,7 +507,7 @@ fn complete_undo_phase(project: &Path) -> Vec<String> {
     let phase = 13;
     let mut hashes = Vec::new();
     let mut client = Client::open(project);
-    let context = phase13::approve(json!({"operation":"context-submit","submission":{
+    let context = serve::approve(json!({"operation":"context-submit","submission":{
         "phase":phase,"title":"Native milestone fixture","scope":"Complete one real artifact.",
         "durable_decisions":[],"decisions":[],"assumptions":[],"truths":[{
             "id":"T1","trigger":"the owner opens the artifact","observer":"the owner","verb":"sees",
@@ -516,7 +516,7 @@ fn complete_undo_phase(project: &Path) -> Vec<String> {
     let allocation = client.call("cadence_query", json!({"operation":"plan-read","phase":phase,"count":1}));
     let command = format!("python3 -B tests/p{phase}.py");
     let file = format!("src/p{phase}.txt");
-    ok(&mut client, phase13::approve(json!({"operation":"plan-submit","submission":{
+    ok(&mut client, serve::approve(json!({"operation":"plan-submit","submission":{
         "phase":phase,"occurrence":allocation["occurrence"],"request_id":format!("publish-{phase}"),
         "inventory_basis":allocation["inventory"]["basis"],"plans":[{"target":allocation["targets"][0],"content":{
             "phase":phase,"plan":1,"requirements":["T1"],"files":[file,"src/second.txt","src/third.txt","docs.txt"],"directories":[],
@@ -558,7 +558,7 @@ fn complete_undo_phase(project: &Path) -> Vec<String> {
     let red_run = format!("red-{phase}");
     ok(&mut client, json!({"operation":"execution-run","request":{"request_id":red_run,"task":task["task"],"attempt":"attempt-ready",
         "expected_version":task["state"]["version"],"command":command,"check":check,"stage":"red"}}));
-    let red = phase13::native_result_with(|v| client.call("cadence_query", v), phase, &red_run);
+    let red = serve::native_result_with(|v| client.call("cadence_query", v), phase, &red_run);
     assert_eq!(red["request"]["event"]["disposition"]["code"], 1, "{red}");
     fs::write(project.join(&file), "ready\n").unwrap();
     git(project, &["add", &file]);
@@ -568,7 +568,7 @@ fn complete_undo_phase(project: &Path) -> Vec<String> {
     let run = format!("verify-{phase}");
     ok(&mut client, json!({"operation":"execution-run","request":{"request_id":run,"task":task["task"],"attempt":"attempt-ready",
         "expected_version":task["state"]["version"],"command":command,"check":check,"stage":"green"}}));
-    let result = phase13::native_result_with(|v| client.call("cadence_query", v), phase, &run);
+    let result = serve::native_result_with(|v| client.call("cadence_query", v), phase, &run);
     assert_eq!(result["request"]["event"]["disposition"]["code"], 0, "{result}");
     let launch = client.call("cadence_query", json!({"operation":"execution-history","phase":phase,"run":red_run}));
     let inspection = json!({"check":check,"test_digest":launch["launch"]["request"]["event"]["material"]["test_digest"],
@@ -595,7 +595,7 @@ fn complete_undo_phase(project: &Path) -> Vec<String> {
         let run = format!("undo-fixture-verify-{id}");
         ok(&mut client, json!({"operation":"execution-run","request":{"request_id":run,"task":task["task"],"attempt":id,
             "expected_version":task["state"]["version"],"command":command,"check":null,"stage":"verify"}}));
-        let result = phase13::native_result_with(|v| client.call("cadence_query", v), phase, &run);
+        let result = serve::native_result_with(|v| client.call("cadence_query", v), phase, &run);
         assert_eq!(result["request"]["event"]["disposition"]["code"], 0, "{result}");
         let task = undo_task(&mut client, id);
         ok(&mut client, json!({"operation":"execution-task-close","request":{"request_id":format!("undo-fixture-close-{id}"),
@@ -606,7 +606,7 @@ fn complete_undo_phase(project: &Path) -> Vec<String> {
     let plan = state(&mut client, phase, "plans");
     let suite = format!("suite-{phase}");
     ok(&mut client, json!({"operation":"execution-suite","request":{"request_id":suite,"plan":plan["plan"],"expected_version":plan["state"]["version"]}}));
-    let result = phase13::native_result_with(|v| client.call("cadence_query", v), phase, &suite);
+    let result = serve::native_result_with(|v| client.call("cadence_query", v), phase, &suite);
     assert_eq!(result["request"]["event"]["disposition"]["code"], 0, "{result}");
     ok(&mut client, json!({"operation":"risk-check","request_id":format!("execution-risk-{phase}"),
         "scope":{"phase":phase,"occurrence":format!("phase-{phase}-execution"),"worker":"1"},
@@ -615,7 +615,7 @@ fn complete_undo_phase(project: &Path) -> Vec<String> {
     ok(&mut client, json!({"operation":"execution-plan-complete","request":{"request_id":format!("complete-{phase}"),"plan":plan["plan"],"expected_version":plan["state"]["version"]}}));
     let dispatch = client.call("cadence_query", json!({"operation":"verify-next","phase":phase,"request_id":format!("verification-{phase}")}));
     assert_eq!(dispatch["status"], "ok", "{dispatch}");
-    let attempt = phase13::attempt_with(&mut client, &dispatch);
+    let attempt = serve::attempt_with(&mut client, &dispatch);
     let mut items = Vec::new();
     for item in attempt["map"]["items"].as_array().unwrap() {
         let mut runs = Vec::new();
@@ -623,7 +623,7 @@ fn complete_undo_phase(project: &Path) -> Vec<String> {
             let run = format!("independent-{phase}");
             ok(&mut client, json!({"operation":"verification-run","request":{"request_id":run,"attempt":attempt["id"],"basis":attempt["basis"],
                 "item":{"id":item["id"],"item_revision":item["item_revision"]}}}));
-            let result = phase13::independent_result(&mut client, phase, &run);
+            let result = serve::independent_result(&mut client, phase, &run);
             assert_eq!(result["disposition"]["code"], 0, "{result}");
             runs.push(run);
         }
@@ -633,7 +633,7 @@ fn complete_undo_phase(project: &Path) -> Vec<String> {
         "items":items}}));
     let read = client.call("cadence_query", json!({"operation":"verification-read","phase":phase}));
     ok(&mut client, json!({"operation":"verification-complete","request_id":format!("verified-{phase}"),"attempt":attempt["id"],
-        "basis":read["current"]["observed"],"projections":{"roadmap":phase13::digest_of(&project.join(".planning/ROADMAP.md")),"requirements":null}}));
+        "basis":read["current"]["observed"],"projections":{"roadmap":serve::digest_of(&project.join(".planning/ROADMAP.md")),"requirements":null}}));
     client.finish();
     hashes
 }

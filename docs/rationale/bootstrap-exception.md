@@ -336,7 +336,7 @@ recover from its own mistake with one owner answer.
 12. `d0754518` test(execution): close a commit outside the lease and name it
     on the plan record (D-170 red). The unit test that asserted the refusal
     now asserts the retained paths, and a new stdio test in
-    `tests/phase34_blocked_path.rs` closes a task whose completion commit
+    `tests/execution_blocked_path.rs` closes a task whose completion commit
     adds `docs/outside.md`, then retires the next task and reads one
     deviation on the blocked plan's record. The existing retire test gained
     the negative control: an in-lease completion records none.
@@ -351,7 +351,7 @@ recover from its own mistake with one owner answer.
     every retained record and digest reads as before.
 
 Clippy is clean on the two files touched; the two warnings at
-`tests/support/phase31_hosts.rs:375` and `tests/phase31_read_layer.rs:35`
+`tests/support/host_rounds.rs:375` and `tests/read_layer.rs:35`
 are phase 31's. The suite runs once at the end of this batch, after D-171
 and D-172, and its result is recorded here.
 
