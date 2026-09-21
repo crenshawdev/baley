@@ -138,39 +138,6 @@ test('phase_diff: the schema purpose names the gate a no-gate resolve really ans
     + `"${r.review.phase_diff}"`);
 });
 
-// --- DFC-04: the risk_surface row admits the artifact /cad-task produces -----
-
-test('risk_surface row: its shape (c) clause names no producer, and task.md still holds its rails', () => {
-  // The defect: the row admitted "(c) the flagged-diff FILE path THE CHECKPOINT
-  // RETURNED", and /cad-task's fire produces that file with no checkpoint at
-  // all - its commits already exist. Correcting the workflow to match the row
-  // is what produced a worse instruction than the one it replaced, so the row
-  // is what moves. Section 2's own shape-(c) definition is already broad
-  // enough ("a file artifact... or one the reviewer's tree cannot reach").
-  const row = tableRow(doc('cadence-core', 'references', 'review-triggers.md'), 'risk_surface');
-
-  const firedBy = row[1].split(',').map((s) => s.trim().replace(/`/g, ''));
-  assert.deepEqual(firedBy, ['cad-execute', 'cad-debug', 'cad-task', 'cad-verify']);
-
-  const payload = row[3];
-  assert.match(payload, /\(c\)/, 'the row no longer offers shape (c)');
-  assert.match(payload, /\(b\)/, 'the row no longer offers shape (b)');
-  // The qualifier itself. Bounded to THIS cell, never a tree scan: verify.md's
-  // own shape-(c) fire is a diagnosis review naming no wiring-table trigger and
-  // carrying no resolved gate, and must not be dragged in here.
-  const shapeC = payload.split(/,\s*or\s*\(b\)/)[0];
-  assert.doesNotMatch(shapeC, /checkpoint/i,
-    'shape (c) is qualified by its producer again, so a /cad-task fire is a shape the row does not admit');
-
-  // The other half of DFC-04 is already closed in the workflow (716fb60) and
-  // ROADMAP criterion 4 forbids losing it. Pinned so a future "simplification"
-  // of the row cannot take these with it.
-  const task = doc('cadence-core', 'workflows', 'task.md');
-  assert.match(task, /\.planning\/tasks\/\{slug\}\/risk-task-\{slug\}\.diff/);
-  assert.match(task, /never stage it/i);
-  assert.match(task, /delete it once\s+the trigger returns/i);
-});
-
 // --- CST-02: the eight risk-surface categories, stated in three places -------
 
 test('risk-surface categories: the schema enum, the detector and the detection list are one list', () => {
@@ -1086,26 +1053,16 @@ test('the executor dispatch hands over the resolve\'s answered surfaces, and the
 
 // --- RSK-01/RSK-02: detection is the seam's answer, and completion needs it ---
 
-test('both fire sites invoke the risk-check seam rather than reading a prose list', () => {
-  // The defect: detection was execute.md and task.md telling a model to check a
-  // diff against the eight categories in references/review-triggers.md. A fire
-  // wrote a lifecycle event and a NON-match wrote nothing, so the run record
-  // could not tell "the detection step was skipped" from "it ran and matched
-  // nothing". The heuristics stay heuristics; what moved is that the answer is
-  // computed by something that always returns one and always records it.
+test('the execute fire site invokes the risk-check seam rather than reading a prose list', () => {
+  // The defect: detection was execute.md telling a model to check a diff against
+  // the eight categories in references/review-triggers.md. A fire wrote a
+  // lifecycle event and a NON-match wrote nothing, so the run record could not
+  // tell "the detection step was skipped" from "it ran and matched nothing". The
+  // heuristics stay heuristics; what moved is that the answer is computed by
+  // something that always returns one and always records it.
   const execute = doc('cadence-core', 'workflows', 'execute.md');
-  const task = doc('cadence-core', 'workflows', 'task.md');
   assert.match(execute, /risk-check run/,
     "execute.md's post-plan step no longer calls the risk-check seam");
-  assert.match(task, /risk-check run/,
-    "task.md's risk_check step no longer calls the risk-check seam");
-  // FST-02's third shipped byte. The two below it - the transient `.diff` rails
-  // and the `written: false` withholding - are already pinned (DFC-04 above,
-  // ENFORCEMENT below); only the phase number was unheld.
-  assert.match(task, /risk-check run --phase 0/,
-    "task.md's risk_check step calls the seam without `--phase 0` - a task sits "
-    + 'outside the phase spine and 0 is the one number no roadmap phase carries, '
-    + "so any other value files the task's range against a real phase's records");
   // An unjudged range is not a cleared one, and widening is the only safe
   // direction on the one gate whose schema default is `blocking`.
   assert.match(execute, /inconclusive/,
@@ -1250,101 +1207,6 @@ test('ENFORCEMENT, execute.md: the plan is not reported done while risk-check st
   assert.match(execute, /not reported done while that call refuses/i,
     'execute.md calls risk-check status without withholding done on its refusal - '
     + 'detection without enforcement is the outcome RSK-02 exists to prevent');
-});
-
-/**
- * The first sentence of `slice` delivering a done verdict ON `written: false`.
- *
- * `sentencesOf` above is the file's one sentence bound - `.!?` followed by
- * WHITESPACE, so `.planning/` and `trace.jsonl` are not ends - and each
- * sentence is wrap-collapsed before it is read, because a workflow file breaks
- * lines wherever the column runs out and "reports done" must match across one.
- */
-const ownVerdict = (slice) => sentencesOf(slice).map((x) => x.replace(/\s+/g, ' '))
-  .find((x) => /`written: false`/.test(x) && /reports? done/i.test(x));
-
-test('ENFORCEMENT, task.md: the completion rule decides `written: false`, in ONE place', () => {
-  // RSK-11. `ok:true, written:false` splits in two and the split is the rule:
-  // an absent planning root is a run that HAS no receipt to land - git is the
-  // code record, the seams create nothing, the check itself genuinely ran - and
-  // it reports done saying so. Every OTHER `written: false` - a symlinked
-  // trace, a failed stat, a full disk, the size-cap bound - is a receipt that
-  // SHOULD have landed and did not, and it is still not a completed check. The
-  // execute path is covered by its own `risk-check status` call, which re-reads
-  // the trace and finds nothing; the task path has no status call, so this flag
-  // is its whole guard.
-  //
-  // Both halves are read out of the `risk_check` step by its own anchor and
-  // asserted SENTENCE-WISE, because the failure that matters is a half quietly
-  // dropped: keep the reporting half alone and a lost record on an adopted repo
-  // reports done, keep the withholding half alone and a treeless task can never
-  // finish - which is the defect GH-246 filed.
-  const task = doc('cadence-core', 'workflows', 'task.md');
-  const risk = stepBody(task, 'risk_check', 'task.md');
-
-  // HALF ONE: the absent root REPORTS done - and names both seam spellings of
-  // it, since those two strings are the whole discriminator.
-  const reports = sentenceAround(risk, 'the absent planning root', 'task.md');
-  const lostReporting = "task.md's completion rule no longer reports done on a `written: false` "
-    + 'whose reason is the absent planning root, so an inline /cad-task on a repository with no '
-    + '.planning/ can never finish - the defect GH-246 filed';
-  assert.match(reports, /`written: false`/, lostReporting);
-  assert.match(reports, /ENOENT/, lostReporting);
-  assert.match(reports, /no planning root/, lostReporting);
-  assert.match(reports, /reports? done/i, lostReporting);
-  assert.doesNotMatch(reports, /\b(do not|does not|never|withhold)\b/i,
-    `${lostReporting} - the reporting half now carries a negation: ${reports}`);
-
-  // HALF TWO: every other reason WITHHOLDS done. Detection without enforcement
-  // is the outcome RSK-02 exists to prevent.
-  const withheld = sentenceAround(risk, 'any other reason', 'task.md');
-  const lostWithholding = "task.md's completion rule no longer withholds done on a "
-    + '`written: false` for any other reason, so a symlinked trace or a full disk on an '
-    + 'ADOPTED repository reports done over a record that never landed - detection without '
-    + 'enforcement is the outcome RSK-02 exists to prevent';
-  assert.match(withheld, /`written: false`/, lostWithholding);
-  assert.match(withheld, /(do not|does not|never)\s+report\s+done/i, lostWithholding);
-
-  // ONCE: the two other sites POINT at the rule rather than restating it. Three
-  // statements of one rule in one file is how the treeless arm gets restored in
-  // one place and lost in another (CONTEXT D-04).
-  const at = risk.indexOf('The event NAME');
-  assert.ok(at > -1, "task.md's risk_check step has no skip-arm paragraph");
-  const skip = risk.slice(at, risk.indexOf('\n\n', at));
-  const record = stepBody(task, 'record', 'task.md');
-  const restated = 'task.md states the completion rule in more than one place again - the '
-    + 'skip arm and the `record` step must POINT at the `risk_check` rule, because a rule '
-    + 'written three times is a rule that gets edited once';
-  assert.match(skip, /completion rule/, restated);
-  assert.match(record, /completion rule/, restated);
-  assert.equal(ownVerdict(skip), undefined, `${restated} - skip arm: ${ownVerdict(skip)}`);
-  assert.equal(ownVerdict(record), undefined, `${restated} - record step: ${ownVerdict(record)}`);
-});
-
-test('RSK-11, task.md: the surfaces-unanswered refusal is answered in the run, not stopped at', () => {
-  // `risk-check run` refuses `surfaces-unanswered` whenever no config layer
-  // answered `review.triggers.risk_surface.surfaces` and the caller named no
-  // `--surfaces` - which is EVERY fresh user, and on a treeless repository
-  // there is no repo layer to have answered it in. A coordinator that reads
-  // that refusal as a verdict or as a skip stops there, and the one trigger
-  // that defaults to `blocking` never runs for exactly the audience the
-  // inline path exists for. So the arm is prose or it is nothing: the seam has
-  // no way to ask.
-  const risk = stepBody(doc(...TASK_WF), 'risk_check', 'task.md');
-  const regressed = "RSK-11: task.md's risk_check step no longer answers the seam's "
-    + '`surfaces-unanswered` refusal in the run, so a coordinator stops at it and the '
-    + 'blocking risk_surface gate never runs for a user who has answered the surface '
-    + 'question nowhere - which on a treeless repository is every user';
-  assert.match(risk, /surfaces-unanswered/, regressed);
-  // The ASK, in the sentence that names the refusal: the scan runs first so the
-  // question arrives carrying evidence, and it is put to the user here.
-  const arm = sentenceAround(risk, 'surfaces-unanswered', 'task.md');
-  assert.match(arm, /detect-surfaces/, `${regressed} - the arm names no scan: ${arm}`);
-  assert.match(arm, /question to the user/i, `${regressed} - the arm never asks: ${arm}`);
-  // And the RE-RUN, which is what turns the answer into a verdict.
-  const rerun = sentenceAround(risk, '--surfaces', 'task.md');
-  assert.match(rerun, /risk-check run/,
-    `${regressed} - the step names --surfaces without re-running the check on it: ${rerun}`);
 });
 
 // --- ENFORCEMENT: the FAIL branch is a DISPATCH, and its guardrail ----------
@@ -2952,101 +2814,14 @@ test('EXP-05: the executor and the verifier state one rule in one vocabulary', (
   }
 });
 
-// --- PHS-02: the too-big arm opens a door instead of naming a locked one -----
+// --- PHS-02: /cad-context's off-roadmap stop names the command that creates a phase -----
 //
-// The defect: `/cad-task`'s "Too big" arm told the user to "Route it through
-// /cad-context -> /cad-plan", and `/cad-context` on a phase the roadmap does
-// not carry STOPS. So the one arm that fires when Cadence has correctly
-// recognised phase-sized work handed the user a command guaranteed to refuse.
-// `/cad-phase add` is the only command in the plugin that appends a phase to an
-// existing roadmap, so it is the first stop and everything else follows it.
-//
-// Asserted on ORDER and on the NAMED site, never on a tree-wide `/cad-context`
-// count: the corrected arm legitimately names `/cad-context` as its SECOND
-// stop, so a check forbidding the string outright would go red on exactly the
-// prose this phase shipped. No line numbers either - both files are edited
-// often enough that a pinned number would rot before it caught anything.
+// The workflow arms that routed phase-sized /cad-task work retired with the
+// JavaScript task-record seam; what survives is context.md's own off-roadmap
+// stop, which still has to name `/cad-phase add` so a user arriving by a stale
+// cursor or a typed number meets a refusal with an exit rather than a dead end.
 
-const TASK_WF = ['cadence-core', 'workflows', 'task.md'];
-
-/**
- * The `- **Too big**` arm of task.md's `scope` step, WHOLE: from its own marker
- * to the END of the step body.
- *
- * It used to stop at the first blank line, which was the same slice while the
- * arm was one paragraph - and became a silent vacuity the moment PHS-03 gave
- * the arm a branch per `status` answer, because every assertion below would
- * then have read the first paragraph only and passed on prose it never opened.
- * The step body is the right bound: the arm is the last bullet in it.
- */
-const tooBigArm = (text) => {
-  const step = stepBody(text, 'scope', 'task.md');
-  const at = step.indexOf('- **Too big**');
-  assert.ok(at > -1, "task.md's scope step carries no `- **Too big**` bullet");
-  return step.slice(at);
-};
-
-test('PHS-02 (1): the too-big arm names /cad-phase add before the commands that need a phase', () => {
-  const arm = tooBigArm(doc(...TASK_WF));
-  const regressed = "PHS-02: task.md's too-big arm no longer routes a phase-sized task to "
-    + '/cad-phase add FIRST - the user is sent at /cad-context or /cad-plan for a phase the '
-    + 'roadmap does not carry yet, which is the refusal this arm exists to avoid';
-  const add = arm.indexOf('/cad-phase add');
-  const context = arm.indexOf('/cad-context');
-  const plan = arm.indexOf('/cad-plan');
-  assert.ok(add > -1, regressed);
-  assert.ok(context > -1, regressed);
-  assert.ok(plan > -1, regressed);
-  assert.ok(add < context && context < plan, regressed);
-});
-
-test('PHS-02 (2): the arm resolves the phase number rather than printing a placeholder', () => {
-  const arm = tooBigArm(doc(...TASK_WF));
-  const regressed = "PHS-02: task.md's too-big arm no longer resolves the phase number from "
-    + '`planning.mjs status` and `total + 1` - it hands the user a number to substitute, '
-    + 'which is the defect this cycle exists to close';
-  assert.match(arm, /planning\.mjs"?\s+status/, regressed);
-  assert.match(arm, /total \+ 1/, regressed);
-  // The other half: the rule the prose states is one the resolver can actually
-  // answer. A prose rule reading a field the envelope does not carry would
-  // print nothing at all, and no amount of grepping the prose would show it.
-  const out = JSON.parse(execFileSync('node', [join(HERE, 'planning.mjs'), 'status'],
-    { cwd: REPO, encoding: 'utf8' }));
-  assert.equal(out.ok, true, 'planning.mjs status does not answer ok:true on this repo');
-  assert.ok(Number.isInteger(out.total),
-    'planning.mjs status returns no integer `total`, so the arm\'s `total + 1` rule '
-    + 'resolves to nothing and the printed sequence carries no phase number');
-});
-
-test('PHS-02 (3): the first stop carries the task\'s own description, and /cad-phase advertises it', () => {
-  const regressed = 'PHS-02: the printed sequence no longer hands the task description to '
-    + '/cad-phase add, or /cad-phase stopped advertising that `add` takes one - either way '
-    + 'the user retypes what Cadence already holds';
-  assert.match(tooBigArm(doc(...TASK_WF)), /\/cad-phase add \$TASK/, regressed);
-  const hint = doc('skills', 'cad-phase', 'SKILL.md').match(/^argument-hint: "(.*)"$/m);
-  assert.ok(hint, 'skills/cad-phase/SKILL.md carries no argument-hint field');
-  const addAlternative = hint[1].split('|')[0];
-  assert.match(addAlternative, /description/i, regressed);
-});
-
-test('PHS-02 (4): no /cad-task surface sends phase-sized work to /cad-context first', () => {
-  const regressed = 'PHS-02: a /cad-task surface routes phase-sized work at /cad-context '
-    + 'again - the mid-task guardrail or the SKILL objective that rides every session prompt, '
-    + 'either of which advertises the locked door while the arm names the open one';
-  assert.doesNotMatch(doc('skills', 'cad-task', 'SKILL.md'), /\/cad-context/, regressed);
-  const task = doc(...TASK_WF);
-  const open = task.lastIndexOf('<guardrails>');
-  const close = task.lastIndexOf('</guardrails>');
-  assert.ok(open > -1 && close > open, 'task.md has no <guardrails> block');
-  const guardrails = task.slice(open, close);
-  assert.match(guardrails, /\/cad-phase add/, regressed);
-  // Absence as well as presence: a guardrail reading "re-route to /cad-context,
-  // then /cad-phase add" would satisfy the match above while the mid-task path
-  // still walks into the refusal.
-  assert.doesNotMatch(guardrails, /\/cad-context/, regressed);
-});
-
-test('PHS-02 (5): the /cad-context off-roadmap stop names the command that creates the phase', () => {
+test('PHS-02: the /cad-context off-roadmap stop names the command that creates the phase', () => {
   const context = doc('cadence-core', 'workflows', 'context.md');
   const at = context.indexOf('not in the roadmap');
   assert.ok(at > -1, "context.md's resolve_phase step no longer stops on an off-roadmap phase");
@@ -3055,75 +2830,6 @@ test('PHS-02 (5): the /cad-context off-roadmap stop names the command that creat
   assert.match(stop, /\/cad-phase add/,
     "PHS-02: /cad-context's off-roadmap stop names no next action again, so a user arriving "
     + 'by a stale cursor or a typed number meets a refusal with no exit');
-});
-
-// --- PHS-03: /cad-task classifies before it guards ---------------------------
-//
-// The defect: `task.md`'s `git_guard` step opened directly after `parse`, so
-// EVERY invocation paid the rail-1 guard - the protected-branch question, the
-// base-integrity check and the integration-branch decision - including the one
-// arm that then says "this is phase-sized" and stops without touching a file.
-// The user answered branch questions for work Cadence had already decided it
-// was not going to do.
-//
-// Asserted on ORDER, the same index-comparison shape `#195` uses on
-// `execute.md`'s `locate` before its `git_guard`, plus a COUNT: the obvious
-// wrong fix is to leave the step where it is and copy a guard sentence into
-// the inline and planned arms, which ships two statements of one rail in one
-// file and lets them drift.
-
-test('PHS-03: task.md classifies before it guards, with one guard step', () => {
-  const task = doc(...TASK_WF);
-  const regressed = 'PHS-03: task.md no longer classifies before it guards - the rail-1 '
-    + 'branch question is charged to the phase-sized arm, which says so and stops without '
-    + 'ever reaching a commit';
-  const scope = task.indexOf('<step name="scope">');
-  const guard = task.indexOf('<step name="git_guard">');
-  const bracket = task.indexOf('<step name="bracket">');
-  assert.ok(scope > -1 && guard > -1 && bracket > -1, 'task.md is missing one of the three steps');
-  assert.ok(scope < guard, regressed);
-  // Before `bracket`, not after: the guard's `ask` arm has an Abort option, and
-  // an abort taken past an open bracket strands a dispatch event with nothing
-  // to close it - which is the same reason `bracket` excludes the too-big arm.
-  assert.ok(guard < bracket,
-    'PHS-03: task.md opens its trace bracket BEFORE the guard, so a guard abort leaves a '
-    + 'dispatch event unpaired');
-  assert.equal(task.indexOf('<step name="git_guard">', guard + 1), -1,
-    'PHS-03: task.md carries a second git_guard step - one rail stated twice in one file '
-    + 'is two statements that drift');
-  // The step says WHICH arms pay it, so a later reader cannot restore the
-  // every-invocation reading while the step is still in the right place.
-  assert.match(stepBody(task, 'git_guard', 'task.md'), /[Ii]nline and planned/,
-    'PHS-03: task.md\'s git_guard step no longer names the inline and planned arms as its '
-    + 'scope, so it reads as applying to every invocation again');
-});
-
-test('PHS-03: the phase-sized arm names both doors where there is no planning tree', () => {
-  const arm = tooBigArm(doc(...TASK_WF));
-  const regressed = "PHS-03: task.md's phase-sized arm assumes a planning tree again - in a "
-    + 'repository with no .planning/ it routes the user at the one command that appends to a '
-    + 'roadmap, which is the command guaranteed to refuse where no roadmap exists';
-  // These two are also the widened slice's own non-vacuity proof: neither
-  // string is reachable from the arm's FIRST PARAGRAPH, so a `tooBigArm` that
-  // regressed to the first-blank-line bound fails HERE instead of passing
-  // silently on every assertion in this file.
-  assert.match(arm, /\/cad-adopt/, regressed);
-  assert.match(arm, /\/cad-new-project/, regressed);
-  // The treeless branch ALONE, by its own anchors. A whole-arm absence check
-  // cannot serve: the initialised branch above it names /cad-phase add and is
-  // right to.
-  const at = arm.indexOf('`no-planning-dir`');
-  assert.ok(at > -1,
-    "task.md's phase-sized arm no longer branches on the seam's `no-planning-dir` reason, so "
-    + 'it computes `total + 1` over an envelope that carries no total');
-  const end = arm.indexOf('On any other `ok:false`', at);
-  assert.ok(end > at,
-    "task.md's phase-sized arm no longer relays the remaining `ok:false` envelopes, so a "
-    + 'refusal it did not anticipate is reported as a phase-sized verdict');
-  const treeless = arm.slice(at, end);
-  assert.match(treeless, /\/cad-adopt/, regressed);
-  assert.match(treeless, /\/cad-new-project/, regressed);
-  assert.doesNotMatch(treeless, /\/cad-phase add/, regressed);
 });
 
 // --- TRC-13: report.md prints what RAN beside what was DISPATCHED -----------
@@ -3315,9 +3021,9 @@ const SKIP_EVENT = 'risk_check_skipped';
 const SKIP_CONDITION = 'landed no commits';
 
 /**
- * The three sites that emit a per-plan range and can emit a self-comparing one.
+ * The two sites that emit a per-plan range and can emit a self-comparing one.
  * The end marker differs per site because the recorded end does: the pre-plan
- * HEAD, the echoed start sha, and the pre-merge HEAD step 3 wrote down.
+ * HEAD and the pre-merge HEAD step 3 wrote down.
  */
 const SKIP_SITES = [
   {
@@ -3325,12 +3031,6 @@ const SKIP_SITES = [
     body: () => stepBody(doc('cadence-core', 'workflows', 'execute.md'),
       'execute_sequential', 'workflows/execute.md'),
     end: '{pre-plan HEAD}',
-  },
-  {
-    where: 'cadence-core/workflows/task.md',
-    body: () => stepBody(doc('cadence-core', 'workflows', 'task.md'),
-      'risk_check', 'workflows/task.md'),
-    end: '`$S`',
   },
   {
     // No `<step>` blocks in this reference - its step 5 is a numbered item, and

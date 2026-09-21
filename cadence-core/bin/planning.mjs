@@ -65,19 +65,6 @@
 //                                   declared nothing reports *_found:false and
 //                                   is never compared, so `within` is null
 //                                   when nothing was compared at all
-//   task-record --slug <s> --base <ref> --head <ref>
-//               [--text "<what shipped>" | --text-file <path>]
-//                                   the record a `/cad-task` run leaves:
-//                                   .planning/tasks/<slug>/RECORD.md, written in
-//                                   the corpus's own grammar so `recall` indexes
-//                                   it and `/cad-why` joins a commit back to it.
-//                                   The commits table and the declared-files
-//                                   line are DERIVED from the range, never
-//                                   retyped onto a flag. A slug that is not one
-//                                   safe path segment is refused with nothing
-//                                   written, and a tree with no planning root
-//                                   gets neither one nor a record - `written:
-//                                   false` with a reason, ok:true
 //   recall "<query>"                BM25 over .planning artifacts (SUMMARY
 //                                   deviations and open items, CAPTURE, UAT,
 //                                   CONTEXT decisions, ARCHIVE rows, and each
@@ -212,7 +199,6 @@ import { cmdCiteCount } from './planning/cite-count.mjs';
 import { cmdSeedReqs } from './planning/seed-reqs.mjs';
 import { cmdRecall } from './planning/recall.mjs';
 import { cmdLeaseCheck } from './planning/lease-check.mjs';
-import { cmdTaskRecord } from './planning/task-record.mjs';
 import { cmdDetectCommands } from './planning/detect-commands.mjs';
 import { cmdDetectSurfaces } from './planning/detect-surfaces.mjs';
 import { cmdCapture } from './planning/capture.mjs';
@@ -270,10 +256,6 @@ const COMMANDS = {
   // failure. tokenize() splits on non-alphanumerics, so the separator is
   // immaterial; `[].join(' ')` is '', which still trips the bad-args guard.
   recall: (dir, _sub, opts, rest) => cmdRecall(dir, rest.join(' '), opts),
-  // The record a `/cad-task` run leaves (FST-01). ONE word, never a two-word
-  // spelling, for the reason the `adjudication` arm below states:
-  // `subcommandKey` consumes a second word only for the `TWO_WORD` families.
-  'task-record': (dir, _sub, opts) => cmdTaskRecord(dir, opts),
   'lease-check': (dir, _sub, opts) => cmdLeaseCheck(dir, opts),
   // --root, never --dir: this one names the PROJECT root. A `--root` with
   // nothing usable after it is refused rather than silently answered about the

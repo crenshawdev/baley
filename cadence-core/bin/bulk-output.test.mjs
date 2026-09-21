@@ -46,15 +46,15 @@ test('the register and the shape list are frozen, rows and all', () => {
   for (const s of BULK_SHAPES) assert.equal(Object.isFrozen(s), true, `${s.shape} is a mutable shape`);
 });
 
-// CADENCE-CENSUS: bulk-output-register | asserts: the register is 16 rows, 4 redirect and 3 file
+// CADENCE-CENSUS: bulk-output-register | asserts: the register is 15 rows, 4 redirect and 2 file
 test('the register pins its row count', () => {
   // The count is the enumeration's own claim: this phase examined these sites
   // and no others. Adding a site without deciding whether it owes the file
   // transport is exactly the drift the register exists against, so the number
   // moves in the commit that adds the row and never on its own.
-  assert.equal(BULK_OUTPUT.length, 16);
+  assert.equal(BULK_OUTPUT.length, 15);
   assert.equal(BULK_OUTPUT.filter((r) => r.transport === 'redirect').length, 4);
-  assert.equal(BULK_OUTPUT.filter((r) => r.transport === 'file').length, 3);
+  assert.equal(BULK_OUTPUT.filter((r) => r.transport === 'file').length, 2);
 });
 
 test('every row is well formed, and every row owing no redirect carries a reason', () => {

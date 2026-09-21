@@ -186,8 +186,8 @@ export const CENSUSES = Object.freeze([
   entry({
     id: 'bulk-output-register',
     holder: 'cadence-core/bin/bulk-output.test.mjs',
-    counts: "the register's row count and its two transport splits - 16, 4 "
-      + 'redirect and 3 file',
+    counts: "the register's row count and its two transport splits - 15, 4 "
+      + 'redirect and 2 file',
     asserted_by: 'the test named `the register pins its row count`',
     subjects: ['cadence-core/bin/lib/bulk-output.mjs'],
   }),
@@ -211,7 +211,7 @@ export const CENSUSES = Object.freeze([
   entry({
     id: 'planning-detail-sites',
     holder: 'cadence-core/bin/planning-lease-check.test.mjs',
-    counts: 'the 14 error-detail sites across the whole planning seam and the 6 '
+    counts: 'the 13 error-detail sites across the whole planning seam and the 5 '
       + 'of them wrapped in `redactUrl`',
     asserted_by: "the test named `source: planning.mjs's no-staged-set detail "
       + 'goes through redactUrl`',

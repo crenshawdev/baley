@@ -248,12 +248,6 @@ export const BULK_OUTPUT = Object.freeze([
     bytes: 'unbounded', measured: '2026-08-17', transport: 'file',
     reason: 'the step writes it to `<plandir>/reports/plan-<k>-risk.diff` and fires with that path; the destination is on the next line of the same sentence, which is why the row settles the occurrence and the scan does not',
   }),
-  Object.freeze({
-    surface: 'cadence-core/workflows/task.md',
-    shape: 'git diff', call: "git diff <parent of the task's first commit>..HEAD",
-    bytes: 'unbounded', measured: '2026-08-17', transport: 'file',
-    reason: 'the step writes it to `.planning/tasks/{slug}/risk-task-{slug}.diff` and fires with that path, exactly as execute.md does',
-  }),
 
   // --- git diff: the surviving descriptions of calls ANOTHER agent runs ------
   // A Task-dispatched reviewer inherits the parent's cwd and re-runs the

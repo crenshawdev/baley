@@ -105,7 +105,7 @@ const REASON_TOKENS = Object.freeze([
   'carry-exists', 'census-at-risk', 'collision', 'config-parse-failed', 'create-failed',
   'git-failed', 'http', 'invalid', 'line-count-drift', 'missing-file', 'no-cursor', 'no-diff',
   'no-git', 'no-key', 'no-output', 'no-payload', 'no-phase-dir', 'no-plan', 'no-planning-dir',
-  'no-plans', 'no-range', 'no-record', 'no-requirements', 'no-roadmap', 'no-root',
+  'no-plans', 'no-requirements', 'no-roadmap', 'no-root',
   'no-staged-set', 'no-traceability-table', 'no-uat', 'no-version-field', 'out-of-range',
   'over-cap', 'partial-apply', 'partial-bump', 'partial-flip', 'partial-prune', 'push-failed',
   'read', 'reap-failed', 'record-exists', 'surfaces-unanswered',
