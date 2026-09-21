@@ -3,7 +3,6 @@ pub mod config;
 mod guard;
 #[path = "import/binary.rs"]
 pub mod import;
-mod review_hook;
 mod review_ingress;
 mod server;
 
@@ -50,8 +49,6 @@ enum Command {
     Serve,
     /// Guard Bash Git commands and binary-owned Write/Edit outputs.
     Guard,
-    /// Observe an attributed reviewer stop without closing missing delivery.
-    ReviewStop,
     /// Render the compiled context-role skill without opening a project.
     ContextInstructions,
     /// Render the shared read-contract skill without opening a project.
@@ -213,7 +210,6 @@ fn run_command(command: Command) -> std::process::ExitCode {
         }
         Command::Serve => run_serve(None),
         Command::Guard => guard::run(),
-        Command::ReviewStop => review_hook::run(),
         Command::PlanInstructions => {
             use std::io::Write;
             match std::io::stdout()

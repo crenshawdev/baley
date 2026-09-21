@@ -64,8 +64,8 @@ For the read-layer cycle-purpose close handoff, measure a new real Claude Code p
    execution-worker-exit with a fresh request_id, the integer phase,
    `review: <attempt.attempt>`, the actual host, `outcome: exited` or `failed`,
    and optional detail. Retry the same request if acknowledgment is lost.
-   A provider delivery is binary-owned and is not reported. The report uses
-   the same Interrupted observation as review-stop; late returns are accepted.
+   A provider delivery is binary-owned and is not reported. The report records
+   an Interrupted observation; late returns are accepted.
    An orchestrator that never reports leaves no exit observation; the owner's
    resume decides, with no timeout. Use the selected phase; for a target with
    no phase, retain the review's ordinary launch/return observations.

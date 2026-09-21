@@ -11,17 +11,6 @@
           }
         ]
       }
-    ],
-    "SubagentStop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cadence review-stop",
-            "timeout": 10
-          }
-        ]
-      }
     ]
   }
 }

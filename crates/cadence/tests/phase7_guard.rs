@@ -1276,7 +1276,7 @@ fn hard_fail_reads_current_symbolic_head_through_real_worktree_gitdir() {
 }
 
 #[test]
-fn shipped_manifest_loads_both_native_arms_and_preserves_unrelated_hooks() {
+fn shipped_manifest_loads_the_guard_arm_alone() {
     let manifest: serde_json::Value =
         serde_json::from_str(include_str!("../../../hooks/hooks.json")).unwrap();
     assert_eq!(
@@ -1288,14 +1288,5 @@ fn shipped_manifest_loads_both_native_arms_and_preserves_unrelated_hooks() {
         "cadence guard"
     );
     assert!(manifest["hooks"].get("PostToolUse").is_none());
-    assert_eq!(
-        manifest["hooks"]["SubagentStop"],
-        serde_json::json!([{
-            "hooks": [{
-                "type": "command",
-                "command": "cadence review-stop",
-                "timeout": 10
-            }]
-        }])
-    );
+    assert!(manifest["hooks"].get("SubagentStop").is_none());
 }
