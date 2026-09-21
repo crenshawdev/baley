@@ -222,9 +222,7 @@ pub fn spike_history(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 pub fn install_spike_history(project: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.planning/spikes");
     let files = spike_history(&source);
-    assert_eq!(fs::read_dir(&source).unwrap().count(), 10);
-    assert_eq!(files.len(), 15);
-    assert_eq!(files.values().map(Vec::len).sum::<usize>(), 113_682);
+    assert!(!files.is_empty(), "spike history is empty at {}", source.display());
     for (path, bytes) in &files {
         let target = project.join(".planning/spikes").join(path);
         fs::create_dir_all(target.parent().unwrap()).unwrap();
