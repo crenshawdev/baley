@@ -133,7 +133,7 @@ fn phase31_unissued_location_is_refused() {
         let answer = client.call("cadence_query", json!({"operation":"read","location":token}));
         assert_eq!(answer["status"], "refused", "{answer}");
         assert_eq!(answer["code"], "location-not-issued", "{answer}");
-        assert_eq!(answer["rule"], "D-147", "{answer}");
+        assert_eq!(answer["rule"], "issued-location", "{answer}");
         assert_eq!(answer["slot"], "location", "{answer}");
         assert!(answer.get("body").is_none(), "{answer}");
     }

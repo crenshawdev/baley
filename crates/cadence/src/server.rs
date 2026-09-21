@@ -1039,7 +1039,8 @@ impl ServerHandler for PublicServer {
                         Ok(QueryArguments::Read(request)) => cadence::read::Query::Read(request),
                         Ok(QueryArguments::Document(request)) => cadence::read::Query::Document(request),
                         Ok(QueryArguments::DocumentSearch(request)) => cadence::read::Query::DocumentSearch(request),
-                        Err(error) => return structured_result(Ok(QueryOutput::Read(Refusal::new("read-contract", error.to_string()).rule("D-147").slot("arguments").value()))),
+                        // D-147: the model never originates a location; it reads only at a location the binary handed back.
+                        Err(error) => return structured_result(Ok(QueryOutput::Read(Refusal::new("read-contract", error.to_string()).rule("issued-location").slot("arguments").value()))),
                         Ok(_) => unreachable!("read operation selected before generic query"),
                     };
                     return structured_result(Ok(QueryOutput::Read(self.server.service.read(&self.root, query).await)));

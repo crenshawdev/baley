@@ -142,7 +142,8 @@ pub fn typed_return_refusal(request: &Value) -> Option<Value> {
         None => "findings".into(),
     };
     Some(cadence::envelope::Refusal::new("invalid-return", format!("{error:?}"))
-        .rule("H4-1").slot(slot).value())
+        // H4-1: review-return findings must satisfy the admitted contract.
+        .rule("return-shape").slot(slot).value())
 }
 fn output(operation: &str, result: impl Serialize) -> Answer {
     Ok(Envelope::Ok(Output {

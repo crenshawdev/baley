@@ -14,5 +14,6 @@ pub fn execute(domains: &mut BTreeMap<PathBuf, ReadDomain>, planning_root: &Path
 }
 
 pub fn unavailable(reason: impl Into<String>) -> Value {
-    Refusal::new("read-unavailable", reason).rule("D-145").slot("project").value()
+    // D-145: the read layer serves the startup-bound project.
+    Refusal::new("read-unavailable", reason).rule("bound-project").slot("project").value()
 }

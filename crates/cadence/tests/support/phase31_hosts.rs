@@ -256,11 +256,11 @@ fn assert_round(label: &str, calls: &[impl std::borrow::Borrow<Call>], foreign: 
         "{label} omitted the process slice");
     assert!(calls.iter().any(|call| call.arguments["location"] == "unissued-opaque-token"
         && call.result["status"] == "refused" && call.result["code"] == "location-not-issued"
-        && call.result["rule"] == "D-147"), "{label} omitted the named refusal");
+        && call.result["rule"] == "issued-location"), "{label} omitted the named refusal");
     if let Some(foreign) = foreign {
         assert!(calls.iter().any(|call| call.arguments["location"] == foreign
             && call.result["status"] == "refused" && call.result["code"] == "location-not-issued"
-            && call.result["rule"] == "D-147"), "{label} omitted the foreign-location refusal");
+            && call.result["rule"] == "issued-location"), "{label} omitted the foreign-location refusal");
     }
     let outline_rows: Vec<_> = outline.result["rows"].as_array().unwrap().iter().map(|row| json!({
         "name": row["name"], "kind": row["kind"], "range": row["range"]
@@ -271,7 +271,7 @@ fn assert_round(label: &str, calls: &[impl std::borrow::Borrow<Call>], foreign: 
         "outline": outline_rows,
         "cut": cut_body,
         "process": "When the caller asks for the host truth, the caller gets HANDWRITTEN HOST PROCESS SLICE.\n",
-        "refusal": {"status":"refused","code":"location-not-issued","rule":"D-147"},
+        "refusal": {"status":"refused","code":"location-not-issued","rule":"issued-location"},
         "continuation_pages": pages
     })
 }

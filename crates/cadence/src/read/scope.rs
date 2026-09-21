@@ -5,7 +5,8 @@ use crate::envelope::Refusal;
 use std::path::PathBuf;
 
 fn refusal(slot: &str, code: &str, reason: impl Into<String>) -> Value {
-    Refusal::new(code, reason).rule("D-147").slot(slot).value()
+    // D-147: the model never originates a location; it reads only at a location the binary handed back.
+    Refusal::new(code, reason).rule("issued-location").slot(slot).value()
 }
 
 pub(super) fn task_lease_files(

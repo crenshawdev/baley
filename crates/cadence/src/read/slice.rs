@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 pub(super) const ANSWER_BOUND: usize = 65_536;
 
 fn refusal(slot: &str, code: &str, reason: impl Into<String>) -> Value {
-    Refusal::new(code, reason).rule("D-147").slot(slot).value()
+    // D-147: the model never originates a location; it reads only at a location the binary handed back.
+    Refusal::new(code, reason).rule("issued-location").slot(slot).value()
 }
 
 /// The units a caller can name in `path`, and a note when the outline that

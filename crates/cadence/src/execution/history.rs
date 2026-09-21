@@ -45,7 +45,8 @@ pub struct RunView {
 pub fn run_view(data: &Value, phase: u32, run: &str) -> std::result::Result<RunView, Value> {
     use crate::verification::{persistence, runner};
     let unavailable = |error: Error| crate::envelope::Refusal::new("document-unavailable", error.to_string())
-        .rule("D-187").slot("identity").phase(phase).value();
+        // D-187: process records are reached by identity, never by path.
+        .rule("record-identity").slot("identity").phase(phase).value();
     let mut found = Vec::new();
     let records = task_record_values(data, phase).map_err(unavailable)?.iter()
         .filter(|r| r["request"]["event"]["run_id"] == run)
@@ -83,7 +84,8 @@ pub fn run_view(data: &Value, phase: u32, run: &str) -> std::result::Result<RunV
     if found.len() != 1 {
         return Err(crate::envelope::Refusal::new(if found.is_empty() { "document-not-found" } else { "document-ambiguous" },
             format!("phase {phase} retains {} matching launches for run {run}", found.len()))
-            .rule("D-187").slot("identity").phase(phase).value());
+            // D-187: process records are reached by identity, never by path.
+            .rule("record-identity").slot("identity").phase(phase).value());
     }
     let (launch, mut result, verifier) = found.pop().unwrap();
     let mut streams = [String::new(), String::new()];

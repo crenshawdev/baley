@@ -52,7 +52,8 @@ const BOUNDED_NOTE: &str = "search answer was bounded; repeat the same search wi
 const EXHAUSTED_NOTE: &str = "the cursor is at or past this search's last match; nothing follows";
 
 fn refusal(slot: &str, code: &str, reason: impl Into<String>) -> Value {
-    Refusal::new(code, reason).rule("D-147").slot(slot).value()
+    // D-147: the model never originates a location; it reads only at a location the binary handed back.
+    Refusal::new(code, reason).rule("issued-location").slot(slot).value()
 }
 
 fn selector(project: &Path, scope: &Scope) -> Result<(PathBuf, Option<GlobMatcher>), Value> {

@@ -186,7 +186,8 @@ pub struct Resolved {
 }
 
 fn refusal(slot: &str, code: &str, reason: impl Into<String>) -> Value {
-    Refusal::new(code, reason).rule("D-148").slot(slot).value()
+    // D-148: process records are reached by identity, never by path.
+    Refusal::new(code, reason).rule("record-identity").slot(slot).value()
 }
 
 struct SnapshotData(cadence::store::cache::SharedSnapshot);

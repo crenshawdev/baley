@@ -37,7 +37,8 @@ struct Usage {
 }
 
 fn refusal(code: &str, reason: impl Into<String>) -> Value {
-    Refusal::new(code, reason).rule("D-151").slot("identity").value()
+    // D-151: process records are reached by identity, never by path.
+    Refusal::new(code, reason).rule("record-identity").slot("identity").value()
 }
 
 pub fn resolve(planning_root: &Path, identity: &DocumentIdentity) -> Result<Report, Value> {

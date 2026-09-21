@@ -15,15 +15,15 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 
-/// Every `"status":"refused"` written by hand in production source, as
+/// Every matching line in production source, as
 /// `path:line`. Test modules and test files are skipped, the way the phase 7
 /// lease test skips them when it counts `fn covers(`.
-fn handwritten_refusals(root: &Path) -> Vec<String> {
+fn production_sites(root: &Path, matches: &impl Fn(&str) -> bool) -> Vec<String> {
     let mut sites = Vec::new();
     for entry in fs::read_dir(root).unwrap() {
         let path = entry.unwrap().path();
         if path.is_dir() {
-            sites.extend(handwritten_refusals(&path));
+            sites.extend(production_sites(&path, matches));
             continue;
         }
         let name = path.file_name().unwrap().to_str().unwrap();
@@ -43,7 +43,7 @@ fn handwritten_refusals(root: &Path) -> Vec<String> {
             if line.trim().starts_with("//") {
                 continue;
             }
-            if line.replace(' ', "").contains("\"status\":\"refused\"") {
+            if matches(line) {
                 sites.push(format!("{}:{}", path.display(), index + 1));
             }
         }
@@ -58,10 +58,21 @@ fn code_of(answer: &Value) -> &str {
 #[test]
 fn no_refusal_is_written_by_hand() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let sites = handwritten_refusals(&root);
+    let sites = production_sites(&root, &|line| line.replace(' ', "").contains("\"status\":\"refused\""));
     assert!(
         sites.is_empty(),
         "refusals built without cadence::envelope::Refusal:\n{}",
+        sites.join("\n")
+    );
+}
+
+#[test]
+fn no_refusal_names_a_decision_id() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let sites = production_sites(&root, &|line| line.contains(".rule(\"D-") || line.contains(".rule(\"H"));
+    assert!(
+        sites.is_empty(),
+        "refusals naming a decision id or validator version instead of a rule:\n{}",
         sites.join("\n")
     );
 }
@@ -92,7 +103,7 @@ fn a_malformed_review_finding_names_its_indexed_field() {
             {"file":"b.rs","line":2,"claim":"claim","failure_scenario":"failure"}]}));
     assert_eq!(answer["status"], "refused", "{answer}");
     assert_eq!(answer["code"], "invalid-return", "{answer}");
-    assert_eq!(answer["rule"], "H4-1", "{answer}");
+    assert_eq!(answer["rule"], "return-shape", "{answer}");
     assert_eq!(answer["slot"], "findings[1].severity", "{answer}");
     assert!(answer["reason"].as_str().unwrap().contains("severity"));
 }

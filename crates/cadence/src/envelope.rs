@@ -215,11 +215,11 @@ mod tests {
     #[test]
     fn a_refusal_carries_its_location_fields_only_when_set() {
         let full = Refusal::new("read-contract", "no such unit")
-            .rule("D-147").slot("unit").phase(31).entry(2).id("T1").details(json!({"units": ["a"]}))
+            .rule("issued-location").slot("unit").phase(31).entry(2).id("T1").details(json!({"units": ["a"]}))
             .value();
         assert_eq!(
             full,
-            json!({"status": "refused", "code": "read-contract", "reason": "no such unit", "rule": "D-147",
+            json!({"status": "refused", "code": "read-contract", "reason": "no such unit", "rule": "issued-location",
                 "slot": "unit", "phase": 31, "entry": 2, "id": "T1", "details": {"units": ["a"]}})
         );
         let bare = Refusal::new("no-phase-dir", "the phase has no CONTEXT.md").value();
