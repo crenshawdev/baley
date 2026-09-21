@@ -10,6 +10,12 @@ use cadence::{
     },
 };
 use serde_json::json;
+#[allow(dead_code)]
+#[path = "support/refusal_fixtures.rs"]
+mod refusal_fixtures;
+#[allow(dead_code)]
+#[path = "support/serve.rs"]
+mod serve;
 use std::path::PathBuf;
 
 #[test]
@@ -328,8 +334,10 @@ fn public_range_records_exact_material_without_a_review_pass_and_replays_lost_re
     assert_eq!(repo.view(), before);
     let mut reused = request;
     reused["source"]["head"] = json!(base);
-    assert_eq!(repo.call(reused)["code"], "request-reused");
-    assert_eq!(repo.view(), before);
+    let before = serve::tree(&repo.root);
+    let refused = repo.call(reused);
+    assert_eq!(refused["code"], "request-reused");
+    refusal_fixtures::assert_delta(&repo.root, &before, &refused);
 }
 
 #[test]
@@ -689,7 +697,6 @@ fn strict_scope_source_and_surface_validation_refuse_without_a_scan_or_policy_ch
     let head = repo.commit(&["work.txt"]);
     let request = repo.request("valid", &base, &head);
     repo.call(request.clone());
-    let before = repo.view();
     for (pointer, value) in [
         ("/scope/phase", json!(0)),
         ("/scope/phase", json!(999)),
@@ -703,8 +710,10 @@ fn strict_scope_source_and_surface_validation_refuse_without_a_scan_or_policy_ch
         let mut input = request.clone();
         input["request_id"] = json!("invalid");
         *input.pointer_mut(pointer).unwrap() = value;
-        assert_eq!(repo.call(input)["status"], "refused");
-        assert_eq!(repo.view(), before);
+        let before = serve::tree(&repo.root);
+        let refused = repo.call(input);
+        assert_eq!(refused["status"], "refused");
+        refusal_fixtures::assert_delta(&repo.root, &before, &refused);
     }
     let config = repo.root.join(".planning/config.v4.json");
     let mut value: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
@@ -712,7 +721,10 @@ fn strict_scope_source_and_surface_validation_refuse_without_a_scan_or_policy_ch
     fs::write(&config, serde_json::to_vec(&value).unwrap()).unwrap();
     let mut input = request;
     input["request_id"] = json!("explicit");
-    assert_eq!(repo.call(input.clone())["code"], "unanswered-surfaces");
+    let before = serve::tree(&repo.root);
+    let refused = repo.call(input.clone());
+    assert_eq!(refused["code"], "unanswered-surfaces");
+    refusal_fixtures::assert_delta(&repo.root, &before, &refused);
     let bytes = fs::read(&config).unwrap();
     input["surfaces"] = json!(["auth"]);
     let scan = scan_of(&repo.call(input.clone()));
@@ -1012,8 +1024,10 @@ impl Repo {
 fn public_execution_source_uses_only_the_retained_dispatch_base_and_accepted_task_range() {
     let repo = Repo::execution();
     let dispatch = repo.dispatch();
+    let baseline = serve::tree(&repo.root);
     let missing = repo.call(repo.execution_request("not-accepted", &dispatch));
     assert_eq!(missing["code"], "missing-execution-material");
+    refusal_fixtures::assert_delta(&repo.root, &baseline, &missing);
     let commits = repo.complete_execution(&dispatch);
     let before = repo.view();
     let bases = risk::execution_bases(&before.snapshot.data).unwrap();
@@ -1070,7 +1084,6 @@ fn public_execution_source_uses_only_the_retained_dispatch_base_and_accepted_tas
         answer["observation"]["resolution"]
     );
     assert_eq!(second["observation"]["scan"], answer["observation"]["scan"]);
-    let before = repo.view();
     for (pointer, value) in [
         ("/scope/occurrence", json!("foreign")),
         ("/source/plan", json!(2)),
@@ -1079,8 +1092,10 @@ fn public_execution_source_uses_only_the_retained_dispatch_base_and_accepted_tas
     ] {
         let mut input = repo.execution_request("foreign-risk", &dispatch);
         *input.pointer_mut(pointer).unwrap() = value;
-        assert_eq!(repo.call(input)["status"], "refused");
-        assert_eq!(repo.view(), before);
+        let before = serve::tree(&repo.root);
+        let refused = repo.call(input);
+        assert_eq!(refused["status"], "refused");
+        refusal_fixtures::assert_delta(&repo.root, &before, &refused);
     }
     // Complete only after the latest exact scan has its contracted settlement.
     let mut client = Client::new(&repo.root);

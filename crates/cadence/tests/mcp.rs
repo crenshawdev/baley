@@ -16,6 +16,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 
 use serde_json::{Value, json};
+#[allow(dead_code)]
+#[path = "support/refusal_fixtures.rs"]
+mod refusal_fixtures;
 use std::{collections::BTreeSet, fs, path::Path};
 
 #[path = "support/signing.rs"]
@@ -2168,6 +2171,10 @@ fn risk_receipts_cross_stdio_restart_and_bind_current_staged_and_committed_mater
     fs::write(root.join("src/shared.txt"), "jwt.verify(token)\n").unwrap();
     git(root, &["add", "src/shared.txt"]);
     let mut client = fixture.client();
+    let listed = client.tools_list(2);
+    let tools_bytes = serde_json::to_vec(&listed["result"]["tools"]).unwrap().len();
+    println!("tools/list result.tools: {tools_bytes} bytes");
+    assert!(tools_bytes < 6_270);
     let scope = json!({"phase":6,"occurrence":"receipt-fixture","worker":null});
     let source = json!({"kind":"staged","base":base});
     let scan = envelope(&client.tools_call(20,"cadence_apply",json!({"operation":"risk-check","request_id":"staged-one","scope":scope,"source":source,"surfaces":["auth"]})));
@@ -2203,12 +2210,11 @@ fn risk_receipts_cross_stdio_restart_and_bind_current_staged_and_committed_mater
     assert_eq!(fixture.read(), before);
     let mut changed = request.clone();
     changed["receipt"]["consequence"]["evidence_id"] = json!("different");
-    assert_eq!(
-        envelope(&client.tools_call(27, "cadence_apply", changed))["code"],
-        "request-reused"
-    );
-    assert_eq!(fixture.read(), before);
+    let baseline = serve::tree(root);
+    let refused = envelope(&client.tools_call(27, "cadence_apply", changed));
+    assert_eq!(refused["code"], "request-reused");
     assert!(client.finish().success());
+    refusal_fixtures::assert_delta(root, &baseline, &refused);
     let mut replacement = fixture.client();
     let report = envelope(&replacement.tools_call(28, "cadence_query", query.clone()));
     assert_eq!(report["assessment"]["state"], "settled");

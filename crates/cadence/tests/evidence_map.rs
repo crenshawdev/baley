@@ -4,6 +4,12 @@ use cadence::store::{
     writer::{Operation, Store},
 };
 use serde_json::{Value, json};
+#[allow(dead_code)]
+#[path = "support/serve.rs"]
+mod serve;
+#[allow(dead_code)]
+#[path = "support/refusal_fixtures.rs"]
+mod refusal_fixtures;
 use std::{
     collections::BTreeMap,
     fs,
@@ -261,7 +267,7 @@ fn phase28_uncovered_current_truth_is_refused() {
         let answer = client.call("cadence_apply", approve(input));
         assert_refusal(&answer, "uncovered-truth", missing);
         client.finish();
-        assert_unchanged(project, &before, &prior);
+        refusal_fixtures::assert_delta(project, &before, &answer);
     }
 
     let temp = fixture();
@@ -290,9 +296,10 @@ fn phase28_uncovered_current_truth_is_refused() {
     let removes_t2 = replacement(&mut client, "removes-t2", 2, &published["results"][1], &old,
         attached(vec![]), "# Replacement\n");
     assert_refusal(&preview(&mut client, &removes_t2), "uncovered-truth", "truth/full/T2");
-    assert_refusal(&client.call("cadence_apply", approve(removes_t2)), "uncovered-truth", "truth/full/T2");
+    let answer = client.call("cadence_apply", approve(removes_t2));
+    assert_refusal(&answer, "uncovered-truth", "truth/full/T2");
     client.finish();
-    assert_unchanged(project, &before, &prior);
+    refusal_fixtures::assert_delta(project, &before, &answer);
 
     let mut client = Client::open(project);
     let gap = proposal(&mut client, "gap", &[attached(vec![artifact("gap-address", &["T1"])])], &["# Gap\n"]);
@@ -322,9 +329,10 @@ fn phase28_uncovered_current_truth_is_refused() {
     let mut client = Client::open(project);
     let stale_history = proposal(&mut client, "old-cannot-cover", &[attached(vec![])], &["# Gap\n"]);
     assert_refusal(&preview(&mut client, &stale_history), "uncovered-truth", "truth/full/T2");
-    assert_refusal(&client.call("cadence_apply", approve(stale_history)), "uncovered-truth", "truth/full/T2");
+    let answer = client.call("cadence_apply", approve(stale_history));
+    assert_refusal(&answer, "uncovered-truth", "truth/full/T2");
     client.finish();
-    assert_unchanged(project, &before, &prior);
+    refusal_fixtures::assert_delta(project, &before, &answer);
 }
 
 #[test]
@@ -345,9 +353,10 @@ fn phase28_current_truth_without_check_is_refused() {
         let mut client = Client::open(project);
         let input = proposal(&mut client, "no-check", &[attached(items.clone())], &["# Supplementary\n"]);
         assert_refusal(&preview(&mut client, &input), "truth-without-check", "T2");
-        assert_refusal(&client.call("cadence_apply", approve(input)), "truth-without-check", "T2");
+        let answer = client.call("cadence_apply", approve(input));
+        assert_refusal(&answer, "truth-without-check", "T2");
         client.finish();
-        assert_unchanged(project, &before, &prior);
+        refusal_fixtures::assert_delta(project, &before, &answer);
         items.push(check("two", "T2"));
         let mut client = Client::open(project);
         let corrected = proposal(&mut client, "corrected", &[attached(items.clone())], &["# Has a check\n"]);
@@ -377,9 +386,10 @@ fn phase28_current_truth_without_check_is_refused() {
     let removes_check = replacement(&mut client, "removes-check", 1, &first["results"][0], &old,
         attached(vec![check("one", "T1")]), "# T2 artifact survives in the other plan\n");
     assert_refusal(&preview(&mut client, &removes_check), "truth-without-check", "T2");
-    assert_refusal(&client.call("cadence_apply", approve(removes_check)), "truth-without-check", "T2");
+    let answer = client.call("cadence_apply", approve(removes_check));
+    assert_refusal(&answer, "truth-without-check", "T2");
     client.finish();
-    assert_unchanged(project, &before, &prior);
+    refusal_fixtures::assert_delta(project, &before, &answer);
     assert_publication(&prior.data["plan_publications"]["phases"]["27"]["publications"]["2"], &second["results"][0]);
     let mut client = Client::open(project);
     let corrected = replacement(&mut client, "retains-check", 1, &first["results"][0], &old,
@@ -438,7 +448,10 @@ fn phase28_item_without_bound_truth_is_refused() {
         let index = if case == "duplicate" { items.push(item); 3 } else { 2 };
         let mut client = Client::open(project);
         let input = proposal(&mut client, "invalid-edge", &[attached(items)], &["# Membership\n"]);
-        for answer in [preview(&mut client, &input), client.call("cadence_apply", approve(input))] {
+        let previewed = preview(&mut client, &input);
+        assert_eq!(tree(project), before);
+        let answer = client.call("cadence_apply", approve(input));
+        for answer in [previewed, answer.clone()] {
             assert_refusal(&answer, rule, &id);
             assert_eq!(answer["entry"], 0);
             assert_eq!(answer["slot"], format!("submission.plans[0].content.evidence_map.items[{index}].{slot}"));
@@ -447,7 +460,7 @@ fn phase28_item_without_bound_truth_is_refused() {
             }
         }
         client.finish();
-        assert_unchanged(project, &before, &prior);
+        refusal_fixtures::assert_delta(project, &before, &answer);
         let mut client = Client::open(project);
         let corrected = proposal(&mut client, "corrected", &[attached(vec![
             check("one", "T1"), check("two", "parcel/T2"), artifact("opaque/item/T2", &["parcel/T2"]),
@@ -473,14 +486,17 @@ fn phase28_item_without_bound_truth_is_refused() {
     let mut conflicting = maps.clone();
     conflicting[1]["items"][1]["spec"]["substance"] = json!("A conflicting destination.");
     let bad = proposal(&mut client, "conflict", &conflicting, &["# First\n", "# Second\n"]);
-    for answer in [preview(&mut client, &bad), client.call("cadence_apply", approve(bad))] {
+    let previewed = preview(&mut client, &bad);
+    assert_eq!(tree(project), before);
+    let answer = client.call("cadence_apply", approve(bad));
+    for answer in [previewed, answer.clone()] {
         assert_refusal(&answer, "evidence-item-conflict", "shared/opaque");
         assert_eq!(answer["entry"], 1);
         assert_eq!(answer["slot"], "submission.plans[1].content.evidence_map.items[1].id");
         for origin in ["plan 1", "plan 2"] { assert!(answer["reason"].as_str().unwrap().contains(origin), "{answer}"); }
     }
     client.finish();
-    assert_unchanged(project, &before, &prior);
+    refusal_fixtures::assert_delta(project, &before, &answer);
     let mut client = Client::open(project);
     let corrected = proposal(&mut client, "shared", &maps, &["# First\n", "# Second\n"]);
     let original = publish(&mut client, &corrected);
@@ -494,12 +510,15 @@ fn phase28_item_without_bound_truth_is_refused() {
     let before = tree(project);
     let mut client = Client::open(project);
     let bad = proposal(&mut client, "saved-conflict", std::slice::from_ref(&conflicting[1]), &["# Conflicting gap\n"]);
-    for answer in [preview(&mut client, &bad), client.call("cadence_apply", approve(bad))] {
+    let previewed = preview(&mut client, &bad);
+    assert_eq!(tree(project), before);
+    let answer = client.call("cadence_apply", approve(bad));
+    for answer in [previewed, answer.clone()] {
         assert_refusal(&answer, "evidence-item-conflict", "shared/opaque");
         for origin in ["plan 1", "plan 3"] { assert!(answer["reason"].as_str().unwrap().contains(origin), "{answer}"); }
     }
     client.finish();
-    assert_unchanged(project, &before, &saved);
+    refusal_fixtures::assert_delta(project, &before, &answer);
 
     // A coordinated replacement can revise the stable id once no conflicting
     // definition survives in the resulting current set. Prior definitions stay.
@@ -542,7 +561,10 @@ fn phase28_noncurrent_truth_version_is_refused() {
             let mut client = Client::open(project);
             let input = proposal(&mut client, "wrong-version", &[attached(vec![check("one", "T1"),
                 check("two", "T2"), item])], &["# Wrong numeric version\n"]);
-            for answer in [preview(&mut client, &input), client.call("cadence_apply", approve(input))] {
+            let previewed = preview(&mut client, &input);
+            assert_eq!(tree(project), before);
+            let answer = client.call("cadence_apply", approve(input));
+            for answer in [previewed, answer.clone()] {
                 assert_refusal(&answer, "truth-version-mismatch", "opaque/version-item");
                 assert_eq!(answer["entry"], 0);
                 assert_eq!(answer["slot"], format!("submission.plans[0].content.evidence_map.items[2].associations[{edge}].truth_version"));
@@ -552,7 +574,7 @@ fn phase28_noncurrent_truth_version_is_refused() {
                 }
             }
             client.finish();
-            assert_unchanged(project, &before, &prior);
+            refusal_fixtures::assert_delta(project, &before, &answer);
         }
     }
 
@@ -572,7 +594,7 @@ fn phase28_noncurrent_truth_version_is_refused() {
     assert_eq!(answer["slot"], "submission.plans[0].content.evidence_map.items[2].associations[1].truth_version");
     assert!(answer["reason"].as_str().unwrap().contains("missing"));
     client.finish();
-    assert_unchanged(project, &before, &prior);
+    refusal_fixtures::assert_delta(project, &before, &answer);
 
     let mut client = Client::open(project);
     let items = vec![check("one", "T1"), check("two", "T2"), artifact("opaque/version-item", &["T1", "T2"])];
@@ -589,7 +611,10 @@ fn phase28_noncurrent_truth_version_is_refused() {
     let before = tree(absent.path());
     let mut client = Client::open(absent.path());
     let input = proposal(&mut client, "no-native-truths", &[attached(vec![check("one", "T1")])], &["# Cannot infer approval\n"]);
-    for answer in [preview(&mut client, &input), client.call("cadence_apply", approve(input))] {
+    let previewed = preview(&mut client, &input);
+    assert_eq!(tree(absent.path()), before);
+    let answer = client.call("cadence_apply", approve(input));
+    for answer in [previewed, answer.clone()] {
         assert_eq!(answer["status"], "refused", "{answer}");
         assert_eq!(answer["rule"], "native-approved-truths");
         assert_eq!(answer["phase"], 27);
@@ -597,8 +622,8 @@ fn phase28_noncurrent_truth_version_is_refused() {
         assert!(reason.contains("current") && reason.contains("absent") && reason.contains("context-submit"), "{answer}");
     }
     client.finish();
-    assert_eq!(tree(absent.path()), before);
-    assert!(!absent.path().join(".planning/state.json").exists());
+    refusal_fixtures::assert_delta(absent.path(), &before, &answer);
+    assert!(serve::reopened(absent.path()).snapshot.data.get("context").is_none());
 }
 
 fn attached(items: Vec<Value>) -> Value {
@@ -742,14 +767,17 @@ fn phase28_republication_supersedes_previous_map() {
                 bad["submission"]["plans"][0]["replacement"]["content"]["evidence_map"] = json!({"mode":"provisional"});
                 if case == "mapless" { bad["submission"]["plans"][0]["replacement"]["content"]["evidence_map"] = map.clone(); }
             }
+            let before_refusal = tree(project);
             let answer = client.call("cadence_apply", approve(bad));
             assert_eq!(answer["status"], "refused", "{case}/{control}: {answer}");
             assert_eq!(answer["rule"], rule, "{case}/{control}: {answer}");
             client.finish();
-            assert_unchanged(project, &before, &first);
+            refusal_fixtures::assert_delta(project, &before_refusal, &answer);
             client = Client::open(project);
         }
         if case == "shared" {
+            let before = tree(project);
+            let first = reopened(project).snapshot;
             let conflict = replacement(&mut client, "conflict", 1, &original["results"][0],
                 &old_document, attached(changed_items.clone()), "# Conflicting definition\n");
             assert_refusal(&preview(&mut client, &conflict), "evidence-item-conflict", "address");
@@ -824,7 +852,9 @@ fn phase28_republication_supersedes_previous_map() {
                 "replay returns original payload digest");
             assert_eq!(replay["projections"][0]["status"], projection);
             assert_eq!(replay["projections"][0]["current_revision"], replacement["results"][0]["revision"]);
+            assert_eq!(tree(project), before_replay, "successful replay remains read-only");
             for changed in ["spec", "association"] {
+                let before_refusal = tree(project);
                 let mut reused = original_request.clone();
                 let item = &mut reused["submission"]["plans"][0]["content"]["evidence_map"]["items"][0];
                 if changed == "spec" { item["spec"]["call"] = json!("Send an altered parcel."); }
@@ -832,10 +862,14 @@ fn phase28_republication_supersedes_previous_map() {
                 let refused = client.call("cadence_apply", approve(reused));
                 assert_eq!(refused["rule"], "request-id-reuse", "{refused}");
                 assert!(refused["reason"].as_str().unwrap().contains("original"));
+                client.finish();
+                if projection == "newer-authorized" {
+                    refusal_fixtures::assert_delta(project, &before_refusal, &refused);
+                } else { assert_eq!(tree(project), before_refusal, "already logged refusal replay is read-only"); }
+                client = Client::open(project);
             }
             client.finish();
-            assert_unchanged(project, &before_replay, &saved);
-            assert_eq!(reopened(project).snapshot, saved);
+            assert_eq!(reopened(project).snapshot.data, saved.data);
         }
         fs::write(&path, installed).unwrap();
     }
@@ -867,8 +901,7 @@ fn phase28_republication_supersedes_previous_map() {
     assert!(refused["reason"].as_str().unwrap().contains("phase 27 plan 1"));
     assert!(refused["reason"].as_str().unwrap().contains("fresh approval"));
     second.finish();
-    assert_unchanged(project, &before, &saved);
-    assert_eq!(reopened(project).snapshot, saved);
+    refusal_fixtures::assert_delta(project, &before, &refused);
 
     // Restore the captured historical bytes verbatim at their original root.
     // Guard is declared before clients, so unwind reaps them before root cleanup.
@@ -1309,6 +1342,8 @@ fn phase28_accepted_map_is_attached_to_published_plan() {
         assert_unchanged(project, &before, &prior);
 
         for case in ["decline", "changed-map", "wire-body", "wire-execution", "count", "scope"] {
+            let before = tree(project);
+            let prior = reopened(project).snapshot;
             let mut client = Client::open(project);
             let mut candidate = normalized.clone();
             let answer = match case {
@@ -1339,9 +1374,13 @@ fn phase28_accepted_map_is_attached_to_published_plan() {
                 if case == "changed-map" { assert!(["exact-submission-approval","replacement-authorization"].contains(&answer["rule"].as_str().unwrap()), "{answer}"); }
             }
             client.finish();
-            assert_unchanged(project, &before, &prior);
+            if matches!(case, "changed-map" | "wire-body" | "wire-execution") {
+                refusal_fixtures::assert_delta(project, &before, &answer);
+            } else { assert_unchanged(project, &before, &prior); }
         }
         if !replace {
+            let before = tree(project);
+            let prior = reopened(project).snapshot;
             let mut client = Client::open(project);
             let draft = client.call("cadence_apply", normalized.clone());
             assert_eq!(draft["persisted"], false);

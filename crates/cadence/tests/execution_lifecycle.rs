@@ -4,6 +4,9 @@ use cadence::store::{
     writer::{Operation, Store},
 };
 use serde_json::{Value, json};
+#[allow(dead_code)]
+#[path = "support/refusal_fixtures.rs"]
+mod refusal_fixtures;
 use dispatch_support as serve;
 use std::{
     collections::BTreeMap,
@@ -400,13 +403,13 @@ fn apply(project:&Path,request:Value) -> Value {
 }
 
 fn admission_refusal(project:&Path,request:Value,rule:&str,slot:&str,id:&str) -> Value {
-    let before=tree(project); let prior=snapshot(project);
+    let before=tree(project); 
     let answer=apply(project,request);
     assert_eq!(answer["status"],"refused","{answer}");
     assert_eq!(answer["rule"],rule,"{answer}");
     assert_eq!(answer["slot"],slot,"{answer}");
     if !id.is_empty() {assert_eq!(answer["id"],id,"{answer}");}
-    unchanged(project,&before,&prior);
+    refusal_fixtures::assert_delta(project,&before,&answer);
     answer
 }
 
@@ -691,11 +694,11 @@ impl Tiny {
 }
 
 fn close_refused(project:&Path, request:Value, rule:&str, ids:&[&str]) -> Value {
-    let before=tree(project);let prior=reopened(project).snapshot;
+    let before=tree(project);
     let answer=apply(project,request);assert_eq!(answer["status"],"refused","{answer}");
     assert_eq!(answer["rule"],rule,"{answer}");
     for id in ids {assert!(answer["details"]["unsatisfied"].as_array().unwrap().iter().any(|c|c["id"]==*id),"missing {id}: {answer}");}
-    unchanged(project,&before,&prior);answer
+    refusal_fixtures::assert_delta(project,&before,&answer);answer
 }
 
 // A task that stops at a checkpoint resumes in a successor attempt that names
@@ -766,7 +769,7 @@ fn phase12_task_close_requires_red_then_green() {
     let state=task_state(project,"A");let before=tree(project);let prior=reopened(project).snapshot;
     let dirty=apply(project,json!({"operation":"execution-run","request":{"request_id":"dirty-run","task":state["task"],"attempt":"attempt-A",
         "expected_version":state["state"]["version"],"command":fixture.command,"check":fixture.checks[0],"stage":"red"}}));
-    assert_eq!(dirty["status"],"refused","{dirty}");unchanged(project,&before,&prior);
+    assert_eq!(dirty["status"],"refused","{dirty}");refusal_fixtures::assert_delta(project,&before,&dirty);
     git_value(project,&["restore","src/tiny.py"]);
     // A passing run with changed test bytes cannot pair with the original red.
     let test=fs::read(project.join("tests/check.py")).unwrap();fs::write(project.join("tests/check.py"),[test.as_slice(),b"\n# Changed test material\n"].concat()).unwrap();
@@ -825,7 +828,7 @@ fn phase12_task_close_requires_red_then_green() {
             _=>{request["request"]["statement"].as_object_mut().unwrap().remove("approval");request["request"]["statement"]["role"]=json!("owner");},
         }
         if case<3 {request["request"]["statement"]["approval"]["submission"]=request["request"]["statement"]["submission"].clone();}
-        let before=tree(project);let prior=reopened(project).snapshot;let answer=apply(project,request);assert_eq!(answer["status"],"refused","{answer}");unchanged(project,&before,&prior);
+        let before=tree(project);let prior=reopened(project).snapshot;let answer=apply(project,request);assert_eq!(answer["status"],"refused","{answer}");refusal_fixtures::assert_delta(project,&before,&answer);
     }
     let first=custom.classify(0,true);let accepted=apply(project,first.clone());assert_eq!(accepted["status"],"ok","{accepted}");
     assert_eq!(apply(project,first)["receipt"],accepted["receipt"]);
@@ -879,7 +882,7 @@ fn phase12_plan_completion_requires_owner_no_stub_attestation() {
             _=>{request["request"]["statement"].as_object_mut().unwrap().remove("approval");request["request"]["statement"]["no_stub"]=json!(true);request["request"]["statement"]["role"]=json!("owner");},
         }
         if case<3 {request["request"]["statement"]["approval"]["submission"]=request["request"]["statement"]["submission"].clone();}
-        let before=tree(project);let prior=reopened(project).snapshot;let answer=apply(project,request);assert_eq!(answer["status"],"refused","{answer}");unchanged(project,&before,&prior);
+        let before=tree(project);let prior=reopened(project).snapshot;let answer=apply(project,request);assert_eq!(answer["status"],"refused","{answer}");refusal_fixtures::assert_delta(project,&before,&answer);
         owner_completion_refused(project,&format!("complete-stale-owner-{case}"),&[("A","check/A"),("A","check/A2")]);
     }
     let mut first=fixture.owner(0,"affirmative-0",true);first["request"]["statement"]["supersedes"]=json!("false-0");
@@ -1000,7 +1003,8 @@ fn phase12_acknowledged_progress_survives_restart() {
     close_refused(project,fixture.close("restart-duplicate-A"),"task-completed",&[]);
     let mut overwrite=stop_request;overwrite["request"]["request_id"]=json!("overwrite-stop");overwrite["request"]["expected_version"]=task_state(project,"B")["state"]["version"].clone();
     overwrite["request"]["answer"]["disposition"]=json!("approve");overwrite["request"]["answer"]["actual_response"]=json!("Overwrite Stop");
-    let answer=apply(project,overwrite);assert_eq!(answer["status"],"refused","{answer}");unchanged(project,&before_lost,&prior_lost);
+    let before_overwrite=tree(project);
+    let answer=apply(project,overwrite);assert_eq!(answer["status"],"refused","{answer}");refusal_fixtures::assert_delta(project,&before_overwrite,&answer);
     // A real unacknowledged task commit remains uncertain. A later launch claim
     // does not retroactively acknowledge its task progress.
     git_value(project,&["commit","--allow-empty","-S","-m","feat(12): unacknowledged work B"]);let unacknowledged=git_value(project,&["rev-parse","HEAD"]);
@@ -1368,10 +1372,10 @@ fn suite_markers(project:&Path) -> String {
 // A refused plan operation launches nothing and leaves every protected record
 // and marker byte-identical after reopen.
 fn plan_refused(project:&Path,request:Value,rule:&str) -> Value {
-    let before=tree(project);let prior=reopened(project).snapshot;let markers=suite_markers(project);
+    let before=tree(project);let markers=suite_markers(project);
     let answer=apply(project,request);assert_eq!(answer["status"],"refused","{answer}");
     assert_eq!(answer["rule"],rule,"{answer}");
-    unchanged(project,&before,&prior);assert_eq!(suite_markers(project),markers,"a refusal launches no process");
+    refusal_fixtures::assert_delta(project,&before,&answer);assert_eq!(suite_markers(project),markers,"a refusal launches no process");
     answer
 }
 
@@ -1467,7 +1471,7 @@ fn phase12_runner_retains_task_commands_and_one_suite() {
     let a=task_state(project,"A");let before=tree(project);let prior=reopened(project).snapshot;
     let unnamed=apply(project,json!({"operation":"execution-run","request":{"request_id":"unnamed","task":a["task"],"attempt":"attempt-A",
         "expected_version":a["state"]["version"],"command":suite_command("runner"),"check":null,"stage":"verify"}}));
-    assert_eq!(unnamed["status"],"refused","{unnamed}");assert_eq!(unnamed["rule"],"named-command");unchanged(project,&before,&prior);
+    assert_eq!(unnamed["status"],"refused","{unnamed}");assert_eq!(unnamed["rule"],"named-command");refusal_fixtures::assert_delta(project,&before,&unnamed);
     // A recognized result refuses the absence attestation outright.
     plan_refused(project,plan_request(project,"execution-suite-relaunch","relaunch-observed",1,absence("suite-1",json!(output_identity(&result)))),"suite-results-observed");
     // Completion needs both the suite receipt and the exact risk settlement.

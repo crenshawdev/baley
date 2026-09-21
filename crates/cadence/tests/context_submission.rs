@@ -1,6 +1,12 @@
 //! Phase 11 checks exercise the real binary, journal and filesystem.
 use cadence::store::model::{self, Snapshot};
 use serde_json::{Value, json};
+#[allow(dead_code)]
+#[path = "support/serve.rs"]
+mod serve;
+#[allow(dead_code)]
+#[path = "support/refusal_fixtures.rs"]
+mod refusal_fixtures;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -229,6 +235,7 @@ fn phase11_unapproved_context_changes_nothing() {
                     if !approval.is_null() {
                         draft["approval"] = approval.clone();
                     }
+                    let baseline = tree(temp.path());
                     let answer = client.call("cadence_apply", draft);
                     if case == "native" {
                         assert_eq!(answer["status"], "refused", "{answer}");
@@ -245,9 +252,14 @@ fn phase11_unapproved_context_changes_nothing() {
                         assert_eq!(answer["operation"], "context-submit");
                         assert_eq!(answer["persisted"], false);
                     }
-                    assert_eq!(tree(temp.path()), before);
+                    client.finish();
+                    if answer["status"] == "refused" {
+                        refusal_fixtures::assert_delta(temp.path(), &baseline, &answer);
+                    } else { assert_eq!(tree(temp.path()), baseline); }
+                    client = Client::open(temp.path());
                 }
             }
+            let before = tree(temp.path());
             client.finish();
             assert_eq!(
                 tree(temp.path()),
@@ -632,7 +644,7 @@ fn phase11_sentence_fault_names_rule_and_slot() {
             let answer = client.call("cadence_apply", request);
             expect_refusal(&answer, rule, slot, 0, "T1");
             client.finish();
-            assert_eq!(tree(temp.path()), before);
+            refusal_fixtures::assert_delta(temp.path(), &before, &answer);
         }
     }
 }
@@ -686,7 +698,7 @@ fn phase11_unobservable_attestation_is_refused() {
                 );
                 assert_eq!(control["persisted"], false);
                 client.finish();
-                assert_eq!(tree(temp.path()), before);
+                refusal_fixtures::assert_delta(temp.path(), &before, &answer);
             }
         }
     }
@@ -741,7 +753,7 @@ fn phase11_prose_oracle_attestation_is_refused() {
                 );
                 assert_eq!(control["persisted"], false);
                 client.finish();
-                assert_eq!(tree(temp.path()), before);
+                refusal_fixtures::assert_delta(temp.path(), &before, &answer);
             }
         }
     }
@@ -793,7 +805,7 @@ fn phase11_eighth_truth_requires_phase_split() {
         assert_eq!(control["status"], "ok", "{control}");
         assert_eq!(control["persisted"], false);
         client.finish();
-        assert_eq!(tree(temp.path()), before);
+        refusal_fixtures::assert_delta(temp.path(), &before, &answer);
     }
 }
 
@@ -832,7 +844,7 @@ fn phase11_identity_collision_is_refused() {
             );
             expect_refusal(&answer, "identity-collision", slot, index, id);
             client.finish();
-            assert_eq!(tree(temp.path()), before);
+            refusal_fixtures::assert_delta(temp.path(), &before, &answer);
         }
     }
 
@@ -846,7 +858,7 @@ fn phase11_identity_collision_is_refused() {
     );
     assert_eq!(first["persisted"], true);
     client.finish();
-    let winner = tree(temp.path());
+    let mut winner = tree(temp.path());
     for (family, id) in [
         ("truths", "T1"),
         ("durable_decisions", "D-01"),
@@ -873,11 +885,8 @@ fn phase11_identity_collision_is_refused() {
                 id,
             );
             client.finish();
-            assert_eq!(
-                tree(temp.path()),
-                winner,
-                "the first approved set wins after restart"
-            );
+            refusal_fixtures::assert_delta(temp.path(), &winner, &answer);
+            winner = tree(temp.path());
         }
     }
     let mut client = Client::open(temp.path());

@@ -4,6 +4,12 @@ use cadence::store::{
     writer::{Operation, Store},
 };
 use serde_json::{Value, json};
+#[allow(dead_code)]
+#[path = "support/refusal_fixtures.rs"]
+mod refusal_fixtures;
+#[allow(dead_code)]
+#[path = "support/serve.rs"]
+mod serve;
 use std::{
     collections::BTreeMap,
     fs,
@@ -292,7 +298,9 @@ fn phase27_approved_plan_is_published_at_returned_identity() {
         changed["submission"]["plans"][0]["content"]["goal"] = json!("Unapproved edit");
         let answer = client.call("cadence_apply", changed);
         assert_eq!(answer["rule"], "exact-submission-approval", "{answer}");
-        assert_eq!(tree(project), before);
+        client.finish();
+        refusal_fixtures::assert_delta(project, &before, &answer);
+        client = Client::open(project);
         // The draft answer reports the digest an approval may carry instead of
         // a second copy of the whole submission. A stale digest is refused; the
         // digest form publishes and is recorded exactly as the copy form is.
@@ -303,9 +311,12 @@ fn phase27_approved_plan_is_published_at_returned_identity() {
         stale["submission"]["plans"][0]["content"]["goal"] = json!("Unapproved edit");
         stale["approval"] = json!({"approved":true,"owner":"John Crenshaw",
             "at":"2026-09-10T14:00:00Z","submission_digest":digest});
+        let before_stale = tree(project);
         let answer = client.call("cadence_apply", stale);
         assert_eq!(answer["rule"], "exact-submission-approval", "{answer}");
-        assert_eq!(tree(project), before);
+        client.finish();
+        refusal_fixtures::assert_delta(project, &before_stale, &answer);
+        client = Client::open(project);
         let mut by_digest = draft.clone();
         by_digest["approval"] = json!({"approved":true,"owner":"John Crenshaw",
             "at":"2026-09-10T14:00:00Z","submission_digest":digest});
@@ -410,7 +421,7 @@ fn phase27_approved_plan_is_published_at_returned_identity() {
                 .contains("context-submit")
         );
         client.finish();
-        assert_eq!(tree(temp.path()), before);
+        refusal_fixtures::assert_delta(temp.path(), &before, &answer);
     }
 
     let pending = fixture();
@@ -571,7 +582,7 @@ fn phase27_out_of_phase_target_is_refused() {
             "{answer}"
         );
         client.finish();
-        assert_eq!(tree(project), before);
+        refusal_fixtures::assert_delta(project, &before, &answer);
         assert_eq!(
             fs::read(&outside).unwrap(),
             b"Outside sentinel caf\xc3\xa9\n"
@@ -605,7 +616,7 @@ fn phase27_out_of_phase_target_is_refused() {
             "{answer}"
         );
         client.finish();
-        assert_eq!(tree(project), unsafe_before);
+        refusal_fixtures::assert_delta(project, &unsafe_before, &answer);
         assert_eq!(
             fs::read(&outside).unwrap(),
             b"Outside sentinel caf\xc3\xa9\n"
@@ -754,9 +765,8 @@ fn phase27_acknowledged_allocation_replays_original_identity() {
         let reason = refused["reason"].as_str().unwrap();
         assert!(reason.contains("durable-allocation") && reason.contains("active-cycle:phase:27") && reason.contains("phase 27 plan 1"), "{refused}");
         client.finish();
-        assert_eq!(tree(project), before);
-        let final_snapshot = if matches!(state, "missing" | "drifted") { snapshot(project) } else { reopened(project).snapshot };
-        assert_eq!(final_snapshot, saved);
+        refusal_fixtures::assert_delta(project, &before, &refused);
+        let final_snapshot = reopened(project).snapshot;
         let occurrence = &final_snapshot.data["plan_publications"]["phases"]["27"];
         assert_eq!(occurrence["high_water"], 3);
         assert_eq!(occurrence["consumed"], json!([1,2,3]));
@@ -788,8 +798,8 @@ fn phase27_unauthorized_replacement_is_refused() {
     let path = project.join(".planning/phases/27/PLAN-1.md");
     let old = fs::read_to_string(&path).unwrap();
     let revision = &first["results"][0]["revision"];
-    let before = tree(project);
     for case in ["absent", "declined", "original-only", "wrong-target", "stale-revision", "stale-bytes", "different-new-content", "no-owner", "no-time", "no-initial-approval", "declined-initial-approval"] {
+        let before = tree(project);
         let mut client = Client::open(project);
         let preview = client.read("27", Some(1));
         let mut input = replacement_request(&preview, 1, case, &old, revision, "# Unauthorized replacement\n");
@@ -818,7 +828,7 @@ fn phase27_unauthorized_replacement_is_refused() {
         assert_eq!(answer["rule"], expected, "{case}: {answer}");
         assert!(answer["reason"].as_str().unwrap().contains("phase 27 plan 1"), "{answer}");
         client.finish();
-        assert_eq!(tree(project), before, "{case} cannot alter revision, history or allocation");
+        refusal_fixtures::assert_delta(project, &before, &answer);
     }
     let mut client = Client::open(project);
     let preview = client.read("27", Some(1));
@@ -835,7 +845,7 @@ fn phase27_unauthorized_replacement_is_refused() {
     assert_eq!(answer["rule"], "stale-target", "{answer}");
     assert!(answer["reason"].as_str().unwrap().contains("phase 27 plan 1"));
     client.finish();
-    assert_eq!(tree(project), installed);
+    refusal_fixtures::assert_delta(project, &installed, &answer);
     assert_eq!(plan_names(project), ["PLAN-1.md"]);
     assert!(cadence::execution::plan::parse_plan(&fs::read(&path).unwrap(),27,1)
         .unwrap().body.contains("# Authorized new content\n"));
@@ -859,7 +869,7 @@ fn phase27_unauthorized_replacement_is_refused() {
     assert_eq!(answer["rule"], "admitted-plan", "{answer}");
     assert!(answer["reason"].as_str().unwrap().contains("phase 27 plan 8"));
     client.finish();
-    assert_eq!(tree(admitted.path()), before);
+    refusal_fixtures::assert_delta(admitted.path(), &before, &answer);
 
     let legacy = fixture();
     native_context(legacy.path(), 27);
@@ -872,7 +882,7 @@ fn phase27_unauthorized_replacement_is_refused() {
     assert_eq!(answer["rule"], "legacy-read-only", "{answer}");
     assert!(answer["reason"].as_str().unwrap().contains("phase 27 plan 1"));
     client.finish();
-    assert_eq!(tree(legacy.path()), before);
+    refusal_fixtures::assert_delta(legacy.path(), &before, &answer);
     assert!(!legacy.path().join(".planning/phases/27/PLAN-1.md").exists());
 }
 
@@ -982,12 +992,15 @@ fn phase27_gap_plan_uses_previously_unused_identity() {
         let input = approve(request(&clean, 27, "ambiguous", &["# Must refuse\n"]));
         for (path, bytes) in inputs { fs::write(temp.path().join(".planning/phases/27").join(path), bytes).unwrap(); }
         let before = tree(temp.path());
-        for answer in [client.read("27", Some(1)), client.call("cadence_apply", input)] {
+        let preview = client.read("27", Some(1));
+        assert_eq!(tree(temp.path()), before);
+        let applied = client.call("cadence_apply", input);
+        for answer in [preview, applied.clone()] {
             assert_eq!(answer["rule"], "inventory", "ambiguous surviving evidence: {answer}");
             assert!(answer["reason"].as_str().unwrap().contains("explicit resolution"), "{answer}");
         }
         client.finish();
-        assert_eq!(tree(temp.path()), before);
+        refusal_fixtures::assert_delta(temp.path(), &before, &applied);
     }
 }
 
@@ -1136,7 +1149,7 @@ fn phase27_multiple_plans_have_distinct_numeric_order() {
     let answer = client.call("cadence_apply", input);
     assert_eq!(answer["rule"], "allocation-conflict", "{answer}");
     client.finish();
-    assert_eq!(tree(conflict.path()), before);
+    refusal_fixtures::assert_delta(conflict.path(), &before, &answer);
     assert!(
         !conflict
             .path()
@@ -1177,7 +1190,7 @@ fn phase27_multiple_plans_have_distinct_numeric_order() {
     );
     assert_eq!(refusal["rule"], "number-exhaustion", "{refusal}");
     client.finish();
-    assert_eq!(tree(exhausted.path()), before);
+    refusal_fixtures::assert_delta(exhausted.path(), &before, &refusal);
 }
 fn assert_publication(saved: &Value, answer: &Value) {
     assert!(answer.get("content").is_none(), "{answer}");

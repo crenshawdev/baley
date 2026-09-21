@@ -2,6 +2,80 @@ use crate::serve;
 use serde_json::{Value, json};
 use std::path::Path;
 
+pub type Tree = std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>>;
+
+/// Call only after the server exits. Compare every prior journal row and all
+/// domain data, permitting one exact verification replay receipt when named.
+pub fn assert_delta(project: &Path, before: &Tree, answer: &Value) {
+    assert_delta_with_receipt(project, before, answer, None);
+}
+
+pub fn assert_delta_with_receipt(project: &Path, before: &Tree, answer: &Value, patch: Option<&Value>) {
+    assert_eq!(answer["status"], "refused");
+    let after = serve::reopened(project);
+    let bytes = |name: &str| before.get(Path::new(name)).and_then(|v| v.as_deref()).unwrap_or_default();
+    let prior: Option<cadence::store::model::Snapshot> = if bytes(".planning/state.json").is_empty() { None } else {
+        Some(cadence::store::model::Snapshot::parse(bytes(".planning/state.json"),
+            bytes(".planning/items.jsonl"), bytes(".planning/decisions.jsonl")).unwrap())
+    };
+    let data = prior.as_ref().map(|p| p.data.clone()).unwrap_or(json!({}));
+    let decisions: Vec<cadence::store::model::DecisionRecord> =
+        cadence::store::model::parse_lines(bytes(".planning/decisions.jsonl")).unwrap();
+    assert_eq!(after.decisions.len(), decisions.len() + 1 + usize::from(patch.is_some()));
+    assert!(std::fs::read(project.join(".planning/decisions.jsonl")).unwrap().starts_with(bytes(".planning/decisions.jsonl")));
+    assert_eq!(&after.decisions[..decisions.len()], &decisions);
+    let cadence::store::model::Decision::BoundaryV1(saved) = &after.decisions.last().unwrap().decision else {
+        panic!("refusal did not append a boundary decision");
+    };
+    assert!(saved.boundary.native_refusal);
+    assert!(!saved.terminal);
+    assert_answer(&saved.boundary, answer);
+    let cadence::execution::boundary::Receipt::Compact {
+        envelope: cadence::envelope::Envelope::Refused { reason, .. }
+    } = &saved.boundary.receipt else { unreachable!() };
+    if let Some(expected) = answer["reason"].as_str() {
+        assert_eq!(*reason, cadence::execution::boundary::native_refusal_reason(expected));
+    }
+    let mut actual = after.snapshot.data.clone();
+    if let Some(patch) = patch {
+        let old = data["verification"]["claims"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+        let claims = actual["verification"]["claims"].as_array_mut().unwrap();
+        assert_eq!(claims.len(), old.len() + 1);
+        assert_eq!(&claims[..old.len()], old);
+        let claim = claims.pop().unwrap();
+        assert_eq!(claim["patch"], *patch);
+        assert_eq!(claim["answer"], *answer);
+        let receipt = &after.decisions[decisions.len()];
+        assert_eq!(receipt.id, format!("verification-claim:{}", cadence::store::model::digest(patch["request_id"].as_str().unwrap().as_bytes())));
+        let cadence::store::model::Decision::Gate { evidence: cadence::store::model::Evidence::Text(encoded), .. } = &receipt.decision else {
+            panic!("missing verification replay receipt");
+        };
+        assert_eq!(serde_json::from_str::<Value>(encoded).unwrap(), claim);
+        if data["verification"].get("claims").is_none() {
+            actual["verification"].as_object_mut().unwrap().remove("claims");
+        }
+    }
+    assert_eq!(actual, data, "every domain record and prior replay receipt is preserved");
+    if let Some(prior) = prior {
+        assert_eq!(after.snapshot.operations.len(), prior.operations.len() + 1 + usize::from(patch.is_some()));
+        assert_eq!(after.snapshot.generation, prior.generation + 1 + u64::from(patch.is_some()));
+        for (id, fingerprint) in prior.operations {
+            assert_eq!(after.snapshot.operations.get(&id), Some(&fingerprint));
+        }
+    }
+    let mut old_files = before.clone();
+    let mut new_files = serve::tree(project);
+    for path in [".planning/state.json", ".planning/decisions.jsonl"] {
+        old_files.remove(Path::new(path));
+        new_files.remove(Path::new(path));
+    }
+    // First observation can initialize an empty items journal, never an item.
+    if !old_files.contains_key(Path::new(".planning/items.jsonl")) {
+        assert_eq!(new_files.remove(Path::new(".planning/items.jsonl")), Some(Some(vec![])));
+    }
+    assert_eq!(new_files, old_files, "projections and non-store files stay byte-identical");
+}
+
 pub struct Active {
     pub completed: serve::Completed,
     pub contract: Value,

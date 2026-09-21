@@ -2,6 +2,9 @@
 mod serve;
 use serve::*;
 use serde_json::{Value, json};
+#[allow(dead_code)]
+#[path = "support/refusal_fixtures.rs"]
+mod refusal_fixtures;
 use std::{fs, time::{Duration, Instant}};
 
 fn read(project: &std::path::Path, attempt: &Value) -> Value {
@@ -46,19 +49,29 @@ fn phase13_runner_retains_independent_receipts() {
     let mut substituted = request.clone();
     substituted["request"]["request_id"] = json!("alternate");
     substituted["request"]["command"] = json!("printf substituted > .run/substitution");
-    assert_eq!(apply(project, substituted)["status"], "refused");
+    let baseline = tree(project);
+    let refused = apply(project, substituted);
+    assert_eq!(refused["status"], "refused");
+    refusal_fixtures::assert_delta(project, &baseline, &refused);
     assert!(!project.join(".run/substitution").exists());
     let mut foreign = request.clone();
     foreign["request"]["request_id"] = json!("foreign");
     foreign["request"]["item"]["id"] = json!("artifact/shared");
-    assert_eq!(apply(project, foreign)["rule"], "verification-item");
+    let baseline = tree(project);
+    let refused = apply(project, foreign);
+    assert_eq!(refused["rule"], "verification-item");
+    refusal_fixtures::assert_delta(project, &baseline, &refused);
     fs::write(project.join("src/a.py"), "def answer():\n    return 8\n").unwrap();
     let mut stale = request.clone();
     stale["request"]["request_id"] = json!("stale");
-    assert_eq!(apply(project, stale)["rule"], "verification-source");
+    let baseline = tree(project);
+    let refused = apply(project, stale);
+    assert_eq!(refused["rule"], "verification-source");
+    refusal_fixtures::assert_delta(project, &baseline, &refused);
+    let after_refusals = tree(project);
     assert_eq!(apply(project, request.clone())["receipt"], launch["receipt"]);
     fs::write(project.join("src/a.py"), "def answer():\n    return 7\n").unwrap();
-    assert_eq!(tree(project), after);
+    assert_eq!(tree(project), after_refusals);
     // A real paused child is interrupted by killing its owning server.
     fs::write(project.join(".run/wait"), "wait").unwrap();
     let mut interrupted = request;
@@ -198,8 +211,7 @@ fn phase13_human_results_preserve_first_pass() {
     assert_eq!(apply(project, human("pass-1", &result(&occurrence, "1", "The parcel arrived this morning.", "passed", Some(&first["id"])))), passed);
     let reused = apply(project, human("pass-1", &result(&occurrence, "1", "A different reply under the same request.", "passed", Some(&first["id"]))));
     assert_eq!(reused["rule"], "verification-human-reuse", "{reused}");
-    assert_eq!(tree(project), files);
-    assert_eq!(reopened(project).snapshot, stored);
+    refusal_fixtures::assert_delta(project, &files, &reused);
     // A hand edit of the rendered document is refused, never adopted.
     fs::write(&uat, format!("{}\nstatus: pass\n", fs::read_to_string(&uat).unwrap())).unwrap();
     let drifted = apply(project, human("after-drift", &result(&occurrence, "1", "Another look.", "passed", Some(&second["id"]))));
@@ -284,8 +296,7 @@ fn phase13_publication_seeds_only_missing_trace_rows() {
     assert!(!project.join(".planning/phases/13/PLAN-4.md").exists());
     fs::remove_dir(&requirements).unwrap();
     fs::write(&requirements, &seeded_twice).unwrap();
-    assert_eq!(tree(project), before);
-    assert_eq!(reopened(project).snapshot, stored, "a refused publication leaves approval and history unchanged");
+    refusal_fixtures::assert_delta(project, &before, &refused);
     // The same approved request then publishes, seeding nothing new.
     let answer = publish(project, &fourth);
     assert_eq!(answer["requirements"], json!({"seeded":[]}));

@@ -3,6 +3,12 @@
 mod support;
 
 use sha2::{Digest, Sha256};
+#[allow(dead_code)]
+#[path = "support/refusal_fixtures.rs"]
+mod refusal_fixtures;
+#[allow(dead_code)]
+#[path = "support/serve.rs"]
+mod serve;
 use std::fs;
 use support::ClosedRound;
 
@@ -28,7 +34,9 @@ fn phase33_round_record_renders_tokens_beside_the_median() {
     let before = support::tree(round.fixture.project());
     let refused = round.client.call("cadence_apply", request.clone());
     assert_eq!(refused["code"], "round-open", "{refused}");
-    assert_eq!(support::tree(round.fixture.project()), before);
+    round.client.finish();
+    refusal_fixtures::assert_delta(round.fixture.project(), &before, &refused);
+    round.client = support::Client::open(round.fixture.project());
     round.close_tasks();
     let recorded = round.client.call("cadence_apply", request.clone());
     assert_eq!(recorded, json!({"status":"ok","receipt":{"plan":round.plan,"request_id":"round-tokens","version":1}}));
@@ -48,19 +56,31 @@ fn phase33_round_record_renders_tokens_beside_the_median() {
         invalid["request"]["expected_version"] = json!(1);
         invalid["request"]["statement"]["submission"][field] = value.clone();
         invalid["request"]["statement"]["approval"]["submission"][field] = value;
-        assert_eq!(round.client.call("cadence_apply", invalid)["status"], "refused");
-        assert_eq!(support::tree(round.fixture.project()), before);
+        let before = support::tree(round.fixture.project());
+        let refused = round.client.call("cadence_apply", invalid);
+        assert_eq!(refused["status"], "refused");
+        round.client.finish();
+        refusal_fixtures::assert_delta(round.fixture.project(), &before, &refused);
+        round.client = support::Client::open(round.fixture.project());
     }
     let mut mismatch = request.clone();
     mismatch["request"]["request_id"] = json!("mismatched-owner-echo");
     mismatch["request"]["expected_version"] = json!(1);
     mismatch["request"]["statement"]["approval"]["submission"]["tokens"] = json!(1);
-    assert_eq!(round.client.call("cadence_apply", mismatch)["status"], "refused");
-    assert_eq!(support::tree(round.fixture.project()), before);
+    let before = support::tree(round.fixture.project());
+    let refused = round.client.call("cadence_apply", mismatch);
+    assert_eq!(refused["status"], "refused");
+    round.client.finish();
+    refusal_fixtures::assert_delta(round.fixture.project(), &before, &refused);
+    round.client = support::Client::open(round.fixture.project());
     let mut reused = request;
     reused["request"]["statement"]["submission"]["tokens"] = json!(2);
-    assert_eq!(round.client.call("cadence_apply", reused)["status"], "refused");
-    assert_eq!(support::tree(round.fixture.project()), before);
+    let before = support::tree(round.fixture.project());
+    let refused = round.client.call("cadence_apply", reused);
+    assert_eq!(refused["status"], "refused");
+    round.client.finish();
+    refusal_fixtures::assert_delta(round.fixture.project(), &before, &refused);
+    round.client = support::Client::open(round.fixture.project());
     round.complete();
     let state = assert_plan_read_surface(&mut round, &expected_round, &original_parts);
     assert_eq!(state["completion"], json!({"suite_run":"round-suite","request_id":"round-complete",

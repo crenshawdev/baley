@@ -4,6 +4,12 @@ use cadence::store::{
     writer::{Operation, Store},
 };
 use serde_json::{Value, json};
+#[allow(dead_code)]
+#[path = "support/refusal_fixtures.rs"]
+mod refusal_fixtures;
+#[allow(dead_code)]
+#[path = "support/serve.rs"]
+mod serve;
 use std::{
     collections::BTreeMap,
     fs,
@@ -343,7 +349,7 @@ fn refusals(project: &Path, input: &Value) -> [Value; 2] {
     let applied = client.call("cadence_apply", approve(input.clone()));
     client.finish();
     assert_eq!(applied["status"], "refused", "publication must refuse: {applied}");
-    unchanged(project, &before, &prior);
+    refusal_fixtures::assert_delta(project, &before, &applied);
     [preview, applied]
 }
 
@@ -616,8 +622,9 @@ fn phase29_distinct_checks_across_plans_are_refused() {
     assert_eq!(stale["status"], "refused", "{stale}");
     assert_eq!(stale["rule"], "allocation-conflict", "{stale}");
     first.finish();
-    unchanged(root, &before, &prior);
+    refusal_fixtures::assert_delta(root, &before, &stale);
     let refreshed = proposal(root, "fresh-conflict", &[(None, attached(vec![check("check/old", &[truth])]))]);
+    let before = tree(root);
     let mut client = Client::open(root);
     let answer = client.call("cadence_apply", approve(refreshed.clone()));
     client.finish();
@@ -625,7 +632,7 @@ fn phase29_distinct_checks_across_plans_are_refused() {
         {"id":"check/current","origins":[origin(&winner["results"][0]["identity"], "saved", "current.plans[1].evidence_map.items[0]")]},
         {"id":"check/old","origins":[origin(&refreshed["submission"]["plans"][0]["target"], "proposed", "submission.plans[0].content.evidence_map.items[0]")]}
     ]));
-    unchanged(root, &before, &prior);
+    refusal_fixtures::assert_delta(root, &before, &answer);
 }
 
 fn link(value: &str, truths: &[&str]) -> Value {

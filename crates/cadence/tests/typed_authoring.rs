@@ -3,6 +3,12 @@
 mod read_fixtures;
 
 use serde_json::{Value, json};
+#[allow(dead_code)]
+#[path = "support/serve.rs"]
+mod serve;
+#[allow(dead_code)]
+#[path = "support/refusal_fixtures.rs"]
+mod refusal_fixtures;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, fs};
 use read_fixtures::{Client, ProcessFixture, approve, tree};
@@ -943,7 +949,6 @@ fn phase32_stale_digest_is_refused_with_identity_and_part() {
             "digest":newest["submission_digest"]},
         "part":"notes"
     }));
-    assert_eq!(tree(project), before);
     let changed = client.call(
         "cadence_query",
         json!({"operation":"document","identity":answer["identity"],"part":answer["part"]}),
@@ -951,6 +956,7 @@ fn phase32_stale_digest_is_refused_with_identity_and_part() {
     assert_eq!(changed["status"], "ok", "{changed}");
     assert_eq!(changed["body"], "## Notes\n\nThe owner must inspect these revised notes.\n");
     client.finish();
+    refusal_fixtures::assert_delta(project, &before, &answer);
 }
 
 #[test]
@@ -1131,6 +1137,6 @@ fn phase32_plan_body_is_refused() {
     assert_eq!(answer["code"], "typed-content", "{answer}");
     assert_eq!(answer["slot"], "submission.plans[0].content.body", "{answer}");
     assert_eq!(answer["phase"], PHASE, "{answer}");
-    assert_eq!(tree(project), before);
     client.finish();
+    refusal_fixtures::assert_delta(project, &before, &answer);
 }

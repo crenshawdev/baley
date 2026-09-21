@@ -2,6 +2,9 @@
 mod serve;
 use serve::*;
 use serde_json::{Value, json};
+#[allow(dead_code)]
+#[path = "support/refusal_fixtures.rs"]
+mod refusal_fixtures;
 
 fn inspected_patch(project: &std::path::Path, id: &str) -> (Value, Value) {
     inspected_with(project, id, &[])
@@ -39,17 +42,8 @@ fn inspected_with(project: &std::path::Path, id: &str, verdicts: &[(&str, &str, 
     (attempt, patch)
 }
 
-// Refusal history may append; everything except that separate history remains
-// byte-identical after the real server has exited and the store is reopened.
-fn acceptance_bytes(project: &std::path::Path) -> Vec<u8> {
-    let reopened = reopened(project);
-    let mut data = reopened.snapshot.data;
-    let effective = data["verification"]["patches"].clone();
-    data.as_object_mut().unwrap().remove("verification");
-    let mut files = tree(project);
-    files.remove(&std::path::PathBuf::from(".planning/state.json"));
-    files.remove(&std::path::PathBuf::from(".planning/decisions.jsonl"));
-    serde_json::to_vec(&(data, effective, files)).unwrap()
+fn acceptance_bytes(project: &std::path::Path) -> refusal_fixtures::Tree {
+    tree(project)
 }
 
 #[test]
@@ -57,7 +51,6 @@ fn phase13_mismatched_verdict_patch_is_refused() {
     let fixture = Completed::new();
     let project = fixture.project();
     let (attempt, valid) = inspected_patch(project, "patch-attempt");
-    let baseline = acceptance_bytes(project);
     let mut variants = Vec::new();
     let mut unknown = valid.clone();
     unknown["items"][0]["id"] = json!("unknown/item");
@@ -99,6 +92,7 @@ fn phase13_mismatched_verdict_patch_is_refused() {
     variants.push((executor_run, "verification-run", "items[1].runs", "check/A"));
     for (index, (mut patch, rule, slot, item)) in variants.into_iter().enumerate() {
         patch["request_id"] = json!(format!("invalid-{index}"));
+        let baseline = acceptance_bytes(project);
         let response = apply(project, json!({"operation":"verification-submit","patch":patch}));
         assert_eq!(response["status"], "refused", "mismatched patch accepted: {response}");
         assert_eq!(response["rule"], rule, "refusal must identify the mismatched item/input: {response}");
@@ -108,9 +102,14 @@ fn phase13_mismatched_verdict_patch_is_refused() {
             assert!(response["details"].get("requested").is_some(), "{response}");
             assert!(response["details"].get("current").is_some(), "{response}");
         }
-        assert_eq!(acceptance_bytes(project), baseline);
+        let mut expected_patch = patch.clone();
+        expected_patch["basis"] = attempt["basis"].clone();
+        refusal_fixtures::assert_delta_with_receipt(project, &baseline, &response,
+            (rule != "typed-content").then_some(&expected_patch));
         if rule == "typed-content" {
+            let before_replay = tree(project);
             assert_eq!(apply(project, json!({"operation":"verification-submit","patch":patch})), response);
+            assert_eq!(tree(project), before_replay);
             continue;
         }
         let claims = reopened(project).snapshot.data["verification"]["claims"].clone();
@@ -132,8 +131,7 @@ fn phase13_mismatched_verdict_patch_is_refused() {
         assert_eq!(response["status"], "refused");
         assert_eq!(response["rule"], "verification-shape");
         assert!(response["reason"].as_str().unwrap().contains(field), "{response}");
-        assert_eq!(acceptance_bytes(project), baseline);
-        assert_eq!(tree(project), before, "transport-invalid input is not a domain claim");
+        refusal_fixtures::assert_delta(project, &before, &response);
     }
     let accepted = apply(project, json!({"operation":"verification-submit","patch":valid}));
     assert_eq!(accepted["status"], "ok", "valid complete control: {accepted}");
@@ -151,11 +149,14 @@ fn phase13_mismatched_verdict_patch_is_refused() {
     let response = apply(project, json!({"operation":"verification-submit","patch":conflict}));
     assert_eq!(response["rule"], "verification-request-reuse");
     assert_eq!(response["slot"], "request_id");
-    assert_eq!(acceptance_bytes(project), accepted_bytes);
+    refusal_fixtures::assert_delta(project, &accepted_bytes, &response);
     let mut second = valid.clone();
     second["request_id"] = json!("second-completion");
-    assert_eq!(apply(project, json!({"operation":"verification-submit","patch":second}))["rule"], "verification-attempt-complete");
-    assert_eq!(acceptance_bytes(project), accepted_bytes);
+    let baseline = acceptance_bytes(project);
+    let response = apply(project, json!({"operation":"verification-submit","patch":second}));
+    assert_eq!(response["rule"], "verification-attempt-complete");
+    second["basis"] = attempt["basis"].clone();
+    refusal_fixtures::assert_delta_with_receipt(project, &baseline, &response, Some(&second));
     // Actual source staleness, not a forged HEAD in the input.
     std::fs::write(project.join("src/a.py"), "def answer():\n    return 7 # repaired implementation\n").unwrap();
     git_value(project, &["add", "src/a.py"]);
@@ -168,7 +169,8 @@ fn phase13_mismatched_verdict_patch_is_refused() {
     assert_eq!(response["slot"], "basis.source");
     assert_eq!(response["details"]["requested"], attempt["basis"]["source"]);
     assert_eq!(response["details"]["current"]["head"], git_value(project, &["rev-parse", "HEAD"]));
-    assert_eq!(acceptance_bytes(project), before);
+    stale["basis"] = attempt["basis"].clone();
+    refusal_fixtures::assert_delta_with_receipt(project, &before, &response, Some(&stale));
     let (current_attempt, current) = inspected_patch(project, "current-source");
     // Actual approved union extension; an admitted plan is never replaced.
     let gap = proposal(project, "new-map", &[(None, attached(vec![artifact("artifact/gap", &["T1"])]))]);
@@ -180,7 +182,10 @@ fn phase13_mismatched_verdict_patch_is_refused() {
     assert_eq!(response["slot"], "basis.map_digest");
     assert_eq!(response["details"]["requested"], current_attempt["basis"]["map_digest"]);
     assert_eq!(response["details"]["current"], map["input_digest"]);
-    assert_eq!(acceptance_bytes(project), before);
+    let mut expected_current = current.clone();
+    expected_current["basis"] = current_attempt["basis"].clone();
+    refusal_fixtures::assert_delta_with_receipt(project, &before, &response, Some(&expected_current));
+    let before = acceptance_bytes(project);
     assert_eq!(apply(project, json!({"operation":"verification-submit","patch":valid})), accepted);
     assert_eq!(acceptance_bytes(project), before, "historical replay does not reinstall acceptance");
     for name in ["findings.md", ".planning/findings.md", ".planning/phases/13/UAT.md"] {
@@ -619,7 +624,6 @@ fn phase13_owner_waiver_is_distinct_from_met() {
     assert_eq!(read["counts"], json!({"met":1,"concerns":0,"unmet":1,"pending":0,"waived":0}));
     assert_eq!(read["waivers"], json!([]));
     let valid = waiver(&basis, "T2", 1, "The second parcel ships in phase 14.");
-    let before = tree(project);
     let stored = reopened(project).snapshot;
     // Only exact owner approval waives. Each variant is refused with the
     // offending input located and nothing durable changes.
@@ -657,11 +661,12 @@ fn phase13_owner_waiver_is_distinct_from_met() {
     revoke_nothing["revoked"] = json!(true);
     variants.push((waive("revoke-nothing", &revoke_nothing), "verification-waiver", "submission.supersedes"));
     for (request, rule, slot) in variants {
+        let before = tree(project);
         let response = apply(project, request.clone());
         assert_eq!(response["status"], "refused", "{request}\n{response}");
         assert_eq!(response["rule"], rule, "{response}");
         assert_eq!(response["slot"], slot, "{response}");
-        assert_eq!(tree(project), before, "an invalid waiver changes nothing");
+        refusal_fixtures::assert_delta(project, &before, &response);
         assert_eq!(report(project)["truths"], json!([met_a, unmet_b]));
     }
     // A verifier cannot author a waiver from its patch arm, and an absent
@@ -720,11 +725,13 @@ fn phase13_owner_waiver_is_distinct_from_met() {
     changed["reason"] = json!("A different reason under the same request.");
     let reused = apply(project, waive("waive-b", &changed));
     assert_eq!(reused["rule"], "verification-waiver-reuse", "{reused}");
+    refusal_fixtures::assert_delta(project, &after, &reused);
+    let before_duplicate = tree(project);
     let duplicate = apply(project, waive("waive-b-again", &valid));
     assert_eq!(duplicate["rule"], "verification-waiver", "{duplicate}");
     assert_eq!(duplicate["slot"], "submission.supersedes");
     assert_eq!(reopened(project).snapshot.data["verification"]["waivers"], json!([record]));
-    assert_eq!(tree(project), after);
+    refusal_fixtures::assert_delta(project, &before_duplicate, &duplicate);
     // A later verifier patch neither erases the waiver nor is covered by it:
     // the new judgment is derived from its own verdicts and the retained
     // waiver needs explicit owner reaffirmation against the new evidence.
@@ -949,7 +956,7 @@ fn phase13_incomplete_verification_cannot_complete_phase() {
     assert_eq!(tree(project), after);
     let again = apply(project, completion(&root, "complete-13-again", &accepted["id"], &basis));
     assert_eq!(again["rule"], "verification-complete", "{again}");
-    assert_eq!(tree(project), after);
+    refusal_fixtures::assert_delta(project, &after, &again);
     // The lifecycle derives phase 13 complete from the native completion, so
     // the next phase is current and no state conflict names the checked box.
     let next = query(project, json!({"operation":"execute-next","phase":13}));
