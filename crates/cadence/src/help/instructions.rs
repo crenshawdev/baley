@@ -1,6 +1,8 @@
----
+//! Compiled query-only help front door.
+pub fn markdown() -> String {
+    super::table::render_description("cad-help", r#"---
 name: cad-help
-description: "List Cadence commands shipped under skills/ by cluster, or show one command and its compiled description."
+description: ""
 argument-hint: "[command name]"
 allowed-tools:
   - mcp__cadence__cadence_query
@@ -18,3 +20,6 @@ do not invent a command or treat the suggestions as an exact match.
 
 Help reads only the compiled command table. Read nothing else: no project
 files, command reference, search, or state. Help writes nothing.
+"#).expect("compiled help front matter")
+}
+

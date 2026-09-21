@@ -1,6 +1,6 @@
 ---
 name: cad-debug
-description: "Investigate symptoms with ranked hypotheses and durable evidence; resume from the binary debug record."
+description: "Resume a recorded debug session, review its staged fix, and offer a configured consult at dead ends."
 argument-hint: "[list | status <slug> | continue <slug> | --diagnose] [symptom]"
 allowed-tools:
   - Task

@@ -12,6 +12,7 @@ pub mod derivation;
 pub mod envelope;
 pub mod evidence;
 pub mod execution;
+pub mod help;
 /// Legacy sources are immutable evidence, never replayed writers.
 pub mod import;
 pub mod landing;

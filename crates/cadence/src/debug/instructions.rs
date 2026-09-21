@@ -1,8 +1,9 @@
 //! Compiled debug role; the installed skill is only its rendering.
 pub fn markdown() -> &'static str {
-    r#"---
+    static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        crate::help::table::render_description("cad-debug", r#"---
 name: cad-debug
-description: "Investigate symptoms with ranked hypotheses and durable evidence; resume from the binary debug record."
+description: ""
 argument-hint: "[list | status <slug> | continue <slug> | --diagnose] [symptom]"
 allowed-tools:
   - Task
@@ -233,5 +234,7 @@ On an uncertain write, retry its identical request ID and inputs; never invent
 a successful result. On a pending journal or unavailable record, report the
 located refusal and preserve the stopped state for recovery.
 </recovery>
-"#
+"#).expect("compiled skill front matter")
+    });
+    &MARKDOWN
 }

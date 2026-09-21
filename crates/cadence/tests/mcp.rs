@@ -302,8 +302,8 @@ fn tool_schemas_list_exactly_three_tools_with_minimal_inputs() {
     }
     let tools_bytes = serde_json::to_vec(tools).unwrap().len();
     assert!(
-        tools_bytes < 10_553,
-        "tools/list result.tools is {tools_bytes} bytes; measured consult operation plus 64 bytes"
+        tools_bytes < 10_648,
+        "tools/list result.tools is {tools_bytes} bytes; measured help operation plus 64 bytes"
     );
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
     for (tool, names) in [("query", query_operation_names()), ("apply", apply_operation_names())] {
@@ -1559,11 +1559,23 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
 
     // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
-    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 22);
+    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 23);
+    let (help, body) = markdown_parts("skills/cad-help/SKILL.md");
+    assert_eq!(body, cadence::help::instructions::markdown().split_once("\n---\n").unwrap().1);
+    assert_eq!(help["name"], "cad-help");
+    assert_eq!(help["description"], "List Cadence commands shipped under skills/ by cluster, or show one command and its compiled description.");
+    assert_eq!(help["argument-hint"], "[command name]");
+    assert_eq!(help["allowed-tools"], json!(["mcp__cadence__cadence_query"]));
+    for required in [r#"{"operation":"help"}"#, r#"{"operation":"help","name":"<command name>"}"#,
+        "every returned cluster in order", "compiled description", "single row", "closest names",
+        "optional leading slash", "optional cad- prefix", "Read nothing else", "Help writes nothing"] {
+        assert!(body.contains(required), "{required}");
+    }
+    assert!(!cadence::help::instructions::markdown().contains("COMMANDS.md"));
     let (spike, body) = markdown_parts("skills/cad-spike/SKILL.md");
     assert_eq!(body, cadence::spike::instructions::markdown().split_once("\n---\n").unwrap().1);
     assert_eq!(spike["name"], "cad-spike");
-    assert_eq!(spike["description"], "Resolve one unknown with immutable criteria, caller observations and a bounded spike verdict.");
+    assert_eq!(spike["description"], "Record risk-ordered spike criteria before experimenting, then retain observations and a bounded verdict.");
     assert_eq!(spike["argument-hint"], "<the question or hypothesis to resolve>");
     assert_eq!(spike["allowed-tools"], json!(["mcp__cadence__cadence_apply", "mcp__cadence__cadence_query", "Write", "Edit", "Bash", "AskUserQuestion"]));
     for required in ["spike-open", "spike-observation", "spike-verdict", "spike-close",
@@ -1583,7 +1595,7 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     let (debug, body) = markdown_parts("skills/cad-debug/SKILL.md");
     assert_eq!(body, cadence::debug::instructions::markdown().split_once("\n---\n").unwrap().1);
     assert_eq!(debug["name"], "cad-debug");
-    assert_eq!(debug["description"], "Investigate symptoms with ranked hypotheses and durable evidence; resume from the binary debug record.");
+    assert_eq!(debug["description"], "Resume a recorded debug session, review its staged fix, and offer a configured consult at dead ends.");
     assert_eq!(debug["argument-hint"], "[list | status <slug> | continue <slug> | --diagnose] [symptom]");
     assert_eq!(debug["allowed-tools"], json!(["Task", "mcp__cadence__cadence_apply", "mcp__cadence__cadence_query", "Write", "Edit", "Bash", "AskUserQuestion"]));
     for required in ["debug-open", "debug-hypothesis", "debug-observation", "debug-attempt", "debug-resolve",
@@ -1681,7 +1693,7 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     }
     let tools_bytes = serde_json::to_vec(&listed["result"]["tools"]).unwrap().len();
     println!("tools/list result.tools: {tools_bytes} bytes");
-    assert!(tools_bytes < 10_553);
+    assert!(tools_bytes < 10_648);
     let (why, body) = markdown_parts("skills/cad-why/SKILL.md");
     assert_eq!(why["name"], "cad-why");
     assert_eq!(why["argument-hint"], "<path>[:<line>]");

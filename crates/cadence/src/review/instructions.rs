@@ -45,25 +45,25 @@ pub fn frontdoor_markdown(command: &str) -> Option<String> {
     let (name, description, hint, selection) = match command {
         "cad-review" => (
             "cad-review",
-            "Review one explicitly selected target - a decision, a minimalism delete-list over code, or a plan - through the native review subsystem.",
+            crate::help::table::description("cad-review"),
             MERGED_HINT,
             "The first token selects the kind: `decision`, `minimalism` or `plan`; the rest is the target.",
         ),
         "cad-decision-review" => (
             "cad-decision-review",
-            "Alias of /cad-review decision: refute one named decision in one named document.",
+            crate::help::table::description("cad-decision-review"),
             "<document> <decision-id>",
             "This alias selects the `decision` kind; the arguments are the document path and the decision id.",
         ),
         "cad-minimalism-review" => (
             "cad-minimalism-review",
-            "Alias of /cad-review minimalism: a ranked delete-list over one file, one frozen directory or one native phase range.",
+            crate::help::table::description("cad-minimalism-review"),
             "<file|directory|phase>",
             "This alias selects the `minimalism` kind; the argument is a file, a directory or a phase number (`file:`, `dir:` and `phase:` disambiguate).",
         ),
         "cad-plan-review" => (
             "cad-plan-review",
-            "Alias of /cad-review plan: review a phase's native plan slices with its locked context, or one plan document.",
+            crate::help::table::description("cad-plan-review"),
             "<phase|plan-path>",
             "This alias selects the `plan` kind; the argument is a phase number or a plan document path.",
         ),

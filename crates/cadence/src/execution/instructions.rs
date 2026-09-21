@@ -274,7 +274,7 @@ const CONTRACT_TAIL: &str = r#"</instructions>
 
 const FRONTDOOR: &str = r#"---
 name: cad-execute
-description: "Execute a native phase: the binary composes each executor dispatch from state and owns every task, run and suite receipt."
+description: ""
 argument-hint: "[phase number]"
 allowed-tools:
   - mcp__cadence__cadence_query
@@ -321,7 +321,8 @@ pub fn contract_markdown() -> String {
 
 /// `skills/cad-execute/SKILL.md`, a generated artifact.
 pub fn frontdoor_markdown() -> String {
-    format!("{FRONTDOOR}\n## Shared read contract\n\n{}\n\n{USABILITY}", crate::read::instructions::CONTRACT)
+    let frontdoor = crate::help::table::render_description("cad-execute", FRONTDOOR).expect("compiled skill front matter");
+    format!("{frontdoor}\n## Shared read contract\n\n{}\n\n{USABILITY}", crate::read::instructions::CONTRACT)
 }
 
 /// A configured command as the effective configuration reports it, with the

@@ -109,16 +109,6 @@ test('AC5: the same bytes report nothing under a one-row WAIVED', () => {
     [CODES.neverNamed]);
 });
 
-test('AC5: cad-help passes under both, because its objective names the include', () => {
-  // The legitimate shape the dead include was wrongly compared to:
-  // `references/COMMANDS.md` is named in `cad-help`'s own `<objective>`.
-  const root = emptyRoot();
-  copyReal(root, 'skills/cad-help/SKILL.md');
-  copyReal(root, 'cadence-core/references/COMMANDS.md');
-  assert.deepEqual(includeConsumerIssues(root, []), []);
-  assert.deepEqual(includeConsumerIssues(root), []);
-});
-
 // --- AC6 and the exclusions that make the check non-vacuous ------------------
 
 test('AC6: an include named ONLY by its own `@`-include line still reports', () => {

@@ -24,6 +24,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Render the query-only help front door without opening a project.
+    HelpInstructions,
+    /// Regenerate only a skill's description from the compiled table on stdin.
+    SkillDescription { name: String },
     /// Render the debug front door without opening a project.
     DebugInstructions,
     /// Render the spike front door without opening a project.
@@ -90,6 +94,28 @@ fn main() -> std::process::ExitCode {
 
 fn run_command(command: Command) -> std::process::ExitCode {
     match command {
+        Command::HelpInstructions => {
+            use std::io::Write;
+            match std::io::stdout().lock().write_all(cadence::help::instructions::markdown().as_bytes()) {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(_) => std::process::ExitCode::FAILURE,
+            }
+        }
+        Command::SkillDescription { name } => {
+            use std::io::{Read, Write};
+            let mut markdown = String::new();
+            if std::io::stdin().read_to_string(&mut markdown).is_err() {
+                return std::process::ExitCode::FAILURE;
+            }
+            let Some(rendered) = cadence::help::table::render_description(&name, &markdown) else {
+                eprintln!("cadence: unknown user skill or missing description front matter");
+                return std::process::ExitCode::FAILURE;
+            };
+            match std::io::stdout().lock().write_all(rendered.as_bytes()) {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(_) => std::process::ExitCode::FAILURE,
+            }
+        }
         Command::SpikeInstructions => {
             use std::io::Write;
             match std::io::stdout().lock().write_all(cadence::spike::instructions::markdown().as_bytes()) {

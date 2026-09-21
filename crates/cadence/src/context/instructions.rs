@@ -3,7 +3,7 @@ use super::model::Apply;
 
 const ROLE: &str = r#"---
 name: cad-context
-description: "Discuss a phase's scope, decisions and truths with its owner, then publish only the exact approved set through Cadence"
+description: ""
 argument-hint: "[phase number]"
 allowed-tools:
   - AskUserQuestion
@@ -200,7 +200,8 @@ The role has no disk instruction loader or user override.
 "#;
 
 pub fn markdown() -> String {
+    let role = crate::help::table::render_description("cad-context", ROLE).expect("compiled skill front matter");
     let schema = serde_json::to_string_pretty(&schemars::schema_for!(Apply))
         .expect("compiled context submission schema");
-    format!("{ROLE}\n## Shared read contract\n\n{}\n\n```json\n{schema}\n```\n", crate::read::instructions::CONTRACT)
+    format!("{role}\n## Shared read contract\n\n{}\n\n```json\n{schema}\n```\n", crate::read::instructions::CONTRACT)
 }

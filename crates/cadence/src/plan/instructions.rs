@@ -1,7 +1,7 @@
 //! The planner role and its host front door come from this compiled source.
 const ROLE: &str = r#"---
 name: cad-plan
-description: "Author a phase's plans and publish the exact owner-approved content through Cadence"
+description: ""
 argument-hint: "[phase number] [--gaps]"
 allowed-tools:
   - AskUserQuestion
@@ -487,7 +487,8 @@ The schema below is also returned as the `plan-read` contract.
 "#;
 
 pub fn markdown() -> String {
+    let role = crate::help::table::render_description("cad-plan", ROLE).expect("compiled skill front matter");
     let schema = serde_json::to_string_pretty(&super::model::contract())
         .expect("compiled plan submission schema");
-    format!("{ROLE}\n## Shared read contract\n\n{}\n\n```json\n{schema}\n```\n", crate::read::instructions::CONTRACT)
+    format!("{role}\n## Shared read contract\n\n{}\n\n```json\n{schema}\n```\n", crate::read::instructions::CONTRACT)
 }

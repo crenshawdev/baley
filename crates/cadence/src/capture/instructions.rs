@@ -1,7 +1,8 @@
 pub fn markdown() -> &'static str {
-    r#"---
+    static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        crate::help::table::render_description("cad-capture", r#"---
 name: cad-capture
-description: Park a phase-linked todo, a seed for a later milestone, or a note, as one typed item.
+description: <compiled>
 allowed-tools:
   - mcp__cadence__cadence_apply
   - mcp__cadence__cadence_query
@@ -24,5 +25,7 @@ show its exact rule, slot and reason so the owner can send it again.
 
 Capturing friction with Cadence itself is parked for a later phase; this door
 records items about the project you are in.
-"#
+"#).expect("compiled skill front matter")
+    });
+    &MARKDOWN
 }

@@ -1,8 +1,9 @@
 //! The milestone front door is compiled alongside its typed operations.
 pub fn markdown() -> &'static str {
-    r#"---
+    static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        crate::help::table::render_description("cad-milestone", r#"---
 name: cad-milestone
-description: "Close and prune a milestone, or confirm an explicit release manifest bump before landing."
+description: ""
 argument-hint: "<phase ids> <display label>"
 allowed-tools:
   - mcp__cadence__cadence_query
@@ -72,5 +73,7 @@ allowed-tools:
    land-tag step, which rechecks the release manifest and version collisions
    on the pulled base. Never invoke release-bump.mjs or create a tag yourself.
 </process>
-"#
+"#).expect("compiled skill front matter")
+    });
+    &MARKDOWN
 }

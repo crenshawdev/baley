@@ -274,6 +274,8 @@ struct VersionArguments {}
 #[derive(Deserialize, JsonSchema)]
 #[serde(tag = "operation", deny_unknown_fields)]
 enum QueryArguments {
+    #[serde(rename = "help")]
+    Help { name: Option<String> },
     #[serde(rename = "recall")]
     Recall { query: String, limit: Option<std::num::NonZeroU32>, phase: Option<NonZeroU32> },
     #[serde(rename = "debug-list")]
@@ -945,6 +947,14 @@ impl ServerHandler for PublicServer {
                 .into())
             }
             "cadence_query" => {
+                if raw.as_ref().is_some_and(|value| value["operation"] == "help") {
+                    let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
+                        Ok(QueryArguments::Help { name }) => cadence::help::table::answer(name.as_deref()),
+                        Err(error) => Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value(),
+                        Ok(_) => unreachable!("help operation selected"),
+                    };
+                    return structured_result(Ok(QueryOutput::Read(answer)));
+                }
                 if raw.as_ref().is_some_and(|value| value["operation"] == "recall") {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
                         Ok(QueryArguments::Recall { query, limit, phase }) => match self.server.service.recall_phase(
@@ -1188,6 +1198,7 @@ impl ServerHandler for PublicServer {
                     }
                     Some(QueryArguments::Search(_) | QueryArguments::List(_) | QueryArguments::Read(_) | QueryArguments::Document(_) | QueryArguments::DocumentSearch(_)) => unreachable!("read operation routed before generic query"),
                     Some(QueryArguments::Schema { .. }) => unreachable!("schema routed before generic query"),
+                    Some(QueryArguments::Help { .. }) => unreachable!("help routed before generic query"),
                     Some(QueryArguments::Progress {}) => unreachable!("progress routed before generic query"),
                     Some(QueryArguments::MilestoneRead { .. } | QueryArguments::LandRead { .. } | QueryArguments::UndoRead { .. }) => unreachable!("milestone/landing/undo routed before generic query"),
                     Some(QueryArguments::Suggest { .. }) => unreachable!("suggest routed before generic query"),

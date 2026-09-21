@@ -1,7 +1,8 @@
 pub fn markdown() -> &'static str {
-    r#"---
+    static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        crate::help::table::render_description("cad-why", r#"---
 name: cad-why
-description: Why is this code like this - the git chain over one file[:line], joined to the phase, task, decision, deviation and review record, printed verbatim.
+description: <compiled>
 argument-hint: "<path>[:<line>]"
 allowed-tools:
   - mcp__cadence__cadence_query
@@ -24,5 +25,7 @@ commentary after it, no reformatting. `text` is already the whole answer,
 quoted from the record in its own words; a reader checks it byte for byte
 against the binary's own output, and any change here makes that identity
 false.
-"#
+"#).expect("compiled skill front matter")
+    });
+    &MARKDOWN
 }

@@ -1,6 +1,6 @@
 ---
 name: cad-spike
-description: "Resolve one unknown with immutable criteria, caller observations and a bounded spike verdict."
+description: "Record risk-ordered spike criteria before experimenting, then retain observations and a bounded verdict."
 argument-hint: "<the question or hypothesis to resolve>"
 allowed-tools:
   - mcp__cadence__cadence_apply

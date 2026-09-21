@@ -1,8 +1,9 @@
 //! The undo front door presents the binary's exact manifest and receipts.
 pub fn markdown() -> &'static str {
-    r#"---
+    static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        crate::help::table::render_description("cad-undo", r#"---
 name: cad-undo
-description: "Undo a phase's exact recorded commits and report retained progress."
+description: ""
 argument-hint: "<phase> [--no-commit]"
 allowed-tools:
   - mcp__cadence__cadence_query
@@ -48,5 +49,7 @@ allowed-tools:
    do no shell Git, scope-message fallback, raw phase-done --undo or cursor set.
    Local cleanup, tracker writes and publishing are separate operations.
 </process>
-"#
+"#).expect("compiled skill front matter")
+    });
+    &MARKDOWN
 }

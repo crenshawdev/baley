@@ -1,7 +1,8 @@
 pub fn markdown() -> &'static str {
-    r#"---
+    static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        crate::help::table::render_description("cad-suggest", r#"---
 name: cad-suggest
-description: Show retune suggestions from retained decisions and apply only an accepted payload.
+description: <compiled>
 argument-hint: "[phase]"
 allowed-tools:
   - mcp__cadence__cadence_query
@@ -23,5 +24,7 @@ accept it. Send only the accepted `apply` payload unchanged through
 `mcp__cadence__cadence_apply`, then show the returned result. Send nothing on
 decline and nothing before asking. Never re-derive a value, alter a payload,
 combine proposals, or write configuration directly.
-"#
+"#).expect("compiled skill front matter")
+    });
+    &MARKDOWN
 }

@@ -11,8 +11,8 @@
 // Why it exists, concretely: this tree shipped `skills/cad-verify/SKILL.md:29`,
 // a 5,792 B `@`-include of `cadence-core/templates/UAT.md` that no prose in
 // `/cad-verify` has ever named, with a CHANGELOG entry defending it on a
-// comparison to `cad-help` that is false on inspection - `cad-help`'s objective
-// DOES name `references/COMMANDS.md`. Check 3 already proves an included path
+// comparison to an explicitly named include that is false on inspection:
+// the including command must name the surface it uses. Check 3 proves its path
 // EXISTS and check 13 proves a reference a skill stopped including is still
 // Read; neither can see an include whose consumer was never written.
 //

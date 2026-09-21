@@ -1,8 +1,9 @@
 //! The landing front door delegates permission and effects to the binary.
 pub fn markdown() -> &'static str {
-    r#"---
+    static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        crate::help::table::render_description("cad-land", r#"---
 name: cad-land
-description: "Authorize landing steps, confirm the merge and follow ordered local cleanup."
+description: ""
 argument-hint: "<landing id>"
 allowed-tools:
   - mcp__cadence__cadence_query
@@ -90,5 +91,7 @@ allowed-tools:
    PR creation, merge, checkout, pull, tag, shell branching or branch reap, and
    no tracker mutation or FILED write.
 </process>
-"#
+"#).expect("compiled skill front matter")
+    });
+    &MARKDOWN
 }

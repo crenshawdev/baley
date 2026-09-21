@@ -141,11 +141,11 @@ pub fn audit_frontdoor_markdown(coverage: bool) -> String {
     let read_contract = crate::read::instructions::CONTRACT;
     let (name, description, note) = if coverage {
         ("cad-coverage",
-         "Read-only alias of /cad-audit: the phase-scoped requirement-to-evidence trace over the retained map and current verdicts; the test-generation arm is removed.",
+         crate::help::table::description("cad-coverage"),
          "This alias keeps the old name for the read-only view only. It never\ngenerates tests, never authors a gap plan and never edits status; a\nrequirement without failing-capable evidence appears as a broken or unmet\ntrace for the owner to act on through planning.")
     } else {
         ("cad-audit",
-         "Read-only verification audit: every requirement's phase-scoped trace to its plans, truths, evidence and current verdicts, with each broken edge named.",
+         crate::help::table::description("cad-audit"),
          "The audit is the binary's join over the retained records and the owner's\ndocuments as they are. It never repairs a status, seeds a row, infers a\nrequirement-to-truth edge or completes a phase.")
     };
     // The worked example above uses phase 13; the note reads the same way.
@@ -197,9 +197,10 @@ record is written or repaired.
 }
 
 pub fn frontdoor_markdown() -> String {
+    let description = crate::help::table::description("cad-verify");
     format!(r#"---
 name: cad-verify
-description: "Inspect a phase through the retained native verifier dispatch."
+description: "{description}"
 argument-hint: "<phase>"
 allowed-tools:
   - mcp__cadence__cadence_query
