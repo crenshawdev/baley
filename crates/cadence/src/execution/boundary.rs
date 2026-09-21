@@ -757,7 +757,7 @@ impl BoundaryV1 {
             && (terminal || if self.native_refusal {
                 let expected = Located { rule: located.rule.clone(), slot: located.slot.clone(),
                     id: located.id.clone(), ..Located::default() };
-                **located != expected || [&located.rule, &located.slot, &located.id].iter()
+                **located != expected || [&located.rule, &located.slot].iter()
                     .any(|value| value.as_ref().is_some_and(|text| text.trim().is_empty()))
             } else { !located.valid() })
         {
