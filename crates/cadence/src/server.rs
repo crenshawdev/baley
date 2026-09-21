@@ -1358,10 +1358,12 @@ impl ServerHandler for PublicServer {
                 let observation = raw.clone().unwrap_or(Value::Null);
                 // Legacy executor patches retain their existing boundary contract.
                 // The shared native wrapper also sees early decode/shape returns.
-                let historical = raw.as_ref().is_some_and(|value| value["operation"] == "executor");
+                let historical = raw.as_ref().is_some_and(|value|
+                    value["operation"].as_str().is_none() && value.get("dispatch_id").is_some());
                 let response = async {
                 let operation = raw.as_ref().and_then(|v| v["operation"].as_str()).map(str::to_owned);
                 let group = match operation.as_deref() {
+                    None if historical => ApplyGroup::Executor,
                     None => return structured_result(Ok(ApplyOutput::NativeExecution(
                         Refusal::new("invalid-arguments", "cadence_apply requires an operation").slot("operation").value()
                     ))),
