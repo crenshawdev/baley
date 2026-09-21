@@ -1,4 +1,6 @@
----
+//! Compiled spike role; the installed skill is only its rendering.
+pub fn markdown() -> &'static str {
+    r#"---
 name: cad-spike
 description: "Resolve one unknown with immutable criteria, caller observations and a bounded spike verdict."
 argument-hint: "<the question or hypothesis to resolve>"
@@ -96,3 +98,5 @@ than SPIKE.md. Never use Write, Edit or Bash to change it, stage it or commit it
    project nor deletes external files. No phase completion or production change
    follows from a spike verdict.
 </method>
+"#
+}

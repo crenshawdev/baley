@@ -1559,7 +1559,27 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
 
     // These skills are generated artifacts: their bytes are the binary's own
     // rendering, never a second authority. What they say is C7's subject.
-    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 21);
+    assert_eq!(cadence::execution::render::RENDERED_PROJECT_FILES.len(), 22);
+    let (spike, body) = markdown_parts("skills/cad-spike/SKILL.md");
+    assert_eq!(body, cadence::spike::instructions::markdown().split_once("\n---\n").unwrap().1);
+    assert_eq!(spike["name"], "cad-spike");
+    assert_eq!(spike["description"], "Resolve one unknown with immutable criteria, caller observations and a bounded spike verdict.");
+    assert_eq!(spike["argument-hint"], "<the question or hypothesis to resolve>");
+    assert_eq!(spike["allowed-tools"], json!(["mcp__cadence__cadence_apply", "mcp__cadence__cadence_query", "Write", "Edit", "Bash", "AskUserQuestion"]));
+    for required in ["spike-open", "spike-observation", "spike-verdict", "spike-close",
+        "question and decision", "Given/When/Then", "explicit failure outcome", "risk-first",
+        "record and projection before creating any experiment", "initial projection has no Results section",
+        "immutable after open", "one observed result per criterion",
+        "validated, invalidated, inconclusive", "confirmed and every other word are refused",
+        "external temporary directory outside the project", "throwaway_location",
+        "entire .planning/spikes subtree is protected", "identical request_id and inputs",
+        "does not adjudicate experimental truth", "not imported or overwritten",
+        "never invent a successful measurement"] {
+        assert!(body.contains(required), "{required}");
+    }
+    for forbidden in ["workflows/spike.md", ".planning/spikes/<slug>/", "Task", "CLAUDE_PLUGIN_ROOT"] {
+        assert!(!cadence::spike::instructions::markdown().contains(forbidden), "{forbidden}");
+    }
     let (debug, body) = markdown_parts("skills/cad-debug/SKILL.md");
     assert_eq!(body, cadence::debug::instructions::markdown().split_once("\n---\n").unwrap().1);
     assert_eq!(debug["name"], "cad-debug");
