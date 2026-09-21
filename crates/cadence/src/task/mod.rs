@@ -93,7 +93,7 @@ pub fn observe_range(project: &Path, start: &str) -> Result<Range> {
         let (id, subject) = line.split_once('\0').ok_or_else(|| Error::Invalid("malformed git log record".into()))?;
         let names = git::run(project, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--root", "--end-of-options", id])?;
         let files = names.split(|byte| *byte == 0).filter(|name| !name.is_empty())
-            .map(|name| text(name)).collect::<Result<Vec<_>>>()?;
+            .map(text).collect::<Result<Vec<_>>>()?;
         commits.push(model::Commit { id: id.to_owned(), subject: subject.to_owned(), files });
     }
     let diff = git::diff(project, &material)?;
