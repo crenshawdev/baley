@@ -234,7 +234,7 @@ pub fn documents(project: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 }
 
 #[allow(dead_code)]
-#[path = "phase31.rs"]
+#[path = "read_fixtures.rs"]
 pub mod exit_support;
 
 /// The phase 33 process fixture, with two plans and an interleavable version of
