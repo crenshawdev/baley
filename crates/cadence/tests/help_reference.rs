@@ -15,7 +15,7 @@ fn help_lists_the_installed_skills_from_the_compiled_table() {
     assert!(!project.join("cadence-core/references/COMMANDS.md").exists());
     let before = phase13::tree(project);
     let mut client = Client::open(project);
-    let all = support_records::query(&mut client, "help", "");
+    let all = client.call("cadence_query", json!({"operation":"help"}));
     assert_eq!(all["status"], "ok", "{all}");
     let expected: [(&str, &[&str]); 4] = [
         ("Build spine", &["new-project", "adopt", "context", "plan", "execute", "verify", "progress", "task"]),
