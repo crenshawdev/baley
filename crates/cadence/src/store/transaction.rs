@@ -1823,11 +1823,10 @@ fn validate_all<S: Storage>(
         && storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(&write.root_binding) {
         return Err(Error::Invalid("debug recovery root binding changed".into()));
     }
-    if let IntentKind::SpikeV1 { write } = kind {
-        if storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(&write.root_binding)
-            || storage.root().and_then(std::path::Path::parent).map(std::path::Path::canonicalize).transpose()?.as_ref() != Some(&write.project) {
-            return Err(Error::Invalid("spike recovery root binding changed".into()));
-        }
+    if let IntentKind::SpikeV1 { write } = kind
+        && (storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(&write.root_binding)
+            || storage.root().and_then(std::path::Path::parent).map(std::path::Path::canonicalize).transpose()?.as_ref() != Some(&write.project)) {
+        return Err(Error::Invalid("spike recovery root binding changed".into()));
     }
     if let IntentKind::MilestoneReleaseV1 { write } = kind { storage.validate_release(write, replay)?; }
     if let IntentKind::MilestonePruneV1 { prune } = kind {
