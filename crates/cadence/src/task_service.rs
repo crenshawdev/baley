@@ -5,7 +5,7 @@ use cadence::{
     envelope::Refusal,
     pause::branch,
     rail::{risk, risk_diff},
-    store::{Error, Result},
+    store::{Error, Result, writer::Operation},
     task::{self, model::{self, Apply, Mode, Recording, Risk, Root}},
 };
 use serde_json::{Value, json};
@@ -23,6 +23,7 @@ pub struct Episode {
     pub branch: String,
     pub start: String,
     pub description: String,
+    pub plan: Option<Vec<model::PlanTask>>,
 }
 
 /// The resident's memory of treeless tasks: open episodes by project and
@@ -66,23 +67,44 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(
     Ok(answer)
 }
 
+/// A record/projection write failure, named by the path it could not write.
+fn unwritable(planning: &Path, slug: &str, file: &str, error: &Error) -> Value {
+    let path = planning.join("tasks").join(slug).join(file);
+    Refusal::new("task-record-unwritable",
+            format!("the task {file} could not be written to {}: {error}", path.display()))
+        .rule("rooted-record").slot("record")
+        .details(json!({"slug":slug,"path":path})).value()
+}
+
 async fn open<I: ConfigIo + Clone + Sync>(
     factory: &SessionFactory<I>, project: &Path, root: Root, request: &model::Open, episodes: &mut Episodes,
 ) -> Result<Value> {
     if let Err(error) = model::validate_slug(&request.slug).and_then(|()| model::validate_description(&request.description)) {
         return Ok(model::invalid(error.to_string(), &request.slug));
     }
-    let Root::Absent { .. } = &root else {
-        return Ok(Refusal::new("task-record-unavailable",
-                format!("a planning root is present at {}; this build serves task records only without one", root.path()))
-            .rule("rooted-record").slot("root").details(json!({"root":root,"slug":request.slug})).value());
-    };
-    // The global layer is the only configuration a treeless project has; it
-    // is observed, never acquired, and nothing is persisted from it.
-    let (generation, _) = factory.observe_config(&project.join(".planning"))?;
+    // Inline carries no plan; planned carries a valid ordered plan.
+    match (request.mode, &request.plan) {
+        (Mode::Planned, None) => return Ok(model::invalid("a planned task needs a plan", &request.slug)),
+        (Mode::Inline, Some(_)) => return Ok(model::invalid("an inline task carries no plan", &request.slug)),
+        (Mode::Planned, Some(plan)) => if let Err(error) = model::validate_plan(plan) {
+            return Ok(model::invalid(error.to_string(), &request.slug));
+        },
+        (Mode::Inline, None) => {}
+    }
+    let planning = PathBuf::from(root.path());
+    // Under a root, a slug that already names a task directory is authored
+    // history, never a fresh record; it is refused, never overwritten (D-209).
+    if let Root::Present { .. } = &root
+        && planning.join("tasks").join(&request.slug).try_exists()? {
+        return Ok(Refusal::new("task-history",
+                format!("a task directory named {} already exists under this root and is authored history", request.slug))
+            .rule("rooted-record").slot("request.slug").details(json!({"slug":request.slug})).value());
+    }
+    // The branch and protected-branch policy are the binary's, treeless or not.
+    let (generation, _) = factory.observe_config(&planning)?;
     let policy = super::pause_service::policy(&generation)?;
     let observed = {
-        let (project, planning, policy) = (project.to_path_buf(), PathBuf::from(root.path()), policy.clone());
+        let (project, planning, policy) = (project.to_path_buf(), planning.clone(), policy.clone());
         tokio::task::spawn_blocking(move || branch::observe(&project, &planning, &policy)).await.map_err(|_| Error::Closed)??
     };
     match branch::protected(&policy, &observed) {
@@ -111,11 +133,35 @@ async fn open<I: ConfigIo + Clone + Sync>(
     let episode = Episode {
         slug: request.slug.clone(), mode: request.mode, token: format!("task-{}", &identity[..24]), root: root.clone(),
         branch: observed.branch.clone(), start: observed.head.clone(), description: request.description.clone(),
+        plan: request.plan.clone(),
     };
-    let answer = json!({"status":"ok","outcome":"open","ephemeral":true,
+    // A planned task renders PLAN.md under a root at open, acknowledged before
+    // the open is reported; an inline open persists nothing.
+    let mut recording = Value::Null;
+    if let (Root::Present { .. }, Some(plan)) = (&root, &request.plan) {
+        let store = factory.first_touch(&planning).await?;
+        let store = store.review_store();
+        let view = store.request(Operation::ReadVerified).await?;
+        let write = model::Write {
+            root_binding: cadence::verification::inputs::root_binding(&planning)?,
+            project: project.to_path_buf(),
+            apply: model::StoreApply::PlanOpen { request_id: request.request_id.clone(), slug: request.slug.clone(),
+                description: request.description.clone(), plan: plan.clone() },
+        };
+        if let Err(error) = store.request(Operation::TaskV1 { expected_generation: view.snapshot.generation,
+            expected_integrity: view.snapshot.integrity.clone(), write: Box::new(write) }).await {
+            return Ok(unwritable(&planning, &request.slug, "PLAN.md", &error));
+        }
+        recording = json!({"kind":"recorded","path":planning.join("tasks").join(&request.slug).join("PLAN.md")});
+    }
+    let mut answer = json!({"status":"ok","outcome":"open","ephemeral":matches!(root, Root::Absent { .. }),
         "task":{"slug":episode.slug,"mode":episode.mode,"token":episode.token,"branch":episode.branch,"start":episode.start},
-        "root":root,"recording":model::unrecorded(&root),
+        "root":root,
         "policy":{"protected":policy.protected,"on_protected":policy.on_protected,"permission":"pass"}});
+    answer["recording"] = match &episode.root {
+        Root::Absent { .. } => serde_json::to_value(model::unrecorded(&episode.root))?,
+        Root::Present { .. } => recording,
+    };
     episodes.open.insert((project.to_path_buf(), episode.token.clone()), episode);
     Ok(answer)
 }
@@ -176,7 +222,7 @@ async fn close<I: ConfigIo + Clone + Sync>(
             model::disposition(scan, surfaces, &gate)
         }
     };
-    let record = model::Record {
+    let mut record = model::Record {
         schema: model::RECORD_SCHEMA.into(), slug: episode.slug.clone(), mode: episode.mode,
         description: episode.description.clone(), token: episode.token.clone(),
         root: root.clone(), branch: episode.branch.clone(), start: episode.start.clone(), head: range.head.clone(),
@@ -185,7 +231,46 @@ async fn close<I: ConfigIo + Clone + Sync>(
     if matches!(record.risk, Risk::Blocked { .. }) {
         return Ok(model::blocked(&record, transient));
     }
-    debug_assert!(matches!(record.recording, Recording::Unrecorded { .. }));
-    episodes.open.remove(&key);
-    Ok(model::done(&record))
+    match &root {
+        Root::Absent { .. } => {
+            debug_assert!(matches!(record.recording, Recording::Unrecorded { .. }));
+            episodes.open.remove(&key);
+            Ok(model::done(&record))
+        }
+        Root::Present { .. } => {
+            // Inline records no outcomes; planned records one per plan step.
+            match (episode.mode, &request.outcomes) {
+                (Mode::Planned, None) =>
+                    return Ok(model::invalid("a planned close records its outcomes", &request.slug)),
+                (Mode::Inline, Some(_)) =>
+                    return Ok(model::invalid("an inline close records no outcomes", &request.slug)),
+                _ => {}
+            }
+            let planning = PathBuf::from(root.path());
+            let record_path = planning.join("tasks").join(&episode.slug).join("RECORD.md");
+            // The projection bytes never depend on the recording field, so this
+            // revision is stable and the installed RECORD.md is byte-identical.
+            let store_record = model::StoreRecord {
+                slug: episode.slug.clone(), mode: episode.mode, description: episode.description.clone(),
+                status: model::StoreStatus::Done, plan: episode.plan.clone(),
+                record: Some(record.clone()), outcomes: request.outcomes.clone(),
+            };
+            let revision = cadence::store::model::digest(task::render::record_markdown(&store_record).as_bytes());
+            record.recording = model::recorded(&record_path.to_string_lossy(), &revision);
+            let session = factory.first_touch(&planning).await?;
+            let store = session.review_store();
+            let view = store.request(Operation::ReadVerified).await?;
+            let write = model::Write {
+                root_binding: cadence::verification::inputs::root_binding(&planning)?,
+                project: project.to_path_buf(),
+                apply: model::StoreApply::Close { request_id: request.request_id.clone(), slug: episode.slug.clone(),
+                    record: Box::new(record.clone()), outcomes: request.outcomes.clone() },
+            };
+            match store.request(Operation::TaskV1 { expected_generation: view.snapshot.generation,
+                expected_integrity: view.snapshot.integrity.clone(), write: Box::new(write) }).await {
+                Ok(_) => { episodes.open.remove(&key); Ok(model::done_recorded(&record)) }
+                Err(error) => Ok(unwritable(&planning, &episode.slug, "RECORD.md", &error)),
+            }
+        }
+    }
 }

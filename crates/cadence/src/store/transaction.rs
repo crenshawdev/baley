@@ -14,6 +14,7 @@ pub(crate) enum IntentKind {
     DebugReviewV1 { root_binding: String },
     DebugV1 { write: Box<crate::debug::model::Write> },
     SpikeV1 { write: Box<crate::spike::model::Write> },
+    TaskV1 { write: Box<crate::task::model::Write>, root_binding: String },
     MilestoneReleaseV1 { write: Box<crate::milestone::release::WriteSeal> },
     UndoV1 { write: Box<crate::undo::model::Write> },
     MilestonePruneV1 {
@@ -576,6 +577,7 @@ impl Intent {
         let mut projections: Vec<&str> = Vec::new();
         let mut debug_targets = Vec::new();
         let mut spike_targets = Vec::new();
+        let mut task_targets = Vec::new();
         for participant in &self.participants {
             let known = matches!(
                 participant.target.as_str(),
@@ -590,6 +592,10 @@ impl Intent {
             if let Some(slug) = debug { debug_targets.push(slug); }
             let spike = super::filesystem::spike_target(&participant.target)?;
             if let Some(slug) = spike { spike_targets.push(slug); }
+            let task = super::filesystem::task_target(&participant.target)?;
+            if let Some(slug) = task { task_targets.push(slug); }
+            let task_plan = super::filesystem::task_plan_target(&participant.target)?;
+            if let Some(slug) = task_plan { task_targets.push(slug); }
             if projection.is_some() {
                 projections.push(participant.target.as_str());
             }
@@ -606,7 +612,7 @@ impl Intent {
             {
                 return Err(Error::Invalid("duplicate UAT participant".into()));
             }
-            if (!known && phase.is_none() && context.is_none() && plan.is_none() && uat.is_none() && projection.is_none() && debug.is_none() && spike.is_none())
+            if (!known && phase.is_none() && context.is_none() && plan.is_none() && uat.is_none() && projection.is_none() && debug.is_none() && spike.is_none() && task.is_none() && task_plan.is_none())
                 || !names.insert(participant.target.as_str())
             {
                 return Err(Error::Invalid(
@@ -626,6 +632,9 @@ impl Intent {
         }
         if !spike_targets.is_empty() && !matches!(self.kind, IntentKind::SpikeV1 { .. }) {
             return Err(Error::Invalid("spike projection requires its owning intent".into()));
+        }
+        if !task_targets.is_empty() && !matches!(self.kind, IntentKind::TaskV1 { .. }) {
+            return Err(Error::Invalid("task projection requires its owning intent".into()));
         }
         match &self.kind {
             IntentKind::PlanPublication { phase, requirements, .. }
@@ -759,6 +768,10 @@ impl Intent {
             && before.as_ref().and_then(|p| p.data.get("spike")) != snapshot.data.get("spike") {
             return Err(Error::Invalid("spike namespace requires its owning intent".into()));
         }
+        if !matches!(self.kind, IntentKind::TaskV1 { .. })
+            && before.as_ref().and_then(|p| p.data.get(crate::task::model::NAMESPACE)) != snapshot.data.get(crate::task::model::NAMESPACE) {
+            return Err(Error::Invalid("task namespace requires its owning intent".into()));
+        }
         let completes_import = before.as_ref().is_none_or(|p| p.data.get("import").is_none())
             && snapshot.data.get("import").is_some();
         if !completes_import
@@ -875,6 +888,26 @@ impl Intent {
                     || self.participants.iter().filter(|p| p.target == ITEMS || p.target == DECISIONS)
                         .any(|p| p.expected.bytes.as_deref() != Some(&p.bytes)) {
                     return Err(Error::Invalid("spike intent differs from its recorded transition".into()));
+                }
+            }
+            IntentKind::TaskV1 { write, .. } => {
+                let previous = previous_snapshot(&self.participants, "task")?;
+                let expected = crate::task::model::store_contribute(&previous.data, &write)?;
+                let record = crate::task::model::store_namespace(&expected)?.records
+                    .get(write.apply.slug()).cloned()
+                    .ok_or_else(|| Error::Invalid("task intent lacks its record".into()))?;
+                let (target, projection) = crate::task::model::store_projection(&record)?;
+                if bytes(&target)? != projection {
+                    return Err(Error::Invalid("task projection differs from its record".into()));
+                }
+                if names.len() != 4
+                    || task_targets != vec![write.apply.slug()]
+                    || snapshot.data != expected
+                    || snapshot.operations != previous.operations
+                    || snapshot.generation != previous.generation.checked_add(1).ok_or_else(|| Error::Invalid("generation exhausted".into()))?
+                    || self.participants.iter().filter(|p| p.target == ITEMS || p.target == DECISIONS)
+                        .any(|p| p.expected.bytes.as_deref() != Some(&p.bytes)) {
+                    return Err(Error::Invalid("task intent differs from its recorded transition".into()));
                 }
             }
             IntentKind::VerificationSubmitV1 { claim, root_binding } => {
@@ -1827,6 +1860,11 @@ fn validate_all<S: Storage>(
         && (storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(&write.root_binding)
             || storage.root().and_then(std::path::Path::parent).map(std::path::Path::canonicalize).transpose()?.as_ref() != Some(&write.project)) {
         return Err(Error::Invalid("spike recovery root binding changed".into()));
+    }
+    if let IntentKind::TaskV1 { write, root_binding } = kind
+        && (storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(root_binding)
+            || storage.root().and_then(std::path::Path::parent).map(std::path::Path::canonicalize).transpose()?.as_ref() != Some(&write.project)) {
+        return Err(Error::Invalid("task recovery root binding changed".into()));
     }
     if let IntentKind::MilestoneReleaseV1 { write } = kind { storage.validate_release(write, replay)?; }
     if let IntentKind::MilestonePruneV1 { prune } = kind {

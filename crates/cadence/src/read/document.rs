@@ -473,6 +473,24 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
                     .collect()),
             })
         }
+        DocumentIdentity::TaskRecord { slug } => {
+            if slug.trim().is_empty() {
+                return Err(refusal("identity", "document-identity", "task record identity must name a slug"));
+            }
+            let data = snapshot(root)?;
+            let record = cadence::task::model::store_namespace(&data)
+                .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?
+                .records.get(slug).cloned()
+                .ok_or_else(|| refusal("identity", "document-not-found", "rooted task record is absent"))?;
+            let body = serde_json::to_string(&record)
+                .map_err(|error| refusal("part", "document-invalid", error.to_string()))?;
+            Ok(Resolved {
+                identity: identity.clone(),
+                classification: "native-task-record",
+                revision: cadence::store::model::digest(body.as_bytes()),
+                parts: bounded_parts(vec![Part { selector: "record".into(), title: slug.clone(), body }]),
+            })
+        }
         DocumentIdentity::PhaseRoadmapRow { phase } => roadmap(root, phase.get()),
         DocumentIdentity::TaskSummary {
             phase,

@@ -106,6 +106,12 @@ impl Filesystem {
         if let Some(slug) = spike_target(target)? {
             return Ok(self.root.join("spikes").join(slug).join("SPIKE.md"));
         }
+        if let Some(slug) = task_target(target)? {
+            return Ok(self.root.join("tasks").join(slug).join("RECORD.md"));
+        }
+        if let Some(slug) = task_plan_target(target)? {
+            return Ok(self.root.join("tasks").join(slug).join("PLAN.md"));
+        }
         if let Some((phase, plan)) = phase_plan_target(target)? {
             return Ok(self.root.join(format!("phases/{phase}/PLAN-{plan}.md")));
         }
@@ -285,6 +291,18 @@ pub(crate) fn spike_target(target: &str) -> Result<Option<&str>> {
     Ok(Some(slug))
 }
 
+pub(crate) fn task_target(target: &str) -> Result<Option<&str>> {
+    let Some(slug) = target.strip_prefix("task:") else { return Ok(None); };
+    crate::task::model::validate_slug(slug)?;
+    Ok(Some(slug))
+}
+
+pub(crate) fn task_plan_target(target: &str) -> Result<Option<&str>> {
+    let Some(slug) = target.strip_prefix("task-plan:") else { return Ok(None); };
+    crate::task::model::validate_slug(slug)?;
+    Ok(Some(slug))
+}
+
 /// The two root projections the binary changes narrowly (D-131): a phase box
 /// in ROADMAP.md and requirement trace rows in REQUIREMENTS.md.
 pub(crate) fn projection_target(target: &str) -> Option<&'static str> {
@@ -422,7 +440,8 @@ impl Storage for Filesystem {
     }
 
     fn read(&mut self, target: &str) -> Result<Observed> {
-        if debug_target(target)?.is_some() || spike_target(target)?.is_some() {
+        if debug_target(target)?.is_some() || spike_target(target)?.is_some()
+            || task_target(target)?.is_some() || task_plan_target(target)?.is_some() {
             safe_plan_path(&self.target(target)?)?;
         }
         if let Some((phase, plan)) = phase_plan_target(target)? {
@@ -442,7 +461,7 @@ impl Storage for Filesystem {
                 directory_identity: String::new(),
             });
         }
-        if phase_context_target(target)?.is_some() || phase_plan_target(target)?.is_some() || phase_uat_target(target)?.is_some() || debug_target(target)?.is_some() || spike_target(target)?.is_some() {
+        if phase_context_target(target)?.is_some() || phase_plan_target(target)?.is_some() || phase_uat_target(target)?.is_some() || debug_target(target)?.is_some() || spike_target(target)?.is_some() || task_target(target)?.is_some() || task_plan_target(target)?.is_some() {
             // Only the approved writer path requests this participant. Bind and
             // sync its parents before capturing the expected-file identity.
             if self.directories.get(&self.root) != Some(&directory_identity(&self.root)?) {
@@ -518,7 +537,8 @@ impl Storage for Filesystem {
     }
 
     fn prepare(&mut self, target: &str, bytes: &[u8]) -> Result<Prepared> {
-        let plan = phase_plan_target(target)?.is_some() || debug_target(target)?.is_some() || spike_target(target)?.is_some();
+        let plan = phase_plan_target(target)?.is_some() || debug_target(target)?.is_some() || spike_target(target)?.is_some()
+            || task_target(target)?.is_some() || task_plan_target(target)?.is_some();
         let target = self.target(target)?;
         if plan {
             self.check_plan_parent(&target)?;
@@ -597,7 +617,8 @@ impl Storage for Filesystem {
 
     fn resync(&mut self, target: &str, bytes: &[u8]) -> Result<Observed> {
         let path = self.target(target)?;
-        if phase_plan_target(target)?.is_some() || debug_target(target)?.is_some() || spike_target(target)?.is_some() {
+        if phase_plan_target(target)?.is_some() || debug_target(target)?.is_some() || spike_target(target)?.is_some()
+            || task_target(target)?.is_some() || task_plan_target(target)?.is_some() {
             self.check_plan_parent(&path)?;
         }
         (self.probe)(Stage::RecoverySync, &path)?;

@@ -71,6 +71,7 @@ pub enum DocumentIdentity {
     PhaseContext { phase: NonZeroU32 },
     PhasePlan { phase: NonZeroU32, plan: NonZeroU32 },
     PhaseRoadmapRow { phase: NonZeroU32 },
+    TaskRecord { slug: String },
     TaskSummary {
         phase: NonZeroU32,
         occurrence: String,

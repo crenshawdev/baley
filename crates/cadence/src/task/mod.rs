@@ -8,6 +8,7 @@
 //! plan 2's and is refused here by name rather than answered without a record.
 pub mod instructions;
 pub mod model;
+pub mod render;
 
 use crate::{
     rail::{git, risk::MaterialIdentity},

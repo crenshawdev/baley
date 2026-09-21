@@ -75,6 +75,11 @@ pub enum Operation {
         expected_integrity: String,
         write: Box<crate::spike::model::Write>,
     },
+    TaskV1 {
+        expected_generation: u64,
+        expected_integrity: String,
+        write: Box<crate::task::model::Write>,
+    },
     MilestoneReleaseV1 {
         expected_generation: u64,
         expected_integrity: String,
@@ -590,6 +595,34 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 let operations = next.snapshot.operations.clone();
                 self.persist(next, operations, participants, "spike", super::transaction::IntentKind::SpikeV1 { write })
             },
+            Operation::TaskV1 { expected_generation, expected_integrity, write } => {
+                let root_binding = self.observed[STATE].directory_identity.clone();
+                if root_binding != write.root_binding {
+                    return Err(Error::Invalid("task root binding changed".into()));
+                }
+                if self.storage.root().and_then(std::path::Path::parent).map(std::path::Path::canonicalize).transpose()?.as_ref() != Some(&write.project) {
+                    return Err(Error::Invalid("task project binding changed".into()));
+                }
+                if let Some(_answer) = crate::task::model::store_replay(&self.view.snapshot.data, &write)? {
+                    return Ok(self.view.as_ref().clone());
+                }
+                self.check_expected(expected_generation, &expected_integrity)?;
+                let slug = write.apply.slug().to_owned();
+                let mut next = self.view.as_ref().clone();
+                next.snapshot.data = crate::task::model::store_contribute(&next.snapshot.data, &write)?;
+                let record = crate::task::model::store_namespace(&next.snapshot.data)?.records
+                    .get(&slug).cloned().ok_or_else(|| Error::Invalid("task record disappeared".into()))?;
+                let (target, bytes) = crate::task::model::store_projection(&record)?;
+                let expected = self.storage.read(&target)?;
+                if !crate::task::model::store_namespace(&self.view.snapshot.data)?.records.contains_key(&slug)
+                    && expected.bytes.is_some() {
+                    return Err(Error::Invalid("historical task projection cannot be overwritten".into()));
+                }
+                let participants = vec![super::transaction::Participant { target, expected, bytes }];
+                let operations = next.snapshot.operations.clone();
+                self.persist(next, operations, participants, "task",
+                    super::transaction::IntentKind::TaskV1 { write, root_binding })
+            },
             Operation::UndoV1 { expected_generation, expected_integrity, write } => {
                 self.check_expected(expected_generation, &expected_integrity)?;
                 self.storage.validate_undo(&write, false)?;
@@ -835,6 +868,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             | Operation::DebugReviewV1 { .. }
             | Operation::DebugV1 { .. }
             | Operation::SpikeV1 { .. }
+            | Operation::TaskV1 { .. }
             | Operation::UndoV1 { .. }
             | Operation::MilestonePruneV1 { .. }
             | Operation::MilestoneReleaseV1 { .. }

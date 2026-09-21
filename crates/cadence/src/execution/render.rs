@@ -60,6 +60,22 @@ pub fn installed_debug(data: &Value) -> Result<std::collections::BTreeMap<String
         (format!(".planning/debug/{slug}.md"), crate::debug::render::render(&record).into_bytes())).collect())
 }
 
+/// Only native-owned task records contribute projections; the authored
+/// historical `.planning/tasks/` directories are never store records and are
+/// never enumerated here.
+pub fn installed_tasks(data: &Value) -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
+    let mut installed = std::collections::BTreeMap::new();
+    for (slug, record) in crate::task::model::store_namespace(data)?.records {
+        if record.plan.is_some() {
+            installed.insert(format!(".planning/tasks/{slug}/PLAN.md"), crate::task::render::plan_markdown(&record).into_bytes());
+        }
+        if record.record.is_some() {
+            installed.insert(format!(".planning/tasks/{slug}/RECORD.md"), crate::task::render::record_markdown(&record).into_bytes());
+        }
+    }
+    Ok(installed)
+}
+
 pub fn render_native_phase_summary(
     records: &[super::history::Record], plan_records: &[super::history::PlanRecord],
     admissions: &[super::admission::Record], phase: u32,
