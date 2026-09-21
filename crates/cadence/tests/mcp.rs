@@ -302,8 +302,8 @@ fn tool_schemas_list_exactly_three_tools_with_minimal_inputs() {
     }
     let tools_bytes = serde_json::to_vec(tools).unwrap().len();
     assert!(
-        tools_bytes < 10_648,
-        "tools/list result.tools is {tools_bytes} bytes; measured help operation plus 64 bytes"
+        tools_bytes < 6_245,
+        "tools/list result.tools is {tools_bytes} bytes; measured after the GH-271 description cut plus 64 bytes"
     );
     assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
     for (tool, names) in [("query", query_operation_names()), ("apply", apply_operation_names())] {
@@ -1554,7 +1554,7 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     let description = query["description"].as_str().unwrap();
     assert!(!description.contains(cadence::read::instructions::CONTRACT),
         "cadence_query description repeats CONTRACT already sent as server instructions");
-    assert!(description.starts_with("Read supported configuration"), "description: {description}");
+    assert!(description.starts_with("Read the bound project's records"), "description: {description}");
     assert!(client.finish().success());
 
     // These skills are generated artifacts: their bytes are the binary's own
@@ -1693,7 +1693,7 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     }
     let tools_bytes = serde_json::to_vec(&listed["result"]["tools"]).unwrap().len();
     println!("tools/list result.tools: {tools_bytes} bytes");
-    assert!(tools_bytes < 10_648);
+    assert!(tools_bytes < 6_245);
     let (why, body) = markdown_parts("skills/cad-why/SKILL.md");
     assert_eq!(why["name"], "cad-why");
     assert_eq!(why["argument-hint"], "<path>[:<line>]");
