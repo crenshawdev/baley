@@ -262,15 +262,15 @@ pub fn present(intent: &LocalIntent, actual: &State) -> bool {
     actual == &expected
 }
 
-pub fn retry(root: &Path, landing: &Landing, intent: &LocalIntent, config: &Value) -> Result<(State, bool)> {
+pub fn retry(root: &Path, landing: &Landing, intent: &LocalIntent, config: &Value) -> std::result::Result<(State, bool), Failure> {
     remote_matches(root, landing)?;
     let actual = observe(root, landing)?;
     clean(&actual)?;
     if present(intent, &actual) { return Ok((actual, true)); }
-    if actual != intent.before { return Err(Error::Invalid("local refs, index or branch differ from the retained cleanup intent".into())); }
-    let prepared = prepare(root, landing, &intent.request, &intent.step, config).map_err(|failure| failure.error)?;
+    if actual != intent.before { return Err(Error::Invalid("local refs, index or branch differ from the retained cleanup intent".into()).into()); }
+    let prepared = prepare(root, landing, &intent.request, &intent.step, config)?;
     if prepared.invocation != intent.invocation || prepared.intended != intent.intended {
-        return Err(Error::Invalid("cleanup retry differs from its retained intent".into()));
+        return Err(Error::Invalid("cleanup retry differs from its retained intent".into()).into());
     }
     Ok((actual, false))
 }

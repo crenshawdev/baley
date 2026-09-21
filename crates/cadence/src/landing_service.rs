@@ -180,7 +180,7 @@ async fn local_effect(store: &Store, view: &mut View, records: &mut Records<Land
                 return Ok(cleanup::complete(records.records.get_mut(&request.landing).unwrap(), step, &intended, &actual, "reconciled"));
             }
             Ok((_, false)) => intent.clone(),
-            Err(error) => return Ok(cleanup::failure(project, landing, step, &error)),
+            Err(failure) => return Ok(cleanup::refused(project, landing, step, &failure)),
         }
     } else {
         match cleanup::prepare(project, landing, request, step, config) {

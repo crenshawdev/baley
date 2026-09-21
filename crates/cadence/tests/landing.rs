@@ -594,6 +594,43 @@ fn reap_refusal_codes_name_the_gate_that_fired() {
 }
 
 #[test]
+fn reap_retry_refusal_keeps_the_gate_code() {
+    use cadence::landing::{cleanup, model::{Landing, LocalRequest, Step}};
+    use landing_fixtures::Publishing;
+
+    let fixture = Publishing::new(false);
+    let (landing, merged) = fixture.cleanup_ready(true);
+    let root = fixture.project.path();
+    let mut client = fixture.client();
+    let confirmed = client.call("cadence_apply", json!({"operation":"land-confirm-merge","request":{
+        "request_id":"reap-retry-confirmation","landing":landing["id"],"expected_generation":landing["generation"],
+        "source":landing["source"],"base":landing["base"],"remote":landing["remote"],
+        "merged":{"forge":{"provider":"github","repo":"fixture/repo","host":"github.com"},"pr":7,"commit":merged},
+        "tag":null,"reap":true,"owner":"Fixture Owner","at":"2026-09-19T15:00:00Z"}}));
+    assert_eq!(confirmed["status"], "ok", "{confirmed}");
+    let mut landing = confirmed["landing"].clone();
+    for operation in ["land-checkout", "land-pull", "land-tag"] {
+        let answer = client.call("cadence_apply", json!({"operation":operation,"request":{
+            "request_id":format!("reap-retry-{operation}"),"landing":landing["id"],"expected_generation":landing["generation"]}}));
+        assert_eq!(answer["status"], "ok", "{answer}");
+        landing = answer["landing"].clone();
+    }
+    client.finish();
+
+    let landing = serde_json::from_value::<Landing>(landing).unwrap();
+    let request = LocalRequest {
+        request_id:"reap-retry-direct".into(), landing:landing.id.clone(), expected_generation:landing.generation,
+    };
+    let intent = cleanup::prepare(root, &landing, &request, &Step::Reap, &json!({}))
+        .map_err(|failure| failure.error).unwrap();
+    assert!(matches!(cleanup::retry(root, &landing, &intent, &json!({})), Ok((_, false))));
+    let failure = cleanup::retry(root, &landing, &intent,
+        &json!({"git":{"protected_branches":["fixture/execution"]}})).unwrap_err();
+    assert_eq!(failure.code, Some("landing-reap-protected"));
+    assert_eq!(cleanup::refused(root, &landing, &Step::Reap, &failure)["code"], "landing-reap-protected");
+}
+
+#[test]
 fn phase15_undo_reverts_exact_hashes_and_marks_the_record() {
     use landing_fixtures::UndoFixture;
     use serde_json::Value;
