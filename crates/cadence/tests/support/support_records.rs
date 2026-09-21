@@ -193,3 +193,30 @@ impl UnreadableFile {
 impl Drop for UnreadableFile {
     fn drop(&mut self) { fs::set_permissions(&self.path, self.permissions.clone()).unwrap(); }
 }
+
+pub fn spike_history(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    fn visit(root: &Path, path: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() { visit(root, &entry.path(), files); }
+            else { files.insert(entry.path().strip_prefix(root).unwrap().into(), fs::read(entry.path()).unwrap()); }
+        }
+    }
+    let mut files = BTreeMap::new();
+    visit(root, root, &mut files);
+    files
+}
+
+pub fn install_spike_history(project: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.planning/spikes");
+    let files = spike_history(&source);
+    assert_eq!(fs::read_dir(&source).unwrap().count(), 10);
+    assert_eq!(files.len(), 15);
+    assert_eq!(files.values().map(Vec::len).sum::<usize>(), 113_682);
+    for (path, bytes) in &files {
+        let target = project.join(".planning/spikes").join(path);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(target, bytes).unwrap();
+    }
+    files
+}
