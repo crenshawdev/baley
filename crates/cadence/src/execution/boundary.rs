@@ -622,8 +622,6 @@ impl Located {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BoundaryV1 {
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub native_refusal: bool,
     pub codec: u32,
     pub scope: BoundaryScope,
     pub tool: BoundaryTool,
@@ -649,7 +647,6 @@ impl BoundaryV1 {
         answer: &PreparedAnswer,
     ) -> Self {
         Self {
-            native_refusal: false,
             codec: ENVELOPE_CODEC,
             scope,
             tool,
@@ -669,6 +666,12 @@ impl BoundaryV1 {
     pub fn with_located(mut self, located: Option<Located>) -> Self {
         self.located = located.map(Box::new);
         self
+    }
+
+    /// Native observations use a distinct operation; historical dispatch-loop
+    /// encodings and public struct construction remain unchanged.
+    pub fn is_native_refusal(&self) -> bool {
+        self.operation == "native-refusal"
     }
 }
 
@@ -718,7 +721,7 @@ impl BoundaryV1 {
     }
 
     pub fn validate(&self, terminal: bool) -> Result<(), Failure> {
-        if self.native_refusal && (terminal || self.tool != BoundaryTool::CadenceApply
+        if self.is_native_refusal() && (terminal || self.tool != BoundaryTool::CadenceApply
             || self.lease_refusal.is_some()
             || !matches!(self.receipt, Receipt::Compact { envelope: Envelope::Refused { .. } })) {
             return Err(Failure::Encoding);
@@ -738,6 +741,7 @@ impl BoundaryV1 {
                 .as_ref()
                 .is_some_and(|id| id.trim().is_empty())
             || (!terminal
+                && !self.is_native_refusal()
                 && self.operation
                     != match self.tool {
                         BoundaryTool::CadenceQuery => "execute-next",
@@ -754,7 +758,7 @@ impl BoundaryV1 {
             return Err(Failure::Encoding);
         }
         if let Some(located) = &self.located
-            && (terminal || if self.native_refusal {
+            && (terminal || if self.is_native_refusal() {
                 let expected = Located { rule: located.rule.clone(), slot: located.slot.clone(),
                     id: located.id.clone(), ..Located::default() };
                 **located != expected || [&located.rule, &located.slot].iter()

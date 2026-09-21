@@ -128,7 +128,7 @@ pub async fn record_native_refusal<I: ConfigIo + Clone + Sync>(
     )
     .map_err(|_| encoding())?
     .with_located(Some(located));
-    decision.native_refusal = true;
+    decision.operation = "native-refusal".into();
     let session = factory.first_touch(root).await?;
     let view = session.derivation_view().await?;
     session

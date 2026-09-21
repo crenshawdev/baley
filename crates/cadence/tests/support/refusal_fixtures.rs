@@ -27,7 +27,7 @@ pub fn assert_delta_with_receipt(project: &Path, before: &Tree, answer: &Value, 
     let cadence::store::model::Decision::BoundaryV1(saved) = &after.decisions.last().unwrap().decision else {
         panic!("refusal did not append a boundary decision");
     };
-    assert!(saved.boundary.native_refusal);
+    assert!(saved.boundary.is_native_refusal());
     assert!(!saved.terminal);
     assert_eq!(saved.store_generation, after.snapshot.generation);
     assert!(after.snapshot.operations.contains_key(&format!(

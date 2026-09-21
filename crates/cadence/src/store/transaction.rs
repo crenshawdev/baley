@@ -1589,7 +1589,7 @@ impl Intent {
                 "boundary generation exceeds snapshot".into(),
             ));
         }
-        if value.boundary.native_refusal
+        if value.boundary.is_native_refusal()
             && !matches!(self.kind, IntentKind::BoundaryObservationV1 { .. }) {
             return Err(Error::Invalid("native refusal intent must be an observation".into()));
         }
