@@ -32,17 +32,19 @@ impl transport::Transport for Wire {
         })
     }
 }
-fn factory() -> SessionFactory { SessionFactory::new(None, Arc::new(|_, _| Ok(()))) }
-async fn fixture(enabled: bool, model: bool) -> (tempfile::TempDir, PathBuf, SessionFactory) {
+fn factory() -> SessionFactory { SessionFactory::new(None, Arc::new(crate::config::planning_policy)) }
+async fn fixture(enabled: bool, model: bool, cap: Option<u64>) -> (tempfile::TempDir, PathBuf, SessionFactory) {
     let tree = tempfile::tempdir().unwrap();
     let root = tree.path().join(".planning");
     fs::create_dir(&root).unwrap();
     let git = std::process::Command::new("git").args(["init", "--initial-branch=fixture/consult"])
         .current_dir(tree.path()).output().unwrap();
     assert!(git.status.success());
-    fs::write(root.join("config.json"), serde_json::to_vec(&json!({"memory":{"backend":"none"},
+    let mut config = json!({"memory":{"backend":"none"},
         "review":{"consult":{"enabled":enabled,"attempt_threshold":2,"tier":"flagship","effort":"high"},
-        "providers":{"openai":{"tiers":{"flagship":if model { json!("fixture-consult") } else { Value::Null }}}}}})).unwrap()).unwrap();
+        "providers":{"openai":{"tiers":{"flagship":if model { json!("fixture-consult") } else { Value::Null }}}}}});
+    if let Some(cap) = cap { config["review"]["max_prompt_tokens"] = json!(cap); }
+    fs::write(root.join("config.json"), serde_json::to_vec(&config).unwrap()).unwrap();
     let factory = factory();
     factory.first_touch(&root).await.unwrap();
     (tree, root, factory)
@@ -76,13 +78,13 @@ async fn debug_consult_is_offered_once_per_dead_end() {
         sleep: Arc::new(|_| Box::pin(std::future::pending())) });
     ENVIRONMENT.scope(environment, async {
         for (enabled, model) in [(false,true),(true,false)] {
-            let (_tree, root, factory) = fixture(enabled, model).await;
+            let (_tree, root, factory) = fixture(enabled, model, None).await;
             change(&factory, &root, "debug-open", "open", json!({"symptom":"tenant cache leaks entries"})).await;
             failed(&factory, &root, "failed-one").await;
             assert!(offers(&failed(&factory, &root, "failed-two").await).is_empty());
             assert!(wire.requests.lock().unwrap().is_empty());
         }
-        let (_tree, root, mut service) = fixture(true, true).await;
+        let (_tree, root, mut service) = fixture(true, true, None).await;
         let opened = change(&service, &root, "debug-open", "open", json!({"symptom":"tenant cache leaks entries; API_KEY=secret-value"})).await;
         assert!(offers(&opened).is_empty(), "empty hypotheses are not a dead end");
         assert!(offers(&failed(&service, &root, "failed-one").await).is_empty());
@@ -133,7 +135,7 @@ async fn debug_consult_is_offered_once_per_dead_end() {
         assert_eq!(offers(&second)[1]["angles"], angles);
         assert_eq!(wire.requests.lock().unwrap().len(), 2);
 
-        let (_decline_tree, decline_root, declined_service) = fixture(true, true).await;
+        let (_decline_tree, decline_root, declined_service) = fixture(true, true, None).await;
         change(&declined_service, &decline_root, "debug-open", "open", json!({"symptom":"tenant cache"})).await;
         for (id, state) in [("h-one","untested"),("h-two","untested"),("h-one","refuted"),("h-two","refuted")] {
             let answer = change(&declined_service, &decline_root, "debug-hypothesis", &format!("{id}-{state}"),
@@ -150,6 +152,22 @@ async fn debug_consult_is_offered_once_per_dead_end() {
         drop(declined_service);
         assert_eq!(offers(&read(&factory(), &decline_root).await), offers(&declined));
         assert_eq!(wire.requests.lock().unwrap().len(), 2);
+
+        let (_cap_tree, cap_root, capped) = fixture(true, true, Some(1)).await;
+        change(&capped, &cap_root, "debug-open", "open", json!({"symptom":"tenant cache leaks entries"})).await;
+        failed(&capped, &cap_root, "failed-one").await;
+        let offered = failed(&capped, &cap_root, "failed-two").await;
+        assert_eq!(offers(&offered).len(), 1, "cap fixture must durably offer consult");
+        assert_eq!(offers(&offered)[0]["state"], "offered", "cap is checked on acceptance");
+        let accepted = call(&capped, &cap_root, "debug-consult", decision(&offered, "accept-capped", "accept")).await;
+        assert_eq!(accepted["status"], "ok", "cap failure must be recorded: {accepted}");
+        assert_eq!(offers(&accepted)[0]["state"], "failed", "cap must fail the accepted consult");
+        assert!(offers(&accepted)[0]["failure"].as_str().unwrap().contains("provider prompt over cap"), "cap failure must explain the prompt limit");
+        assert_eq!(offers(&accepted)[0]["angles"], json!([]), "cap failure must leave angles empty");
+        assert!(offers(&accepted)[0]["evidence"].is_null(), "cap failure must leave evidence empty");
+        assert_eq!(wire.requests.lock().unwrap().len(), 2, "a capped situation never reaches the provider");
+        drop(capped);
+        assert_eq!(offers(&read(&factory(), &cap_root).await), offers(&accepted), "cap failure must survive restart");
 
         // Cancel after the HTTP boundary: durable accepted intent cannot authorize
         // another spend, including a concurrent request or a restarted service.
