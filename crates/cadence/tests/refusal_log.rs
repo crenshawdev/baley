@@ -21,7 +21,10 @@ fn native_refusals_reach_the_log() {
         assert_ne!(answer["code"], "invalid-arguments", "must reach the semantic gate: {answer}");
         answers.push(answer);
     }
-    eprintln!("semantic refusals: {answers:?}");
+    for (answer, rule) in answers.iter().zip(["native-admission", "task-attempt", "tasks-unfinished", "admission-set-version", "admitted-plan"]) {
+        assert_eq!(answer["rule"], rule, "{answer}");
+    }
+    assert!(answers[0]["reason"].as_str().unwrap().contains("requires its active dispatch"));
     client.finish();
     let after = serve::reopened(project);
     assert_eq!(after.snapshot.data, before.snapshot.data);
@@ -55,7 +58,7 @@ fn native_refusals_reach_the_log() {
     assert_eq!(after_long.snapshot.data, before.snapshot.data);
     assert_eq!(after_long.decisions.len(), before.decisions.len() + 6);
     let cadence::store::model::Decision::BoundaryV1(saved) = &after_long.decisions.last().unwrap().decision else { panic!("not a boundary"); };
-    let cadence::execution::boundary::Receipt::Compact { envelope: cadence::execution::boundary::Envelope::Refused { reason, .. } } = &saved.boundary.receipt else { panic!("not refused"); };
+    let cadence::execution::boundary::Receipt::Compact { envelope: cadence::envelope::Envelope::Refused { reason, .. } } = &saved.boundary.receipt else { panic!("not refused"); };
     assert!(reason.len() <= 1024);
     assert!(reason.ends_with("[cut] cap=1024 bytes"));
     let mut client = serve::Client::open(project);

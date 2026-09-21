@@ -14,6 +14,10 @@ impl Active {
     pub fn new() -> Self {
         let completed = serve::Completed::new();
         let project = completed.project();
+        // The fixture owns roadmap order; phase 13 retains its real native
+        // completion while phase 28 is now the current authored work.
+        std::fs::write(project.join(".planning/ROADMAP.md"),
+            "## Phases\n- [ ] **Phase 28: Refusals**\n- [ ] **Phase 13: Plan publication**\n").unwrap();
         let mut client = serve::Client::open(project);
         let context = client.call("cadence_apply", serve::approve(json!({
             "operation":"context-submit","submission":{"phase":28,"title":"Refusals",
@@ -25,7 +29,8 @@ impl Active {
         let preview = client.call("cadence_query", json!({"operation":"plan-read","phase":28,"count":2}));
         let mut input = serve::request(&preview, 28, "refusal-two-plans", &["First plan", "Second plan"]);
         for entry in input["submission"]["plans"].as_array_mut().unwrap() {
-            entry["content"]["evidence_map"] = serve::attached(vec![serve::artifact("artifact/refusal", &["T1"])]);
+            entry["content"]["evidence_map"] = serve::attached(vec![serve::check("check/refusal", &["T1"])]);
+            entry["content"]["tasks"][0]["verify"] = json!(["custom-delivery-check"]);
         }
         let published = client.call("cadence_apply", serve::approve(input.clone()));
         assert_eq!(published["status"], "ok", "{published}");
@@ -33,12 +38,15 @@ impl Active {
         let publications = read["native"]["publications"].as_object().unwrap();
         let mut plans = vec![];
         let mut allocation = vec![];
+        let map = client.call("cadence_query", json!({"operation":"evidence-read","phase":28}));
+        let check = json!({"id":map["items"][0]["id"],"item_revision":map["items"][0]["item_revision"]});
         for publication in publications.values() {
             let number = &publication["identity"]["plan"];
             plans.push(json!({"plan":number,"publication_request":publication["publication_request"],
                 "content_revision":publication["revision"],"map_revision":publication["map_revision"]}));
             for task in publication["tasks"].as_array().unwrap() {
-                allocation.push(json!({"plan":number,"task":task["id"],"checks":[]}));
+                let checks = if allocation.is_empty() { vec![check.clone()] } else { vec![] };
+                allocation.push(json!({"plan":number,"task":task["id"],"checks":checks}));
             }
         }
         let contract = json!({"phase":28,"occurrence":read["occurrence"],"plans":plans,"allocation":allocation});
@@ -53,7 +61,7 @@ impl Active {
         let tasks = history["tasks"].as_array().unwrap().clone();
         let started = client.call("cadence_apply", json!({"operation":"execution-task-start","request":{
             "request_id":"refusal-start-first","task":tasks[0]["task"],"attempt":"refusal-first",
-            "expected_version":0,"predecessor":null,"checks":[]}}));
+            "expected_version":0,"predecessor":null,"checks":[check]}}));
         assert_eq!(started["status"], "ok", "{started}");
         let history = client.call("cadence_query", json!({"operation":"execution-history","phase":28}));
         let plan = history["plans"][0].clone();
@@ -76,7 +84,7 @@ impl Active {
     pub fn requests(&self) -> Vec<Value> {
         vec![
             json!({"operation":"execution-task-start","request":{"request_id":"refusal-not-next",
-                "task":self.tasks[1]["task"],"attempt":"refusal-second","expected_version":0,"predecessor":null,"checks":[]}}),
+                "task":self.tasks[2]["task"],"attempt":"refusal-non-next","expected_version":0,"predecessor":null,"checks":[]}}),
             json!({"operation":"execution-run","request":{"request_id":"refusal-unstarted",
                 "task":self.tasks[1]["task"],"attempt":"refusal-second","expected_version":0,
                 "command":"printf documented","check":null,"stage":"verify"}}),
@@ -89,7 +97,7 @@ impl Active {
 }
 
 pub fn assert_answer(boundary: &cadence::execution::boundary::BoundaryV1, answer: &Value) {
-    let cadence::execution::boundary::Receipt::Compact { envelope: cadence::execution::boundary::Envelope::Refused { code, .. } } = &boundary.receipt else {
+    let cadence::execution::boundary::Receipt::Compact { envelope: cadence::envelope::Envelope::Refused { code, .. } } = &boundary.receipt else {
         panic!("expected a compact refused receipt: {boundary:?}");
     };
     assert_eq!(code, answer["code"].as_str().unwrap());
