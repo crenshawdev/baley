@@ -258,7 +258,6 @@ fn phase28_uncovered_current_truth_is_refused() {
         let project = temp.path();
         native_context(project, 27, &["T1", "truth/full/T2"]);
         let before = tree(project);
-        let prior = snapshot(project);
         let mut client = Client::open(project);
         let input = proposal(&mut client, "uncovered", std::slice::from_ref(&map), &["# Proposed\n"]);
         let missing = if map["items"].as_array().unwrap().is_empty() { "T1" } else { "truth/full/T2" };
@@ -290,7 +289,6 @@ fn phase28_uncovered_current_truth_is_refused() {
     assert_eq!(published["results"].as_array().unwrap().len(), 2);
     client.finish();
     let before = tree(project);
-    let prior = reopened(project).snapshot;
     let old = fs::read_to_string(project.join(".planning/phases/27/PLAN-2.md")).unwrap();
     let mut client = Client::open(project);
     let removes_t2 = replacement(&mut client, "removes-t2", 2, &published["results"][1], &old,
@@ -325,7 +323,6 @@ fn phase28_uncovered_current_truth_is_refused() {
     assert_eq!(provisional["coverage"]["uncovered"], json!(["truth/full/T2"]));
     client.finish();
     let before = tree(project);
-    let prior = reopened(project).snapshot;
     let mut client = Client::open(project);
     let stale_history = proposal(&mut client, "old-cannot-cover", &[attached(vec![])], &["# Gap\n"]);
     assert_refusal(&preview(&mut client, &stale_history), "uncovered-truth", "truth/full/T2");
@@ -347,7 +344,6 @@ fn phase28_current_truth_without_check_is_refused() {
         let project = temp.path();
         native_context(project, 27, &["T1", "T2"]);
         let before = tree(project);
-        let prior = snapshot(project);
         let mut items = vec![check("one", "T1")];
         items.extend(supplementary);
         let mut client = Client::open(project);
@@ -409,7 +405,6 @@ fn phase28_item_without_bound_truth_is_refused() {
         native_context(project, 27, &["T1", "parcel/T2"]);
         native_context(project, 28, &["elsewhere/T2"]);
         let before = tree(project);
-        let prior = snapshot(project);
         let mut item = artifact("opaque/item/T2", &["parcel/T2"]);
         let (rule, slot, requested) = match case {
             "empty" => {
@@ -481,7 +476,6 @@ fn phase28_item_without_bound_truth_is_refused() {
     let maps = [attached(vec![check("one", "T1"), shared_one.clone()]),
         attached(vec![check("two", "parcel/T2"), shared_two.clone()])];
     let before = tree(project);
-    let prior = snapshot(project);
     let mut client = Client::open(project);
     let mut conflicting = maps.clone();
     conflicting[1]["items"][1]["spec"]["substance"] = json!("A conflicting destination.");
@@ -582,7 +576,6 @@ fn phase28_noncurrent_truth_version_is_refused() {
     let project = temp.path();
     native_context(project, 27, &["T1", "T2"]);
     let before = tree(project);
-    let prior = snapshot(project);
     let mut client = Client::open(project);
     let mut missing = proposal(&mut client, "missing-version", &[attached(vec![check("one", "T1"),
         check("two", "T2"), artifact("opaque/version-item", &["T1", "T2"])])], &["# Missing numeric version\n"]);
@@ -729,7 +722,6 @@ fn phase28_republication_supersedes_previous_map() {
         assert_eq!(old_events[0]["payload_digest"], first.data["plan_publications"]["phases"]["27"]["receipts"]["original"]["payload_digest"]);
         let path = project.join(".planning/phases/27/PLAN-1.md");
         let old_document = fs::read_to_string(&path).unwrap();
-        let before = tree(project);
         let mut changed_items = items.clone();
         changed_items[1]["spec"]["substance"] = json!("A revised usable destination.");
         let new_map = match case {
@@ -895,7 +887,6 @@ fn phase28_republication_supersedes_previous_map() {
     assert_eq!(won["persisted"], true, "{won}");
     first.finish();
     let before = tree(project);
-    let saved = reopened(project).snapshot;
     let refused = second.call("cadence_apply", loser);
     assert_eq!(refused["rule"], "stale-target", "{refused}");
     assert!(refused["reason"].as_str().unwrap().contains("phase 27 plan 1"));

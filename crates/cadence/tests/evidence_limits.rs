@@ -617,7 +617,6 @@ fn phase29_distinct_checks_across_plans_are_refused() {
     let early_approval = approve(early);
     let winner = publish(root, &proposal(root, "competing", &[(Some(1), attached(vec![check("check/current", &[truth])]))]));
     let before = tree(root);
-    let prior = snapshot(root);
     let stale = first.call("cadence_apply", early_approval);
     assert_eq!(stale["status"], "refused", "{stale}");
     assert_eq!(stale["rule"], "allocation-conflict", "{stale}");

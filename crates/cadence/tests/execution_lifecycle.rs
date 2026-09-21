@@ -766,7 +766,7 @@ fn phase12_task_close_requires_red_then_green() {
     }
     // Real source dirt is refused before spawning another child.
     fs::write(project.join("src/tiny.py"),"def answer():\n    return 8\n").unwrap();
-    let state=task_state(project,"A");let before=tree(project);let prior=reopened(project).snapshot;
+    let state=task_state(project,"A");let before=tree(project);
     let dirty=apply(project,json!({"operation":"execution-run","request":{"request_id":"dirty-run","task":state["task"],"attempt":"attempt-A",
         "expected_version":state["state"]["version"],"command":fixture.command,"check":fixture.checks[0],"stage":"red"}}));
     assert_eq!(dirty["status"],"refused","{dirty}");refusal_fixtures::assert_delta(project,&before,&dirty);
@@ -828,7 +828,7 @@ fn phase12_task_close_requires_red_then_green() {
             _=>{request["request"]["statement"].as_object_mut().unwrap().remove("approval");request["request"]["statement"]["role"]=json!("owner");},
         }
         if case<3 {request["request"]["statement"]["approval"]["submission"]=request["request"]["statement"]["submission"].clone();}
-        let before=tree(project);let prior=reopened(project).snapshot;let answer=apply(project,request);assert_eq!(answer["status"],"refused","{answer}");refusal_fixtures::assert_delta(project,&before,&answer);
+        let before=tree(project);let answer=apply(project,request);assert_eq!(answer["status"],"refused","{answer}");refusal_fixtures::assert_delta(project,&before,&answer);
     }
     let first=custom.classify(0,true);let accepted=apply(project,first.clone());assert_eq!(accepted["status"],"ok","{accepted}");
     assert_eq!(apply(project,first)["receipt"],accepted["receipt"]);
@@ -882,7 +882,7 @@ fn phase12_plan_completion_requires_owner_no_stub_attestation() {
             _=>{request["request"]["statement"].as_object_mut().unwrap().remove("approval");request["request"]["statement"]["no_stub"]=json!(true);request["request"]["statement"]["role"]=json!("owner");},
         }
         if case<3 {request["request"]["statement"]["approval"]["submission"]=request["request"]["statement"]["submission"].clone();}
-        let before=tree(project);let prior=reopened(project).snapshot;let answer=apply(project,request);assert_eq!(answer["status"],"refused","{answer}");refusal_fixtures::assert_delta(project,&before,&answer);
+        let before=tree(project);let answer=apply(project,request);assert_eq!(answer["status"],"refused","{answer}");refusal_fixtures::assert_delta(project,&before,&answer);
         owner_completion_refused(project,&format!("complete-stale-owner-{case}"),&[("A","check/A"),("A","check/A2")]);
     }
     let mut first=fixture.owner(0,"affirmative-0",true);first["request"]["statement"]["supersedes"]=json!("false-0");
@@ -1468,7 +1468,7 @@ fn phase12_runner_retains_task_commands_and_one_suite() {
     let answer=apply(project,claimed);assert_eq!(answer["status"],"refused","{answer}");assert_eq!(suite_markers(project),"suite\n");
     let mut ci=plan_request(project,"execution-plan-complete","complete-ci",1,json!({}));ci["request"]["suite_result"]=json!({"runner":"ci","passed":true});
     let answer=apply(project,ci);assert_eq!(answer["status"],"refused","{answer}");
-    let a=task_state(project,"A");let before=tree(project);let prior=reopened(project).snapshot;
+    let a=task_state(project,"A");let before=tree(project);
     let unnamed=apply(project,json!({"operation":"execution-run","request":{"request_id":"unnamed","task":a["task"],"attempt":"attempt-A",
         "expected_version":a["state"]["version"],"command":suite_command("runner"),"check":null,"stage":"verify"}}));
     assert_eq!(unnamed["status"],"refused","{unnamed}");assert_eq!(unnamed["rule"],"named-command");refusal_fixtures::assert_delta(project,&before,&unnamed);
