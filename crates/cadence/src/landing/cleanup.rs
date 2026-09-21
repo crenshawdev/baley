@@ -7,6 +7,16 @@ use std::path::Path;
 
 pub const ORDER: [Step; 4] = [Step::Checkout, Step::Pull, Step::Tag, Step::Reap];
 
+/// A local cleanup failure carrying the wire code when a gate names one.
+pub struct Failure {
+    pub code: Option<&'static str>,
+    pub error: Error,
+}
+
+impl From<Error> for Failure {
+    fn from(error: Error) -> Self { Self { code:None, error } }
+}
+
 pub fn receipt<'a>(landing: &'a Landing, step: &Step) -> Option<&'a Value> {
     landing.steps.iter().find(|slot| slot.step == *step).and_then(|slot| slot.receipt.as_ref())
 }
@@ -171,28 +181,28 @@ pub fn skipped(landing: &Landing, step: &Step) -> bool {
     })
 }
 
-pub fn prepare(root: &Path, landing: &Landing, request: &LocalRequest, step: &Step, config: &Value) -> Result<LocalIntent> {
+pub fn prepare(root: &Path, landing: &Landing, request: &LocalRequest, step: &Step, config: &Value) -> std::result::Result<LocalIntent, Failure> {
     let confirmation = landing.merge_confirmation.as_ref().ok_or_else(|| Error::Invalid("merge confirmation missing".into()))?;
     remote_matches(root, landing)?;
     let before = observe(root, landing)?;
     clean(&before)?;
     let mut intended = before.clone();
-    if before.source.as_deref() != Some(&landing.source.head) { return Err(Error::Invalid("recorded source branch changed or disappeared".into())); }
+    if before.source.as_deref() != Some(&landing.source.head) { return Err(Error::Invalid("recorded source branch changed or disappeared".into()).into()); }
     let merged = &confirmation.request.merged.commit;
     let args = match step {
         Step::Checkout => {
             if before.branch != landing.source.branch || before.head != landing.source.head || before.base != landing.base.head {
-                return Err(Error::Invalid("checkout source or local base differs from the recorded identity".into()));
+                return Err(Error::Invalid("checkout source or local base differs from the recorded identity".into()).into());
             }
             intended.branch = landing.base.branch.clone(); intended.head = before.base.clone();
             vec!["checkout".into(), "--no-guess".into(), landing.base.branch.clone(), "--".into()]
         }
         Step::Pull => {
             if before.branch != landing.base.branch || before.head != landing.base.head || before.base != landing.base.head {
-                return Err(Error::Invalid("pull requires the recorded checked-out base".into()));
+                return Err(Error::Invalid("pull requires the recorded checked-out base".into()).into());
             }
             if effects::remote_head(root, landing, &format!("refs/heads/{}", landing.base.branch))?.as_deref() != Some(merged) {
-                return Err(Error::Invalid("remote/base moved since owner merge confirmation".into()));
+                return Err(Error::Invalid("remote/base moved since owner merge confirmation".into()).into());
             }
             intended.head = merged.clone(); intended.base = merged.clone();
             vec!["pull".into(), "--ff-only".into(), "--no-rebase".into(), "--no-autostash".into(), "--".into(), landing.remote.url.clone(), landing.base.branch.clone()]
@@ -201,18 +211,18 @@ pub fn prepare(root: &Path, landing: &Landing, request: &LocalRequest, step: &St
             require_pulled(landing, &before)?;
             let tag = confirmation.request.tag.as_ref().ok_or_else(|| Error::Invalid("tag selection is an explicit skip".into()))?;
             effects::observe(root, &["check-ref-format", &format!("refs/tags/{}", tag.name)])?;
-            if before.tag.is_some() { return Err(Error::Invalid(format!("tag {} already exists", tag.name))); }
+            if before.tag.is_some() { return Err(Error::Invalid(format!("tag {} already exists", tag.name)).into()); }
             if let Some(release) = &landing.release { crate::milestone::release::validate_tag(root, release, &tag.name)?; }
             intended.tag_target = Some(merged.clone()); intended.tag_message = Some(tag.message.trim_end().into());
             vec!["tag".into(), "-a".into(), "--cleanup=verbatim".into(), "-m".into(), tag.message.clone(), "--".into(), tag.name.clone(), merged.clone()]
         }
         Step::Reap => {
-            require_pulled(landing, &before)?;
             reap_gate(root, landing, &before, config)?;
+            require_pulled(landing, &before)?;
             intended.source = None;
             vec!["branch".into(), "-d".into(), "--".into(), landing.source.branch.clone()]
         }
-        _ => return Err(Error::Invalid("not a local cleanup step".into())),
+        _ => return Err(Error::Invalid("not a local cleanup step".into()).into()),
     };
     Ok(LocalIntent { request:request.clone(), step:step.clone(), confirmation:confirmation.id.clone(),
         invocation:Invocation { program:"git".into(), args }, before, intended, actual:None, failure:None })
@@ -226,14 +236,20 @@ fn require_pulled(landing: &Landing, state: &State) -> Result<()> {
     Ok(())
 }
 
-pub fn reap_gate(root: &Path, landing: &Landing, state: &State, config: &Value) -> Result<()> {
+pub fn reap_gate(root: &Path, landing: &Landing, state: &State, config: &Value) -> std::result::Result<(), Failure> {
     if branch::protected_branches(config.pointer("/git/protected_branches")).contains(&landing.source.branch) {
-        return Err(Error::Policy(format!("protected source branch {} cannot be reaped", landing.source.branch)));
+        return Err(Failure { code:Some("landing-reap-protected"),
+            error:Error::Policy(format!("protected source branch {} cannot be reaped", landing.source.branch)) });
     }
-    if state.branch == landing.source.branch { return Err(Error::Invalid("source branch is currently checked out".into())); }
-    if state.source.as_deref() != Some(&landing.source.head) { return Err(Error::Invalid("source tip changed incompatibly".into())); }
+    if state.branch == landing.source.branch {
+        return Err(Failure { code:Some("landing-reap-checked-out"), error:Error::Invalid("source branch is currently checked out".into()) });
+    }
+    if state.source.as_deref() != Some(&landing.source.head) {
+        return Err(Failure { code:Some("landing-reap-moved"), error:Error::Invalid("source tip changed incompatibly".into()) });
+    }
     // This subprocess interrogates real Git ancestry immediately before deletion.
-    effects::observe(root, &["merge-base", "--is-ancestor", state.source.as_deref().unwrap(), &state.base])?;
+    effects::observe(root, &["merge-base", "--is-ancestor", state.source.as_deref().unwrap(), &state.base])
+        .map_err(|error| Failure { code:Some("landing-reap-uncontained"), error })?;
     Ok(())
 }
 
@@ -252,7 +268,7 @@ pub fn retry(root: &Path, landing: &Landing, intent: &LocalIntent, config: &Valu
     clean(&actual)?;
     if present(intent, &actual) { return Ok((actual, true)); }
     if actual != intent.before { return Err(Error::Invalid("local refs, index or branch differ from the retained cleanup intent".into())); }
-    let prepared = prepare(root, landing, &intent.request, &intent.step, config)?;
+    let prepared = prepare(root, landing, &intent.request, &intent.step, config).map_err(|failure| failure.error)?;
     if prepared.invocation != intent.invocation || prepared.intended != intent.intended {
         return Err(Error::Invalid("cleanup retry differs from its retained intent".into()));
     }
@@ -273,10 +289,18 @@ pub fn complete(landing: &mut Landing, step: &Step, intended: &State, actual: &S
 }
 
 pub fn failure(root: &Path, landing: &Landing, step: &Step, error: &Error) -> Value {
+    failure_body(root, landing, step, "landing-cleanup-discrepancy", error)
+}
+
+pub fn refused(root: &Path, landing: &Landing, step: &Step, failure: &Failure) -> Value {
+    failure_body(root, landing, step, failure.code.unwrap_or("landing-cleanup-discrepancy"), &failure.error)
+}
+
+fn failure_body(root: &Path, landing: &Landing, step: &Step, code: &str, error: &Error) -> Value {
     let state = observe(root, landing).ok();
     let source = json!({"branch":landing.source.branch,"head":state.as_ref().and_then(|s| s.source.as_ref())});
     let base = json!({"branch":landing.base.branch,"head":state.as_ref().map(|s| &s.base)});
-    Refusal::new(if *step == Step::Reap { "landing-reap-uncontained" } else { "landing-cleanup-discrepancy" },
+    Refusal::new(code,
         format!("{} refused for source {} and base {}: {error}", step.name(), source, base)).slot("request")
         .details(json!({"landing":landing.id,"step":step.name(),"source":source,"base":base})).value()
 }

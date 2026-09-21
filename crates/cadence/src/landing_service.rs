@@ -184,7 +184,7 @@ async fn local_effect(store: &Store, view: &mut View, records: &mut Records<Land
         }
     } else {
         match cleanup::prepare(project, landing, request, step, config) {
-            Ok(intent) => intent, Err(error) => return Ok(cleanup::failure(project, landing, step, &error)),
+            Ok(intent) => intent, Err(failure) => return Ok(cleanup::refused(project, landing, step, &failure)),
         }
     };
     records.records.get_mut(&request.landing).unwrap().steps[slot].local_intent = Some(intent.clone());
@@ -193,8 +193,8 @@ async fn local_effect(store: &Store, view: &mut View, records: &mut Records<Land
     // Re-observe after journaling: a changed branch/index cannot ride the intent.
     let before = cleanup::observe(project, landing)?;
     if before != intent.before { return Ok(cleanup::failure(project, landing, step, &Error::Invalid("local state changed before invocation".into()))); }
-    if *step == Step::Reap && let Err(error) = cleanup::reap_gate(project, landing, &before, config) {
-        return Ok(cleanup::failure(project, landing, step, &error));
+    if *step == Step::Reap && let Err(failure) = cleanup::reap_gate(project, landing, &before, config) {
+        return Ok(cleanup::refused(project, landing, step, &failure));
     }
     if let Err(error) = effects::run(project, &intent.invocation) {
         landing.steps[slot].local_intent.as_mut().unwrap().failure = Some(error.to_string());

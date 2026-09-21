@@ -531,6 +531,69 @@ fn phase15_confirmed_merge_orders_cleanup_and_reap_checks_containment() {
 }
 
 #[test]
+fn reap_refusal_codes_name_the_gate_that_fired() {
+    use cadence::{landing::{cleanup, model::{Landing, Remote, Revision, Start, Step}}, store::Error};
+    use phase15::Publishing;
+    use serde_json::Value;
+
+    let fixture = Publishing::new(false);
+    let (landing, merged) = fixture.cleanup_ready(true);
+    let root = fixture.project.path();
+    let mut client = fixture.client();
+    let confirmed = client.call("cadence_apply", json!({"operation":"land-confirm-merge","request":{
+        "request_id":"reap-code-confirmation","landing":landing["id"],"expected_generation":landing["generation"],
+        "source":landing["source"],"base":landing["base"],"remote":landing["remote"],
+        "merged":{"forge":{"provider":"github","repo":"fixture/repo","host":"github.com"},"pr":7,"commit":merged},
+        "tag":null,"reap":true,"owner":"Fixture Owner","at":"2026-09-19T15:00:00Z"}}));
+    assert_eq!(confirmed["status"], "ok", "{confirmed}");
+    let mut landing = confirmed["landing"].clone();
+    let request = |operation: &str, landing: &Value| json!({"operation":operation,"request":{
+        "request_id":format!("reap-code-{operation}"),"landing":landing["id"],"expected_generation":landing["generation"]}});
+    for operation in ["land-checkout", "land-pull", "land-tag"] {
+        let answer = client.call("cadence_apply", request(operation, &landing));
+        assert_eq!(answer["status"], "ok", "{answer}");
+        landing = answer["landing"].clone();
+    }
+    git(root, &["checkout", "fixture/execution"]);
+    let answer = client.call("cadence_apply", request("land-reap", &landing));
+    git(root, &["checkout", "main"]);
+    assert_eq!(answer["status"], "refused", "{answer}");
+    assert_eq!(answer["code"], "landing-reap-checked-out", "{answer}");
+    assert_eq!(answer["details"]["step"], "reap");
+    assert!(answer["reason"].as_str().unwrap().contains("fixture/execution"));
+    client.finish();
+
+    let landing = Landing::new(root.to_str().unwrap().into(), &Start {
+        request_id:"reap-code-direct".into(), occurrence:"reap-code-fixture".into(), expected_generation:1,
+        source:Revision { branch:"fixture/execution".into(), head:fixture.head.clone() },
+        base:Revision { branch:"main".into(), head:merged.clone() },
+        remote:Remote { name:"origin".into(), url:fixture.remote.path().to_str().unwrap().into() },
+    });
+    let clean = cleanup::State {
+        branch:"main".into(), head:merged.clone(), source:Some(fixture.head.clone()), base:merged.clone(),
+        index:String::new(), worktree:String::new(), tag:None, tag_target:None, tag_message:None,
+    };
+    let checked_out = cleanup::State { branch:landing.source.branch.clone(), ..clean.clone() };
+    let moved = cleanup::State { source:Some(merged), ..clean.clone() };
+    for (state, config, code) in [
+        (clean, json!({"git":{"protected_branches":["fixture/execution"]}}), "landing-reap-protected"),
+        (checked_out, json!({}), "landing-reap-checked-out"),
+        (moved, json!({}), "landing-reap-moved"),
+    ] {
+        let failure = cleanup::reap_gate(root, &landing, &state, &config).unwrap_err();
+        assert_eq!(failure.code, Some(code));
+        let refused = cleanup::refused(root, &landing, &Step::Reap, &failure);
+        assert_eq!(refused["status"], "refused", "{refused}");
+        assert_eq!(refused["code"], code, "{refused}");
+    }
+    let error = Error::Invalid("local state changed before invocation".into());
+    assert_eq!(cleanup::failure(root, &landing, &Step::Reap, &error)["code"], "landing-cleanup-discrepancy");
+    let failure = cleanup::Failure::from(error);
+    assert_eq!(failure.code, None);
+    assert_eq!(cleanup::refused(root, &landing, &Step::Reap, &failure)["code"], "landing-cleanup-discrepancy");
+}
+
+#[test]
 fn phase15_undo_reverts_exact_hashes_and_marks_the_record() {
     use phase15::UndoFixture;
     use serde_json::Value;
