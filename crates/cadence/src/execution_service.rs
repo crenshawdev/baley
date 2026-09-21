@@ -64,49 +64,10 @@ pub(super) fn native_error(error:Error) -> Value {
 }
 
 pub async fn native_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value) -> cadence::store::Result<Value> {
-    let answer = native_answer(factory, root, raw.clone()).await?;
-    if answer["status"] == "refused" && records_refusal(&raw, &answer) {
-        // D-140: a refusal the caller was told about and the log never heard of
-        // is one the owner has to go looking for. The answer is already decided,
-        // so a store that cannot take the record does not change it.
-        let _ = record_native_refusal(factory, root, &raw, &answer).await;
-    }
-    Ok(answer)
+    native_answer(factory, root, raw).await
 }
 
-/// The one refused native apply the log takes a record of: an
-/// `execution-task-close` the lease rule refused over a staged path the plan
-/// does not cover.
-///
-/// What is NOT recorded, and stays invisible in the log: every other
-/// `execution-*` refusal. The rest of the close family
-/// (`execution-task-start`, `execution-run`, `execution-plan-complete`), the
-/// admission, authorization, dispatch and plan-publication refusals, and
-/// `execution-task-close` refused by any rule but the lease, are all answered
-/// to the caller and leave no trace behind them. That is a known gap; the
-/// owner will home it in a later phase and it is not closed here.
-///
-/// The reason it is not closed by widening this test: a refused execution
-/// operation leaves every durable byte under `.planning` identical, and the
-/// phase 12, 13, 29 and 33 regressions hold that invariant. Recording the
-/// whole family writes a boundary decision into the journal of a store those
-/// tests require untouched, and the invariant outranks the record.
-fn records_refusal(raw: &Value, answer: &Value) -> bool {
-    raw["operation"].as_str() == Some("execution-task-close")
-        && answer["rule"].as_str() == Some("lease")
-        && answer["slot"].as_str() == Some("staged")
-}
 
-/// The rule that refused, which is what a later query joins on. A plan
-/// diagnostic stamps the same family code on every rule it carries, so the
-/// log names the rule; every other refusal already names itself.
-fn recorded_code(answer: &Value) -> &str {
-    match answer["code"].as_str() {
-        Some("invalid-plan") => answer["rule"].as_str().unwrap_or("invalid-plan"),
-        Some(code) => code,
-        None => "invalid-request",
-    }
-}
 
 /// The phase a refused native request was about: the diagnostic's own phase
 /// where it has one, otherwise the phase the request named.
@@ -116,6 +77,9 @@ fn refused_phase(raw: &Value, answer: &Value) -> Option<u32> {
         raw["request"]["task"]["phase"].as_u64(),
         raw["request"]["plan"]["phase"].as_u64(),
         raw["request"]["contract"]["phase"].as_u64(),
+        raw["submission"]["phase"].as_u64(),
+        raw["scope"]["phase"].as_u64(),
+        raw["request"]["phase"].as_u64(),
         raw["phase"].as_u64(),
     ]
     .into_iter()
@@ -128,25 +92,32 @@ fn refused_phase(raw: &Value, answer: &Value) -> Option<u32> {
 /// slot and id in `located`, the bounded envelope, and the stamp the writer
 /// adds. The operation id is the boundary's own identity, so a replayed
 /// refusal returns its receipt instead of appending a second record.
-async fn record_native_refusal<I: ConfigIo + Clone + Sync>(
+pub async fn record_native_refusal<I: ConfigIo + Clone + Sync>(
     factory: &SessionFactory<I>,
     root: &Path,
     raw: &Value,
     answer: &Value,
 ) -> cadence::store::Result<()> {
-    let Some(phase) = refused_phase(raw, answer) else {
+    // A treeless task must remain treeless, including its refusal path.
+    if !root.is_dir() {
         return Ok(());
+    }
+    let phase = refused_phase(raw, answer).unwrap_or(0);
+    let code = answer["code"].as_str().unwrap_or("invalid-request");
+    let located = Located {
+        rule: answer["rule"].as_str().map(str::to_owned),
+        slot: answer["slot"].as_str().map(str::to_owned),
+        id: answer["id"].as_str().filter(|id| !id.is_empty()).map(str::to_owned),
+        ..Located::default()
     };
-    let code = recorded_code(answer);
-    let located = Located::rule(code, answer["slot"].as_str().unwrap_or("request"))
-        .id(answer["id"].as_str().unwrap_or_default());
     let response = Response::Refused {
         phase,
         code: code.to_owned(),
-        reason: stable_reason(code, answer["reason"].as_str().unwrap_or_default()),
+        reason: cadence::execution::boundary::native_refusal_reason(
+            &stable_reason(code, answer["reason"].as_str().unwrap_or_default())),
     };
     let encoding = || Error::Invalid("native refusal has no recordable boundary".to_owned());
-    let decision = boundary(
+    let mut decision = boundary(
         phase,
         BoundaryTool::CadenceApply,
         "executor",
@@ -157,6 +128,7 @@ async fn record_native_refusal<I: ConfigIo + Clone + Sync>(
     )
     .map_err(|_| encoding())?
     .with_located(Some(located));
+    decision.native_refusal = true;
     let session = factory.first_touch(root).await?;
     let view = session.derivation_view().await?;
     session

@@ -1718,9 +1718,10 @@ fn skill_contract_matches_wire_patch_and_direct_tool_permissions() {
     assert!(tools_bytes < 6_270);
     let (why, body) = markdown_parts("skills/cad-why/SKILL.md");
     assert_eq!(why["name"], "cad-why");
-    assert_eq!(why["argument-hint"], "<path>[:<line>]");
+    assert_eq!(why["argument-hint"], "<path>[:<line>] | <phase> refusals");
     assert_eq!(why["allowed-tools"], json!(["mcp__cadence__cadence_query"]));
     assert!(body.contains("once") && body.contains(r#"{"operation":"why","path":"<path>"}"#));
+    assert!(body.contains(r#"{"operation":"why","phase":14,"part":"refusals"}"#));
     assert!(body.contains("`\"line\":<n>` as a JSON integer"));
     assert!(body.contains("Print the returned `text` verbatim and nothing else"));
     assert!(body.contains("no reformatting"));

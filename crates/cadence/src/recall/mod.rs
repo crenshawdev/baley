@@ -361,6 +361,12 @@ pub(crate) mod resident {
             raw: serde_json::Value,
             reply: oneshot::Sender<Result<serde_json::Value>>,
         },
+        NativeRefusal {
+            root: PathBuf,
+            raw: serde_json::Value,
+            answer: serde_json::Value,
+            reply: oneshot::Sender<Result<()>>,
+        },
         NativeExecutionHistory {
             root: PathBuf,
             phase: u32,
@@ -545,6 +551,21 @@ pub(crate) mod resident {
                             let _ = reply.send(result);
                         }
                         Request::Why { root, request, reply } => {
+                            if request.phase.is_some() || request.part.is_some() {
+                                let result = if request.path.is_some() || request.line.is_some() || request.top.is_some()
+                                    || request.phase.is_none() || request.part.as_deref() != Some("refusals") {
+                                    Ok(cadence::envelope::Refusal::new("invalid-arguments",
+                                        "why takes either path/line/top or phase with part=refusals").slot("arguments").value())
+                                } else {
+                                    match factory.first_touch(&root).await {
+                                        Ok(session) => session.derivation_view().await.map(|view|
+                                            crate::server::why_service::refusals(&view, request.phase.unwrap())),
+                                        Err(error) => Err(error),
+                                    }
+                                };
+                                let _ = reply.send(result);
+                                continue;
+                            }
                             // git and the record are read on a blocking thread
                             // so a long chain never holds the resident's loop.
                             let result = tokio::task::spawn_blocking(move || crate::server::why_service::query(&root, &request))
@@ -685,6 +706,9 @@ pub(crate) mod resident {
                         }
                         Request::NativeExecutionApply {root,raw,reply} => {
                             let _=reply.send(execution_service::native_apply(&factory,&root,raw).await);
+                        }
+                        Request::NativeRefusal { root, raw, answer, reply } => {
+                            let _ = reply.send(execution_service::record_native_refusal(&factory, &root, &raw, &answer).await);
                         }
                         Request::NativeExecutionHistory { root, phase, run, plan, task, reply } => {
                             let _ = reply.send(match run {
@@ -1093,6 +1117,12 @@ pub(crate) mod resident {
             let (reply,result)=oneshot::channel();
             self.requests.send(Request::NativeExecutionApply {root:root.to_path_buf(),raw,reply}).await.map_err(|_|Error::Closed)?;
             result.await.map_err(|_|Error::Closed)?
+        }
+
+        pub async fn record_native_refusal(&self, root: &Path, raw: serde_json::Value, answer: serde_json::Value) -> Result<()> {
+            let (reply, result) = oneshot::channel();
+            self.requests.send(Request::NativeRefusal { root: root.into(), raw, answer, reply }).await.map_err(|_| Error::Closed)?;
+            result.await.map_err(|_| Error::Closed)?
         }
 
         pub async fn native_execution_history(&self, root: &Path, phase: u32, run: Option<String>, plan: Option<u32>, task: Option<String>) -> Result<serde_json::Value> {

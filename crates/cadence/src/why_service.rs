@@ -7,14 +7,40 @@ use std::path::Path;
 /// line, and an optional entry cap. The path is a question, never a read
 /// location: the binary reads the repository itself.
 pub struct Request {
-    pub path: String,
+    pub path: Option<String>,
     pub line: Option<u32>,
     pub top: Option<u32>,
+    pub phase: Option<u32>,
+    pub part: Option<String>,
 }
 
 /// The next step for a `git-failed` refusal, the same for the probe and the
 /// chain query: neither knows which git fact failed.
 const GIT_FAILED_HINT: &str = "this query needs a readable git repository: run it inside one, or bind the resident to a working tree where `git log` answers, then re-run";
+
+/// Read immutable boundary receipts from the verified journal, in append order.
+pub fn refusals(view: &cadence::store::writer::View, phase: u32) -> Value {
+    let rows: Vec<Value> = view.decisions.iter().filter_map(|record| {
+        let cadence::store::model::Decision::BoundaryV1(saved) = &record.decision else { return None; };
+        let boundary = &saved.boundary;
+        if boundary.scope != (cadence::execution::boundary::BoundaryScope::Execution { phase }) { return None; }
+        let cadence::execution::boundary::Receipt::Compact {
+            envelope: cadence::envelope::Envelope::Refused { code, reason }
+        } = &boundary.receipt else { return None; };
+        Some(json!({ "decision": record.id, "code": code, "reason": reason,
+            "rule": boundary.located.as_ref().and_then(|l| l.rule.as_deref()),
+            "slot": boundary.located.as_ref().and_then(|l| l.slot.as_deref()),
+            "id": boundary.located.as_ref().and_then(|l| l.id.as_deref()) }))
+    }).collect();
+    let mut text = format!("Phase {phase} refusals\n");
+    for row in &rows {
+        text.push_str(&format!("{} rule={} slot={} id={}: {}\n",
+            row["code"].as_str().unwrap_or(""), row["rule"].as_str().unwrap_or(""),
+            row["slot"].as_str().unwrap_or(""), row["id"].as_str().unwrap_or(""),
+            row["reason"].as_str().unwrap_or("")));
+    }
+    json!({"status":"ok","phase":phase,"part":"refusals","refusals":rows,"text":text})
+}
 
 fn git_failed(detail: &str) -> Value {
     Refusal::new("git-failed", format!("{detail} failed; {GIT_FAILED_HINT}")).slot("path").value()
@@ -26,7 +52,7 @@ fn git_failed(detail: &str) -> Value {
 /// the caller decides the thread.
 pub fn query(root: &Path, request: &Request) -> Value {
     let root = root.parent().unwrap_or(root);
-    let path = request.path.as_str();
+    let path = request.path.as_deref().unwrap_or_default();
     if path.trim().is_empty() {
         return Refusal::new("bad-query", "the path is blank; pass one repository-relative path").slot("path").value();
     }

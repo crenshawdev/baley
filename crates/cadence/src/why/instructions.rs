@@ -3,12 +3,17 @@ pub fn markdown() -> &'static str {
         crate::help::table::render_description("cad-why", r#"---
 name: cad-why
 description: <compiled>
-argument-hint: "<path>[:<line>]"
+argument-hint: "<path>[:<line>] | <phase> refusals"
 allowed-tools:
   - mcp__cadence__cadence_query
 ---
 
-Read the argument as `<path>[:<line>]`. The text after the LAST colon is a
+For `<phase> refusals`, require a positive integer phase and call once with
+`{"operation":"why","phase":14,"part":"refusals"}`, replacing 14 with that
+integer. This reads recorded refusals in journal order. Do not combine this
+form with a path, line or entry cap.
+
+Otherwise read the argument as `<path>[:<line>]`. The text after the LAST colon is a
 line only when it is all digits; a colon followed by anything else stays part
 of the path. Refuse a blank path, a trailing colon, a zero line and a
 non-integer line, saying which, and never substitute a default.

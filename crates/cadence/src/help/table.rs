@@ -40,7 +40,7 @@ pub const COMMANDS: &[Command] = &[
     Command { name: "cad-pause", cluster: "Support", description: "Pause work cleanly - a WIP commit of in-flight changes plus a STATE cursor set to paused with a one-line resume pointer (/cad-progress offers to resume it)" },
     Command { name: "cad-spike", cluster: "Support", description: "Record risk-ordered spike criteria before experimenting, then retain observations and a bounded verdict." },
     Command { name: "cad-suggest", cluster: "Support", description: "Show retune suggestions from retained decisions and apply only an accepted payload." },
-    Command { name: "cad-why", cluster: "Support", description: "Why is this code like this - the git chain over one file[:line], joined to the phase, task, decision, deviation and review record, printed verbatim." },
+    Command { name: "cad-why", cluster: "Support", description: "Explain file[:line] through its git and planning history, or list a phase's journal refusals with <phase> refusals." },
 ];
 
 pub fn description(name: &str) -> &'static str {
@@ -97,4 +97,3 @@ fn edit_distance(left: &str, right: &str) -> usize {
     }
     previous[right.len()]
 }
-

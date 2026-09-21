@@ -1567,6 +1567,7 @@ impl Intent {
             ));
         }
         let records: Vec<DecisionRecord> = model::parse_lines(decisions)?;
+        model::validate_decisions(&records)?;
         let value = records
             .iter()
             .find_map(|record| match &record.decision {
@@ -1587,6 +1588,10 @@ impl Intent {
             return Err(Error::Invalid(
                 "boundary generation exceeds snapshot".into(),
             ));
+        }
+        if value.boundary.native_refusal
+            && !matches!(self.kind, IntentKind::BoundaryObservationV1 { .. }) {
+            return Err(Error::Invalid("native refusal intent must be an observation".into()));
         }
         if let Some(evidence) = &value.boundary.lease_refusal {
             if !matches!(self.kind, IntentKind::BoundaryObservationV1 { .. }) {

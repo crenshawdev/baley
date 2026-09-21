@@ -299,11 +299,13 @@ enum QueryArguments {
     #[serde(rename = "why")]
     Why {
         /// A repository-relative path: the owner's question, never a read location.
-        path: String,
+        path: Option<String>,
         /// A 1-based line; omit for every commit that touched the path.
         line: Option<NonZeroU32>,
         /// The entry cap; omit for the default of 6.
         top: Option<NonZeroU32>,
+        phase: Option<NonZeroU32>,
+        part: Option<String>,
     },
     #[serde(rename = "search")]
     Search(cadence::read::model::SearchRequest),
@@ -1007,8 +1009,9 @@ impl ServerHandler for PublicServer {
                 }
                 if raw.as_ref().is_some_and(|value| value["operation"] == "why") {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::Why { path, line, top }) => match self.server.service.why(&self.root,
-                            why_service::Request { path, line: line.map(NonZeroU32::get), top: top.map(NonZeroU32::get) }).await {
+                        Ok(QueryArguments::Why { path, line, top, phase, part }) => match self.server.service.why(&self.root,
+                            why_service::Request { path, line: line.map(NonZeroU32::get), top: top.map(NonZeroU32::get),
+                                phase: phase.map(NonZeroU32::get), part }).await {
                             Ok(answer) => answer,
                             Err(error) => Refusal::new("why-unavailable", error.to_string()).slot("why").value(),
                         },
@@ -1352,9 +1355,16 @@ impl ServerHandler for PublicServer {
                 structured_result(Ok(QueryOutput::Execution(envelope)))
             }
             "cadence_apply" => {
+                let observation = raw.clone().unwrap_or(Value::Null);
+                // Legacy executor patches retain their existing boundary contract.
+                // The shared native wrapper also sees early decode/shape returns.
+                let historical = raw.as_ref().is_some_and(|value| value["operation"] == "executor");
+                let response = async {
                 let operation = raw.as_ref().and_then(|v| v["operation"].as_str()).map(str::to_owned);
                 let group = match operation.as_deref() {
-                    None => ApplyGroup::Executor,
+                    None => return structured_result(Ok(ApplyOutput::NativeExecution(
+                        Refusal::new("invalid-arguments", "cadence_apply requires an operation").slot("operation").value()
+                    ))),
                     Some(operation) => match apply_group(operation) {
                         Some(group) => group,
                         None => {
@@ -1532,6 +1542,15 @@ impl ServerHandler for PublicServer {
                         structured_result(answer.map(ApplyOutput::NativeExecution))
                     }
                 }
+                }.await;
+                if !historical
+                    && let Ok(CallToolResponse::Complete(result)) = &response
+                    && let Some(answer) = &result.structured_content
+                    && answer["status"] == "refused" {
+                    // The answer is already decided; observation is best effort.
+                    let _ = self.server.service.record_native_refusal(&self.root, observation, answer.clone()).await;
+                }
+                response
             }
             _ => Err(ErrorData::invalid_params("unknown tool", None)),
         }

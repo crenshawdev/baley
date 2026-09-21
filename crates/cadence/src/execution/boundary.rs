@@ -11,6 +11,18 @@ pub const ENVELOPE_CODEC: u32 = 1;
 pub const MAX_COMPACT_BYTES: usize = 16 * 1024;
 pub const MAX_REASON_BYTES: usize = 1024;
 
+/// New native observations make truncation visible before hashing. Historical
+/// envelopes still validate with their original bytes and digests.
+pub fn native_refusal_reason(reason: &str) -> String {
+    const CUT: &str = "[cut] cap=1024 bytes";
+    if reason.len() <= MAX_REASON_BYTES {
+        return reason.to_owned();
+    }
+    let mut end = MAX_REASON_BYTES - CUT.len();
+    while !reason.is_char_boundary(end) { end -= 1; }
+    format!("{}{CUT}", &reason[..end])
+}
+
 /// Preserve the caller's scalar diagnostic without dumping arbitrary objects.
 pub fn argument_detail(raw: Option<&Value>) -> String {
     let value = raw.and_then(|v| v.get("phase")).unwrap_or(&Value::Null);
@@ -610,6 +622,8 @@ impl Located {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BoundaryV1 {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native_refusal: bool,
     pub codec: u32,
     pub scope: BoundaryScope,
     pub tool: BoundaryTool,
@@ -635,6 +649,7 @@ impl BoundaryV1 {
         answer: &PreparedAnswer,
     ) -> Self {
         Self {
+            native_refusal: false,
             codec: ENVELOPE_CODEC,
             scope,
             tool,
@@ -703,6 +718,11 @@ impl BoundaryV1 {
     }
 
     pub fn validate(&self, terminal: bool) -> Result<(), Failure> {
+        if self.native_refusal && (terminal || self.tool != BoundaryTool::CadenceApply
+            || self.lease_refusal.is_some()
+            || !matches!(self.receipt, Receipt::Compact { envelope: Envelope::Refused { .. } })) {
+            return Err(Failure::Encoding);
+        }
         let digest = |value: &str| {
             value.len() == 64
                 && value
@@ -734,7 +754,12 @@ impl BoundaryV1 {
             return Err(Failure::Encoding);
         }
         if let Some(located) = &self.located
-            && (terminal || !located.valid())
+            && (terminal || if self.native_refusal {
+                let expected = Located { rule: located.rule.clone(), slot: located.slot.clone(),
+                    id: located.id.clone(), ..Located::default() };
+                **located != expected || [&located.rule, &located.slot, &located.id].iter()
+                    .any(|value| value.as_ref().is_some_and(|text| text.trim().is_empty()))
+            } else { !located.valid() })
         {
             return Err(Failure::Encoding);
         }

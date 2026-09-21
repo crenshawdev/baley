@@ -346,13 +346,14 @@ pub fn validate_decisions(records: &[DecisionRecord]) -> Result<()> {
                 return Err(Error::Invalid("invalid immutable boundary record".into()));
             }
             let (count, terminal) = scopes.entry(&value.boundary.scope).or_insert((0, false));
-            if *terminal || (value.terminal && *count != 256) || (!value.terminal && *count >= 256)
+            if !value.boundary.native_refusal
+                && (*terminal || (value.terminal && *count != 256) || (!value.terminal && *count >= 256))
             {
                 return Err(Error::Invalid("invalid boundary budget history".into()));
             }
             if value.terminal {
                 *terminal = true;
-            } else {
+            } else if !value.boundary.native_refusal {
                 *count += 1;
             }
             generation = value.store_generation;

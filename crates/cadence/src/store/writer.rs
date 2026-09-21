@@ -1287,10 +1287,13 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         if !decision.scope.valid() {
             return Err(Error::Invalid("invalid boundary scope".into()));
         }
-        if terminal_v1(&self.view, &decision.scope).is_some() {
+        if !decision.native_refusal && terminal_v1(&self.view, &decision.scope).is_some() {
             return Ok(self.view.as_ref().clone());
         }
         decision.validate(false).map_err(boundary_error)?;
+        if decision.native_refusal && !matches!(change, BoundaryChange::Observe) {
+            return Err(Error::Invalid("native refusal must be an observation".into()));
+        }
         if operation_id.trim().is_empty() {
             return Err(Error::Invalid("empty operation identity".into()));
         }
@@ -1316,8 +1319,8 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             };
         }
         let count = self.view.decisions.iter().filter(|record| matches!(&record.decision,
-            model::Decision::BoundaryV1(value) if value.boundary.scope == decision.scope && !value.terminal)).count();
-        if count >= 256 {
+            model::Decision::BoundaryV1(value) if value.boundary.scope == decision.scope && !value.terminal && !value.boundary.native_refusal)).count();
+        if !decision.native_refusal && count >= 256 {
             let terminal = BoundaryV1::terminal(decision.scope).map_err(boundary_error)?;
             let record = record_v1(terminal, self.next_generation()?, true)?;
             let kind = super::transaction::IntentKind::BoundaryObservationV1 {
