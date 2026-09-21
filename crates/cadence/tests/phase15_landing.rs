@@ -13,6 +13,22 @@ use std::{fs, path::Path};
 
 #[path = "support/phase15_prune.rs"]
 mod phase15_prune;
+#[path = "support/production_source.rs"]
+mod production_source;
+
+#[test]
+fn fault_drivers_are_gated_to_debug_builds() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let is_fault_driver = |line: &str| line.contains("process::exit(")
+        || line.contains("\"CADENCE_PRUNE_STOP\"")
+        || line.contains("\"CADENCE_LANDING_EXIT_AFTER_EFFECT\"");
+    let sites = production_source::production_sites(&root, &is_fault_driver);
+    assert!(!sites.is_empty(), "production fault drivers must be found");
+    let offenders = production_source::production_sites(&root, &|line| {
+        is_fault_driver(line) && !line.contains("cfg!(debug_assertions)")
+    });
+    assert!(offenders.is_empty(), "fault drivers without a debug-build gate:\n{}", offenders.join("\n"));
+}
 
 #[test]
 fn phase15_interrupted_landing_reconciles_against_the_remote() {

@@ -153,6 +153,10 @@ async fn persist_intent(store: &Store, view: &View, records: &Records<Landing>, 
 
 struct StepRequest<'a> { request: &'a Publish, step: &'a Step, resume: bool }
 
+/// An integration-test caller can kill the real writer after a named effect.
+/// Release builds ignore the variable.
+fn exit_after_effect(step: &Step) { if cfg!(debug_assertions) && std::env::var("CADENCE_LANDING_EXIT_AFTER_EFFECT").ok().as_deref() == Some(step.name()) { std::process::exit(86); } }
+
 async fn local_effect(store: &Store, view: &mut View, records: &mut Records<Landing>, project: &Path,
     request: &LocalRequest, step: &Step, config: &Value) -> Result<Value> {
     let Some(landing) = records.records.get(&request.landing) else { return Ok(model::refuse("landing-unknown", &request.landing)); };
@@ -197,7 +201,7 @@ async fn local_effect(store: &Store, view: &mut View, records: &mut Records<Land
         landing.steps[slot].local_intent.as_mut().unwrap().actual = cleanup::observe(project, landing).ok();
         return Ok(cleanup::failure(project, landing, step, &error));
     }
-    if std::env::var("CADENCE_LANDING_EXIT_AFTER_EFFECT").ok().as_deref() == Some(step.name()) { std::process::exit(86); }
+    exit_after_effect(step);
     let actual = cleanup::observe(project, landing)?;
     landing.steps[slot].local_intent.as_mut().unwrap().actual = Some(actual.clone());
     if !cleanup::present(&intent, &actual) {
@@ -287,9 +291,7 @@ async fn effect(store: &Store, view: &mut View, records: &mut Records<Landing>, 
             Ok(refuse("landing-reconciliation-required", error.to_string()))
         }
         Ok(result) => {
-            if std::env::var("CADENCE_LANDING_EXIT_AFTER_EFFECT").ok().as_deref() == Some(step.name()) {
-                std::process::exit(86);
-            }
+            exit_after_effect(step);
             Ok(complete(landing, slot, &auth, result, Value::Null,
                 json!({"kind":"executed","request_id":request.request_id,"prior_remote_observation":absence})))
         }
