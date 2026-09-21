@@ -29,6 +29,9 @@ pub fn assert_delta_with_receipt(project: &Path, before: &Tree, answer: &Value, 
     };
     assert!(saved.boundary.native_refusal);
     assert!(!saved.terminal);
+    assert_eq!(saved.store_generation, after.snapshot.generation);
+    assert!(after.snapshot.operations.contains_key(&format!(
+        "execution-observation:{}", after.decisions.last().unwrap().id)));
     assert_answer(&saved.boundary, answer);
     let cadence::execution::boundary::Receipt::Compact {
         envelope: cadence::envelope::Envelope::Refused { reason, .. }
