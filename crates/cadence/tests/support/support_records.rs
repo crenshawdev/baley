@@ -95,6 +95,18 @@ pub fn query(client: &mut Client, operation: &str, slug: &str) -> Value {
     client.call("cadence_query", json!({"operation":operation,"slug":slug}))
 }
 
+pub fn skill_frontmatter(text: &str) -> Value {
+    let (frontmatter, _) = text.strip_prefix("---\n").unwrap().split_once("\n---\n").unwrap();
+    serde_saphyr::from_str(frontmatter).unwrap()
+}
+
+pub fn render_skill(project: &Path, command: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_cadence"))
+        .args(command).current_dir(project).stdin(Stdio::null()).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8(output.stdout).unwrap()
+}
+
 pub fn resolve(client: &mut Client, slug: &str, id: &str, passed: bool) -> Value {
     let status = query(client, "debug-status", slug);
     client.call("cadence_apply", json!({"operation":"debug-resolve","request":{
