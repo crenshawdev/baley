@@ -101,3 +101,6 @@ pub(crate) fn nonblank(name: &str, value: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod fact_tests;

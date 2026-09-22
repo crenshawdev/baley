@@ -734,6 +734,49 @@ pub fn drafts(root: &Path) -> Result<Arc<Mutex<Drafts>>> {
         .map_err(|_| Error::Invalid("draft registry unavailable".into()))?;
     Ok(registry.entry(root).or_default().clone())
 }
+/// Whether an evidence decision is already in the log. Reconstructing the
+/// projection after another write changes attempt data, not the logical
+/// input, so a recorded submission is recovered, never projected again. The
+/// comparison is over the content, never the write-time stamp: a retried
+/// submit is a second process and never saw the second the first one wrote in.
+/// The same operation identity with other content is refused.
+pub fn replays_evidence(
+    decisions: &[cadence::store::model::DecisionRecord],
+    decision: &cadence::store::model::DecisionRecord,
+) -> Result<bool> {
+    match decisions.iter().find(|prior| prior.id == decision.id) {
+        None => Ok(false),
+        Some(prior) if prior.same_record(decision) => Ok(true),
+        Some(_) => Err(Error::Conflict("operation identity reused for different content".into())),
+    }
+}
+
+/// The guarded write for a new evidence record: its history decision appended
+/// and the record projected into `expected`, the view it was prepared
+/// against, which must still carry the session's import `manifest`.
+pub fn evidence_write(
+    expected: &View,
+    manifest: &Value,
+    decision: cadence::store::model::DecisionRecord,
+    record: &cadence::evidence::Record,
+) -> Result<Operation> {
+    if expected.snapshot.data.get("import") != Some(manifest) {
+        return Err(Error::Invalid("evidence proposal must preserve import manifest".into()));
+    }
+    let data = cadence::evidence::persistence::project(&expected.snapshot.data, record)?;
+    Ok(Operation::CompareTransact {
+        expected_generation: expected.snapshot.generation,
+        expected_integrity: expected.snapshot.integrity.clone(),
+        transaction: Transaction {
+            id: decision.id.clone(),
+            items: Vec::new(),
+            decisions: vec![decision],
+            snapshot: Some(data),
+            external: Vec::new(),
+        },
+    })
+}
+
 impl<I: ConfigIo> Session<I> {
     /// Saved review operations read admitted policy; the writer still validates
     /// current controlling inputs before every conditional mutation.
@@ -804,42 +847,12 @@ impl<I: ConfigIo> Session<I> {
         self.config()?;
         let decision = persistence::history(operation_id, record, cadence::store::model::stamped_at())?;
         let current = self.store.request(Operation::ReadVerified).await?;
-        // Reconstructing the projection after another write changes attempt data,
-        // not the logical input. Recover its immutable receipt before projecting.
-        // The comparison is over the content, never the write-time stamp: the
-        // retried submit is a second process and never observed the second the
-        // first one wrote in.
-        if let Some(prior) = current
-            .decisions
-            .iter()
-            .find(|prior| prior.id == decision.id)
-        {
-            return if prior.same_record(&decision) {
-                Ok(current)
-            } else {
-                Err(Error::Conflict(
-                    "operation identity reused for different content".into(),
-                ))
-            };
+        if replays_evidence(&current.decisions, &decision)? {
+            return Ok(current);
         }
-        if expected.snapshot.data.get("import") != Some(&serde_json::to_value(&self.manifest)?) {
-            return Err(Error::Invalid(
-                "evidence proposal must preserve import manifest".into(),
-            ));
-        }
-        let data = persistence::project(&expected.snapshot.data, record)?;
+        let manifest = serde_json::to_value(&self.manifest)?;
         self.store
-            .request(Operation::CompareTransact {
-                expected_generation: expected.snapshot.generation,
-                expected_integrity: expected.snapshot.integrity.clone(),
-                transaction: Transaction {
-                    id: decision.id.clone(),
-                    items: Vec::new(),
-                    decisions: vec![decision],
-                    snapshot: Some(data),
-                    external: Vec::new(),
-                },
-            })
+            .request(evidence_write(expected, &manifest, decision, record)?)
             .await
     }
 
