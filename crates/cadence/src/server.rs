@@ -876,12 +876,17 @@ where
     Ok(CallToolResult::structured(value).into())
 }
 
+/// The server's answer to the host's initialize request.
+fn info() -> ServerInfo {
+    let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        .with_server_info(Implementation::new("cadence", env!("CARGO_PKG_VERSION")));
+    info.instructions = Some(cadence::read::instructions::CONTRACT.to_owned());
+    info
+}
+
 impl ServerHandler for PublicServer {
     fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("cadence", env!("CARGO_PKG_VERSION")));
-        info.instructions = Some(cadence::read::instructions::CONTRACT.to_owned());
-        info
+        info()
     }
 
     async fn list_tools(
@@ -1652,5 +1657,10 @@ mod wire_tests {
     #[test]
     fn an_unknown_tool_is_invalid_params() {
         assert_eq!(answer("cadence_unknown").unwrap_err().message, "unknown tool");
+    }
+
+    #[test]
+    fn the_initialize_answer_names_the_server_cadence() {
+        assert_eq!(info().server_info.name, "cadence");
     }
 }

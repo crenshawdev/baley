@@ -3,6 +3,7 @@ mod bash;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    ffi::OsString,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
     process::ExitCode,
@@ -46,6 +47,61 @@ struct HookOutput {
     permission_decision_reason: String,
 }
 
+const CONFIG_DENIAL: &str =
+    "Cadence owns this config destination; use cadence_apply config operations instead of Write/Edit";
+
+/// What the filesystem answers about one path, asked one lookup at a time.
+pub(crate) trait Lookup {
+    /// As `std::fs::metadata`: follows a symlink.
+    fn metadata(&self, path: &Path) -> std::io::Result<Entry>;
+    /// As `std::fs::symlink_metadata`: whether anything, a symlink included, is at the path.
+    fn present(&self, path: &Path) -> std::io::Result<()>;
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf>;
+    /// As `std::path::absolute`: a relative path is taken from the process's directory.
+    fn absolute(&self, path: &Path) -> std::io::Result<PathBuf>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Entry {
+    pub(crate) directory: bool,
+    /// Device and inode: two paths with one identity are one file.
+    pub(crate) identity: (u64, u64),
+}
+
+struct Disk;
+
+impl Lookup for Disk {
+    fn metadata(&self, path: &Path) -> std::io::Result<Entry> {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path).map(|metadata| Entry {
+            directory: metadata.is_dir(),
+            identity: (metadata.dev(), metadata.ino()),
+        })
+    }
+
+    fn present(&self, path: &Path) -> std::io::Result<()> {
+        std::fs::symlink_metadata(path).map(|_| ())
+    }
+
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        std::fs::canonicalize(path)
+    }
+
+    fn absolute(&self, path: &Path) -> std::io::Result<PathBuf> {
+        std::path::absolute(path)
+    }
+}
+
+/// What the hook input asks of the guard, judged from its bytes alone.
+enum Input {
+    /// Not a Write/Edit event: the hook answers nothing.
+    Silent,
+    /// A Write/Edit event that cannot be read safely.
+    Denied(String),
+    Bash,
+    WriteEdit(Event),
+}
+
 pub fn run() -> ExitCode {
     let mut bytes = Vec::new();
     if let Err(error) = std::io::stdin()
@@ -55,82 +111,99 @@ pub fn run() -> ExitCode {
     {
         return write_denial(format!("cannot read hook input safely: {error}"));
     }
-    let matched = matched_tool(&bytes);
+    match input(&bytes) {
+        Input::Silent => ExitCode::SUCCESS,
+        Input::Denied(reason) => write_denial(reason),
+        Input::Bash => bash::run(&bytes, &mut cadence::process::System),
+        Input::WriteEdit(event) => {
+            let global = global_setting(
+                std::env::var_os("CADENCE_GLOBAL_CONFIG"),
+                std::env::var_os("HOME"),
+            );
+            match write_edit(&event, global.as_deref(), &Disk) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(reason) => write_denial(reason),
+            }
+        }
+    }
+}
+
+/// `bytes` is the input read up to one byte past the bound.
+fn input(bytes: &[u8]) -> Input {
+    let matched = matched_tool(bytes);
     if bytes.len() as u64 > MAX_INPUT_BYTES {
         return if matched {
-            write_denial(format!(
+            Input::Denied(format!(
                 "Write/Edit hook input exceeds the {MAX_INPUT_BYTES}-byte bound"
             ))
         } else {
-            ExitCode::SUCCESS
+            Input::Silent
         };
     }
-    let tool = match serde_json::from_slice::<ToolOnly>(&bytes) {
+    let tool = match serde_json::from_slice::<ToolOnly>(bytes) {
         Ok(tool) => tool.tool_name.as_str().map(str::to_owned),
         Err(error) => {
             return if matched {
-                write_denial(format!("malformed Write/Edit hook input: {error}"))
+                Input::Denied(format!("malformed Write/Edit hook input: {error}"))
             } else {
-                ExitCode::SUCCESS
+                Input::Silent
             };
         }
     };
     if tool.as_deref() == Some("Bash") {
-        return bash::run(&bytes, &mut cadence::process::System);
+        return Input::Bash;
     }
     if !matches!(tool.as_deref(), Some("Write" | "Edit")) {
-        return ExitCode::SUCCESS;
+        return Input::Silent;
     }
-    let event: Event = match serde_json::from_slice(&bytes) {
+    let event: Event = match serde_json::from_slice(bytes) {
         Ok(event) => event,
-        Err(error) => return write_denial(format!("malformed Write/Edit hook input: {error}")),
+        Err(error) => return Input::Denied(format!("malformed Write/Edit hook input: {error}")),
     };
     if !matches!(event.tool_name.as_str(), "Write" | "Edit") {
-        return write_denial("ambiguous Write/Edit tool identity");
+        return Input::Denied("ambiguous Write/Edit tool identity".into());
     }
     if event
         .hook_event_name
         .as_deref()
         .is_some_and(|name| name != "PreToolUse")
     {
-        return write_denial("Write/Edit event is not a PreToolUse event");
+        return Input::Denied("Write/Edit event is not a PreToolUse event".into());
     }
+    Input::WriteEdit(event)
+}
+
+/// The global legacy config path: the setting when present, else the default
+/// under HOME. An empty setting turns the global layer off.
+fn global_setting(setting: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    setting
+        .map(PathBuf::from)
+        .or_else(|| home.map(|home| PathBuf::from(home).join(".claude/cadence/config.json")))
+        .filter(|path| !path.as_os_str().is_empty())
+}
+
+/// Allows the event, or answers why it is denied. Every failure to decide denies.
+fn write_edit(event: &Event, global: Option<&Path>, fs: &dyn Lookup) -> Result<(), String> {
+    let bindings = config_destinations(&event.cwd, global, fs)?;
     // Inspect native spelling first: a POSIX backslash can name a real alias.
-    let bindings = match config_destinations(&event.cwd) {
-        Ok(bindings) => bindings,
-        Err(reason) => return write_denial(reason),
-    };
     for spelling in [
         event.tool_input.file_path.clone(),
         event.tool_input.file_path.replace('\\', "/"),
     ] {
-        let target = match resolve_target(&event.cwd, &spelling) {
-            Ok(target) => target,
-            Err(reason) => return write_denial(reason),
-        };
+        let target = resolve_target(&event.cwd, &spelling, fs)?;
         for destination in &bindings {
-            match same_destination(&target, destination) {
-                Ok(true) => {
-                    return write_denial(
-                        "Cadence owns this config destination; use cadence_apply config operations instead of Write/Edit",
-                    );
-                }
-                Ok(false) => {}
-                Err(reason) => return write_denial(reason),
+            if same_destination(&target, destination, fs)? {
+                return Err(CONFIG_DENIAL.into());
             }
         }
-        match protected_target(&target) {
-            Ok(true) => {
-                return write_denial(format!(
-                    "Cadence owns {}; use the native execution boundary instead of Write/Edit",
-                    target.display()
-                ));
-            }
-            Ok(false) => {}
-            Err(reason) => return write_denial(reason),
+        if protected_target(&target)? {
+            return Err(format!(
+                "Cadence owns {}; use the native execution boundary instead of Write/Edit",
+                target.display()
+            ));
         }
     }
-    ExitCode::SUCCESS
+    Ok(())
 }
 
 fn matched_tool(bytes: &[u8]) -> bool {
@@ -170,16 +243,17 @@ fn write_decision(decision: &'static str, reason: impl Into<String>) -> ExitCode
     }
 }
 
-fn resolve_target(cwd: &str, target: &str) -> Result<PathBuf, String> {
+fn resolve_target(cwd: &str, target: &str, fs: &dyn Lookup) -> Result<PathBuf, String> {
     validate_text(cwd, "cwd")?;
     validate_text(target, "target")?;
     let cwd = Path::new(cwd);
     if !cwd.is_absolute() {
         return Err("Write/Edit cwd must be an absolute path".into());
     }
-    let cwd = std::fs::canonicalize(cwd)
+    let cwd = fs
+        .canonicalize(cwd)
         .map_err(|error| format!("cannot resolve Write/Edit cwd: {error}"))?;
-    if !cwd.is_dir() {
+    if !fs.metadata(&cwd).is_ok_and(|entry| entry.directory) {
         return Err("Write/Edit cwd is not a directory".into());
     }
     if target.starts_with("//") || target.as_bytes().get(1).is_some_and(|byte| *byte == b':') {
@@ -191,7 +265,7 @@ fn resolve_target(cwd: &str, target: &str) -> Result<PathBuf, String> {
     } else {
         cwd.join(supplied)
     };
-    resolve_existing_prefix(&joined)
+    resolve_existing_prefix(&joined, fs)
 }
 
 fn validate_text(value: &str, name: &str) -> Result<(), String> {
@@ -203,7 +277,7 @@ fn validate_text(value: &str, name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_existing_prefix(path: &Path) -> Result<PathBuf, String> {
+fn resolve_existing_prefix(path: &Path, fs: &dyn Lookup) -> Result<PathBuf, String> {
     let mut resolved = PathBuf::new();
     for component in path.components() {
         match component {
@@ -218,8 +292,8 @@ fn resolve_existing_prefix(path: &Path) -> Result<PathBuf, String> {
                 }
             }
             Component::Normal(value) => {
-                match std::fs::metadata(&resolved) {
-                    Ok(metadata) if !metadata.is_dir() => {
+                match fs.metadata(&resolved) {
+                    Ok(entry) if !entry.directory => {
                         return Err("Write/Edit target has a non-directory parent".into());
                     }
                     Ok(_) => {}
@@ -229,9 +303,10 @@ fn resolve_existing_prefix(path: &Path) -> Result<PathBuf, String> {
                     }
                 }
                 resolved.push(value);
-                match std::fs::symlink_metadata(&resolved) {
-                    Ok(_) => {
-                        resolved = std::fs::canonicalize(&resolved)
+                match fs.present(&resolved) {
+                    Ok(()) => {
+                        resolved = fs
+                            .canonicalize(&resolved)
                             .map_err(|error| format!("cannot resolve Write/Edit target: {error}"))?
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -245,38 +320,34 @@ fn resolve_existing_prefix(path: &Path) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
-fn config_destinations(cwd: &str) -> Result<Vec<PathBuf>, String> {
-    let repo = resolve_target(cwd, ".planning/config.json")?;
-    let global = std::env::var_os("CADENCE_GLOBAL_CONFIG")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .map(|home| PathBuf::from(home).join(".claude/cadence/config.json"))
-        })
-        .filter(|path| !path.as_os_str().is_empty());
+fn config_destinations(
+    cwd: &str,
+    global: Option<&Path>,
+    fs: &dyn Lookup,
+) -> Result<Vec<PathBuf>, String> {
+    let repo = resolve_target(cwd, ".planning/config.json", fs)?;
     let mut legacy = vec![repo];
     if let Some(global) = global {
-        let absolute = std::path::absolute(global).map_err(|error| error.to_string())?;
-        legacy.push(resolve_existing_prefix(&absolute)?);
+        let absolute = fs.absolute(global).map_err(|error| error.to_string())?;
+        legacy.push(resolve_existing_prefix(&absolute, fs)?);
     }
     legacy
         .into_iter()
-        .map(|path| resolve_existing_prefix(&path.with_file_name("config.v4.json")))
+        .map(|path| resolve_existing_prefix(&path.with_file_name("config.v4.json"), fs))
         .collect()
 }
 
-fn same_destination(target: &Path, destination: &Path) -> Result<bool, String> {
-    use std::os::unix::fs::MetadataExt;
+fn same_destination(target: &Path, destination: &Path, fs: &dyn Lookup) -> Result<bool, String> {
     if target == destination {
         return Ok(true);
     }
-    let metadata = |path| match std::fs::metadata(path) {
-        Ok(value) => Ok(Some(value)),
+    let identity = |path| match fs.metadata(path) {
+        Ok(entry) => Ok(Some(entry.identity)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("cannot inspect config destination safely: {error}")),
     };
-    Ok(match (metadata(target)?, metadata(destination)?) {
-        (Some(left), Some(right)) => (left.dev(), left.ino()) == (right.dev(), right.ino()),
+    Ok(match (identity(target)?, identity(destination)?) {
+        (Some(left), Some(right)) => left == right,
         _ => false,
     })
 }

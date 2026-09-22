@@ -467,13 +467,10 @@ pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
         return ExitCode::SUCCESS;
     };
     let planning = project.join(".planning");
-    let global = std::env::var_os("CADENCE_GLOBAL_CONFIG")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .map(|home| PathBuf::from(home).join(".claude/cadence/config.json"))
-        })
-        .filter(|path| !path.as_os_str().is_empty());
+    let global = super::global_setting(
+        std::env::var_os("CADENCE_GLOBAL_CONFIG"),
+        std::env::var_os("HOME"),
+    );
     let factory =
         crate::import::SessionFactory::new(global.clone(), std::sync::Arc::new(|_, _| Ok(())));
     let mut audit = Audit {
@@ -516,5 +513,24 @@ pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
             Err(error) => audit_failed(&audit, error),
         },
         Err(error) => audit_failed(&audit, error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Verb, verb};
+
+    // The Bash guard decides on a Git push or commit, never on the files a
+    // command names: an owned output named without one is no decision.
+    #[test]
+    fn a_command_naming_an_owned_file_is_judged_by_its_git_verb_alone() {
+        for command in [
+            "cat .planning/state.json",
+            "rm .planning/decisions.jsonl",
+            "cp draft.md .planning/phases/6/SUMMARY.md",
+        ] {
+            assert_eq!(verb(command), None, "{command}");
+        }
+        assert_eq!(verb("git commit .planning/state.json"), Some(Verb::Commit));
     }
 }
