@@ -105,6 +105,14 @@ nonblank reason for serving that particular truth. The four spec shapes are:
   approved_at}`, and `status: "pending"`. These names/time describe approval of
   the specification, never an observation result.
 
+Write every check at one unit. `boundary` is the one unit the check exercises,
+named as a unit and not as a workflow. `fakes` names every filesystem, process
+and clock seam that unit touches; do not leave it empty when the unit touches
+one. A check never starts a program to get its answer: not the project's binary,
+not git, not gpg, not a shell. A check that starts the whole thing tests the end
+and not the part it names, and a failure there says something broke without
+saying what.
+
 Except for numeric `truth_version` and the arrays shown, spec slots are strings.
 The compiled schema below is the exact wire grammar. Kind-specific required
 fields are structural, not proof that the check proves its truth or that a handoff
@@ -129,7 +137,10 @@ occurs. Complete preview and fresh approved attached publication enforce:
 
 Only command and expected output are content-checked on a check. Test locator,
 setup, call, boundary and fakes retain their typed grammar; blank strings and
-an empty fakes array remain legal. Test existence, task/check bindings, red/green
+an empty fakes array remain legal, which says what the binary refuses and never
+that a check may skip the one-unit shape above. Cadence gates no test style; the
+shape is instruction, the owner reads the plan. Test existence, task/check
+bindings, red/green
 receipts and subject-stub gates belong to phase 12, adequacy to the verifier.
 
 Link comparison uses the same snapshot's native approved trigger, observer and
