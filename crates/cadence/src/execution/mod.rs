@@ -29,3 +29,6 @@ mod source_tests;
 
 #[cfg(test)]
 mod runner_tests;
+
+#[cfg(test)]
+mod lease_tests;

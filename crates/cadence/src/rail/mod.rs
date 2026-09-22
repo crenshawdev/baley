@@ -9,3 +9,6 @@ pub mod surfaces;
 
 #[cfg(test)]
 mod commit_tests;
+
+#[cfg(test)]
+mod risk_tests;
