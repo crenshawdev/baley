@@ -1,4 +1,5 @@
 //! Filesystem work belongs exclusively to the resource-owning writer thread.
+use crate::process::Process;
 use super::{Error, Observed, Result, Storage};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -34,6 +35,8 @@ pub enum OmitSync {
 
 pub struct Filesystem {
     root: PathBuf,
+    /// Release, undo and prune reach git through this; nothing else here does.
+    process: Box<dyn Process + Send>,
     sequence: u64,
     probe: Probe,
     participants: BTreeMap<String, PathBuf>,
@@ -57,6 +60,7 @@ impl Filesystem {
         let directories = [(root.clone(), directory_identity(&root)?)].into();
         Ok(Self {
             root,
+            process: Box::new(crate::process::System),
             sequence: 0,
             probe: Box::new(|_, _| Ok(())),
             participants: BTreeMap::new(),
@@ -373,28 +377,28 @@ impl Storage for Filesystem {
     type Prepared = Prepared;
 
     fn validate_prune(&mut self, prune: &crate::milestone::prune::Prune, replay: bool) -> Result<()> {
-        crate::milestone::prune::validate(&self.root, prune, replay)
+        crate::milestone::prune::validate(&self.root, prune, replay, &mut *self.process)
     }
     fn validate_release(&mut self, write: &crate::milestone::release::WriteSeal, replay: bool) -> Result<()> {
-        crate::milestone::release::validate(&self.root, write, replay)
+        crate::milestone::release::validate(&self.root, write, replay, &mut *self.process)
     }
     fn install_release(&mut self, write: &crate::milestone::release::WriteSeal) -> Result<()> {
         super::cache::invalidate(&self.root);
-        crate::milestone::release::install(&self.root, write)
+        crate::milestone::release::install(&self.root, write, &mut *self.process)
     }
 
     fn validate_undo(&mut self, write: &crate::undo::model::Write, replay: bool) -> Result<()> {
-        crate::undo::revert::validate(&self.root, write, replay)
+        crate::undo::revert::validate(&self.root, write, replay, &mut *self.process)
     }
 
     fn install_undo(&mut self, write: &crate::undo::model::Write) -> Result<()> {
         super::cache::invalidate(&self.root);
-        crate::undo::revert::install(&self.root, write)
+        crate::undo::revert::install(&self.root, write, &mut *self.process)
     }
 
     fn install_prune(&mut self, prune: &crate::milestone::prune::Prune) -> Result<()> {
         super::cache::invalidate(&self.root);
-        crate::milestone::prune::install(&self.root, prune)
+        crate::milestone::prune::install(&self.root, prune, &mut *self.process)
     }
 
     fn root(&self) -> Option<&Path> { Some(&self.root) }

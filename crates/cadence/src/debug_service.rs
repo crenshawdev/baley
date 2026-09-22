@@ -1,3 +1,4 @@
+use cadence::process::Process;
 use crate::{config::reload::ConfigIo, import::SessionFactory};
 use cadence::{debug::model::{self, Apply, Status}, envelope::{Envelope, Refusal}, rail::{git, receipts, risk},
     store::{Error, Result, writer::{Operation, Store}}};
@@ -10,16 +11,16 @@ mod debug_consult_tests;
 
 pub enum Command { List, Read { slug: String }, Apply(Apply) }
 
-pub async fn execute<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command) -> Result<Value> {
+pub async fn execute<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command, process: &mut (dyn Process + Send)) -> Result<Value> {
     let slug = match &command { Command::List => None, Command::Read { slug } => Some(slug.clone()),
         Command::Apply(apply) => Some(apply.identity().1.to_owned()) };
-    Ok(match execute_inner(factory, root, command).await {
+    Ok(match execute_inner(factory, root, command, process).await {
         Ok(answer) => answer,
         Err(error) => Refusal::new("debug-unavailable", error.to_string()).slot("slug").details(json!({"slug":slug})).value(),
     })
 }
 
-async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command) -> Result<Value> {
+async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command, process: &mut (dyn Process + Send)) -> Result<Value> {
     if !matches!(command, Command::Apply(_)) {
         // Continuation has no configuration dependency, including in a stopped
         // copy. The shared Store reader verifies all three journal files.
@@ -69,7 +70,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                 write.recall = Some(serde_json::from_value(serde_json::to_value(recalled)?)?);
             }
             if matches!(write.apply, Apply::Resolve { .. }) && model::outcome(data, &write).is_ok()
-                && let Some(refusal) = coordinate(factory, root, store, &mut write).await? {
+                && let Some(refusal) = coordinate(factory, root, store, &mut write, process).await? {
                 return Ok(refusal);
             }
             persist(store, write).await
@@ -96,14 +97,15 @@ fn refusal(code: &str, reason: impl Into<String>, slug: &str) -> Value {
 /// allocates a fire; a restart can finish either journal join without rescanning.
 async fn coordinate<I: ConfigIo + Clone + Sync>(
     factory: &SessionFactory<I>, root: &Path, store: &Store, write: &mut model::Write,
+    process: &mut (dyn Process + Send),
 ) -> Result<Option<Value>> {
     let slug = write.apply.identity().1.to_owned();
     let project = root.parent().ok_or_else(|| Error::Invalid("planning root lacks project".into()))?;
-    let (resolved, diagnostics) = git::resolve(project, &risk::Source::Staged { base: "HEAD".into() });
+    let (resolved, diagnostics) = git::resolve(project, &risk::Source::Staged { base: "HEAD".into() }, process);
     let Some(material) = resolved.material() else {
         return Ok(Some(refusal("unresolved-material", diagnostics.join("; "), &slug)));
     };
-    let paths = git::changed_paths(project, &material)?;
+    let paths = git::changed_paths(project, &material, process)?;
     if paths.is_empty() {
         return Ok(Some(refusal("debug-empty-index", "empty index: stage the approved fix before resolve", &slug)));
     }
@@ -121,7 +123,7 @@ async fn coordinate<I: ConfigIo + Clone + Sync>(
         if !cadence::debug::review::current(review, &material, &surfaces) {
             return Ok(Some(refusal("debug-material-changed", "staged material differs from the exact debug review receipt", &slug)));
         }
-        let (current, _) = git::resolve(project, &risk::Source::Staged { base: "HEAD".into() });
+        let (current, _) = git::resolve(project, &risk::Source::Staged { base: "HEAD".into() }, process);
         if current.material().as_ref() != Some(&material) || session.config()? != config {
             return Ok(Some(refusal("debug-material-changed", "staged material or risk configuration changed during resolve", &slug)));
         }
@@ -195,7 +197,8 @@ async fn coordinate<I: ConfigIo + Clone + Sync>(
                 .collect::<Result<std::collections::BTreeSet<_>>>()?.into_iter().collect(), rearm_of: None };
         match super::rail_service::receipt(factory, root, super::rail_service::ReceiptCommand::Submit(
             receipts::Apply::Fire { request_id: format!("debug-fire-{identity}"), fire: Box::new(fire_record) }
-        )).await? {
+        ),
+        process,).await? {
             Envelope::Ok(_) => review.fire = Some(fire),
             Envelope::Refused { code, reason } => return Ok(Some(refusal(&code, reason, &slug))),
             other => return Ok(Some(refusal("debug-risk-unavailable", serde_json::to_string(&other)?, &slug))),
@@ -210,7 +213,7 @@ async fn coordinate<I: ConfigIo + Clone + Sync>(
                 .slot("slug").details(json!({"slug":slug,"assessment":assessment})).value()));
         }
     }
-    let (current, _) = git::resolve(project, &risk::Source::Staged { base: "HEAD".into() });
+    let (current, _) = git::resolve(project, &risk::Source::Staged { base: "HEAD".into() }, process);
     if current.material().as_ref() != Some(&material) || session.config()? != config {
         return Ok(Some(refusal("debug-material-changed", "staged material or risk configuration changed during resolve", &slug)));
     }

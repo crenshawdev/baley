@@ -1,4 +1,5 @@
 //! Resident adapter; all writes use the existing session's single store queue.
+use cadence::process::Process;
 use cadence::{store::{Error, Result, Storage, writer::Operation}, verification::{audit, completion, human, inputs, model::{Query, Apply}, persistence, runner, status, verdicts, waivers}};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -7,13 +8,14 @@ pub enum Command { Query(Query), Apply(Apply) }
 
 pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
     factory: &crate::import::SessionFactory<I>, root: &Path, command: Command,
+    process: &mut (dyn Process + Send),
 ) -> Result<Value> {
     let result = match command {
-        Command::Query(query) => execute_inner(factory, root, query).await,
+        Command::Query(query) => execute_inner(factory, root, query, process).await,
         Command::Apply(Apply::Run { request }) => {
             let session = factory.first_touch(root).await?;
             session.config()?;
-            runner::launch(session.review_store().clone(), root.into(), *request).await
+            runner::launch(session.review_store().clone(), root.into(), *request, process).await
                 .map(|receipt| json!({"status":"ok","receipt":receipt}))
         }
         Command::Apply(Apply::Submit { patch }) => {
@@ -39,7 +41,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 }
             };
             if let Some(answer) = verdicts::replay(&view.snapshot.data, &patch)? { return Ok(answer); }
-            let claim = verdicts::prepare(root, &view.snapshot.data, patch)?;
+            let claim = verdicts::prepare(root, &view.snapshot.data, patch, process)?;
             let transaction = verdicts::transaction(&view.snapshot.data, &claim)?;
             let written = session.review_store().request(Operation::CompareTransact {
                 expected_generation: view.snapshot.generation, expected_integrity: view.snapshot.integrity, transaction,
@@ -53,7 +55,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             session.config()?;
             let view = session.derivation_view().await?;
             if let Some(answer) = waivers::replay(&view.snapshot.data, &request)? { return Ok(answer); }
-            let claim = waivers::prepare(root, &view.snapshot.data, request)?;
+            let claim = waivers::prepare(root, &view.snapshot.data, request, process)?;
             if claim.answer["status"] != "ok" { return Ok(claim.answer); }
             let transaction = waivers::transaction(&view.snapshot.data, &claim)?;
             let written = session.review_store().request(Operation::CompareTransact {
@@ -87,7 +89,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             session.config()?;
             let view = session.derivation_view().await?;
             if let Some(answer) = completion::replay(&view.snapshot.data, &request)? { return Ok(answer); }
-            let claim = completion::prepare(root, &view.snapshot.data, request)?;
+            let claim = completion::prepare(root, &view.snapshot.data, request, process)?;
             if claim.answer["status"] != "ok" { return Ok(claim.answer); }
             let mut filesystem = cadence::store::filesystem::Filesystem::new(root)?;
             let expected = completion::installed(&claim)?.iter().map(|(target, _)| filesystem.read(target)).collect::<Result<Vec<_>>>()?;
@@ -108,6 +110,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
 
 async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
     factory: &crate::import::SessionFactory<I>, root: &Path, query: Query,
+    process: &mut (dyn Process + Send),
 ) -> Result<Value> {
     let snapshot = if matches!(query, Query::Read { .. }) && root.join(cadence::store::model::STATE).exists() {
         Some(cadence::store::cache::SharedSnapshot(factory.first_touch(root).await?.shared_derivation_view().await?))
@@ -117,7 +120,7 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
     let empty = json!({});
     let data = snapshot.as_ref().map(|s| &s.data).unwrap_or(&empty);
     match query {
-        Query::Audit { phase, command } => audit::report(root, data, phase, command.as_deref()),
+        Query::Audit { phase, command } => audit::report(root, data, phase, command.as_deref(), process),
         Query::Read { phase, attempt } => {
             // The requested attempt selects its receipts; the derived rows are
             // always the phase's current judgment, never the selected one's.
@@ -125,7 +128,7 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
             if attempt.is_some() && saved.is_none() {
                 return Err(inputs::refuse(phase, "verification-attempt", "attempt", "retained attempt absent"));
             }
-            let mut answer = status::report(root, data, phase)?;
+            let mut answer = status::report(root, data, phase, process)?;
             let runs: Vec<_> = runner::records(data)?.into_iter().filter(|r| saved.as_ref().is_some_and(|a| r.attempt == a.id)).collect();
             let unknown: Vec<_> = runs.iter().filter(|r| matches!(r.event, runner::Event::Launch { .. }) && runner::result(&runs, &r.id).is_none()).map(|r| r.id.clone()).collect();
             let claims: Vec<_> = verdicts::claims(data)?.into_iter().filter(|c| saved.as_ref().is_some_and(|a| c.patch.attempt == a.id))
@@ -170,14 +173,14 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let request_id = match request_id {
                 Some(id) => id,
                 None => {
-                    let observed = inputs::observe(root, data, phase)?;
+                    let observed = inputs::observe(root, data, phase, process)?;
                     format!("verify-{}", cadence::store::model::digest(&serde_json::to_vec(&observed.basis)?))
                 }
             };
             if let Some(saved) = persistence::replay(data, phase, &request_id)? {
                 return next_answer(factory, root, &saved).await;
             }
-            let mut request = persistence::prepare(root.into(), data, phase, request_id)?;
+            let mut request = persistence::prepare(root.into(), data, phase, request_id, process)?;
             let session = factory.first_touch(root).await?;
             let config = session.config()?;
             request.attempt.route = Some(cadence::execution::model::DispatchRoute {
@@ -193,7 +196,7 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
             }).await?;
             let saved = persistence::replay(&written.snapshot.data, phase, &request.attempt.request_id)?
                 .ok_or_else(|| Error::Invalid("confirmed verification attempt absent".into()))?;
-            inputs::reobserve_external(root, &written.snapshot.data, &saved.inputs, &request.documents)?;
+            inputs::reobserve_external(root, &written.snapshot.data, &saved.inputs, &request.documents, process)?;
             next_answer(factory, root, &saved).await
         }
     }

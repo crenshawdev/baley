@@ -423,6 +423,7 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
         };
         let mut git = review::material_io::SourceGit {
             root: project_root.into(),
+            process: Box::new(cadence::process::System),
         };
         #[cfg(test)]
         let mut clock = Gap158Clock;

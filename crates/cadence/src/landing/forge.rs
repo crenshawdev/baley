@@ -1,4 +1,5 @@
 //! Explicit API endpoints keep forge effects limited to the authorized step.
+use crate::process::Process;
 use super::{effects::Invocation, model::{ExternalInput, Forge, Landing}};
 use crate::store::{Error, Result};
 use serde_json::Value;
@@ -86,8 +87,8 @@ fn pulls(forge: &Forge) -> String {
     else { format!("repos/{}/pulls", forge.repo) }
 }
 
-fn get(root: &Path, forge: &Forge, endpoint: String) -> Result<Value> {
-    serde_json::from_str(&super::effects::run(root, &api(forge, "GET", endpoint, vec![]))?).map_err(Into::into)
+fn get(root: &Path, forge: &Forge, endpoint: String, process: &mut dyn Process) -> Result<Value> {
+    serde_json::from_str(&super::effects::run(root, &api(forge, "GET", endpoint, vec![]), process)?).map_err(Into::into)
 }
 
 pub fn number(forge: &Forge, value: &Value) -> Result<u64> {
@@ -96,7 +97,7 @@ pub fn number(forge: &Forge, value: &Value) -> Result<u64> {
 }
 
 /// Discover across all states: a closed or moved PR is a discrepancy, not absence.
-pub fn read_pull(root: &Path, landing: &Landing, forge: &Forge, identity: Option<u64>) -> Result<Option<Value>> {
+pub fn read_pull(root: &Path, landing: &Landing, forge: &Forge, identity: Option<u64>, process: &mut dyn Process) -> Result<Option<Value>> {
     let endpoint = pulls(forge);
     let identity = if let Some(identity) = identity { identity } else {
         let filter = match forge.provider.as_str() {
@@ -109,7 +110,7 @@ pub fn read_pull(root: &Path, landing: &Landing, forge: &Forge, identity: Option
         let mut candidates = Vec::new();
         let mut complete = false;
         for page in 1..=10 {
-            let values = get(root, forge, format!("{endpoint}?state=all&{limit}=100&page={page}{filter}"))?;
+            let values = get(root, forge, format!("{endpoint}?state=all&{limit}=100&page={page}{filter}"), process)?;
             let values = values.as_array().ok_or_else(|| Error::Invalid("remote PR list is not an array".into()))?;
             for value in values {
                 if forge.provider == "forgejo" {
@@ -131,16 +132,16 @@ pub fn read_pull(root: &Path, landing: &Landing, forge: &Forge, identity: Option
         let Some(identity) = candidates.first() else { return Ok(None); };
         *identity
     };
-    let value = get(root, forge, format!("{endpoint}/{identity}"))?;
+    let value = get(root, forge, format!("{endpoint}/{identity}"), process)?;
     if number(forge, &value)? != identity {
         return Err(Error::Invalid(format!("remote PR identity differs from {identity}: {value}")));
     }
     Ok(Some(value))
 }
 
-pub fn pull_state(root: &Path, landing: &Landing, forge: &Forge, value: &Value) -> Result<&'static str> {
+pub fn pull_state(root: &Path, landing: &Landing, forge: &Forge, value: &Value, process: &mut dyn Process) -> Result<&'static str> {
     let matches = if forge.provider == "gitlab" {
-        let project = get(root, forge, format!("projects/{}", parameter(&forge.repo)))?;
+        let project = get(root, forge, format!("projects/{}", parameter(&forge.repo)), process)?;
         project["path_with_namespace"] == forge.repo && project["id"].as_u64().is_some_and(|id| id > 0)
             && value["source_project_id"] == project["id"] && value["target_project_id"] == project["id"]
             && value["source_branch"] == landing.source.branch && value["sha"] == landing.source.head

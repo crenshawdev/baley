@@ -1,4 +1,5 @@
 //! Complete immutable claims, separately retained application outcomes and verdicts.
+use crate::process::Process;
 use super::{inputs, model::{Patch, Source, Verdict}, persistence, runner};
 use crate::store::{Error, Result, model::{digest, DecisionRecord, Decision, Origin, Evidence}};
 use serde::{Deserialize, Serialize};
@@ -65,7 +66,7 @@ pub fn replay(data: &Value, patch: &Patch) -> Result<Option<Value>> {
     Ok(None)
 }
 
-pub fn prepare(root: &Path, data: &Value, patch: Patch) -> Result<Claim> {
+pub fn prepare(root: &Path, data: &Value, patch: Patch, process: &mut dyn Process) -> Result<Claim> {
     let phase = patch.basis.phase;
     let mut claim = Claim { schema: SCHEMA.into(), root: root.into(), root_binding: inputs::root_binding(root)?,
         payload_digest: digest(&serde_json::to_vec(&patch)?), authority_digest: inputs::authority_digest(data)?,
@@ -75,9 +76,9 @@ pub fn prepare(root: &Path, data: &Value, patch: Patch) -> Result<Claim> {
         let map = serde_json::to_value(crate::plan::map_view::read(root, phase)?)?;
         claim.map_digest = map["input_digest"].as_str().map(str::to_owned);
         claim.documents = crate::plan::inventory::read(root, &phase.to_string(), data)?.documents;
-        claim.source = Some(inputs::source(root.parent().ok_or_else(|| Error::Invalid("project root absent".into()))?)?);
+        claim.source = Some(inputs::source(root.parent().ok_or_else(|| Error::Invalid("project root absent".into()))?, process)?);
         // Revalidate all original execution evidence and owner statements too.
-        inputs::observe(root, data, phase)?;
+        inputs::observe(root, data, phase, process)?;
         Ok(())
     })();
     if let Err(error) = observation { claim.unavailable = Some(error_answer(error)); }
@@ -197,14 +198,14 @@ pub fn transaction(data: &Value, claim: &Claim) -> Result<crate::store::transact
 
 /// All external inputs and exact root participants are checked during commit
 /// and recovery. Historical refusals never install effective verdicts.
-pub fn reobserve(data: &Value, claim: &Claim) -> Result<()> {
+pub fn reobserve(data: &Value, claim: &Claim, process: &mut dyn Process) -> Result<()> {
     if inputs::root_binding(&claim.root)? != claim.root_binding {
         return Err(Error::Conflict("verification claim root changed".into()));
     }
     if claim.answer["status"] == "ok" {
         let attempt = persistence::attempt(data, None, &claim.patch.attempt)?
             .ok_or_else(|| Error::Invalid("claim attempt absent".into()))?;
-        inputs::reobserve_external(&claim.root, data, &attempt.inputs, &claim.documents)?;
+        inputs::reobserve_external(&claim.root, data, &attempt.inputs, &claim.documents, process)?;
     }
     Ok(())
 }

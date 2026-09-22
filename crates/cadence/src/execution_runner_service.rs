@@ -1,10 +1,11 @@
 //! Root-bound adapter for the shared native runner; it owns no second writer.
+use cadence::process::Process;
 use crate::{config::reload::ConfigIo, import::SessionFactory};
 use cadence::{execution::{history, runner}, store::{Error, Result}};
 use serde_json::{Value, json};
 use std::path::Path;
 
-pub async fn apply<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, raw: Value) -> Result<Value> {
+pub async fn apply<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, raw: Value, process: &mut (dyn Process + Send)) -> Result<Value> {
     let input: runner::Apply = match serde_json::from_value(raw) {
         Ok(input) => input,
         Err(error) => return Ok(super::execution_service::native_error(Error::Invalid(error.to_string()))),
@@ -18,8 +19,8 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root
     }
     let project = root.parent().ok_or_else(|| Error::Invalid("project root missing".into()))?;
     let result = match input {
-        runner::Apply::Start { request } => runner::start(session.review_store(), project, request).await,
-        runner::Apply::Run { request } => runner::launch(session.review_store().clone(), project.to_path_buf(), request).await,
+        runner::Apply::Start { request } => runner::start(session.review_store(), project, request, process).await,
+        runner::Apply::Run { request } => runner::launch(session.review_store().clone(), project.to_path_buf(), request, process).await,
     };
     Ok(match result {
         Ok(receipt) => json!({"status":"ok","receipt":receipt}),
@@ -30,7 +31,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root
 /// The plan-level operations: the suite launch, the operator's absence
 /// attestation for one relaunch, and native completion. Completion needs the
 /// plan's one passing suite receipt and its exact risk settlement together.
-pub async fn plan_apply<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, raw: Value) -> Result<Value> {
+pub async fn plan_apply<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, raw: Value, process: &mut (dyn Process + Send)) -> Result<Value> {
     use cadence::execution::history::{Completion, PlanEvent, PlanRequest};
     let input: runner::PlanApply = match serde_json::from_value(raw) {
         Ok(input) => input,
@@ -46,12 +47,12 @@ pub async fn plan_apply<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>,
             request_id: request.request_id, plan: request.plan, expected_version: request.expected_version,
             event: PlanEvent::RoundRecord(request.statement),
         }).await,
-        runner::PlanApply::Suite { request } => runner::suite_launch(session.review_store().clone(), project.to_path_buf(), request).await,
+        runner::PlanApply::Suite { request } => runner::suite_launch(session.review_store().clone(), project.to_path_buf(), request, process).await,
         runner::PlanApply::RepairAnswer { request } => match request.plan_request() {
             Ok(request) => runner::plan_append(session.review_store(), request).await,
             Err(error) => Err(error),
         },
-        runner::PlanApply::Repair { request } => runner::suite_repair(session.review_store(), project, request).await,
+        runner::PlanApply::Repair { request } => runner::suite_repair(session.review_store(), project, request, process).await,
         runner::PlanApply::Relaunch { request } => runner::plan_append(session.review_store(), PlanRequest { request_id: request.request_id,
             plan: request.plan, expected_version: request.expected_version, event: PlanEvent::SuiteRelaunch(request.statement) }).await,
         runner::PlanApply::Complete { request } => {
@@ -105,7 +106,8 @@ pub async fn read_run<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, r
 
 
 pub async fn read<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, phase: u32,
-    selected_plan: Option<u32>, selected_task: Option<String>) -> Result<Value> {
+    selected_plan: Option<u32>, selected_task: Option<String>,
+    process: &mut (dyn Process + Send),) -> Result<Value> {
     let session = factory.first_touch(root).await?;
     let view = session.shared_derivation_view().await?;
     let records = history::selected_records(&view.snapshot.data, phase, selected_plan, None)?;
@@ -148,7 +150,7 @@ pub async fn read<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root:
             let close = own.iter().find(|r| matches!(r.request.event, history::Event::Close(_))).map(|r| &r.request.request_id);
             let checkpoints = history::task_checkpoints(&records, &task.task).into_iter().map(|c| c["id"].clone()).collect::<Vec<_>>();
             let mut row = json!({"task":task.task,"state":task.state,"runs":runs,"close":close,"checkpoints":checkpoints,
-                "uncertainty":runner::uncertainty(project, &records, &task)?,
+                "uncertainty":runner::uncertainty(project, &records, &task, process)?,
                 "identity":{"kind":"task-summary","phase":phase,"occurrence":task.task.occurrence,"plan":plan.plan,"task":task.task.task}});
             for key in ["runs", "checkpoints"] { trim_ids(&mut row, key, 64); }
             for key in ["progress", "unknown_runs"] { trim_ids(&mut row["state"], key, 16); }

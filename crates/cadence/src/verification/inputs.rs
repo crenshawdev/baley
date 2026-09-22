@@ -1,4 +1,5 @@
 //! Observe current native authority and committed source as one checked input.
+use crate::process::Process;
 use super::model::{Basis, Source, TruthVersion};
 use crate::{execution::{admission, history, receipts, runner}, plan, store::{Error, Result, Storage, model::digest}};
 use serde::{Deserialize, Serialize};
@@ -47,8 +48,8 @@ pub fn root_binding(root: &Path) -> Result<String> {
 
 /// Observe actual tracked bytes too: Git's index flags cannot hide modified
 /// files. Symlinks contribute their own text, never their destination's bytes.
-pub fn source(project: &Path) -> Result<Source> {
-    source_accounting(project, &confirmed_summaries(project)?)
+pub fn source(project: &Path, process: &mut dyn Process) -> Result<Source> {
+    source_accounting(project, &confirmed_summaries(project)?, process)
 }
 
 pub fn confirmed_summaries(project: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
@@ -61,11 +62,11 @@ pub fn confirmed_summaries(project: &Path) -> Result<BTreeMap<String, Vec<u8>>> 
 /// bytes. Only the named paths with their exact bytes are accounted for; any
 /// other difference is still ambiguous, and HEAD, tree and index identities
 /// are observed in full (D-131).
-pub fn source_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>) -> Result<Source> {
-    clean_accounting(project, installed)?;
-    let head = runner::git_text(project, &["rev-parse", "HEAD"])?;
-    let tree = runner::git_text(project, &["rev-parse", "HEAD^{tree}"])?;
-    let index = runner::git(project, &["ls-files", "--stage", "-z"])?;
+pub fn source_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>, process: &mut dyn Process) -> Result<Source> {
+    clean_accounting(project, installed, process)?;
+    let head = runner::git_text(project, &["rev-parse", "HEAD"], process)?;
+    let tree = runner::git_text(project, &["rev-parse", "HEAD^{tree}"], process)?;
+    let index = runner::git(project, &["ls-files", "--stage", "-z"], process)?;
     let mut material = Vec::new();
     for row in index.split(|b| *b == 0).filter(|r| !r.is_empty()) {
         let row = std::str::from_utf8(row).map_err(|_| Error::Invalid("unrepresentable index path".into()))?;
@@ -79,15 +80,15 @@ pub fn source_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>) 
             std::fs::read_link(path)?.as_os_str().as_encoded_bytes().to_vec()
         } else if metadata.is_file() { std::fs::read(path)? }
         else { return Err(Error::Invalid(format!("ambiguous source material: {name}"))); };
-        let committed = runner::git(project, &["show", &format!("{head}:{name}")])?;
+        let committed = runner::git(project, &["show", &format!("{head}:{name}")], process)?;
         let bytes = if committed == bytes { bytes }
             else if installed.get(name).is_some_and(|expected| *expected == bytes) { committed }
             else { return Err(Error::Invalid(format!("tracked material differs from HEAD: {name}"))); };
         material.push((entry.to_owned(), name.to_owned(), digest(&bytes)));
     }
-    clean_accounting(project, installed)?;
-    if runner::git_text(project, &["rev-parse", "HEAD"])? != head
-        || runner::git(project, &["ls-files", "--stage", "-z"])? != index {
+    clean_accounting(project, installed, process)?;
+    if runner::git_text(project, &["rev-parse", "HEAD"], process)? != head
+        || runner::git(project, &["ls-files", "--stage", "-z"], process)? != index {
         return Err(Error::Conflict("source changed during observation".into()));
     }
     Ok(Source { head, tree, index_digest: digest(&index), material_digest: digest(&serde_json::to_vec(&material)?) })
@@ -95,9 +96,9 @@ pub fn source_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>) 
 
 /// Exact installed projection bytes are accounted for whether tracked or new.
 /// Staged, renamed, deleted and otherwise modified paths stay dirty.
-pub fn clean_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>) -> Result<()> {
-    if installed.is_empty() { return runner::clean(project); }
-    for (code, name) in runner::status(project)? {
+pub fn clean_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>, process: &mut dyn Process) -> Result<()> {
+    if installed.is_empty() { return runner::clean(project, process); }
+    for (code, name) in runner::status(project, process)? {
         let accounted = matches!(code.as_str(), " M " | "?? ")
             && std::fs::symlink_metadata(project.join(&name)).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
             && installed.get(&name).is_some_and(|expected| std::fs::read(project.join(&name)).is_ok_and(|bytes| bytes == *expected));
@@ -108,7 +109,7 @@ pub fn clean_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>) -
     Ok(())
 }
 
-pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
+pub fn observe(root: &Path, data: &Value, phase: u32, process: &mut dyn Process) -> Result<Inputs> {
     let project = root.parent().ok_or_else(|| refuse(phase, "verification-root", "project", "project root required"))?;
     let context = crate::context::persistence::saved(data, phase)?
         .ok_or_else(|| refuse(phase, "native-approved-truths", "context", "native approved truths required"))?;
@@ -140,9 +141,9 @@ pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
             let proof = events.iter().find_map(|r| match &r.request.event {
                 history::Event::Close(proof) if r.request.task == task.task => Some(proof), _ => None,
             }).ok_or_else(|| refuse(phase, "verification-execution", "execution.tasks", "close proof absent"))?;
-            receipts::validate_pairs(data, &events, &proof.submission, project)?;
+            receipts::validate_pairs(data, &events, &proof.submission, project, process)?;
             receipts::validate_close_owner(data, &events, &proof.submission)?;
-            receipts::reobserve_source(project, &proof.dispatch, &task.task.task, &proof.source)?;
+            receipts::reobserve_source(project, &proof.dispatch, &task.task.task, &proof.source, process)?;
         }
     }
     for record in &events {
@@ -157,7 +158,7 @@ pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
                 format!("plan event identity mismatch: {} is not the record the log holds", record.request.request_id)));
         }
     }
-    let source = source_accounting(project, &crate::execution::render::installed_summaries(data)?)
+    let source = source_accounting(project, &crate::execution::render::installed_summaries(data)?, process)
         .map_err(|e| refuse(phase, "verification-source", "source", e.to_string()))?;
     let map = serde_json::to_value(plan::map_view::read(root, phase)?)?;
     if map["coherence"] != "consistent" {
@@ -183,19 +184,20 @@ pub fn observe(root: &Path, data: &Value, phase: u32) -> Result<Inputs> {
 
 /// Transaction replay checks the captured authority against its preimage, and
 /// reobserves external material without asking readback to ignore a live intent.
-pub fn reobserve_external(root: &Path, data: &Value, inputs: &Inputs, documents: &BTreeMap<String, String>) -> Result<()> {
-    reobserve_external_accounting(root, inputs, documents, &crate::execution::render::installed_summaries(data)?)
+pub fn reobserve_external(root: &Path, data: &Value, inputs: &Inputs, documents: &BTreeMap<String, String>, process: &mut dyn Process) -> Result<()> {
+    reobserve_external_accounting(root, inputs, documents, &crate::execution::render::installed_summaries(data)?, process)
 }
 
 /// The same reobservation for a transaction that installs its own confirmed
 /// projections: those exact bytes, at those paths, are not a source change.
 pub fn reobserve_external_accounting(root: &Path, inputs: &Inputs, documents: &BTreeMap<String, String>,
-    installed: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+    installed: &BTreeMap<String, Vec<u8>>,
+    process: &mut dyn Process,) -> Result<()> {
     let phase = inputs.basis.phase;
     if root.parent().map(|p| p.to_string_lossy().into_owned()).as_ref() != Some(&inputs.basis.project) {
         return Err(refuse(phase, "verification-root", "basis", "bound project changed"));
     }
-    if source_accounting(Path::new(&inputs.basis.project), installed).map_err(|e| refuse(phase, "verification-source", "source", e.to_string()))? != inputs.basis.source {
+    if source_accounting(Path::new(&inputs.basis.project), installed, process).map_err(|e| refuse(phase, "verification-source", "source", e.to_string()))? != inputs.basis.source {
         return Err(refuse(phase, "verification-source", "source", "committed source, index or material changed"));
     }
     let observed = plan::inventory::read(root, &phase.to_string(), &json!({}))?;

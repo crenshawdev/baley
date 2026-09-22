@@ -1,4 +1,5 @@
 //! Versioned attempts own their namespace and immutable journal records.
+use crate::process::Process;
 use super::inputs::{self, Inputs, refuse};
 use crate::store::{Error, Result, model::{digest, DecisionRecord, Decision, Origin, Evidence}};
 use serde::{Deserialize, Serialize};
@@ -66,11 +67,11 @@ pub fn replay(data: &Value, phase: u32, request_id: &str) -> Result<Option<Attem
     Ok(saved)
 }
 
-pub fn prepare(root: PathBuf, data: &Value, phase: u32, request_id: String) -> Result<Request> {
+pub fn prepare(root: PathBuf, data: &Value, phase: u32, request_id: String, process: &mut dyn Process) -> Result<Request> {
     if request_id.trim().is_empty() || request_id.len() > 256 {
         return Err(refuse(phase, "verification-request", "request_id", "bounded nonblank request identity required"));
     }
-    let inputs = inputs::observe(&root, data, phase)?;
+    let inputs = inputs::observe(&root, data, phase, process)?;
     let documents = crate::plan::inventory::read(&root, &phase.to_string(), data)?.documents;
     let prompt = String::new();
     let id = digest(&serde_json::to_vec(&(&request_id, &inputs.basis))?);

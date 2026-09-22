@@ -1,3 +1,4 @@
+use cadence::process::Process;
 use crate::{config::reload::ConfigIo, import::SessionFactory};
 use cadence::envelope::Refusal;
 use cadence::{milestone::{model::{self, Apply, Close, Receipt, Selection, State}, preflight}, store::{Error, Result}};
@@ -9,33 +10,34 @@ pub enum Command {
     Apply(Apply),
 }
 
-pub async fn execute<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command) -> Result<Value> {
-    match execute_inner(factory, root, command).await {
+pub async fn execute<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command, process: &mut (dyn Process + Send)) -> Result<Value> {
+    match execute_inner(factory, root, command, process).await {
         Ok(answer) => Ok(answer),
         Err(error) => Ok(model::refuse("milestone-unavailable", error.to_string())),
     }
 }
 
-async fn audits<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, selection: &Selection) -> Result<Vec<Value>> {
+async fn audits<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, selection: &Selection, process: &mut (dyn Process + Send)) -> Result<Vec<Value>> {
     let mut answers = Vec::new();
     for phase in &selection.phases {
         let audit = super::verification_service::execute(factory, root,
             super::verification_service::Command::Query(cadence::verification::model::Query::Audit {
                 phase: phase.get(), command: Some("cad-audit".into()),
-            })).await?;
+            }),
+            process,).await?;
         answers.push(json!({"phase":phase.get(),"audit":audit}));
     }
     Ok(answers)
 }
 
-async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command) -> Result<Value> {
+async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command, process: &mut (dyn Process + Send)) -> Result<Value> {
     match &command {
-        Command::Apply(Apply::Release { request }) => return release_propose(factory, root, request.clone()).await,
-        Command::Apply(Apply::ReleaseConfirm { request }) => return release_confirm(factory, root, request.clone()).await,
+        Command::Apply(Apply::Release { request }) => return release_propose(factory, root, request.clone(), process).await,
+        Command::Apply(Apply::ReleaseConfirm { request }) => return release_confirm(factory, root, request.clone(), process).await,
         _ => {},
     }
     if let Command::Apply(Apply::Prune { request }) = command {
-        return execute_prune(factory, root, request).await;
+        return execute_prune(factory, root, request, process).await;
     }
     let session = factory.first_touch(root).await?;
     let store = session.review_store();
@@ -110,7 +112,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                         } else {
                             // Reading existing audits is not a new audit verdict. Prune is
                             // a later operation; this record changes no authored document.
-                            let audit = audits(factory, root, &selection).await?;
+                            let audit = audits(factory, root, &selection, process).await?;
                             if audit.iter().any(|a| a["audit"]["status"] != "ok") {
                                 Refusal::new("milestone-audit-unavailable", "selected phases need available audit reports")
                                     .details(json!({"audits":audit})).value()
@@ -123,7 +125,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
                         }
                     }
                 } else {
-                    let audit = audits(factory, root, &selection).await?;
+                    let audit = audits(factory, root, &selection, process).await?;
                     let action = json!({"operation":"milestone-close","request":{
                         "request_id":model::identity("close", &binding, &format!("{occurrence}:{}:{generation}:{}", cadence::store::model::digest(&serde_json::to_vec(&selection)?), view.snapshot.generation)),
                         "occurrence":occurrence,"expected_generation":generation,"selection":selection}});
@@ -146,7 +148,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
     } else { Ok(answer) }
 }
 
-async fn execute_prune<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, request: model::PruneRequest) -> Result<Value> {
+async fn execute_prune<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, request: model::PruneRequest, process: &mut (dyn Process + Send)) -> Result<Value> {
     use cadence::{milestone::prune::{self, Prune, NAMESPACE}, store::writer::Operation};
     let session = factory.first_touch(root).await?;
     let store = session.review_store();
@@ -172,7 +174,7 @@ async fn execute_prune<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
             let config = session.config()?;
             let protected = cadence::rail::branch::protected_branches(config.effective.values.pointer("/git/protected_branches"));
             let on_protected = config.effective.values.pointer("/git/on_protected").and_then(Value::as_str).unwrap_or("ask").to_owned();
-            match prune::freeze(root, &view.snapshot.data, &binding, request.clone(), protected, on_protected) {
+            match prune::freeze(root, &view.snapshot.data, &binding, request.clone(), protected, on_protected, process) {
                 Ok(prune) => {
                     let answer = prune::answer(&prune);
                     store.request(Operation::MilestonePruneV1 {expected_generation:view.snapshot.generation,
@@ -188,7 +190,7 @@ async fn execute_prune<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
         request_id:request.request_id,request:raw,answer:refusal.expect("all successful branches return")}).await
 }
 
-async fn release_propose<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, request: cadence::milestone::release::Request) -> Result<Value> {
+async fn release_propose<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, request: cadence::milestone::release::Request, process: &mut (dyn Process + Send)) -> Result<Value> {
     use cadence::{milestone::release::{self, Report, NAMESPACE}, store::writer::Operation};
     let session = factory.first_touch(root).await?;
     let store = session.review_store();
@@ -200,7 +202,7 @@ async fn release_propose<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>
     let answer = if model::reused(&records,&binding,&request.request_id) {
         model::refuse("request-reused","request_id already binds different release inputs")
     } else {
-        match release::observe(root.parent().ok_or_else(|| Error::Invalid("missing project".into()))?,&binding,request.clone()) {
+        match release::observe(root.parent().ok_or_else(|| Error::Invalid("missing project".into()))?,&binding,request.clone(), process) {
             Err(error) => Refusal::new("release-input",error.to_string()).slot("request").details(json!({"manifest":request.manifest})).value(),
             Ok(report) => {
                 if let Some(collision) = release::collision(&report.tags,&request.version,&request.tag) {
@@ -218,7 +220,7 @@ async fn release_propose<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>
     model::persist(store,&view,NAMESPACE,&mut records,Receipt {root_binding:binding,request_id:request.request_id,request:raw,answer}).await
 }
 
-async fn release_confirm<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, request: cadence::milestone::release::Confirm) -> Result<Value> {
+async fn release_confirm<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, request: cadence::milestone::release::Confirm, process: &mut (dyn Process + Send)) -> Result<Value> {
     use cadence::{milestone::release::{self, Report, NAMESPACE}, store::writer::Operation};
     let session = factory.first_touch(root).await?;
     let store = session.review_store();
@@ -236,13 +238,13 @@ async fn release_confirm<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>
     } else {
         let report = report.unwrap();
         let project = root.parent().ok_or_else(|| Error::Invalid("missing project".into()))?;
-        match release::reobserve(project,&report).and_then(|()| release::landing(&view.snapshot.data,&binding,&report.request,&report.head).map(|_| ())) {
+        match release::reobserve(project,&report, process).and_then(|()| release::landing(&view.snapshot.data,&binding,&report.request,&report.head).map(|_| ())) {
             Err(error) => model::refuse("release-basis-changed",error.to_string()),
             Ok(()) => {
                 let config = session.config()?;
                 let protected = cadence::rail::branch::protected_branches(config.effective.values.pointer("/git/protected_branches"));
                 let on_protected = config.effective.values.pointer("/git/on_protected").and_then(Value::as_str).unwrap_or("ask").to_owned();
-                match release::freeze(root,report,request.clone(),protected,on_protected) {
+                match release::freeze(root,report,request.clone(),protected,on_protected, process) {
                     Err(error) => model::refuse("release-preflight",error.to_string()),
                     Ok(write) => {
                         let answer = release::answer(&write);

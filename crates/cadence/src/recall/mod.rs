@@ -529,16 +529,22 @@ pub(crate) mod resident {
                 while let Some(request) = receiver.recv().await {
                     match request {
                         Request::Milestone { root, command, reply } => {
-                            let _ = reply.send(crate::server::milestone_service::execute(&factory, &root, command).await);
+                            let _ = reply.send(crate::server::milestone_service::execute(&factory, &root, command, &mut cadence::process::System).await);
                         }
                         Request::Landing { root, command, reply } => {
-                            let _ = reply.send(crate::server::landing_service::execute(&factory, &root, command).await);
+                            let _ = reply.send(crate::server::landing_service::execute(&factory, &root, command, &mut cadence::process::System).await);
                         }
                         Request::Undo { root, command, reply } => {
-                            let _ = reply.send(crate::server::undo_service::execute(&factory, &root, command).await);
+                            let _ = reply.send(crate::server::undo_service::execute(
+                                    &factory,
+                                    &root,
+                                    command,
+                                    &mut cadence::process::System,
+                                )
+                                .await);
                         }
                         Request::Debug { root, command, reply } => {
-                            let _ = reply.send(crate::server::debug_service::execute(&factory, &root, command).await);
+                            let _ = reply.send(crate::server::debug_service::execute(&factory, &root, command, &mut cadence::process::System).await);
                         }
                         Request::Spike { root, command, reply } => {
                             let _ = reply.send(crate::server::spike_service::execute(&factory, &root, command).await);
@@ -596,7 +602,7 @@ pub(crate) mod resident {
                             let _ = reply.send(result);
                         }
                         Request::Verification { root, command, reply } => {
-                            let result = crate::server::verification_service::execute(&factory, &root, command).await;
+                            let result = crate::server::verification_service::execute(&factory, &root, command, &mut cadence::process::System).await;
                             let _ = reply.send(result);
                         }
                         Request::Plan {
@@ -660,7 +666,7 @@ pub(crate) mod resident {
                             reply,
                         } => {
                             let result =
-                                crate::server::rail_service::receipt(&factory, &root, *command)
+                                crate::server::rail_service::receipt(&factory, &root, *command, &mut cadence::process::System)
                                     .await;
                             let _ = reply.send(result);
                         }
@@ -670,12 +676,13 @@ pub(crate) mod resident {
                             reply,
                         } => {
                             let result =
-                                crate::server::rail_service::apply(&factory, &root, *request).await;
+                                crate::server::rail_service::apply(&factory, &root, *request)
+                                    .await;
                             let _ = reply.send(result);
                         }
                         Request::Pause { input, reply } => {
                             let result =
-                                crate::server::pause_service::execute(&factory, input, &driver)
+                                crate::server::pause_service::execute(&factory, input, &driver, &mut cadence::process::System)
                                     .await;
                             let _ = reply.send(result);
                         }
@@ -708,11 +715,12 @@ pub(crate) mod resident {
                         }
                         Request::ExecutionQuery { root, phase, plan, reply } => {
                             let result =
-                                execution_service::query_selected(&factory, &root, phase, plan, &driver).await;
+                                execution_service::query_selected(&factory, &root, phase, plan, &driver, &mut cadence::process::System).await;
                             let _ = reply.send(result);
                         }
                         Request::NativeExecutionApply {root,raw,reply} => {
-                            let _=reply.send(execution_service::native_apply(&factory,&root,raw).await);
+                            let _=reply.send(execution_service::native_apply(&factory, &root, raw, &mut cadence::process::System)
+                                    .await);
                         }
                         Request::NativeRefusal { root, raw, answer, reply } => {
                             let _ = reply.send(execution_service::record_native_refusal(&factory, &root, &raw, &answer).await);
@@ -720,12 +728,18 @@ pub(crate) mod resident {
                         Request::NativeExecutionHistory { root, phase, run, plan, task, reply } => {
                             let _ = reply.send(match run {
                                 Some(run) => crate::server::execution_runner_service::read_run(&factory, &root, phase, &run).await,
-                                None => crate::server::execution_runner_service::read(&factory, &root, phase, plan, task).await,
+                                None => crate::server::execution_runner_service::read(&factory, &root, phase, plan, task, &mut cadence::process::System).await,
                             });
                         }
                         Request::ExecutionApply { root, patch, reply } => {
                             let result =
-                                execution_service::apply(&factory, &root, patch, &driver).await;
+                                execution_service::apply(
+                                    &factory,
+                                    &root,
+                                    patch,
+                                    &driver
+                                )
+                                .await;
                             let _ = reply.send(result);
                         }
                         Request::Lifecycle { root, reply } => {

@@ -1,4 +1,5 @@
 //! Read-only Git and tracker observations; no tracker filing belongs here.
+use crate::process::Process;
 use super::{authorization, effects, forge, reconcile, model::{Forge, Landing, Publish}};
 use crate::store::{Error, Result};
 use serde_json::{Value, json};
@@ -41,22 +42,22 @@ pub fn resume(landing: &Landing, snapshot_generation: u64) -> Option<Value> {
     Some(json!({"operation":"land-resume","request":request}))
 }
 
-pub fn git(root: &Path, landing: &Landing) -> Result<Value> {
-    let branch = effects::observe(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
-    let head = effects::observe(root, &["rev-parse", "HEAD"])?;
-    let dirty = !effects::observe(root, &["status", "--porcelain", "--untracked-files=normal"])?.is_empty();
-    let url = effects::observe(root, &["remote", "get-url", "--all", &landing.remote.name])?;
-    let push_url = effects::observe(root, &["remote", "get-url", "--push", "--all", &landing.remote.name])?;
-    let source_head = effects::remote_head(root, landing, &format!("refs/heads/{}", landing.source.branch))?;
-    let base_head = effects::remote_head(root, landing, &format!("refs/heads/{}", landing.base.branch))?;
+pub fn git(root: &Path, landing: &Landing, process: &mut dyn Process) -> Result<Value> {
+    let branch = effects::observe(root, &["symbolic-ref", "--quiet", "--short", "HEAD"], process)?;
+    let head = effects::observe(root, &["rev-parse", "HEAD"], process)?;
+    let dirty = !effects::observe(root, &["status", "--porcelain", "--untracked-files=normal"], process)?.is_empty();
+    let url = effects::observe(root, &["remote", "get-url", "--all", &landing.remote.name], process)?;
+    let push_url = effects::observe(root, &["remote", "get-url", "--push", "--all", &landing.remote.name], process)?;
+    let source_head = effects::remote_head(root, landing, &format!("refs/heads/{}", landing.source.branch), process)?;
+    let base_head = effects::remote_head(root, landing, &format!("refs/heads/{}", landing.base.branch), process)?;
     let comparison = source_head.as_ref().unwrap_or(&landing.base.head);
-    let ahead = effects::observe(root, &["rev-list", "--count", &format!("{comparison}..{head}")])?
+    let ahead = effects::observe(root, &["rev-list", "--count", &format!("{comparison}..{head}")], process)?
         .parse::<u64>().map_err(|_| Error::Invalid("invalid Git ahead count".into()))?;
     Ok(json!({"branch":branch,"head":head,"dirty":dirty,"ahead":ahead,"ahead_of":comparison,
         "remote":{"name":landing.remote.name,"url":url,"push_url":push_url,"source_head":source_head,"base_head":base_head}}))
 }
 
-pub fn tracker(root: &Path, config: &Value) -> Value {
+pub fn tracker(root: &Path, config: &Value, process: &mut dyn Process) -> Value {
     let Some(provider) = config.pointer("/git/forge_provider").and_then(Value::as_str) else {
         return json!({"status":"unconfigured","read_only":true});
     };
@@ -65,7 +66,7 @@ pub fn tracker(root: &Path, config: &Value) -> Value {
         "github" => "github.com", "gitlab" => "gitlab.com", _ => "",
     });
     let forge = Forge { provider: provider.into(), repo: repo.into(), host: host.into() };
-    let result = forge::configured(&forge, config).and_then(|_| effects::run(root, &forge::tracker(&forge)))
+    let result = forge::configured(&forge, config).and_then(|_| effects::run(root, &forge::tracker(&forge), process))
         .and_then(|output| serde_json::from_str::<Value>(&output).map_err(Into::into));
     match result {
         Ok(issues) if issues.is_array() => json!({"status":"ok","read_only":true,"forge":forge,"issues":issues,"bounded":true}),

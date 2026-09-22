@@ -4,6 +4,7 @@ pub mod git;
 pub mod risk;
 pub mod risk_diff;
 
+use crate::process::Process;
 use crate::{
     derivation::ValidatedIntake,
     evidence::Scope,
@@ -54,7 +55,7 @@ pub struct Capture {
     pub wip: Option<String>,
 }
 
-pub fn capture(input: Input, retained: Option<&ValidatedIntake>) -> Result<Capture> {
+pub fn capture(input: Input, retained: Option<&ValidatedIntake>, process: &mut dyn Process) -> Result<Capture> {
     let phase = input
         .phase
         .or_else(|| {
@@ -107,7 +108,7 @@ pub fn capture(input: Input, retained: Option<&ValidatedIntake>) -> Result<Captu
     for path in &input.authorized {
         validate_path(path)?;
     }
-    let observed = git::observe(project)?;
+    let observed = git::observe(project, process)?;
     Ok(Capture {
         scope,
         phase,

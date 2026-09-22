@@ -1,4 +1,5 @@
 //! Pause-local branch policy. Observations and decisions remain separate.
+use crate::process::{Launch, Process};
 use super::git;
 use crate::{
     evidence::gates::{Gate, OptionChoice, Purpose, State},
@@ -8,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     path::Path,
-    process::{Command, Stdio},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,11 +43,11 @@ fn document(path: &Path) -> Result<String> {
     }
 }
 
-pub fn observe(root: &Path, planning: &Path, policy: &Policy) -> Result<Observed> {
-    let branch = text(git::run(root, ["branch", "--show-current"])?)?
+pub fn observe(root: &Path, planning: &Path, policy: &Policy, process: &mut dyn Process) -> Result<Observed> {
+    let branch = text(git::run(root, ["branch", "--show-current"], process)?)?
         .trim_end_matches('\n')
         .into();
-    let head = text(git::run(root, ["rev-parse", "--verify", "HEAD"])?)?
+    let head = text(git::run(root, ["rev-parse", "--verify", "HEAD"], process)?)?
         .trim_end_matches('\n')
         .to_owned();
     let refs = text(git::run(
@@ -57,6 +57,7 @@ pub fn observe(root: &Path, planning: &Path, policy: &Policy) -> Result<Observed
             "--format=%(refname) %(objectname)",
             "refs/heads/",
         ],
+        process,
     )?)?;
     let branches: BTreeMap<String, String> = refs
         .lines()
@@ -79,12 +80,12 @@ pub fn observe(root: &Path, planning: &Path, policy: &Policy) -> Result<Observed
             .cloned(),
     };
     let shared_history = if let Some(base) = &base {
-        let output = Command::new("git")
-            .current_dir(root)
-            .args(["merge-base", branches[base].as_str(), head.as_str()])
-            .stdin(Stdio::null())
-            .output()?;
-        match output.status.code() {
+        let output = process.run(
+            &Launch::new("git")
+                .cwd(root)
+                .args(["merge-base", branches[base].as_str(), head.as_str()]),
+        )?;
+        match output.code() {
             Some(0) => !output.stdout.is_empty(),
             Some(1) => false,
             _ => {
@@ -103,7 +104,7 @@ pub fn observe(root: &Path, planning: &Path, policy: &Policy) -> Result<Observed
         branches,
         base,
         shared_history,
-        tags: text(git::run(root, ["tag", "--list"])?)?
+        tags: text(git::run(root, ["tag", "--list"], process)?)?
             .lines()
             .map(str::to_owned)
             .collect(),

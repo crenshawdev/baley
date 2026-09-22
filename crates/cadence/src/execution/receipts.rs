@@ -1,4 +1,5 @@
 //! Native evidence is recorded separately from historical executor receipts.
+use crate::process::Process;
 use super::allocation::Check;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -362,7 +363,7 @@ fn attempt_lineage(records: &[super::history::Record], task: &super::history::Ta
     lineage
 }
 
-pub fn validate_pairs(data: &serde_json::Value, records: &[super::history::Record], input: &Close, project: &std::path::Path) -> crate::store::Result<()> {
+pub fn validate_pairs(data: &serde_json::Value, records: &[super::history::Record], input: &Close, project: &std::path::Path, process: &mut dyn Process) -> crate::store::Result<()> {
     use super::{history::Event, runner::{git,git_text}};
     let checks=allocated(data,&input.task)?;
     // A task that stopped at a checkpoint resumes in a successor attempt that
@@ -391,14 +392,14 @@ pub fn validate_pairs(data: &serde_json::Value, records: &[super::history::Recor
             let (gi,green,_)=get(&pair.green_run,false)?;
             if ri>=gi || red_result.observed_at>green.launched_at || red.material.commit!=pair.red_commit || green.material.commit!=pair.green_commit
                 || red.material.test_file!=green.material.test_file || red.material.test_digest!=green.material.test_digest || red.material.command!=green.material.command {return None}
-            git(project,&["merge-base","--is-ancestor",&pair.red_commit,&pair.green_commit]).ok()?;
-            git(project,&["merge-base","--is-ancestor",&pair.green_commit,&input.completion]).ok()?;
+            git(project,&["merge-base","--is-ancestor",&pair.red_commit,&pair.green_commit], process).ok()?;
+            git(project,&["merge-base","--is-ancestor",&pair.green_commit,&input.completion], process).ok()?;
             for (commit,material) in [(&pair.red_commit,&red.material),(&pair.green_commit,&green.material)] {
-                let bytes=git(project,&["show",&format!("{commit}:{}",material.test_file)]).ok()?;
+                let bytes=git(project,&["show",&format!("{commit}:{}",material.test_file)], process).ok()?;
                 if crate::store::model::digest(&bytes)!=material.test_digest
-                    || git_text(project,&["rev-parse",&format!("{commit}^{{tree}}")]).ok()?!=material.tree {return None}
+                    || git_text(project,&["rev-parse",&format!("{commit}^{{tree}}")], process).ok()?!=material.tree {return None}
             }
-            let completion_test=git(project,&["show",&format!("{}:{}",input.completion,green.material.test_file)]).ok()?;
+            let completion_test=git(project,&["show",&format!("{}:{}",input.completion,green.material.test_file)], process).ok()?;
             if crate::store::model::digest(&completion_test)!=green.material.test_digest {return None}
             Some(())
         })().is_some();
@@ -411,9 +412,9 @@ pub fn validate_pairs(data: &serde_json::Value, records: &[super::history::Recor
     Ok(())
 }
 
-pub fn validate_close(data: &serde_json::Value, records: &[super::history::Record], proof: &CloseProof) -> crate::store::Result<()> {
+pub fn validate_close(data: &serde_json::Value, records: &[super::history::Record], proof: &CloseProof, process: &mut dyn Process) -> crate::store::Result<()> {
     let input=&proof.submission;
-    validate_pairs(data,records,input,&proof.project)?;
+    validate_pairs(data,records,input,&proof.project, process)?;
     let active=&data["execution"]["occurrences"][input.task.phase.to_string()]["active"];
     if serde_json::from_value::<super::model::ActiveDispatch>(active.clone())?!=proof.dispatch || proof.dispatch.plan!=input.task.plan {
         return Err(super::admission::refuse(input.task.phase,"task-dispatch","task",&input.task.task,"task close requires its exact active dispatch"));
@@ -431,7 +432,7 @@ pub fn validate_close(data: &serde_json::Value, records: &[super::history::Recor
         });
         if !verified {return Err(super::admission::refuse(input.task.phase,"named-verification","verification",&input.task.task,"every named task command needs an observed passing receipt at completion"));}
     }
-    reobserve_source(&proof.project,&proof.dispatch,&input.task.task,&proof.source)
+    reobserve_source(&proof.project,&proof.dispatch,&input.task.task,&proof.source, process)
 }
 
 pub fn validate_close_owner(data: &serde_json::Value, records: &[super::history::Record], input: &Close) -> crate::store::Result<()> {
@@ -499,55 +500,56 @@ pub fn conventional_subject(subject: &str, task_id: &str) -> bool {
     valid_type && description.split(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))).any(|word| word == task_id)
 }
 
-pub fn commit_paths(project: &std::path::Path, commit: &str) -> crate::store::Result<Vec<String>> {
+pub fn commit_paths(project: &std::path::Path, commit: &str, process: &mut dyn Process) -> crate::store::Result<Vec<String>> {
     use super::runner::{git, git_text};
     use crate::store::Error;
-    let parents = git_text(project, &["show", "-s", "--format=%P", commit])?;
+    let parents = git_text(project, &["show", "-s", "--format=%P", commit], process)?;
     let parents: Vec<_> = parents.split_whitespace().collect();
     let mut paths = std::collections::BTreeSet::new();
     for parent in parents.iter().copied().map(Some).chain(parents.is_empty().then_some(None)) {
         let mut args = vec!["diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "-z", "-M", "--no-ext-diff", "--no-textconv"];
         if let Some(parent) = parent { args.push(parent); }
         args.extend([commit, "--"]);
-        paths.extend(read_name_status(&git(project, &args)?).map_err(Error::Invalid)?);
+        paths.extend(read_name_status(&git(project, &args, process)?).map_err(Error::Invalid)?);
     }
     Ok(paths.into_iter().collect())
 }
 
-pub fn staged(project: &std::path::Path) -> crate::store::Result<(Vec<u8>, Vec<String>)> {
+pub fn staged(project: &std::path::Path, process: &mut dyn Process) -> crate::store::Result<(Vec<u8>, Vec<String>)> {
     use super::runner::git;
     let args = ["diff", "--cached", "--raw", "-z", "-M", "--no-abbrev", "--no-ext-diff", "--no-textconv", "--"];
-    let objects = git(project, &args)?;
-    let paths = read_name_status(&git(project, &["diff", "--cached", "--name-status", "-z", "-M", "--no-ext-diff", "--no-textconv", "--"])? )
+    let objects = git(project, &args, process)?;
+    let paths = read_name_status(&git(project, &["diff", "--cached", "--name-status", "-z", "-M", "--no-ext-diff", "--no-textconv", "--"], process)? )
         .map_err(crate::store::Error::Invalid)?;
-    if git(project, &args)? != objects { return Err(crate::store::Error::Conflict("staged inputs changed during observation".into())); }
+    if git(project, &args, process)? != objects { return Err(crate::store::Error::Conflict("staged inputs changed during observation".into())); }
     Ok((objects, paths))
 }
 
 pub fn observe_source(project: &std::path::Path, active: &super::model::ActiveDispatch, task_id: &str,
-    completion: &str, evidence: &[String]) -> crate::store::Result<SourceMaterial> {
+    completion: &str, evidence: &[String],
+    process: &mut dyn Process,) -> crate::store::Result<SourceMaterial> {
     use super::runner::{git, git_text};
     use crate::{rail::risk::valid_object_id, store::Error};
-    let head = git_text(project, &["rev-parse", "HEAD"])?;
+    let head = git_text(project, &["rev-parse", "HEAD"], process)?;
     let mut observed = std::collections::BTreeMap::new();
     let mut out_of_lease = std::collections::BTreeMap::new();
     for commit in evidence.iter().map(String::as_str).chain(std::iter::once(completion)) {
         if !valid_object_id(commit) || commit == active.base_sha {
             return Err(Error::Invalid("evidence commit requires a full object id strictly after the dispatch base".into()));
         }
-        git(project, &["cat-file", "-e", &format!("{commit}^{{commit}}")])?;
-        git(project, &["merge-base", "--is-ancestor", &active.base_sha, commit])?;
-        git(project, &["merge-base", "--is-ancestor", commit, &head])?;
-        let paths = commit_paths(project, commit)?;
+        git(project, &["cat-file", "-e", &format!("{commit}^{{commit}}")], process)?;
+        git(project, &["merge-base", "--is-ancestor", &active.base_sha, commit], process)?;
+        git(project, &["merge-base", "--is-ancestor", commit, &head], process)?;
+        let paths = commit_paths(project, commit, process)?;
         let outside: Vec<String> = paths.iter()
             .filter(|path| !super::lease::covers(&active.files, &active.directories, path)).cloned().collect();
         if !outside.is_empty() { out_of_lease.insert(commit.to_owned(), outside); }
         observed.insert(commit.to_owned(), paths);
     }
-    git(project, &["verify-commit", completion])?;
-    let subject = git_text(project, &["show", "-s", "--format=%s", completion])?;
+    git(project, &["verify-commit", completion], process)?;
+    let subject = git_text(project, &["show", "-s", "--format=%s", completion], process)?;
     if !conventional_subject(&subject, task_id) { return Err(Error::Invalid("completion subject must name its task conventionally".into())); }
-    let (staged_objects, staged_paths) = staged(project)?;
+    let (staged_objects, staged_paths) = staged(project, process)?;
     for path in &staged_paths {
         if !super::lease::covers(&active.files, &active.directories, path) {
             return Err(super::admission::refuse(active.phase, "lease", "staged", path, "out-of-lease staged path"));
@@ -556,8 +558,8 @@ pub fn observe_source(project: &std::path::Path, active: &super::model::ActiveDi
     Ok(SourceMaterial { completion: completion.into(), evidence_commits: evidence.to_vec(), commit_paths: observed, out_of_lease, staged_objects, staged_paths })
 }
 
-pub fn reobserve_source(project: &std::path::Path, active: &super::model::ActiveDispatch, task_id: &str, expected: &SourceMaterial) -> crate::store::Result<()> {
-    if observe_source(project, active, task_id, &expected.completion, &expected.evidence_commits)? != *expected {
+pub fn reobserve_source(project: &std::path::Path, active: &super::model::ActiveDispatch, task_id: &str, expected: &SourceMaterial, process: &mut dyn Process) -> crate::store::Result<()> {
+    if observe_source(project, active, task_id, &expected.completion, &expected.evidence_commits, process)? != *expected {
         return Err(crate::store::Error::Conflict("native source or staged inputs changed".into()));
     }
     Ok(())

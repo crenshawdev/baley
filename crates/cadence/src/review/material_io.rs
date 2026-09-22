@@ -1,4 +1,5 @@
 //! Source acquisition adapters. Retention is supplied separately as Storage.
+use crate::process::Process;
 use super::io::{
     Clock, DirectoryMembers, DirectoryNode, DirectoryObservation, GitIo, GitObservation,
     MaterialIo, NodeKind,
@@ -144,14 +145,16 @@ impl MaterialIo for SourceFiles {
 
 pub struct SourceGit {
     pub root: PathBuf,
+    /// The git observations below are the only thing this boundary starts.
+    pub process: Box<dyn Process + Send>,
 }
 
 impl GitIo for SourceGit {
     fn resolve(&mut self, target: &Target) -> Result<GitObservation> {
         let (base, head, index) = match target {
             Target::CommittedRange { base, head } | Target::PhaseRange { base, head, .. } => (
-                git::resolve_commit(&self.root, base)?,
-                Some(git::resolve_commit(&self.root, head)?),
+                git::resolve_commit(&self.root, base, &mut *self.process)?,
+                Some(git::resolve_commit(&self.root, head, &mut *self.process)?),
                 None,
             ),
             Target::StagedTree {
@@ -169,8 +172,9 @@ impl GitIo for SourceGit {
                         "--end-of-options",
                         &format!("{index}^{{tree}}"),
                     ],
+                    &mut *self.process,
                 )?)?;
-                (git::resolve_comparison(&self.root, base)?, None, Some(tree))
+                (git::resolve_comparison(&self.root, base, &mut *self.process)?, None, Some(tree))
             }
             _ => return Err(Error::Invalid("expected resolved Git target".into())),
         };
@@ -188,6 +192,7 @@ impl GitIo for SourceGit {
                 tip,
                 "--",
             ],
+            &mut *self.process,
         )?;
         let paths = names
             .split(|b| *b == 0)
@@ -215,6 +220,7 @@ impl GitIo for SourceGit {
                 tip,
                 "--",
             ],
+            &mut *self.process,
         )?;
         Ok(GitObservation {
             base,
@@ -230,6 +236,7 @@ impl GitIo for SourceGit {
         git::run(
             &self.root,
             ["cat-file", "blob", &format!("{object}:{path}")],
+            &mut *self.process,
         )
     }
 }

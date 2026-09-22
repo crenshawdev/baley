@@ -1,3 +1,4 @@
+use crate::process::Process;
 use super::model::{self, DECISIONS, DecisionRecord, ITEMS, ItemRecord, STATE, Snapshot, VERSION};
 use super::{Error, MutationContext, Observed, Policy, Result, Storage};
 use cadence::envelope::Envelope;
@@ -560,15 +561,15 @@ impl Intent {
         Snapshot::parse(bytes(STATE)?, items, decisions)
     }
 
-    fn validate_contents(&self) -> Result<Snapshot> {
+    fn validate_contents(&self, process: &mut dyn Process) -> Result<Snapshot> {
         let snapshot = self.parse_contents()?;
-        self.validate_sealed(&snapshot)?;
+        self.validate_sealed(&snapshot, process)?;
         Ok(snapshot)
     }
 
     /// What the intent means, for an intent this process has just sealed and
     /// so need not digest a second time.
-    fn validate_sealed(&self, snapshot: &Snapshot) -> Result<()> {
+    fn validate_sealed(&self, snapshot: &Snapshot, process: &mut dyn Process) -> Result<()> {
         let mut names = BTreeSet::new();
         let mut summary_phase = None;
         let mut context_phase = None;
@@ -1070,7 +1071,7 @@ impl Intent {
                 }
                 let previous: Snapshot = serde_json::from_slice(state.expected.bytes.as_deref()
                     .ok_or_else(|| Error::Invalid("native task requires prior snapshot".into()))?)?;
-                let (expected, record) = history::contribute(&previous.data, &root_binding, &request)?;
+                let (expected, record) = history::contribute(&previous.data, &root_binding, &request, process)?;
                 self.validate_native_summary(&previous, snapshot, request.task.phase)?;
                 let old_items = self.participants.iter().find(|p| p.target == ITEMS).unwrap().expected.bytes.as_deref();
                 let old_decisions = self.participants.iter().find(|p| p.target == DECISIONS).unwrap().expected.bytes.as_deref()
@@ -1851,6 +1852,7 @@ fn validate_all<S: Storage>(
     replay: bool,
     kind: &IntentKind,
     encoding: Encoding,
+    process: &mut dyn Process,
 ) -> Result<()> {
     if let IntentKind::DebugReviewV1 { root_binding } = kind
         && storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(root_binding) {
@@ -1879,13 +1881,13 @@ fn validate_all<S: Storage>(
         && let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
             "verification claim store binding changed", "verification claim preimage absent")?
     {
-        cadence::verification::verdicts::reobserve(&previous.data, claim)?;
+        cadence::verification::verdicts::reobserve(&previous.data, claim, process)?;
     }
     if let IntentKind::VerificationWaiverV1 { claim, root_binding } = kind
         && let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
             "waiver claim store binding changed", "waiver claim preimage absent")?
     {
-        cadence::verification::waivers::reobserve(&previous.data, claim)?;
+        cadence::verification::waivers::reobserve(&previous.data, claim, process)?;
     }
     if let IntentKind::VerificationHumanV1 { claim, root_binding } = kind
         && previous_on_disk(storage, participants, replay, root_binding,
@@ -1897,19 +1899,19 @@ fn validate_all<S: Storage>(
         && let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
             "completion store binding changed", "completion preimage absent")?
     {
-        cadence::verification::completion::reobserve(&previous.data, claim)?;
+        cadence::verification::completion::reobserve(&previous.data, claim, process)?;
     }
     if let IntentKind::VerificationRunV1 { record, root_binding } = kind
         && let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
             "verification run store binding changed", "verification run preimage absent")?
     {
-        cadence::verification::runner::reobserve_launch(&previous.data, record)?;
+        cadence::verification::runner::reobserve_launch(&previous.data, record, process)?;
     }
     if let IntentKind::VerificationV1 { request, root_binding } = kind
         && let Some(previous) = previous_on_disk(storage, participants, replay, root_binding,
             "verification store binding changed", "verification preimage absent")?
     {
-        cadence::verification::inputs::reobserve_external(&request.root, &previous.data, &request.attempt.inputs, &request.documents)?;
+        cadence::verification::inputs::reobserve_external(&request.root, &previous.data, &request.attempt.inputs, &request.documents, process)?;
     }
     if let IntentKind::NativeTaskV1 {request,root_binding}=kind
         && let cadence::execution::history::Event::Checkpoint {records,..}=&request.event
@@ -1928,7 +1930,7 @@ fn validate_all<S: Storage>(
         if filesystem.read(STATE)?.directory_identity!=*root_binding {
             return Err(Error::Invalid("native close project differs from bound store".into()));
         }
-        cadence::execution::receipts::reobserve_source(&proof.project,&proof.dispatch,&request.task.task,&proof.source)?;
+        cadence::execution::receipts::reobserve_source(&proof.project,&proof.dispatch,&request.task.task,&proof.source, process)?;
     }
     if let IntentKind::NativeAdmissionV1 {request,root_binding,inventory}=kind {
         let observed=storage.read(&format!("phase-plan-inventory:{}",request.contract.phase))?;
@@ -2004,13 +2006,14 @@ pub(crate) fn commit<S: Storage, P: Policy>(
     snapshot: &Snapshot,
     kind: IntentKind,
     participants: Vec<Participant>,
+    process: &mut dyn Process,
 ) -> Result<()> {
     if storage.read(INTENT)?.bytes.is_some() {
         return Err(Error::Conflict(
             "pending operation requires recovery".into(),
         ));
     }
-    validate_all(storage, &participants, false, &kind, Encoding::Digest)?;
+    validate_all(storage, &participants, false, &kind, Encoding::Digest, process)?;
     let preconditions = participants.iter().map(Precondition::new).collect::<Vec<_>>();
     let mut prepared = Vec::new();
     for participant in &participants {
@@ -2028,7 +2031,7 @@ pub(crate) fn commit<S: Storage, P: Policy>(
         }
     }
     let mut intent = Intent::unfiltered(kind, participants);
-    intent.validate_sealed(snapshot)?;
+    intent.validate_sealed(snapshot, process)?;
     intent.omit_unchanged();
     intent.integrity = intent.digest()?;
     let prospective = snapshot;
@@ -2050,7 +2053,7 @@ pub(crate) fn commit<S: Storage, P: Policy>(
         }
     };
     if let Err(error) =
-        validate_all(storage, &intent.participants, false, &intent.kind, intent.encoding)
+        validate_all(storage, &intent.participants, false, &intent.kind, intent.encoding, process)
         .and_then(|()| validate_preconditions(storage, &preconditions, false))
         .and_then(|()| match &route {
             Some(route) => policy.validate_routing_admission(
@@ -2084,7 +2087,7 @@ pub(crate) fn commit<S: Storage, P: Policy>(
     while let Some((target, bytes, file)) = remaining.next() {
         // Check all participants again immediately before each replacement.
         prune_stop(&intent.kind, "record:before")?;
-        let result = validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)
+        let result = validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding, process)
             .and_then(|()| validate_preconditions(storage, &preconditions, true))
             .and_then(|()| storage.install(&file))
             .and_then(|()| storage.confirm(&target, &bytes).map(|_| ()));
@@ -2097,7 +2100,7 @@ pub(crate) fn commit<S: Storage, P: Policy>(
     }
     // Snapshot is the final semantic participant and holds completion receipts.
     // Removing the intent and syncing its directory is part of completion.
-    validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)?;
+    validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding, process)?;
     validate_preconditions(storage, &preconditions, true)?;
     prune_stop(&intent.kind, "clear:before")?;
     storage.remove(INTENT)?;
@@ -2109,7 +2112,7 @@ fn prune_stop(kind: &IntentKind, point: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) -> Result<()> {
+pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P, process: &mut dyn Process) -> Result<()> {
     let Some(bytes) = storage.read(INTENT)?.bytes else {
         return Ok(());
     };
@@ -2141,8 +2144,8 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) ->
     intent.participants.sort_by_key(|participant| match participant.target.as_str() {
         ITEMS => 1, DECISIONS => 2, STATE => 3, _ => 0,
     });
-    let snapshot = if installed { intent.parse_contents()? } else { intent.validate_contents()? };
-    validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)?;
+    let snapshot = if installed { intent.parse_contents()? } else { intent.validate_contents(process)? };
+    validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding, process)?;
     policy.validate(&MutationContext {
         operation: if matches!(intent.kind, IntentKind::GuardAudit { .. }) {
             "guard_audit_recovery"
@@ -2157,7 +2160,7 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) ->
     if let IntentKind::UndoV1 { write } = &intent.kind { storage.install_undo(write)?; }
     if let IntentKind::MilestoneReleaseV1 { write } = &intent.kind { storage.install_release(write)?; }
     for participant in &intent.participants {
-        validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)?;
+        validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding, process)?;
         let current = storage.read(&participant.target)?;
         if current.bytes.as_ref() == Some(&participant.bytes) {
             // Rename may have completed before its directory sync. Reconfirm
@@ -2165,7 +2168,7 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) ->
             storage.resync(&participant.target, &participant.bytes)?;
         } else {
             let file = storage.prepare(&participant.target, &participant.bytes)?;
-            let result = validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)
+            let result = validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding, process)
                 .and_then(|()| storage.install(&file))
                 .and_then(|()| {
                     storage
@@ -2176,7 +2179,7 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P) ->
             result?;
         }
     }
-    validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding)?;
+    validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding, process)?;
     storage.remove(INTENT)
 }
 
@@ -2447,7 +2450,7 @@ mod intent_encoding_tests {
             bytes: Some(legacy_bytes), identity: "1:3:420".into(), directory_identity: "1:1;".into(),
         });
         let mut storage = Memory(files);
-        recover(&mut storage, &mut Allow).unwrap();
+        recover(&mut storage, &mut Allow, &mut crate::process::System).unwrap();
         assert_eq!(storage.0[STATE].bytes.as_ref(), Some(&participants[2].bytes));
         assert!(!storage.0.contains_key(INTENT));
 
@@ -2482,7 +2485,7 @@ mod intent_encoding_tests {
             bytes: Some(legacy_bytes), identity: "1:3:420".into(), directory_identity: "1:1;".into(),
         });
         let mut storage = Memory(files);
-        recover(&mut storage, &mut Allow).unwrap();
+        recover(&mut storage, &mut Allow, &mut crate::process::System).unwrap();
         assert_eq!(storage.0[STATE].bytes.as_ref(), Some(&participants[2].bytes));
         assert!(!storage.0.contains_key(INTENT));
     }

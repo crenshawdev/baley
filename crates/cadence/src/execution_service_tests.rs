@@ -2679,6 +2679,7 @@ fn gap_query_child(test: &str) -> bool {
 
 #[test]
 fn phase8_gap_active_dispatch_returns_original_choice_under_new_config() {
+    let process = &mut cadence::process::System;
     if !gap_query_child(
         "server::execution_service_tests::phase8_gap_active_dispatch_returns_original_choice_under_new_config",
     ) {
@@ -2689,7 +2690,7 @@ fn phase8_gap_active_dispatch_returns_original_choice_under_new_config() {
         let root = tree.path().join(".planning");
         let factory = SessionFactory::new(None, Arc::new(crate::config::planning_policy));
         let driver = Driver::default();
-        let answer = execution_service::query(&factory, &root, 8, &driver).await;
+        let answer = execution_service::query(&factory, &root, 8, &driver, process).await;
         let Envelope::Ok(Success::Dispatch { dispatch_id, route, prompt_digest, .. }) = answer.unwrap() else {
             panic!("expected the retained admitted prompt, received a refusal");
         };
@@ -2716,6 +2717,7 @@ fn phase8_gap_active_dispatch_returns_original_choice_under_new_config() {
 
 #[test]
 fn phase8_gap_new_dispatch_returns_newer_choice() {
+    let process = &mut cadence::process::System;
     if !gap_query_child(
         "server::execution_service_tests::phase8_gap_new_dispatch_returns_newer_choice",
     ) {
@@ -2726,7 +2728,7 @@ fn phase8_gap_new_dispatch_returns_newer_choice() {
         let root = tree.path().join(".planning");
         let factory = SessionFactory::new(None, Arc::new(crate::config::planning_policy));
         let driver = Driver::default();
-        let answer = execution_service::query(&factory, &root, 8, &driver).await;
+        let answer = execution_service::query(&factory, &root, 8, &driver, process).await;
         let confirmed = answer.is_ok();
         let Envelope::Ok(Success::Dispatch { route, .. }) = answer.unwrap() else {
             panic!("expected confirmed new dispatch");

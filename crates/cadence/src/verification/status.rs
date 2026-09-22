@@ -5,6 +5,7 @@
 //! dispatched from. The current judgment is the latest complete patch whose
 //! full basis equals the basis observed now; every other complete attempt is
 //! historical and keeps its rows, reasons and identities unchanged.
+use crate::process::Process;
 use super::{inputs, model::{Basis, Patch, Verdict}, persistence::{self, Attempt}, verdicts, waivers};
 use crate::store::{Error, Result};
 use serde::Serialize;
@@ -112,11 +113,11 @@ impl Judgment {
     }
 }
 
-pub fn judgment(root: &Path, data: &Value, phase: u32) -> Result<Judgment> {
+pub fn judgment(root: &Path, data: &Value, phase: u32, process: &mut dyn Process) -> Result<Judgment> {
     let attempts: Vec<Attempt> = persistence::phase_attempts(data, phase)?;
     let patches = verdicts::patches(data)?;
     let complete: Vec<Option<Patch>> = attempts.iter().map(|a| patches.iter().find(|p| p.attempt == a.id).cloned()).collect();
-    let (observed, unavailable) = match inputs::observe(root, data, phase) {
+    let (observed, unavailable) = match inputs::observe(root, data, phase, process) {
         Ok(observed) => (Some(observed.basis), None),
         Err(error) => (None, Some(verdicts::error_answer(error))),
     };
@@ -146,10 +147,10 @@ pub fn counts(truths: &Value) -> Value {
 
 /// The owner-visible report for one phase. Reading observes the current basis
 /// exactly as a dispatch would; it writes nothing and repairs nothing.
-pub fn report(root: &Path, data: &Value, phase: u32) -> Result<Value> {
+pub fn report(root: &Path, data: &Value, phase: u32, process: &mut dyn Process) -> Result<Value> {
     let context = crate::context::persistence::saved(data, phase)?
         .ok_or_else(|| inputs::refuse(phase, "native-approved-truths", "context", "native approved truths required"))?;
-    let judged = judgment(root, data, phase)?;
+    let judged = judgment(root, data, phase, process)?;
     let Judgment { observed, unavailable, attempts, complete, .. } = &judged;
     let current = judged.current();
     let mut history = Vec::new();

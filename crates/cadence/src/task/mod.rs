@@ -10,6 +10,7 @@ pub mod instructions;
 pub mod model;
 pub mod render;
 
+use crate::process::Process;
 use crate::{
     rail::{git, risk::MaterialIdentity},
     store::{Error, Result},
@@ -82,22 +83,22 @@ fn path_text(path: &Path) -> Result<String> {
 
 /// Observe the range `start..HEAD`. An unmoved HEAD is an empty range with
 /// no material: nothing landed, so nothing can be scanned.
-pub fn observe_range(project: &Path, start: &str) -> Result<Range> {
-    let head = git::resolve_commit(project, "HEAD")?;
+pub fn observe_range(project: &Path, start: &str, process: &mut dyn Process) -> Result<Range> {
+    let head = git::resolve_commit(project, "HEAD", process)?;
     if head == start {
         return Ok(Range { head, commits: Vec::new(), files: Vec::new(), material: None, diff: Vec::new(), diff_paths: Vec::new() });
     }
     let material = MaterialIdentity::Committed { base_id: start.to_owned(), head_id: head.clone() };
-    let log = git::run(project, ["log", "--reverse", "--format=%H%x00%s", "--end-of-options", &format!("{start}..{head}")])?;
+    let log = git::run(project, ["log", "--reverse", "--format=%H%x00%s", "--end-of-options", &format!("{start}..{head}")], process)?;
     let mut commits = Vec::new();
     for line in text(&log)?.lines().filter(|line| !line.is_empty()) {
         let (id, subject) = line.split_once('\0').ok_or_else(|| Error::Invalid("malformed git log record".into()))?;
-        let names = git::run(project, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--root", "--end-of-options", id])?;
+        let names = git::run(project, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--root", "--end-of-options", id], process)?;
         let files = names.split(|byte| *byte == 0).filter(|name| !name.is_empty())
             .map(text).collect::<Result<Vec<_>>>()?;
         commits.push(model::Commit { id: id.to_owned(), subject: subject.to_owned(), files });
     }
-    let diff = git::diff(project, &material)?;
-    let files = git::changed_paths(project, &material)?.iter().map(|path| path_text(path)).collect::<Result<Vec<_>>>()?;
+    let diff = git::diff(project, &material, process)?;
+    let files = git::changed_paths(project, &material, process)?.iter().map(|path| path_text(path)).collect::<Result<Vec<_>>>()?;
     Ok(Range { head, commits, files, material: Some(material), diff: diff.body, diff_paths: diff.paths })
 }

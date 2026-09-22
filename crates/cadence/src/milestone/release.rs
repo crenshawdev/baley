@@ -1,4 +1,5 @@
 //! Explicit release observations and a confirmed participant of the sole journal.
+use crate::process::Process;
 use super::model::{self, Receipt};
 use crate::{landing::model::Landing, rail::{branch, commit, git}, store::{Error, Result, model::digest}};
 use schemars::JsonSchema;
@@ -77,8 +78,8 @@ impl Ord for Version {
 }
 impl PartialOrd for Version { fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) } }
 
-pub fn tags(project: &Path) -> Result<Vec<Tag>> {
-    let bytes = git::run(project, ["for-each-ref", "--format=%(refname) %(objectname)", "refs/tags/"])?;
+pub fn tags(project: &Path, process: &mut dyn Process) -> Result<Vec<Tag>> {
+    let bytes = git::run(project, ["for-each-ref", "--format=%(refname) %(objectname)", "refs/tags/"], process)?;
     let text = String::from_utf8(bytes).map_err(|e| Error::Invalid(e.to_string()))?;
     text.lines().map(|row| {
         let (name, object) = row.split_once(' ').ok_or_else(|| Error::Invalid("invalid tag inventory".into()))?;
@@ -86,7 +87,7 @@ pub fn tags(project: &Path) -> Result<Vec<Tag>> {
         let normalized = tag.strip_prefix('v').unwrap_or(tag);
         let release = version(normalized).map(|_| normalized.to_owned());
         // A ref that cannot peel is a failed read, never an empty inventory.
-        Ok(Tag { tag:tag.into(), object:object.into(), commit:git::resolve_commit(project,name)?, version:release })
+        Ok(Tag { tag:tag.into(), object:object.into(), commit:git::resolve_commit(project,name, process)?, version:release })
     }).collect()
 }
 pub fn collision<'a>(tags: &'a [Tag], proposed: &str, tag: &str) -> Option<&'a Tag> {
@@ -128,27 +129,27 @@ pub fn landing(data: &Value, binding: &str, request: &Request, head: &str) -> Re
     }
     Ok(landing.clone())
 }
-pub fn observe(project: &Path, binding: &str, request: Request) -> Result<Report> {
+pub fn observe(project: &Path, binding: &str, request: Request, process: &mut dyn Process) -> Result<Report> {
     for s in [&request.request_id,&request.landing,&request.version,&request.tag] { model::name(s)?; }
     if version(&request.version).is_none() || request.tag != format!("v{}",request.version) {
         return Err(Error::Invalid("release requires a semantic version and its exact v-prefixed tag".into()));
     }
-    git::run(project,["check-ref-format",&format!("refs/tags/{}",request.tag)])?;
-    let tags = tags(project)?;
+    git::run(project,["check-ref-format",&format!("refs/tags/{}",request.tag)], process)?;
+    let tags = tags(project, process)?;
     let (manifest_bytes,manifest_version) = manifest(project,&request.manifest)?;
     let newest = tags.iter().filter_map(|t| Some((version(t.version.as_deref()?)?,t)))
         .max_by(|(a,ta),(b,tb)| a.cmp(b).then_with(|| ta.tag.cmp(&tb.tag))).map(|(_,t)| t.clone());
     let drift = newest.as_ref().is_some_and(|t| version(t.version.as_deref().unwrap()) != version(&manifest_version));
     let mut report = Report { id:model::identity("release",binding,&request.request_id), digest:String::new(), root_binding:binding.into(),
-        request,state:"awaiting-confirmation".into(),manifest_bytes,manifest_version,head:git::resolve_commit(project,"HEAD")?,tags,newest,drift };
+        request,state:"awaiting-confirmation".into(),manifest_bytes,manifest_version,head:git::resolve_commit(project,"HEAD", process)?,tags,newest,drift };
     report.digest = report_digest(&report)?;
     Ok(report)
 }
 fn report_digest(report: &Report) -> Result<String> {
     let mut copy = report.clone(); copy.digest.clear(); Ok(digest(&serde_json::to_vec(&copy)?))
 }
-pub fn reobserve(project: &Path, report: &Report) -> Result<()> {
-    if observe(project,&report.root_binding,report.request.clone())? != *report {
+pub fn reobserve(project: &Path, report: &Report, process: &mut dyn Process) -> Result<()> {
+    if observe(project,&report.root_binding,report.request.clone(), process)? != *report {
         return Err(Error::Conflict("observed manifest bytes, tag inventory or HEAD changed".into()));
     }
     Ok(())
@@ -156,16 +157,16 @@ pub fn reobserve(project: &Path, report: &Report) -> Result<()> {
 fn guard_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
     match fs::read(path) { Ok(b)=>Ok(Some(b)),Err(e) if e.kind()==std::io::ErrorKind::NotFound=>Ok(None),Err(e)=>Err(e.into()) }
 }
-pub fn freeze(root: &Path, report: Report, confirmation: Confirm, protected: Vec<String>, on_protected: String) -> Result<WriteSeal> {
+pub fn freeze(root: &Path, report: Report, confirmation: Confirm, protected: Vec<String>, on_protected: String, process: &mut dyn Process) -> Result<WriteSeal> {
     let project = root.parent().ok_or_else(|| Error::Invalid("missing release project".into()))?;
-    reobserve(project,&report)?;
-    let reference = String::from_utf8(git::run(project,["symbolic-ref","--short","HEAD"])?).map_err(|e| Error::Invalid(e.to_string()))?;
+    reobserve(project,&report, process)?;
+    let reference = String::from_utf8(git::run(project,["symbolic-ref","--short","HEAD"], process)?).map_err(|e| Error::Invalid(e.to_string()))?;
     if branch::permission(&protected,&on_protected,reference.trim())? != branch::Permission::Pass { return Err(Error::Policy("release bump requires branch permission".into())); }
     let mut document: Value = serde_json::from_slice(&report.manifest_bytes)?;
     document["version"] = json!(report.request.version);
     let mut after = serde_json::to_vec_pretty(&document)?; after.push(b'\n');
     let changes = BTreeMap::from([(report.request.manifest.path.clone(),Some(after.clone()))]);
-    let git = commit::freeze_message(project,&changes,&[],&format!("chore(release): bump version to {}\n\nRecord the owner-confirmed release version before landing.\n",report.request.version))?;
+    let git = commit::freeze_message(project,&changes,&[],&format!("chore(release): bump version to {}\n\nRecord the owner-confirmed release version before landing.\n",report.request.version), process)?;
     let mode = fs::metadata(path(project,&report.request.manifest)?)?.permissions().mode();
     let mut guards = BTreeMap::new();
     for path in [root.join("config.json"),root.join("config.v4.json")].into_iter().chain(std::env::var_os("CADENCE_GLOBAL_CONFIG").filter(|v| !v.is_empty()).map(PathBuf::from)) {
@@ -208,12 +209,12 @@ pub fn contribute(data: &Value, write: &WriteSeal) -> Result<Value> {
     next[NAMESPACE] = serde_json::to_value(records)?; next["landings"] = serde_json::to_value(landings)?;
     Ok(next)
 }
-pub fn validate(root: &Path, write: &WriteSeal, replay: bool) -> Result<()> {
+pub fn validate(root: &Path, write: &WriteSeal, replay: bool, process: &mut dyn Process) -> Result<()> {
     if crate::verification::inputs::root_binding(root)? != write.report.root_binding { return Err(Error::Conflict("release root changed".into())); }
     let project = root.parent().ok_or_else(|| Error::Invalid("missing release project".into()))?;
     for (path,bytes) in &write.guards { if guard_bytes(path)? != *bytes { return Err(Error::Conflict("release branch policy changed".into())); } }
-    commit::validate(project,&write.git,replay)?;
-    if tags(project)? != write.report.tags { return Err(Error::Conflict("release tag inventory changed".into())); }
+    commit::validate(project,&write.git,replay, process)?;
+    if tags(project, process)? != write.report.tags { return Err(Error::Conflict("release tag inventory changed".into())); }
     let (bytes,_) = manifest(project,&write.report.request.manifest)?;
     if bytes != write.report.manifest_bytes && !(replay && bytes == write.after) { return Err(Error::Conflict("release manifest bytes changed".into())); }
     if branch::permission(&write.protected,&write.on_protected,write.git.reference.trim_start_matches("refs/heads/"))? != branch::Permission::Pass {
@@ -221,8 +222,8 @@ pub fn validate(root: &Path, write: &WriteSeal, replay: bool) -> Result<()> {
     }
     Ok(())
 }
-pub fn install(root: &Path, write: &WriteSeal) -> Result<()> {
-    validate(root,write,true)?;
+pub fn install(root: &Path, write: &WriteSeal, process: &mut dyn Process) -> Result<()> {
+    validate(root,write,true, process)?;
     let project = root.parent().unwrap();
     let target = path(project,&write.report.request.manifest)?;
     if fs::read(&target)? != write.after {
@@ -231,18 +232,18 @@ pub fn install(root: &Path, write: &WriteSeal) -> Result<()> {
         if temporary.exists() { fs::remove_file(&temporary)?; }
         let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(write.mode).open(&temporary)?;
         file.write_all(&write.after)?; file.sync_all()?;
-        validate(root,write,true)?;
+        validate(root,write,true, process)?;
         fs::rename(&temporary,&target)?; fs::File::open(target.parent().unwrap())?.sync_all()?;
     }
-    commit::install(project,&write.git,&mut || validate(root,write,true))?;
-    validate(root,write,true)
+    commit::install(project,&write.git,&mut |process: &mut dyn Process| validate(root,write,true,process), process)?;
+    validate(root,write,true, process)
 }
-pub fn validate_tag(project: &Path, intent: &Intent, tag: &str) -> Result<()> {
+pub fn validate_tag(project: &Path, intent: &Intent, tag: &str, process: &mut dyn Process) -> Result<()> {
     if tag != intent.tag { return Err(Error::Conflict("landing tag differs from confirmed release intent".into())); }
     let (bytes,v) = manifest(project,&intent.manifest)?;
     if bytes != intent.manifest_bytes || v != intent.version { return Err(Error::Conflict("pulled release manifest differs from confirmed bump".into())); }
-    git::run(project,["merge-base","--is-ancestor",&intent.commit,"HEAD"])?;
-    if let Some(existing) = collision(&tags(project)?,&intent.version,tag) {
+    git::run(project,["merge-base","--is-ancestor",&intent.commit,"HEAD"], process)?;
+    if let Some(existing) = collision(&tags(project, process)?,&intent.version,tag) {
         return Err(Error::Conflict(format!("release tag collision: {}",existing.tag)));
     }
     Ok(())

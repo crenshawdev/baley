@@ -1,4 +1,5 @@
 //! A complete prune participant of the store's existing, sole intent journal.
+use crate::process::Process;
 use super::{documents, model::{self, Close, PruneRequest, Receipt, Selection}};
 use crate::{rail::{branch, commit}, store::{Error, Result}};
 use serde::{Deserialize, Serialize};
@@ -102,7 +103,7 @@ pub fn require_close(data: &Value, binding: &str, request: &PruneRequest) -> Res
     Ok(close.clone())
 }
 
-pub fn freeze(root: &Path, data: &Value, binding: &str, request: PruneRequest, protected: Vec<String>, on_protected: String) -> Result<Prune> {
+pub fn freeze(root: &Path, data: &Value, binding: &str, request: PruneRequest, protected: Vec<String>, on_protected: String, process: &mut dyn Process) -> Result<Prune> {
     require_close(data,binding,&request)?;
     let project = root.parent().ok_or_else(|| Error::Invalid("planning root lacks project".into()))?;
     // Required documents are opened before any transaction or destructive write.
@@ -121,11 +122,11 @@ pub fn freeze(root: &Path, data: &Value, binding: &str, request: PruneRequest, p
     }
     entries.extend([roadmap,requirements]);
     let changes = entries.iter().filter(|e| !e.directory).map(|e| (e.path.clone(),e.after.clone())).collect();
-    let reference = String::from_utf8(crate::rail::git::run(project,["symbolic-ref","--short","HEAD"])?).map_err(|e| Error::Invalid(e.to_string()))?;
+    let reference = String::from_utf8(crate::rail::git::run(project,["symbolic-ref","--short","HEAD"], process)?).map_err(|e| Error::Invalid(e.to_string()))?;
     if branch::permission(&protected,&on_protected,reference.trim())? != branch::Permission::Pass {
         return Err(Error::Policy(format!("prune commit requires branch permission: {}",reference.trim())));
     }
-    let git = commit::freeze(project,&changes,&phases.into_iter().collect::<Vec<_>>())?;
+    let git = commit::freeze(project,&changes,&phases.into_iter().collect::<Vec<_>>(), process)?;
     let mut guards = BTreeMap::new();
     for path in [root.join("config.json"),root.join("config.v4.json")].into_iter().chain(
         std::env::var_os("CADENCE_GLOBAL_CONFIG").filter(|s| !s.is_empty()).map(std::path::PathBuf::from)) {
@@ -163,7 +164,7 @@ pub fn answer(prune: &Prune) -> Value {
         "steps":prune.steps},"next":"land-read"})
 }
 
-pub fn validate(root: &Path, prune: &Prune, replay: bool) -> Result<()> {
+pub fn validate(root: &Path, prune: &Prune, replay: bool, process: &mut dyn Process) -> Result<()> {
     use crate::store::Storage;
     if crate::store::filesystem::Filesystem::new(root)?.read(crate::store::model::STATE)?.directory_identity != prune.root_binding {
         return Err(Error::Conflict("prune store root changed".into()));
@@ -173,7 +174,7 @@ pub fn validate(root: &Path, prune: &Prune, replay: bool) -> Result<()> {
         let actual = match fs::read(path) {Ok(b)=>Some(b),Err(e) if e.kind()==std::io::ErrorKind::NotFound=>None,Err(e)=>return Err(fault(path,e))};
         if actual != *expected { return Err(fault(path,"prune commit policy input changed")); }
     }
-    commit::validate(project,&prune.git,replay)?;
+    commit::validate(project,&prune.git,replay, process)?;
     for entry in &prune.entries {
         let phase_path = prune.selection.phases.iter().any(|p| entry.path == format!(".planning/phases/{p}") || entry.path.starts_with(&format!(".planning/phases/{p}/")));
         if !(phase_path && entry.after.is_none() || !entry.directory && entry.after.is_some() && matches!(entry.path.as_str(),".planning/ROADMAP.md"|".planning/REQUIREMENTS.md")) {
@@ -200,10 +201,10 @@ pub fn validate(root: &Path, prune: &Prune, replay: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn install(root: &Path, prune: &Prune) -> Result<()> {
+pub fn install(root: &Path, prune: &Prune, process: &mut dyn Process) -> Result<()> {
     let project = root.parent().ok_or_else(|| Error::Invalid("planning root lacks project".into()))?;
     for entry in &prune.entries {
-        validate(root,prune,true)?;
+        validate(root,prune,true, process)?;
         let operation = if entry.after.is_some(){"replace"}else{"delete"};
         stop(&format!("{operation}:{}:before",entry.path))?;
         let path = contained(project,&entry.path)?;
@@ -215,7 +216,7 @@ pub fn install(root: &Path, prune: &Prune) -> Result<()> {
                     file.write_all(bytes)?;
                     file.set_permissions(fs::Permissions::from_mode(entry.mode & 0o7777))?;
                     file.sync_all()?;
-                    validate(root,prune,true)?;
+                    validate(root,prune,true, process)?;
                     fs::rename(&temporary,&path)?;
                     Ok::<_,Error>(())
                 })();
@@ -232,6 +233,6 @@ pub fn install(root: &Path, prune: &Prune) -> Result<()> {
         File::open(parent)?.sync_all()?;
         stop(&format!("{operation}:{}:after",entry.path))?;
     }
-    commit::install(project,&prune.git,&mut || validate(root,prune,true))?;
-    validate(root,prune,true)
+    commit::install(project,&prune.git,&mut |process: &mut dyn Process| validate(root,prune,true,process), process)?;
+    validate(root,prune,true, process)
 }

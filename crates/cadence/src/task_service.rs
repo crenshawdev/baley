@@ -105,7 +105,7 @@ async fn open<I: ConfigIo + Clone + Sync>(
     let policy = super::pause_service::policy(&generation)?;
     let observed = {
         let (project, planning, policy) = (project.to_path_buf(), planning.clone(), policy.clone());
-        tokio::task::spawn_blocking(move || branch::observe(&project, &planning, &policy)).await.map_err(|_| Error::Closed)??
+        tokio::task::spawn_blocking(move || branch::observe(&project, &planning, &policy, &mut cadence::process::System)).await.map_err(|_| Error::Closed)??
     };
     match branch::protected(&policy, &observed) {
         Ok(None) => {}
@@ -191,7 +191,7 @@ async fn close<I: ConfigIo + Clone + Sync>(
     }
     let range = {
         let (project, start) = (project.to_path_buf(), episode.start.clone());
-        tokio::task::spawn_blocking(move || task::observe_range(&project, &start)).await.map_err(|_| Error::Closed)??
+        tokio::task::spawn_blocking(move || task::observe_range(&project, &start, &mut cadence::process::System)).await.map_err(|_| Error::Closed)??
     };
     let (generation, _) = factory.observe_config(&project.join(".planning"))?;
     let gate = crate::config::merge::get(&generation.effective.values, "review.triggers.risk_surface.gate")

@@ -1,3 +1,4 @@
+use cadence::process::Process;
 use super::{CadenceServer, evidence_service::Command, pause_service::Response};
 use crate::import::SessionFactory;
 use cadence::{
@@ -57,10 +58,10 @@ fn git_config(root: &Path, args: &[&str]) -> Vec<u8> {
     );
     output.stdout
 }
-async fn fixture(policy: Value) -> tempfile::TempDir {
-    configured_fixture(json!({"git":policy})).await
+async fn fixture(policy: Value, process: &mut (dyn Process + Send)) -> tempfile::TempDir {
+    configured_fixture(json!({"git":policy}), process).await
 }
-async fn configured_fixture(config: Value) -> tempfile::TempDir {
+async fn configured_fixture(config: Value, process: &mut (dyn Process + Send)) -> tempfile::TempDir {
     let temp = tempfile::tempdir().unwrap();
     assert!(temp.path().starts_with("/tmp"));
     let root = temp.path().join(".planning");
@@ -76,28 +77,35 @@ async fn configured_fixture(config: Value) -> tempfile::TempDir {
         serde_json::to_vec(&config).unwrap(),
     )
     .unwrap();
-    git::run(temp.path(), ["init", "-b", "main"]).unwrap();
+    git::run(temp.path(), ["init", "-b", "main"], process).unwrap();
     git::run(
         temp.path(),
         ["config", "--local", "user.name", "Pause Fixture"],
+        process,
     )
     .unwrap();
     git::run(
         temp.path(),
         ["config", "--local", "user.email", "pause@example.invalid"],
+        process,
     )
     .unwrap();
     git::run(
         temp.path(),
         ["config", "--local", "commit.gpgsign", "false"],
+        process,
     )
     .unwrap();
     server().lifecycle(&root).await.unwrap();
-    git::run(temp.path(), ["add", "--", ".planning"]).unwrap();
+    git::run(temp.path(), ["add", "--", ".planning"], process).unwrap();
     git_config(temp.path(), &["commit", "-m", "imported fixture"]);
     temp
 }
-pub(super) async fn risk_fixture(consequence: &str, surfaces: Option<Value>) -> tempfile::TempDir {
+pub(super) async fn risk_fixture(
+    consequence: &str,
+    surfaces: Option<Value>,
+    process: &mut (dyn Process + Send),
+) -> tempfile::TempDir {
     let mut risk = json!({"gate":consequence});
     if let Some(surfaces) = surfaces {
         risk["surfaces"] = surfaces;
@@ -105,7 +113,8 @@ pub(super) async fn risk_fixture(consequence: &str, surfaces: Option<Value>) -> 
     configured_fixture(json!({
         "git":{"on_protected":"allow","integration_branch":"trunk"},
         "review":{"triggers":{"risk_surface":risk}}
-    }))
+    }),
+    process,)
     .await
 }
 pub(super) fn input(project: &Path, occurrence: &str) -> Input {
@@ -225,9 +234,9 @@ async fn review(
         .unwrap();
 }
 
-fn staged_request(project: &Path, occurrence: &str, body: &[u8]) -> Input {
+fn staged_request(project: &Path, occurrence: &str, body: &[u8], process: &mut dyn Process) -> Input {
     fs::write(project.join("work.sql"), body).unwrap();
-    git::run(project, ["add", "--", "work.sql"]).unwrap();
+    git::run(project, ["add", "--", "work.sql"], process).unwrap();
     let mut request = input(project, occurrence);
     request.authorized.insert("work.sql".into());
     request
@@ -235,11 +244,12 @@ fn staged_request(project: &Path, occurrence: &str, body: &[u8]) -> Input {
 
 #[test]
 fn pause_protected_questions_survive_reopen_and_answers_are_occurrence_scoped() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
         for choice in ["proceed", "create", "abort"] {
-            let temp = fixture(json!({"on_protected":"ask","integration_branch":"trunk"})).await;
+            let temp = fixture(json!({"on_protected":"ask","integration_branch":"trunk"}), process).await;
             let request = input(temp.path(), "one");
-            let head = git::run(temp.path(), ["rev-parse", "HEAD"]).unwrap();
+            let head = git::run(temp.path(), ["rev-parse", "HEAD"], process).unwrap();
             let gate = waiting(server().pause(request.clone()).await.unwrap(), "protected");
             let reopened = waiting(server().pause(request.clone()).await.unwrap(), "protected");
             assert_eq!(gate, reopened);
@@ -247,14 +257,14 @@ fn pause_protected_questions_survive_reopen_and_answers_are_occurrence_scoped() 
             let result = server().pause(request.clone()).await.unwrap();
             if choice == "abort" {
                 assert!(matches!(result, Response::Refused(_)));
-                assert_eq!(git::run(temp.path(), ["rev-parse", "HEAD"]).unwrap(), head);
+                assert_eq!(git::run(temp.path(), ["rev-parse", "HEAD"], process).unwrap(), head);
             } else {
                 assert!(matches!(result, Response::Ready(_)), "{result:?}");
-                assert_eq!(git::run(temp.path(), ["rev-parse", "HEAD^"]).unwrap(), head);
+                assert_eq!(git::run(temp.path(), ["rev-parse", "HEAD^"], process).unwrap(), head);
             }
             if choice == "create" {
                 assert_eq!(
-                    git::run(temp.path(), ["branch", "--show-current"]).unwrap(),
+                    git::run(temp.path(), ["branch", "--show-current"], process).unwrap(),
                     b"work/approved\n"
                 );
             } else {
@@ -264,15 +274,16 @@ fn pause_protected_questions_survive_reopen_and_answers_are_occurrence_scoped() 
                 );
             }
         }
-        let temp = fixture(json!({"on_protected":"refuse"})).await;
-        let head = git::run(temp.path(), ["rev-parse", "HEAD"]).unwrap();
+        let temp = fixture(json!({"on_protected":"refuse"}), process).await;
+        let head = git::run(temp.path(), ["rev-parse", "HEAD"], process).unwrap();
         assert!(server().pause(input(temp.path(), "refused")).await.is_err());
-        assert_eq!(git::run(temp.path(), ["rev-parse", "HEAD"]).unwrap(), head);
+        assert_eq!(git::run(temp.path(), ["rev-parse", "HEAD"], process).unwrap(), head);
     });
 }
 
 #[test]
 fn pause_base_guards_use_local_refs_and_shared_history() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
         for case in [
             "detached",
@@ -289,33 +300,33 @@ fn pause_base_guards_use_local_refs_and_shared_history() {
             if case == "unknown" {
                 policy["protected_branches"] = json!(["absent"]);
             }
-            let temp = fixture(policy).await;
+            let temp = fixture(policy, process).await;
             let root = temp.path();
             match case {
                 "detached" => {
-                    git::run(root, ["checkout", "--detach"]).unwrap();
+                    git::run(root, ["checkout", "--detach"], process).unwrap();
                 }
                 "tag-only" => {
-                    git::run(root, ["tag", "--no-sign", "absent"]).unwrap();
+                    git::run(root, ["tag", "--no-sign", "absent"], process).unwrap();
                 }
                 "unrelated" => {
-                    git::run(root, ["checkout", "--orphan", "unrelated"]).unwrap();
+                    git::run(root, ["checkout", "--orphan", "unrelated"], process).unwrap();
                     git_config(root, &["commit", "-m", "unrelated history"]);
                 }
                 "advanced" => {
-                    git::run(root, ["branch", "work"]).unwrap();
+                    git::run(root, ["branch", "work"], process).unwrap();
                     fs::write(root.join("advance"), "advanced base").unwrap();
-                    git::run(root, ["add", "--", "advance"]).unwrap();
+                    git::run(root, ["add", "--", "advance"], process).unwrap();
                     git_config(root, &["commit", "-m", "advance base"]);
-                    git::run(root, ["checkout", "work"]).unwrap();
+                    git::run(root, ["checkout", "work"], process).unwrap();
                 }
                 _ => (),
             }
-            let head = git::run(root, ["rev-parse", "HEAD"]).unwrap();
+            let head = git::run(root, ["rev-parse", "HEAD"], process).unwrap();
             let result = server().pause(input(root, case)).await.unwrap();
             if case == "advanced" {
                 assert!(matches!(result, Response::Ready(_)), "{result:?}");
-                assert_eq!(git::run(root, ["rev-parse", "HEAD^"]).unwrap(), head);
+                assert_eq!(git::run(root, ["rev-parse", "HEAD^"], process).unwrap(), head);
             } else {
                 let kind = match case {
                     "detached" => "detached",
@@ -330,7 +341,7 @@ fn pause_base_guards_use_local_refs_and_shared_history() {
                 );
             }
             if case != "advanced" {
-                assert_eq!(git::run(root, ["rev-parse", "HEAD"]).unwrap(), head);
+                assert_eq!(git::run(root, ["rev-parse", "HEAD"], process).unwrap(), head);
             }
         }
     });
@@ -338,10 +349,12 @@ fn pause_base_guards_use_local_refs_and_shared_history() {
 
 #[test]
 fn pause_integration_policy_uses_active_version_before_title_and_preserves_all_arms() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
         for case in ["active", "title", "missing", "published", "trunk", "off", "off-base", "ask"] {
             let temp = fixture(json!({"on_protected":"allow", "integration_branch":if case == "trunk" {"trunk"} else {"milestone"},
-                "auto_branch":if case == "off" {"off"} else if case == "ask" {"ask"} else {"auto"}})).await;
+                "auto_branch":if case == "off" {"off"} else if case == "ask" {"ask"} else {"auto"}}),
+                process,).await;
             let root = temp.path();
             if case == "active" {
                 fs::write(root.join(".planning/PROJECT.md"), "### Active\n\nPrevious v1.0.0 closed.\n\n**`v2.3.4 - Current`**, opened today\n").unwrap();
@@ -350,11 +363,11 @@ fn pause_integration_policy_uses_active_version_before_title_and_preserves_all_a
                 fs::write(root.join(".planning/ROADMAP.md"), "# Roadmap\n\n## Phases\n\n- [ ] **Phase 1: Work**\n").unwrap();
             }
             if matches!(case, "active" | "missing") {
-                git::run(root, ["add", "--", ".planning"]).unwrap();
+                git::run(root, ["add", "--", ".planning"], process).unwrap();
                 git_config(root, &["commit", "-m", "set branch fixture inputs"]);
             }
-            if case == "published" { git::run(root, ["tag", "--no-sign", "9.8.7+release"]).unwrap(); }
-            if case == "off-base" { git::run(root, ["checkout", "-b", "existing-work"]).unwrap(); }
+            if case == "published" { git::run(root, ["tag", "--no-sign", "9.8.7+release"], process).unwrap(); }
+            if case == "off-base" { git::run(root, ["checkout", "-b", "existing-work"], process).unwrap(); }
             let result = server().pause(input(root, case)).await.unwrap();
             match case {
                 "missing" => { waiting(result, "missing-version"); }
@@ -363,7 +376,7 @@ fn pause_integration_policy_uses_active_version_before_title_and_preserves_all_a
                 _ => {
                     assert!(matches!(result, Response::Ready(_)), "{case}: {result:?}");
                     let expected = match case { "active" => "cadence/v2.3.4", "title" => "cadence/v9.8.7", "off-base" => "existing-work", _ => "main" };
-                    assert_eq!(git::run(root, ["branch", "--show-current"]).unwrap(), format!("{expected}\n").as_bytes());
+                    assert_eq!(git::run(root, ["branch", "--show-current"], process).unwrap(), format!("{expected}\n").as_bytes());
                 }
             }
         }
@@ -372,8 +385,9 @@ fn pause_integration_policy_uses_active_version_before_title_and_preserves_all_a
 
 #[test]
 fn pause_unreadable_controlling_config_never_supplies_cached_permission() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let temp = fixture(json!({"on_protected":"allow","integration_branch":"trunk"})).await;
+        let temp = fixture(json!({"on_protected":"allow","integration_branch":"trunk"}), process).await;
         let server = server();
         assert!(matches!(
             server.pause(input(temp.path(), "one")).await.unwrap(),
@@ -388,10 +402,10 @@ fn pause_unreadable_controlling_config_never_supplies_cached_permission() {
         let active = session.config().unwrap().repo.identity;
         fs::remove_file(&active).unwrap();
         fs::create_dir(&active).unwrap();
-        let before = git::run(temp.path(), ["rev-parse", "HEAD"]).unwrap();
+        let before = git::run(temp.path(), ["rev-parse", "HEAD"], process).unwrap();
         assert!(server.pause(input(temp.path(), "one")).await.is_err());
         assert_eq!(
-            git::run(temp.path(), ["rev-parse", "HEAD"]).unwrap(),
+            git::run(temp.path(), ["rev-parse", "HEAD"], process).unwrap(),
             before
         );
     });
@@ -399,19 +413,21 @@ fn pause_unreadable_controlling_config_never_supplies_cached_permission() {
 
 #[test]
 fn pause_risk_reads_the_staged_tree_and_preserves_checked_match_and_inconclusive_states() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let temp = risk_fixture("blocking", Some(json!(["destructive", "untrusted_input"]))).await;
+        let temp = risk_fixture("blocking", Some(json!(["destructive", "untrusted_input"])), process).await;
         let request = staged_request(
             temp.path(),
             "staged-risk",
             b"const body = JSON.parse(request.body);\nDROP TABLE accounts;\n",
+            process,
         );
-        let before = git::run(temp.path(), ["rev-parse", "HEAD"]).unwrap();
+        let before = git::run(temp.path(), ["rev-parse", "HEAD"], process).unwrap();
         let need = reviewing(server().pause(request).await.unwrap());
         assert_eq!(need.fire.base.as_bytes(), &before[..before.len() - 1]);
         assert!(need.fire.staged);
         assert_eq!(need.fire.head_id, None);
-        assert_eq!(need.fire.index_id, git::index_id(temp.path()).unwrap());
+        assert_eq!(need.fire.index_id, git::index_id(temp.path(), process).unwrap());
         assert_eq!(need.fire.scope, vec![PathBuf::from("work.sql")]);
         assert_eq!(need.fire.authored, need.fire.scope);
         assert!(need.fire.scan.checked);
@@ -429,18 +445,19 @@ fn pause_risk_reads_the_staged_tree_and_preserves_checked_match_and_inconclusive
             ]
         );
 
-        let binary = risk_fixture("blocking", Some(json!(["destructive"]))).await;
-        let request = staged_request(binary.path(), "binary-risk", b"\0\xff\0");
+        let binary = risk_fixture("blocking", Some(json!(["destructive"])), process).await;
+        let request = staged_request(binary.path(), "binary-risk", b"\0\xff\0", process);
         let need = reviewing(server().pause(request).await.unwrap());
         assert!(need.fire.scan.checked);
         assert!(need.fire.scan.inconclusive);
         assert!(need.fire.scan.matches.is_empty());
 
-        let safe = risk_fixture("blocking", Some(json!(["destructive"]))).await;
+        let safe = risk_fixture("blocking", Some(json!(["destructive"])), process).await;
         let request = staged_request(
             safe.path(),
             "safe-risk",
             b"CREATE TABLE accounts(id int);\n",
+            process,
         );
         let Response::Ready(capture) = server().pause(request).await.unwrap() else {
             panic!("a judged nonmatching staged change must clear");
@@ -452,12 +469,13 @@ fn pause_risk_reads_the_staged_tree_and_preserves_checked_match_and_inconclusive
 
 #[test]
 fn pause_risk_asks_for_unanswered_surfaces_and_persists_the_answer_before_review() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let temp = risk_fixture("blocking", None).await;
+        let temp = risk_fixture("blocking", None, process).await;
         fs::create_dir(temp.path().join("auth")).unwrap();
         let config_before = fs::read(temp.path().join(".planning/config.json")).unwrap();
-        let request = staged_request(temp.path(), "scope-risk", b"DROP TABLE accounts;\n");
-        let head = git::run(temp.path(), ["rev-parse", "HEAD"]).unwrap();
+        let request = staged_request(temp.path(), "scope-risk", b"DROP TABLE accounts;\n", process);
+        let head = git::run(temp.path(), ["rev-parse", "HEAD"], process).unwrap();
         let gate = waiting(
             server().pause(request.clone()).await.unwrap(),
             "risk-surfaces",
@@ -474,7 +492,7 @@ fn pause_risk_asks_for_unanswered_surfaces_and_persists_the_answer_before_review
             fs::read(temp.path().join(".planning/config.json")).unwrap(),
             config_before
         );
-        assert_eq!(git::run(temp.path(), ["rev-parse", "HEAD"]).unwrap(), head);
+        assert_eq!(git::run(temp.path(), ["rev-parse", "HEAD"], process).unwrap(), head);
         answer(temp.path(), &request, gate, "all", None).await;
         assert!(matches!(
             server().pause(request.clone()).await.unwrap(),
@@ -494,8 +512,9 @@ fn pause_risk_asks_for_unanswered_surfaces_and_persists_the_answer_before_review
 
 #[test]
 fn pause_risk_excludes_binary_receipts_by_provenance_and_keeps_narrow_review_exclusions() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let temp = risk_fixture("blocking", Some(json!(["destructive"]))).await;
+        let temp = risk_fixture("blocking", Some(json!(["destructive"])), process).await;
         let request = input(temp.path(), "receipt-risk");
         let view = server()
             .store(
@@ -536,6 +555,7 @@ fn pause_risk_excludes_binary_receipts_by_provenance_and_keeps_narrow_review_exc
                 ".planning/decisions.jsonl",
                 ".planning/state.json",
             ],
+            process,
         )
         .unwrap();
         let Response::Ready(capture) = server().pause(request).await.unwrap() else {
@@ -548,7 +568,7 @@ fn pause_risk_excludes_binary_receipts_by_provenance_and_keeps_narrow_review_exc
         assert!(fire.authored.is_empty());
         assert!(fire.scan.empty);
 
-        let future = risk_fixture("blocking", Some(json!(["destructive"]))).await;
+        let future = risk_fixture("blocking", Some(json!(["destructive"])), process).await;
         fs::write(
             future.path().join("future-store-participant.jsonl"),
             "DROP TABLE accounts\n",
@@ -557,12 +577,14 @@ fn pause_risk_excludes_binary_receipts_by_provenance_and_keeps_narrow_review_exc
         git::run(
             future.path(),
             ["add", "--", "future-store-participant.jsonl"],
+            process,
         )
         .unwrap();
         let staged = git::staged(
             future.path(),
             "HEAD",
             &BTreeSet::from([PathBuf::from("future-store-participant.jsonl")]),
+            process,
         )
         .unwrap();
         assert_eq!(staged.scope.len(), 1);
@@ -577,7 +599,7 @@ fn pause_risk_excludes_binary_receipts_by_provenance_and_keeps_narrow_review_exc
             .empty
         );
 
-        let review = risk_fixture("blocking", Some(json!(["destructive"]))).await;
+        let review = risk_fixture("blocking", Some(json!(["destructive"])), process).await;
         let artifact = review
             .path()
             .join(".planning/phases/1/REVIEW-risk_surface-fixture.md");
@@ -598,9 +620,10 @@ fn pause_risk_excludes_binary_receipts_by_provenance_and_keeps_narrow_review_exc
                 ".planning/phases/1/REVIEW-risk_surface-fixture.md",
                 ".planning/phases/1/nested/REVIEW-risk_surface-fixture.md",
             ],
+            process,
         )
         .unwrap();
-        let staged = git::staged(review.path(), "HEAD", &BTreeSet::new()).unwrap();
+        let staged = git::staged(review.path(), "HEAD", &BTreeSet::new(), process).unwrap();
         assert_eq!(
             staged.authored,
             vec![PathBuf::from(
@@ -623,16 +646,17 @@ fn pause_risk_excludes_binary_receipts_by_provenance_and_keeps_narrow_review_exc
 
 #[test]
 fn pause_risk_consequences_use_only_recorded_contracted_results() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let off = risk_fixture("off", None).await;
-        let request = staged_request(off.path(), "off-risk", b"DROP TABLE accounts;\n");
+        let off = risk_fixture("off", None, process).await;
+        let request = staged_request(off.path(), "off-risk", b"DROP TABLE accounts;\n", process);
         let Response::Ready(capture) = server().pause(request).await.unwrap() else {
             panic!("off must skip review");
         };
         assert_eq!(capture.risk, Some(Outcome::Off));
 
-        let advisory = risk_fixture("advisory", Some(json!(["destructive"]))).await;
-        let request = staged_request(advisory.path(), "advisory-risk", b"DROP TABLE accounts;\n");
+        let advisory = risk_fixture("advisory", Some(json!(["destructive"])), process).await;
+        let request = staged_request(advisory.path(), "advisory-risk", b"DROP TABLE accounts;\n", process);
         let need = reviewing(server().pause(request.clone()).await.unwrap());
         review(
             advisory.path(),
@@ -646,8 +670,8 @@ fn pause_risk_consequences_use_only_recorded_contracted_results() {
         };
         assert!(matches!(capture.risk, Some(Outcome::Advisory(_))));
 
-        let blocking = risk_fixture("blocking", Some(json!(["destructive"]))).await;
-        let request = staged_request(blocking.path(), "blocking-clean", b"DROP TABLE accounts;\n");
+        let blocking = risk_fixture("blocking", Some(json!(["destructive"])), process).await;
+        let request = staged_request(blocking.path(), "blocking-clean", b"DROP TABLE accounts;\n", process);
         let need = reviewing(server().pause(request.clone()).await.unwrap());
         review(blocking.path(), &request, &need, Vec::new()).await;
         let Response::Ready(capture) = server().pause(request).await.unwrap() else {
@@ -658,11 +682,12 @@ fn pause_risk_consequences_use_only_recorded_contracted_results() {
             Some(Outcome::BlockingCleared(Review { findings, .. })) if findings.is_empty()
         ));
 
-        let malformed = risk_fixture("blocking", Some(json!(["destructive"]))).await;
+        let malformed = risk_fixture("blocking", Some(json!(["destructive"])), process).await;
         let request = staged_request(
             malformed.path(),
             "malformed-risk",
             b"DROP TABLE accounts;\n",
+            process,
         );
         let need = reviewing(server().pause(request.clone()).await.unwrap());
         server()
@@ -695,9 +720,10 @@ fn pause_risk_consequences_use_only_recorded_contracted_results() {
 
 #[test]
 fn pause_deferred_review_is_visible_to_the_production_queue_observation() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let temp = risk_fixture("deferred", Some(json!(["destructive"]))).await;
-        let request = staged_request(temp.path(), "deferred-risk", b"DROP TABLE accounts;\n");
+        let temp = risk_fixture("deferred", Some(json!(["destructive"])), process).await;
+        let request = staged_request(temp.path(), "deferred-risk", b"DROP TABLE accounts;\n", process);
         let need = reviewing(server().pause(request.clone()).await.unwrap());
         review(
             temp.path(),
@@ -725,12 +751,14 @@ fn pause_deferred_review_is_visible_to_the_production_queue_observation() {
 
 #[test]
 fn pause_blocking_override_is_occurrence_scoped_and_rearm_is_capped_across_restart() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let overridden = risk_fixture("blocking", Some(json!(["destructive"]))).await;
+        let overridden = risk_fixture("blocking", Some(json!(["destructive"])), process).await;
         let request = staged_request(
             overridden.path(),
             "override-risk",
             b"DROP TABLE accounts;\n",
+            process,
         );
         let need = reviewing(server().pause(request.clone()).await.unwrap());
         review(
@@ -768,8 +796,8 @@ fn pause_blocking_override_is_occurrence_scoped_and_rearm_is_capped_across_resta
                         && receipt.head != receipt.base))
         }));
 
-        let rearmed = risk_fixture("blocking", Some(json!(["destructive"]))).await;
-        let request = staged_request(rearmed.path(), "rearm-risk", b"DROP TABLE accounts;\n");
+        let rearmed = risk_fixture("blocking", Some(json!(["destructive"])), process).await;
+        let request = staged_request(rearmed.path(), "rearm-risk", b"DROP TABLE accounts;\n", process);
         let first = reviewing(server().pause(request.clone()).await.unwrap());
         review(
             rearmed.path(),
@@ -785,7 +813,7 @@ fn pause_blocking_override_is_occurrence_scoped_and_rearm_is_capped_across_resta
             "CREATE TABLE accounts(id int);\n",
         )
         .unwrap();
-        git::run(rearmed.path(), ["add", "--", "work.sql"]).unwrap();
+        git::run(rearmed.path(), ["add", "--", "work.sql"], process).unwrap();
         let second = reviewing(server().pause(request.clone()).await.unwrap());
         assert_eq!(second.fire.round, 2);
         assert_eq!(second.fire.base, first.fire.index_id);
@@ -813,9 +841,10 @@ fn pause_blocking_override_is_occurrence_scoped_and_rearm_is_capped_across_resta
 
 #[test]
 fn pause_adjudicated_findings_wait_for_a_recorded_operator_disposition() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let temp = risk_fixture("adjudicated", Some(json!(["destructive"]))).await;
-        let request = staged_request(temp.path(), "adjudicated-risk", b"DROP TABLE accounts;\n");
+        let temp = risk_fixture("adjudicated", Some(json!(["destructive"])), process).await;
+        let request = staged_request(temp.path(), "adjudicated-risk", b"DROP TABLE accounts;\n", process);
         let need = reviewing(server().pause(request.clone()).await.unwrap());
         review(temp.path(), &request, &need, vec![finding(Severity::Low)]).await;
         let gate = waiting(server().pause(request.clone()).await.unwrap(), "risk");
@@ -829,8 +858,9 @@ fn pause_adjudicated_findings_wait_for_a_recorded_operator_disposition() {
 
 #[test]
 fn pause_wip_preserves_exact_bytes_deletion_and_rename() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let temp = risk_fixture("off", None).await;
+        let temp = risk_fixture("off", None, process).await;
         let root = temp.path();
         fs::write(root.join("binary data.bin"), b"old bytes\n").unwrap();
         fs::write(root.join("delete-me.txt"), "remove me\n").unwrap();
@@ -844,15 +874,16 @@ fn pause_wip_preserves_exact_bytes_deletion_and_rename() {
                 "delete-me.txt",
                 "old name.txt",
             ],
+            process,
         )
         .unwrap();
         git_config(root, &["commit", "-m", "seed work files"]);
-        let before = git::run(root, ["rev-parse", "HEAD"]).unwrap();
+        let before = git::run(root, ["rev-parse", "HEAD"], process).unwrap();
 
         let bytes = b"\0preserved\xffbytes\n";
         fs::write(root.join("binary data.bin"), bytes).unwrap();
         fs::remove_file(root.join("delete-me.txt")).unwrap();
-        git::run(root, ["mv", "--", "old name.txt", "renamed \u{2713}.txt"]).unwrap();
+        git::run(root, ["mv", "--", "old name.txt", "renamed \u{2713}.txt"], process).unwrap();
         fs::write(root.join("new file.txt"), "new contents\n").unwrap();
         fs::write(
             root.join(".planning/phases/1/working notes.md"),
@@ -878,12 +909,12 @@ fn pause_wip_preserves_exact_bytes_deletion_and_rename() {
         };
         let wip = capture.wip.expect("dirty source work needs a WIP");
         assert_eq!(
-            git::run(root, ["rev-parse", "HEAD^"]).unwrap(),
+            git::run(root, ["rev-parse", "HEAD^"], process).unwrap(),
             format!("{wip}\n").as_bytes()
         );
         assert_ne!(before, format!("{wip}\n").as_bytes());
         assert_eq!(
-            git::run(root, ["show", "-s", "--format=%s", &wip]).unwrap(),
+            git::run(root, ["show", "-s", "--format=%s", &wip], process).unwrap(),
             b"wip: Work\n"
         );
         let binary = format!("{wip}:binary data.bin");
@@ -891,36 +922,37 @@ fn pause_wip_preserves_exact_bytes_deletion_and_rename() {
         let added = format!("{wip}:new file.txt");
         let deleted = format!("{wip}:delete-me.txt");
         let planning = format!("{wip}:.planning/phases/1/working notes.md");
-        assert_eq!(git::run(root, ["show", binary.as_str()]).unwrap(), bytes);
+        assert_eq!(git::run(root, ["show", binary.as_str()], process).unwrap(), bytes);
         assert_eq!(
-            git::run(root, ["show", renamed.as_str()]).unwrap(),
+            git::run(root, ["show", renamed.as_str()], process).unwrap(),
             b"rename contents\n"
         );
         assert_eq!(
-            git::run(root, ["show", added.as_str()]).unwrap(),
+            git::run(root, ["show", added.as_str()], process).unwrap(),
             b"new contents\n"
         );
-        assert!(git::run(root, ["show", deleted.as_str()]).is_err());
-        assert!(git::run(root, ["show", planning.as_str()]).is_err());
+        assert!(git::run(root, ["show", deleted.as_str()], process).is_err());
+        assert!(git::run(root, ["show", planning.as_str()], process).is_err());
         assert!(root.join(".planning/phases/1/working notes.md").is_file());
     });
 }
 
 #[test]
 fn pause_wip_refuses_unauthorized_dirt_and_skips_an_originally_clean_tree() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let dirty = risk_fixture("off", None).await;
+        let dirty = risk_fixture("off", None, process).await;
         fs::write(dirty.path().join("authorized.txt"), "authorized\n").unwrap();
         fs::write(dirty.path().join("unrelated.txt"), "unrelated\n").unwrap();
         let mut request = input(dirty.path(), "unauthorized-wip");
         request.authorized.insert("authorized.txt".into());
-        let head = git::run(dirty.path(), ["rev-parse", "HEAD"]).unwrap();
+        let head = git::run(dirty.path(), ["rev-parse", "HEAD"], process).unwrap();
         assert!(server().pause(request).await.is_err());
-        assert_eq!(git::run(dirty.path(), ["rev-parse", "HEAD"]).unwrap(), head);
-        assert!(git::run(dirty.path(), ["diff", "--cached", "--quiet"]).is_ok());
+        assert_eq!(git::run(dirty.path(), ["rev-parse", "HEAD"], process).unwrap(), head);
+        assert!(git::run(dirty.path(), ["diff", "--cached", "--quiet"], process).is_ok());
 
-        let clean = risk_fixture("off", None).await;
-        let head = git::run(clean.path(), ["rev-parse", "HEAD"]).unwrap();
+        let clean = risk_fixture("off", None, process).await;
+        let head = git::run(clean.path(), ["rev-parse", "HEAD"], process).unwrap();
         let Response::Ready(capture) = server()
             .pause(input(clean.path(), "clean-wip"))
             .await
@@ -930,7 +962,7 @@ fn pause_wip_refuses_unauthorized_dirt_and_skips_an_originally_clean_tree() {
         };
         assert_eq!(capture.wip, None);
         assert_eq!(
-            git::run(clean.path(), ["rev-parse", "HEAD^"]).unwrap(),
+            git::run(clean.path(), ["rev-parse", "HEAD^"], process).unwrap(),
             head
         );
     });
@@ -938,30 +970,32 @@ fn pause_wip_refuses_unauthorized_dirt_and_skips_an_originally_clean_tree() {
 
 #[test]
 fn pause_wip_rechecks_the_staged_tree_before_commit() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let temp = risk_fixture("off", None).await;
+        let temp = risk_fixture("off", None, process).await;
         let root = temp.path();
         fs::write(root.join("guarded.txt"), "first\n").unwrap();
-        let observed = git::observe(root).unwrap();
+        let observed = git::observe(root, process).unwrap();
         let authorized = BTreeSet::from([PathBuf::from("guarded.txt")]);
         let staged =
-            git::stage_authorized(root, &observed, &authorized, &BTreeSet::new(), &authorized)
+            git::stage_authorized(root, &observed, &authorized, &BTreeSet::new(), &authorized, process)
                 .unwrap()
                 .unwrap();
-        let head = git::run(root, ["rev-parse", "HEAD"]).unwrap();
+        let head = git::run(root, ["rev-parse", "HEAD"], process).unwrap();
         fs::write(root.join("guarded.txt"), "second\n").unwrap();
-        git::run(root, ["add", "--", "guarded.txt"]).unwrap();
-        assert!(git::commit_wip(root, &staged, "guarded work").is_err());
-        assert_eq!(git::run(root, ["rev-parse", "HEAD"]).unwrap(), head);
+        git::run(root, ["add", "--", "guarded.txt"], process).unwrap();
+        assert!(git::commit_wip(root, &staged, "guarded work", process).is_err());
+        assert_eq!(git::run(root, ["rev-parse", "HEAD"], process).unwrap(), head);
     });
 }
 
 #[test]
 fn pause_wip_reports_a_real_commit_hook_failure_without_discarding_the_index() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
         use std::os::unix::fs::PermissionsExt;
 
-        let temp = risk_fixture("off", None).await;
+        let temp = risk_fixture("off", None, process).await;
         let root = temp.path();
         fs::write(root.join("hooked.txt"), "preserve me\n").unwrap();
         let hook = root.join(".git/hooks/pre-commit");
@@ -971,12 +1005,12 @@ fn pause_wip_reports_a_real_commit_hook_failure_without_discarding_the_index() {
         fs::set_permissions(&hook, permissions).unwrap();
         let mut request = input(root, "hook-failure");
         request.authorized.insert("hooked.txt".into());
-        let head = git::run(root, ["rev-parse", "HEAD"]).unwrap();
+        let head = git::run(root, ["rev-parse", "HEAD"], process).unwrap();
 
         assert!(server().pause(request).await.is_err());
-        assert_eq!(git::run(root, ["rev-parse", "HEAD"]).unwrap(), head);
+        assert_eq!(git::run(root, ["rev-parse", "HEAD"], process).unwrap(), head);
         assert_eq!(
-            git::run(root, ["show", ":hooked.txt"]).unwrap(),
+            git::run(root, ["show", ":hooked.txt"], process).unwrap(),
             b"preserve me\n"
         );
     });
@@ -984,11 +1018,12 @@ fn pause_wip_reports_a_real_commit_hook_failure_without_discarding_the_index() {
 
 #[test]
 fn pause_commits_exact_resume_record_for_dirty_and_clean_starts() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
         for dirty in [true, false] {
-            let temp = risk_fixture("off", None).await;
+            let temp = risk_fixture("off", None, process).await;
             let root = temp.path();
-            let before = String::from_utf8(git::run(root, ["rev-parse", "HEAD"]).unwrap())
+            let before = String::from_utf8(git::run(root, ["rev-parse", "HEAD"], process).unwrap())
                 .unwrap()
                 .trim()
                 .to_owned();
@@ -1001,26 +1036,26 @@ fn pause_commits_exact_resume_record_for_dirty_and_clean_starts() {
                 panic!("pause record must commit");
             };
             let commits = String::from_utf8(
-                git::run(root, ["rev-list", "--count", &format!("{before}..HEAD")]).unwrap(),
+                git::run(root, ["rev-list", "--count", &format!("{before}..HEAD")], process).unwrap(),
             )
             .unwrap();
             assert_eq!(commits.trim(), if dirty { "2" } else { "1" });
             assert_eq!(capture.wip.is_some(), dirty);
             if let Some(wip) = &capture.wip {
                 assert_eq!(
-                    git::run(root, ["show", &format!("{wip}:source.txt")]).unwrap(),
+                    git::run(root, ["show", &format!("{wip}:source.txt")], process).unwrap(),
                     b"exact source bytes\0\xff"
                 );
                 assert_eq!(
-                    git::run(root, ["rev-parse", "HEAD^"]).unwrap(),
+                    git::run(root, ["rev-parse", "HEAD^"], process).unwrap(),
                     format!("{wip}\n").as_bytes()
                 );
             }
             assert_eq!(
-                git::run(root, ["log", "-1", "--format=%s"]).unwrap(),
+                git::run(root, ["log", "-1", "--format=%s"], process).unwrap(),
                 b"docs: pause at phase 1\n"
             );
-            git::require_clean(root).unwrap();
+            git::require_clean(root, process).unwrap();
 
             let service = server();
             let recovery = service
@@ -1076,7 +1111,7 @@ fn pause_commits_exact_resume_record_for_dirty_and_clean_starts() {
                 .unwrap();
             for (name, bytes) in evidence::persistence::confirmed_participants(&view).unwrap() {
                 assert_eq!(
-                    git::run(root, ["show", &format!("HEAD:.planning/{name}")]).unwrap(),
+                    git::run(root, ["show", &format!("HEAD:.planning/{name}")], process).unwrap(),
                     bytes
                 );
             }
@@ -1086,10 +1121,11 @@ fn pause_commits_exact_resume_record_for_dirty_and_clean_starts() {
 
 #[test]
 fn pause_record_failure_after_wip_is_partial_and_retry_is_idempotent() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let temp = risk_fixture("off", None).await;
+        let temp = risk_fixture("off", None, process).await;
         let root = temp.path();
-        let before = String::from_utf8(git::run(root, ["rev-parse", "HEAD"]).unwrap())
+        let before = String::from_utf8(git::run(root, ["rev-parse", "HEAD"], process).unwrap())
             .unwrap()
             .trim()
             .to_owned();
@@ -1112,13 +1148,13 @@ fn pause_record_failure_after_wip_is_partial_and_retry_is_idempotent() {
         ));
         let failed = CadenceServer::with_factory(factory);
         assert!(failed.pause(request.clone()).await.is_err());
-        let wip = String::from_utf8(git::run(root, ["rev-parse", "HEAD"]).unwrap())
+        let wip = String::from_utf8(git::run(root, ["rev-parse", "HEAD"], process).unwrap())
             .unwrap()
             .trim()
             .to_owned();
         assert_ne!(wip, before);
         assert_eq!(
-            git::run(root, ["show", &format!("{wip}:partial.txt")]).unwrap(),
+            git::run(root, ["show", &format!("{wip}:partial.txt")], process).unwrap(),
             b"preserve before record\n"
         );
         let recovery = server()
@@ -1135,12 +1171,12 @@ fn pause_record_failure_after_wip_is_partial_and_retry_is_idempotent() {
         };
         assert_eq!(capture.wip, None);
         let count = String::from_utf8(
-            git::run(root, ["rev-list", "--count", &format!("{before}..HEAD")]).unwrap(),
+            git::run(root, ["rev-list", "--count", &format!("{before}..HEAD")], process).unwrap(),
         )
         .unwrap();
         assert_eq!(count.trim(), "2");
         let subjects = String::from_utf8(
-            git::run(root, ["log", "--format=%s", &format!("{before}..HEAD")]).unwrap(),
+            git::run(root, ["log", "--format=%s", &format!("{before}..HEAD")], process).unwrap(),
         )
         .unwrap();
         assert_eq!(subjects.matches("wip: Work").count(), 1);
@@ -1160,14 +1196,15 @@ fn pause_record_failure_after_wip_is_partial_and_retry_is_idempotent() {
                 .count(),
             1
         );
-        git::require_clean(root).unwrap();
+        git::require_clean(root, process).unwrap();
     });
 }
 
 #[test]
 fn pause_record_risk_identity_ignores_changed_binary_receipt_bytes() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let temp = risk_fixture("blocking", Some(json!(["destructive"]))).await;
+        let temp = risk_fixture("blocking", Some(json!(["destructive"])), process).await;
         let root = temp.path();
         let note = ".planning/phases/1/operator note.md";
         fs::write(
@@ -1186,9 +1223,9 @@ fn pause_record_risk_identity_ignores_changed_binary_receipt_bytes() {
             panic!("receipt-only changes must not create a second review fire");
         };
         assert_eq!(capture.wip, None);
-        git::require_clean(root).unwrap();
+        git::require_clean(root, process).unwrap();
         assert_eq!(
-            git::run(root, ["show", &format!("HEAD:{note}")]).unwrap(),
+            git::run(root, ["show", &format!("HEAD:{note}")], process).unwrap(),
             b"DROP TABLE only in authored documentation\n"
         );
     });
@@ -1327,13 +1364,14 @@ fn read_pause_child(project: &Path, occurrence: &str) -> Value {
 
 #[test]
 fn pause_survives_process_loss_at_each_real_commit_boundary() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
         for barrier in ["after-wip", "after-record", "after-final-commit"] {
-            let temp = risk_fixture("off", None).await;
+            let temp = risk_fixture("off", None, process).await;
             let project = temp.path();
             let occurrence = format!("process-loss-{barrier}");
             let request = recovery_input(project, &occurrence);
-            let before = String::from_utf8(git::run(project, ["rev-parse", "HEAD"]).unwrap())
+            let before = String::from_utf8(git::run(project, ["rev-parse", "HEAD"], process).unwrap())
                 .unwrap()
                 .trim()
                 .to_owned();
@@ -1342,11 +1380,11 @@ fn pause_survives_process_loss_at_each_real_commit_boundary() {
 
             kill_pause_child(project, &occurrence, barrier);
             assert_eq!(
-                git::run(project, ["show", "HEAD:device.bin"]).unwrap(),
+                git::run(project, ["show", "HEAD:device.bin"], process).unwrap(),
                 source
             );
             let count = String::from_utf8(
-                git::run(project, ["rev-list", "--count", &format!("{before}..HEAD")]).unwrap(),
+                git::run(project, ["rev-list", "--count", &format!("{before}..HEAD")], process).unwrap(),
             )
             .unwrap();
             assert_eq!(
@@ -1371,7 +1409,7 @@ fn pause_survives_process_loss_at_each_real_commit_boundary() {
             );
             if barrier == "after-record" {
                 assert!(
-                    !git::run(project, ["status", "--porcelain"])
+                    !git::run(project, ["status", "--porcelain"], process)
                         .unwrap()
                         .is_empty()
                 );
@@ -1381,19 +1419,19 @@ fn pause_survives_process_loss_at_each_real_commit_boundary() {
                 panic!("fresh retry must complete {barrier}");
             };
             assert_eq!(retried.wip, None);
-            git::require_clean(project).unwrap();
+            git::require_clean(project, process).unwrap();
             let completed = String::from_utf8(
-                git::run(project, ["rev-list", "--count", &format!("{before}..HEAD")]).unwrap(),
+                git::run(project, ["rev-list", "--count", &format!("{before}..HEAD")], process).unwrap(),
             )
             .unwrap();
             assert_eq!(completed.trim(), "2");
-            let completed_head = git::run(project, ["rev-parse", "HEAD"]).unwrap();
+            let completed_head = git::run(project, ["rev-parse", "HEAD"], process).unwrap();
             assert!(matches!(
                 server().pause(request).await.unwrap(),
                 Response::Ready(_)
             ));
             assert_eq!(
-                git::run(project, ["rev-parse", "HEAD"]).unwrap(),
+                git::run(project, ["rev-parse", "HEAD"], process).unwrap(),
                 completed_head
             );
             let committed_view = server()
@@ -1407,7 +1445,7 @@ fn pause_survives_process_loss_at_each_real_commit_boundary() {
                 evidence::persistence::confirmed_participants(&committed_view).unwrap()
             {
                 assert_eq!(
-                    git::run(project, ["show", &format!("HEAD:.planning/{name}")]).unwrap(),
+                    git::run(project, ["show", &format!("HEAD:.planning/{name}")], process).unwrap(),
                     bytes
                 );
             }
@@ -1439,13 +1477,14 @@ fn pause_branch_child() {
 
 #[test]
 fn pause_unanswered_branch_gate_reads_back_in_a_fresh_process() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let temp = fixture(json!({"on_protected":"ask","integration_branch":"trunk"})).await;
+        let temp = fixture(json!({"on_protected":"ask","integration_branch":"trunk"}), process).await;
         let pending = waiting(
             server().pause(input(temp.path(), "restart")).await.unwrap(),
             "protected",
         );
-        let head = git::run(temp.path(), ["rev-parse", "HEAD"]).unwrap();
+        let head = git::run(temp.path(), ["rev-parse", "HEAD"], process).unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -1467,6 +1506,6 @@ fn pause_unanswered_branch_gate_reads_back_in_a_fresh_process() {
             .find_map(|line| line.strip_prefix("PAUSE_GATE:"))
             .unwrap();
         assert_eq!(serde_json::from_str::<Gate>(line).unwrap(), pending);
-        assert_eq!(git::run(temp.path(), ["rev-parse", "HEAD"]).unwrap(), head);
+        assert_eq!(git::run(temp.path(), ["rev-parse", "HEAD"], process).unwrap(), head);
     });
 }

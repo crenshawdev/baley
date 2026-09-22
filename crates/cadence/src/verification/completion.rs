@@ -9,6 +9,7 @@
 //! same confirmed transaction, and UAT.md and the approved context do not.
 //! The record's lifecycle authority names the native inputs it certified, so
 //! a later change to them makes it inapplicable and the disagreement exact.
+use crate::process::Process;
 use super::{human, inputs, model::{Basis, Projections}, persistence, projections, status, waivers, verdicts};
 use crate::{execution::{admission, history}, plan, store::{Error, Result, model::{digest, DecisionRecord, Decision, Origin, Evidence}}};
 use serde::{Deserialize, Serialize};
@@ -137,13 +138,13 @@ fn read_text(path: &Path) -> std::result::Result<Option<String>, String> {
     }
 }
 
-pub fn prepare(root: &Path, data: &Value, request: Request) -> Result<Claim> {
+pub fn prepare(root: &Path, data: &Value, request: Request, process: &mut dyn Process) -> Result<Claim> {
     let phase = request.basis.phase;
     let mut claim = Claim { schema: SCHEMA.into(), root: root.into(), root_binding: inputs::root_binding(root)?,
         payload_digest: payload_digest(&request)?, authority_digest: inputs::authority_digest(data)?, request,
         observed: None, documents: BTreeMap::new(), unavailable: None, roadmap: None, requirements: None, uat: None, unreadable: None, answer: Value::Null };
     let observation = (|| -> Result<()> {
-        let observed = inputs::observe(root, data, phase)?;
+        let observed = inputs::observe(root, data, phase, process)?;
         claim.documents = plan::inventory::read(root, &phase.to_string(), data)?.documents;
         claim.observed = Some(observed.basis);
         Ok(())
@@ -393,7 +394,7 @@ pub fn transaction(data: &Value, claim: &Claim, expected: &[crate::store::Observ
 
 /// Commit and recovery reobserve root, source and installed plans; the
 /// transaction's own confirmed projections are accounted for, never stale.
-pub fn reobserve(data: &Value, claim: &Claim) -> Result<()> {
+pub fn reobserve(data: &Value, claim: &Claim, process: &mut dyn Process) -> Result<()> {
     if inputs::root_binding(&claim.root)? != claim.root_binding {
         return Err(Error::Conflict("completion claim root changed".into()));
     }
@@ -401,7 +402,7 @@ pub fn reobserve(data: &Value, claim: &Claim) -> Result<()> {
         .ok_or_else(|| Error::Invalid("completion attempt absent".into()))?;
     let mut installed = crate::execution::render::installed_summaries(data)?;
     installed.extend(accounted(claim)?);
-    inputs::reobserve_external_accounting(&claim.root, &attempt.inputs, &claim.documents, &installed)
+    inputs::reobserve_external_accounting(&claim.root, &attempt.inputs, &claim.documents, &installed, process)
 }
 
 #[cfg(test)]

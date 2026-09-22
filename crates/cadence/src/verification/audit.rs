@@ -4,6 +4,7 @@
 //! current verdicts and waivers. Every missing edge is reported with its
 //! origin and a next action. The audit infers no semantic requirement-to-truth
 //! edge, counts no structural coverage as met, and writes nothing.
+use crate::process::Process;
 use super::{inputs, projections, status};
 use crate::{plan, store::{Result, model::digest}};
 use serde_json::{Value, json};
@@ -80,7 +81,7 @@ impl Roadmap {
 
 /// The owner-visible audit for one phase, from the documents and records as
 /// they are; a stray `command` is refused instead of guessed at.
-pub fn report(root: &Path, data: &Value, phase: u32, requested: Option<&str>) -> Result<Value> {
+pub fn report(root: &Path, data: &Value, phase: u32, requested: Option<&str>, process: &mut dyn Process) -> Result<Value> {
     if let Some(name) = requested && name != CANONICAL && name != ALIAS {
         return Err(inputs::refuse(phase, OPERATION, "command", format!("{name} is not an audit command; use {CANONICAL} or its read-only alias {ALIAS}")));
     }
@@ -148,7 +149,7 @@ pub fn report(root: &Path, data: &Value, phase: u32, requested: Option<&str>) ->
         json!({"coherence":map["coherence"],"rule":map["rule"],"reason":map["reason"],"superseded":superseded})
     };
     let verification = match &context {
-        Some(_) => Some(status::report(root, data, phase)?),
+        Some(_) => Some(status::report(root, data, phase, process)?),
         None => None,
     };
     let verification_source = match &verification {

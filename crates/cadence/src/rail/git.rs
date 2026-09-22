@@ -3,29 +3,29 @@ use super::{
     risk::{MaterialIdentity, Resolution, Source},
     risk_diff::{self, Scan},
 };
+use crate::process::{Launch, Process};
 use crate::store::{Error, Result};
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
-pub fn run<I, S>(root: &Path, args: I) -> Result<Vec<u8>>
+pub fn run<I, S>(root: &Path, args: I, process: &mut dyn Process) -> Result<Vec<u8>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env_remove("GIT_LITERAL_PATHSPECS")
-        .env_remove("GIT_GLOB_PATHSPECS")
-        .env_remove("GIT_NOGLOB_PATHSPECS")
-        .env_remove("GIT_ICASE_PATHSPECS")
-        .stdin(Stdio::null())
-        .output()?;
-    if !output.status.success() {
+    let output = process.run(
+        &Launch::new("git")
+            .cwd(root)
+            .args(args)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .unset("GIT_LITERAL_PATHSPECS")
+            .unset("GIT_GLOB_PATHSPECS")
+            .unset("GIT_NOGLOB_PATHSPECS")
+            .unset("GIT_ICASE_PATHSPECS"),
+    )?;
+    if !output.success() {
         return Err(Error::Invalid(format!(
             "Git observation failed ({}): {}",
             output.status,
@@ -35,7 +35,7 @@ where
     Ok(output.stdout)
 }
 
-pub fn resolve_commit(root: &Path, reference: &str) -> Result<String> {
+pub fn resolve_commit(root: &Path, reference: &str, process: &mut dyn Process) -> Result<String> {
     if reference.trim().is_empty() || reference.contains('\0') {
         return Err(Error::Invalid("invalid commit ref".into()));
     }
@@ -47,13 +47,14 @@ pub fn resolve_commit(root: &Path, reference: &str) -> Result<String> {
             "--end-of-options",
             &format!("{reference}^{{commit}}"),
         ],
+        process,
     )?;
     object_id(bytes)
 }
 
 /// Pause may compare a narrowed re-arm against its previous authored tree.
 /// Keep commit IDs as commits so existing pause fire preimages remain intact.
-pub fn resolve_comparison(root: &Path, reference: &str) -> Result<String> {
+pub fn resolve_comparison(root: &Path, reference: &str, process: &mut dyn Process) -> Result<String> {
     let id = object_id(run(
         root,
         [
@@ -62,8 +63,9 @@ pub fn resolve_comparison(root: &Path, reference: &str) -> Result<String> {
             "--end-of-options",
             &format!("{reference}^{{object}}"),
         ],
+        process,
     )?)?;
-    match run(root, ["cat-file", "-t", &id])?.as_slice() {
+    match run(root, ["cat-file", "-t", &id], process)?.as_slice() {
         b"commit\n" | b"tree\n" => Ok(id),
         _ => Err(Error::Invalid(
             "comparison base must be a commit or tree".into(),
@@ -81,19 +83,19 @@ pub fn object_id(bytes: Vec<u8>) -> Result<String> {
     Ok(id.into())
 }
 
-pub fn index_id(root: &Path) -> Result<String> {
-    object_id(run(root, ["write-tree"])?)
+pub fn index_id(root: &Path, process: &mut dyn Process) -> Result<String> {
+    object_id(run(root, ["write-tree"], process)?)
 }
 
-pub fn resolve(root: &Path, source: &Source) -> (Resolution, Vec<String>) {
+pub fn resolve(root: &Path, source: &Source, process: &mut dyn Process) -> (Resolution, Vec<String>) {
     // Resolve independently, preserving whichever immutable endpoint is available.
     let (base, head, index) = match source {
         Source::Committed { base, head } => (
-            resolve_commit(root, base),
-            Some(resolve_commit(root, head)),
+            resolve_commit(root, base, process),
+            Some(resolve_commit(root, head, process)),
             None,
         ),
-        Source::Staged { base } => (resolve_commit(root, base), None, Some(index_id(root))),
+        Source::Staged { base } => (resolve_commit(root, base, process), None, Some(index_id(root, process))),
         Source::Execution { .. } => {
             return (
                 Resolution::Committed {
@@ -139,17 +141,18 @@ pub struct Diff {
     pub body: Vec<u8>,
 }
 
-pub fn diff(root: &Path, material: &MaterialIdentity) -> Result<Diff> {
+pub fn diff(root: &Path, material: &MaterialIdentity, process: &mut dyn Process) -> Result<Diff> {
     diff_with_pathspecs(
         root,
         material,
         &REVIEWER_TEXT_PATHSPECS.map(std::ffi::OsString::from),
+        process,
     )
 }
 
 /// Pause supplies its provenance-filtered selection. An empty selection means
 /// no authored material, and never broadens to all paths in the tree.
-pub fn diff_selected(root: &Path, material: &MaterialIdentity, paths: &[PathBuf]) -> Result<Diff> {
+pub fn diff_selected(root: &Path, material: &MaterialIdentity, paths: &[PathBuf], process: &mut dyn Process) -> Result<Diff> {
     material.validate()?;
     if paths.is_empty() {
         return Ok(Diff {
@@ -165,7 +168,7 @@ pub fn diff_selected(root: &Path, material: &MaterialIdentity, paths: &[PathBuf]
             spec
         })
         .collect::<Vec<_>>();
-    diff_with_pathspecs(root, material, &pathspecs)
+    diff_with_pathspecs(root, material, &pathspecs, process)
 }
 
 fn arguments(
@@ -189,19 +192,20 @@ fn arguments(
     args
 }
 
-pub fn changed_paths(root: &Path, material: &MaterialIdentity) -> Result<Vec<PathBuf>> {
-    read_paths(root, material, &[])
+pub fn changed_paths(root: &Path, material: &MaterialIdentity, process: &mut dyn Process) -> Result<Vec<PathBuf>> {
+    read_paths(root, material, &[], process)
 }
 
 fn read_paths(
     root: &Path,
     material: &MaterialIdentity,
     pathspecs: &[std::ffi::OsString],
+    process: &mut dyn Process,
 ) -> Result<Vec<PathBuf>> {
     material.validate()?;
     // --no-renames reports a rename as a deletion plus an addition. Both ends
     // are classified, with NUL records avoiding Git's display quoting entirely.
-    let names = run(root, arguments(material, &["--name-only", "-z"], pathspecs))?;
+    let names = run(root, arguments(material, &["--name-only", "-z"], pathspecs), process)?;
     if !names.is_empty() && names.last() != Some(&0) {
         return Err(Error::Invalid("unterminated Git pathname record".into()));
     }
@@ -229,8 +233,9 @@ fn diff_with_pathspecs(
     root: &Path,
     material: &MaterialIdentity,
     pathspecs: &[std::ffi::OsString],
+    process: &mut dyn Process,
 ) -> Result<Diff> {
-    let paths = read_paths(root, material, pathspecs)?;
+    let paths = read_paths(root, material, pathspecs, process)?;
     let body = run(
         root,
         arguments(
@@ -246,11 +251,12 @@ fn diff_with_pathspecs(
             ],
             pathspecs,
         ),
+        process,
     )?;
     Ok(Diff { paths, body })
 }
 
-pub fn scan(root: &Path, material: &MaterialIdentity, surfaces: &[String]) -> Result<Scan> {
-    let diff = diff(root, material)?;
+pub fn scan(root: &Path, material: &MaterialIdentity, surfaces: &[String], process: &mut dyn Process) -> Result<Scan> {
+    let diff = diff(root, material, process)?;
     risk_diff::scan(Some(&diff.body), &diff.paths, surfaces)
 }

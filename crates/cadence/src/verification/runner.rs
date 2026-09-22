@@ -1,4 +1,5 @@
 //! Independent verification launches never reopen execution task state.
+use crate::process::Process;
 use super::{inputs::{self, refuse}, model::{Run, Source}, persistence};
 use crate::{execution::{receipts::{Launch, RunResult, Stage}, runner as child},
     store::{Error, Result, model::{digest, DecisionRecord, Decision, Origin, Evidence}, writer::{Operation, Store}}};
@@ -115,11 +116,11 @@ pub fn contribute(data: &Value, binding: &str, record: &Record) -> Result<Value>
     Ok(next)
 }
 
-pub fn reobserve_launch(data: &Value, record: &Record) -> Result<()> {
+pub fn reobserve_launch(data: &Value, record: &Record, process: &mut dyn Process) -> Result<()> {
     if let Event::Launch { documents, .. } = &record.event {
         let attempt = persistence::attempt(data, None, &record.attempt)?
             .ok_or_else(|| Error::Invalid("verification attempt absent".into()))?;
-        inputs::reobserve_external(&record.root, data, &attempt.inputs, documents)?;
+        inputs::reobserve_external(&record.root, data, &attempt.inputs, documents, process)?;
     }
     Ok(())
 }
@@ -132,7 +133,12 @@ async fn append(store: &Store, record: Record) -> Result<Record> {
         .ok_or_else(|| Error::Invalid("confirmed verification run missing".into()))
 }
 
-pub async fn launch(store: Store, root: PathBuf, request: Run) -> Result<Record> {
+pub async fn launch(
+    store: Store,
+    root: PathBuf,
+    request: Run,
+    process: &mut (dyn Process + Send),
+) -> Result<Record> {
     let view = store.request(Operation::ReadVerified).await?;
     let history = records(&view.snapshot.data)?;
     if let Some(prior) = history.iter().find(|r| r.id == request.request_id) {
@@ -145,7 +151,7 @@ pub async fn launch(store: Store, root: PathBuf, request: Run) -> Result<Record>
     if attempt.inputs.basis != request.basis {
         return Err(refuse(request.basis.phase, "verification-run-basis", "basis", "echo the saved attempt basis"));
     }
-    let observed = inputs::observe(&root, &view.snapshot.data, request.basis.phase)?;
+    let observed = inputs::observe(&root, &view.snapshot.data, request.basis.phase, process)?;
     if observed != attempt.inputs {
         return Err(refuse(request.basis.phase, "verification-run-basis", "basis", "attempt is historical; request a current dispatch"));
     }
@@ -155,7 +161,7 @@ pub async fn launch(store: Store, root: PathBuf, request: Run) -> Result<Record>
     let test = item["spec"]["test"]["file"].as_str().ok_or_else(|| Error::Invalid("test locator absent".into()))?;
     let project = Path::new(&request.basis.project);
     let launch = Launch { run_id: request.request_id.clone(), check: Some(request.item.clone()), stage: Stage::Verify,
-        material: child::material(project, command, test)?, launched_at: child::now() };
+        material: child::material(project, command, test, process)?, launched_at: child::now() };
     let documents = crate::plan::inventory::read(&root, &request.basis.phase.to_string(), &view.snapshot.data)?.documents;
     let record = Record { schema: "verification-run-1".into(), root, root_binding: request.basis.root_binding.clone(),
         attempt: request.attempt.clone(), id: request.request_id.clone(), event: Event::Launch { request: Box::new(request.clone()), launch: Box::new(launch.clone()), documents } };
@@ -164,16 +170,18 @@ pub async fn launch(store: Store, root: PathBuf, request: Run) -> Result<Record>
         let project = PathBuf::from(&request.basis.project);
         let expected = request.basis.source.clone();
         let process = tokio::task::spawn_blocking(move || {
-            if inputs::source(&project).ok().as_ref() != Some(&expected) {
+            if inputs::source(&project, &mut crate::process::System).ok().as_ref()
+                != Some(&expected)
+            {
                 use crate::execution::receipts::{Capture, Disposition, Observation};
                 let empty = Capture::new(vec![], true, vec![]);
                 return (RunResult { run_id: launch.run_id, disposition: Disposition::LaunchFailed {
                     reason: "verification source changed before process launch".into() },
                     stdout: empty.clone(), stderr: empty, observed_at: child::now(),
-                    observation: Observation::Unknown, material_unchanged: false }, inputs::source(&project).ok());
+                    observation: Observation::Unknown, material_unchanged: false }, inputs::source(&project, &mut crate::process::System).ok());
             }
-            let mut result = child::observe_child(&project, &launch);
-            let source_after = inputs::source(&project).ok();
+            let mut result = child::observe_child(&project, &launch, &mut crate::process::System);
+            let source_after = inputs::source(&project, &mut crate::process::System).ok();
             result.material_unchanged &= source_after.as_ref() == Some(&expected);
             (result, source_after)
         }).await;

@@ -393,6 +393,7 @@ fn native_admission_commits_versioned_extensions() {
 
 #[test]
 fn native_records_outlive_the_directory_identity_they_were_stamped_with() {
+    let process = &mut cadence::process::System;
     // A reboot or restore gives .planning new device and inode numbers at the
     // same path. The records a store retains were stamped under the old
     // identity; the identity is provenance, never a key the next process must
@@ -410,7 +411,7 @@ fn native_records_outlive_the_directory_identity_they_were_stamped_with() {
     let check = basis.request.contract.allocation[0].checks[0].clone();
     let start = Request { request_id: "event-0".into(), task: task.clone(), attempt: "attempt-1".into(), expected_version: 0,
         event: Event::Attempt { predecessor: None, checks: vec![check], base_commit: "unit-base".into() } };
-    let (data, event) = history::contribute(&data, after_reboot, &start).unwrap();
+    let (data, event) = history::contribute(&data, after_reboot, &start, process).unwrap();
     assert_eq!(event.root_binding, after_reboot);
     assert_eq!(history::replay(&data, &start).unwrap(), Some(event));
 }
@@ -588,6 +589,7 @@ fn native_owner_statements_bind_exact_inspection() {
 
 #[test]
 fn native_material_includes_scoped_evidence_commits() {
+    let process = &mut cadence::process::System;
     use super::{admission, history::Task, receipts, dispatch::build_dispatch};
     use crate::{rail::risk, store::{filesystem::Filesystem, writer::{Store, Operation, PlanningPolicy}, model::digest}};
     use std::os::unix::fs::PermissionsExt;
@@ -632,7 +634,7 @@ fn native_material_includes_scoped_evidence_commits() {
         // Unit dispatch authority explicitly leases the test and rename target.
         plan.files.extend(["test.py".into(), "src/renamed.rs".into()]);
         let active = build_dispatch(&plan, &digest(b"original-set"), 0, &base).unwrap();
-        let material = receipts::observe_source(&project, &active, "deliver", &green, std::slice::from_ref(&red)).unwrap();
+        let material = receipts::observe_source(&project, &active, "deliver", &green, std::slice::from_ref(&red), process).unwrap();
         let in_lease = serde_json::to_value(&material).unwrap();
         assert!(in_lease["out_of_lease"].is_null() || in_lease["out_of_lease"] == json!({}), "in-lease evidence records no deviation: {in_lease}");
         assert_eq!(material.commit_paths[&red], vec!["test.py"]); assert_eq!(material.commit_paths[&green], vec!["src/delivery.rs"]);
@@ -668,18 +670,18 @@ fn native_material_includes_scoped_evidence_commits() {
         assert_eq!(serde_json::to_vec(&risk::native_execution_bases(&view.snapshot.data).unwrap()).unwrap(), retained);
         assert_eq!(admission::records(&view.snapshot.data, 12).unwrap().len(), 2);
         std::fs::write(project.join("src/delivery.rs"), "staged correction\n").unwrap(); git(&["add", "src/delivery.rs"]);
-        assert!(receipts::reobserve_source(&project, &active, "deliver", &material).unwrap_err().to_string().contains("staged inputs changed"));
+        assert!(receipts::reobserve_source(&project, &active, "deliver", &material, process).unwrap_err().to_string().contains("staged inputs changed"));
         git(&["reset", "--hard", &green]);
         std::fs::write(project.join("outside.txt"), "changed outside lease\n").unwrap(); git(&["add", "outside.txt"]); git(&["commit", "-m", "test(12): evidence outside lease"]);
         let outside = git(&["rev-parse", "HEAD"]);
-        let widened = receipts::observe_source(&project, &active, "deliver", &green, &[red.clone(), outside.clone()]).unwrap();
+        let widened = receipts::observe_source(&project, &active, "deliver", &green, &[red.clone(), outside.clone()], process).unwrap();
         assert_eq!(serde_json::to_value(&widened).unwrap()["out_of_lease"], json!({outside.clone(): ["outside.txt"]}),
             "a committed path outside the lease is retained by commit, never refused (D-170)");
         assert_eq!(widened.commit_paths[&outside], vec!["outside.txt"]);
         git(&["reset", "--hard", &green]); git(&["mv", "outside.txt", "src/renamed.rs"]); git(&["commit", "-m", "test(12): rename evidence"]);
         let rename = git(&["rev-parse", "HEAD"]);
-        assert_eq!(receipts::commit_paths(&project, &rename).unwrap(), vec!["outside.txt", "src/renamed.rs"]);
-        let renamed = receipts::observe_source(&project, &active, "deliver", &green, &[red, rename.clone()]).unwrap();
+        assert_eq!(receipts::commit_paths(&project, &rename, process).unwrap(), vec!["outside.txt", "src/renamed.rs"]);
+        let renamed = receipts::observe_source(&project, &active, "deliver", &green, &[red, rename.clone()], process).unwrap();
         assert_eq!(serde_json::to_value(&renamed).unwrap()["out_of_lease"], json!({rename: ["outside.txt"]}),
             "a rename names its out-of-lease source; its in-lease destination is not a deviation");
         assert_eq!(git(&["show", &format!("{green}:src/delivery.rs")]), "answer seven");

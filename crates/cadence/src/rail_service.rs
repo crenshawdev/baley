@@ -1,4 +1,5 @@
 //! Resident-owned risk observations. Detection and confirmed persistence are separate.
+use cadence::process::Process;
 use crate::{
     config::{
         merge,
@@ -115,7 +116,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
     }
     let source = source.clone();
     let observation = tokio::task::spawn_blocking(move || {
-        let (resolution, mut diagnostics) = git::resolve(&project, &material_source);
+        let (resolution, mut diagnostics) = git::resolve(&project, &material_source, &mut cadence::process::System);
         let material = resolution.material();
         let scan = if material
             .as_ref()
@@ -124,7 +125,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             None
         } else {
             Some(match material {
-                Some(material) => match git::scan(&project, &material, &surfaces) {
+                Some(material) => match git::scan(&project, &material, &surfaces, &mut cadence::process::System) {
                     Ok(scan) => scan,
                     Err(error) => {
                         diagnostics.push(error.to_string());
@@ -260,6 +261,7 @@ pub async fn receipt<I: ConfigIo + Clone + Sync>(
     factory: &SessionFactory<I>,
     selected: &Path,
     command: ReceiptCommand,
+    process: &mut (dyn Process + Send),
 ) -> ReceiptAnswer {
     let root = reload::identity(selected)?;
     let session = match factory.first_touch(&root).await {
@@ -356,7 +358,7 @@ pub async fn receipt<I: ConfigIo + Clone + Sync>(
             }
         }
         source => {
-            let (resolution, diagnostics) = git::resolve(project, source);
+            let (resolution, diagnostics) = git::resolve(project, source, process);
             match resolution.material() {
                 Some(material) => material,
                 None => return Ok(refused("unresolved-material", &diagnostics.join("; "))),
@@ -376,7 +378,7 @@ pub async fn receipt<I: ConfigIo + Clone + Sync>(
     let current_observation = risk::read(&view.snapshot.data)?
         .into_values()
         .find(|r| assessment.observation.as_ref() == Some(&r.confirmation));
-    let review_scope = match git::changed_paths(project, &requirement.material) {
+    let review_scope = match git::changed_paths(project, &requirement.material, process) {
         Ok(paths) => match paths
             .into_iter()
             .map(|p| p.into_os_string().into_string())
@@ -427,7 +429,7 @@ pub async fn receipt<I: ConfigIo + Clone + Sync>(
     {
         // A re-arm selects an already recorded later observation. Verify the
         // narrowed immutable diff rather than accepting invented path coverage.
-        let paths = git::changed_paths(project, &next_fire.binding.material)?;
+        let paths = git::changed_paths(project, &next_fire.binding.material, process)?;
         let paths = paths
             .iter()
             .map(|p| p.to_string_lossy().into_owned())

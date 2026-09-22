@@ -1,13 +1,12 @@
 //! Git process boundary. Paths are OS strings, never shell commands or quoted text.
+use crate::process::{Launch, Process};
 use crate::rail::{git as shared_git, risk::MaterialIdentity};
 use crate::store::{Error, Result};
 use std::{
     collections::BTreeSet,
     ffi::OsStr,
     fs,
-    io::Write,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -55,19 +54,19 @@ pub struct Observation {
     pub changes: Vec<Change>,
 }
 
-pub fn run<I, S>(root: &Path, args: I) -> Result<Vec<u8>>
+pub fn run<I, S>(root: &Path, args: I, process: &mut dyn Process) -> Result<Vec<u8>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_LITERAL_PATHSPECS", "1")
-        .stdin(Stdio::null())
-        .output()?;
-    if !output.status.success() {
+    let output = process.run(
+        &Launch::new("git")
+            .cwd(root)
+            .args(args)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("GIT_LITERAL_PATHSPECS", "1"),
+    )?;
+    if !output.success() {
         return Err(Error::Invalid(format!(
             "Git failed ({}): {}",
             output.status,
@@ -123,17 +122,17 @@ fn material(path: &Path) -> Result<Material> {
     })
 }
 
-pub fn observe(root: &Path) -> Result<Observation> {
-    let prefix = run(root, ["rev-parse", "--show-prefix"])?;
+pub fn observe(root: &Path, process: &mut dyn Process) -> Result<Observation> {
+    let prefix = run(root, ["rev-parse", "--show-prefix"], process)?;
     if prefix != b"\n" {
         return Err(Error::Invalid(
             "pause root is not the Git worktree root".into(),
         ));
     }
-    let head = String::from_utf8(line(run(root, ["rev-parse", "--verify", "HEAD"])?))
+    let head = String::from_utf8(line(run(root, ["rev-parse", "--verify", "HEAD"], process)?))
         .map_err(|_| Error::Invalid("invalid Git HEAD".into()))?;
-    let branch = line(run(root, ["branch", "--show-current"])?);
-    let index = run(root, ["ls-files", "--stage", "-z"])?;
+    let branch = line(run(root, ["branch", "--show-current"], process)?);
+    let index = run(root, ["ls-files", "--stage", "-z"], process)?;
     let status = run(
         root,
         [
@@ -143,6 +142,7 @@ pub fn observe(root: &Path) -> Result<Observation> {
             "--untracked-files=all",
             "--renames",
         ],
+        process,
     )?;
     let mut fields = status.split(|b| *b == 0);
     let mut changes = Vec::new();
@@ -175,9 +175,9 @@ pub fn observe(root: &Path) -> Result<Observation> {
         });
     }
     // Observation is read-only, including Git's optional index refresh.
-    if index != run(root, ["ls-files", "--stage", "-z"])?
-        || head.as_bytes() != line(run(root, ["rev-parse", "--verify", "HEAD"])?)
-        || branch != line(run(root, ["branch", "--show-current"])?)
+    if index != run(root, ["ls-files", "--stage", "-z"], process)?
+        || head.as_bytes() != line(run(root, ["rev-parse", "--verify", "HEAD"], process)?)
+        || branch != line(run(root, ["branch", "--show-current"], process)?)
     {
         return Err(Error::Invalid(
             "Git changed during pause observation".into(),
@@ -216,8 +216,8 @@ fn review_artifact(path: &Path) -> bool {
         || matches!(name, "FINDINGS.json" | "verifier-findings.json")
 }
 
-pub fn index_id(root: &Path) -> Result<String> {
-    shared_git::index_id(root)
+pub fn index_id(root: &Path, process: &mut dyn Process) -> Result<String> {
+    shared_git::index_id(root, process)
 }
 
 struct TempIndex {
@@ -246,34 +246,27 @@ impl TempIndex {
         }
     }
 
-    fn run<I, S>(&self, root: &Path, args: I, input: Option<&[u8]>) -> Result<Vec<u8>>
+    fn run<I, S>(
+        &self,
+        root: &Path,
+        args: I,
+        input: Option<&[u8]>,
+        process: &mut dyn Process,
+    ) -> Result<Vec<u8>>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut command = Command::new("git");
-        command
-            .current_dir(root)
+        let mut launch = Launch::new("git")
+            .cwd(root)
             .args(args)
             .env("GIT_OPTIONAL_LOCKS", "0")
-            .env("GIT_INDEX_FILE", &self.path)
-            .stdin(if input.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = command.spawn()?;
+            .env("GIT_INDEX_FILE", &self.path);
         if let Some(bytes) = input {
-            child
-                .stdin
-                .take()
-                .ok_or_else(|| Error::Io("Git index input unavailable".into()))?
-                .write_all(bytes)?;
+            launch = launch.stdin(bytes);
         }
-        let output = child.wait_with_output()?;
-        if !output.status.success() {
+        let output = process.run(&launch)?;
+        if !output.success() {
             return Err(Error::Invalid(format!(
                 "Git failed ({}): {}",
                 output.status,
@@ -295,9 +288,10 @@ fn authored_index_id(
     base: &str,
     captured_index: &str,
     authored: &[PathBuf],
+    process: &mut dyn Process,
 ) -> Result<String> {
     let index = TempIndex::create()?;
-    index.run(root, ["read-tree", base], None)?;
+    index.run(root, ["read-tree", base], None, process)?;
     for path in authored {
         index.run(
             root,
@@ -307,6 +301,7 @@ fn authored_index_id(
                 path.as_os_str(),
             ],
             None,
+            process,
         )?;
         let entry = run(
             root,
@@ -317,33 +312,35 @@ fn authored_index_id(
                 OsStr::new("--"),
                 path.as_os_str(),
             ],
+            process,
         )?;
         if !entry.is_empty() {
-            index.run(root, ["update-index", "-z", "--index-info"], Some(&entry))?;
+            index.run(root, ["update-index", "-z", "--index-info"], Some(&entry), process)?;
         }
     }
-    String::from_utf8(line(index.run(root, ["write-tree"], None)?))
+    String::from_utf8(line(index.run(root, ["write-tree"], None, process)?))
         .map_err(|_| Error::Invalid("invalid authored staged tree identity".into()))
 }
 
 /// Store receipts are supplied by provenance, not recognized by filename.
-pub fn staged(root: &Path, base: &str, receipts: &BTreeSet<PathBuf>) -> Result<Staged> {
-    let head = shared_git::resolve_commit(root, "HEAD")?;
-    let base = shared_git::resolve_comparison(root, base)?;
-    let before = index_id(root)?;
+pub fn staged(root: &Path, base: &str, receipts: &BTreeSet<PathBuf>, process: &mut dyn Process) -> Result<Staged> {
+    let head = shared_git::resolve_commit(root, "HEAD", process)?;
+    let base = shared_git::resolve_comparison(root, base, process)?;
+    let before = index_id(root, process)?;
     let scope = shared_git::changed_paths(
         root,
         &MaterialIdentity::Staged {
             base_id: base.clone(),
             index_id: before.clone(),
         },
+        process,
     )?;
     let authored: Vec<_> = scope
         .iter()
         .filter(|path| !receipts.contains(*path) && !review_artifact(path))
         .cloned()
         .collect();
-    let authored_id = authored_index_id(root, &base, &before, &authored)?;
+    let authored_id = authored_index_id(root, &base, &before, &authored, process)?;
     let diff = shared_git::diff_selected(
         root,
         &MaterialIdentity::Staged {
@@ -351,9 +348,10 @@ pub fn staged(root: &Path, base: &str, receipts: &BTreeSet<PathBuf>) -> Result<S
             index_id: authored_id.clone(),
         },
         &authored,
+        process,
     )?
     .body;
-    if before != index_id(root)? || head != shared_git::resolve_commit(root, "HEAD")? {
+    if before != index_id(root, process)? || head != shared_git::resolve_commit(root, "HEAD", process)? {
         return Err(Error::Conflict(
             "staged material changed during risk observation".into(),
         ));
@@ -381,6 +379,7 @@ pub fn stage_authorized(
     authorized: &BTreeSet<PathBuf>,
     ignored_paths: &BTreeSet<PathBuf>,
     stage_paths: &BTreeSet<PathBuf>,
+    process: &mut dyn Process,
 ) -> Result<Option<WipIndex>> {
     if expected
         .changes
@@ -391,7 +390,7 @@ pub fn stage_authorized(
             "pause found dirty work outside the authorized set".into(),
         ));
     }
-    let current = observe(root)?;
+    let current = observe(root, process)?;
     let authored = |observation: &Observation| {
         observation
             .changes
@@ -422,7 +421,7 @@ pub fn stage_authorized(
     if !add_paths.is_empty() {
         let mut args = vec![std::ffi::OsString::from("add"), "--all".into(), "--".into()];
         args.extend(add_paths.iter().map(|path| path.as_os_str().to_owned()));
-        run(root, args)?;
+        run(root, args, process)?;
     }
     let staged_paths = paths(&run(
         root,
@@ -435,6 +434,7 @@ pub fn stage_authorized(
             expected.head.as_str(),
             "--",
         ],
+        process,
     )?)?;
     let wip_paths: Vec<_> = staged_paths
         .iter()
@@ -452,12 +452,12 @@ pub fn stage_authorized(
     Ok(Some(WipIndex {
         head: expected.head.clone(),
         branch: expected.branch.clone(),
-        index_id: index_id(root)?,
+        index_id: index_id(root, process)?,
         paths: wip_paths,
     }))
 }
 
-fn unstaged(root: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+fn unstaged(root: &Path, paths: &[PathBuf], process: &mut dyn Process) -> Result<Vec<PathBuf>> {
     let mut args = vec![
         std::ffi::OsString::from("diff"),
         "--name-only".into(),
@@ -466,16 +466,21 @@ fn unstaged(root: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
         "--".into(),
     ];
     args.extend(paths.iter().map(|path| path.as_os_str().to_owned()));
-    self::paths(&run(root, args)?)
+    self::paths(&run(root, args, process)?)
 }
 
-pub fn commit_guarded(root: &Path, expected: &WipIndex, subject: &str) -> Result<String> {
-    let head = String::from_utf8(line(run(root, ["rev-parse", "--verify", "HEAD"])?))
+pub fn commit_guarded(
+    root: &Path,
+    expected: &WipIndex,
+    subject: &str,
+    process: &mut dyn Process,
+) -> Result<String> {
+    let head = String::from_utf8(line(run(root, ["rev-parse", "--verify", "HEAD"], process)?))
         .map_err(|_| Error::Invalid("invalid Git HEAD".into()))?;
     if head != expected.head
-        || line(run(root, ["branch", "--show-current"])?) != expected.branch
-        || index_id(root)? != expected.index_id
-        || !unstaged(root, &expected.paths)?.is_empty()
+        || line(run(root, ["branch", "--show-current"], process)?) != expected.branch
+        || index_id(root, process)? != expected.index_id
+        || !unstaged(root, &expected.paths, process)?.is_empty()
     {
         return Err(Error::Conflict(
             "guarded material changed before commit".into(),
@@ -485,16 +490,16 @@ pub fn commit_guarded(root: &Path, expected: &WipIndex, subject: &str) -> Result
     if subject.is_empty() || subject.contains(['\r', '\n']) {
         return Err(Error::Invalid("commit subject must be one line".into()));
     }
-    run(root, ["commit", "-m", subject])?;
-    let committed = String::from_utf8(line(run(root, ["rev-parse", "--verify", "HEAD"])?))
+    run(root, ["commit", "-m", subject], process)?;
+    let committed = String::from_utf8(line(run(root, ["rev-parse", "--verify", "HEAD"], process)?))
         .map_err(|_| Error::Invalid("invalid commit identity".into()))?;
-    let tree = String::from_utf8(line(run(root, ["rev-parse", "HEAD^{tree}"])?))
+    let tree = String::from_utf8(line(run(root, ["rev-parse", "HEAD^{tree}"], process)?))
         .map_err(|_| Error::Invalid("invalid WIP tree identity".into()))?;
-    let parent = String::from_utf8(line(run(root, ["rev-parse", "HEAD^"])?))
+    let parent = String::from_utf8(line(run(root, ["rev-parse", "HEAD^"], process)?))
         .map_err(|_| Error::Invalid("invalid WIP parent identity".into()))?;
     if tree != expected.index_id
         || parent != expected.head
-        || !unstaged(root, &expected.paths)?.is_empty()
+        || !unstaged(root, &expected.paths, process)?.is_empty()
     {
         return Err(Error::Conflict(
             "commit differs from the guarded staged tree".into(),
@@ -503,15 +508,15 @@ pub fn commit_guarded(root: &Path, expected: &WipIndex, subject: &str) -> Result
     Ok(committed)
 }
 
-pub fn commit_wip(root: &Path, expected: &WipIndex, description: &str) -> Result<String> {
+pub fn commit_wip(root: &Path, expected: &WipIndex, description: &str, process: &mut dyn Process) -> Result<String> {
     let description = description.trim();
     if description.is_empty() || description.contains(['\r', '\n']) {
         return Err(Error::Invalid("WIP description must be one line".into()));
     }
-    commit_guarded(root, expected, &format!("wip: {description}"))
+    commit_guarded(root, expected, &format!("wip: {description}"), process)
 }
 
-pub fn require_clean(root: &Path) -> Result<()> {
+pub fn require_clean(root: &Path, process: &mut dyn Process) -> Result<()> {
     if run(
         root,
         [
@@ -521,6 +526,7 @@ pub fn require_clean(root: &Path) -> Result<()> {
             "--untracked-files=all",
             "--renames",
         ],
+        process,
     )?
     .is_empty()
     {
@@ -532,9 +538,14 @@ pub fn require_clean(root: &Path) -> Result<()> {
     }
 }
 
-pub fn committed_file(root: &Path, commit: &str, path: &Path) -> Result<Vec<u8>> {
+pub fn committed_file(
+    root: &Path,
+    commit: &str,
+    path: &Path,
+    process: &mut dyn Process,
+) -> Result<Vec<u8>> {
     let path = path
         .to_str()
         .ok_or_else(|| Error::Invalid("committed participant path is not UTF-8".into()))?;
-    run(root, ["show", &format!("{commit}:{path}")])
+    run(root, ["show", &format!("{commit}:{path}")], process)
 }

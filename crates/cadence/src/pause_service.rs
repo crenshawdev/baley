@@ -1,4 +1,5 @@
 //! Internal pause request. Durable answers precede dependent Git operations.
+use cadence::process::Process;
 use super::derivation_service::{self, Driver};
 use crate::{
     config::{
@@ -353,6 +354,7 @@ fn surface_config_receipt(
     config: &Generation,
     root: &Path,
     head: &str,
+    process: &mut (dyn Process + Send),
 ) -> Result<Option<PathBuf>> {
     let answer = persistence::read(&view.snapshot.data)?
         .values()
@@ -377,7 +379,7 @@ fn surface_config_receipt(
         return Ok(None);
     };
     let object = format!("{head}:{path_text}");
-    let Ok(bytes) = git::run(root, ["show", object.as_str()]) else {
+    let Ok(bytes) = git::run(root, ["show", object.as_str()], process) else {
         return Ok(None);
     };
     let mut raw: serde_json::Value = serde_json::from_slice(&bytes)?;
@@ -403,10 +405,11 @@ async fn prepare_wip<I: ConfigIo>(
     config: &Generation,
     root: &Path,
     planning: &Path,
+    process: &mut (dyn Process + Send),
 ) -> Result<Option<git::WipIndex>> {
     let mut ignored = receipt_paths(session, root)?;
     if let Some(path) =
-        surface_config_receipt(view, &captured.scope, config, root, &captured.observed.head)?
+        surface_config_receipt(view, &captured.scope, config, root, &captured.observed.head, process)?
     {
         ignored.insert(path);
     }
@@ -425,7 +428,7 @@ async fn prepare_wip<I: ConfigIo>(
     let expected = captured.observed.clone();
     let authorized = captured.authorized.clone();
     tokio::task::spawn_blocking(move || {
-        git::stage_authorized(&root, &expected, &authorized, &ignored, &stage_paths)
+        git::stage_authorized(&root, &expected, &authorized, &ignored, &stage_paths, &mut cadence::process::System)
     })
     .await
     .map_err(|_| Error::Closed)?
@@ -576,6 +579,7 @@ fn verify_participants(
     planning: &Path,
     view: &View,
     commit: Option<&str>,
+    process: &mut (dyn Process + Send),
 ) -> Result<()> {
     let planning = planning
         .strip_prefix(root)
@@ -589,7 +593,7 @@ fn verify_participants(
             )));
         }
         if let Some(commit) = commit
-            && git::committed_file(root, commit, &path)? != expected
+            && git::committed_file(root, commit, &path, process)? != expected
         {
             return Err(Error::Conflict(format!(
                 "pause commit lacks confirmed store participant: {}",
@@ -612,19 +616,20 @@ async fn stage_final<I: ConfigIo>(
     let root = root.to_path_buf();
     let observed = tokio::task::spawn_blocking({
         let root = root.clone();
-        move || git::observe(&root)
+        move || git::observe(&root, &mut cadence::process::System)
     })
     .await
     .map_err(|_| Error::Closed)??;
     let expected = observed.clone();
     let staged = tokio::task::spawn_blocking(move || {
-        git::stage_authorized(&root, &expected, &paths, &BTreeSet::new(), &paths)
+        git::stage_authorized(&root, &expected, &paths, &BTreeSet::new(), &paths, &mut cadence::process::System)
     })
     .await
     .map_err(|_| Error::Closed)??;
     Ok((observed, staged))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finalize_pause<I: ConfigIo>(
     session: &Session<I>,
     view: &mut View,
@@ -633,6 +638,7 @@ async fn finalize_pause<I: ConfigIo>(
     config: &Generation,
     root: &Path,
     planning: &Path,
+    process: &mut (dyn Process + Send),
 ) -> Result<Response> {
     loop {
         if session.config()? != *config || session.derivation_view().await? != *view {
@@ -640,7 +646,7 @@ async fn finalize_pause<I: ConfigIo>(
                 "pause store/config changed before record commit".into(),
             ));
         }
-        verify_participants(root, planning, view, None)?;
+        verify_participants(root, planning, view, None, process)?;
         let (observed, staged) =
             stage_final(session, view, captured, config, root, planning).await?;
         if observed.branch != invocation.branch {
@@ -649,8 +655,8 @@ async fn finalize_pause<I: ConfigIo>(
             ));
         }
         let Some(staged) = staged else {
-            git::require_clean(root)?;
-            verify_participants(root, planning, view, Some(&observed.head))?;
+            git::require_clean(root, process)?;
+            verify_participants(root, planning, view, Some(&observed.head), process)?;
             return Ok(Response::Ready(Box::new(captured.clone())));
         };
         if observed.head != invocation.preserved_head {
@@ -669,6 +675,7 @@ async fn finalize_pause<I: ConfigIo>(
             root,
             planning,
             CommitKind::ResumeRecord,
+            process,
         )
         .await?;
         if !matches!(response, Response::Ready(_)) {
@@ -679,7 +686,7 @@ async fn finalize_pause<I: ConfigIo>(
                 "pause store/config changed during record guard".into(),
             ));
         }
-        verify_participants(root, planning, view, None)?;
+        verify_participants(root, planning, view, None, process)?;
         let (_, latest) = stage_final(session, view, captured, config, root, planning).await?;
         let Some(latest) = latest else {
             return Err(Error::Conflict(
@@ -693,7 +700,7 @@ async fn finalize_pause<I: ConfigIo>(
         let subject = format!("docs: pause at phase {}", captured.phase.identity);
         let root_for_commit = root.to_path_buf();
         let committed = tokio::task::spawn_blocking(move || {
-            git::commit_guarded(&root_for_commit, &latest, &subject)
+            git::commit_guarded(&root_for_commit, &latest, &subject, &mut cadence::process::System)
         })
         .await
         .map_err(|_| Error::Closed)??;
@@ -702,8 +709,8 @@ async fn finalize_pause<I: ConfigIo>(
                 "pause store changed after record commit".into(),
             ));
         }
-        verify_participants(root, planning, view, Some(&committed))?;
-        git::require_clean(root)?;
+        verify_participants(root, planning, view, Some(&committed), process)?;
+        git::require_clean(root, process)?;
         pause_barrier("after-final-commit");
         return Ok(Response::Ready(Box::new(captured.clone())));
     }
@@ -912,6 +919,7 @@ async fn override_review<I: ConfigIo>(
     Ok(id)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn risk_gate<I: ConfigIo>(
     session: &Session<I>,
     view: &mut View,
@@ -920,6 +928,7 @@ async fn risk_gate<I: ConfigIo>(
     root: &Path,
     planning: &Path,
     kind: CommitKind,
+    process: &mut (dyn Process + Send),
 ) -> Result<Response> {
     let consequence = consequence(config)?;
     if consequence == Consequence::Off {
@@ -927,7 +936,7 @@ async fn risk_gate<I: ConfigIo>(
         return Ok(Response::Ready(Box::new(captured.clone())));
     }
     let receipts = receipt_paths(session, root)?;
-    let initial = git::staged(root, &captured.observed.head, &receipts)?;
+    let initial = git::staged(root, &captured.observed.head, &receipts, process)?;
     if initial.authored.is_empty() {
         let scan = risk_diff::scan(Some(&initial.diff), &initial.authored, &[])?;
         let fire = risk::Fire::new(&captured.scope, kind, 1, &initial, scan)?;
@@ -957,7 +966,7 @@ async fn risk_gate<I: ConfigIo>(
             "risk surfaces recorded; repeat pause against the new config generation".into(),
         ));
     };
-    let current_index = git::index_id(root)?;
+    let current_index = git::index_id(root, process)?;
     let prior = prior_blocking(view, &captured.scope, kind)?;
     let mut round = 1;
     let mut base = captured.observed.head.clone();
@@ -997,7 +1006,7 @@ async fn risk_gate<I: ConfigIo>(
             }
         }
     }
-    let staged = git::staged(root, &base, &receipts)?;
+    let staged = git::staged(root, &base, &receipts, process)?;
     if round == 2
         && let Some(prior) = &prior
         && prior.fire.round == 1
@@ -1093,7 +1102,7 @@ async fn risk_gate<I: ConfigIo>(
 }
 
 async fn observe(root: PathBuf, planning: PathBuf, policy: Policy) -> Result<branch::Observed> {
-    tokio::task::spawn_blocking(move || branch::observe(&root, &planning, &policy))
+    tokio::task::spawn_blocking(move || branch::observe(&root, &planning, &policy, &mut cadence::process::System))
         .await
         .map_err(|_| Error::Closed)?
 }
@@ -1115,8 +1124,8 @@ async fn create<I: ConfigIo>(
     }
     let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        git::run(&root, ["check-ref-format", "--branch", &name])?;
-        git::run(&root, ["checkout", "-b", &name])?;
+        git::run(&root, ["check-ref-format", "--branch", &name], &mut cadence::process::System)?;
+        git::run(&root, ["checkout", "-b", &name], &mut cadence::process::System)?;
         Ok(())
     })
     .await
@@ -1127,12 +1136,13 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
     factory: &SessionFactory<I>,
     input: Input,
     driver: &Driver,
+    process: &mut (dyn Process + Send),
 ) -> Result<Response> {
     let root = PathBuf::from(&input.scope.project);
     let planning = PathBuf::from(&input.scope.planning_root);
     // Capture Git before first-touch migration, lifecycle memo or question writes.
     let git_root = root.clone();
-    let original = tokio::task::spawn_blocking(move || git::observe(&git_root))
+    let original = tokio::task::spawn_blocking(move || git::observe(&git_root, &mut cadence::process::System))
         .await
         .map_err(|_| Error::Closed)??;
     let (checked, mut view) = derivation_service::checked_query(factory, &planning, driver)
@@ -1140,7 +1150,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
         .map_err(|e| Error::Conflict(format!("pause lifecycle: {e}")))?;
     let retained = checked.intake().cloned();
     let mut captured =
-        tokio::task::spawn_blocking(move || pause::capture(input, retained.as_ref()))
+        tokio::task::spawn_blocking(move || pause::capture(input, retained.as_ref(), &mut cadence::process::System))
             .await
             .map_err(|_| Error::Closed)??;
     captured.observed = original;
@@ -1163,6 +1173,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
             &config,
             &root,
             &planning,
+            process,
         )
         .await;
     }
@@ -1174,7 +1185,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
             Choice::Stop => return Ok(Response::Refused("pause branch choice stopped".into())),
             Choice::Create(name) => {
                 create(
-                    &session, &config, &root, &planning, &policy, &observed, name,
+                    &session, &config, &root, &planning, &policy, &observed, name
                 )
                 .await?;
                 observed = observe(root.clone(), planning.clone(), policy.clone()).await?;
@@ -1188,7 +1199,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
             Choice::Stop => return Ok(Response::Refused("pause base choice stopped".into())),
             Choice::Create(name) => {
                 create(
-                    &session, &config, &root, &planning, &policy, &observed, name,
+                    &session, &config, &root, &planning, &policy, &observed, name
                 )
                 .await?;
                 // A new branch requires a new observation before other questions.
@@ -1216,7 +1227,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
     };
     if let Some(name) = create_name {
         create(
-            &session, &config, &root, &planning, &policy, &observed, name,
+            &session, &config, &root, &planning, &policy, &observed, name
         )
         .await?;
         observed = observe(root.clone(), planning.clone(), policy.clone()).await?;
@@ -1229,7 +1240,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
         ));
     }
     captured.observed.branch = observed.branch.into_bytes();
-    let wip = prepare_wip(&session, &view, &captured, &config, &root, &planning).await?;
+    let wip = prepare_wip(&session, &view, &captured, &config, &root, &planning, process).await?;
     let response = risk_gate(
         &session,
         &mut view,
@@ -1238,6 +1249,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
         &root,
         &planning,
         CommitKind::Wip,
+        process,
     )
     .await?;
     let Response::Ready(mut ready) = response else {
@@ -1252,7 +1264,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
         let root = root.clone();
         let description = ready.phase.name.clone();
         let committed =
-            tokio::task::spawn_blocking(move || git::commit_wip(&root, &wip, &description))
+            tokio::task::spawn_blocking(move || git::commit_wip(&root, &wip, &description, &mut cadence::process::System))
                 .await
                 .map_err(|_| Error::Closed)??;
         ready.wip = Some(committed);
@@ -1265,7 +1277,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
     }
     let record_observation = {
         let root = root.clone();
-        tokio::task::spawn_blocking(move || git::observe(&root))
+        tokio::task::spawn_blocking(move || git::observe(&root, &mut cadence::process::System))
             .await
             .map_err(|_| Error::Closed)??
     };
@@ -1288,6 +1300,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
         &config,
         &root,
         &planning,
+        process,
     )
     .await
 }

@@ -750,9 +750,10 @@ async fn instruction(server: &CadenceServer, root: &Path) -> String {
 
 #[test]
 fn committed_pause_is_selected_exactly_and_requires_scoped_acceptance() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
         for end in ["fulfilled", "superseded"] {
-            let temp = super::pause_service_tests::risk_fixture("off", None).await;
+            let temp = super::pause_service_tests::risk_fixture("off", None, process).await;
             let project = temp.path();
             let root = project.join(".planning");
             let request = super::pause_service_tests::input(project, end);
@@ -882,8 +883,9 @@ fn committed_pause_is_selected_exactly_and_requires_scoped_acceptance() {
 
 #[test]
 fn stale_native_and_retained_legacy_pauses_remain_context_only() {
+    let process = &mut cadence::process::System;
     runtime().block_on(async {
-        let native = super::pause_service_tests::risk_fixture("off", None).await;
+        let native = super::pause_service_tests::risk_fixture("off", None, process).await;
         let mut request = super::pause_service_tests::input(native.path(), "stale-native");
         request.scope.phase = "2".into();
         let phase = request.phase.as_mut().unwrap();

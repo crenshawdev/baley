@@ -376,12 +376,15 @@ struct Writer<S: Storage, P: Policy> {
     identity: Option<super::cache::Identity>,
     observed: BTreeMap<String, Observed>,
     failed: Option<Error>,
+    /// Receipt validation observes git; the writer starts it here rather than
+    /// taking one from every caller of the store.
+    process: Box<dyn crate::process::Process + Send>,
 }
 
 impl<S: Storage, P: Policy> Writer<S, P> {
     fn open(mut storage: S, mut policy: P) -> Result<Self> {
         let _ownership = storage.acquire()?;
-        super::transaction::recover(&mut storage, &mut policy)?;
+        super::transaction::recover(&mut storage, &mut policy, &mut crate::process::System)?;
         let identity = storage.root().map(super::cache::identity).transpose()?;
         let (view, observed) = Self::observe(&mut storage)?;
         if identity != storage.root().map(super::cache::identity).transpose()? {
@@ -397,6 +400,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             identity,
             view: Arc::new(view),
             failed: None,
+            process: Box::new(crate::process::System),
         };
         writer.repair_snapshot()?;
         writer.publish()?;
@@ -486,7 +490,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
 
     fn refresh_owned(&mut self) -> Result<()> {
         if let Some(error) = &self.failed { return Err(error.clone()); }
-        if let Err(error) = super::transaction::recover(&mut self.storage, &mut self.policy) {
+        if let Err(error) = super::transaction::recover(&mut self.storage, &mut self.policy, &mut *self.process) {
             // Recovery can install participants just like commit. A failed
             // attempt requires a replacement owner, not a retry on this writer.
             self.failed = Some(error.clone());
@@ -1049,7 +1053,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     /// source names its claim kind. The claim is recomputed on the committing
     /// snapshot, root, source and installed plans included, and a differing
     /// claim, transaction identity or fingerprint is a conflict, never a write.
-    fn verification_claim(&self, transaction: &super::transaction::Transaction) -> Result<Option<super::transaction::IntentKind>> {
+    fn verification_claim(&mut self, transaction: &super::transaction::Transaction) -> Result<Option<super::transaction::IntentKind>> {
         use cadence::verification::{completion, human, verdicts, waivers};
         use super::transaction::{IntentKind, Transaction};
         let Some(record) = transaction.decisions.iter().find(|d| matches!(d.origin.source.as_str(),
@@ -1086,7 +1090,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let intent = match record.origin.source.as_str() {
             verdicts::SCHEMA => {
                 let claim: verdicts::Claim = serde_json::from_str(encoded)?;
-                let current = verdicts::prepare(&claim.root, data, claim.patch.clone())?;
+                let current = verdicts::prepare(&claim.root, data, claim.patch.clone(), &mut *self.process)?;
                 if claim != current || !same(verdicts::transaction(data, &claim)?)? || claim.root_binding != root_binding {
                     return Err(Error::Conflict("verification claim changed at committing snapshot".into()));
                 }
@@ -1094,7 +1098,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             }
             waivers::SCHEMA => {
                 let claim: waivers::Claim = serde_json::from_str(encoded)?;
-                let current = waivers::prepare(&claim.root, data, claim.request.clone())?;
+                let current = waivers::prepare(&claim.root, data, claim.request.clone(), &mut *self.process)?;
                 if claim != current || !same(waivers::transaction(data, &claim)?)? || claim.root_binding != root_binding {
                     return Err(Error::Conflict("waiver claim changed at committing snapshot".into()));
                 }
@@ -1112,7 +1116,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             }
             completion::SCHEMA => {
                 let claim: completion::Claim = serde_json::from_str(encoded)?;
-                let current = completion::prepare(&claim.root, data, claim.request.clone())?;
+                let current = completion::prepare(&claim.root, data, claim.request.clone(), &mut *self.process)?;
                 let expected: Vec<_> = transaction.external.iter().map(|c| c.expected.clone()).collect();
                 if claim != current || !same(completion::transaction(data, &claim, &expected)?)? || claim.root_binding != root_binding {
                     return Err(Error::Conflict("completion claim changed at committing snapshot".into()));
@@ -1132,7 +1136,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 else { Err(Error::Invalid("verification run request reused".into())) };
         }
         self.check_expected(generation, integrity)?;
-        runner::reobserve_launch(&self.view.snapshot.data, &record)?;
+        runner::reobserve_launch(&self.view.snapshot.data, &record, &mut *self.process)?;
         let mut next = self.view.as_ref().clone();
         next.snapshot.data = runner::contribute(&next.snapshot.data, &binding, &record)?;
         next.decisions.push(runner::decision(&record)?);
@@ -1179,7 +1183,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             return Ok(self.view.as_ref().clone());
         }
         self.check_expected(generation, integrity)?;
-        let current = inputs::observe(&request.root, &self.view.snapshot.data, request.attempt.inputs.basis.phase)?;
+        let current = inputs::observe(&request.root, &self.view.snapshot.data, request.attempt.inputs.basis.phase, &mut *self.process)?;
         if current != request.attempt.inputs { return Err(Error::Conflict("verification inputs changed at committing snapshot".into())); }
         let mut next = self.view.as_ref().clone();
         next.snapshot.data = persistence::contribute(&next.snapshot.data, &root_binding, &request)?;
@@ -1198,7 +1202,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             return Ok(self.view.as_ref().clone());
         }
         self.check_expected(generation, integrity)?;
-        let (data, record) = history::contribute(&self.view.snapshot.data, &root_binding, &request)?;
+        let (data, record) = history::contribute(&self.view.snapshot.data, &root_binding, &request, &mut *self.process)?;
         let mut next = self.view.as_ref().clone();
         next.snapshot.data = data;
         next.decisions.extend(history::decisions(&record)?);
@@ -2058,6 +2062,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             &next.snapshot,
             intent_kind,
             participants,
+            &mut *self.process,
         ) {
             if error != Error::Conflict("routing inputs changed before admission".into()) {
                 self.failed = Some(error.clone());

@@ -141,7 +141,7 @@ fn dispatch(root: &Path, identity: &DocumentIdentity, id: &str, process: &mut dy
             .unwrap_or_else(|| json!({"id":view.task.task,"verify":view.verify}));
         task["checks"] = json!(view.checks);
         task["state"] = json!(view.state);
-        task["uncertainty"] = cadence::execution::runner::uncertainty(root.parent().unwrap_or(root), &records, &view).map_err(fail)?;
+        task["uncertainty"] = cadence::execution::runner::uncertainty(root.parent().unwrap_or(root), &records, &view, process).map_err(fail)?;
         task["checkpoints"] = json!(history::task_checkpoints(&records, &view.task));
         task["lease_scope"] = json!({"kind":"current-task-lease","phase":view.task.phase,
             "occurrence":view.task.occurrence,"plan":view.task.plan,"task":view.task.task});
@@ -349,7 +349,7 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity, process: &mut dyn Proce
             for plan in execution["plans"].as_array().into_iter().flatten() {
                 parts.push(part(&format!("plan:{}", plan["plan"]["plan"]), plan.clone()));
             }
-            let mut report = cadence::verification::status::report(root, &data, phase.get()).map_err(unavailable)?;
+            let mut report = cadence::verification::status::report(root, &data, phase.get(), process).map_err(unavailable)?;
             report["history"].as_array_mut().into_iter().for_each(|rows| rows.retain(|r| r["attempt"] == *attempt));
             parts.push(part("judgment", report.clone()));
             parts.push(Part { selector: "report".into(), title: "report".into(), body: cadence::verification::render::text(&report) });

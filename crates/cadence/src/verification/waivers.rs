@@ -7,6 +7,7 @@
 //! naming the retained record, never edits. A waived truth is reported as
 //! waived beside the met ones, with its derived status and rejected evidence
 //! kept visible, and it never raises the met count.
+use crate::process::Process;
 use super::{inputs, model::{Basis, Waiver}, persistence, status, verdicts};
 use crate::{execution::receipts::OwnerApproval, store::{Error, Result, model::{digest, DecisionRecord, Decision, Origin, Evidence}}};
 use serde::{Deserialize, Serialize};
@@ -77,13 +78,13 @@ pub fn replay(data: &Value, request: &Request) -> Result<Option<Value>> {
     }))
 }
 
-pub fn prepare(root: &Path, data: &Value, request: Request) -> Result<Claim> {
+pub fn prepare(root: &Path, data: &Value, request: Request, process: &mut dyn Process) -> Result<Claim> {
     let phase = request.submission.basis.phase;
     let mut claim = Claim { schema: SCHEMA.into(), root: root.into(), root_binding: inputs::root_binding(root)?,
         payload_digest: payload_digest(&request)?, authority_digest: inputs::authority_digest(data)?, request,
         observed: None, documents: BTreeMap::new(), unavailable: None, answer: Value::Null };
     let observation = (|| -> Result<()> {
-        let observed = inputs::observe(root, data, phase)?;
+        let observed = inputs::observe(root, data, phase, process)?;
         claim.documents = crate::plan::inventory::read(root, &phase.to_string(), data)?.documents;
         claim.observed = Some(observed.basis);
         Ok(())
@@ -216,13 +217,13 @@ pub fn transaction(data: &Value, claim: &Claim) -> Result<crate::store::transact
 
 /// Commit and recovery reobserve the root, source and installed plans the
 /// claim was bound to; a changed basis refuses instead of installing.
-pub fn reobserve(data: &Value, claim: &Claim) -> Result<()> {
+pub fn reobserve(data: &Value, claim: &Claim, process: &mut dyn Process) -> Result<()> {
     if inputs::root_binding(&claim.root)? != claim.root_binding {
         return Err(Error::Conflict("waiver claim root changed".into()));
     }
     let attempt = persistence::attempts(data)?.into_iter().find(|a| a.id == claim.answer["receipt"]["record"]["reviewed"]["attempt"])
         .ok_or_else(|| Error::Invalid("waiver reviewed attempt absent".into()))?;
-    inputs::reobserve_external(&claim.root, data, &attempt.inputs, &claim.documents)
+    inputs::reobserve_external(&claim.root, data, &attempt.inputs, &claim.documents, process)
 }
 
 /// One row per retained event, with whether it is effective against the

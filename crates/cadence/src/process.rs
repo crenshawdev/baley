@@ -185,14 +185,31 @@ impl Output {
 /// The one way to start an external program.
 pub trait Process {
     fn run(&mut self, launch: &Launch) -> std::io::Result<Output>;
+
+    /// Start a child and hand it back while it runs, for the one caller that
+    /// reads a stream as it arrives rather than after the fact. Only `System`
+    /// offers this; a fake refuses it unless it scripts children of its own.
+    fn start(&mut self, launch: &Launch) -> std::io::Result<Box<dyn Child>> {
+        let _ = launch;
+        Err(std::io::Error::other("this process does not start children"))
+    }
+}
+
+/// A child that is still running.
+pub trait Child {
+    /// Taken once; the caller reads it on its own thread.
+    fn stdout(&mut self) -> Option<Box<dyn Read + Send>>;
+    fn stderr(&mut self) -> Option<Box<dyn Read + Send>>;
+    fn wait(&mut self) -> std::io::Result<ExitStatus>;
+    fn kill(&mut self) -> std::io::Result<()>;
 }
 
 /// Starts real children.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct System;
 
-impl Process for System {
-    fn run(&mut self, launch: &Launch) -> std::io::Result<Output> {
+impl System {
+    fn command(launch: &Launch) -> Command {
         let mut command = Command::new(&launch.program);
         command.args(&launch.args);
         if let Some(cwd) = &launch.cwd {
@@ -232,6 +249,13 @@ impl Process for System {
             };
         }
 
+        command
+    }
+}
+
+impl Process for System {
+    fn run(&mut self, launch: &Launch) -> std::io::Result<Output> {
+        let mut command = Self::command(launch);
         let mut child = command.spawn()?;
         let out_stream = child.stdout.take();
         let err_stream = child.stderr.take();
@@ -282,6 +306,31 @@ impl Process for System {
             };
             Ok(Output { status, stdout, stderr, stdout_complete, stderr_complete })
         })
+    }
+
+    fn start(&mut self, launch: &Launch) -> std::io::Result<Box<dyn Child>> {
+        Ok(Box::new(SystemChild(Self::command(launch).spawn()?)))
+    }
+}
+
+/// A real child of this process.
+struct SystemChild(std::process::Child);
+
+impl Child for SystemChild {
+    fn stdout(&mut self) -> Option<Box<dyn Read + Send>> {
+        self.0.stdout.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>)
+    }
+
+    fn stderr(&mut self) -> Option<Box<dyn Read + Send>> {
+        self.0.stderr.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>)
+    }
+
+    fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        self.0.wait()
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.0.kill()
     }
 }
 

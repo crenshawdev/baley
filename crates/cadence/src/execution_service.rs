@@ -2,6 +2,7 @@
 //!
 //! The resident calls these functions directly. They never send another
 //! resident request, so the single owner cannot deadlock itself.
+use cadence::process::{Launch, Process};
 use super::derivation_service::{self, Driver};
 use crate::{
     config::reload::ConfigIo,
@@ -35,7 +36,6 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
-    process::Command,
     sync::Arc,
 };
 
@@ -63,8 +63,8 @@ pub(super) fn native_error(error:Error) -> Value {
     Refusal::new("invalid-request", error.to_string()).rule("native-admission").slot("request").value()
 }
 
-pub async fn native_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value) -> cadence::store::Result<Value> {
-    native_answer(factory, root, raw).await
+pub async fn native_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value, process: &mut (dyn Process + Send)) -> cadence::store::Result<Value> {
+    native_answer(factory, root, raw, process).await
 }
 
 
@@ -143,7 +143,7 @@ pub async fn record_native_refusal<I: ConfigIo + Clone + Sync>(
     Ok(())
 }
 
-async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value) -> cadence::store::Result<Value> {
+async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value, process: &mut (dyn Process + Send)) -> cadence::store::Result<Value> {
     if raw["operation"] == "execution-worker-exit" {
         let report = match serde_json::from_value(raw) {
             Ok(cadence::execution::runner::PlanApply::WorkerExit { report }) => report,
@@ -155,10 +155,10 @@ async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&P
         return Ok(cadence::execution::runner::worker_exit(session.review_store(), report).await.unwrap_or_else(native_error));
     }
     if matches!(raw["operation"].as_str(), Some("execution-task-progress" | "execution-task-checkpoint" | "execution-task-answer")) {
-        return native_progress_apply(factory, root, raw).await;
+        return native_progress_apply(factory, root, raw, process).await;
     }
     if matches!(raw["operation"].as_str(), Some("execution-task-close" | "execution-classify-run")) {
-        return native_close_apply(factory, root, raw).await;
+        return native_close_apply(factory, root, raw, process).await;
     }
     if raw["operation"] == "execution-owner-attest" {
         use cadence::execution::{history, receipts::OwnerApply, runner};
@@ -202,11 +202,11 @@ async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&P
         });
     }
     if matches!(raw["operation"].as_str(), Some("execution-task-start" | "execution-run")) {
-        return super::execution_runner_service::apply(factory, root, raw).await;
+        return super::execution_runner_service::apply(factory, root, raw, process).await;
     }
     if matches!(raw["operation"].as_str(), Some("execution-suite" | "execution-suite-repair-answer" |
         "execution-suite-repair" | "execution-suite-relaunch" | "execution-plan-complete" | "execution-round-record")) {
-        return super::execution_runner_service::plan_apply(factory, root, raw).await;
+        return super::execution_runner_service::plan_apply(factory, root, raw, process).await;
     }
     use cadence::execution::{admission,boundary::NativeApply};
     if matches!(raw["operation"].as_str(),Some("execution-admit"|"execution-extend")) {
@@ -301,7 +301,7 @@ async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&P
     }
 }
 
-async fn native_close_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value) -> cadence::store::Result<Value> {
+async fn native_close_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value, process: &mut (dyn Process + Send)) -> cadence::store::Result<Value> {
     use cadence::execution::{history::{self,Event}, receipts::{self,CloseApply,CloseProof}, runner};
     let session=factory.first_touch(root).await?;
     let view=session.derivation_view().await?;
@@ -331,7 +331,7 @@ async fn native_close_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,ro
                 return Ok(native_error(cadence::execution::admission::refuse(request.task.phase,"task-completed","task",&request.task.task,"task already completed")));
             }
             let project=root.parent().ok_or_else(||Error::Invalid("project root missing".into()))?;
-            if let Err(error)=receipts::validate_pairs(&view.snapshot.data,&records,&request,project) {return Ok(native_error(error));}
+            if let Err(error)=receipts::validate_pairs(&view.snapshot.data,&records,&request,project, process) {return Ok(native_error(error));}
             let active:ActiveDispatch=match serde_json::from_value(view.snapshot.data["execution"]["occurrences"][request.task.phase.to_string()]["active"].clone()) {
                 Ok(active)=>active,Err(error)=>return Ok(native_error(Error::Invalid(error.to_string()))),
             };
@@ -340,7 +340,7 @@ async fn native_close_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,ro
             }
             let mut evidence=Vec::new();
             for pair in &request.checks {for commit in [&pair.red_commit,&pair.green_commit] {if !evidence.contains(commit) {evidence.push(commit.clone());}}}
-            let source=match receipts::observe_source(project,&active,&request.task.task,&request.completion,&evidence) {
+            let source=match receipts::observe_source(project,&active,&request.task.task,&request.completion,&evidence, process) {
                 Ok(source)=>source,Err(error)=>return Ok(native_error(error)),
             };
             let event=Event::Close(Box::new(CloseProof {submission:request.clone(),project:project.to_path_buf(),planning_root:root.to_path_buf(),dispatch:active,source}));
@@ -362,7 +362,7 @@ fn native_close_answer(data: &Value, receipt: &cadence::execution::history::Reco
     answer
 }
 
-async fn native_progress_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value) -> cadence::store::Result<Value> {
+async fn native_progress_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value, process: &mut (dyn Process + Send)) -> cadence::store::Result<Value> {
     use cadence::{execution::{history::{self,Event,ProgressApply,ProgressEvent},runner},evidence::{self,Fact,gates,checkpoint}};
     let input=match serde_json::from_value::<ProgressApply>(raw) {Ok(input)=>input,Err(error)=>return Ok(native_error(Error::Invalid(error.to_string())))};
     let session=factory.first_touch(root).await?;let view=session.derivation_view().await?;
@@ -374,7 +374,7 @@ async fn native_progress_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>
                     let prior=history::records(&view.snapshot.data,request.task.phase)?.into_iter().find(|r|r.request.request_id==request.request_id);
                     let commit=match prior.map(|r|r.request.event) {
                         Some(Event::AcknowledgedProgress {commit,..})=>commit,
-                        _=>runner::git_text(project,&["rev-parse","HEAD"] )?,
+                        _=>runner::git_text(project,&["rev-parse","HEAD"], process )?,
                     };
                     Event::AcknowledgedProgress {text,evidence,commit}
                 }
@@ -440,8 +440,9 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
     selected_root: &Path,
     phase: u32,
     driver: &Driver,
+    process: &mut (dyn Process + Send),
 ) -> Answer {
-    query_selected(factory, selected_root, phase, None, driver).await
+    query_selected(factory, selected_root, phase, None, driver, process).await
 }
 
 pub async fn query_selected<I: ConfigIo + Clone + Sync>(
@@ -450,6 +451,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
     phase: u32,
     selected_plan: Option<std::num::NonZeroU32>,
     driver: &Driver,
+    process: &mut (dyn Process + Send),
 ) -> Answer {
     let request = match selected_plan {
         Some(plan) => json!({"operation":"execute-next","phase":phase,"plan":plan}),
@@ -752,7 +754,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 phase,
                 &phase_record.plans,
                 &plans,
-                Some(&head),
+                Some(&head)
             )
             .await
             {
@@ -891,7 +893,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             }
             _ => unreachable!("checked above"),
         };
-        return native_query(&session, &view, &root, phase, selected_plan, &phase_record.plans, &plans, &admissions, continuation_view, &raw_request, driver).await;
+        return native_query(&session, &view, &root, phase, selected_plan, &phase_record.plans, &plans, &admissions, continuation_view, &raw_request, driver, process).await;
     }
     let execution = match execution_snapshot(&view) {
         Ok(value) => value,
@@ -988,7 +990,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             phase,
             &phase_record.plans,
             &plans,
-            None,
+            None
         )
         .await
         {
@@ -1170,7 +1172,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
         phase,
         &phase_record.plans,
         &plans,
-        Some(&base_sha),
+        Some(&base_sha)
     )
     .await
     {
@@ -1241,6 +1243,7 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
     continuation: Value,
     raw_request: &str,
     driver: &Driver,
+    process: &mut (dyn Process + Send),
 ) -> Answer {
     use cadence::execution::{
         dispatch::{NativeState, admitted_checks, native_dispatch, native_operational},
@@ -1341,7 +1344,7 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
             completed.push(done);
             continue;
         }
-        let uncertainty = runner::uncertainty(&project, &records, &task).map_err(store_failure)?;
+        let uncertainty = runner::uncertainty(&project, &records, &task, process).map_err(store_failure)?;
         if uncertainty["requires_reconciliation"] == true {
             return refuse("reconciliation-required", format!(
                 "task {} has unacknowledged work (commits {}, dirty source {}); acknowledge it through execution-task-progress before continuing",
@@ -1648,7 +1651,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             phase,
             &phase_record.plans,
             &plans,
-            None,
+            None
         )
         .await
         {
@@ -1833,7 +1836,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             phase,
             &phase_record.plans,
             &plans,
-            Some(&base_sha),
+            Some(&base_sha)
         )
         .await
     {
@@ -2232,7 +2235,11 @@ async fn reobserve<I: ConfigIo>(
 async fn git_head(project: &Path) -> Result<String, String> {
     let project = project.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        let output = git_output(&project, &["rev-parse", "--verify", "HEAD"])?;
+        let output = git_output(
+            &project,
+            &["rev-parse", "--verify", "HEAD"],
+            &mut cadence::process::System,
+        )?;
         let sha = output.trim().to_owned();
         if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err("Git HEAD is not a full commit SHA".into());
@@ -2253,7 +2260,15 @@ async fn validate_commits(
     let active = active.clone();
     let patch = patch.clone();
     let head = head.to_owned();
-    tokio::task::spawn_blocking(move || validate_commits_blocking(&project, &active, &patch, &head))
+    tokio::task::spawn_blocking(move || {
+        validate_commits_blocking(
+            &project,
+            &active,
+            &patch,
+            &head,
+            &mut cadence::process::System,
+        )
+    })
         .await
         .map_err(|_| ("git-validation", "Git validation task closed".into()))?
 }
@@ -2263,6 +2278,7 @@ fn validate_commits_blocking(
     active: &ActiveDispatch,
     patch: &ExecutorPatch,
     head: &str,
+    process: &mut (dyn Process + Send),
 ) -> Result<BTreeMap<String, Vec<String>>, (&'static str, String)> {
     let completed = patch.tasks.iter().filter_map(|task| match task {
         cadence::execution::model::TaskOutcome::Completed {
@@ -2284,10 +2300,11 @@ fn validate_commits_blocking(
         git_success(
             project,
             &["cat-file", "-e", &format!("{commit}^{{commit}}")],
+            process,
         )
         .map_err(|reason| ("missing-commit", reason))?;
         if commit == prior
-            || !git_status(project, &["merge-base", "--is-ancestor", prior, commit])
+            || !git_status(project, &["merge-base", "--is-ancestor", prior, commit], process)
                 .map_err(|reason| ("git-order", reason))?
         {
             return Err((
@@ -2295,7 +2312,7 @@ fn validate_commits_blocking(
                 format!("commit {commit} is not strictly after {prior}"),
             ));
         }
-        if !git_status(project, &["merge-base", "--is-ancestor", commit, head])
+        if !git_status(project, &["merge-base", "--is-ancestor", commit, head], process)
             .map_err(|reason| ("git-order", reason))?
         {
             return Err((
@@ -2303,9 +2320,9 @@ fn validate_commits_blocking(
                 format!("commit {commit} is not an ancestor of current HEAD"),
             ));
         }
-        git_success(project, &["verify-commit", commit])
+        git_success(project, &["verify-commit", commit], process)
             .map_err(|reason| ("bad-signature", reason))?;
-        let subject = git_output(project, &["show", "-s", "--format=%s", commit])
+        let subject = git_output(project, &["show", "-s", "--format=%s", commit], process)
             .map_err(|reason| ("commit-subject", reason))?;
         if !conventional_subject(subject.trim(), task_id) {
             return Err((
@@ -2315,7 +2332,7 @@ fn validate_commits_blocking(
         }
         // Compare every parent explicitly. A combined merge diff omits paths
         // changed against only one parent and is insufficient lease evidence.
-        let parents = git_output(project, &["show", "-s", "--format=%P", commit])
+        let parents = git_output(project, &["show", "-s", "--format=%P", commit], process)
             .map_err(|reason| ("commit-paths", reason))?;
         let parents = parents.split_whitespace().collect::<Vec<_>>();
         let mut observed = BTreeSet::new();
@@ -2341,7 +2358,7 @@ fn validate_commits_blocking(
             }
             args.extend([commit, "--"]);
             let output =
-                git_output_bytes(project, &args).map_err(|reason| ("commit-paths", reason))?;
+                git_output_bytes(project, &args, process).map_err(|reason| ("commit-paths", reason))?;
             observed.extend(read_name_status(&output).map_err(|reason| ("commit-paths", reason))?);
         }
         paths.insert(commit.clone(), observed.into_iter().collect());
@@ -2378,6 +2395,7 @@ async fn observe_staged(project: &Path) -> Result<StagedObservation, String> {
                     "--no-textconv",
                     "--",
                 ],
+                &mut cadence::process::System,
             )
         };
         let before = objects()?;
@@ -2393,6 +2411,7 @@ async fn observe_staged(project: &Path) -> Result<StagedObservation, String> {
                 "--no-textconv",
                 "--",
             ],
+            &mut cadence::process::System,
         )?;
         let paths = read_name_status(&bytes)?;
         if objects()? != before {
@@ -2418,19 +2437,20 @@ fn conventional_subject(subject: &str, task_id: &str) -> bool {
     cadence::execution::receipts::conventional_subject(subject, task_id)
 }
 
-fn git_output(project: &Path, args: &[&str]) -> Result<String, String> {
-    String::from_utf8(git_output_bytes(project, args)?)
+fn git_output(project: &Path, args: &[&str], process: &mut (dyn Process + Send)) -> Result<String, String> {
+    String::from_utf8(git_output_bytes(project, args, process)?)
         .map_err(|_| "Git output is not valid UTF-8".into())
 }
 
-fn git_output_bytes(project: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(project)
-        .args(args)
-        .output()
+fn git_output_bytes(
+    project: &Path,
+    args: &[&str],
+    process: &mut dyn Process,
+) -> Result<Vec<u8>, String> {
+    let output = process
+        .run(&Launch::new("git").arg("-C").arg(project).args(args))
         .map_err(|error| format!("cannot run git: {error}"))?;
-    if output.status.success() {
+    if output.success() {
         Ok(output.stdout)
     } else {
         Err(format!(
@@ -2441,21 +2461,20 @@ fn git_output_bytes(project: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     }
 }
 
-fn git_success(project: &Path, args: &[&str]) -> Result<(), String> {
-    git_output_bytes(project, args).map(|_| ())
+fn git_success(project: &Path, args: &[&str], process: &mut (dyn Process + Send)) -> Result<(), String> {
+    git_output_bytes(project, args, process).map(|_| ())
 }
 
-fn git_status(project: &Path, args: &[&str]) -> Result<bool, String> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(project)
-        .args(args)
-        .status()
+/// This one inherits the server's own stdin, stdout and stderr, as it always
+/// has; nothing here reads the child's output.
+fn git_status(project: &Path, args: &[&str], process: &mut dyn Process) -> Result<bool, String> {
+    let output = process
+        .run(&Launch::new("git").arg("-C").arg(project).args(args).inherit())
         .map_err(|error| format!("cannot run git: {error}"))?;
-    match status.code() {
+    match output.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
-        _ => Err(format!("git {} failed with {status}", args.join(" "))),
+        _ => Err(format!("git {} failed with {}", args.join(" "), output.status)),
     }
 }
 

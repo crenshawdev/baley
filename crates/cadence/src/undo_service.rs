@@ -1,3 +1,4 @@
+use cadence::process::Process;
 use crate::{config::reload::ConfigIo, import::SessionFactory};
 use cadence::{envelope::Refusal, rail::{branch, commit, git}, undo::{manifest, model::{self, Apply, Completed, Conflict, Mode, Pending, Record}, revert},
     store::{Error, Result, writer::{Operation, Store, View}}};
@@ -6,10 +7,10 @@ use std::{collections::BTreeMap, path::Path};
 
 pub enum Command { Read { phase: u32 }, Apply(Apply) }
 
-pub async fn execute<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command) -> Result<Value> {
+pub async fn execute<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command, process: &mut (dyn Process + Send)) -> Result<Value> {
     let phase = match &command { Command::Read { phase } => *phase, Command::Apply(Apply::Phase { request }) => request.phase.get() };
     let request = match &command { Command::Apply(Apply::Phase { request }) => Some(request.clone()), _ => None };
-    let answer = match execute_inner(factory, root, command).await {
+    let answer = match execute_inner(factory, root, command, process).await {
         Ok(answer) => answer,
         Err(error) => Refusal::new("undo-unavailable", error.to_string()).slot("phase")
             .details(json!({"phase":phase})).value(),
@@ -67,7 +68,7 @@ fn projections(root: &Path, view: &View, phase: u32, config: &Value) -> Result<B
     Ok(out)
 }
 
-async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command) -> Result<Value> {
+async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command, process: &mut (dyn Process + Send)) -> Result<Value> {
     let session = factory.first_touch(root).await?;
     let store = session.review_store();
     let mut view = store.request(Operation::ReadVerified).await?;
@@ -82,7 +83,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
             return Ok(Refusal::new("request-reused", "undo request identity binds different inputs").slot("request.request_id").value());
         }
     }
-    let selected = manifest::read(root, &view.snapshot.data, &binding, phase)?;
+    let selected = manifest::read(root, &view.snapshot.data, &binding, phase, process)?;
     let request = match command {
         Command::Read { .. } => return Ok(json!({"status":"ok","manifest":selected,"modes":["committed","no-commit"]})),
         Command::Apply(Apply::Phase { request }) => request,
@@ -106,7 +107,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
     let protected = branch::protected_branches(config.effective.values.pointer("/git/protected_branches"));
     let on_protected = config.effective.values.pointer("/git/on_protected").and_then(Value::as_str).unwrap_or("ask");
     let mut record = if let Some(prior) = records.get(&id) { prior.clone() } else {
-        revert::preflight(project, &request.mode, &protected, on_protected)?;
+        revert::preflight(project, &request.mode, &protected, on_protected, process)?;
         Record { id, request, manifest: selected, completed: vec![], pending: None, conflict: None, state: "running".into() }
     };
     // All projection reads are preflight, before the first revert can change a file.
@@ -118,11 +119,11 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
     }
     while record.completed.len() < record.manifest.hashes.len() {
         let hash = record.manifest.hashes[record.manifest.hashes.len() - 1 - record.completed.len()].clone();
-        if record.request.mode == Mode::Committed { revert::policy(project, &protected, on_protected)?; }
-        record.pending = Some(Pending { hash: hash.clone(), head: git::resolve_commit(project, "HEAD")?, index: git::index_id(project)? });
+        if record.request.mode == Mode::Committed { revert::policy(project, &protected, on_protected, process)?; }
+        record.pending = Some(Pending { hash: hash.clone(), head: git::resolve_commit(project, "HEAD", process)?, index: git::index_id(project, process)? });
         persist(store, &mut view, revert::write(record.clone(), &protected, on_protected)).await?;
-        if let Err(error) = revert::perform(project, &hash) {
-            record.conflict = Some(Conflict { hash, paths: revert::conflicts(project)?, reason: error.to_string() });
+        if let Err(error) = revert::perform(project, &hash, process) {
+            record.conflict = Some(Conflict { hash, paths: revert::conflicts(project, process)?, reason: error.to_string() });
             record.state = "conflict".into();
             persist(store, &mut view, revert::write(record.clone(), &protected, on_protected)).await?;
             return Ok(model::answer(&record));
@@ -131,11 +132,11 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
         let mut write = revert::write(record.clone(), &protected, on_protected);
         if record.request.mode == Mode::Committed {
             if last { write.documents = documents.clone(); }
-            let seal = commit::freeze_staged(project, &revert::tracked_changes(&write.documents), &format!("revert({phase}): undo {hash}"))?;
+            let seal = commit::freeze_staged(project, &revert::tracked_changes(&write.documents), &format!("revert({phase}): undo {hash}"), process)?;
             record.completed.push(Completed { hash, commit: Some(seal.commit.id.clone()), index: seal.tree.clone() });
             write.seal = Some(seal);
         } else {
-            record.completed.push(Completed { hash, commit: None, index: git::index_id(project)? });
+            record.completed.push(Completed { hash, commit: None, index: git::index_id(project, process)? });
         }
         record.pending = None;
         if last { record.state = if record.request.mode == Mode::Committed { "committed" } else { "staged" }.into(); }

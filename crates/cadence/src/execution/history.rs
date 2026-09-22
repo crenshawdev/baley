@@ -1,4 +1,5 @@
 //! Immutable native task events and a separately derived current projection.
+use crate::process::Process;
 use super::{admission, allocation::Check, receipts::*};
 use crate::store::{Error, Result, model::{digest, DecisionRecord, Decision, Origin, Evidence}};
 use schemars::JsonSchema;
@@ -297,7 +298,7 @@ pub fn replay(data: &Value, request: &Request) -> Result<Option<Record>> {
     Ok(None)
 }
 
-pub fn contribute(data: &Value, root: &str, request: &Request) -> Result<(Value, Record)> {
+pub fn contribute(data: &Value, root: &str, request: &Request, process: &mut dyn Process) -> Result<(Value, Record)> {
     if let Some(record) = replay(data, request)? { return Ok((data.clone(), record)) }
     let task = &request.task;
     let refuse = |rule: &str, reason: &str| admission::refuse(task.phase, rule, "task", &task.task, reason);
@@ -362,7 +363,7 @@ pub fn contribute(data: &Value, root: &str, request: &Request) -> Result<(Value,
                 || proof.submission.expected_version != request.expected_version {
                 return Err(refuse("task-close", "close event differs from its public submission"));
             }
-            super::receipts::validate_close(data, &history, proof)?;
+            super::receipts::validate_close(data, &history, proof, process)?;
         }
         Event::Checkpoint { records, owner, at } => {
             if records.iter().any(|r|matches!(&r.fact,crate::evidence::Fact::Gate(gate) if matches!(gate.state,crate::evidence::gates::State::Answered(_))))

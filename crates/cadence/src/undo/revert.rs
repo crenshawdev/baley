@@ -1,3 +1,4 @@
+use crate::process::Process;
 use super::model::{Document, Mode, Record, Write};
 use crate::{rail::{branch, commit, git}, store::{Error, Result}};
 use std::{collections::BTreeMap, fs, io::Write as _, os::unix::fs::PermissionsExt, path::Path};
@@ -15,8 +16,8 @@ pub fn read_regular(path: &Path) -> Result<Option<Vec<u8>>> {
     }
 }
 
-pub fn policy(project: &Path, protected: &[String], on_protected: &str) -> Result<()> {
-    let name = String::from_utf8(git::run(project, ["symbolic-ref", "--short", "HEAD"])?)
+pub fn policy(project: &Path, protected: &[String], on_protected: &str, process: &mut dyn Process) -> Result<()> {
+    let name = String::from_utf8(git::run(project, ["symbolic-ref", "--short", "HEAD"], process)?)
         .map_err(|e| Error::Invalid(e.to_string()))?;
     if branch::permission(protected, on_protected, name.trim())? != branch::Permission::Pass {
         return Err(Error::Policy(format!("undo commit requires branch permission: {}", name.trim())));
@@ -24,25 +25,25 @@ pub fn policy(project: &Path, protected: &[String], on_protected: &str) -> Resul
     Ok(())
 }
 
-pub fn preflight(project: &Path, mode: &Mode, protected: &[String], on_protected: &str) -> Result<()> {
-    if !git::run(project, ["status", "--porcelain", "--untracked-files=normal"])?.is_empty() {
+pub fn preflight(project: &Path, mode: &Mode, protected: &[String], on_protected: &str, process: &mut dyn Process) -> Result<()> {
+    if !git::run(project, ["status", "--porcelain", "--untracked-files=normal"], process)?.is_empty() {
         return Err(Error::Conflict("undo requires a clean worktree and index".into()));
     }
     for name in ["REVERT_HEAD", "CHERRY_PICK_HEAD", "MERGE_HEAD", "sequencer"] {
-        let path = String::from_utf8(git::run(project, ["rev-parse", "--git-path", name])?).map_err(|e| Error::Invalid(e.to_string()))?;
+        let path = String::from_utf8(git::run(project, ["rev-parse", "--git-path", name], process)?).map_err(|e| Error::Invalid(e.to_string()))?;
         if project.join(path.trim()).exists() { return Err(Error::Conflict(format!("undo cannot enter existing Git state {name}"))); }
     }
-    if *mode == Mode::Committed { policy(project, protected, on_protected)?; }
+    if *mode == Mode::Committed { policy(project, protected, on_protected, process)?; }
     Ok(())
 }
 
-pub fn perform(project: &Path, hash: &str) -> Result<()> {
+pub fn perform(project: &Path, hash: &str, process: &mut dyn Process) -> Result<()> {
     // One full hash, always. Git owns real index/worktree conflict state.
-    git::run(project, ["revert", "--no-commit", hash]).map(|_| ())
+    git::run(project, ["revert", "--no-commit", hash], process).map(|_| ())
 }
 
-pub fn conflicts(project: &Path) -> Result<Vec<String>> {
-    git::run(project, ["diff", "--name-only", "--diff-filter=U", "-z"])?
+pub fn conflicts(project: &Path, process: &mut dyn Process) -> Result<Vec<String>> {
+    git::run(project, ["diff", "--name-only", "--diff-filter=U", "-z"], process)?
         .split(|b| *b == 0).filter(|p| !p.is_empty())
         .map(|p| String::from_utf8(p.to_vec()).map_err(|e| Error::Invalid(e.to_string()))).collect()
 }
@@ -74,14 +75,14 @@ pub fn tracked_changes(documents: &BTreeMap<String, Document>) -> BTreeMap<Strin
     documents.iter().map(|(path, document)| (path.clone(), document.after.clone())).collect()
 }
 
-pub fn validate(root: &Path, write: &Write, replay: bool) -> Result<()> {
+pub fn validate(root: &Path, write: &Write, replay: bool, process: &mut dyn Process) -> Result<()> {
     if crate::verification::inputs::root_binding(root)? != write.record.manifest.root_binding {
         return Err(Error::Conflict("undo store root changed".into()));
     }
     let project = root.parent().ok_or_else(|| Error::Invalid("planning root lacks project".into()))?;
     if let Some(seal) = &write.seal {
-        policy(project, &write.protected, &write.on_protected)?;
-        commit::validate(project, seal, replay)?;
+        policy(project, &write.protected, &write.on_protected, process)?;
+        commit::validate(project, seal, replay, process)?;
     }
     for (path, document) in &write.documents {
         if !matches!(path.as_str(), ".planning/ROADMAP.md" | ".planning/REQUIREMENTS.md" | ".planning/STATE.md") {
@@ -95,10 +96,10 @@ pub fn validate(root: &Path, write: &Write, replay: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn install(root: &Path, write: &Write) -> Result<()> {
+pub fn install(root: &Path, write: &Write, process: &mut dyn Process) -> Result<()> {
     let project = root.parent().ok_or_else(|| Error::Invalid("planning root lacks project".into()))?;
     for (relative, document) in &write.documents {
-        validate(root, write, true)?;
+        validate(root, write, true, process)?;
         let path = project.join(relative);
         if read_regular(&path)?.as_ref() == Some(&document.after) { continue; }
         let temporary = path.with_extension(format!("undo-{}.tmp", std::process::id()));
@@ -107,7 +108,7 @@ pub fn install(root: &Path, write: &Write) -> Result<()> {
             if let Ok(meta) = fs::metadata(&path) { file.set_permissions(meta.permissions())?; }
             file.write_all(&document.after)?;
             file.sync_all()?;
-            validate(root, write, true)?;
+            validate(root, write, true, process)?;
             fs::rename(&temporary, &path)?;
             fs::File::open(path.parent().unwrap())?.sync_all()?;
             Ok::<_, Error>(())
@@ -115,8 +116,8 @@ pub fn install(root: &Path, write: &Write) -> Result<()> {
         let _ = fs::remove_file(temporary);
         result?;
     }
-    if let Some(seal) = &write.seal { commit::install(project, seal, &mut || validate(root, write, true))?; }
-    validate(root, write, true)
+    if let Some(seal) = &write.seal { commit::install(project, seal, &mut |process: &mut dyn Process| validate(root, write, true, process), process)?; }
+    validate(root, write, true, process)
 }
 
 pub fn write(record: Record, protected: &[String], on_protected: &str) -> Write {

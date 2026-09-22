@@ -3,7 +3,8 @@ use super::{admission, allocation::Check, history::{self, Event, Record, Request
 use crate::store::{Error, Result, model::digest, writer::{Operation, Store}};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::{io::Read, path::{Path, PathBuf}, process::{Command, Stdio}, time::{SystemTime, UNIX_EPOCH}};
+use crate::process::Process;
+use std::{io::Read, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -218,19 +219,19 @@ pub fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis().try_into().unwrap_or(u64::MAX)
 }
 
-pub fn git(project: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let output = Command::new("git").args(args).current_dir(project).stdin(Stdio::null()).output()?;
-    if !output.status.success() { return Err(Error::Invalid(format!("Git observation failed: {}", String::from_utf8_lossy(&output.stderr)))) }
+pub fn git(project: &Path, args: &[&str], process: &mut dyn Process) -> Result<Vec<u8>> {
+    let output = process.run(&crate::process::Launch::new("git").args(args).cwd(project))?;
+    if !output.success() { return Err(Error::Invalid(format!("Git observation failed: {}", String::from_utf8_lossy(&output.stderr)))) }
     Ok(output.stdout)
 }
 
-pub fn git_text(project: &Path, args: &[&str]) -> Result<String> {
-    String::from_utf8(git(project, args)?).map(|s| s.trim_end().to_owned()).map_err(|_| Error::Invalid("unrepresentable Git output".into()))
+pub fn git_text(project: &Path, args: &[&str], process: &mut dyn Process) -> Result<String> {
+    String::from_utf8(git(project, args, process)?).map(|s| s.trim_end().to_owned()).map_err(|_| Error::Invalid("unrepresentable Git output".into()))
 }
 
 /// Commits after the last acknowledged progress, or a dirty tree, are visible
 /// uncertainty that needs explicit reconciliation before any redispatch.
-pub fn uncertainty(project: &Path, records: &[Record], view: &history::TaskView) -> Result<serde_json::Value> {
+pub fn uncertainty(project: &Path, records: &[Record], view: &history::TaskView, process: &mut dyn Process) -> Result<serde_json::Value> {
     let baseline = records.iter().rev().filter(|r| r.request.task == view.task).find_map(|r| match &r.request.event {
         Event::AcknowledgedProgress { commit, .. } => Some(commit.clone()),
         Event::Attempt { base_commit, .. } => Some(base_commit.clone()),
@@ -238,11 +239,11 @@ pub fn uncertainty(project: &Path, records: &[Record], view: &history::TaskView)
     });
     let mut commits = Vec::new();
     if !view.state.completed && let Some(baseline) = baseline {
-        commits = git_text(project, &["rev-list", "--reverse", &format!("{baseline}..HEAD")])?.lines().map(str::to_owned).collect();
+        commits = git_text(project, &["rev-list", "--reverse", &format!("{baseline}..HEAD")], process)?.lines().map(str::to_owned).collect();
     }
     let mut uncertainty = serde_json::json!({"requires_reconciliation":!commits.is_empty(),"commits":commits});
     if !view.state.completed && view.state.attempt.is_some()
-        && crate::verification::inputs::clean_accounting(project, &crate::verification::inputs::confirmed_summaries(project)?).is_err() {
+        && crate::verification::inputs::clean_accounting(project, &crate::verification::inputs::confirmed_summaries(project)?, process).is_err() {
         uncertainty["requires_reconciliation"] = serde_json::json!(true);
         uncertainty["dirty_source"] = serde_json::json!(true);
     }
@@ -254,8 +255,8 @@ pub fn uncertainty(project: &Path, records: &[Record], view: &history::TaskView)
 /// `.planning/.state.json.<pid>.<seq>.tmp` beside its target, and that file
 /// is the binary's, never the user's (D-160). A rename or copy carries its
 /// origin path in the next entry; only the destination is kept.
-pub fn status(project: &Path) -> Result<Vec<(String, String)>> {
-    let output = git(project, &["status", "--porcelain=v1", "-z", "--untracked-files=all"])?;
+pub fn status(project: &Path, process: &mut dyn Process) -> Result<Vec<(String, String)>> {
+    let output = git(project, &["status", "--porcelain=v1", "-z", "--untracked-files=all"], process)?;
     let mut entries = output.split(|b| *b == 0).filter(|e| !e.is_empty());
     let mut differences = Vec::new();
     while let Some(entry) = entries.next() {
@@ -274,18 +275,18 @@ fn own_staging(path: &str) -> bool {
         .is_some_and(crate::store::filesystem::is_staging_name)
 }
 
-pub fn clean(project: &Path) -> Result<()> {
-    if !status(project)?.is_empty() {
+pub fn clean(project: &Path, process: &mut dyn Process) -> Result<()> {
+    if !status(project, process)?.is_empty() {
         return Err(Error::Invalid("evidence-source-dirty: commit source before requesting an evidence run".into()));
     }
     Ok(())
 }
 
-pub fn material(project: &Path, command: &str, test_file: &str) -> Result<Material> {
-    crate::verification::inputs::clean_accounting(project, &crate::verification::inputs::confirmed_summaries(project)?)?;
-    let commit = git_text(project, &["rev-parse", "HEAD"])?;
-    let tree = git_text(project, &["rev-parse", "HEAD^{tree}"])?;
-    let test = if test_file.is_empty() { vec![] } else { git(project, &["show", &format!("{commit}:{test_file}")])? };
+pub fn material(project: &Path, command: &str, test_file: &str, process: &mut dyn Process) -> Result<Material> {
+    crate::verification::inputs::clean_accounting(project, &crate::verification::inputs::confirmed_summaries(project)?, process)?;
+    let commit = git_text(project, &["rev-parse", "HEAD"], process)?;
+    let tree = git_text(project, &["rev-parse", "HEAD^{tree}"], process)?;
+    let test = if test_file.is_empty() { vec![] } else { git(project, &["show", &format!("{commit}:{test_file}")], process)? };
     Ok(Material { commit, tree, test_file: test_file.into(), test_digest: digest(&test), command: command.into() })
 }
 
@@ -297,12 +298,12 @@ pub async fn append(store: &Store, request: Request) -> Result<Record> {
         .ok_or_else(|| Error::Invalid("confirmed task receipt missing".into()))
 }
 
-pub async fn start(store: &Store, project: &Path, input: Start) -> Result<Record> {
+pub async fn start(store: &Store, project: &Path, input: Start, process: &mut (dyn Process + Send)) -> Result<Record> {
     let view = store.request(Operation::ReadVerified).await?;
     let prior = history::records(&view.snapshot.data, input.task.phase)?.into_iter().find(|r| r.request.request_id == input.request_id);
     let base_commit = match prior.as_ref().map(|r| &r.request.event) {
         Some(Event::Attempt { base_commit, .. }) => base_commit.clone(),
-        _ => git_text(project, &["rev-parse", "HEAD"] )?,
+        _ => git_text(project, &["rev-parse", "HEAD"], process )?,
     };
     append(store, Request { request_id: input.request_id, task: input.task, attempt: input.attempt, expected_version: input.expected_version,
         event: Event::Attempt { predecessor: input.predecessor, checks: input.checks, base_commit } }).await
@@ -310,7 +311,7 @@ pub async fn start(store: &Store, project: &Path, input: Start) -> Result<Record
 
 /// Returns after confirmation and child ownership transfer. It never awaits the
 /// child's exit on the resident's serial request loop.
-pub async fn launch(store: Store, project: PathBuf, input: Run) -> Result<Record> {
+pub async fn launch(store: Store, project: PathBuf, input: Run, process: &mut (dyn Process + Send)) -> Result<Record> {
     let view = store.request(Operation::ReadVerified).await?;
     let history = history::records(&view.snapshot.data, input.task.phase)?;
     if let Some(prior) = history.iter().find(|r| r.request.request_id == input.request_id) {
@@ -347,7 +348,7 @@ pub async fn launch(store: Store, project: PathBuf, input: Run) -> Result<Record
         }
         if test_file.is_empty() { return Err(Error::Invalid("committed check test locator required".into())); }
     } else if input.stage != Stage::Verify { return Err(Error::Invalid("red/green launch needs an admitted check".into())); }
-    let observed = material(&project, &input.command, &test_file)?;
+    let observed = material(&project, &input.command, &test_file, process)?;
     let launch = Launch { run_id: input.request_id.clone(), check: input.check, stage: input.stage, material: observed, launched_at: now() };
     let request = Request { request_id: input.request_id, task: input.task, attempt: input.attempt,
         expected_version: input.expected_version, event: Event::Launch(launch.clone()) };
@@ -356,7 +357,7 @@ pub async fn launch(store: Store, project: PathBuf, input: Run) -> Result<Record
     tokio::spawn(async move {
         let process_project = project.clone();
         let process_launch = launch.clone();
-        let result = tokio::task::spawn_blocking(move || observe_child(&process_project, &process_launch)).await;
+        let result = tokio::task::spawn_blocking(move || observe_child(&process_project, &process_launch, &mut crate::process::System)).await;
         if let Ok(result) = result {
             for _ in 0..3 {
                 let Ok(view) = store.request(Operation::ReadVerified).await else { return };
@@ -383,7 +384,7 @@ pub async fn plan_append(store: &Store, request: history::PlanRequest) -> Result
         .ok_or_else(|| Error::Invalid("confirmed plan receipt missing".into()))
 }
 
-pub async fn suite_repair(store: &Store, project: &Path, input: RepairInput) -> Result<history::PlanRecord> {
+pub async fn suite_repair(store: &Store, project: &Path, input: RepairInput, process: &mut (dyn Process + Send)) -> Result<history::PlanRecord> {
     use history::{PlanEvent, PlanRequest, SuiteRepair};
     let view = store.request(Operation::ReadVerified).await?;
     let records = history::plan_records(&view.snapshot.data, input.plan.phase)?;
@@ -399,7 +400,7 @@ pub async fn suite_repair(store: &Store, project: &Path, input: RepairInput) -> 
         }
         return Ok(prior.clone());
     }
-    crate::verification::inputs::clean_accounting(project, &crate::verification::inputs::confirmed_summaries(project)?)?;
+    crate::verification::inputs::clean_accounting(project, &crate::verification::inputs::confirmed_summaries(project)?, process)?;
     let projection = history::plan_project(&records, &input.plan);
     let question = projection.repair_question.as_ref()
         .filter(|question| question.id == input.question_id)
@@ -411,7 +412,7 @@ pub async fn suite_repair(store: &Store, project: &Path, input: RepairInput) -> 
         }
         _ => None,
     }).ok_or_else(|| Error::Invalid("suite repair question lacks its failed launch".into()))?;
-    let head = git_text(project, &["rev-parse", "HEAD"])?;
+    let head = git_text(project, &["rev-parse", "HEAD"], process)?;
     let mut changed_paths = std::collections::BTreeMap::new();
     let mut predecessor = failed_commit;
     for commit in &input.commits {
@@ -419,11 +420,11 @@ pub async fn suite_repair(store: &Store, project: &Path, input: RepairInput) -> 
             return Err(admission::refuse(input.plan.phase, "suite-repair", "commits", commit,
                 "repair commits require distinct full object ids after the failed launch"));
         }
-        git(project, &["cat-file", "-e", &format!("{commit}^{{commit}}")])?;
-        git(project, &["merge-base", "--is-ancestor", &predecessor, commit])?;
-        git(project, &["merge-base", "--is-ancestor", commit, &head])?;
-        git(project, &["verify-commit", commit])?;
-        changed_paths.insert(commit.clone(), super::receipts::commit_paths(project, commit)?);
+        git(project, &["cat-file", "-e", &format!("{commit}^{{commit}}")], process)?;
+        git(project, &["merge-base", "--is-ancestor", &predecessor, commit], process)?;
+        git(project, &["merge-base", "--is-ancestor", commit, &head], process)?;
+        git(project, &["verify-commit", commit], process)?;
+        changed_paths.insert(commit.clone(), super::receipts::commit_paths(project, commit, process)?);
         predecessor = commit.clone();
     }
     plan_append(store, PlanRequest { request_id: input.request_id, plan: input.plan,
@@ -434,7 +435,7 @@ pub async fn suite_repair(store: &Store, project: &Path, input: RepairInput) -> 
 
 /// The suite launch is claimed before the process starts, exactly like a task
 /// command; eligibility and the once-per-plan rule are validated in the store.
-pub async fn suite_launch(store: Store, project: PathBuf, input: SuiteInput) -> Result<history::PlanRecord> {
+pub async fn suite_launch(store: Store, project: PathBuf, input: SuiteInput, process: &mut (dyn Process + Send)) -> Result<history::PlanRecord> {
     use history::{PlanEvent, PlanRequest, SuiteLaunch};
     let view = store.request(Operation::ReadVerified).await?;
     let history = history::plan_records(&view.snapshot.data, input.plan.phase)?;
@@ -447,7 +448,7 @@ pub async fn suite_launch(store: Store, project: PathBuf, input: SuiteInput) -> 
     let publication = crate::plan::persistence::saved(&view.snapshot.data, input.plan.phase)?
         .and_then(|p| p.publications.get(&input.plan.plan).cloned())
         .ok_or_else(|| Error::Invalid("plan publication missing".into()))?;
-    let observed = material(&project, &publication.content.execution.suite, "")?;
+    let observed = material(&project, &publication.content.execution.suite, "", process)?;
     let launch = SuiteLaunch { run_id: input.request_id.clone(), material: observed, launched_at: now(),
         proposed_paths: input.proposed_paths };
     let request = PlanRequest { request_id: input.request_id, plan: input.plan, expected_version: input.expected_version,
@@ -456,7 +457,7 @@ pub async fn suite_launch(store: Store, project: PathBuf, input: SuiteInput) -> 
     tokio::spawn(async move {
         let process_project = project.clone();
         let process_launch = Launch { run_id: launch.run_id.clone(), check: None, stage: Stage::Verify, material: launch.material.clone(), launched_at: launch.launched_at };
-        let result = tokio::task::spawn_blocking(move || observe_child(&process_project, &process_launch)).await;
+        let result = tokio::task::spawn_blocking(move || observe_child(&process_project, &process_launch, &mut crate::process::System)).await;
         if let Ok(result) = result {
             for _ in 0..3 {
                 let Ok(view) = store.request(Operation::ReadVerified).await else { return };
@@ -511,27 +512,25 @@ pub(crate) fn capture(mut reader: impl Read) -> Capture {
     Capture::new(bytes, complete, result_lines)
 }
 
-pub fn observe_child(project: &Path, launch: &Launch) -> RunResult {
-    use std::os::unix::process::{CommandExt, ExitStatusExt};
-    if !material(project, &launch.material.command, &launch.material.test_file).is_ok_and(|m| m == launch.material) {
+pub fn observe_child(project: &Path, launch: &Launch, process: &mut dyn Process) -> RunResult {
+    use std::os::unix::process::ExitStatusExt;
+    if !material(project, &launch.material.command, &launch.material.test_file, process).is_ok_and(|m| m == launch.material) {
         return RunResult { run_id: launch.run_id.clone(), disposition: Disposition::LaunchFailed { reason: "committed material changed before spawn".into() },
             stdout: capture(&b""[..]), stderr: capture(&b""[..]), observed_at: now(), observation: Observation::Unknown, material_unchanged: false };
     }
-    let mut command = Command::new("sh");
-    command.args(["-c", &launch.material.command]).current_dir(project).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    // The child cannot survive loss of its owning server on Linux.
-    #[cfg(target_os = "linux")]
-    let parent = std::process::id() as libc::pid_t;
-    #[cfg(target_os = "linux")]
-    unsafe { command.pre_exec(move || {
-        if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 { return Err(std::io::Error::last_os_error()) }
-        if libc::getppid() != parent { return Err(std::io::Error::other("runner owner exited before spawn")) }
-        Ok(())
-    }); }
-    let (disposition, stdout, stderr) = match command.spawn() {
+    // The child is started rather than run to completion, because the result
+    // line can arrive after the retained bytes are already full and the scan
+    // has to see the whole stream.
+    let started = process.start(
+        &crate::process::Launch::new("sh")
+            .args(["-c", &launch.material.command])
+            .cwd(project)
+            .die_with_parent(),
+    );
+    let (disposition, stdout, stderr) = match started {
         Ok(mut child) => {
-            let stdout = child.stdout.take().expect("piped stdout");
-            let stderr = child.stderr.take().expect("piped stderr");
+            let stdout = child.stdout().expect("piped stdout");
+            let stderr = child.stderr().expect("piped stderr");
             std::thread::scope(|scope| {
                 let out = scope.spawn(|| capture(stdout));
                 let err = scope.spawn(|| capture(stderr));
@@ -547,7 +546,7 @@ pub fn observe_child(project: &Path, launch: &Launch) -> RunResult {
     };
     let observation = classify(&stdout, &stderr);
     RunResult { run_id: launch.run_id.clone(), disposition, stdout, stderr, observed_at: now(), observation,
-        material_unchanged: material(project, &launch.material.command, &launch.material.test_file).is_ok_and(|m| m == launch.material) }
+        material_unchanged: material(project, &launch.material.command, &launch.material.test_file, process).is_ok_and(|m| m == launch.material) }
 }
 
 pub fn valid_result_line(line: &str) -> bool {

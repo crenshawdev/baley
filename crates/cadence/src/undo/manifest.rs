@@ -1,3 +1,4 @@
+use crate::process::Process;
 use super::model::{Manifest, records};
 use crate::{execution::{admission, history, model::ExecutionOccurrence}, rail::git, store::{Error, Result}};
 use serde_json::{Value, json};
@@ -67,7 +68,7 @@ fn legacy(root: &Path, phase: u32) -> Result<(Vec<String>, Value)> {
     Ok((hashes, json!({"document":{"kind":"phase-summary","phase":phase},"sha256":format!("{:x}", Sha256::digest(&bytes))})))
 }
 
-pub fn read(root: &Path, data: &Value, binding: &str, phase: u32) -> Result<Manifest> {
+pub fn read(root: &Path, data: &Value, binding: &str, phase: u32, process: &mut dyn Process) -> Result<Manifest> {
     let native = native(data, phase)?; // A malformed native authority never becomes a legacy fallback.
     if let Some(prior) = records(data)?.values().find(|r| r.manifest.phase == phase) {
         if prior.manifest.root_binding != binding { return Err(Error::Conflict("undo root binding changed".into())); }
@@ -88,16 +89,16 @@ pub fn read(root: &Path, data: &Value, binding: &str, phase: u32) -> Result<Mani
         }
         let hash = if let Some(hash) = resolutions.get(&input) { hash.clone() } else {
             // Resolve object prefixes, never a same-spelled ref or a peeled tag.
-            let candidates = git::run(project, ["rev-parse".to_owned(), format!("--disambiguate={input}")])?;
+            let candidates = git::run(project, ["rev-parse".to_owned(), format!("--disambiguate={input}")], process)?;
             let candidates: Vec<_> = candidates.split(|b| *b == b'\n').filter(|line| !line.is_empty()).collect();
             let [candidate] = candidates.as_slice() else {
                 return Err(Error::Invalid(format!("phase {phase} {source} commit {input} is absent or ambiguous")));
             };
             let hash = git::object_id(candidate.to_vec())?;
-            if git::run(project, ["cat-file", "-t", &hash])? != b"commit\n" {
+            if git::run(project, ["cat-file", "-t", &hash], process)? != b"commit\n" {
                 return Err(Error::Invalid(format!("phase {phase} {source} object {input} is not a commit")));
             }
-            let object = git::run(project, ["cat-file", "commit", &hash])?;
+            let object = git::run(project, ["cat-file", "commit", &hash], process)?;
             let headers = object.split(|b| *b == b'\n').take_while(|line| !line.is_empty());
             if headers.filter(|line| line.starts_with(b"parent ")).count() > 1 {
                 return Err(Error::Invalid(format!("phase {phase} {source} merge commit {hash} is unsupported")));

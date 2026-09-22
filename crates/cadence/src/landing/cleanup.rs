@@ -1,4 +1,5 @@
 //! Owner-confirmed local effects. The service journals each intent before launch.
+use crate::process::Process;
 use super::{effects::{self, Invocation}, forge, model::{ConfirmMerge, Confirmation, Landing, LocalIntent, LocalRequest, Step}};
 use crate::{envelope::Refusal, milestone::model, rail::branch, store::{Error, Result}};
 use serde::{Deserialize, Serialize};
@@ -26,7 +27,7 @@ pub fn refuse(landing: &Landing, step: &Step, code: &str, reason: impl Into<Stri
         "source":landing.source,"base":landing.base})).value()
 }
 
-pub fn confirm(root: &Path, landing: &mut Landing, request: &ConfirmMerge, config: &Value) -> Result<Value> {
+pub fn confirm(root: &Path, landing: &mut Landing, request: &ConfirmMerge, config: &Value, process: &mut dyn Process) -> Result<Value> {
     for value in [&request.request_id, &request.owner, &request.at] { model::name(value)?; }
     if request.landing != landing.id || request.expected_generation != landing.generation
         || request.source != landing.source || request.base != landing.base || request.remote != landing.remote {
@@ -51,9 +52,9 @@ pub fn confirm(root: &Path, landing: &mut Landing, request: &ConfirmMerge, confi
         }
     }
     forge::configured(&request.merged.forge, config)?;
-    let pull = forge::read_pull(root, landing, &request.merged.forge, Some(request.merged.pr))?
+    let pull = forge::read_pull(root, landing, &request.merged.forge, Some(request.merged.pr), process)?
         .ok_or_else(|| Error::Invalid("confirmed PR is unavailable".into()))?;
-    if forge::pull_state(root, landing, &request.merged.forge, &pull)? != "MERGED" {
+    if forge::pull_state(root, landing, &request.merged.forge, &pull, process)? != "MERGED" {
         return Err(Error::Invalid("confirmed PR is not merged".into()));
     }
     // Forge variants can omit the merge hash; when supplied it must agree.
@@ -62,7 +63,7 @@ pub fn confirm(root: &Path, landing: &mut Landing, request: &ConfirmMerge, confi
             return Err(Error::Invalid("owner merge commit differs from the forge's merged commit".into()));
         }
     }
-    if effects::remote_head(root, landing, &format!("refs/heads/{}", landing.base.branch))?.as_deref() != Some(&request.merged.commit) {
+    if effects::remote_head(root, landing, &format!("refs/heads/{}", landing.base.branch), process)?.as_deref() != Some(&request.merged.commit) {
         return Err(Error::Invalid("confirmed merge commit differs from the recorded remote/base tip".into()));
     }
     let confirmation = Confirmation { id:model::identity("landing-merge-confirmation", &landing.root_binding, &request.request_id), request:request.clone() };
@@ -114,8 +115,8 @@ pub struct State {
     pub tag_message: Option<String>,
 }
 
-fn reference(root: &Path, name: &str) -> Result<Option<String>> {
-    let output = effects::observe(root, &["for-each-ref", "--format=%(refname) %(objectname)", "--", name])?;
+fn reference(root: &Path, name: &str, process: &mut dyn Process) -> Result<Option<String>> {
+    let output = effects::observe(root, &["for-each-ref", "--format=%(refname) %(objectname)", "--", name], process)?;
     for line in output.lines() {
         let (reference, sha) = line.split_once(' ').ok_or_else(|| Error::Invalid("invalid local ref observation".into()))?;
         if reference == name {
@@ -126,24 +127,24 @@ fn reference(root: &Path, name: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-pub fn observe(root: &Path, landing: &Landing) -> Result<State> {
+pub fn observe(root: &Path, landing: &Landing, process: &mut dyn Process) -> Result<State> {
     validate_refs(landing)?;
     let mut state = State {
-        branch:effects::observe(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])?,
-        head:effects::observe(root, &["rev-parse", "--verify", "HEAD^{commit}"])?,
-        source:reference(root, &format!("refs/heads/{}", landing.source.branch))?,
-        base:reference(root, &format!("refs/heads/{}", landing.base.branch))?.ok_or_else(|| Error::Invalid("local base branch is missing".into()))?,
-        index:effects::observe(root, &["diff", "--cached", "--raw", "--no-ext-diff"])?,
-        worktree:effects::observe(root, &["status", "--porcelain", "--untracked-files=normal"])?,
+        branch:effects::observe(root, &["symbolic-ref", "--quiet", "--short", "HEAD"], process)?,
+        head:effects::observe(root, &["rev-parse", "--verify", "HEAD^{commit}"], process)?,
+        source:reference(root, &format!("refs/heads/{}", landing.source.branch), process)?,
+        base:reference(root, &format!("refs/heads/{}", landing.base.branch), process)?.ok_or_else(|| Error::Invalid("local base branch is missing".into()))?,
+        index:effects::observe(root, &["diff", "--cached", "--raw", "--no-ext-diff"], process)?,
+        worktree:effects::observe(root, &["status", "--porcelain", "--untracked-files=normal"], process)?,
         tag:None, tag_target:None, tag_message:None,
     };
     if let Some(tag) = landing.merge_confirmation.as_ref().and_then(|c| c.request.tag.as_ref()) {
         let name = format!("refs/tags/{}", tag.name);
-        state.tag = reference(root, &name)?;
+        state.tag = reference(root, &name, process)?;
         if let Some(object) = &state.tag
-            && effects::observe(root, &["cat-file", "-t", object])? == "tag" {
-            state.tag_target = Some(effects::observe(root, &["rev-parse", "--verify", &format!("{object}^{{commit}}")])?);
-            let annotation = effects::observe(root, &["cat-file", "-p", object])?;
+            && effects::observe(root, &["cat-file", "-t", object], process)? == "tag" {
+            state.tag_target = Some(effects::observe(root, &["rev-parse", "--verify", &format!("{object}^{{commit}}")], process)?);
+            let annotation = effects::observe(root, &["cat-file", "-p", object], process)?;
             state.tag_message = annotation.split_once("\n\n").map(|(_, message)| message.into());
         }
     }
@@ -157,22 +158,22 @@ fn clean(state: &State) -> Result<()> {
     Ok(())
 }
 
-pub fn remote_matches(root: &Path, landing: &Landing) -> Result<()> {
+pub fn remote_matches(root: &Path, landing: &Landing, process: &mut dyn Process) -> Result<()> {
     for args in [vec!["remote", "get-url", "--all", &landing.remote.name], vec!["remote", "get-url", "--push", "--all", &landing.remote.name]] {
-        if effects::observe(root, &args)? != landing.remote.url { return Err(Error::Invalid("recorded remote URL changed".into())); }
+        if effects::observe(root, &args, process)? != landing.remote.url { return Err(Error::Invalid("recorded remote URL changed".into())); }
     }
     Ok(())
 }
 
-pub fn tag_push_matches(root: &Path, landing: &Landing, inputs: &super::model::ExternalInput) -> Result<bool> {
-    remote_matches(root, landing)?;
+pub fn tag_push_matches(root: &Path, landing: &Landing, inputs: &super::model::ExternalInput, process: &mut dyn Process) -> Result<bool> {
+    remote_matches(root, landing, process)?;
     let super::model::ExternalInput::TagPush { tag, head } = inputs else { return Ok(false); };
     let Some(saved) = receipt(landing, &Step::Tag) else { return Ok(false); };
     let confirmation = landing.merge_confirmation.as_ref().unwrap();
     Ok(saved["state"] == "done" && saved["confirmation"] == confirmation.id
         && confirmation.request.tag.as_ref().is_some_and(|selected| selected.name == *tag)
         && saved["actual"]["tag"] == *head
-        && reference(root, &format!("refs/tags/{tag}"))?.as_deref() == Some(head))
+        && reference(root, &format!("refs/tags/{tag}"), process)?.as_deref() == Some(head))
 }
 
 pub fn skipped(landing: &Landing, step: &Step) -> bool {
@@ -181,10 +182,10 @@ pub fn skipped(landing: &Landing, step: &Step) -> bool {
     })
 }
 
-pub fn prepare(root: &Path, landing: &Landing, request: &LocalRequest, step: &Step, config: &Value) -> std::result::Result<LocalIntent, Failure> {
+pub fn prepare(root: &Path, landing: &Landing, request: &LocalRequest, step: &Step, config: &Value, process: &mut dyn Process) -> std::result::Result<LocalIntent, Failure> {
     let confirmation = landing.merge_confirmation.as_ref().ok_or_else(|| Error::Invalid("merge confirmation missing".into()))?;
-    remote_matches(root, landing)?;
-    let before = observe(root, landing)?;
+    remote_matches(root, landing, process)?;
+    let before = observe(root, landing, process)?;
     clean(&before)?;
     let mut intended = before.clone();
     if before.source.as_deref() != Some(&landing.source.head) { return Err(Error::Invalid("recorded source branch changed or disappeared".into()).into()); }
@@ -201,7 +202,7 @@ pub fn prepare(root: &Path, landing: &Landing, request: &LocalRequest, step: &St
             if before.branch != landing.base.branch || before.head != landing.base.head || before.base != landing.base.head {
                 return Err(Error::Invalid("pull requires the recorded checked-out base".into()).into());
             }
-            if effects::remote_head(root, landing, &format!("refs/heads/{}", landing.base.branch))?.as_deref() != Some(merged) {
+            if effects::remote_head(root, landing, &format!("refs/heads/{}", landing.base.branch), process)?.as_deref() != Some(merged) {
                 return Err(Error::Invalid("remote/base moved since owner merge confirmation".into()).into());
             }
             intended.head = merged.clone(); intended.base = merged.clone();
@@ -210,14 +211,14 @@ pub fn prepare(root: &Path, landing: &Landing, request: &LocalRequest, step: &St
         Step::Tag => {
             require_pulled(landing, &before)?;
             let tag = confirmation.request.tag.as_ref().ok_or_else(|| Error::Invalid("tag selection is an explicit skip".into()))?;
-            effects::observe(root, &["check-ref-format", &format!("refs/tags/{}", tag.name)])?;
+            effects::observe(root, &["check-ref-format", &format!("refs/tags/{}", tag.name)], process)?;
             if before.tag.is_some() { return Err(Error::Invalid(format!("tag {} already exists", tag.name)).into()); }
-            if let Some(release) = &landing.release { crate::milestone::release::validate_tag(root, release, &tag.name)?; }
+            if let Some(release) = &landing.release { crate::milestone::release::validate_tag(root, release, &tag.name, process)?; }
             intended.tag_target = Some(merged.clone()); intended.tag_message = Some(tag.message.trim_end().into());
             vec!["tag".into(), "-a".into(), "--cleanup=verbatim".into(), "-m".into(), tag.message.clone(), "--".into(), tag.name.clone(), merged.clone()]
         }
         Step::Reap => {
-            reap_gate(root, landing, &before, config)?;
+            reap_gate(root, landing, &before, config, process)?;
             require_pulled(landing, &before)?;
             intended.source = None;
             vec!["branch".into(), "-d".into(), "--".into(), landing.source.branch.clone()]
@@ -236,7 +237,7 @@ fn require_pulled(landing: &Landing, state: &State) -> Result<()> {
     Ok(())
 }
 
-pub fn reap_gate(root: &Path, landing: &Landing, state: &State, config: &Value) -> std::result::Result<(), Failure> {
+pub fn reap_gate(root: &Path, landing: &Landing, state: &State, config: &Value, process: &mut dyn Process) -> std::result::Result<(), Failure> {
     if branch::protected_branches(config.pointer("/git/protected_branches")).contains(&landing.source.branch) {
         return Err(Failure { code:Some("landing-reap-protected"),
             error:Error::Policy(format!("protected source branch {} cannot be reaped", landing.source.branch)) });
@@ -248,7 +249,7 @@ pub fn reap_gate(root: &Path, landing: &Landing, state: &State, config: &Value) 
         return Err(Failure { code:Some("landing-reap-moved"), error:Error::Invalid("source tip changed incompatibly".into()) });
     }
     // This subprocess interrogates real Git ancestry immediately before deletion.
-    effects::observe(root, &["merge-base", "--is-ancestor", state.source.as_deref().unwrap(), &state.base])
+    effects::observe(root, &["merge-base", "--is-ancestor", state.source.as_deref().unwrap(), &state.base], process)
         .map_err(|error| Failure { code:Some("landing-reap-uncontained"), error })?;
     Ok(())
 }
@@ -262,13 +263,13 @@ pub fn present(intent: &LocalIntent, actual: &State) -> bool {
     actual == &expected
 }
 
-pub fn retry(root: &Path, landing: &Landing, intent: &LocalIntent, config: &Value) -> std::result::Result<(State, bool), Failure> {
-    remote_matches(root, landing)?;
-    let actual = observe(root, landing)?;
+pub fn retry(root: &Path, landing: &Landing, intent: &LocalIntent, config: &Value, process: &mut dyn Process) -> std::result::Result<(State, bool), Failure> {
+    remote_matches(root, landing, process)?;
+    let actual = observe(root, landing, process)?;
     clean(&actual)?;
     if present(intent, &actual) { return Ok((actual, true)); }
     if actual != intent.before { return Err(Error::Invalid("local refs, index or branch differ from the retained cleanup intent".into()).into()); }
-    let prepared = prepare(root, landing, &intent.request, &intent.step, config)?;
+    let prepared = prepare(root, landing, &intent.request, &intent.step, config, process)?;
     if prepared.invocation != intent.invocation || prepared.intended != intent.intended {
         return Err(Error::Invalid("cleanup retry differs from its retained intent".into()).into());
     }
@@ -288,16 +289,16 @@ pub fn complete(landing: &mut Landing, step: &Step, intended: &State, actual: &S
     json!({"status":"ok","landing":landing,"receipt":receipt,"done":super::report::done(landing),"next_step":super::reconcile::next_step(landing)})
 }
 
-pub fn failure(root: &Path, landing: &Landing, step: &Step, error: &Error) -> Value {
-    failure_body(root, landing, step, "landing-cleanup-discrepancy", error)
+pub fn failure(root: &Path, landing: &Landing, step: &Step, error: &Error, process: &mut dyn Process) -> Value {
+    failure_body(root, landing, step, "landing-cleanup-discrepancy", error, process)
 }
 
-pub fn refused(root: &Path, landing: &Landing, step: &Step, failure: &Failure) -> Value {
-    failure_body(root, landing, step, failure.code.unwrap_or("landing-cleanup-discrepancy"), &failure.error)
+pub fn refused(root: &Path, landing: &Landing, step: &Step, failure: &Failure, process: &mut dyn Process) -> Value {
+    failure_body(root, landing, step, failure.code.unwrap_or("landing-cleanup-discrepancy"), &failure.error, process)
 }
 
-fn failure_body(root: &Path, landing: &Landing, step: &Step, code: &str, error: &Error) -> Value {
-    let state = observe(root, landing).ok();
+fn failure_body(root: &Path, landing: &Landing, step: &Step, code: &str, error: &Error, process: &mut dyn Process) -> Value {
+    let state = observe(root, landing, process).ok();
     let source = json!({"branch":landing.source.branch,"head":state.as_ref().and_then(|s| s.source.as_ref())});
     let base = json!({"branch":landing.base.branch,"head":state.as_ref().map(|s| &s.base)});
     Refusal::new(code,
