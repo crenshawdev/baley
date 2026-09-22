@@ -6,6 +6,12 @@ pub mod model;
 pub mod transaction;
 pub mod writer;
 
+#[cfg(test)]
+mod transaction_tests;
+
+#[cfg(test)]
+mod writer_tests;
+
 use model::Snapshot;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

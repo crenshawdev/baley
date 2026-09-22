@@ -194,6 +194,32 @@ impl Filesystem {
     }
 }
 
+/// A registered directory as `acquire` opened it: the identity chain it was
+/// registered with, the identity of the directory opened, and the chain its
+/// path resolves to now.
+pub(crate) struct Opened<T> {
+    pub(crate) path: PathBuf,
+    pub(crate) registered: Vec<(u64, u64)>,
+    pub(crate) opened: (u64, u64),
+    pub(crate) now: Vec<(u64, u64)>,
+    pub(crate) handle: T,
+}
+
+/// The directories to lock: one per directory identity, named by the first
+/// path given for it, in ascending (device, inode) order so every writer takes
+/// them in the same order. A directory whose opened identity or current chain
+/// is not the one registered is refused.
+pub(crate) fn lock_set<T>(opened: Vec<Opened<T>>) -> Result<BTreeMap<(u64, u64), (T, PathBuf)>> {
+    let mut ownership = BTreeMap::new();
+    for Opened { path, registered, opened, now, handle } in opened {
+        if registered.first() != Some(&opened) || now != registered {
+            return Err(Error::Conflict("registered directory identity changed".into()));
+        }
+        ownership.entry(opened).or_insert((handle, path));
+    }
+    Ok(ownership)
+}
+
 fn directory_identity(path: &Path) -> Result<Vec<(u64, u64)>> {
     path.ancestors()
         .map(|ancestor| {
@@ -404,23 +430,22 @@ impl Storage for Filesystem {
     fn root(&self) -> Option<&Path> { Some(&self.root) }
 
     fn acquire(&mut self) -> Result<Box<dyn Send>> {
-        let mut ownership = BTreeMap::new();
-        for (path, expected) in &self.directories {
+        let mut opened = Vec::new();
+        for (path, registered) in &self.directories {
             let directory = OpenOptions::new()
                 .read(true)
                 .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
                 .open(path)?;
             let metadata = directory.metadata()?;
-            let identity = (metadata.dev(), metadata.ino());
-            if expected.first() != Some(&identity) || directory_identity(path)? != *expected {
-                return Err(Error::Conflict(
-                    "registered directory identity changed".into(),
-                ));
-            }
-            ownership
-                .entry(identity)
-                .or_insert((directory, path.clone()));
+            opened.push(Opened {
+                path: path.clone(),
+                registered: registered.clone(),
+                opened: (metadata.dev(), metadata.ino()),
+                now: directory_identity(path)?,
+                handle: directory,
+            });
         }
+        let ownership = lock_set(opened)?;
         for (directory, path) in ownership.values() {
             loop {
                 if unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX) } == 0 {
@@ -641,5 +666,57 @@ impl Storage for Filesystem {
         (self.probe)(Stage::DirectorySync, parent)?;
         self.sync_directory(parent)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    /// A directory opened as registered: its chain is itself under a root.
+    fn opened(path: &str, identity: (u64, u64)) -> Opened<()> {
+        let chain = vec![identity, (1, 2)];
+        Opened { path: path.into(), registered: chain.clone(), opened: identity, now: chain, handle: () }
+    }
+
+    fn order(set: &BTreeMap<(u64, u64), ((), PathBuf)>) -> Vec<((u64, u64), &str)> {
+        set.iter().map(|(identity, (_, path))| (*identity, path.to_str().unwrap())).collect()
+    }
+
+    #[test]
+    fn directories_are_locked_in_ascending_device_and_inode_order_whatever_their_paths() {
+        let set = lock_set(vec![
+            opened("/a", (2, 5)),
+            opened("/b", (1, 20)),
+            opened("/c", (1, 10)),
+        ])
+        .unwrap();
+        assert_eq!(order(&set), [((1, 10), "/c"), ((1, 20), "/b"), ((2, 5), "/a")]);
+    }
+
+    #[test]
+    fn two_paths_to_one_directory_take_one_lock_named_by_the_first_path() {
+        let set = lock_set(vec![opened("/alias/config", (1, 7)), opened("/home/config", (1, 7))]).unwrap();
+        assert_eq!(order(&set), [((1, 7), "/alias/config")]);
+    }
+
+    #[test]
+    fn a_directory_opened_as_another_directory_is_refused() {
+        let mut moved = opened("/home/config", (1, 7));
+        moved.opened = (1, 8);
+        assert_eq!(
+            lock_set(vec![opened("/root", (1, 3)), moved]).map(|_| ()),
+            Err(Error::Conflict("registered directory identity changed".into()))
+        );
+    }
+
+    #[test]
+    fn a_directory_whose_path_now_runs_through_other_ancestors_is_refused() {
+        let mut moved = opened("/home/config", (1, 7));
+        moved.now[1] = (1, 9);
+        assert_eq!(
+            lock_set(vec![moved]).map(|_| ()),
+            Err(Error::Conflict("registered directory identity changed".into()))
+        );
     }
 }

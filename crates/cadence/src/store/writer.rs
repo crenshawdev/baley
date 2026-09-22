@@ -36,6 +36,65 @@ pub fn precondition(current: &Snapshot, generation: u64, integrity: &str) -> Res
     Ok(())
 }
 
+/// The view of the store files as read. Parsing is the cost of an operation
+/// on a large store (GH-261), so `execute` parses only bytes it has not seen.
+/// A store is its three files together: all present, or none for a new store.
+pub(crate) fn view(observed: &BTreeMap<String, Observed>) -> Result<View> {
+    #[cfg(test)]
+    PARSES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let items_bytes = observed[ITEMS].bytes.as_deref().unwrap_or_default();
+    let decision_bytes = observed[DECISIONS].bytes.as_deref().unwrap_or_default();
+    let snapshot = match observed[STATE].bytes.as_deref() {
+        Some(bytes) if observed.values().all(|file| file.bytes.is_some()) => {
+            Snapshot::parse(bytes, items_bytes, decision_bytes)?
+        }
+        Some(_) => return Err(Error::Conflict("owned generation lost a store file".into())),
+        None if observed.values().all(|file| file.bytes.is_none()) => {
+            Snapshot::new(0, b"", b"", Value::Null)?
+        }
+        None => return Err(Error::Conflict("owned records lack a snapshot".into())),
+    };
+    let items = model::parse_lines(items_bytes)?;
+    let decisions = model::parse_lines(decision_bytes)?;
+    model::validate_items(&items)?;
+    model::validate_decisions(&decisions)?;
+    if decisions.iter().any(|record| {
+        matches!(&record.decision,
+        model::Decision::BoundaryV1(value) if value.store_generation > snapshot.generation)
+    }) {
+        return Err(Error::Invalid(
+            "boundary generation exceeds snapshot".into(),
+        ));
+    }
+    Ok(View {
+        items,
+        decisions,
+        snapshot,
+    })
+}
+
+/// Whether the files another writer left, read as `after`, can replace what
+/// this writer last saw, `before`: a later generation that only appends to
+/// the items and decisions, in the same store directories. Anything else is
+/// an external change to the store.
+pub(crate) fn later_generation(
+    before: &View,
+    before_files: &BTreeMap<String, Observed>,
+    after: &View,
+    after_files: &BTreeMap<String, Observed>,
+) -> Result<()> {
+    if after.snapshot.generation <= before.snapshot.generation
+        || !after.items.starts_with(&before.items)
+        || !after.decisions.starts_with(&before.decisions)
+        || before_files.iter().any(|(name, previous)| {
+            after_files[name].directory_identity != previous.directory_identity
+        })
+    {
+        return Err(Error::Conflict("externally changed store generation".into()));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub enum BoundaryChange {
     Issue {
@@ -437,8 +496,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
 
     fn observe(storage: &mut S) -> Result<(View, BTreeMap<String, Observed>)> {
         let observed = Self::read_files(storage)?;
-        let view = Self::parse(&observed)?;
-        Ok((view, observed))
+        Ok((view(&observed)?, observed))
     }
 
     fn read_files(storage: &mut S) -> Result<BTreeMap<String, Observed>> {
@@ -447,42 +505,6 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             observed.insert(name.to_string(), storage.read(name)?);
         }
         Ok(observed)
-    }
-
-    /// The view of the bytes read. Parsing is the cost of an operation on a
-    /// large store (GH-261), so `execute` parses only bytes it has not seen.
-    fn parse(observed: &BTreeMap<String, Observed>) -> Result<View> {
-        #[cfg(test)]
-        PARSES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let items_bytes = observed[ITEMS].bytes.as_deref().unwrap_or_default();
-        let decision_bytes = observed[DECISIONS].bytes.as_deref().unwrap_or_default();
-        let snapshot = match observed[STATE].bytes.as_deref() {
-            Some(bytes) if observed.values().all(|file| file.bytes.is_some()) => {
-                Snapshot::parse(bytes, items_bytes, decision_bytes)?
-            }
-            Some(_) => return Err(Error::Conflict("owned generation lost a store file".into())),
-            None if observed.values().all(|file| file.bytes.is_none()) => {
-                Snapshot::new(0, b"", b"", Value::Null)?
-            }
-            None => return Err(Error::Conflict("owned records lack a snapshot".into())),
-        };
-        let items = model::parse_lines(items_bytes)?;
-        let decisions = model::parse_lines(decision_bytes)?;
-        model::validate_items(&items)?;
-        model::validate_decisions(&decisions)?;
-        if decisions.iter().any(|record| {
-            matches!(&record.decision,
-            model::Decision::BoundaryV1(value) if value.store_generation > snapshot.generation)
-        }) {
-            return Err(Error::Invalid(
-                "boundary generation exceeds snapshot".into(),
-            ));
-        }
-        Ok(View {
-            items,
-            decisions,
-            snapshot,
-        })
     }
 
     fn publish(&self) -> Result<()> {
@@ -514,19 +536,9 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             return Err(Error::Conflict("store changed while reading".into()));
         }
         if observed != self.observed {
-            let view = Self::parse(&observed)?;
-            if view.snapshot.generation <= self.view.snapshot.generation
-                || !view.items.starts_with(&self.view.items)
-                || !view.decisions.starts_with(&self.view.decisions)
-                || self.observed.iter().any(|(name, previous)| {
-                    observed[name].directory_identity != previous.directory_identity
-                })
-            {
-                return Err(Error::Conflict(
-                    "externally changed store generation".into(),
-                ));
-            }
-            self.view = Arc::new(view);
+            let next = view(&observed)?;
+            later_generation(&self.view, &self.observed, &next, &observed)?;
+            self.view = Arc::new(next);
             self.observed = observed;
             self.identity = identity.clone();
             self.repair_snapshot()?;
@@ -823,9 +835,10 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     return Err(Error::Invalid("empty operation identity".into()));
                 }
                 let fingerprint = transaction.fingerprint()?;
-                if let Some(prior) = operations.get(&transaction.id) {
+                let prior = operation_prior(&operations, &transaction.id, &fingerprint)?;
+                if prior != Prior::New {
                     self.revalidate()?;
-                    return if *prior == fingerprint {
+                    return if prior == Prior::Replay {
                         Ok(next)
                     } else {
                         Err(Error::Conflict(
@@ -838,20 +851,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     precondition(&self.view.snapshot, generation, &integrity)?;
                 }
                 verification_claim = self.verification_claim(&transaction)?;
-                operations.insert(transaction.id, fingerprint);
-                next.items.extend(transaction.items);
-                next.decisions.extend(
-                    transaction
-                        .decisions
-                        .into_iter()
-                        .map(super::decisions::normalize),
-                );
-                model::validate_items(&next.items)?;
-                model::validate_decisions(&next.decisions)?;
-                if let Some(data) = transaction.snapshot {
-                    next.snapshot.data = data;
-                }
-                external = transaction.external;
+                external = transact(&mut next, &mut operations, transaction, fingerprint)?;
                 "transaction"
             }
             Operation::CompareTransact { .. } => unreachable!("unwrapped above"),
@@ -1308,21 +1308,12 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             return Ok(self.view.as_ref().clone());
         };
         let id = decision.identity().map_err(boundary_error)?;
-        if self.view.decisions.iter().any(|record| record.id == id) {
-            // A distinct caller ID cannot turn the same answer into another mutation.
-            return if matches!(change, BoundaryChange::Observe) {
-                Ok(self.view.as_ref().clone())
-            } else {
-                Err(Error::Conflict(
-                    "boundary decision already admitted under another operation".into(),
-                ))
-            };
+        let admission = scoped_admission(&self.view.decisions, &id, &decision, &change,
+            self.next_generation()?, model::stamped_at())?;
+        if admission == ScopedAdmission::Replay {
+            return Ok(self.view.as_ref().clone());
         }
-        let count = self.view.decisions.iter().filter(|record| matches!(&record.decision,
-            model::Decision::BoundaryV1(value) if value.boundary.scope == decision.scope && !value.terminal && !value.boundary.is_native_refusal())).count();
-        if !decision.is_native_refusal() && count >= 256 {
-            let terminal = BoundaryV1::terminal(decision.scope).map_err(boundary_error)?;
-            let record = record_v1(terminal, self.next_generation()?, true)?;
+        if let ScopedAdmission::Terminal(record) = admission {
             let kind = super::transaction::IntentKind::BoundaryObservationV1 {
                 scope: match &record.decision {
                     model::Decision::BoundaryV1(value) => value.boundary.scope.clone(),
@@ -1331,7 +1322,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 decision_id: record.id.clone(),
             };
             let mut next = self.view.as_ref().clone();
-            next.decisions.push(record);
+            next.decisions.push(*record);
             model::validate_decisions(&next.decisions)?;
             return self.persist(
                 next,
@@ -1573,7 +1564,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             install_execution(&mut next.snapshot.data, execution)?;
         }
         next.decisions
-            .push(record_v1(decision, self.next_generation()?, false)?);
+            .push(record_v1(decision, self.next_generation()?, false, model::stamped_at())?);
         model::validate_decisions(&next.decisions)?;
         let mut operations = next.snapshot.operations.clone();
         operations.insert(operation_id.to_owned(), fingerprint);
@@ -1816,58 +1807,21 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         fingerprint: &str,
         phase: u32,
     ) -> Result<Option<View>> {
-        if operation_id.trim().is_empty() {
-            return Err(Error::Invalid("empty operation identity".into()));
+        let prior = prior(&self.view, operation_id, fingerprint, phase)?;
+        if prior == Prior::New {
+            return Ok(None);
         }
-        if terminal_boundary(&self.view.decisions, phase).is_some() {
-            self.revalidate()?;
-            return Ok(Some(self.view.as_ref().clone()));
+        self.revalidate()?;
+        if prior == Prior::Reused {
+            return Err(Error::Conflict(
+                "operation identity reused for different content".into(),
+            ));
         }
-        if let Some(prior) = self.view.snapshot.operations.get(operation_id).cloned() {
-            self.revalidate()?;
-            return if prior == fingerprint {
-                Ok(Some(self.view.as_ref().clone()))
-            } else {
-                Err(Error::Conflict(
-                    "operation identity reused for different content".into(),
-                ))
-            };
-        }
-        Ok(None)
+        Ok(Some(self.view.as_ref().clone()))
     }
 
     fn boundary_admission(&self, decision: &BoundaryDecision) -> Result<BoundaryAdmission> {
-        let record = boundary_record(decision, self.next_generation()?)?;
-        if self
-            .view
-            .decisions
-            .iter()
-            .any(|prior| prior.id == record.id)
-        {
-            return Ok(BoundaryAdmission::Replay);
-        }
-        let count = self
-            .view
-            .decisions
-            .iter()
-            .filter(|record| {
-                matches!(
-                    record.decision,
-                    model::Decision::Boundary {
-                        phase,
-                        terminal: false,
-                        ..
-                    } if phase == decision.phase
-                )
-            })
-            .count();
-        if count >= 256 {
-            return Ok(BoundaryAdmission::Terminal(terminal_record(
-                decision.phase,
-                self.next_generation()?,
-            )?));
-        }
-        Ok(BoundaryAdmission::Proceed(record))
+        boundary_admission(&self.view.decisions, decision, self.next_generation()?, model::stamped_at())
     }
 
     fn persist_terminal(&mut self, admission: BoundaryAdmission, phase: u32) -> Result<View> {
@@ -1994,9 +1948,9 @@ impl<S: Storage, P: Policy> Writer<S, P> {
 
     fn persist(
         &mut self,
-        mut next: View,
+        next: View,
         operations: BTreeMap<String, String>,
-        mut participants: Vec<super::transaction::Participant>,
+        participants: Vec<super::transaction::Participant>,
         operation_name: &'static str,
         intent_kind: super::transaction::IntentKind,
     ) -> Result<View> {
@@ -2005,18 +1959,8 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             operation: operation_name,
             snapshot: &self.view.snapshot,
         })?;
-        let items = model::render_lines(&next.items)?;
-        let decisions = model::render_lines(&next.decisions)?;
-        let generation = self.next_generation()?;
-        let (snapshot, state) = Snapshot::sealed(generation, &items, &decisions, next.snapshot.data, operations)?;
-        next.snapshot = snapshot;
-        for (name, bytes) in [(ITEMS, items), (DECISIONS, decisions), (STATE, state)] {
-            participants.push(super::transaction::Participant {
-                target: name.into(),
-                expected: self.observed[name].clone(),
-                bytes,
-            });
-        }
+        let (next, participants) =
+            sealed(next, operations, participants, self.next_generation()?, &self.observed)?;
         if let Err(error) = super::transaction::commit(
             &mut self.storage,
             &mut self.policy,
@@ -2087,10 +2031,173 @@ pub(super) fn rail_fact_record(
     )?)?)
 }
 
-enum BoundaryAdmission {
+#[derive(Debug, PartialEq)]
+pub(crate) enum BoundaryAdmission {
     Proceed(DecisionRecord),
     Replay,
     Terminal(DecisionRecord),
+}
+
+/// Each phase admits this many boundary decisions; the next is its terminal
+/// log-bound decision.
+const BOUNDARY_LIMIT: usize = 256;
+
+/// What a boundary decision for its phase becomes against the decision log,
+/// written at `store_generation` and stamped `at`: a replay when the log holds
+/// the identical record, the phase's terminal log-bound decision once the
+/// phase has used its limit, and otherwise the record to append.
+pub(crate) fn boundary_admission(
+    decisions: &[DecisionRecord],
+    decision: &BoundaryDecision,
+    store_generation: u64,
+    at: Option<u64>,
+) -> Result<BoundaryAdmission> {
+    let record = boundary_record(decision, store_generation, at)?;
+    if decisions.iter().any(|prior| prior.id == record.id) {
+        return Ok(BoundaryAdmission::Replay);
+    }
+    let count = decisions
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.decision,
+                model::Decision::Boundary {
+                    phase,
+                    terminal: false,
+                    ..
+                } if phase == decision.phase
+            )
+        })
+        .count();
+    if count >= BOUNDARY_LIMIT {
+        return Ok(BoundaryAdmission::Terminal(terminal_record(decision.phase, store_generation, at)?));
+    }
+    Ok(BoundaryAdmission::Proceed(record))
+}
+
+/// What a scoped boundary write with a new operation identity becomes.
+#[derive(Debug, PartialEq)]
+pub(crate) enum ScopedAdmission {
+    /// Its decision, `id`, is already logged and the write only observes.
+    Replay,
+    /// Its scope has used its limit: the scope's terminal log-bound decision.
+    Terminal(Box<DecisionRecord>),
+    /// A write to make.
+    Proceed,
+}
+
+/// What a scoped boundary write becomes against the decision log, written at
+/// `store_generation` and stamped `at`. The decision `id` already logged under
+/// another operation replays an observation and refuses any other change. A
+/// scope that has admitted its limit of ordinary decisions gets its terminal
+/// log-bound decision; a native refusal neither counts nor is limited.
+pub(crate) fn scoped_admission(
+    decisions: &[DecisionRecord],
+    id: &str,
+    decision: &BoundaryV1,
+    change: &BoundaryChange,
+    store_generation: u64,
+    at: Option<u64>,
+) -> Result<ScopedAdmission> {
+    if decisions.iter().any(|record| record.id == id) {
+        // A distinct caller ID cannot turn the same answer into another mutation.
+        return if matches!(change, BoundaryChange::Observe) {
+            Ok(ScopedAdmission::Replay)
+        } else {
+            Err(Error::Conflict(
+                "boundary decision already admitted under another operation".into(),
+            ))
+        };
+    }
+    let count = decisions.iter().filter(|record| matches!(&record.decision,
+        model::Decision::BoundaryV1(value) if value.boundary.scope == decision.scope && !value.terminal && !value.boundary.is_native_refusal())).count();
+    if !decision.is_native_refusal() && count >= BOUNDARY_LIMIT {
+        let terminal = BoundaryV1::terminal(decision.scope.clone()).map_err(boundary_error)?;
+        return Ok(ScopedAdmission::Terminal(Box::new(record_v1(terminal, store_generation, true, at)?)));
+    }
+    Ok(ScopedAdmission::Proceed)
+}
+
+/// How an execution request stands against the view before anything is
+/// admitted.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Prior {
+    /// Nothing in the view answers it yet.
+    New,
+    /// The view already answers it: its phase holds the terminal log-bound
+    /// decision, or its operation identity was recorded with this content.
+    Replay,
+    /// Its operation identity was recorded with other content.
+    Reused,
+}
+
+pub(crate) fn prior(view: &View, operation_id: &str, fingerprint: &str, phase: u32) -> Result<Prior> {
+    if terminal_boundary(&view.decisions, phase).is_some() && !operation_id.trim().is_empty() {
+        return Ok(Prior::Replay);
+    }
+    operation_prior(&view.snapshot.operations, operation_id, fingerprint)
+}
+
+/// How an operation identity stands against the operations the snapshot
+/// records: new, a replay of the same content, or reused for other content.
+pub(crate) fn operation_prior(
+    operations: &BTreeMap<String, String>,
+    operation_id: &str,
+    fingerprint: &str,
+) -> Result<Prior> {
+    if operation_id.trim().is_empty() {
+        return Err(Error::Invalid("empty operation identity".into()));
+    }
+    Ok(match operations.get(operation_id) {
+        None => Prior::New,
+        Some(recorded) if recorded.as_str() == fingerprint => Prior::Replay,
+        Some(_) => Prior::Reused,
+    })
+}
+
+/// Apply `transaction` to `next`: its items and its normalized decisions
+/// appended, its snapshot data in place of the old when it carries some, and
+/// its identity recorded in `operations` with `fingerprint`. Answers the
+/// external participants it brings.
+pub(crate) fn transact(
+    next: &mut View,
+    operations: &mut BTreeMap<String, String>,
+    transaction: super::transaction::Transaction,
+    fingerprint: String,
+) -> Result<Vec<super::transaction::Participant>> {
+    operations.insert(transaction.id, fingerprint);
+    next.items.extend(transaction.items);
+    next.decisions.extend(transaction.decisions.into_iter().map(super::decisions::normalize));
+    model::validate_items(&next.items)?;
+    model::validate_decisions(&next.decisions)?;
+    if let Some(data) = transaction.snapshot {
+        next.snapshot.data = data;
+    }
+    Ok(transaction.external)
+}
+
+/// The unit a write installs: `next` sealed as `generation` with
+/// `operations`, and after the write's own `participants` the items,
+/// decisions and state files, in that order, each expected as `observed`.
+pub(crate) fn sealed(
+    mut next: View,
+    operations: BTreeMap<String, String>,
+    mut participants: Vec<super::transaction::Participant>,
+    generation: u64,
+    observed: &BTreeMap<String, Observed>,
+) -> Result<(View, Vec<super::transaction::Participant>)> {
+    let items = model::render_lines(&next.items)?;
+    let decisions = model::render_lines(&next.decisions)?;
+    let (snapshot, state) = Snapshot::sealed(generation, &items, &decisions, next.snapshot.data, operations)?;
+    next.snapshot = snapshot;
+    for (name, bytes) in [(ITEMS, items), (DECISIONS, decisions), (STATE, state)] {
+        participants.push(super::transaction::Participant {
+            target: name.into(),
+            expected: observed[name].clone(),
+            bytes,
+        });
+    }
+    Ok((next, participants))
 }
 
 fn append_admitted_boundary(next: &mut View, admission: BoundaryAdmission) -> Result<()> {
@@ -2101,7 +2208,7 @@ fn append_admitted_boundary(next: &mut View, admission: BoundaryAdmission) -> Re
     model::validate_decisions(&next.decisions)
 }
 
-fn boundary_record(decision: &BoundaryDecision, store_generation: u64) -> Result<DecisionRecord> {
+fn boundary_record(decision: &BoundaryDecision, store_generation: u64, at: Option<u64>) -> Result<DecisionRecord> {
     if decision.phase == 0 {
         return Err(Error::Invalid("boundary phase must be positive".into()));
     }
@@ -2130,13 +2237,13 @@ fn boundary_record(decision: &BoundaryDecision, store_generation: u64) -> Result
             response_digest: decision.response_digest.clone(),
             terminal: false,
         },
-        at: model::stamped_at(),
+        at,
     };
     model::validate_decisions(std::slice::from_ref(&record))?;
     Ok(record)
 }
 
-fn terminal_record(phase: u32, store_generation: u64) -> Result<DecisionRecord> {
+fn terminal_record(phase: u32, store_generation: u64, at: Option<u64>) -> Result<DecisionRecord> {
     let identity = model::digest(format!("execution-log-bound:{phase}").as_bytes());
     let record = DecisionRecord {
         version: model::VERSION,
@@ -2158,7 +2265,7 @@ fn terminal_record(phase: u32, store_generation: u64) -> Result<DecisionRecord> 
             response_digest: identity,
             terminal: true,
         },
-        at: model::stamped_at(),
+        at,
     };
     model::validate_decisions(std::slice::from_ref(&record))?;
     Ok(record)
@@ -2282,6 +2389,7 @@ fn record_v1(
     boundary: BoundaryV1,
     store_generation: u64,
     terminal: bool,
+    at: Option<u64>,
 ) -> Result<DecisionRecord> {
     boundary.validate(terminal).map_err(boundary_error)?;
     Ok(DecisionRecord {
@@ -2297,7 +2405,7 @@ fn record_v1(
             store_generation,
             terminal,
         }),
-        at: model::stamped_at(),
+        at,
     })
 }
 

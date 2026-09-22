@@ -406,3 +406,157 @@ pub fn prompt_operational(dispatch: &ActiveDispatch) -> Value {
     }
     operational
 }
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+    use crate::execution::model::{
+        AppliedReceipt, Blocker, ExecutionOccurrence, PlanDisposition, VerificationReceipt,
+    };
+    use std::collections::BTreeMap;
+
+    const SHA1: &str = "1111111111111111111111111111111111111111";
+    const SHA2: &str = "2222222222222222222222222222222222222222";
+
+    fn completed(task: &str, commit: &str, disposition: VerificationDisposition, evidence: Vec<EvidenceReference>) -> TaskOutcome {
+        TaskOutcome::Completed {
+            task_id: task.into(),
+            commit: commit.into(),
+            verification: VerificationReceipt { disposition, commands: vec![] },
+            evidence,
+        }
+    }
+
+    fn passed(task: &str, commit: &str) -> TaskOutcome {
+        completed(task, commit, VerificationDisposition::Passed, vec![EvidenceReference::Commit { sha: commit.into() }])
+    }
+
+    fn outcome(plan: u32, dispatch: &str, tasks: Vec<TaskOutcome>, blockers: &[&str]) -> PlanOutcome {
+        PlanOutcome {
+            dispatch_id: dispatch.into(),
+            phase: 3,
+            plan,
+            disposition: if blockers.is_empty() { PlanDisposition::Complete } else { PlanDisposition::Blocked },
+            tasks,
+            deviations: vec![],
+            blockers: blockers
+                .iter()
+                .map(|id| Blocker { id: (*id).into(), text: "stuck".into(), evidence: vec![] })
+                .collect(),
+            commit_paths: BTreeMap::new(),
+            transition_id: format!("transition {dispatch}"),
+        }
+    }
+
+    fn phase_3(plans: Vec<PlanOutcome>, terminal: Option<TerminalOutcome>, receipts: Vec<PlanOutcome>) -> ExecutionSnapshot {
+        let receipts = receipts
+            .into_iter()
+            .map(|outcome| {
+                (outcome.dispatch_id.clone(), AppliedReceipt {
+                    dispatch_id: outcome.dispatch_id.clone(),
+                    request_digest: "r".repeat(64),
+                    transition_id: outcome.transition_id.clone(),
+                    outcome,
+                })
+            })
+            .collect();
+        let occurrence = ExecutionOccurrence {
+            phase: 3,
+            undone: None,
+            plan_set_fingerprint: "plans".into(),
+            version: 2,
+            active: None,
+            plans,
+            terminal,
+            receipts,
+            issues: BTreeMap::new(),
+        };
+        ExecutionSnapshot { schema: super::super::model::EXECUTION_SCHEMA, occurrences: BTreeMap::from([("3".into(), occurrence)]) }
+    }
+
+    fn summary(execution: &ExecutionSnapshot) -> String {
+        String::from_utf8(render_phase_summary(execution, 3).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_completed_phase_is_complete_with_a_passed_row_per_task_carrying_its_commit() {
+        let text = summary(&phase_3(
+            vec![outcome(1, "d1", vec![passed("T1", SHA1), passed("T2", SHA2)], &[])],
+            Some(TerminalOutcome::Complete { phase: 3 }),
+            vec![],
+        ));
+        assert!(text.contains("Status: complete\n"), "{text}");
+        assert!(text.contains(&format!("| 1 | T1 | completed | {SHA1} | passed |\n")), "{text}");
+        assert!(text.contains(&format!("| 1 | T2 | completed | {SHA2} | passed |\n")), "{text}");
+        assert!(text.contains("Blocker references: none\n"), "{text}");
+    }
+
+    #[test]
+    fn a_judgment_stop_is_blocked_with_the_stopped_dispatchs_rows_and_blocker_reference() {
+        let stopped = outcome(
+            1,
+            "d1",
+            vec![TaskOutcome::Blocked { task_id: "T1".into(), blocker_id: "B1".into() }, TaskOutcome::NotRun { task_id: "T2".into() }],
+            &["B1"],
+        );
+        let text = summary(&phase_3(
+            vec![],
+            Some(TerminalOutcome::JudgmentStop { dispatch_id: "d1".into(), blocker_ids: vec!["B1".into()] }),
+            vec![stopped],
+        ));
+        assert!(text.contains("Status: blocked\n"), "{text}");
+        assert!(text.contains("| 1 | T1 | blocked |  | not-passed |\n"), "{text}");
+        assert!(text.contains("| 1 | T2 | not-run |  | not-run |\n"), "{text}");
+        assert!(text.contains("Blocker references: B1\n"), "{text}");
+    }
+
+    #[test]
+    fn a_phase_without_a_terminal_outcome_is_executing() {
+        let text = summary(&phase_3(vec![outcome(1, "d1", vec![passed("T1", SHA1)], &[])], None, vec![]));
+        assert!(text.contains("Status: executing\n"), "{text}");
+    }
+
+    #[test]
+    fn a_passed_task_with_malformed_evidence_or_a_failed_verification_is_not_shown_as_passed() {
+        let text = summary(&phase_3(
+            vec![outcome(
+                1,
+                "d1",
+                vec![
+                    completed("T1", SHA1, VerificationDisposition::Passed, vec![EvidenceReference::Commit { sha: "short".into() }]),
+                    completed("T2", SHA2, VerificationDisposition::Failed, vec![]),
+                ],
+                &[],
+            )],
+            None,
+            vec![],
+        ));
+        assert!(text.contains(&format!("| 1 | T1 | completed | {SHA1} | invalid-evidence |\n")), "{text}");
+        assert!(text.contains(&format!("| 1 | T2 | completed | {SHA2} | failed |\n")), "{text}");
+    }
+
+    #[test]
+    fn rows_follow_plan_order_whatever_order_the_plans_were_recorded() {
+        let text = summary(&phase_3(
+            vec![outcome(2, "d2", vec![passed("T9", SHA2)], &[]), outcome(1, "d1", vec![passed("T1", SHA1)], &[])],
+            None,
+            vec![],
+        ));
+        let first = text.find("| 1 | T1 |").unwrap();
+        let second = text.find("| 2 | T9 |").unwrap();
+        assert!(first < second, "{text}");
+    }
+
+    #[test]
+    fn a_phase_the_snapshot_does_not_hold_or_phase_0_is_refused() {
+        let execution = phase_3(vec![], None, vec![]);
+        assert_eq!(
+            render_phase_summary(&execution, 4),
+            Err(Error::Invalid("execution summary phase is absent".into()))
+        );
+        assert_eq!(
+            render_phase_summary(&execution, 0),
+            Err(Error::Invalid("invalid execution summary identity".into()))
+        );
+    }
+}

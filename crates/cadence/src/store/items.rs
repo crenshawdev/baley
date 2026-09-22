@@ -95,3 +95,129 @@ pub fn mark_filing_uncertain(
     next.filing_uncertain = true;
     Ok(Some(next))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::model::{Evidence, Origin, Snapshot, VERSION};
+
+    fn item(id: &str, text: &str) -> ItemRecord {
+        ItemRecord {
+            version: VERSION,
+            id: id.into(),
+            revision: 1,
+            origin: Origin { source: "capture".into(), original: Evidence::Missing },
+            text: text.into(),
+            kind: "todo".into(),
+            phase: None,
+            disposition: Disposition::Captured,
+            completed: false,
+            filing_uncertain: false,
+        }
+    }
+
+    fn view(items: Vec<ItemRecord>) -> View {
+        View { items, decisions: vec![], snapshot: Snapshot::new(1, b"", b"", serde_json::Value::Null).unwrap() }
+    }
+
+    fn recalled(view: &View) -> Vec<(&str, u64)> {
+        view.recall_items().iter().map(|item| (item.id.as_str(), item.revision)).collect()
+    }
+
+    fn filed(pointer: &str, uncertain: bool) -> ItemChange {
+        ItemChange::File { pointer: pointer.into(), uncertain }
+    }
+
+    #[test]
+    fn recall_offers_each_identity_once_at_its_latest_revision() {
+        let first = item("first", "same words");
+        let completed = revise(&first, ItemChange::Complete).unwrap();
+        let log = view(vec![first, item("second", "same words"), completed]);
+        assert_eq!(recalled(&log), [("second", 1), ("first", 2)]);
+    }
+
+    #[test]
+    fn a_declined_identity_is_absent_from_recall_in_every_revision() {
+        let captured = item("quasar", "unique quasar");
+        let filing = revise(&captured, filed("GH-1", false)).unwrap();
+        let declined = revise(&filing, ItemChange::Decline { reason: "out of scope".into() }).unwrap();
+        let log = view(vec![captured, filing, declined, item("other", "kept")]);
+        assert_eq!(recalled(&log), [("other", 1)]);
+    }
+
+    #[test]
+    fn lookup_returns_the_latest_revision_even_when_it_is_declined() {
+        let captured = item("quasar", "unique quasar");
+        let declined = revise(&captured, ItemChange::Decline { reason: "out of scope".into() }).unwrap();
+        let log = view(vec![captured, declined.clone()]);
+        assert_eq!(log.lookup_item("quasar"), Some(&declined));
+        assert_eq!(log.lookup_item("absent"), None);
+    }
+
+    #[test]
+    fn each_revision_keeps_the_identity_and_advances_the_revision_by_one() {
+        let captured = item("a", "words");
+        for change in [filed("GH-1", false), ItemChange::Decline { reason: "no".into() }, ItemChange::Complete] {
+            let next = revise(&captured, change).unwrap();
+            assert_eq!((next.id.as_str(), next.revision, next.text.as_str()), ("a", 2, "words"));
+        }
+    }
+
+    #[test]
+    fn filing_records_the_pointer_and_whether_it_is_uncertain() {
+        let next = revise(&item("a", "words"), filed("GH-7", true)).unwrap();
+        assert_eq!(next.disposition, Disposition::Filed { pointer: "GH-7".into() });
+        assert!(next.filing_uncertain);
+    }
+
+    #[test]
+    fn completing_keeps_the_disposition() {
+        let filing = revise(&item("a", "words"), filed("GH-7", false)).unwrap();
+        let completed = revise(&filing, ItemChange::Complete).unwrap();
+        assert!(completed.completed);
+        assert_eq!(completed.disposition, Disposition::Filed { pointer: "GH-7".into() });
+    }
+
+    #[test]
+    fn a_blank_filing_pointer_or_decline_reason_is_refused() {
+        let captured = item("a", "words");
+        assert_eq!(
+            revise(&captured, filed(" \t", false)).map(|_| ()),
+            Err(Error::Invalid("empty filing pointer".into()))
+        );
+        assert_eq!(
+            revise(&captured, ItemChange::Decline { reason: "\n".into() }).map(|_| ()),
+            Err(Error::Invalid("empty decline reason".into()))
+        );
+    }
+
+    #[test]
+    fn a_declined_identity_is_never_revised_again() {
+        let declined = revise(&item("a", "words"), ItemChange::Decline { reason: "no".into() }).unwrap();
+        for change in [filed("GH-1", false), ItemChange::Complete, ItemChange::Decline { reason: "again".into() }] {
+            assert_eq!(
+                revise(&declined, change).map(|_| ()),
+                Err(Error::Invalid("declined identity is terminal".into()))
+            );
+        }
+    }
+
+    #[test]
+    fn an_uncertain_result_revises_a_confirmed_filing_under_the_same_identity() {
+        let filing = revise(&item("a", "words"), filed("GH-42", false)).unwrap();
+        let completed = revise(&filing, ItemChange::Complete).unwrap();
+        let uncertain = mark_filing_uncertain(&completed, true).unwrap().unwrap();
+        assert_eq!((uncertain.id.as_str(), uncertain.revision), ("a", 4));
+        assert_eq!(uncertain.disposition, Disposition::Filed { pointer: "GH-42".into() });
+        assert!(uncertain.completed);
+        assert!(uncertain.filing_uncertain);
+    }
+
+    #[test]
+    fn a_certain_result_or_an_already_uncertain_row_changes_nothing() {
+        let filing = revise(&item("a", "words"), filed("GH-42", false)).unwrap();
+        assert_eq!(mark_filing_uncertain(&filing, false), Ok(None));
+        let uncertain = mark_filing_uncertain(&filing, true).unwrap().unwrap();
+        assert_eq!(mark_filing_uncertain(&uncertain, true), Ok(None));
+    }
+}

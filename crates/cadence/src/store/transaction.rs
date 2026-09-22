@@ -148,20 +148,20 @@ impl IntentKind {
     }
 }
 
-/// Test-only counts of intent digests and previous-snapshot parses in a
-/// commit, so a test can pin the work a write does (GH-261).
+// Test-only counts of intent digests and snapshot parses on this thread, so a
+// test can pin the work a commit does (GH-261) without counting other tests.
 #[cfg(test)]
-pub static INTENT_DIGESTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-#[cfg(test)]
-pub static PREVIOUS_PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-#[cfg(test)]
-pub static NEW_STATE_PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+thread_local! {
+    pub static INTENT_DIGESTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub static PREVIOUS_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub static NEW_STATE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// The snapshot a transaction starts from, parsed from the state
 /// participant's expected bytes.
 fn parse_previous(bytes: &[u8]) -> Result<Snapshot> {
     #[cfg(test)]
-    PREVIOUS_PARSES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    PREVIOUS_PARSES.with(|count| count.set(count.get() + 1));
     Ok(serde_json::from_slice(bytes)?)
 }
 
@@ -563,7 +563,7 @@ impl Intent {
 
     fn digest(&self) -> Result<String> {
         #[cfg(test)]
-        INTENT_DIGESTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        INTENT_DIGESTS.with(|count| count.set(count.get() + 1));
         Ok(model::digest(&serde_json::to_vec(&(
             self.version,
             &self.kind,
@@ -591,7 +591,7 @@ impl Intent {
         let items = bytes(ITEMS)?;
         let decisions = bytes(DECISIONS)?;
         #[cfg(test)]
-        NEW_STATE_PARSES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        NEW_STATE_PARSES.with(|count| count.set(count.get() + 1));
         Snapshot::parse(bytes(STATE)?, items, decisions)
     }
 
