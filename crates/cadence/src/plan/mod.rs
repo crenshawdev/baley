@@ -9,3 +9,6 @@ pub mod map_view;
 pub mod persistence;
 pub mod render;
 pub mod validation;
+
+#[cfg(test)]
+mod limits_tests;
