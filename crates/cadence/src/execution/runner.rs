@@ -231,23 +231,35 @@ pub fn git_text(project: &Path, args: &[&str], process: &mut dyn Process) -> Res
 
 /// Commits after the last acknowledged progress, or a dirty tree, are visible
 /// uncertainty that needs explicit reconciliation before any redispatch.
-pub fn uncertainty(project: &Path, records: &[Record], view: &history::TaskView, process: &mut dyn Process) -> Result<serde_json::Value> {
-    let baseline = records.iter().rev().filter(|r| r.request.task == view.task).find_map(|r| match &r.request.event {
+/// The commit a task's uncertainty is measured from: the last progress the
+/// owner acknowledged, or failing that the attempt's base.
+pub fn baseline(records: &[Record], view: &history::TaskView) -> Option<String> {
+    records.iter().rev().filter(|r| r.request.task == view.task).find_map(|r| match &r.request.event {
         Event::AcknowledgedProgress { commit, .. } => Some(commit.clone()),
         Event::Attempt { base_commit, .. } => Some(base_commit.clone()),
         _ => None,
-    });
-    let mut commits = Vec::new();
-    if !view.state.completed && let Some(baseline) = baseline {
-        commits = git_text(project, &["rev-list", "--reverse", &format!("{baseline}..HEAD")], process)?.lines().map(str::to_owned).collect();
-    }
+    })
+}
+
+/// Say what the commits since the baseline, and a dirty working tree, mean for
+/// a task. Both are facts the caller gathered.
+pub fn uncertain(view: &history::TaskView, commits: &[String], dirty_source: bool) -> serde_json::Value {
     let mut uncertainty = serde_json::json!({"requires_reconciliation":!commits.is_empty(),"commits":commits});
-    if !view.state.completed && view.state.attempt.is_some()
-        && crate::verification::inputs::clean_accounting(project, &crate::verification::inputs::confirmed_summaries(project)?, process).is_err() {
+    if !view.state.completed && view.state.attempt.is_some() && dirty_source {
         uncertainty["requires_reconciliation"] = serde_json::json!(true);
         uncertainty["dirty_source"] = serde_json::json!(true);
     }
-    Ok(uncertainty)
+    uncertainty
+}
+
+pub fn uncertainty(project: &Path, records: &[Record], view: &history::TaskView, process: &mut dyn Process) -> Result<serde_json::Value> {
+    let mut commits = Vec::new();
+    if !view.state.completed && let Some(baseline) = baseline(records, view) {
+        commits = git_text(project, &["rev-list", "--reverse", &format!("{baseline}..HEAD")], process)?.lines().map(str::to_owned).collect();
+    }
+    let dirty = !view.state.completed && view.state.attempt.is_some()
+        && crate::verification::inputs::clean_accounting(project, &crate::verification::inputs::confirmed_summaries(project)?, process).is_err();
+    Ok(uncertain(view, &commits, dirty))
 }
 
 /// Every working-tree difference Git reports, as `(code, path)`, less the
@@ -256,7 +268,13 @@ pub fn uncertainty(project: &Path, records: &[Record], view: &history::TaskView,
 /// is the binary's, never the user's (D-160). A rename or copy carries its
 /// origin path in the next entry; only the destination is kept.
 pub fn status(project: &Path, process: &mut dyn Process) -> Result<Vec<(String, String)>> {
-    let output = git(project, &["status", "--porcelain=v1", "-z", "--untracked-files=all"], process)?;
+    parse_status(&git(project, &["status", "--porcelain=v1", "-z", "--untracked-files=all"], process)?)
+}
+
+/// Read what Git already said. Splitting this from the call is what makes the
+/// rules above checkable: which codes carry a second entry, which paths are
+/// the store's own, and what an unreadable entry costs.
+pub fn parse_status(output: &[u8]) -> Result<Vec<(String, String)>> {
     let mut entries = output.split(|b| *b == 0).filter(|e| !e.is_empty());
     let mut differences = Vec::new();
     while let Some(entry) = entries.next() {

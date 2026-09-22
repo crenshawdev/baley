@@ -26,3 +26,6 @@ mod owner_tests;
 
 #[cfg(test)]
 mod source_tests;
+
+#[cfg(test)]
+mod runner_tests;

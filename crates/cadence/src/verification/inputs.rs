@@ -96,17 +96,71 @@ pub fn source_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>, 
 
 /// Exact installed projection bytes are accounted for whether tracked or new.
 /// Staged, renamed, deleted and otherwise modified paths stay dirty.
-pub fn clean_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>, process: &mut dyn Process) -> Result<()> {
-    if installed.is_empty() { return runner::clean(project, process); }
+/// What the working tree shows, beside the bytes of every differing path that
+/// could be read as a regular file. A path Git named but that is missing here
+/// is one the filesystem would not give up as plain bytes: a directory, a
+/// symlink, a deletion, something unreadable.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkingTree {
+    entries: Vec<(String, String)>,
+    files: BTreeMap<String, Vec<u8>>,
+}
+
+impl WorkingTree {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Git reported this code for this path, and the path reads back as these
+    /// bytes.
+    pub fn file(mut self, code: &str, path: &str, bytes: &[u8]) -> Self {
+        self.entries.push((code.to_owned(), path.to_owned()));
+        self.files.insert(path.to_owned(), bytes.to_vec());
+        self
+    }
+
+    /// Git reported this code for this path, and the path is not a readable
+    /// regular file.
+    pub fn unreadable(mut self, code: &str, path: &str) -> Self {
+        self.entries.push((code.to_owned(), path.to_owned()));
+        self
+    }
+}
+
+/// Ask Git and the filesystem what differs. Judges nothing, so it has no check
+/// of its own.
+pub fn observe_working_tree(project: &Path, process: &mut dyn Process) -> Result<WorkingTree> {
+    let mut tree = WorkingTree::new();
     for (code, name) in runner::status(project, process)? {
-        let accounted = matches!(code.as_str(), " M " | "?? ")
-            && std::fs::symlink_metadata(project.join(&name)).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
-            && installed.get(&name).is_some_and(|expected| std::fs::read(project.join(&name)).is_ok_and(|bytes| bytes == *expected));
-        if !accounted {
-            return Err(Error::Invalid("evidence-source-dirty: commit source before requesting an evidence run".into()));
+        let path = project.join(&name);
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
+            && let Ok(bytes) = std::fs::read(&path) {
+            tree.files.insert(name.clone(), bytes);
         }
+        tree.entries.push((code, name));
+    }
+    Ok(tree)
+}
+
+/// A difference is accounted for only when the binary itself wrote it: the
+/// path is one of the confirmed projections and its bytes are exactly the
+/// bytes that projection installed. Anything else is source the owner has not
+/// committed, and evidence cannot be observed over it.
+pub fn accounted(installed: &BTreeMap<String, Vec<u8>>, tree: &WorkingTree) -> Result<()> {
+    let dirty = || Error::Invalid("evidence-source-dirty: commit source before requesting an evidence run".into());
+    if installed.is_empty() {
+        return if tree.entries.is_empty() { Ok(()) } else { Err(dirty()) };
+    }
+    for (code, name) in &tree.entries {
+        let accounted = matches!(code.as_str(), " M " | "?? ")
+            && tree.files.get(name).is_some_and(|bytes| installed.get(name).is_some_and(|expected| bytes == expected));
+        if !accounted { return Err(dirty()); }
     }
     Ok(())
+}
+
+pub fn clean_accounting(project: &Path, installed: &BTreeMap<String, Vec<u8>>, process: &mut dyn Process) -> Result<()> {
+    accounted(installed, &observe_working_tree(project, process)?)
 }
 
 pub fn observe(root: &Path, data: &Value, phase: u32, process: &mut dyn Process) -> Result<Inputs> {
