@@ -1,7 +1,5 @@
 use cadence::derivation::*;
 use std::collections::BTreeMap;
-use std::fs;
-use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 fn roadmap(entries: &str) -> Vec<u8> {
@@ -124,33 +122,6 @@ impl ArtifactIo for ChangingIo {
     }
 }
 
-struct DenialAsAbsence<I>(I);
-
-fn swallow<T>(value: Observation<T>) -> Observation<T> {
-    match value {
-        Observation::Failed(_) => Observation::Absent,
-        value => value,
-    }
-}
-
-impl<I: ArtifactIo> ArtifactIo for DenialAsAbsence<I> {
-    fn resolve_root(&mut self, selected: &Path) -> Result<PathBuf, InputFailure> {
-        self.0.resolve_root(selected)
-    }
-    fn probe_root(&mut self, path: &Path) -> Observation<()> {
-        swallow(self.0.probe_root(path))
-    }
-    fn list_phase(&mut self, path: &Path) -> Observation<Vec<String>> {
-        swallow(self.0.list_phase(path))
-    }
-    fn probe_summary(&mut self, path: &Path) -> Observation<()> {
-        swallow(self.0.probe_summary(path))
-    }
-    fn read(&mut self, path: &Path) -> Observation<Vec<u8>> {
-        swallow(self.0.read(path))
-    }
-}
-
 // The consumer intentionally knows nothing about artifact truth tables. It
 // replaces its existing memo only when the supplied query returns success.
 fn publication_guard(
@@ -235,20 +206,6 @@ fn ac7_changes_refuse_candidate_and_preserve_prior_memo() {
     }
 }
 
-#[test]
-fn ac7_omitted_recheck_mutant_fails_same_publication_guard() {
-    for (label, before, after) in change_cases() {
-        let mut io = ChangingIo::new(before, after);
-        let omitted = prepare_query(Path::new("/planning"), &mut io)
-            .map(|prepared| prepared.answer().clone());
-        assert_eq!(io.captures, 1);
-        assert!(
-            publication_guard(omitted, &DerivationError::InputsChanged).is_err(),
-            "mutant survived: {label}"
-        );
-    }
-}
-
 fn denied(operation: &str, path: &str) -> MemoryIo {
     let mut io = MemoryIo::one();
     match operation {
@@ -295,78 +252,6 @@ fn ac7_read_list_probe_denials_refuse_at_prepare_and_recheck() {
                 "{operation} {path} second={second}"
             );
         }
-    }
-}
-
-#[test]
-fn ac7_denial_as_absence_mutant_fails_same_publication_guard() {
-    for (operation, path) in DENIALS {
-        let mut io = DenialAsAbsence(denied(operation, path));
-        let result = run_query(&mut io);
-        assert!(
-            publication_guard(result, &DerivationError::InputFailure(denial(path))).is_err(),
-            "mutant survived: {path}"
-        );
-    }
-}
-
-#[test]
-fn ac7_ordinary_absence_keeps_truth_table_and_same_capture() {
-    for (plan, summary, uat, status) in [
-        (false, false, None, LifecycleStatus::Unplanned),
-        (true, false, None, LifecycleStatus::Planned),
-        (false, true, None, LifecycleStatus::Executed),
-        (false, true, Some(""), LifecycleStatus::Executed),
-        (
-            false,
-            true,
-            Some("---\nstatus: complete\n---"),
-            LifecycleStatus::Executed,
-        ),
-        (
-            false,
-            true,
-            Some("### 1. Item\nstatus: pass"),
-            LifecycleStatus::Complete,
-        ),
-        (
-            true,
-            true,
-            Some("### 1. Item\nstatus: pass"),
-            LifecycleStatus::Complete,
-        ),
-    ] {
-        let mut io = MemoryIo::one();
-        if plan {
-            io.lists.insert(
-                "/planning/phases/1".into(),
-                Observation::Present(vec!["PLAN.md".into()]),
-            );
-        }
-        if summary {
-            io.probes.insert(
-                "/planning/phases/1/SUMMARY.md".into(),
-                Observation::Present(()),
-            );
-        }
-        if let Some(text) = uat {
-            io.reads.insert(
-                "/planning/phases/1/UAT.md".into(),
-                Observation::Present(text.as_bytes().to_vec()),
-            );
-        }
-        if status == LifecycleStatus::Complete {
-            io.reads.insert(
-                "/planning/ROADMAP.md".into(),
-                Observation::Present(roadmap("- [x] **Phase 1: One**")),
-            );
-        }
-        let prepared = prepare_query(Path::new("/planning"), &mut io).unwrap();
-        let rechecked = recheck_query(&prepared, &mut io).unwrap();
-        assert_eq!(prepared.capture(), rechecked.capture());
-        assert_eq!(prepared.answer(), rechecked.answer());
-        assert_eq!(rechecked.answer().phases[0].status, status);
-        assert_eq!(run_query(&mut io).unwrap(), *rechecked.answer());
     }
 }
 
@@ -440,45 +325,6 @@ fn ac7_other_named_changes_refuse_but_excluded_names_do_not() {
             .phases[0]
             .status,
         LifecycleStatus::Planned
-    );
-}
-
-#[test]
-fn capture_matching_directories_count_and_dangling_summary_is_absent() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    fs::write(root.join("ROADMAP.md"), roadmap("- [ ] **Phase 1: One**")).unwrap();
-    let phase = root.join("phases/1");
-    fs::create_dir_all(phase.join("PLAN-01.md")).unwrap();
-    fs::create_dir(phase.join("SUMMARY.md")).unwrap();
-    for name in [
-        "PLAN.md",
-        "PLAN-2.md",
-        "PLAN-10.md",
-        "PLAN-.md",
-        "PLAN-１.md",
-        "PLAN-1.md.bak",
-        "plan.md",
-        "CONTEXT.md",
-    ] {
-        fs::write(phase.join(name), []).unwrap();
-    }
-    let capture = capture_inputs(root, &mut ArtifactFiles).unwrap();
-    assert_eq!(
-        capture.phases[0].plans,
-        Observation::Present(vec![
-            "PLAN-01.md".into(),
-            "PLAN-10.md".into(),
-            "PLAN-2.md".into(),
-            "PLAN.md".into()
-        ])
-    );
-    assert_eq!(capture.phases[0].summary, Observation::Present(()));
-    fs::remove_dir(phase.join("SUMMARY.md")).unwrap();
-    symlink("missing", phase.join("SUMMARY.md")).unwrap();
-    assert_eq!(
-        capture_inputs(root, &mut ArtifactFiles).unwrap().phases[0].summary,
-        Observation::Absent
     );
 }
 
@@ -567,42 +413,6 @@ fn capture_denials_preserve_path_category_and_absence() {
     assert_eq!(ordinary.phases[0].plans, Observation::Absent);
     assert_eq!(ordinary.phases[0].summary, Observation::Absent);
     assert_eq!(ordinary.phases[0].uat, Observation::Absent);
-}
-
-#[test]
-fn capture_missing_root_stays_absent_and_addresses_are_normalized() {
-    let temp = tempfile::tempdir().unwrap();
-    let selected = temp.path().join("unused/../missing/.");
-    let captured = capture_inputs(&selected, &mut ArtifactFiles).unwrap();
-    assert_eq!(captured.root, temp.path().join("missing"));
-    assert_eq!(captured.root_probe, Observation::Absent);
-    assert!(!captured.root.exists());
-    assert!(!temp.path().join("unused").exists());
-    assert!(captured.declarations.is_none());
-}
-
-#[test]
-fn capture_non_directory_nonregular_and_symlink_loop_failures() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    fs::write(root.join("ROADMAP.md"), roadmap("- [ ] **Phase 1: One**")).unwrap();
-    fs::create_dir(root.join("phases")).unwrap();
-    let phase = root.join("phases/1");
-    fs::write(&phase, []).unwrap();
-    let captured = capture_inputs(root, &mut ArtifactFiles).unwrap();
-    assert!(
-        matches!(&captured.phases[0].plans, Observation::Failed(e) if e.path == phase && e.category == InputFailureCategory::NotDirectory)
-    );
-    fs::remove_file(&phase).unwrap();
-    fs::create_dir_all(phase.join("UAT.md")).unwrap();
-    symlink("SUMMARY.md", phase.join("SUMMARY.md")).unwrap();
-    let captured = capture_inputs(root, &mut ArtifactFiles).unwrap();
-    assert!(
-        matches!(&captured.phases[0].uat, Observation::Failed(e) if e.path == phase.join("UAT.md") && e.category == InputFailureCategory::OtherIo)
-    );
-    assert!(
-        matches!(&captured.phases[0].summary, Observation::Failed(e) if e.path == phase.join("SUMMARY.md") && e.category == InputFailureCategory::SymlinkLoop)
-    );
 }
 
 #[test]

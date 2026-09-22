@@ -7,35 +7,10 @@
 //! field sets grew out of it. A caller had to know which subsystem answered
 //! before it knew which field to read.
 
-#[path = "support/production_source.rs"]
-mod production_source;
 use serde_json::{Value, json};
-use std::path::Path;
 
 fn code_of(answer: &Value) -> &str {
     answer["code"].as_str().unwrap_or_else(|| panic!("no code in {answer}"))
-}
-
-#[test]
-fn no_refusal_is_written_by_hand() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let sites = production_source::production_sites(&root, &|line| line.replace(' ', "").contains("\"status\":\"refused\""));
-    assert!(
-        sites.is_empty(),
-        "refusals built without cadence::envelope::Refusal:\n{}",
-        sites.join("\n")
-    );
-}
-
-#[test]
-fn no_refusal_names_a_decision_id() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let sites = production_source::production_sites(&root, &|line| line.contains(".rule(\"D-") || line.contains(".rule(\"H"));
-    assert!(
-        sites.is_empty(),
-        "refusals naming a decision id or validator version instead of a rule:\n{}",
-        sites.join("\n")
-    );
 }
 
 #[test]

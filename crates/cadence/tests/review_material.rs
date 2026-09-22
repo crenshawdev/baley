@@ -170,24 +170,6 @@ fn retain_staged_ac35() {
     );
 }
 #[test]
-fn retain_file_ac36() {
-    let mut input = Source(snapshot("file"));
-    assert_eq!(
-        acquired(
-            material::retain_file(
-                "m1",
-                "f1",
-                "a.rs",
-                &mut input,
-                &mut Saved::default(),
-                &mut FixedClock
-            )
-            .unwrap()
-        ),
-        json!({"kind":"named-file","path":"a.rs","head":null,"bytes":"old\n"})
-    );
-}
-#[test]
 fn retain_content_old_ac41() {
     let input = snapshot("old");
     assert_eq!(

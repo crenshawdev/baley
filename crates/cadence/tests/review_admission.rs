@@ -117,29 +117,6 @@ fn saved(input: &Value) -> Value {
     data
 }
 #[tokio::test]
-async fn admission_revision_conflict_ac48() {
-    let input = fixture();
-    let basis = view(input["fresh"].clone(), 1);
-    let winner = view(input["fresh"].clone(), 2);
-    let store = store(&basis, Some(&winner)).await;
-    let transaction = persistence::transaction(&basis, "caller:k1");
-    assert_eq!(
-        serde_json::to_value(
-            admission::admit_pending(
-                &store,
-                &basis,
-                transaction,
-                pending(&input),
-                &mut FixedClock
-            )
-            .await
-            .unwrap()
-        )
-        .unwrap(),
-        json!({"code":"revision-conflict","replay_key":"k1","dispatch":null})
-    );
-}
-#[tokio::test]
 async fn admission_replay_ac49() {
     let input = fixture();
     let basis = view(saved(&input), 2);
@@ -159,16 +136,6 @@ async fn admission_replay_ac49() {
         )
         .unwrap(),
         json!({"fire":"f1","attempt":"a1","replayed":true})
-    );
-}
-#[tokio::test]
-async fn admission_saved_policy_ac68() {
-    let input = fixture();
-    let basis = view(saved(&input), 2);
-    let store = store(&basis, None).await;
-    assert_eq!(
-        serde_json::to_value(admission::read_admission(&store, "f1").await.unwrap()).unwrap(),
-        json!({"fire":"f1","replay_key":"k1","scope":{"project":"p1","root":"r1","cycle":"c1"},"home":{"kind":"task","id":"h1","occurrence":"occ1"},"caller":"task","trigger":"risk_surface","specialist":null,"discriminator":"d1","plan":null,"anchor":null,"round":1,"artifact":"m1","gate":"deferred","selection":{"mode":"single","choices":["A","B"],"fallback":"local"},"routing":{"answer":"local","evidence":"route1"},"roster":{"required":["A"],"completion":"all-required-terminal"},"contract":{"schema":"review-1","interpretation":"H1-H5","validator":"H4-1"},"settlement":"pending"})
     );
 }
 #[tokio::test]

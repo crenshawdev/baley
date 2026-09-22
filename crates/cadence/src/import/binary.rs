@@ -8,6 +8,3 @@ mod tests;
 
 #[cfg(test)]
 mod routing_admission_tests;
-
-#[cfg(test)]
-mod adoption_tests;

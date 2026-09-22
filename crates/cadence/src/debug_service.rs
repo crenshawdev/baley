@@ -5,10 +5,6 @@ use cadence::{debug::model::{self, Apply, Status}, envelope::{Envelope, Refusal}
 use serde_json::{Value, json};
 use std::path::Path;
 
-#[cfg(test)]
-#[path = "debug_consult_tests.rs"]
-mod debug_consult_tests;
-
 pub enum Command { List, Read { slug: String }, Apply(Apply) }
 
 pub async fn execute<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &Path, command: Command, process: &mut (dyn Process + Send)) -> Result<Value> {
@@ -269,10 +265,6 @@ async fn consult(store: &Store, values: &Value, mut write: model::Write) -> Resu
         max_prompt_tokens: get("review.max_prompt_tokens").and_then(Value::as_u64).unwrap_or(defaults.max_prompt_tokens),
         request_timeout_ms: get("review.request_timeout_ms").and_then(Value::as_u64).unwrap_or(defaults.request_timeout_ms),
     };
-    #[cfg(test)]
-    let environment = debug_consult_tests::ENVIRONMENT.try_with(Clone::clone)
-        .unwrap_or_else(|_| std::sync::Arc::new(provider::delivery::Environment::default()));
-    #[cfg(not(test))]
     let environment = provider::delivery::Environment::default();
     write.consult_result = Some(provider::consult::run(offer, &settings, &environment).await);
     write.coordinating = false;

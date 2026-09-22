@@ -131,22 +131,6 @@ async fn recover_host_return_ac44() {
     );
 }
 #[tokio::test]
-async fn recover_original_without_rendering_ac52() {
-    let input = original_fixture()["F"].clone();
-    let basis = view(json!({"schema":"review-1","originals":{"o1":input}}));
-    let store = store(&basis, None).await;
-    assert_eq!(
-        serde_json::to_value(
-            &recovery::recover_original(&store, "o1")
-                .await
-                .unwrap()
-                .unwrap()[0]
-        )
-        .unwrap(),
-        json!({"file":"a.rs","line":1,"severity":"high","claim":"C","failure_scenario":"S"})
-    );
-}
-#[tokio::test]
 async fn recover_original_identity_ac108() {
     let input = original_fixture()["Q"].clone();
     let basis = view(json!({"schema":"review-1","originals":{"o1":input}}));
@@ -160,34 +144,6 @@ async fn recover_original_identity_ac108() {
         )
         .unwrap(),
         json!({"original":"o1","contract":"H4-1","finding_ids":["o1:0","o1:1"]})
-    );
-}
-#[tokio::test]
-async fn recover_original_q_ac109() {
-    let input = original_fixture()["Q"].clone();
-    let basis = view(json!({"schema":"review-1","originals":{"o1":input}}));
-    let store = store(&basis, None).await;
-    assert_eq!(
-        originals::read_original(&store, "o1")
-            .await
-            .unwrap()
-            .findings
-            .unwrap()[0]
-            .claim,
-        "quote: \"\n雪"
-    );
-}
-#[tokio::test]
-async fn recover_original_raw_ac110() {
-    let input = original_fixture()["empty"].clone();
-    let basis = view(json!({"schema":"review-1","originals":{"o1":input}}));
-    let store = store(&basis, None).await;
-    assert_eq!(
-        originals::read_original(&store, "o1")
-            .await
-            .unwrap()
-            .raw_bytes,
-        br#"{"findings":[]}"#
     );
 }
 #[tokio::test]

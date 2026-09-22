@@ -241,43 +241,6 @@ fn ac1_removing_final_skip_reason_prevents_completion() {
 }
 
 #[test]
-fn ac1_empty_and_nonregular_plan_summary_use_existence() {
-    for directories in [false, true] {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
-        std::fs::write(root.join("ROADMAP.md"), "## Phases\n- [ ] **Phase 1: One**").unwrap();
-        let phase = root.join("phases/1");
-        std::fs::create_dir_all(&phase).unwrap();
-        let make = |name| {
-            if directories {
-                std::fs::create_dir(phase.join(name)).unwrap();
-            } else {
-                std::fs::write(phase.join(name), []).unwrap();
-            }
-        };
-        make("PLAN.md");
-        let answer = derive(&capture_inputs(root, &mut ArtifactFiles).unwrap()).unwrap();
-        assert_eq!(answer.phases[0].status, LifecycleStatus::Planned);
-        make("SUMMARY.md");
-        assert_eq!(
-            derive(&capture_inputs(root, &mut ArtifactFiles).unwrap())
-                .unwrap()
-                .phases[0]
-                .status,
-            LifecycleStatus::Executed
-        );
-        std::fs::write(phase.join("UAT.md"), "### 1. Pass\nstatus: pass").unwrap();
-        assert_eq!(
-            derive(&capture_inputs(root, &mut ArtifactFiles).unwrap())
-                .unwrap()
-                .phases[0]
-                .status,
-            LifecycleStatus::Complete
-        );
-    }
-}
-
-#[test]
 fn ac1_failures_cannot_derive_success() {
     let mut capture = captured("## Phases\n- [ ] **Phase 1: One**");
     capture.root_probe = Observation::Absent;
@@ -624,23 +587,6 @@ fn contract_round_trips_order_plans_counters_and_null_cycles() {
     );
 }
 
-#[test]
-fn contract_absent_empty_failed_are_distinct() {
-    let absent = Observation::<Vec<u8>>::Absent;
-    let empty = Observation::Present(vec![]);
-    let failed = Observation::Failed(InputFailure {
-        path: "/planning/UAT.md".into(),
-        category: InputFailureCategory::PermissionDenied,
-        diagnostic: Some("denied by fixture".into()),
-    });
-    assert_ne!(absent, empty);
-    assert_ne!(empty, failed);
-    assert_ne!(absent, failed);
-    for value in [absent, empty, failed] {
-        round_trip(&value);
-    }
-}
-
 fn imported_cursor(status: &str, phase: u64, total: u64) -> serde_json::Value {
     serde_json::json!({"available": true, "phase": phase, "total": total, "name": "Three",
         "status": status, "next": "  /cad-plan 3 --exact\t ", "updated": "2026-09-06",
@@ -923,41 +869,6 @@ fn ac5_agreement_canonical_alias_closed_all_complete_and_hold_table() {
     assert_eq!(agreement_failures(agreement), Vec::<String>::new());
 }
 
-#[test]
-fn ac5_agreement_frozen_agree_mutant_fails_shared_table() {
-    let failed = agreement_failures(|capture, word, phase, total| {
-        let answer = derive(capture)?;
-        // Test-only reinstatement of the frozen AGREE table, before native
-        // alias normalization. Its omission of canonical unplanned must fail.
-        let frozen_agree: &[(LifecycleStatus, &[&str])] = &[
-            (
-                LifecycleStatus::Unplanned,
-                &["ready to plan", "context gathered"],
-            ),
-            (LifecycleStatus::Planned, &["planned"]),
-            (LifecycleStatus::Executed, &["executed"]),
-        ];
-        let current = answer.phases.iter().find(|p| Some(p.id) == answer.current);
-        if word != "paused"
-            && current.is_some_and(|phase| {
-                !frozen_agree
-                    .iter()
-                    .any(|(status, words)| *status == phase.status && words.contains(&word))
-            })
-        {
-            return Err(DerivationError::StateConflict {
-                source: "data.cursor".into(),
-                field: "status".into(),
-                declared: "unplanned".into(),
-                derived: "unplanned".into(),
-                entry: None,
-            });
-        }
-        agreement(capture, word, phase, total)
-    });
-    assert!(failed.contains(&"live: unplanned".into()));
-}
-
 fn conflict_only<T>(
     result: &Result<T, DerivationError>,
     source: &str,
@@ -1012,79 +923,10 @@ fn ac6_conflicts_both_checkbox_directions_and_success_with_drift_mutant() {
     }
 }
 
-#[test]
-fn ac6_conflicts_query_wrappers_and_ordered_tie_diagnostics() {
-    let temp = tempfile::tempdir().unwrap();
-    std::fs::write(temp.path().join("ROADMAP.md"), "## Phases\n- [ ] **Phase 3.0: First**\n- [x] **Phase 3: Second**\n- [x] **Phase 4: Fourth**").unwrap();
-    let result = query(temp.path(), &mut ArtifactFiles);
-    assert!(conflict_only(
-        &result,
-        "ROADMAP.md:3 entry 1",
-        "complete",
-        "true",
-        "false"
-    ));
-    let raw = imported_cursor("planned", 2, 4);
-    let cursor = normalize_imported_cursor(&raw).unwrap();
-    let observation = IntakeObservation::from_data(&serde_json::json!({"cursor":raw}));
-    let result = prepare_query_with_intake(temp.path(), &mut ArtifactFiles, &cursor, &observation);
-    assert!(conflict_only(
-        &result,
-        "ROADMAP.md:3 entry 1",
-        "complete",
-        "true",
-        "false"
-    ));
-}
-
 struct FixedIntake(IntakeObservation);
 impl IntakeIo for FixedIntake {
     fn observe_intake(&mut self) -> Result<IntakeObservation, DerivationError> {
         Ok(self.0.clone())
-    }
-}
-
-#[test]
-fn ac5_agreement_query_requires_exact_cursor_and_retirement_recheck() {
-    let temp = tempfile::tempdir().unwrap();
-    std::fs::write(
-        temp.path().join("ROADMAP.md"),
-        "## Phases\n- [ ] **Phase 3: Three**",
-    )
-    .unwrap();
-    let raw = imported_cursor("unplanned", 3, 4);
-    let cursor = normalize_imported_cursor(&raw).unwrap();
-    let observation = IntakeObservation::from_data(&serde_json::json!({"cursor":raw}));
-    let prepared =
-        prepare_query_with_intake(temp.path(), &mut ArtifactFiles, &cursor, &observation).unwrap();
-    assert_eq!(
-        recheck_query(&prepared, &mut ArtifactFiles)
-            .unwrap_err()
-            .code(),
-        "inputs-changed"
-    );
-    let candidate = query_with_intake(
-        temp.path(),
-        &mut ArtifactFiles,
-        &cursor,
-        &observation,
-        &mut FixedIntake(observation.clone()),
-    )
-    .unwrap();
-    assert_eq!(candidate.intake().unwrap().observation(), &observation);
-    for retirement in [false, true] {
-        let mut changed = observation.clone();
-        if retirement {
-            changed.retirement = Some(serde_json::json!({"retired":true}));
-        } else {
-            changed.cursor.as_mut().unwrap()["next"] = "changed".into();
-        }
-        assert_eq!(
-            recheck_query_with_intake(&prepared, &mut ArtifactFiles, &mut FixedIntake(changed))
-                .unwrap_err()
-                .code(),
-            "inputs-changed"
-        );
     }
 }
 

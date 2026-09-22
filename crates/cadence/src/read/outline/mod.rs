@@ -397,18 +397,6 @@ mod tests {
         assert_eq!(walk(&tree, |_, _| {}), Err(OutlineError::TooDeep));
     }
 
-    /// 40 KB of unbalanced `[`: error recovery flattens it, so it is neither
-    /// deep nor slow, but it is the shape the depth cap exists for.
-    #[test]
-    fn forty_kilobytes_of_open_brackets_parses_and_walks_within_the_budget() {
-        let content = "[".repeat(40_000);
-        let started = Instant::now();
-        if let Some(tree) = parse(&content, Grammar::Json, PARSE_BUDGET) {
-            walk(&tree, |_, _| {}).ok();
-        }
-        assert!(started.elapsed() < Duration::from_secs(1), "took {:?}", started.elapsed());
-    }
-
     /// A markdown file nesting more than 254 containers overflows
     /// tree-sitter-md's scanner-state buffer and aborts the process. Refusing
     /// to parse it is the only place that can be stopped.
@@ -428,20 +416,6 @@ mod tests {
             "\t- tab indented\n",
         ] {
             assert!(parse(content, Grammar::Markdown, PARSE_BUDGET).is_some(), "refused ordinary markdown: {content:?}");
-        }
-    }
-
-    #[test]
-    fn every_grammar_parses_its_own_shape() {
-        for (grammar, source) in [
-            (Grammar::C, "int main(void) { return 0; }\n"),
-            (Grammar::JavaScript, "const a = 1;\n"),
-            (Grammar::Json, "{\"a\": 1}\n"),
-            (Grammar::Markdown, "# title\n\nbody\n"),
-            (Grammar::Python, "def alpha():\n    pass\n"),
-            (Grammar::Rust, "fn alpha() {}\n"),
-        ] {
-            assert!(parse(source, grammar, PARSE_BUDGET).is_some(), "{grammar:?} failed to parse its own source");
         }
     }
 

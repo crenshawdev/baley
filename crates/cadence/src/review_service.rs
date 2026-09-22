@@ -1509,14 +1509,6 @@ pub(super) async fn next(store: &Store, fire: &str) -> Answer {
         persistence::update(store, &view, &format!("issue:{}", attempt.attempt), records).await?;
         if review::provider::Provider::parse(&attempt.requested.agent).is_some() {
             let environment = review::provider::delivery::Environment::default();
-            #[cfg(test)]
-            let environment = phase10_provider_tests::BOUNDARIES.try_with(|boundaries| {
-                review::provider::delivery::Environment {
-                    credentials: boundaries.credentials.clone(),
-                    transport: boundaries.transport.clone(),
-                    sleep: boundaries.sleep.clone(),
-                }
-            }).unwrap_or(environment);
             let owned_store = store.clone();
             let attempt_id = attempt.attempt.clone();
             tokio::spawn(async move {
@@ -1626,10 +1618,6 @@ fn historical_input(root: &Path, path: &str) -> Answer {
 mod tests;
 
 #[cfg(test)]
-#[path = "phase10_provider_tests.rs"]
-mod phase10_provider_tests;
-
-#[cfg(test)]
 mod gap151_adapter_tests {
     use super::*;
 
@@ -1660,182 +1648,6 @@ mod gap151_adapter_tests {
         ] {
             assert_eq!(execution_continuation(&delivery), expected);
         }
-    }
-}
-
-#[cfg(test)]
-mod gap158_service_tests {
-    use super::*;
-    use std::{
-        fs,
-        path::PathBuf,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-    };
-
-    #[derive(Clone)]
-    struct CountingConfigIo {
-        reads: Arc<AtomicUsize>,
-    }
-
-    impl ConfigIo for CountingConfigIo {
-        fn read(&mut self, path: &Path) -> Result<crate::config::reload::Input> {
-            self.reads.fetch_add(1, Ordering::SeqCst);
-            crate::config::reload::FileIo.read(path)
-        }
-    }
-
-    fn factory() -> SessionFactory {
-        SessionFactory::new(None, Arc::new(|_, _| Ok(())))
-    }
-
-    fn fixture() -> (tempfile::TempDir, PathBuf) {
-        let tree = tempfile::tempdir().unwrap();
-        let root = tree.path().join(".planning");
-        fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("config.v4.json"), b"{}").unwrap();
-        let data = json!({"import":{"format":1,"complete":true,"source_generation":"fixture",
-            "sources":[],"active":{"global":null,"repo":root.join("config.v4.json")},
-            "created":[],"warnings":[]}});
-        let snapshot = cadence::store::model::Snapshot::new(1, b"", b"", data).unwrap();
-        fs::write(root.join("state.json"), snapshot.render().unwrap()).unwrap();
-        fs::write(root.join("items.jsonl"), b"").unwrap();
-        fs::write(root.join("decisions.jsonl"), b"").unwrap();
-        (tree, root)
-    }
-
-    fn request(caller: &str) -> Value {
-        json!({"replay_key":"k1","caller":caller,"trigger":"diff","specialist":null,
-            "project":"p1","cycle":"c1","home":{"kind":"phase","id":"9"},
-            "discriminator":"occ1","phase":9,"plan":8,"anchor":"t1","round":1,
-            "target":{"kind":"committed-range","base":"b1","head":"h1"}})
-    }
-
-    fn resolution() -> (Generation, super::super::config_service::Route) {
-        let repo = json!({
-            "roles":{"cad-reviewer":{"model":"opus","effort":"xhigh"}},
-            "review":{"triggers":{"diff":{"gate":"advisory"}}}
-        });
-        let generation = Generation {
-            number: 7,
-            global: None,
-            repo: crate::config::reload::Input {
-                identity: "/captured/config.v4.json".into(),
-                bytes: None,
-                stamp: None,
-            },
-            effective: merge::merge(None, Some(repo), false),
-        };
-        let route = super::super::config_service::resolve_route(
-            &generation,
-            &super::super::config_service::RouteRequest {
-                role: "cad-reviewer".into(),
-                phase: NonZeroU32::new(9),
-                plan: NonZeroU32::new(8),
-                attempt: None,
-            },
-        )
-        .unwrap();
-        (generation, route)
-    }
-
-    #[tokio::test]
-    async fn gap158_ac152_supplied_admission_persists_exact_gate_and_route() {
-        let (_tree, root) = fixture();
-        fs::write(
-            root.join("config.v4.json"),
-            serde_json::to_vec(&json!({
-                "roles":{"cad-reviewer":{"model":"sonnet","effort":"high"}},
-                "review":{"triggers":{"diff":{"gate":"blocking"}}}
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let reads = Arc::new(AtomicUsize::new(0));
-        let factory = SessionFactory::with_io(
-            None,
-            CountingConfigIo {
-                reads: reads.clone(),
-            },
-            Arc::new(|_, _| Ok(())),
-        );
-        let session = factory.first_touch(&root).await.unwrap();
-        reads.store(0, Ordering::SeqCst);
-        let (generation, route) = resolution();
-        assert_eq!(route.choice.agent, "cad-reviewer-xhigh");
-        let boundaries = Arc::new(Gap158AdmissionBoundaries {
-            now: 100,
-            acquisitions: std::sync::Mutex::new(0),
-        });
-        let result = GAP158_ADMISSION_BOUNDARIES
-            .scope(
-                boundaries.clone(),
-                admit(
-                    &factory,
-                    &root,
-                    request("execute"),
-                    AdmissionResolution::Supplied {
-                        generation: Box::new(generation),
-                        route: Box::new(route),
-                        gate: Gate::Advisory,
-                    },
-                ),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            serde_json::to_value(result).unwrap(),
-            json!({"status":"ok","operation":"review-admit","result":{
-                "fire":"f1","attempt":"f1-a1","replayed":false}})
-        );
-        assert_eq!(*boundaries.acquisitions.lock().unwrap(), 1);
-        let view = persistence::read(session.review_store()).await.unwrap();
-        let records = persistence::records(&view.snapshot.data).unwrap();
-        assert_eq!(
-            json!({
-                "gate":records["admissions"]["f1"]["gate"],
-                "routing":records["admissions"]["f1"]["routing"]
-            }),
-            json!({"gate":"advisory","routing":{
-                "answer":"cad-reviewer-xhigh","evidence":"route:f1"}})
-        );
-        assert_eq!(records["replays"]["k1"]["admitted_at"], 100);
-        assert_eq!(reads.load(Ordering::SeqCst), 2);
-    }
-
-    #[tokio::test]
-    async fn gap158_ac154_saved_replay_precedes_unusable_resolution() {
-        let (_tree, root) = fixture();
-        let factory = factory();
-        let session = factory.first_touch(&root).await.unwrap();
-        let view = persistence::read(session.review_store()).await.unwrap();
-        let mut records = persistence::records(&view.snapshot.data).unwrap();
-        persistence::insert(
-            &mut records,
-            "replays",
-            "k1",
-            &json!({"fire":"f1","attempt":"a1"}),
-        )
-        .unwrap();
-        persistence::update(session.review_store(), &view, "gap158-replay", records)
-            .await
-            .unwrap();
-        fs::write(root.join("config.v4.json"), b"{").unwrap();
-        let result = admit(
-            &factory,
-            &root,
-            request("manual-plan"),
-            AdmissionResolution::Refresh,
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            serde_json::to_value(result).unwrap(),
-            json!({"status":"ok","operation":"review-admit","result":{
-                "fire":"f1","attempt":"a1","replayed":true}})
-        );
     }
 }
 

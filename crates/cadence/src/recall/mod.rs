@@ -1081,13 +1081,6 @@ pub(crate) mod resident {
             completion.await.unwrap_or_else(|_| crate::server::read_service::unavailable("resident closed"))
         }
 
-        #[cfg(test)]
-        pub fn closed_for_test() -> Self {
-            let (requests, receiver) = mpsc::channel(1);
-            drop(receiver);
-            Self { requests }
-        }
-
         pub async fn refuse_execution_arguments(
             &self,
             root: &Path,

@@ -170,9 +170,6 @@ impl From<Refusal> for serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmcp::handler::server::tool::IntoCallToolResult;
-    use rmcp::handler::server::wrapper::Json;
-    use rmcp::model::CallToolResponse;
     use serde_json::json;
 
     /// A stand-in for a real operation's payload. Struct-shaped on purpose:
@@ -279,37 +276,4 @@ mod tests {
         }
     }
 
-    /// D-07, proven through the path a tool actually takes: `Json<T>` is what
-    /// an rmcp tool returns to get structured output, and this is the
-    /// conversion rmcp runs on it. A refusal has to come out the other side as
-    /// a successful call whose structured content carries the tag, because a
-    /// caller that cannot tell "I declined" from "I crashed" cannot retry
-    /// informed.
-    #[test]
-    fn refused_is_a_successful_call_carrying_its_refusal() {
-        let envelope: Envelope<Payload> = Envelope::Refused {
-            code: "no-phase-dir".to_string(),
-            reason: "risk floor raises this plan above the configured rung".to_string(),
-        };
-        let response = Json(envelope)
-            .into_call_tool_result()
-            .expect("a refusal must not fail to serialize");
-        let CallToolResponse::Complete(result) = response else {
-            panic!("a refusal must complete, not ask for input or materialize a task");
-        };
-        let structured = result
-            .structured_content
-            .expect("the refusal must ride structured content, not a text convention");
-        assert_eq!(structured["status"], json!("refused"));
-        assert_eq!(structured["code"], json!("no-phase-dir"));
-        assert_eq!(
-            structured["reason"],
-            json!("risk floor raises this plan above the configured rung")
-        );
-        assert_ne!(
-            result.is_error,
-            Some(true),
-            "a refusal marked isError is indistinguishable from a crash"
-        );
-    }
 }

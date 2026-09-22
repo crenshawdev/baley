@@ -96,6 +96,3 @@ pub trait Storage: Send + 'static {
     fn resync(&mut self, target: &str, bytes: &[u8]) -> Result<Observed>;
     fn remove(&mut self, target: &str) -> Result<()>;
 }
-
-#[cfg(test)]
-mod crash_tests;

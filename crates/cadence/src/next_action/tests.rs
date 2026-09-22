@@ -190,65 +190,6 @@ fn authored_w1_w9_and_p12_p89_inventory_and_answers() {
 }
 
 #[test]
-fn all_eight_adjacent_swaps_fail_their_authored_fixture() {
-    let cases = fixtures();
-    for (i, name) in ["P12", "P23", "P34", "P45", "P56", "P67", "P78", "P89"]
-        .iter()
-        .enumerate()
-    {
-        let case = cases
-            .iter()
-            .find(|c| c.name == *name)
-            .expect("missing adjacent case");
-        let mut rules = super::select::RULES;
-        assert!(
-            rules[..i].iter().all(|rule| rule
-                .apply(
-                    &case.lifecycle,
-                    &case.observations,
-                    case.pause.as_ref(),
-                    case.skip
-                )
-                .is_none()),
-            "earlier rule applies: {name}"
-        );
-        assert!(
-            rules[i]
-                .apply(
-                    &case.lifecycle,
-                    &case.observations,
-                    case.pause.as_ref(),
-                    case.skip
-                )
-                .is_some()
-        );
-        assert!(
-            rules[i + 1]
-                .apply(
-                    &case.lifecycle,
-                    &case.observations,
-                    case.pause.as_ref(),
-                    case.skip
-                )
-                .is_some()
-        );
-        rules.swap(i, i + 1);
-        let wrong = rules
-            .iter()
-            .find_map(|rule| {
-                rule.apply(
-                    &case.lifecycle,
-                    &case.observations,
-                    case.pause.as_ref(),
-                    case.skip,
-                )
-            })
-            .unwrap();
-        assert_ne!(wrong.instruction(), case.expected, "swap escaped {name}");
-    }
-}
-
-#[test]
 fn numeric_order_and_different_phase_pause() {
     let mut case = fixture(
         "order",

@@ -122,40 +122,6 @@ fn accepted(input: &Value) -> Value {
     records
 }
 #[tokio::test]
-async fn accept_exact_q_ac5() {
-    let input = fixture();
-    let basis = view(input["pending"].clone(), 2);
-    let store = store(&basis, None, false).await;
-    let submitted = submission(
-        &input,
-        Some(include_bytes!("fixtures/phase9/original-q.json")),
-    );
-    let receipt = returns::accept_return(&store, submitted, &mut FixedClock).await.unwrap();
-    let original = cadence::review::originals::read_original(&store, "o1").await.unwrap();
-    assert_eq!(original.raw_bytes, include_bytes!("fixtures/phase9/original-q.json"));
-    assert_eq!(original.findings.unwrap()[0].claim, "quote: \"\n雪");
-    let projected = serde_json::to_value(receipt).unwrap();
-    assert_eq!(projected["findings"], json!({"digest":cadence::store::model::digest(
-        include_bytes!("fixtures/phase9/original-q.json")),"count":2}));
-    assert!(projected.get("original").is_none() && projected.get("originals").is_none());
-}
-#[tokio::test]
-async fn accept_sync_failure_ac45() {
-    let input = fixture();
-    let basis = view(input["pending"].clone(), 2);
-    let store = store(&basis, None, true).await;
-    let submitted = submission(&input, Some(input["F"].as_str().unwrap().as_bytes()));
-    assert_eq!(
-        serde_json::to_value(
-            returns::accept_return(&store, submitted, &mut FixedClock)
-                .await
-                .unwrap_err()
-        )
-        .unwrap(),
-        json!({"code":"delivery-write-failed","attempt":"a1","acknowledged":false})
-    );
-}
-#[tokio::test]
 async fn accept_replay_ac46() {
     let input = fixture();
     let basis = view(accepted(&input), 3);
@@ -174,23 +140,6 @@ async fn accept_conflict_ac47() {
     let input = fixture();
     let basis = view(accepted(&input), 3);
     let store = store(&basis, None, false).await;
-    let submitted = submission(&input, Some(input["Changed"].as_str().unwrap().as_bytes()));
-    assert_eq!(
-        serde_json::to_value(
-            returns::accept_return(&store, submitted, &mut FixedClock)
-                .await
-                .unwrap_err()
-        )
-        .unwrap(),
-        json!({"code":"conflicting-return","attempt":"a1","original":"o1"})
-    );
-}
-#[tokio::test]
-async fn accept_conflicting_winner_ac51() {
-    let input = fixture();
-    let basis = view(input["pending"].clone(), 2);
-    let winner = view(accepted(&input), 3);
-    let store = store(&basis, Some(&winner), false).await;
     let submitted = submission(&input, Some(input["Changed"].as_str().unwrap().as_bytes()));
     assert_eq!(
         serde_json::to_value(

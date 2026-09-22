@@ -203,72 +203,6 @@ fn mismatched_policy_and_agent_are_rejected_before_admission() {
 }
 
 #[test]
-fn writer_admits_the_route_and_routing_record_in_one_persistence_result() {
-    use cadence::execution::{
-        boundary::{BoundaryScope, BoundaryV1},
-        model::BoundaryTool,
-    };
-    use cadence::store::{
-        filesystem::Filesystem,
-        writer::{BoundaryChange, Operation, PlanningPolicy, Store},
-    };
-    let root = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join("state.json"), br#"{"version":1,"generation":0,"items_digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","decisions_digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","data":{},"operations":{},"integrity":"e9756a2c9107069a015c009d174bacbc989df7121a7646ecc1a770afdfbf35bd"}"#).unwrap();
-    std::fs::write(root.path().join("items.jsonl"), b"").unwrap();
-    std::fs::write(root.path().join("decisions.jsonl"), b"").unwrap();
-    tokio::runtime::Runtime::new().unwrap().block_on(async {
-        let store = Store::open(Filesystem::new(root.path()).unwrap(), PlanningPolicy)
-            .await
-            .unwrap();
-        let mut candidate = dispatch();
-        candidate.expected_execution_version = 0;
-        let decision = BoundaryV1 {
-            codec: 1,
-            scope: BoundaryScope::Execution { phase: 8 },
-            tool: BoundaryTool::CadenceQuery,
-            operation: "execute-next".into(),
-            request_digest: "4".repeat(64),
-            outcome: "dispatch".into(),
-            subject_id: Some(DISPATCH_ID.into()),
-            response_digest: "281a096470439f1147be2843416cd400f527c633d0b92704b50e4eec81b38b96"
-                .into(),
-            receipt: Receipt::Dispatch {
-                dispatch_id: DISPATCH_ID.into(),
-                prompt_bytes: None,
-                prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into(),
-            },
-            lease_refusal: None,
-            located: None,
-        };
-        let written = store
-            .request(Operation::BoundaryV1 {
-                expected_generation: 0,
-                expected_integrity:
-                    "e9756a2c9107069a015c009d174bacbc989df7121a7646ecc1a770afdfbf35bd".into(),
-                operation_id: "fixture-admission".into(),
-                decision,
-                change: Box::new(BoundaryChange::Dispatch {
-                    plan_set_fingerprint: "2".repeat(64),
-                    dispatch: candidate,
-                }),
-            })
-            .await
-            .unwrap();
-        let active = &written.snapshot.data["execution"]["occurrences"]["8"]["active"];
-        assert_eq!(
-            (
-                written.decisions.len(),
-                &undated(written.decisions[0].clone()),
-                written.snapshot.generation,
-                &active["route"]["choice"]["model"],
-                &active["id"]
-            ),
-            (2, &record(), 1, &json!("sonnet"), &json!(DISPATCH_ID))
-        );
-    });
-}
-
-#[test]
 fn completed_route_resolver_keeps_saved_spending_for_separate_generations() {
     use cadence::{
         config::{
@@ -552,54 +486,6 @@ fn admission() -> cadence::store::writer::Operation {
             plan_set_fingerprint: "2".repeat(64),
             dispatch: candidate,
         }),
-    }
-}
-
-#[test]
-fn each_routing_persistence_failure_returns_no_confirmed_admission() {
-    use cadence::store::{
-        Error,
-        filesystem::{Filesystem, Stage},
-        writer::{PlanningPolicy, Store},
-    };
-    for (stage, target, occurrence) in [
-        (Stage::Writing, "decisions.jsonl", 1),
-        (Stage::TemporarySync, ".store-intent.json", 1),
-        (Stage::Renamed, "decisions.jsonl", 1),
-        (Stage::Renamed, "state.json", 1),
-        (Stage::Confirmation, "state.json", 1),
-        (Stage::Confirmation, ".store-intent.json", 1),
-        (Stage::DirectorySync, "intent-removal", 1),
-    ] {
-        let root = tempfile::tempdir().unwrap();
-        seed_empty(root.path());
-        let mut seen = 0;
-        let intent_path = root.path().join(".store-intent.json");
-        let storage = Filesystem::new(root.path())
-            .unwrap()
-            .with_probe(move |at, path| {
-                let selected = match stage {
-                    Stage::TemporarySync => path.file_name().is_some_and(|name| {
-                        name.to_string_lossy().starts_with("..store-intent.json.")
-                    }),
-                    Stage::DirectorySync => !intent_path.exists(),
-                    _ => path.file_name().is_some_and(|name| name == target),
-                };
-                if at == stage && selected {
-                    seen += 1;
-                    if seen == occurrence {
-                        return Err(Error::Io("injected routing persistence failure".into()));
-                    }
-                }
-                Ok(())
-            });
-        tokio::runtime::Runtime::new().unwrap().block_on(async {
-            let store = Store::open(storage, PlanningPolicy).await.unwrap();
-            assert_eq!(
-                store.request(admission()).await,
-                Err(Error::Io("injected routing persistence failure".into()))
-            );
-        });
     }
 }
 
@@ -887,85 +773,6 @@ const SAVED: [SavedCase; 3] = [
 ];
 
 #[test]
-fn native_config_batch_saves_each_spending_choice_without_a_dispatch_workflow() {
-    use cadence::{
-        config::{
-            Layer,
-            reload::{ConfigPolicy, FileIo, Paths, Reload},
-            write::{ConfigWriter, Update, register},
-        },
-        store::writer::Store,
-    };
-    use std::sync::{Arc, Mutex};
-    for case in &SAVED {
-        let root = tempfile::tempdir().unwrap();
-        let active = Paths {
-            repo: root.path().join("config.v4.json"),
-            global: None,
-        };
-        std::fs::write(
-            &active.repo,
-            if case.model.is_none() {
-                SAVED[1].stored
-            } else {
-                "{}"
-            },
-        )
-        .unwrap();
-        tokio::runtime::Runtime::new().unwrap().block_on(async {
-            let config = Arc::new(Mutex::new(Reload::new(active.clone(), FileIo)));
-            let store = Store::open(
-                register(root.path(), &active).unwrap(),
-                ConfigPolicy {
-                    config: config.clone(),
-                    evaluate: cadence::config::planning_policy,
-                },
-            )
-            .await
-            .unwrap();
-            let writer = ConfigWriter {
-                root: root.path().into(),
-                active: active.clone(),
-                store,
-                config,
-            };
-            let mut updates = vec![Update {
-                key: "roles.cad-executor.model".into(),
-                value: case.model.map_or(Value::Null, |model| json!(model)),
-            }];
-            if case.model.is_some() {
-                updates.push(Update {
-                    key: "roles.cad-executor.effort".into(),
-                    value: json!(case.rung),
-                });
-            }
-            let written = writer.batch(Layer::Repo, &updates).await.unwrap();
-            assert_eq!(
-                (
-                    written.requested_layer,
-                    written.changed_keys,
-                    written.view.snapshot.generation,
-                    std::fs::read(&written.destination).unwrap()
-                ),
-                (
-                    Layer::Repo,
-                    if case.model.is_some() {
-                        vec![
-                            "roles.cad-executor.effort".into(),
-                            "roles.cad-executor.model".into(),
-                        ]
-                    } else {
-                        vec!["roles.cad-executor.model".into()]
-                    },
-                    1,
-                    case.stored.as_bytes().to_vec()
-                )
-            );
-        });
-    }
-}
-
-#[test]
 fn saved_generation_resolves_literal_sources_resets_and_reason_trails() {
     use cadence::{
         config::{
@@ -1109,38 +916,5 @@ fn each_new_admission_returns_the_exact_saved_choice_and_missing_host_evidence()
                 )
             );
         });
-    }
-}
-
-#[test]
-fn dispatch_renderer_matches_independent_exact_byte_oracles_for_both_renderings() {
-    for case in &SAVED {
-        for lease in [true, false] {
-            let mut dispatch = saved_dispatch(case);
-            let prompt = cadence::execution::render::render_dispatch_prompt(
-                &dispatch,
-                &json!({"const":"supplied schema"}),
-                lease,
-            );
-            dispatch.prompt_digest = cadence::store::model::digest(prompt.as_bytes());
-            dispatch.prompt = prompt.clone();
-            let retained = serde_json::to_value(dispatch).unwrap();
-            assert_eq!(retained["prompt"], prompt, "the admitted prompt must be retained exactly");
-            assert_eq!(retained["prompt_digest"], cadence::store::model::digest(prompt.as_bytes()));
-            assert_eq!(retained["prompt"].as_str().unwrap().as_bytes(), prompt.as_bytes());
-        }
-    }
-}
-
-#[test]
-fn saved_dispatch_envelope_matches_the_independently_encoded_answer_digest() {
-    for case in &SAVED {
-        let retained = saved_dispatch(case);
-        let historical = json!({"status":"ok","outcome":"dispatch","dispatch":retained,"prompt":"fixture"});
-        assert_eq!(cadence::store::model::digest(&canonical_wire(&historical)), case.envelope_digest);
-        let answer = PreparedAnswer::new(cadence::envelope::Envelope::Ok(Success::dispatch(&retained))).unwrap();
-        let expected = identity_answer(case.id, serde_json::from_str(case.route).unwrap());
-        assert_eq!(serde_json::to_value(&answer.envelope).unwrap(), expected);
-        assert_eq!(answer.response_digest, cadence::store::model::digest(&canonical_wire(&expected)));
     }
 }

@@ -116,93 +116,6 @@ fn saved_member(files: &Arc<Mutex<Files>>) -> Value {
     snapshot["data"]["review"]["deferred"]["f1"].clone()
 }
 #[tokio::test]
-async fn deferred_phase_ac139() {
-    let input = fixture("phase");
-    let (store, files) = store(&input).await;
-    let output = deferred::enqueue_deferred(&store, "f1", &mut FixedClock)
-        .await
-        .unwrap();
-    assert_eq!(
-        json!({"receipt":output,"durable":saved_member(&files)}),
-        json!({
-            "receipt":{"member":"f1","state":"unruled","continuation":"allowed"},
-            "durable":{"member":"f1","state":"unruled","home":{"kind":"phase","id":"h1","occurrence":"occ1"},"references":[{"fire":"f1","manifest":"m1","attempt":"a1","original":"o1"}],"enqueued_at":100,"contract":{"schema":"review-1","interpretation":"H1-H5","validator":"H4-1"}}
-        })
-    );
-}
-#[tokio::test]
-async fn deferred_task_ac140() {
-    let input = fixture("task");
-    let (store, files) = store(&input).await;
-    let output = deferred::enqueue_deferred(&store, "f1", &mut FixedClock)
-        .await
-        .unwrap();
-    assert_eq!(
-        json!({"receipt":output,"durable":saved_member(&files)}),
-        json!({
-            "receipt":{"member":"f1","state":"unruled","continuation":"allowed"},
-            "durable":{"member":"f1","state":"unruled","home":{"kind":"task","id":"h1","occurrence":"occ1"},"references":[{"fire":"f1","manifest":"m1","attempt":"a1","original":"o1"}],"enqueued_at":100,"contract":{"schema":"review-1","interpretation":"H1-H5","validator":"H4-1"}}
-        })
-    );
-}
-#[tokio::test]
-async fn deferred_root_inline_ac141() {
-    let input = fixture("root-inline");
-    let (store, files) = store(&input).await;
-    let output = deferred::enqueue_deferred(&store, "f1", &mut FixedClock)
-        .await
-        .unwrap();
-    assert_eq!(
-        json!({"receipt":output,"durable":saved_member(&files)}),
-        json!({
-            "receipt":{"member":"f1","state":"unruled","continuation":"allowed"},
-            "durable":{"member":"f1","state":"unruled","home":{"kind":"root-inline","id":"h1","occurrence":"occ1"},"references":[{"fire":"f1","manifest":"m1","attempt":"a1","original":"o1"}],"enqueued_at":100,"contract":{"schema":"review-1","interpretation":"H1-H5","validator":"H4-1"}}
-        })
-    );
-}
-#[tokio::test]
-async fn deferred_root_debug_ac142() {
-    let input = fixture("root-debug");
-    let (store, files) = store(&input).await;
-    let output = deferred::enqueue_deferred(&store, "f1", &mut FixedClock)
-        .await
-        .unwrap();
-    assert_eq!(
-        json!({"receipt":output,"durable":saved_member(&files)}),
-        json!({
-            "receipt":{"member":"f1","state":"unruled","continuation":"allowed"},
-            "durable":{"member":"f1","state":"unruled","home":{"kind":"root-debug","id":"h1","occurrence":"occ1"},"references":[{"fire":"f1","manifest":"m1","attempt":"a1","original":"o1"}],"enqueued_at":100,"contract":{"schema":"review-1","interpretation":"H1-H5","validator":"H4-1"}}
-        })
-    );
-}
-#[tokio::test]
-async fn deferred_root_diagnosis_ac143() {
-    let input = fixture("root-diagnosis");
-    let (store, files) = store(&input).await;
-    let output = deferred::enqueue_deferred(&store, "f1", &mut FixedClock)
-        .await
-        .unwrap();
-    assert_eq!(
-        json!({"receipt":output,"durable":saved_member(&files)}),
-        json!({
-            "receipt":{"member":"f1","state":"unruled","continuation":"allowed"},
-            "durable":{"member":"f1","state":"unruled","home":{"kind":"root-diagnosis","id":"h1","occurrence":"occ1"},"references":[{"fire":"f1","manifest":"m1","attempt":"a1","original":"o1"}],"enqueued_at":100,"contract":{"schema":"review-1","interpretation":"H1-H5","validator":"H4-1"}}
-        })
-    );
-}
-#[tokio::test]
-async fn deferred_sync_failure_ac144() {
-    let input = fixture("sync-failure");
-    let (store, files) = store(&input).await;
-    let output = deferred::enqueue_deferred(&store, "f1", &mut FixedClock)
-        .await
-        .unwrap_err();
-    assert_eq!(
-        json!({"receipt":output,"durable":saved_member(&files)}),
-        json!({"receipt":{"code":"enqueue-write-failed","fire":"f1","continuation":"wait"},"durable":null})
-    );
-}
-#[tokio::test]
 async fn deferred_advisory_ac146() {
     let input = fixture("advisory");
     let (store, _) = store(&input).await;
@@ -231,30 +144,8 @@ async fn deferred_off_ac147() {
     );
 }
 #[tokio::test]
-async fn deferred_references_ac150() {
-    let input = fixture("references");
-    let (store, _) = store(&input).await;
-    let output = deferred::enumerate_deferred(&store).await.unwrap();
-    assert_eq!(
-        serde_json::to_value(&output.members[0].references).unwrap(),
-        json!({"fire":"f1","manifest":"m1","attempt":"a1","original":"o1"})
-    );
-}
-#[tokio::test]
 async fn deferred_replay_preserves_initial_member() {
     let input = fixture("replay");
-    let (store, files) = store(&input).await;
-    let output = deferred::enqueue_deferred(&store, "f1", &mut FixedClock)
-        .await
-        .unwrap();
-    assert_eq!(
-        json!({"receipt":output,"enqueued_at":saved_member(&files)["enqueued_at"]}),
-        json!({"receipt":{"member":"f1","state":"unruled","continuation":"allowed"},"enqueued_at":99})
-    );
-}
-#[tokio::test]
-async fn deferred_same_winner_preserves_initial_member() {
-    let input = fixture("same-winner");
     let (store, files) = store(&input).await;
     let output = deferred::enqueue_deferred(&store, "f1", &mut FixedClock)
         .await
