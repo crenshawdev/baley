@@ -10,6 +10,7 @@ pub mod slice;
 pub mod scope;
 pub mod source;
 
+use crate::process::Process;
 use location::Registry;
 use model::{DocumentRequest, DocumentSearchRequest, ListRequest, ReadRequest, SearchRequest};
 use serde_json::Value;
@@ -41,13 +42,13 @@ impl ReadDomain {
             registry: Registry::default(),
         })
     }
-    pub fn query(&mut self, query: Query) -> Value {
+    pub fn query(&mut self, query: Query, process: &mut dyn Process) -> Value {
         match query {
             Query::Search(request) => self.search(request),
             Query::List(request) => self.list(request),
             Query::Read(request) => self.read(request),
-            Query::Document(request) => self.document(request),
-            Query::DocumentSearch(request) => self.document_search(request),
+            Query::Document(request) => self.document(request, process),
+            Query::DocumentSearch(request) => self.document_search(request, process),
         }
     }
 }

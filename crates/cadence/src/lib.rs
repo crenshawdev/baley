@@ -25,6 +25,9 @@ pub mod milestone;
 pub mod next_action;
 pub mod pause;
 pub mod plan;
+/// The one way to start an external program, so a check can hand the code
+/// a recorded fake instead of running real git, gpg or `sh`.
+pub mod process;
 pub mod progress;
 pub mod rail;
 pub mod review;

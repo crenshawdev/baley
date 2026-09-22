@@ -1,4 +1,5 @@
 //! Bash decisions use a short-lived writer, independent of the resident queue.
+use cadence::process::{Launch, Process};
 use cadence::rail::branch::{self, Permission};
 use cadence::store::model::digest;
 use cadence::store::writer::audit::{self, Audit, Outcome, PolicyEvidence, Verb};
@@ -258,18 +259,18 @@ fn read_policy(
     )
 }
 
-fn branch_observation(cwd: &Path) -> (Option<String>, Vec<audit::Unavailable>) {
-    let observed = std::process::Command::new("git")
-        .current_dir(cwd)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_NAMESPACE")
-        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .stdin(std::process::Stdio::null())
-        .output();
+fn branch_observation(cwd: &Path, process: &mut dyn Process) -> (Option<String>, Vec<audit::Unavailable>) {
+    let observed = process.run(
+        &Launch::new("git")
+            .cwd(cwd)
+            .unset("GIT_DIR")
+            .unset("GIT_WORK_TREE")
+            .unset("GIT_COMMON_DIR")
+            .unset("GIT_NAMESPACE")
+            .args(["symbolic-ref", "--quiet", "--short", "HEAD"]),
+    );
     match observed {
-        Ok(output) if output.status.success() => {
+        Ok(output) if output.success() => {
             if let Ok(name) = String::from_utf8(output.stdout) {
                 let name = name.trim_end_matches('\n');
                 if !name.is_empty() {
@@ -284,7 +285,7 @@ fn branch_observation(cwd: &Path) -> (Option<String>, Vec<audit::Unavailable>) {
                 )],
             )
         }
-        Ok(output) if output.status.code() == Some(1) => (
+        Ok(output) if output.code() == Some(1) => (
             None,
             vec![unavailable(
                 "branch",
@@ -365,9 +366,10 @@ fn commit_decision(
     policy: PolicyEvidence,
     mut failures: Vec<audit::Unavailable>,
     prior: Option<&cadence::store::writer::View>,
+    process: &mut dyn Process,
 ) -> bool {
     let torn = !failures.is_empty();
-    let (branch, observation_failures) = branch_observation(&audit.cwd);
+    let (branch, observation_failures) = branch_observation(&audit.cwd, process);
     let observed = observation_failures.is_empty();
     failures.extend(observation_failures);
     let branch = branch.or_else(|| symbolic_head(&audit.cwd));
@@ -446,7 +448,7 @@ fn audit_failed(audit: &Audit, error: impl std::fmt::Display) -> ExitCode {
     }
 }
 
-pub(super) fn run(bytes: &[u8]) -> ExitCode {
+pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
     let Ok(event) = serde_json::from_slice::<Event>(bytes) else {
         return ExitCode::SUCCESS;
     };
@@ -497,7 +499,7 @@ pub(super) fn run(bytes: &[u8]) -> ExitCode {
     }
     if audit.verb == Verb::Commit {
         let (policy, failures) = read_policy(&planning, global, prior.as_ref());
-        if !commit_decision(&mut audit, policy, failures, prior.as_ref()) {
+        if !commit_decision(&mut audit, policy, failures, prior.as_ref(), process) {
             return ExitCode::SUCCESS;
         }
     }

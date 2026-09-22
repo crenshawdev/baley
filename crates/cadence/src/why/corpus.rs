@@ -12,6 +12,7 @@
 //! read makes the join thinner, not the chain wrong.
 
 use super::git::{self, Entry as RawEntry};
+use crate::process::Process;
 use super::{
     ArchiveRow, Brief, Close, DeclaredJoin, DecisionJoin, DeclaringTask, Entry, Finding, Gap, Join,
     Recovered, Resolved, ReviewJoin,
@@ -624,18 +625,18 @@ pub fn parse_prune_records(stdout: &str) -> Vec<Prune> {
 
 /// The nearest containing release tag, peeled to its commit. An earlier
 /// ancestor release cannot label a later close; names break equal-distance ties.
-fn prune_labels(repo: &Path, commits: &[String]) -> BTreeMap<String, Option<String>> {
+fn prune_labels(repo: &Path, commits: &[String], process: &mut dyn Process) -> BTreeMap<String, Option<String>> {
     let release = re(r"^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$");
-    let out = git::run(repo, &git_args(&["tag", "--list"]));
+    let out = git::run(repo, &git_args(&["tag", "--list"]), process);
     let tags: Vec<_> = out.stdout.lines().filter(|tag| release.is_match(tag)).collect();
     commits.iter().map(|commit| {
         let mut candidates = Vec::new();
         for tag in &tags {
-            let peeled = git::run(repo, &git_args(&["rev-parse", "--verify", &format!("refs/tags/{tag}^{{commit}}") ]));
+            let peeled = git::run(repo, &git_args(&["rev-parse", "--verify", &format!("refs/tags/{tag}^{{commit}}") ]), process);
             if !peeled.ok() { continue; }
             let tip = peeled.stdout.trim();
-            if !git::run(repo, &git_args(&["merge-base", "--is-ancestor", commit, tip])).ok() { continue; }
-            let distance = git::run(repo, &git_args(&["rev-list", "--count", "--ancestry-path", &format!("{commit}..{tip}")]));
+            if !git::run(repo, &git_args(&["merge-base", "--is-ancestor", commit, tip]), process).ok() { continue; }
+            let distance = git::run(repo, &git_args(&["rev-list", "--count", "--ancestry-path", &format!("{commit}..{tip}")]), process);
             if distance.ok() && let Ok(distance) = distance.stdout.trim().parse::<u64>() { candidates.push((distance,(*tag).to_owned())); }
         }
         candidates.sort();
@@ -644,13 +645,13 @@ fn prune_labels(repo: &Path, commits: &[String]) -> BTreeMap<String, Option<Stri
 }
 
 /// Every close that deleted a phase summary, newest first, labelled.
-pub fn find_prune_commits(repo: &Path) -> (Vec<Prune>, Vec<String>) {
+pub fn find_prune_commits(repo: &Path, process: &mut dyn Process) -> (Vec<Prune>, Vec<String>) {
     let args = git_args(&["log", "--full-history", "-M", "--diff-filter=D", "--name-only",
         "--format=%x01%H%x1f%cI%x1f%ct%x1f%P", "--", PRUNED_SUMMARY]);
-    let out = git::run(repo, &args);
+    let out = git::run(repo, &args, process);
     if !out.ok() && out.stdout.is_empty() { return (Vec::new(), Vec::new()); }
     let mut prunes = parse_prune_records(&out.stdout);
-    let labels = prune_labels(repo, &prunes.iter().map(|p| p.commit.clone()).collect::<Vec<_>>());
+    let labels = prune_labels(repo, &prunes.iter().map(|p| p.commit.clone()).collect::<Vec<_>>(), process);
     for prune in &mut prunes { prune.label = labels.get(&prune.commit).cloned().flatten(); }
     let warnings = prunes.iter().filter_map(|prune| prune.refused.clone()).collect();
     (prunes, warnings)
@@ -672,14 +673,14 @@ fn recovered_dir(prune: &Prune, phase: &str, path: &str) -> Dir {
 
 /// The git-recovered tier: each pruned phase's SUMMARY.md read from the
 /// prune's parent, and the prunes themselves for the named gap.
-pub fn build_recovered_index(repo: &Path) -> (Tier, Vec<Prune>) {
-    let (prunes, warnings) = find_prune_commits(repo);
+pub fn build_recovered_index(repo: &Path, process: &mut dyn Process) -> (Tier, Vec<Prune>) {
+    let (prunes, warnings) = find_prune_commits(repo, process);
     let mut tier = Tier { warnings, ..Tier::default() };
     for prune in &prunes {
         let Some(parent) = &prune.parent else { continue };
         for (phase, path) in &prune.phases {
             let dir = recovered_dir(prune, phase, path);
-            let out = git::run(repo, &git_args(&["show", &format!("{parent}:{path}")]));
+            let out = git::run(repo, &git_args(&["show", &format!("{parent}:{path}")]), process);
             if !out.ok() {
                 tier.warnings.push(format!("{path} could not be recovered from {}; its commits are not indexed", &parent[..parent.len().min(8)]));
                 continue;
@@ -692,11 +693,11 @@ pub fn build_recovered_index(repo: &Path) -> (Tier, Vec<Prune>) {
 }
 
 /// The four tiers in order, with the prunes riding beside them.
-pub fn build_index(repo: &Path) -> Index {
+pub fn build_index(repo: &Path, process: &mut dyn Process) -> Index {
     let planning = repo.join(".planning");
     let disk = build_commit_index(&planning);
     let tasks = build_task_index(&planning);
-    let (recovered, prunes) = build_recovered_index(repo);
+    let (recovered, prunes) = build_recovered_index(repo, process);
     let warnings = disk.warnings.iter().chain(&tasks.warnings).chain(&recovered.warnings).cloned().collect();
     Index { tiers: vec![disk, tasks, recovered], prunes, warnings }
 }
@@ -736,11 +737,11 @@ fn brief(row: &Row) -> Brief {
 /// Read one named artifact of a directory: from disk, or from the recovered
 /// tree through `git show`. A disk read that fails for a reason other than
 /// absence warns; a recovered read that fails is silently empty.
-fn pull(dir: &Dir, repo: &Path, name: &str, warnings: &mut Vec<String>) -> String {
+fn pull(dir: &Dir, repo: &Path, name: &str, warnings: &mut Vec<String>, process: &mut dyn Process) -> String {
     match &dir.path {
         None => {
             let Some(at) = &dir.recovered else { return String::new() };
-            let out = git::run(repo, &git_args(&["show", &format!("{}:{}/{name}", at.parent, at.tree)]));
+            let out = git::run(repo, &git_args(&["show", &format!("{}:{}/{name}", at.parent, at.tree)]), process);
             if out.ok() { out.stdout } else { String::new() }
         }
         Some(path) => match read_artifact(&path.join(name)) {
@@ -763,7 +764,7 @@ pub struct PhaseRecords {
     pub warnings: Vec<String>,
 }
 
-pub fn read_phase_records(dir: Option<&Dir>, plan_cell: &str, repo: &Path) -> PhaseRecords {
+pub fn read_phase_records(dir: Option<&Dir>, plan_cell: &str, repo: &Path, process: &mut dyn Process) -> PhaseRecords {
     let mut records = PhaseRecords { context: String::new(), summary: String::new(), plan: String::new(), plan_file: None, warnings: Vec::new() };
     let Some(dir) = dir else { return records };
     let key = plan_cell.trim();
@@ -777,19 +778,19 @@ pub fn read_phase_records(dir: Option<&Dir>, plan_cell: &str, repo: &Path) -> Ph
         None => spellings,
     };
     for name in names {
-        let text = pull(dir, repo, &name, &mut records.warnings);
+        let text = pull(dir, repo, &name, &mut records.warnings, process);
         if !text.is_empty() { records.plan = text; records.plan_file = Some(name); break; }
     }
-    records.context = pull(dir, repo, "CONTEXT.md", &mut records.warnings);
-    records.summary = pull(dir, repo, "SUMMARY.md", &mut records.warnings);
+    records.context = pull(dir, repo, "CONTEXT.md", &mut records.warnings, process);
+    records.summary = pull(dir, repo, "SUMMARY.md", &mut records.warnings, process);
     records
 }
 
-fn list_record_names(dir: &Dir, repo: &Path) -> Vec<String> {
+fn list_record_names(dir: &Dir, repo: &Path, process: &mut dyn Process) -> Vec<String> {
     let mut names: Vec<String> = match &dir.path {
         None => {
             let Some(at) = &dir.recovered else { return Vec::new() };
-            let out = git::run(repo, &git_args(&["ls-tree", "--name-only", &format!("{}:{}", at.parent, at.tree)]));
+            let out = git::run(repo, &git_args(&["ls-tree", "--name-only", &format!("{}:{}", at.parent, at.tree)]), process);
             if !out.ok() { return Vec::new(); }
             out.stdout.split('\n').map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned).collect()
         }
@@ -801,13 +802,13 @@ fn list_record_names(dir: &Dir, repo: &Path) -> Vec<String> {
 }
 
 /// Every adjudication record in a directory, parsed, with its issues named.
-pub fn read_adjudications(dir: Option<&Dir>, repo: &Path) -> (Vec<Adjudication>, Vec<String>) {
+pub fn read_adjudications(dir: Option<&Dir>, repo: &Path, process: &mut dyn Process) -> (Vec<Adjudication>, Vec<String>) {
     let mut warnings = Vec::new();
     let mut records = Vec::new();
     let Some(dir) = dir else { return (records, warnings) };
-    for name in list_record_names(dir, repo) {
+    for name in list_record_names(dir, repo, process) {
         let before = warnings.len();
-        let text = pull(dir, repo, &name, &mut warnings);
+        let text = pull(dir, repo, &name, &mut warnings, process);
         if warnings.len() > before { continue; }
         let parsed = parse_adjudication(&name, &text);
         for issue in &parsed.issues { warnings.push(format!("{}/{name}: {issue}", dir.label)); }
@@ -819,15 +820,15 @@ pub fn read_adjudications(dir: Option<&Dir>, repo: &Path) -> (Vec<Adjudication>,
 fn is_commit_id(text: &str) -> bool { (4..=40).contains(&text.len()) && is_hex(text) }
 
 /// The commits in `base..head`, or none when the range does not resolve.
-pub fn range_members(repo: &Path, base: &str, head: &str) -> Option<BTreeSet<String>> {
+pub fn range_members(repo: &Path, base: &str, head: &str, process: &mut dyn Process) -> Option<BTreeSet<String>> {
     if !is_commit_id(base) || !is_commit_id(head) { return None; }
-    let out = git::run(repo, &git_args(&["rev-list", &format!("{base}..{head}")]));
+    let out = git::run(repo, &git_args(&["rev-list", &format!("{base}..{head}")]), process);
     if !out.ok() { return None; }
     Some(out.stdout.split('\n').map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect())
 }
 
 /// The paths each commit touched, one `git show` for the whole set.
-pub fn touched_paths(repo: &Path, shas: &[String]) -> BTreeMap<String, Vec<String>> {
+pub fn touched_paths(repo: &Path, shas: &[String], process: &mut dyn Process) -> BTreeMap<String, Vec<String>> {
     let mut out = BTreeMap::new();
     let mut ids: Vec<String> = Vec::new();
     for sha in shas {
@@ -836,7 +837,7 @@ pub fn touched_paths(repo: &Path, shas: &[String]) -> BTreeMap<String, Vec<Strin
     if ids.is_empty() { return out; }
     let mut args = git_args(&["show", "--name-only", "-M", "--format=%x01%H"]);
     args.extend(ids);
-    let res = git::run(repo, &args);
+    let res = git::run(repo, &args, process);
     let mut current: Option<String> = None;
     for line in res.stdout.split('\n') {
         if let Some(rest) = line.strip_prefix('\x01') {
@@ -902,7 +903,7 @@ fn commit_scope(subject: &str) -> Option<String> {
 /// Resolve every commit against the index and hang the record edges off each
 /// one: one read per phase directory and plan, one range resolution per
 /// distinct range, and one `git show` for every unresolved commit's paths.
-pub fn join_chain(repo: &Path, path: &str, index: &Index, raws: &[RawEntry]) -> (Vec<Entry>, Vec<String>) {
+pub fn join_chain(repo: &Path, path: &str, index: &Index, raws: &[RawEntry], process: &mut dyn Process) -> (Vec<Entry>, Vec<String>) {
     let mut warnings: Vec<String> = Vec::new();
     let warn = |warnings: &mut Vec<String>, text: String| { if !warnings.contains(&text) { warnings.push(text); } };
     let mut memo: BTreeMap<String, PhaseRecords> = BTreeMap::new();
@@ -919,13 +920,13 @@ pub fn join_chain(repo: &Path, path: &str, index: &Index, raws: &[RawEntry]) -> 
                 let summary = brief(row);
                 let key = format!("{}\x1f{}", summary.label, summary.plan);
                 let dir = index.dir(&summary.label);
-                if !memo.contains_key(&key) { memo.insert(key.clone(), read_phase_records(dir, &summary.plan, repo)); }
+                if !memo.contains_key(&key) { memo.insert(key.clone(), read_phase_records(dir, &summary.plan, repo, process)); }
                 let records = memo.get(&key).expect("memoized records");
                 for warning in &records.warnings { warn(&mut warnings, warning.clone()); }
                 let decision = decisions_for(&records.plan, &records.context, &summary.task);
                 let deviation = parse_deviations(&records.summary);
                 if !reviews.contains_key(&summary.label) {
-                    let (read, read_warnings) = read_adjudications(dir, repo);
+                    let (read, read_warnings) = read_adjudications(dir, repo, process);
                     for warning in read_warnings { warn(&mut warnings, warning); }
                     reviews.insert(summary.label.clone(), read);
                 }
@@ -937,7 +938,7 @@ pub fn join_chain(repo: &Path, path: &str, index: &Index, raws: &[RawEntry]) -> 
                         let members = match (&survivor.base_id, &survivor.head_id) {
                             (Some(base), Some(head)) => {
                                 let range = format!("{base}..{head}");
-                                ranges.entry(range).or_insert_with(|| range_members(repo, base, head)).clone()
+                                ranges.entry(range).or_insert_with(|| range_members(repo, base, head, process)).clone()
                             }
                             _ => None,
                         };
@@ -965,7 +966,7 @@ pub fn join_chain(repo: &Path, path: &str, index: &Index, raws: &[RawEntry]) -> 
     let open: Vec<String> = entries.iter()
         .filter(|entry| matches!(entry.join, Join::Unresolved { .. })).map(|entry| entry.sha.clone()).collect();
     if !open.is_empty() {
-        let paths = touched_paths(repo, &open);
+        let paths = touched_paths(repo, &open, process);
         let archive = archive_sections(&repo.join(".planning"));
         for entry in &mut entries {
             if !matches!(entry.join, Join::Unresolved { .. }) { continue; }

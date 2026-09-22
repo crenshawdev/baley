@@ -568,7 +568,9 @@ pub(crate) mod resident {
                             }
                             // git and the record are read on a blocking thread
                             // so a long chain never holds the resident's loop.
-                            let result = tokio::task::spawn_blocking(move || crate::server::why_service::query(&root, &request))
+                            let result = tokio::task::spawn_blocking(move || {
+                                crate::server::why_service::query(&root, &request, &mut cadence::process::System)
+                            })
                                 .await.map_err(|_| Error::Closed);
                             let _ = reply.send(result);
                         }
@@ -585,7 +587,12 @@ pub(crate) mod resident {
                             let _ = reply.send(result);
                         }
                         Request::Read { root, query, reply } => {
-                            let result = crate::server::read_service::execute(&mut read_domains, &root, query);
+                            let result = crate::server::read_service::execute(
+                                &mut read_domains,
+                                &root,
+                                query,
+                                &mut cadence::process::System,
+                            );
                             let _ = reply.send(result);
                         }
                         Request::Verification { root, command, reply } => {

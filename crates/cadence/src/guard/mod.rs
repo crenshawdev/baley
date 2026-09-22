@@ -76,7 +76,7 @@ pub fn run() -> ExitCode {
         }
     };
     if tool.as_deref() == Some("Bash") {
-        return bash::run(&bytes);
+        return bash::run(&bytes, &mut cadence::process::System);
     }
     if !matches!(tool.as_deref(), Some("Write" | "Edit")) {
         return ExitCode::SUCCESS;

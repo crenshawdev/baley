@@ -2588,7 +2588,7 @@ mod observe_tests {
 
     fn document_scope(root: &std::path::Path) -> String {
         let identity = cadence::read::model::DocumentIdentity::PhaseContext { phase: 1.try_into().unwrap() };
-        cadence::read::document::resolve(root, &identity).unwrap().parts.into_iter()
+        cadence::read::document::resolve(root, &identity, &mut cadence::process::Recorded::new()).unwrap().parts.into_iter()
             .find(|part| part.selector == "scope").unwrap().body
     }
 

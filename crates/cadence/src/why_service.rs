@@ -1,3 +1,4 @@
+use cadence::process::Process;
 use cadence::envelope::Refusal;
 use cadence::why::{corpus, git, render};
 use serde_json::{Value, json};
@@ -50,7 +51,7 @@ fn git_failed(detail: &str) -> Value {
 /// bound `.planning` directory every service receives; the repository git
 /// answers for is its parent. Runs git and reads the record synchronously;
 /// the caller decides the thread.
-pub fn query(root: &Path, request: &Request) -> Value {
+pub fn query(root: &Path, request: &Request, process: &mut dyn Process) -> Value {
     let root = root.parent().unwrap_or(root);
     let path = request.path.as_deref().unwrap_or_default();
     if path.trim().is_empty() {
@@ -60,7 +61,7 @@ pub fn query(root: &Path, request: &Request) -> Value {
 
     // The explicit not-in-history probe, run before either chain query so a
     // mistyped path is answered by the smallest invocation that can answer it.
-    let probe = git::run(root, &git::probe_argv(path));
+    let probe = git::run(root, &git::probe_argv(path), process);
     match git::classify(&probe) {
         git::Outcome::NotInHistory => return json!({
             "status":"ok","path":path,"line":line,"result":"not-in-history",
@@ -71,8 +72,8 @@ pub fn query(root: &Path, request: &Request) -> Value {
     }
 
     let chain = match request.line {
-        None => git::run(root, &git::bare_argv(path)),
-        Some(line) => git::run(root, &git::line_argv(path, line)),
+        None => git::run(root, &git::bare_argv(path), process),
+        Some(line) => git::run(root, &git::line_argv(path, line), process),
     };
     match git::classify(&chain) {
         git::Outcome::NotInHistory => return json!({
@@ -88,18 +89,18 @@ pub fn query(root: &Path, request: &Request) -> Value {
         git::Outcome::Ok => {}
     }
 
-    let index = corpus::build_index(root);
+    let index = corpus::build_index(root, process);
     let raws = git::parse_entries(&chain.stdout);
     // The bare arm only: the line arm carries its own simplification. A
     // comparand that could not run makes the answer thinner, not wrong.
     let excluded = match request.line {
         None => {
-            let comparand = git::run(root, &git::comparand_argv(path));
+            let comparand = git::run(root, &git::comparand_argv(path), process);
             comparand.ok().then(|| git::excluded_from(&raws, &git::parse_comparand(&comparand.stdout)))
         }
         Some(_) => None,
     };
-    let (entries, joined_warnings) = corpus::join_chain(root, path, &index, &raws);
+    let (entries, joined_warnings) = corpus::join_chain(root, path, &index, &raws, process);
     let rendered = render::render_chain(&entries, request.top, excluded.as_deref(), path);
     let warnings: Vec<&String> = index.warnings.iter().chain(&joined_warnings).collect();
     json!({

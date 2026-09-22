@@ -6,6 +6,7 @@ use super::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::process::{Launch, Process};
 use crate::envelope::Refusal;
 use std::path::Path;
 
@@ -28,7 +29,7 @@ fn bounded_parts(parts: Vec<Part>) -> Vec<Part> {
     }).collect()
 }
 
-fn dispatch(root: &Path, identity: &DocumentIdentity, id: &str) -> Result<Resolved, Value> {
+fn dispatch(root: &Path, identity: &DocumentIdentity, id: &str, process: &mut dyn Process) -> Result<Resolved, Value> {
     use cadence::execution::{admission, dispatch::{changed_part, issue_binding}, history, model::ExecutionSnapshot};
     let fail = |error: cadence::store::Error| refusal("identity", "document-unavailable", error.to_string());
     let data = snapshot(root)?;
@@ -74,10 +75,10 @@ fn dispatch(root: &Path, identity: &DocumentIdentity, id: &str) -> Result<Resolv
         "expected_execution_version":active.expected_execution_version,"lease":{"files":active.files,"directories":active.directories},
         "commands":{},"continuation":null,"policy":active.policy,"route":active.route
     }));
-    let head = std::process::Command::new("git").args(["rev-parse", "HEAD"])
-        .current_dir(root.parent().unwrap_or(root)).output()
+    let head = process
+        .run(&Launch::new("git").args(["rev-parse", "HEAD"]).cwd(root.parent().unwrap_or(root)))
         .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?;
-    if !head.status.success() { return Err(refusal("head", "document-unavailable", "cannot observe project head")); }
+    if !head.success() { return Err(refusal("head", "document-unavailable", "cannot observe project head")); }
     operational["head"] = json!(String::from_utf8_lossy(&head.stdout).trim());
     operational["dispatch_id"] = json!(id);
     operational["admitted_dispatch_id"] = json!(active.id);
@@ -278,7 +279,7 @@ fn roadmap(root: &Path, phase: u32) -> Result<Resolved, Value> {
     })
 }
 
-pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Value> {
+pub fn resolve(root: &Path, identity: &DocumentIdentity, process: &mut dyn Process) -> Result<Resolved, Value> {
     match identity {
         DocumentIdentity::ReviewEntry { attempt, entry } => {
             use crate::review::{material, persistence};
@@ -378,7 +379,7 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity) -> Result<Resolved, Val
             let revision = cadence::store::model::digest(parts.iter().flat_map(|p| p.body.bytes()).collect::<Vec<_>>().as_slice());
             Ok(Resolved { identity: identity.clone(), classification: "run-output", revision, parts })
         }
-        DocumentIdentity::Dispatch { id } => dispatch(root, identity, id),
+        DocumentIdentity::Dispatch { id } => dispatch(root, identity, id, process),
         DocumentIdentity::PlanDraft { phase, plan, digest } => {
             let drafts = crate::import::drafts(root)
                 .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?;
@@ -638,7 +639,7 @@ pub fn context_draft(
     Ok(resolved)
 }
 
-pub fn catalog(root: &Path, phase: u32) -> Result<Vec<Resolved>, Value> {
+pub fn catalog(root: &Path, phase: u32, process: &mut dyn Process) -> Result<Vec<Resolved>, Value> {
     let phase = std::num::NonZeroU32::new(phase)
         .ok_or_else(|| refusal("scope", "document-identity", "phase must be positive"))?;
     let mut identities = vec![
@@ -673,7 +674,7 @@ pub fn catalog(root: &Path, phase: u32) -> Result<Vec<Resolved>, Value> {
     }
     let mut found = Vec::new();
     for identity in identities {
-        if let Ok(resolved) = resolve(root, &identity) {
+        if let Ok(resolved) = resolve(root, &identity, process) {
             found.push(resolved);
         }
     }
@@ -681,8 +682,8 @@ pub fn catalog(root: &Path, phase: u32) -> Result<Vec<Resolved>, Value> {
 }
 
 impl ReadDomain {
-    pub(super) fn document(&self, request: DocumentRequest) -> Value {
-        let resolved = match resolve(&self.planning_root, &request.identity) {
+    pub(super) fn document(&self, request: DocumentRequest, process: &mut dyn Process) -> Value {
+        let resolved = match resolve(&self.planning_root, &request.identity, process) {
             Ok(value) => value,
             Err(answer) => return answer,
         };
@@ -735,13 +736,13 @@ impl ReadDomain {
     /// Which parts of one phase's process records mention `pattern`: each
     /// hit is an identity and a part for `document`, with the matching line
     /// numbers, and never a body. Hits are in identity-then-part order.
-    pub(super) fn document_search(&self, request: DocumentSearchRequest) -> Value {
+    pub(super) fn document_search(&self, request: DocumentSearchRequest, process: &mut dyn Process) -> Value {
         let matcher = match search::matcher(&request.pattern, request.case_insensitive.unwrap_or(false)) {
             Ok(matcher) => matcher,
             Err(answer) => return answer,
         };
         let mut searcher = search::searcher();
-        let records = match catalog(&self.planning_root, request.phase.get()) {
+        let records = match catalog(&self.planning_root, request.phase.get(), process) {
             Ok(records) => records,
             Err(answer) => return answer,
         };

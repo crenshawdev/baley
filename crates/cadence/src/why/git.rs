@@ -5,8 +5,8 @@
 //! no git bytes onward, because a `fatal:` line reaching an answer is how a
 //! credential leaked once.
 
+use crate::process::{Launch, Output, Process};
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 /// One finished git invocation. A spawn failure is a non-zero status with
 /// its message in `stderr`, so every caller classifies one shape.
@@ -21,38 +21,21 @@ impl Run {
 }
 
 /// Run `git -C <dir> <args>`, never panicking on the repository's state.
-pub fn run(dir: &Path, args: &[String]) -> Run {
-    let output = Command::new("git")
-        .arg("-C").arg(dir).args(args)
-        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
-        .output();
-    match output {
-        Ok(output) => Run {
-            status: output.status.code().unwrap_or(1),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        },
-        Err(error) => Run { status: 1, stdout: String::new(), stderr: error.to_string() },
-    }
+pub fn run(dir: &Path, args: &[String], process: &mut dyn Process) -> Run {
+    finish(process.run(&Launch::new("git").arg("-C").arg(dir).args(args)))
 }
 
 /// Run git with bytes on stdin, for the batched object probe.
-pub fn run_with_input(dir: &Path, args: &[String], input: &str) -> Run {
-    use std::io::Write;
-    let child = Command::new("git")
-        .arg("-C").arg(dir).args(args)
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
-        .spawn();
-    let mut child = match child {
-        Ok(child) => child,
-        Err(error) => return Run { status: 1, stdout: String::new(), stderr: error.to_string() },
-    };
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(input.as_bytes());
-    }
-    match child.wait_with_output() {
+pub fn run_with_input(dir: &Path, args: &[String], input: &str, process: &mut dyn Process) -> Run {
+    finish(process.run(&Launch::new("git").arg("-C").arg(dir).args(args).stdin(input.as_bytes())))
+}
+
+/// One shape for both arms: a program that could not start is a non-zero
+/// status carrying its message, exactly as a git failure is.
+fn finish(answer: std::io::Result<Output>) -> Run {
+    match answer {
         Ok(output) => Run {
-            status: output.status.code().unwrap_or(1),
+            status: output.code().unwrap_or(1),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         },
