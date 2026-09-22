@@ -846,3 +846,34 @@ fn each_new_admission_returns_the_exact_saved_choice_and_missing_host_evidence()
         );
     }
 }
+
+#[test]
+fn changed_content_under_a_recorded_operation_id_is_refused() {
+    use cadence::store::{Error, model::digest, writer::{Operation, boundary_operation}};
+    let Operation::BoundaryV1 { operation_id, decision, change, .. } = admission() else {
+        unreachable!()
+    };
+    let recorded = boundary_operation(&Default::default(), &operation_id, &decision, &change).unwrap().unwrap();
+    let confirmed = std::collections::BTreeMap::from([(operation_id.clone(), recorded)]);
+    let mut changed = decision.clone();
+    changed.request_digest = digest(b"another request");
+    assert_eq!(
+        boundary_operation(&confirmed, &operation_id, &changed, &change),
+        Err(Error::Conflict("operation identity reused for different content".into()))
+    );
+}
+
+#[test]
+fn a_routed_dispatch_answer_carries_its_route() {
+    use cadence::execution::{boundary::Success, model::ActiveDispatch};
+    let (_, state, _) = wire_unit("valid");
+    let state: Value = serde_json::from_slice(&state).unwrap();
+    let mut active = state["data"]["execution"]["occurrences"]["8"]["active"].clone();
+    active["body"] = json!("fixture");
+    let active: ActiveDispatch = serde_json::from_value(active).unwrap();
+    assert!(active.route.is_some());
+    let Success::Dispatch { route, .. } = Success::dispatch(&active) else {
+        panic!("not a dispatch answer")
+    };
+    assert_eq!(route, active.route);
+}

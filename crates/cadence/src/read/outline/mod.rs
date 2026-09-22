@@ -404,6 +404,20 @@ mod tests {
         assert!(parse(SOURCE, Grammar::JavaScript, Duration::ZERO, &mut still).is_none());
     }
 
+    /// The budget binds while tree-sitter is parsing, not only before it
+    /// starts: a clock that reads the deadline passed mid-parse cancels it.
+    #[test]
+    fn a_clock_that_passes_the_deadline_mid_parse_cancels_it() {
+        let content = "[".repeat(40_000);
+        assert!(parse(&content, Grammar::JavaScript, PARSE_BUDGET, &mut still).is_some());
+        let mut reads = 0;
+        let mut late = || {
+            reads += 1;
+            if reads <= 2 { Duration::ZERO } else { PARSE_BUDGET * 2 }
+        };
+        assert!(parse(&content, Grammar::JavaScript, PARSE_BUDGET, &mut late).is_none());
+    }
+
     /// 2000 balanced brackets nest past the 1024 cap; the walk abandons the
     /// whole outline rather than returning a partial one.
     #[test]

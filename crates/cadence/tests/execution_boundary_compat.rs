@@ -316,3 +316,20 @@ fn a_dispatch_receipt_validates_in_digest_form_and_refuses_a_zero_count_or_unkno
     unknown["receipt"]["prompt_size"] = json!(1);
     assert!(!validate(vec![wire_record(unknown, 1, false)]));
 }
+
+#[test]
+fn the_historical_replay_refuses_a_boundary_whose_response_digest_differs() {
+    use cadence::execution::model::ActiveDispatch;
+    use cadence::store::writer::ConfirmedBoundary;
+    let (post, post_prompt) = post_d165_dispatch();
+    for (dispatch, prompt) in [(pre_d165_dispatch(), "x".repeat(512)), (post, post_prompt)] {
+        let (_, mut record) = historical_boundary(&dispatch, &prompt);
+        if let Decision::BoundaryV1(value) = &mut record.decision {
+            value.boundary.response_digest = cadence::store::model::digest(b"another answer");
+        }
+        let Decision::BoundaryV1(value) = &record.decision else { panic!("historical boundary") };
+        let confirmed = ConfirmedBoundary { id: &record.id, value };
+        let supplied: ActiveDispatch = serde_json::from_value(dispatch.clone()).unwrap();
+        assert!(confirmed.historical_dispatch(&supplied, &prompt).is_err());
+    }
+}

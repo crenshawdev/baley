@@ -1663,4 +1663,18 @@ mod wire_tests {
     fn the_initialize_answer_names_the_server_cadence() {
         assert_eq!(info().server_info.name, "cadence");
     }
+
+    #[test]
+    fn a_refusal_is_answered_as_a_successful_call_carrying_it() {
+        let refusal: cadence::store::Result<Envelope<Value>> = Ok(Envelope::Refused {
+            code: "invalid-request".into(),
+            reason: "the request is incomplete".into(),
+        });
+        let CallToolResponse::Complete(result) = structured_result(refusal).unwrap() else {
+            panic!("a complete answer")
+        };
+        assert_ne!(result.is_error, Some(true));
+        let structured = result.structured_content.expect("a structured answer");
+        assert_eq!((&structured["status"], &structured["code"]), (&json!("refused"), &json!("invalid-request")));
+    }
 }

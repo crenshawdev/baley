@@ -191,6 +191,22 @@ fn a_batch_of_stored_values_changes_no_key_and_plans_no_bytes() {
 }
 
 #[test]
+fn a_plan_that_changes_nothing_has_no_change_to_install() {
+    let stored = json!({"review":{"triggers":{"risk_surface":{"waive_routing_floor":[]}}}});
+    let planned = plan(
+        &generation(None, Some(stored)),
+        &distinct(),
+        Layer::Repo,
+        &[update("review.triggers.risk_surface.waive_routing_floor", json!([]))],
+    )
+    .unwrap();
+    assert_eq!(
+        planned.change(observed(planned.prepared_against.as_deref())).map(|_| ()),
+        Err(Error::Invalid("config plan changes nothing".into()))
+    );
+}
+
+#[test]
 fn a_value_changed_and_then_changed_back_is_written_both_times() {
     let key = "roles.cad-executor.effort";
     for (stored, requested) in [("high", "low"), ("low", "high")] {

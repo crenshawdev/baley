@@ -284,6 +284,16 @@ fn stale_captured_inputs_return_exact_conflict() {
     );
 }
 #[test]
+fn a_changed_global_input_returns_the_same_conflict() {
+    let input = generation(Some(json!({})), None, false);
+    let mut captured = Captured::from_generation(&input);
+    captured.global.as_mut().unwrap().content = Some("old".into());
+    assert_eq!(
+        interview::answers(&input, Mode::Roles, &captured, true, Some(&defaults())),
+        Err(Error::Conflict("interview config inputs changed".into()))
+    );
+}
+#[test]
 fn incomplete_answers_return_exact_invalid() {
     let input = generation(None, None, false);
     assert_eq!(

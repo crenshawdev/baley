@@ -6,10 +6,15 @@ use super::model::{
     DECISIONS, Disposition, Evidence, ITEMS, ItemRecord, Origin, STATE, Snapshot, VERSION,
     render_lines,
 };
-use super::writer::{STALE_SNAPSHOT, View, later_generation, precondition, view};
+use super::writer::{STALE_SNAPSHOT, View, later_generation, next_generation, precondition, view};
 use super::{Error, Observed};
 use serde_json::json;
 use std::collections::BTreeMap;
+
+#[test]
+fn a_write_commits_as_the_generation_after_the_current_one() {
+    assert_eq!((next_generation(0), next_generation(41)), (Ok(1), Ok(42)));
+}
 
 fn item(id: &str) -> ItemRecord {
     ItemRecord {
@@ -445,6 +450,58 @@ mod scoped {
         assert_eq!(
             scoped_admission(&decisions, &id, &decision, &change, 3, Some(9)),
             Err(Error::Conflict("boundary decision already admitted under another operation".into()))
+        );
+    }
+
+    #[test]
+    fn the_root_refusal_scope_reaches_its_own_limit() {
+        let root = BoundaryScope::RootRefusal;
+        assert!(matches!(
+            admit(&log(root.clone(), "executor", 256), &boundary(root, "executor", "next")),
+            ScopedAdmission::Terminal(_)
+        ));
+    }
+
+    #[test]
+    fn a_store_with_no_execution_records_is_not_legacy() {
+        use super::super::writer::require_current_execution;
+        assert_eq!(require_current_execution(&view_of(vec![], json!({"import": {"complete": true}}))), Ok(()));
+    }
+
+    #[test]
+    fn a_legacy_store_is_refused_as_an_unsupported_cross_format_resume() {
+        use super::super::writer::require_current_execution;
+        let data = json!({"execution": {"occurrences": {"3": {"active": null}}}});
+        assert_eq!(
+            require_current_execution(&view_of(vec![], data)).unwrap_err().to_string(),
+            "cross-format native execution resume is unsupported"
+        );
+    }
+
+    #[test]
+    fn a_confirmed_boundary_answers_its_compact_envelope_only_under_its_canonical_digest() {
+        use super::super::writer::ConfirmedBoundary;
+        let record = logged(PHASE, "executor", 1);
+        let Decision::BoundaryV1(value) = &record.decision else { unreachable!() };
+        assert_eq!(
+            ConfirmedBoundary { id: &record.id, value }.envelope(None).unwrap(),
+            Envelope::Refused { code: "refused".into(), reason: "logged 1".into() }
+        );
+        let mut tampered = value.clone();
+        tampered.boundary.response_digest = digest(b"another answer");
+        assert!(ConfirmedBoundary { id: &record.id, value: &tampered }.envelope(None).is_err());
+    }
+
+    #[test]
+    fn a_scope_holding_its_terminal_decision_confirms_every_later_request_with_it() {
+        use super::super::writer::confirmed_boundary;
+        let mut decisions = log(PHASE, "executor", 256);
+        decisions.push(terminal(PHASE));
+        let id = decisions[256].id.clone();
+        let view = view_of(decisions, serde_json::Value::Null);
+        assert_eq!(
+            confirmed_boundary(&view, &boundary(PHASE, "executor", "later")).map(|found| found.id.to_string()),
+            Ok(id)
         );
     }
 }

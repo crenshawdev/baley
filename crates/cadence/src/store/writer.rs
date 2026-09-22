@@ -1994,11 +1994,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     }
 
     fn next_generation(&self) -> Result<u64> {
-        self.view
-            .snapshot
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| Error::Invalid("generation overflow".into()))
+        next_generation(self.view.snapshot.generation)
     }
 
     fn revalidate(&mut self) -> Result<()> {
@@ -2176,6 +2172,13 @@ pub(crate) fn transact(
         next.snapshot.data = data;
     }
     Ok(transaction.external)
+}
+
+/// The generation a write after `generation` commits as: the next one.
+pub(crate) fn next_generation(generation: u64) -> Result<u64> {
+    generation
+        .checked_add(1)
+        .ok_or_else(|| Error::Invalid("generation overflow".into()))
 }
 
 /// The unit a write installs: `next` sealed as `generation` with

@@ -720,3 +720,24 @@ mod lock_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod target_tests {
+    use super::*;
+
+    #[test]
+    fn a_phase_summary_target_names_a_positive_phase_without_padding() {
+        assert_eq!(phase_summary_target("phase-summary:3").unwrap(), Some(3));
+        assert_eq!(phase_summary_target("decisions.jsonl").unwrap(), None);
+        for target in ["phase-summary:0", "phase-summary:03", "phase-summary:../3", "phase-summary:/3", "phase-summary:"] {
+            assert!(phase_summary_target(target).is_err(), "{target}");
+        }
+    }
+
+    #[test]
+    fn the_store_root_is_a_directory_to_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Filesystem::new(temp.path()).unwrap();
+        assert!(store.directories.contains_key(&std::path::absolute(temp.path()).unwrap()));
+    }
+}
