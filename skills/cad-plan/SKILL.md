@@ -112,6 +112,14 @@ not git, not gpg, not a shell. A check that starts the whole thing tests the end
 and not the part it names, and a failure there says something broke without
 saying what.
 
+Naming a fake is not permission to script one. A check builds the values it
+needs and asserts the rule over them. If the check has to supply the answer the
+unit is about to reach for, it cannot fail for any reason the rule cares about,
+and it measures nothing. When the unit stops in the middle of judging to ask
+git, the filesystem or the clock, that unit is not testable as written: say so
+in the plan and move the asking out, so the judging takes its facts as
+arguments. The small function that does the asking gets no check of its own.
+
 Except for numeric `truth_version` and the arrays shown, spec slots are strings.
 The compiled schema below is the exact wire grammar. Kind-specific required
 fields are structural, not proof that the check proves its truth or that a handoff

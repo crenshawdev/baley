@@ -243,6 +243,22 @@ how a phase of full-run checks got written. The binary parses none of it and
 refuses nothing new on it. The planner is told, the executor is told, and the
 owner reads the plan.
 
+**2026-09-22, later the same day — decided by John Crenshaw.** Naming a fake is
+not permission to script one. A check builds the values it needs and asserts
+our rules over them. If the check has to supply the answer the code is about to
+reach for, the check cannot fail for any reason the rules care about, and it
+measures nothing. That is the same failure as a test whose result moves without
+the code moving, arriving from the other side.
+
+So a unit that stops in the middle of judging to go ask git, the filesystem or
+the clock is not testable as written, and the answer is not a cleverer fake. The
+asking moves out. The judging function takes the facts as arguments and a small
+function beside it fetches them. That fetcher gets no unit test, because a test
+of it could only hand it the answers it exists to fetch; it is the boundary, and
+the boundary is proven when the real thing runs. `execution::receipts` is the
+worked example: `observe_pairs` asks git, `validate_pairs` judges values, and
+every check over it is a comparison.
+
 ## Verify: a decision, not a count
 
 **What the verifier gets.** The truths and the evidence map, from the binary,
@@ -371,7 +387,11 @@ last task, report, and stop; the orchestrator requests the full suite. Every
 test you write, the checks included, exercises one unit through what it
 exposes and fakes the outside world: files, clock, other programs, network.
 Never start a program to get an answer, not this project's binary, not git,
-not gpg. Skip trivial code, write the expected value by hand.
+not gpg. Naming a fake is not permission to script one: build the values the
+test needs and assert the rule over them, because a test that supplies the
+answer the code reaches for cannot fail. If a unit asks the outside world in
+the middle of deciding, say so and stop; do not fake your way around it. Skip
+trivial code, write the expected value by hand.
 
 **Verifier.** For each evidence item: open it, run it, or trace it. Return a
 verdict per item - accepted, rejected or not seen - with what you observed.
