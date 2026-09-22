@@ -4,9 +4,8 @@ pub mod git;
 pub mod risk;
 pub mod risk_diff;
 
-use crate::process::Process;
 use crate::{
-    derivation::ValidatedIntake,
+    derivation::{CursorProvenance, ValidatedIntake},
     evidence::Scope,
     store::{Error, Result},
 };
@@ -55,26 +54,12 @@ pub struct Capture {
     pub wip: Option<String>,
 }
 
-pub fn capture(input: Input, retained: Option<&ValidatedIntake>, process: &mut dyn Process) -> Result<Capture> {
+/// Settles a pause request against `observed`, the Git observation taken
+/// before anything else ran.
+pub fn capture(input: Input, retained: Option<&ValidatedIntake>, observed: git::Observation) -> Result<Capture> {
     let phase = input
         .phase
-        .or_else(|| {
-            let prior = retained?.cursor().provenance();
-            let normalized =
-                crate::derivation::normalize_imported_cursor(&prior.original_cursor).ok()?;
-            if matches!(
-                normalized,
-                crate::derivation::CompatibilityCursor::Unavailable(_)
-            ) {
-                return None;
-            }
-            Some(Phase {
-                identity: prior.phase?.address(),
-                name: prior.name.clone()?,
-                total: prior.total?,
-                provenance: serde_json::to_string(prior).ok()?,
-            })
-        })
+        .or_else(|| retained_phase(retained?.cursor().provenance()))
         .ok_or_else(|| Error::Invalid("missing pause phase and name/total provenance".into()))?;
     for value in [&phase.identity, &phase.name, &phase.provenance] {
         if value.trim().is_empty() {
@@ -108,7 +93,6 @@ pub fn capture(input: Input, retained: Option<&ValidatedIntake>, process: &mut d
     for path in &input.authorized {
         validate_path(path)?;
     }
-    let observed = git::observe(project, process)?;
     Ok(Capture {
         scope,
         phase,
@@ -117,6 +101,24 @@ pub fn capture(input: Input, retained: Option<&ValidatedIntake>, process: &mut d
         observed,
         risk: None,
         wip: None,
+    })
+}
+
+/// The phase a pause takes when its input names none: the retained imported
+/// cursor's, when that cursor was usable when it was imported.
+fn retained_phase(prior: &CursorProvenance) -> Option<Phase> {
+    let normalized = crate::derivation::normalize_imported_cursor(&prior.original_cursor).ok()?;
+    if matches!(
+        normalized,
+        crate::derivation::CompatibilityCursor::Unavailable(_)
+    ) {
+        return None;
+    }
+    Some(Phase {
+        identity: prior.phase?.address(),
+        name: prior.name.clone()?,
+        total: prior.total?,
+        provenance: serde_json::to_string(prior).ok()?,
     })
 }
 
@@ -152,3 +154,9 @@ mod tests;
 
 #[cfg(test)]
 mod branch_tests;
+
+#[cfg(test)]
+mod git_tests;
+
+#[cfg(test)]
+mod risk_tests;

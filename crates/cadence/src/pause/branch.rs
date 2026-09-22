@@ -74,6 +74,19 @@ pub fn choose_base(policy: &Policy, branches: &BTreeMap<String, String>) -> Opti
     }
 }
 
+/// Reads `git merge-base <base> <head>` into whether the two share history:
+/// exit 0 naming a commit shares it, exit 1 does not, and anything else fails.
+pub fn read_merge_base(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> Result<bool> {
+    match code {
+        Some(0) => Ok(!stdout.is_empty()),
+        Some(1) => Ok(false),
+        _ => Err(Error::Invalid(format!(
+            "merge-base failed: {}",
+            String::from_utf8_lossy(stderr)
+        ))),
+    }
+}
+
 pub fn observe(root: &Path, planning: &Path, policy: &Policy, process: &mut dyn Process) -> Result<Observed> {
     let branch = text(git::run(root, ["branch", "--show-current"], process)?)?
         .trim_end_matches('\n')
@@ -98,16 +111,7 @@ pub fn observe(root: &Path, planning: &Path, policy: &Policy, process: &mut dyn 
                 .cwd(root)
                 .args(["merge-base", branches[base].as_str(), head.as_str()]),
         )?;
-        match output.code() {
-            Some(0) => !output.stdout.is_empty(),
-            Some(1) => false,
-            _ => {
-                return Err(Error::Invalid(format!(
-                    "merge-base failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                )));
-            }
-        }
+        read_merge_base(output.code(), &output.stdout, &output.stderr)?
     } else {
         false
     };

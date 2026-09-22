@@ -95,7 +95,7 @@ fn pathname(bytes: &[u8]) -> Result<PathBuf> {
         .map_err(|_| Error::Invalid("Git pathname is not representable on this platform".into()))
 }
 
-fn material(path: &Path) -> Result<Material> {
+pub(crate) fn material(path: &Path) -> Result<Material> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(value) => value,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Material::Missing),
@@ -122,6 +122,50 @@ fn material(path: &Path) -> Result<Material> {
     })
 }
 
+/// One entry of `git status --porcelain=v1 -z`: the index and worktree codes,
+/// the path, and the source of a rename or copy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub index: u8,
+    pub worktree: u8,
+    pub path: PathBuf,
+    pub original: Option<PathBuf>,
+}
+
+/// Reads status output as raw pathname bytes; nothing is decoded or quoted.
+pub fn parse_status(status: &[u8]) -> Result<Vec<Entry>> {
+    let mut fields = status.split(|b| *b == 0);
+    let mut entries = Vec::new();
+    while let Some(entry) = fields.next() {
+        if entry.is_empty() {
+            break;
+        }
+        if entry.len() < 4 || entry[2] != b' ' {
+            return Err(Error::Invalid("malformed Git status".into()));
+        }
+        let path = pathname(&entry[3..])?;
+        super::validate_path(&path)?;
+        let original = if entry[..2].iter().any(|b| matches!(b, b'R' | b'C')) {
+            let source = fields
+                .next()
+                .filter(|f| !f.is_empty())
+                .ok_or_else(|| Error::Invalid("missing Git rename source".into()))?;
+            let source = pathname(source)?;
+            super::validate_path(&source)?;
+            Some(source)
+        } else {
+            None
+        };
+        entries.push(Entry {
+            index: entry[0],
+            worktree: entry[1],
+            path,
+            original,
+        });
+    }
+    Ok(entries)
+}
+
 pub fn observe(root: &Path, process: &mut dyn Process) -> Result<Observation> {
     let prefix = run(root, ["rev-parse", "--show-prefix"], process)?;
     if prefix != b"\n" {
@@ -144,36 +188,18 @@ pub fn observe(root: &Path, process: &mut dyn Process) -> Result<Observation> {
         ],
         process,
     )?;
-    let mut fields = status.split(|b| *b == 0);
-    let mut changes = Vec::new();
-    while let Some(entry) = fields.next() {
-        if entry.is_empty() {
-            break;
-        }
-        if entry.len() < 4 || entry[2] != b' ' {
-            return Err(Error::Invalid("malformed Git status".into()));
-        }
-        let path = pathname(&entry[3..])?;
-        super::validate_path(&path)?;
-        let original = if entry[..2].iter().any(|b| matches!(b, b'R' | b'C')) {
-            let source = fields
-                .next()
-                .filter(|f| !f.is_empty())
-                .ok_or_else(|| Error::Invalid("missing Git rename source".into()))?;
-            let source = pathname(source)?;
-            super::validate_path(&source)?;
-            Some(source)
-        } else {
-            None
-        };
-        changes.push(Change {
-            index: entry[0],
-            worktree: entry[1],
-            material: material(&root.join(&path))?,
-            path,
-            original,
-        });
-    }
+    let changes = parse_status(&status)?
+        .into_iter()
+        .map(|entry| {
+            Ok(Change {
+                index: entry.index,
+                worktree: entry.worktree,
+                material: material(&root.join(&entry.path))?,
+                path: entry.path,
+                original: entry.original,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     // Observation is read-only, including Git's optional index refresh.
     if index != run(root, ["ls-files", "--stage", "-z"], process)?
         || head.as_bytes() != line(run(root, ["rev-parse", "--verify", "HEAD"], process)?)
@@ -322,6 +348,16 @@ fn authored_index_id(
         .map_err(|_| Error::Invalid("invalid authored staged tree identity".into()))
 }
 
+/// The staged paths risk reviews: every changed path except the store receipts
+/// named by provenance and the review artifacts directly under a phase.
+pub fn authored(scope: &[PathBuf], receipts: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
+    scope
+        .iter()
+        .filter(|path| !receipts.contains(*path) && !review_artifact(path))
+        .cloned()
+        .collect()
+}
+
 /// Store receipts are supplied by provenance, not recognized by filename.
 pub fn staged(root: &Path, base: &str, receipts: &BTreeSet<PathBuf>, process: &mut dyn Process) -> Result<Staged> {
     let head = shared_git::resolve_commit(root, "HEAD", process)?;
@@ -335,11 +371,7 @@ pub fn staged(root: &Path, base: &str, receipts: &BTreeSet<PathBuf>, process: &m
         },
         process,
     )?;
-    let authored: Vec<_> = scope
-        .iter()
-        .filter(|path| !receipts.contains(*path) && !review_artifact(path))
-        .cloned()
-        .collect();
+    let authored = authored(&scope, receipts);
     let authored_id = authored_index_id(root, &base, &before, &authored, process)?;
     let diff = shared_git::diff_selected(
         root,
@@ -373,40 +405,37 @@ fn covered(change: &Change, paths: &BTreeSet<PathBuf>) -> bool {
             .is_none_or(|original| paths.contains(original))
 }
 
-pub fn stage_authorized(
-    root: &Path,
+/// Dirty work that is neither authorized nor an ignored receipt.
+pub fn unauthorized(
     expected: &Observation,
     authorized: &BTreeSet<PathBuf>,
-    ignored_paths: &BTreeSet<PathBuf>,
-    stage_paths: &BTreeSet<PathBuf>,
-    process: &mut dyn Process,
-) -> Result<Option<WipIndex>> {
-    if expected
+    ignored: &BTreeSet<PathBuf>,
+) -> bool {
+    expected
         .changes
         .iter()
-        .any(|change| !covered(change, ignored_paths) && !covered(change, authorized))
-    {
-        return Err(Error::Conflict(
-            "pause found dirty work outside the authorized set".into(),
-        ));
-    }
-    let current = observe(root, process)?;
+        .any(|change| !covered(change, ignored) && !covered(change, authorized))
+}
+
+/// Whether Git still shows the work pause captured: the same head, the same
+/// index, and the same changes apart from the ignored receipts.
+pub fn unchanged(current: &Observation, expected: &Observation, ignored: &BTreeSet<PathBuf>) -> bool {
     let authored = |observation: &Observation| {
         observation
             .changes
             .iter()
-            .filter(|change| !covered(change, ignored_paths))
+            .filter(|change| !covered(change, ignored))
             .cloned()
             .collect::<Vec<_>>()
     };
-    if current.head != expected.head
-        || current.index != expected.index
-        || authored(&current) != authored(expected)
-    {
-        return Err(Error::Conflict(
-            "authorized work changed before pause staging".into(),
-        ));
-    }
+    current.head == expected.head
+        && current.index == expected.index
+        && authored(current) == authored(expected)
+}
+
+/// What `git add` is given: each worktree change the WIP stages, and the source
+/// of a rename not yet in the index, so both sides of it land.
+pub fn add_paths(expected: &Observation, stage_paths: &BTreeSet<PathBuf>) -> BTreeSet<PathBuf> {
     let mut add_paths = BTreeSet::new();
     for change in &expected.changes {
         if change.worktree != b' ' && covered(change, stage_paths) {
@@ -418,6 +447,48 @@ pub fn stage_authorized(
             }
         }
     }
+    add_paths
+}
+
+/// The WIP commit's paths out of everything staged: none when nothing staged is
+/// WIP material, and a refusal when anything else is staged beside it.
+pub fn wip_paths(staged: Vec<PathBuf>, stage_paths: &BTreeSet<PathBuf>) -> Result<Option<Vec<PathBuf>>> {
+    let count = staged.len();
+    let wip: Vec<_> = staged
+        .into_iter()
+        .filter(|path| stage_paths.contains(path))
+        .collect();
+    if wip.is_empty() {
+        return Ok(None);
+    }
+    if wip.len() != count {
+        return Err(Error::Conflict(
+            "pause found non-WIP material in the staged index".into(),
+        ));
+    }
+    Ok(Some(wip))
+}
+
+pub fn stage_authorized(
+    root: &Path,
+    expected: &Observation,
+    authorized: &BTreeSet<PathBuf>,
+    ignored_paths: &BTreeSet<PathBuf>,
+    stage_paths: &BTreeSet<PathBuf>,
+    process: &mut dyn Process,
+) -> Result<Option<WipIndex>> {
+    if unauthorized(expected, authorized, ignored_paths) {
+        return Err(Error::Conflict(
+            "pause found dirty work outside the authorized set".into(),
+        ));
+    }
+    let current = observe(root, process)?;
+    if !unchanged(&current, expected, ignored_paths) {
+        return Err(Error::Conflict(
+            "authorized work changed before pause staging".into(),
+        ));
+    }
+    let add_paths = add_paths(expected, stage_paths);
     if !add_paths.is_empty() {
         let mut args = vec![std::ffi::OsString::from("add"), "--all".into(), "--".into()];
         args.extend(add_paths.iter().map(|path| path.as_os_str().to_owned()));
@@ -436,19 +507,9 @@ pub fn stage_authorized(
         ],
         process,
     )?)?;
-    let wip_paths: Vec<_> = staged_paths
-        .iter()
-        .filter(|path| stage_paths.contains(*path))
-        .cloned()
-        .collect();
-    if wip_paths.is_empty() {
+    let Some(wip_paths) = wip_paths(staged_paths, stage_paths)? else {
         return Ok(None);
-    }
-    if wip_paths.len() != staged_paths.len() {
-        return Err(Error::Conflict(
-            "pause found non-WIP material in the staged index".into(),
-        ));
-    }
+    };
     Ok(Some(WipIndex {
         head: expected.head.clone(),
         branch: expected.branch.clone(),
@@ -477,11 +538,9 @@ pub fn commit_guarded(
 ) -> Result<String> {
     let head = String::from_utf8(line(run(root, ["rev-parse", "--verify", "HEAD"], process)?))
         .map_err(|_| Error::Invalid("invalid Git HEAD".into()))?;
-    if head != expected.head
-        || line(run(root, ["branch", "--show-current"], process)?) != expected.branch
-        || index_id(root, process)? != expected.index_id
-        || !unstaged(root, &expected.paths, process)?.is_empty()
-    {
+    let branch = line(run(root, ["branch", "--show-current"], process)?);
+    let index = index_id(root, process)?;
+    if !guard_holds(expected, &head, &branch, &index, &unstaged(root, &expected.paths, process)?) {
         return Err(Error::Conflict(
             "guarded material changed before commit".into(),
         ));
@@ -497,10 +556,7 @@ pub fn commit_guarded(
         .map_err(|_| Error::Invalid("invalid WIP tree identity".into()))?;
     let parent = String::from_utf8(line(run(root, ["rev-parse", "HEAD^"], process)?))
         .map_err(|_| Error::Invalid("invalid WIP parent identity".into()))?;
-    if tree != expected.index_id
-        || parent != expected.head
-        || !unstaged(root, &expected.paths, process)?.is_empty()
-    {
+    if !committed_as_guarded(expected, &tree, &parent, &unstaged(root, &expected.paths, process)?) {
         return Err(Error::Conflict(
             "commit differs from the guarded staged tree".into(),
         ));
@@ -508,12 +564,32 @@ pub fn commit_guarded(
     Ok(committed)
 }
 
-pub fn commit_wip(root: &Path, expected: &WipIndex, description: &str, process: &mut dyn Process) -> Result<String> {
+/// Whether Git still shows the guarded index before its commit: its head, its
+/// branch, its tree, and nothing of its paths left unstaged.
+pub fn guard_holds(expected: &WipIndex, head: &str, branch: &[u8], index_id: &str, unstaged: &[PathBuf]) -> bool {
+    head == expected.head
+        && branch == expected.branch
+        && index_id == expected.index_id
+        && unstaged.is_empty()
+}
+
+/// Whether the new commit is the guarded tree on the guarded head, with
+/// nothing of its paths left unstaged.
+pub fn committed_as_guarded(expected: &WipIndex, tree: &str, parent: &str, unstaged: &[PathBuf]) -> bool {
+    tree == expected.index_id && parent == expected.head && unstaged.is_empty()
+}
+
+/// `wip: <description>`, from one nonblank line.
+pub fn wip_subject(description: &str) -> Result<String> {
     let description = description.trim();
     if description.is_empty() || description.contains(['\r', '\n']) {
         return Err(Error::Invalid("WIP description must be one line".into()));
     }
-    commit_guarded(root, expected, &format!("wip: {description}"), process)
+    Ok(format!("wip: {description}"))
+}
+
+pub fn commit_wip(root: &Path, expected: &WipIndex, description: &str, process: &mut dyn Process) -> Result<String> {
+    commit_guarded(root, expected, &wip_subject(description)?, process)
 }
 
 pub fn require_clean(root: &Path, process: &mut dyn Process) -> Result<()> {

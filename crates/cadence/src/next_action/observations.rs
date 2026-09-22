@@ -97,7 +97,8 @@ fn legal_phase(name: &str) -> bool {
     legal(parts.next().unwrap_or("")) && parts.next().is_none_or(legal) && parts.next().is_none()
 }
 
-fn queue_member(path: PathBuf, phase: &str, name: &str, value: Value) -> Option<QueueMember> {
+/// A deferred review queue file, when its content matches its name and phase.
+pub fn queue_member(path: PathBuf, phase: &str, name: &str, value: Value) -> Option<QueueMember> {
     let string = |key| {
         value
             .get(key)?
