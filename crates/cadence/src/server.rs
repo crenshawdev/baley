@@ -935,9 +935,21 @@ impl ServerHandler for PublicServer {
         request: CallToolRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        self.call(request.name.as_ref(), request.arguments.map(Value::Object)).await
+    }
+}
+
+impl PublicServer {
+    /// One tool call with no transport around it: a name and its arguments
+    /// in, the tool's answer out. `call_tool` is this plus the request
+    /// context, so a check can exercise the wire without starting a child.
+    pub async fn call(
+        &self,
+        name: &str,
+        raw: Option<Value>,
+    ) -> Result<CallToolResponse, ErrorData> {
         let _in_flight = crate::review_ingress::InFlight::enter();
-        let raw = request.arguments.map(Value::Object);
-        match request.name.as_ref() {
+        match name {
             "cadence_version" => {
                 let envelope = match raw
                     .and_then(|value| serde_json::from_value::<VersionArguments>(value).ok())
@@ -1611,5 +1623,39 @@ mod schema_tests {
             assert_eq!(refused["slot"], "part");
             assert_eq!(refused["code"], "schema-part-not-found");
         }
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn answer(tool: &str) -> Result<CallToolResponse, ErrorData> {
+        let project = tempfile::tempdir().unwrap();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let server = CadenceServer::new().bind_project(project.path()).unwrap();
+                server.call(tool, Some(json!({}))).await
+            })
+    }
+
+    // The tool call is reachable without a transport: no child, no stdio and
+    // no MCP request context, so a check can exercise the wire in process.
+    #[test]
+    fn a_tool_call_answers_in_process() {
+        let CallToolResponse::Complete(result) = answer("cadence_version").unwrap() else {
+            panic!("a complete answer")
+        };
+        let structured = result.structured_content.expect("a structured answer");
+        assert_eq!(structured["status"], "ok", "{structured}");
+    }
+
+    #[test]
+    fn an_unknown_tool_is_invalid_params() {
+        assert_eq!(answer("cadence_unknown").unwrap_err().message, "unknown tool");
     }
 }
