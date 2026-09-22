@@ -106,6 +106,39 @@ impl ReadDocuments for Files {
     }
 }
 
+/// What the walk observed about a listed entry whose name it may use.
+pub struct Seen {
+    pub link: bool,
+    /// Its canonical path stays under the planning root.
+    pub contained: bool,
+    pub dir: bool,
+    pub file: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Step {
+    Skip,
+    Refuse,
+    Descend,
+    Read,
+}
+
+/// What the walk does with the entry `name`. A link, or a path whose canonical
+/// form leaves the root, is refused: that also prevents cycles and alias
+/// duplication. A directory on the way to a source is descended, an eligible
+/// file is read, and anything else is skipped.
+pub fn step(name: &str, seen: &Seen) -> Step {
+    if seen.link || !seen.contained {
+        Step::Refuse
+    } else if seen.dir && directory(name) {
+        Step::Descend
+    } else if seen.file && eligible(name) {
+        Step::Read
+    } else {
+        Step::Skip
+    }
+}
+
 pub fn read(root: &Path, io: &mut impl ReadDocuments) -> Documents {
     let mut result = Documents::default();
     let root = match root.canonicalize() {
@@ -149,19 +182,19 @@ pub fn read(root: &Path, io: &mut impl ReadDocuments) -> Documents {
                     continue;
                 }
             };
-            // Refusing links also prevents cycles and alias duplication. Check
-            // canonical containment again at the read boundary.
-            if metadata.file_type().is_symlink()
-                || !path.canonicalize().is_ok_and(|p| p.starts_with(root))
-            {
-                out.incomplete
-                    .push(format!("{name}: linked or escaping source skipped"));
-                continue;
-            }
-            if metadata.is_dir() && directory(name) {
-                walk(root, &path, io, out);
-            } else if metadata.is_file() && eligible(name) {
-                match io.text(&path) {
+            let link = metadata.file_type().is_symlink();
+            let seen = Seen {
+                link,
+                contained: !link && path.canonicalize().is_ok_and(|p| p.starts_with(root)),
+                dir: metadata.is_dir(),
+                file: metadata.is_file(),
+            };
+            match step(name, &seen) {
+                Step::Refuse => out
+                    .incomplete
+                    .push(format!("{name}: linked or escaping source skipped")),
+                Step::Descend => walk(root, &path, io, out),
+                Step::Read => match io.text(&path) {
                     Ok(text) => {
                         out.identities.insert(name.into(), digest(text.as_bytes()));
                         out.candidates.extend(snippets(name, &text, None));
@@ -169,7 +202,8 @@ pub fn read(root: &Path, io: &mut impl ReadDocuments) -> Documents {
                     Err(e) => out
                         .incomplete
                         .push(format!("{name}: source unavailable: {e}")),
-                }
+                },
+                Step::Skip => {}
             }
         }
     }

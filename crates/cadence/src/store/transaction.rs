@@ -2472,14 +2472,17 @@ mod intent_encoding_tests {
     // bytes as strings and says so; an intent written before that is read,
     // checked and written back exactly as it was.
     #[test]
-    fn intent_writes_utf8_participants_as_text_and_keeps_a_legacy_intent_as_written() {
+    fn a_legacy_array_intent_keeps_its_integrity_and_is_written_back_as_read() {
         let legacy: Intent = serde_json::from_str(LEGACY).unwrap();
         assert_eq!(legacy.integrity, legacy.digest().unwrap(), "a legacy intent keeps its integrity");
         assert_eq!(serde_json::to_value(&legacy).unwrap(), serde_json::from_str::<Value>(LEGACY).unwrap(), "written back as read");
         assert_eq!(legacy.participants.len(), 3);
         assert_eq!(legacy.participants[2].expected.bytes.as_deref(), Some(&b"{\"old\":true}"[..]));
         assert_eq!(legacy.participants[2].bytes, b"{\"new\":true}");
+    }
 
+    #[test]
+    fn a_fresh_intent_writes_utf8_participant_bytes_as_text() {
         let mut fresh = Intent::new(IntentKind::Store, participants());
         fresh.integrity = fresh.digest().unwrap();
         let written = serde_json::to_string(&fresh).unwrap();
@@ -2493,8 +2496,10 @@ mod intent_encoding_tests {
         assert_eq!(read.participants.iter().map(|p| (&p.target, &p.expected, &p.bytes)).collect::<Vec<_>>(),
             fresh.participants.iter().map(|p| (&p.target, &p.expected, &p.bytes)).collect::<Vec<_>>());
         assert_eq!(serde_json::to_value(&read).unwrap(), value, "written back as read");
+    }
 
-        // Bytes that are not UTF-8 stay an array inside a text intent.
+    #[test]
+    fn non_utf8_participant_bytes_stay_an_integer_array_inside_a_text_intent() {
         let mut binary = participants();
         binary[2].bytes = vec![0xff, 0xfe, b'{'];
         let mut intent = Intent::new(IntentKind::Store, binary);
@@ -2508,9 +2513,18 @@ mod intent_encoding_tests {
     }
 
     // GH-261: a write that changes only the snapshot journals only that
-    // participant, while an older three-participant journal still replays.
+    // participant.
     #[test]
-    fn state_only_intent_carries_one_participant_and_legacy_three_recovers() {
+    fn a_state_only_intent_carries_only_the_state_participant() {
+        let fresh = Intent::new(IntentKind::Store, state_only_participants());
+        assert_eq!(fresh.participants.len(), 1);
+        assert_eq!(fresh.participants[0].target, STATE);
+    }
+
+    // GH-261: an older journal, three participants each carrying its full
+    // prior bytes as integer arrays, still replays to the new state.
+    #[test]
+    fn a_legacy_three_participant_full_byte_intent_recovers_to_the_new_state() {
         let participants = state_only_participants();
         let mut legacy = Intent {
             version: VERSION, kind: IntentKind::Store, participants: participants.clone(),
@@ -2524,19 +2538,15 @@ mod intent_encoding_tests {
             bytes: Some(legacy_bytes), identity: "1:3:420".into(), directory_identity: "1:1;".into(),
         });
         let mut storage = Memory(files);
-        recover(&mut storage, &mut Allow, &mut crate::process::System).unwrap();
+        recover(&mut storage, &mut Allow, &mut crate::process::Recorded::new()).unwrap();
         assert_eq!(storage.0[STATE].bytes.as_ref(), Some(&participants[2].bytes));
         assert!(!storage.0.contains_key(INTENT));
-
-        let fresh = Intent::new(IntentKind::Store, participants);
-        assert_eq!(fresh.participants.len(), 1);
-        assert_eq!(fresh.participants[0].target, STATE);
     }
 
     // GH-261: a new journal identifies the prior file by digest rather than
-    // carrying its bytes, while the full-byte wire shape remains recoverable.
+    // carrying its bytes.
     #[test]
-    fn intent_expected_carries_a_digest_without_bytes_and_legacy_bytes_recover() {
+    fn a_fresh_intent_identifies_the_prior_file_by_digest_without_its_bytes() {
         let participants = state_only_participants();
         let old_state = participants[2].expected.bytes.as_deref().unwrap();
         let mut fresh = Intent::unfiltered(IntentKind::Store, participants.clone());
@@ -2546,21 +2556,5 @@ mod intent_encoding_tests {
         let expected = value["participants"][0]["expected"].as_object().unwrap();
         assert!(!expected.contains_key("bytes"), "fresh intent retained its preimage: {value}");
         assert_eq!(expected["digest"], model::digest(old_state));
-
-        let mut legacy = Intent {
-            version: VERSION, kind: IntentKind::Store, participants: participants.clone(),
-            integrity: String::new(), encoding: Encoding::Array,
-        };
-        legacy.integrity = legacy.digest().unwrap();
-        let legacy_bytes = serde_json::to_vec(&legacy).unwrap();
-        let mut files = participants.iter().map(|participant|
-            (participant.target.clone(), participant.expected.clone())).collect::<BTreeMap<_, _>>();
-        files.insert(INTENT.into(), Observed {
-            bytes: Some(legacy_bytes), identity: "1:3:420".into(), directory_identity: "1:1;".into(),
-        });
-        let mut storage = Memory(files);
-        recover(&mut storage, &mut Allow, &mut crate::process::System).unwrap();
-        assert_eq!(storage.0[STATE].bytes.as_ref(), Some(&participants[2].bytes));
-        assert!(!storage.0.contains_key(INTENT));
     }
 }

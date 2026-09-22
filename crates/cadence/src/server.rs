@@ -1588,7 +1588,7 @@ mod schema_tests {
     }
 
     #[test]
-    fn schema_part_boundary_is_inclusive_and_missing_parts_are_located() {
+    fn a_schema_at_the_bound_is_served_whole_and_one_byte_over_is_paged() {
         let schema = json!("x".repeat(SCHEMA_PART_BOUND - 2));
         assert_eq!(serde_json::to_vec(&schema).unwrap().len(), SCHEMA_PART_BOUND);
         assert_eq!(schema_part("query", "synthetic", &schema, None),
@@ -1601,6 +1601,11 @@ mod schema_tests {
         let last = schema_part("query", "synthetic", &oversized, Some(2));
         assert_eq!(last["body"].as_str().unwrap().len(), 1);
         assert!(last["next"].is_null());
+    }
+
+    #[test]
+    fn a_schema_part_of_0_past_the_end_or_usize_max_is_refused_as_not_found() {
+        let schema = json!("x".repeat(SCHEMA_PART_BOUND - 2));
         for part in [0, 2, usize::MAX] {
             let refused = schema_part("query", "synthetic", &schema, Some(part));
             assert_eq!(refused["status"], "refused");

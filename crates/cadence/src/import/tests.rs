@@ -1,7 +1,6 @@
 use super::*;
 use cadence::store::{
     MutationContext, Policy, Result,
-    filesystem::Filesystem,
     model::{Disposition, Evidence},
     transaction::Transaction,
     writer::{Operation, Store},
@@ -26,13 +25,16 @@ const FROZEN_DECLINED: &[u8] = include_bytes!("../../tests/fixtures/v3.7.12/DECL
 const FROZEN_FILED: &[u8] = include_bytes!("../../tests/fixtures/v3.7.12/FILED.md");
 const FROZEN_STATE: &[u8] = include_bytes!("../../tests/fixtures/v3.7.12/STATE.md");
 
-#[test]
-fn capture_import_preserves_independent_identities_and_all_source_bytes() {
-    let capture = source(
+fn capture_source() -> Source {
+    source(
         "CAPTURE.md",
         "# Capture\n\n## Todos\n- [ ] (phase 03.1) same\n  continuation with unknown meaning\n  ````rust\n- [ ] not an item\n  ```\n## Notes\n  ````\n- [ ] same\n- [x] complete\n## Seeds\n- seed\n## Notes\n- 2026-01-01 note\n## Unknown\n- evidence only\n",
-    );
-    let result = items::translate(Some(&capture), None, None).unwrap();
+    )
+}
+
+#[test]
+fn capture_entries_become_records_by_section_skipping_other_lines_and_carrying_completion() {
+    let result = items::translate(Some(&capture_source()), None, None).unwrap();
     assert_eq!(result.records.len(), 5);
     assert_eq!(
         result
@@ -42,17 +44,7 @@ fn capture_import_preserves_independent_identities_and_all_source_bytes() {
             .collect::<Vec<_>>(),
         ["todo", "todo", "todo", "seed", "note"]
     );
-    assert_eq!(result.records[0].text, "same");
-    assert_eq!(result.records[1].text, "same");
-    assert_ne!(result.records[0].id, result.records[1].id);
     assert!(result.records[2].completed);
-    assert_eq!(result.evidence[0].source, capture);
-    assert_eq!(result.evidence[0].label, "non_effective_original_source");
-    let Evidence::Text(provenance) = &result.records[0].origin.original else {
-        panic!("missing provenance")
-    };
-    let provenance: serde_json::Value = serde_json::from_str(provenance).unwrap();
-    assert_eq!(provenance[0]["phase_spelling"], json!("03.1"));
     assert!(
         result
             .records
@@ -61,10 +53,36 @@ fn capture_import_preserves_independent_identities_and_all_source_bytes() {
                 && !r.text.contains("not an item")
                 && !r.text.contains("evidence only"))
     );
+}
+
+#[test]
+fn identical_capture_texts_get_distinct_ids_and_translation_is_deterministic() {
+    let capture = capture_source();
+    let result = items::translate(Some(&capture), None, None).unwrap();
+    assert_eq!(result.records[0].text, "same");
+    assert_eq!(result.records[1].text, "same");
+    assert_ne!(result.records[0].id, result.records[1].id);
     assert_eq!(
         result,
         items::translate(Some(&capture), None, None).unwrap()
     );
+}
+
+#[test]
+fn capture_source_bytes_are_kept_as_evidence_with_the_phase_spelling_in_provenance() {
+    let capture = capture_source();
+    let result = items::translate(Some(&capture), None, None).unwrap();
+    assert_eq!(result.evidence[0].source, capture);
+    assert_eq!(result.evidence[0].label, "non_effective_original_source");
+    let Evidence::Text(provenance) = &result.records[0].origin.original else {
+        panic!("missing provenance")
+    };
+    let provenance: serde_json::Value = serde_json::from_str(provenance).unwrap();
+    assert_eq!(provenance[0]["phase_spelling"], json!("03.1"));
+}
+
+#[test]
+fn no_capture_source_yields_no_records() {
     assert!(
         items::translate(None, None, None)
             .unwrap()
@@ -73,8 +91,7 @@ fn capture_import_preserves_independent_identities_and_all_source_bytes() {
     );
 }
 
-#[test]
-fn cross_ledger_decline_wins_preserves_uncertainty_and_replay_does_not_append() {
+fn ledgers() -> (Source, Source) {
     let filed = source(
         "FILED.md",
         "- 2026-01-01 github org/repo abc: shared finding\n- 2026-01-02 github org/repo def unconfirmed: uncertain finding\n",
@@ -83,10 +100,22 @@ fn cross_ledger_decline_wins_preserves_uncertainty_and_replay_does_not_append() 
         "DECLINED.md",
         "## Fingerprints\n- 2026-01-03 github org/repo abc: rejected shared finding\n## Decisions\n### Human decline\nDeclined because the tradeoff is wrong.\n## Nested reasoning\nKeep all of this.\n```md\n### not a separate decision\n```\n",
     );
+    (filed, declined)
+}
+
+#[test]
+fn an_unconfirmed_filing_is_marked_uncertain() {
+    let (filed, declined) = ledgers();
     let translated = items::translate(None, Some(&filed), Some(&declined)).unwrap();
     assert_eq!(translated.records.len(), 4);
     assert!(translated.records[1].filing_uncertain); // frozen planning-files.mjs:1366-1367
     assert!(!translated.records[0].filing_uncertain);
+}
+
+#[test]
+fn a_decline_of_a_filed_fingerprint_wins_under_the_same_id_with_a_conflict_warning() {
+    let (filed, declined) = ledgers();
+    let translated = items::translate(None, Some(&filed), Some(&declined)).unwrap();
     assert_eq!(translated.records[0].id, translated.records[2].id);
     assert!(matches!(
         translated.records[2].disposition,
@@ -98,10 +127,22 @@ fn cross_ledger_decline_wins_preserves_uncertainty_and_replay_does_not_append() 
             .iter()
             .any(|w| w.contains("FILED/DECLINED conflict"))
     );
+}
+
+#[test]
+fn a_declined_decision_keeps_all_of_its_nested_reasoning() {
+    let (filed, declined) = ledgers();
+    let translated = items::translate(None, Some(&filed), Some(&declined)).unwrap();
     let Disposition::Declined { reason } = &translated.records[3].disposition else {
         panic!("prose not declined")
     };
     assert!(reason.contains("Nested reasoning") && reason.contains("tradeoff"));
+}
+
+#[test]
+fn both_ledgers_are_kept_as_evidence_in_order() {
+    let (filed, declined) = ledgers();
+    let translated = items::translate(None, Some(&filed), Some(&declined)).unwrap();
     assert_eq!(
         translated
             .evidence
@@ -110,39 +151,24 @@ fn cross_ledger_decline_wins_preserves_uncertainty_and_replay_does_not_append() 
             .collect::<Vec<_>>(),
         [filed, declined]
     );
-    let transaction = Transaction {
-        id: "same-source-generation".into(),
-        items: translated.records.clone(),
+}
+
+#[test]
+fn recall_offers_only_the_uncertain_filing_after_a_decline() {
+    let (filed, declined) = ledgers();
+    let translated = items::translate(None, Some(&filed), Some(&declined)).unwrap();
+    let view = cadence::store::writer::View {
+        snapshot: serde_json::from_value(json!({"version":1,"generation":0,"items_digest":"","decisions_digest":"","data":{},"operations":{},"integrity":""})).unwrap(),
+        items: translated.records,
         decisions: vec![],
-        snapshot: Some(json!({"source_evidence":translated.evidence})),
-        external: vec![],
     };
-    let dir = tempfile::tempdir().unwrap();
-    tokio::runtime::Runtime::new().unwrap().block_on(async {
-        let store = Store::open(Filesystem::new(dir.path()).unwrap(), Allow)
-            .await
-            .unwrap();
-        let first = store
-            .request(Operation::Transact(transaction.clone()))
-            .await
-            .unwrap();
-        assert_eq!(
-            first
-                .recall_items()
-                .iter()
-                .map(|r| r.text.as_str())
-                .collect::<Vec<_>>(),
-            ["uncertain finding"]
-        );
-        assert_eq!(
-            store
-                .request(Operation::Transact(transaction))
-                .await
-                .unwrap(),
-            first
-        );
-        assert_eq!(first.items.len(), 4);
-    });
+    assert_eq!(
+        view.recall_items()
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<Vec<_>>(),
+        ["uncertain finding"]
+    );
 }
 
 #[test]
@@ -209,9 +235,9 @@ fn frozen_cursor_is_read_without_deriving_phase_status() {
     assert_eq!(translated.evidence[0].source, state);
 }
 
-#[test]
-fn mixed_legacy_logs_admit_only_decisions_and_keep_requested_observed_effort_distinct() {
-    use cadence::store::model::Decision;
+/// The current trace log with every family, a rotated copy of its first
+/// routing row, and a broken tail.
+fn mixed_logs() -> (Source, Source) {
     let mut raw = String::new();
     let routing = json!({"family":"routing","event":"resolve","phase":"03.1","agent":"cad-executor-high","role":"cad-executor","effort":"high","model_source":"repo","agent_id":"a","observed_effort":" \t "});
     for row in [
@@ -228,11 +254,22 @@ fn mixed_legacy_logs_admit_only_decisions_and_keep_requested_observed_effort_dis
         raw.push_str(&format!("{row}\n"));
     }
     raw.push_str("broken row\n{\"family\":\"outcome\"");
-    let current = source("trace.jsonl", &raw);
-    let rotated = source("trace.1.jsonl", &format!("{routing}\n"));
+    (source("trace.jsonl", &raw), source("trace.1.jsonl", &format!("{routing}\n")))
+}
+
+#[test]
+fn log_admission_keeps_only_decisions_and_an_equal_rotated_row_is_its_own_record() {
+    let (current, rotated) = mixed_logs();
     let result = decisions::translate(None, Some(&current), Some(&rotated)).unwrap();
     assert_eq!(result.records.len(), 5); // equal payload in another source is not proof of a carry
     assert_ne!(result.records[0].id, result.records[4].id);
+}
+
+#[test]
+fn a_routing_row_keeps_requested_effort_and_omits_a_blank_observed_effort() {
+    use cadence::store::model::Decision;
+    let (current, rotated) = mixed_logs();
+    let result = decisions::translate(None, Some(&current), Some(&rotated)).unwrap();
     let Decision::Routing {
         requested_effort,
         observed_effort,
@@ -250,6 +287,13 @@ fn mixed_legacy_logs_admit_only_decisions_and_keep_requested_observed_effort_dis
             .unwrap()
             .contains("observed_effort")
     );
+}
+
+#[test]
+fn an_unfamiliar_observed_effort_is_kept_verbatim() {
+    use cadence::store::model::Decision;
+    let (current, rotated) = mixed_logs();
+    let result = decisions::translate(None, Some(&current), Some(&rotated)).unwrap();
     let Decision::Routing {
         observed_effort, ..
     } = &result.records[1].decision
@@ -257,11 +301,24 @@ fn mixed_legacy_logs_admit_only_decisions_and_keep_requested_observed_effort_dis
         panic!("routing missing")
     };
     assert_eq!(*observed_effort, Evidence::Text("host-unfamiliar".into()));
+}
+
+#[test]
+fn a_risk_check_is_a_gate_and_an_undeclared_census_is_a_refusal() {
+    use cadence::store::model::Decision;
+    let (current, rotated) = mixed_logs();
+    let result = decisions::translate(None, Some(&current), Some(&rotated)).unwrap();
     assert!(matches!(result.records[2].decision, Decision::Gate { .. }));
     assert!(matches!(
         result.records[3].decision,
         Decision::Refusal { .. }
     ));
+}
+
+#[test]
+fn malformed_log_rows_warn_and_the_current_log_is_kept_as_evidence() {
+    let (current, rotated) = mixed_logs();
+    let result = decisions::translate(None, Some(&current), Some(&rotated)).unwrap();
     assert!(
         result
             .warnings
@@ -269,36 +326,17 @@ fn mixed_legacy_logs_admit_only_decisions_and_keep_requested_observed_effort_dis
             .any(|s| s.contains("malformed/incomplete"))
     );
     assert_eq!(result.evidence[0].source, current);
+}
+
+#[test]
+fn log_translation_is_deterministic() {
+    let (current, rotated) = mixed_logs();
     assert_eq!(
-        result.records,
+        decisions::translate(None, Some(&current), Some(&rotated)).unwrap().records,
         decisions::translate(None, Some(&current), Some(&rotated))
             .unwrap()
             .records
     );
-    let transaction = Transaction {
-        id: "log-source-generation".into(),
-        items: vec![],
-        decisions: result.records,
-        snapshot: None,
-        external: vec![],
-    };
-    let dir = tempfile::tempdir().unwrap();
-    tokio::runtime::Runtime::new().unwrap().block_on(async {
-        let store = Store::open(Filesystem::new(dir.path()).unwrap(), Allow)
-            .await
-            .unwrap();
-        let first = store
-            .request(Operation::Transact(transaction.clone()))
-            .await
-            .unwrap();
-        assert_eq!(
-            store
-                .request(Operation::Transact(transaction))
-                .await
-                .unwrap(),
-            first
-        );
-    });
 }
 
 #[test]

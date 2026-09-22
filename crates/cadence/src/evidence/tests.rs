@@ -27,8 +27,9 @@ fn record(kind: CheckpointType) -> Record {
     }
 }
 
-#[test]
-fn checkpoint_round_trips_all_types_and_dispositions() {
+/// A checkpoint record of every type in every state.
+fn checkpoints() -> Vec<(CheckpointType, Record)> {
+    let mut all = Vec::new();
     for kind in [
         CheckpointType::Structural,
         CheckpointType::HumanVerify,
@@ -50,24 +51,53 @@ fn checkpoint_round_trips_all_types_and_dispositions() {
                 panic!("checkpoint")
             };
             checkpoint.state = state;
-            assert_eq!(
-                checkpoint.requires_operator_answer(),
-                kind != CheckpointType::SuiteRed
-            );
-            value.validate().unwrap();
-            let decoded: Record =
-                serde_json::from_value(serde_json::to_value(&value).unwrap()).unwrap();
-            assert_eq!(decoded, value);
-            assert_eq!(
-                persistence::decode_history(&persistence::history("op", &value).unwrap()).unwrap(),
-                Some(value)
-            );
+            all.push((kind.clone(), value));
         }
+    }
+    all
+}
+
+#[test]
+fn only_a_suite_red_checkpoint_needs_no_operator_answer() {
+    for (kind, value) in checkpoints() {
+        let Fact::Checkpoint(checkpoint) = &value.fact else {
+            panic!("checkpoint")
+        };
+        assert_eq!(
+            checkpoint.requires_operator_answer(),
+            kind != CheckpointType::SuiteRed
+        );
     }
 }
 
 #[test]
-fn checkpoint_rejects_missing_and_blank_routing_fields() {
+fn validate_accepts_every_checkpoint_type_and_state() {
+    for (_, value) in checkpoints() {
+        value.validate().unwrap();
+    }
+}
+
+#[test]
+fn a_checkpoint_record_round_trips_through_json() {
+    for (_, value) in checkpoints() {
+        let decoded: Record =
+            serde_json::from_value(serde_json::to_value(&value).unwrap()).unwrap();
+        assert_eq!(decoded, value);
+    }
+}
+
+#[test]
+fn a_checkpoint_record_round_trips_through_its_history_decision() {
+    for (_, value) in checkpoints() {
+        assert_eq!(
+            persistence::decode_history(&persistence::history("op", &value, Some(1_700_000_000)).unwrap()).unwrap(),
+            Some(value)
+        );
+    }
+}
+
+#[test]
+fn a_record_missing_a_required_field_does_not_deserialize() {
     let original = serde_json::to_value(record(CheckpointType::SuiteRed)).unwrap();
     for field in ["version", "scope", "fact"] {
         let mut value = original.clone();
@@ -86,15 +116,6 @@ fn checkpoint_rejects_missing_and_blank_routing_fields() {
         let mut value = original.clone();
         value["scope"].as_object_mut().unwrap().remove(field);
         assert!(serde_json::from_value::<Record>(value).is_err(), "{field}");
-        let mut value = original.clone();
-        value["scope"][field] = json!(" \t");
-        assert!(
-            serde_json::from_value::<Record>(value)
-                .unwrap()
-                .validate()
-                .is_err(),
-            "{field}"
-        );
     }
     for field in [
         "id",
@@ -111,6 +132,30 @@ fn checkpoint_rejects_missing_and_blank_routing_fields() {
             .unwrap()
             .remove(field);
         assert!(serde_json::from_value::<Record>(value).is_err(), "{field}");
+    }
+}
+
+#[test]
+fn validate_refuses_blank_scope_and_checkpoint_fields() {
+    let original = serde_json::to_value(record(CheckpointType::SuiteRed)).unwrap();
+    for field in [
+        "project",
+        "planning_root",
+        "cycle",
+        "occurrence",
+        "phase",
+        "plan",
+        "report",
+    ] {
+        let mut value = original.clone();
+        value["scope"][field] = json!(" \t");
+        assert!(
+            serde_json::from_value::<Record>(value)
+                .unwrap()
+                .validate()
+                .is_err(),
+            "{field}"
+        );
     }
     for (field, bad) in [
         ("id", json!("")),
@@ -129,6 +174,10 @@ fn checkpoint_rejects_missing_and_blank_routing_fields() {
             "{field}"
         );
     }
+}
+
+#[test]
+fn validate_refuses_an_unsupported_version() {
     let mut bad = record(CheckpointType::Blocked);
     bad.version = 99;
     assert!(bad.validate().is_err());
@@ -136,28 +185,38 @@ fn checkpoint_rejects_missing_and_blank_routing_fields() {
 
 use serde_json::Value;
 #[test]
-fn checkpoint_projection_preserves_namespaces_and_occurrences() {
+fn project_keeps_every_other_snapshot_key() {
     let seed = json!({"derivation":{"memo":"hash"}, "import":{"original":"bytes"}, "cursor":"raw", "arbitrary":[1,null," x "]});
+    let data = persistence::project(&seed, &record(CheckpointType::Blocked)).unwrap();
+    for (key, value) in seed.as_object().unwrap() {
+        assert_eq!(&data[key], value);
+    }
+}
+
+#[test]
+fn read_returns_each_occurrence_under_its_own_key_and_nothing_without_the_namespace() {
+    let seed = json!({"cursor":"raw"});
     let first = record(CheckpointType::Blocked);
     let mut second = first.clone();
     second.scope.occurrence = "dispatch-2".into();
     let data =
         persistence::project(&persistence::project(&seed, &first).unwrap(), &second).unwrap();
-    for (key, value) in seed.as_object().unwrap() {
-        assert_eq!(&data[key], value);
-    }
     let records = persistence::read(&data).unwrap();
     assert_eq!(records.len(), 2);
     assert_eq!(records[&first.key().unwrap()], first);
     assert_eq!(records[&second.key().unwrap()], second);
     assert!(persistence::read(&seed).unwrap().is_empty());
-    let mut legacy = persistence::history("legacy", &first).unwrap();
+}
+
+#[test]
+fn decode_history_ignores_a_decision_without_the_native_marker() {
+    let mut legacy = persistence::history("legacy", &record(CheckpointType::Blocked), Some(1_700_000_000)).unwrap();
     legacy.origin.source = "import".into();
     assert_eq!(persistence::decode_history(&legacy).unwrap(), None);
 }
 
-#[test]
-fn review_receipt_counts_do_not_replace_finding_reference() {
+/// A review-receipt override with its settled counts and finding record.
+fn review_override() -> Record {
     use overrides::*;
     let mut value = record(CheckpointType::Decision);
     value.fact = Fact::Override(Override {
@@ -183,15 +242,32 @@ fn review_receipt_counts_do_not_replace_finding_reference() {
             },
         }),
     });
+    value
+}
+
+#[test]
+fn a_review_receipt_round_trips_through_project_and_read() {
+    let value = review_override();
     let projected = persistence::project(&json!({"legacy":{"reason":null}}), &value).unwrap();
     assert_eq!(
         persistence::read(&projected).unwrap()[&value.key().unwrap()],
         value
     );
+}
+
+#[test]
+fn a_review_receipt_round_trips_through_its_history_decision() {
+    let value = review_override();
     assert_eq!(
-        persistence::decode_history(&persistence::history("range", &value).unwrap()).unwrap(),
-        Some(value.clone())
+        persistence::decode_history(&persistence::history("range", &value, Some(1_700_000_000)).unwrap()).unwrap(),
+        Some(value)
     );
+}
+
+#[test]
+fn review_receipt_counts_do_not_replace_finding_reference() {
+    use overrides::*;
+    let mut value = review_override();
     let Fact::Override(o) = &mut value.fact else {
         unreachable!()
     };

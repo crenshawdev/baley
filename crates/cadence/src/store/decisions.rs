@@ -46,10 +46,18 @@ mod tests {
             normalize_effort(Evidence::Text(" host-ultra ".into())),
             Evidence::Text(" host-ultra ".into())
         );
+    }
+
+    #[test]
+    fn historical_observed_effort_without_an_agent_identity_is_missing() {
         assert_eq!(
             historical_observed_effort(None, Some(&serde_json::json!("host-ultra"))),
             Evidence::Missing
         );
+    }
+
+    #[test]
+    fn historical_observed_effort_with_an_agent_keeps_its_text_and_omits_blank_or_absent() {
         assert_eq!(
             historical_observed_effort(Some("agent-1"), Some(&serde_json::json!(" \n"))),
             Evidence::Missing

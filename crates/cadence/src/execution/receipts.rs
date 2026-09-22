@@ -771,25 +771,34 @@ mod capture_tests {
     // capture read as `text` is written back as `text`. Both forms at once,
     // neither, or an unknown field is refused.
     #[test]
-    fn capture_keeps_its_read_form_and_new_captures_are_text() {
+    fn a_retained_bytes_record_reserializes_identically_and_keeps_its_request_digest() {
         let record: Record = serde_json::from_str(RETAINED).unwrap();
         assert_eq!(request_digest(&record.request).unwrap(), record.request_digest);
         assert_eq!(serde_json::to_value(&record).unwrap(), serde_json::from_str::<serde_json::Value>(RETAINED).unwrap());
         let Event::Result(result) = &record.request.event else { panic!("{RETAINED}") };
         assert_eq!(result.stderr.bytes, b"    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s\n");
+    }
 
+    #[test]
+    fn a_new_capture_is_text_with_its_result_lines_when_utf8_and_bytes_otherwise() {
         let fresh = super::super::runner::capture(&b"test result: ok. 1 passed; 0 failed\n"[..]);
-        let written = serde_json::to_value(&fresh).unwrap();
-        assert_eq!(written, json!({"text":"test result: ok. 1 passed; 0 failed\n","digest":digest(b"test result: ok. 1 passed; 0 failed\n"),
+        assert_eq!(serde_json::to_value(&fresh).unwrap(), json!({"text":"test result: ok. 1 passed; 0 failed\n","digest":digest(b"test result: ok. 1 passed; 0 failed\n"),
             "complete":true,"result_lines":["test result: ok. 1 passed; 0 failed"]}));
-        let read: Capture = serde_json::from_value(written.clone()).unwrap();
-        assert_eq!(read, fresh);
-        assert_eq!(read.bytes, fresh.bytes);
-        assert_eq!(serde_json::to_value(&read).unwrap(), written, "a capture read as text is written as text");
-
         let binary = super::super::runner::capture(&[0xff, 0xfe, b'\n'][..]);
         assert_eq!(serde_json::to_value(&binary).unwrap(), json!({"bytes":[255,254,10],"digest":digest(&[0xff,0xfe,10]),"complete":true}));
+    }
 
+    #[test]
+    fn a_capture_read_as_text_is_written_back_as_text() {
+        let written = json!({"text":"test result: ok. 1 passed; 0 failed\n","digest":digest(b"test result: ok. 1 passed; 0 failed\n"),
+            "complete":true,"result_lines":["test result: ok. 1 passed; 0 failed"]});
+        let read: Capture = serde_json::from_value(written.clone()).unwrap();
+        assert_eq!(read.bytes, b"test result: ok. 1 passed; 0 failed\n");
+        assert_eq!(serde_json::to_value(&read).unwrap(), written, "a capture read as text is written as text");
+    }
+
+    #[test]
+    fn a_capture_with_both_forms_neither_or_an_unknown_field_does_not_parse() {
         for bad in [json!({"bytes":[],"text":"","digest":digest(b""),"complete":true}),
                     json!({"digest":digest(b""),"complete":true}),
                     json!({"text":"x","digest":digest(b"x"),"complete":true,"extra":1})] {

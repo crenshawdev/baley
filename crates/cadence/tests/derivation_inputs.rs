@@ -335,8 +335,9 @@ fn ac7_other_named_changes_refuse_but_excluded_names_do_not() {
     );
 }
 
-#[test]
-fn capture_numeric_aliases_once_and_permuted_lists_are_identical() {
+/// A roadmap whose phases 1.10 and 1.1 both address phases/1.1, whose plan
+/// listing is out of order.
+fn aliased_io() -> MemoryIo {
     let mut io = MemoryIo::one();
     io.reads.insert(
         "/planning/ROADMAP.md".into(),
@@ -351,7 +352,12 @@ fn capture_numeric_aliases_once_and_permuted_lists_are_identical() {
             "STATE.md".into(),
         ]),
     );
-    let a = capture_inputs(Path::new("/planning"), &mut io).unwrap();
+    io
+}
+
+#[test]
+fn phases_whose_numbers_alias_one_directory_are_observed_once() {
+    let a = capture_inputs(Path::new("/planning"), &mut aliased_io()).unwrap();
     assert_eq!(a.phases.len(), 1);
     assert_eq!(
         a.declarations
@@ -363,6 +369,12 @@ fn capture_numeric_aliases_once_and_permuted_lists_are_identical() {
             .len(),
         2
     );
+}
+
+#[test]
+fn capture_resolves_probes_reads_lists_and_probes_in_that_order() {
+    let mut io = aliased_io();
+    capture_inputs(Path::new("/planning"), &mut io).unwrap();
     assert_eq!(
         io.calls,
         vec![
@@ -374,6 +386,12 @@ fn capture_numeric_aliases_once_and_permuted_lists_are_identical() {
             ("read".into(), "/planning/phases/1.1/UAT.md".into()),
         ]
     );
+}
+
+#[test]
+fn plan_listing_order_does_not_change_the_capture() {
+    let mut io = aliased_io();
+    let a = capture_inputs(Path::new("/planning"), &mut io).unwrap();
     if let Observation::Present(names) =
         io.lists.get_mut(Path::new("/planning/phases/1.1")).unwrap()
     {

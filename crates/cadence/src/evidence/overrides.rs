@@ -210,8 +210,8 @@ pub(crate) fn validate_submission(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn unified_override_round_trips_and_requires_reason() {
+    /// One override record for each meaning, with a reason padded by blanks.
+    fn overrides() -> Vec<Record> {
         let scope = Scope {
             project: "/p".into(),
             planning_root: "/p/.planning".into(),
@@ -221,7 +221,7 @@ mod tests {
             plan: "PLAN-1.md".into(),
             report: "reports/plan-1.md".into(),
         };
-        for meaning in [
+        [
             Meaning::Rerun {
                 admitted_plans: vec!["PLAN-1.md".into(), "PLAN-2.md".into()],
             },
@@ -248,29 +248,54 @@ mod tests {
                     refuted: 0,
                 },
             }),
-        ] {
-            let mut record = Record {
-                version: super::super::VERSION,
-                scope: scope.clone(),
-                fact: Fact::Override(Override {
-                    id: "exception".into(),
-                    reason: "  Preserve my words\n".into(),
-                    authorization: Authorization::Invocation {
-                        id: "answer".into(),
-                        invocation: "explicit request".into(),
-                    },
-                    meaning,
-                }),
-            };
+        ]
+        .into_iter()
+        .map(|meaning| Record {
+            version: super::super::VERSION,
+            scope: scope.clone(),
+            fact: Fact::Override(Override {
+                id: "exception".into(),
+                reason: "  Preserve my words\n".into(),
+                authorization: Authorization::Invocation {
+                    id: "answer".into(),
+                    invocation: "explicit request".into(),
+                },
+                meaning,
+            }),
+        })
+        .collect()
+    }
+
+    #[test]
+    fn validate_accepts_a_well_formed_override_of_each_meaning() {
+        for record in overrides() {
             record.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn a_record_carrying_an_override_round_trips_through_json() {
+        for record in overrides() {
             let bytes = serde_json::to_vec(&record).unwrap();
             assert_eq!(serde_json::from_slice::<Record>(&bytes).unwrap(), record);
+        }
+    }
+
+    #[test]
+    fn validate_refuses_a_blank_override_reason() {
+        for mut record in overrides() {
             let Fact::Override(value) = &mut record.fact else {
                 unreachable!()
             };
             value.reason = " \t\n".into();
             assert!(record.validate().is_err());
-            let mut missing = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_record_whose_override_lacks_a_reason_does_not_deserialize() {
+        for record in overrides() {
+            let mut missing = serde_json::to_value(&record).unwrap();
             missing["fact"]["value"]
                 .as_object_mut()
                 .unwrap()

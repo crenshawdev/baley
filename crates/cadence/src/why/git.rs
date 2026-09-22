@@ -193,6 +193,10 @@ mod tests {
     #[test]
     fn the_line_arm_embeds_the_path_and_takes_no_pathspec() {
         assert_eq!(line_argv("a/b.rs", 7), ["log", "-L7,7:a/b.rs", "-s", "--format=%H%x1f%cI%x1f%ct%x1f%s", "-M"]);
+    }
+
+    #[test]
+    fn the_bare_arm_follows_renames_and_ends_with_the_pathspec() {
         assert_eq!(bare_argv("HEAD"), ["log", "--format=%H%x1f%cI%x1f%ct%x1f%s", "-M", "--follow", "--", "HEAD"]);
     }
 }

@@ -857,7 +857,7 @@ mod tests {
         assert_eq!(decoder.raw_bytes, 15);
     }
     #[test]
-    fn gap157_duplicate_identity_operation_raw_and_malformed_envelopes_refuse() {
+    fn gap157_a_repeated_envelope_key_is_refused_even_when_escaped() {
         for wire in [
             br#"{"params":{"arguments":{"raw":"a","r\u0061w":"b"}}}"#.as_slice(),
             br#"{"params":{"arguments":{"operation":"review-return","operation":"other"}}}"#,
@@ -869,6 +869,10 @@ mod tests {
                 "duplicate-envelope-key"
             );
         }
+    }
+
+    #[test]
+    fn malformed_envelope_syntax_is_refused() {
         for wire in [
             br#"{"a":"\x"}"#.as_slice(),
             br#"{"a":"\uD800"}"#,
@@ -952,23 +956,32 @@ mod tests {
         assert_eq!(input.decoder.raw_bytes, 9);
         assert_eq!(input.source.position, PREFIX.len() + 9);
     }
+    const PING: &[u8] = b"{\"method\":\"ping\",\"id\":1,\"jsonrpc\":\"2.0\"}\r\n";
+
     #[tokio::test]
-    async fn gap157_crlf_eof_and_buffered_next_frame_preserve_framing() {
-        let wire = b"{\"method\":\"ping\",\"id\":1,\"jsonrpc\":\"2.0\"}\r\n";
-        let mut input = BoundedInput::new(Chunked::new(wire.to_vec()), Limits::default());
-        assert_eq!(input.next_frame().await.unwrap().unwrap(), wire);
+    async fn gap157_a_crlf_frame_is_returned_whole_and_eof_then_yields_none() {
+        let mut input = BoundedInput::new(Chunked::new(PING.to_vec()), Limits::default());
+        assert_eq!(input.next_frame().await.unwrap().unwrap(), PING);
         assert!(input.next_frame().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_partial_frame_at_eof_yields_none() {
         let mut partial = BoundedInput::new(
             Chunked::new(b"{\"method\":\"ping\"".to_vec()),
             Limits::default(),
         );
         assert!(partial.next_frame().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_second_frame_already_buffered_is_returned_intact() {
         let mut frames = PREFIX.to_vec();
         frames.extend_from_slice(b"abc");
         frames.extend_from_slice(SUFFIX);
-        frames.extend_from_slice(wire);
+        frames.extend_from_slice(PING);
         let mut input = BoundedInput::new(Chunked::new(frames), Limits::default());
         assert!(input.next_frame().await.unwrap().is_some());
-        assert_eq!(input.next_frame().await.unwrap().unwrap(), wire);
+        assert_eq!(input.next_frame().await.unwrap().unwrap(), PING);
     }
 }

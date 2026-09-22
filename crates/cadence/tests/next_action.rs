@@ -26,8 +26,27 @@ fn valid(phase: &str) -> serde_json::Value {
     serde_json::json!({"phase":phase,"trigger":"diff-plan","discriminator":"1","round":1,"findings":[{}]})
 }
 
+fn phase_one() -> PhaseId {
+    parse_roadmap("## Phases\n- [ ] **Phase 1: One**").unwrap().phases[0].id
+}
+
+fn report(bytes: Observation<Vec<u8>>) -> Report {
+    Report { path: "phases/1/reports/plan-1.md".into(), bytes }
+}
+
 #[test]
-fn exact_reports_first_line_and_unreadability() {
+fn each_plan_file_name_maps_to_its_report_path() {
+    for (plan, path) in [
+        ("PLAN.md", "phases/1/reports/plan-1.md"),
+        ("PLAN-02.md", "phases/1/reports/plan-2.md"),
+        ("PLAN-3.md", "phases/1/reports/plan-3.md"),
+    ] {
+        assert_eq!(report_path(phase_one(), plan), Path::new(path), "{plan}");
+    }
+}
+
+#[test]
+fn capture_reads_a_missing_report_as_absent_and_an_unreadable_one_as_failed() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let phase = root.join("phases/1");
@@ -36,47 +55,67 @@ fn exact_reports_first_line_and_unreadability() {
         fs::write(phase.join(plan), "").unwrap();
     }
     let life = lifecycle(root, false);
-    fs::write(phase.join("reports/plan-1.1.md"), "PLAN COMPLETE").unwrap();
-    fs::write(
-        phase.join("reports/plan-2.md"),
-        "\u{feff} PLAN COMPLETE \r\nother",
-    )
-    .unwrap();
+    fs::write(phase.join("reports/plan-2.md"), "PLAN COMPLETE").unwrap();
     fs::create_dir(phase.join("reports/plan-3.md")).unwrap();
     let observed = capture(root, &life).unwrap();
     let reports = &observed.reports[0].1;
-    assert!(
-        reports
-            .iter()
-            .any(|r| matches!(r.bytes, Observation::Absent))
-    );
-    assert!(
-        reports
-            .iter()
-            .any(|r| matches!(r.bytes, Observation::Failed(_)))
-    );
-    assert_eq!(reports.iter().filter(|r| r.complete()).count(), 1);
-    assert!(observed.outstanding(life.phases[0].id));
+    let bytes = |path: &str| &reports.iter().find(|r| r.path == Path::new(path)).unwrap().bytes;
+    assert!(matches!(bytes("phases/1/reports/plan-1.md"), Observation::Absent), "{reports:?}");
+    assert!(matches!(bytes("phases/1/reports/plan-3.md"), Observation::Failed(_)), "{reports:?}");
+}
+
+#[test]
+fn a_missing_or_unreadable_report_is_not_complete() {
+    let failure = InputFailure {
+        path: "phases/1/reports/plan-1.md".into(),
+        diagnostic: Some("is a directory".into()),
+        category: InputFailureCategory::OtherIo,
+    };
+    assert!(!report(Observation::Absent).complete());
+    assert!(!report(Observation::Failed(failure)).complete());
+}
+
+#[test]
+fn a_report_is_complete_only_when_its_trimmed_first_line_is_plan_complete() {
+    for body in ["PLAN COMPLETE", "\u{feff} PLAN COMPLETE \r\nother"] {
+        assert!(report(Observation::Present(body.into())).complete(), "{body:?}");
+    }
     for body in [
         "PLAN PARTIAL\nPLAN COMPLETE",
         "\nPLAN COMPLETE",
         "PLAN COMPLETE extra",
         "PLAN CHECKPOINT: blocked",
     ] {
-        fs::write(phase.join("reports/plan-1.md"), body).unwrap();
-        assert!(
-            !capture(root, &life).unwrap().reports[0]
-                .1
-                .iter()
-                .find(|r| r.path.ends_with("plan-1.md"))
-                .unwrap()
-                .complete()
-        );
+        assert!(!report(Observation::Present(body.into())).complete(), "{body:?}");
     }
 }
 
 #[test]
-fn both_queue_homes_and_regular_sibling_suppression() {
+fn a_phase_is_outstanding_while_any_plan_report_is_incomplete() {
+    let observed = |bodies: &[&str]| Observations {
+        reports: vec![(
+            phase_one(),
+            bodies.iter().map(|body| report(Observation::Present(body.as_bytes().to_vec()))).collect(),
+        )],
+        ..Observations::default()
+    };
+    assert!(observed(&["PLAN COMPLETE", "PLAN PARTIAL"]).outstanding(phase_one()));
+    assert!(!observed(&["PLAN COMPLETE", "PLAN COMPLETE"]).outstanding(phase_one()));
+}
+
+#[test]
+fn the_queue_reads_deferred_members_from_both_homes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    for home in ["phases/1", "deferred/1"] {
+        member(root, home, "DEFERRED-diff-plan-1.json", valid("1"));
+    }
+    let life = lifecycle(root, true);
+    assert_eq!(capture(root, &life).unwrap().queue.members.len(), 2);
+}
+
+#[test]
+fn a_regular_adjudication_sibling_suppresses_its_member_and_a_symlinked_one_does_not() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let name = "DEFERRED-diff-plan-1.json";
@@ -84,7 +123,6 @@ fn both_queue_homes_and_regular_sibling_suppression() {
         member(root, home, name, valid("1"));
     }
     let life = lifecycle(root, true);
-    assert_eq!(capture(root, &life).unwrap().queue.members.len(), 2);
     fs::write(
         root.join("phases/1/ADJUDICATION-diff-plan-1.json"),
         "malformed",
@@ -98,11 +136,29 @@ fn both_queue_homes_and_regular_sibling_suppression() {
     let q = capture(root, &life).unwrap().queue;
     assert_eq!(q.members.len(), 1);
     assert!(q.members[0].path.starts_with("deferred"));
-    assert!(q.needs_triage());
+}
+
+fn queue_member(findings: usize) -> QueueMember {
+    QueueMember {
+        path: "deferred/1/DEFERRED-diff-plan-1.json".into(),
+        phase: "1".into(),
+        trigger: "diff-plan".into(),
+        discriminator: "1".into(),
+        round: 1,
+        findings,
+    }
 }
 
 #[test]
-fn malformed_members_and_directory_member_symlinks_remain_unreadable() {
+fn a_queue_needs_triage_when_a_member_has_findings_or_something_is_unreadable() {
+    let with = |members, unreadable| Queue { members, unreadable };
+    assert!(with(vec![queue_member(1)], vec![]).needs_triage());
+    assert!(with(vec![], vec!["deferred/link".into()]).needs_triage());
+    assert!(!with(vec![queue_member(0)], vec![]).needs_triage());
+}
+
+#[test]
+fn a_member_whose_phase_round_findings_or_name_does_not_match_is_unreadable() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let name = "DEFERRED-diff-plan-1.json";
@@ -118,19 +174,46 @@ fn malformed_members_and_directory_member_symlinks_remain_unreadable() {
         }
         member(root, &format!("phases/{}", i + 1), name, value);
     }
-    fs::create_dir_all(root.join("deferred/5")).unwrap();
-    symlink("../../phases/1", root.join("deferred/link")).unwrap();
-    symlink(
-        "../../phases/1/DEFERRED-diff-plan-1.json",
-        root.join("deferred/5").join(name),
-    )
-    .unwrap();
-    fs::write(root.join("deferred/file"), "unrelated").unwrap();
     let life = lifecycle(root, true);
     let q = capture(root, &life).unwrap().queue;
     assert!(q.members.is_empty());
-    assert_eq!(q.unreadable.len(), 6);
-    assert!(q.needs_triage());
+    assert_eq!(q.unreadable.len(), 4);
+}
+
+#[test]
+fn a_symlinked_phase_directory_in_a_home_is_unreadable() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    member(root, "phases/1", "DEFERRED-diff-plan-1.json", valid("1"));
+    fs::create_dir_all(root.join("deferred")).unwrap();
+    symlink("../phases/1", root.join("deferred/1")).unwrap();
+    let life = lifecycle(root, true);
+    let q = capture(root, &life).unwrap().queue;
+    assert_eq!(q.unreadable, [Path::new("deferred/1")]);
+}
+
+#[test]
+fn a_symlinked_member_file_is_unreadable() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let name = "DEFERRED-diff-plan-1.json";
+    member(root, "phases/1", name, valid("1"));
+    fs::create_dir_all(root.join("deferred/1")).unwrap();
+    symlink("../../phases/1/DEFERRED-diff-plan-1.json", root.join("deferred/1").join(name)).unwrap();
+    let life = lifecycle(root, true);
+    let q = capture(root, &life).unwrap().queue;
+    assert_eq!(q.unreadable, [Path::new("deferred/1").join(name)]);
+}
+
+#[test]
+fn a_plain_file_directly_in_a_home_is_ignored() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    fs::create_dir_all(root.join("deferred")).unwrap();
+    fs::write(root.join("deferred/file"), "unrelated").unwrap();
+    let life = lifecycle(root, true);
+    let q = capture(root, &life).unwrap().queue;
+    assert_eq!((q.members.len(), q.unreadable.len()), (0, 0));
 }
 
 #[test]

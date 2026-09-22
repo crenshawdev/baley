@@ -368,29 +368,44 @@ mod gap153_delivery_tests {
         )
     }
 
-    #[test]
-    fn worker_exit_delegates_to_interrupted_without_undoing_a_return() {
+    /// Attempt a1 issued and running for the phase 14 admission f1.
+    fn running_attempt() -> Value {
         let fixture: Value = serde_json::from_str(include_str!("../../tests/fixtures/phase9/h1-admission.json")).unwrap();
         let mut admission = fixture["H"].clone();
         admission["home"]["id"] = json!("14");
-        let records = json!({"attempts":{"a1":fixture["a1"]},"admissions":{"f1":admission},"issued":{"a1":true}});
-        let report = crate::execution::runner::WorkerExit { request_id: "exit-review".into(), phase: 14,
+        json!({"attempts":{"a1":fixture["a1"]},"admissions":{"f1":admission},"issued":{"a1":true}})
+    }
+
+    fn exit_report(request_id: &str) -> crate::execution::runner::WorkerExit {
+        crate::execution::runner::WorkerExit { request_id: request_id.into(), phase: 14,
             host: "codex exec".into(), outcome: crate::execution::runner::WorkerOutcome::Failed,
-            detail: Some("host exited".into()), dispatch: None, attempt: None, review: Some("a1".into()) };
-        let (mut next, interrupted) = worker_exit(&records, &report, "a1", 100).unwrap();
+            detail: Some("host exited".into()), dispatch: None, attempt: None, review: Some("a1".into()) }
+    }
+
+    #[test]
+    fn a_worker_exit_interrupts_a_running_attempt_and_records_its_observation() {
+        let (next, interrupted) = worker_exit(&running_attempt(), &exit_report("exit-review"), "a1", 100).unwrap();
         assert!(interrupted);
         assert_eq!(next["attempts"]["a1"]["state"], "interrupted");
         assert_eq!(next["observations"]["worker-exit:exit-review"]["kind"], "interrupted");
         assert_eq!(next["observation_recorded_at"]["worker-exit:exit-review"], 100);
         assert_eq!(next["closures"], Value::Null);
-        next["attempts"]["a1"]["state"] = json!("accepted");
-        next["attempts"]["a1"]["original"] = json!("original-1");
-        let report = crate::execution::runner::WorkerExit { request_id: "exit-after-return".into(), ..report };
-        let (next, interrupted) = worker_exit(&next, &report, "a1", 101).unwrap();
+    }
+
+    #[test]
+    fn a_worker_exit_after_a_terminal_return_leaves_state_and_original_unchanged() {
+        let mut returned = running_attempt();
+        returned["attempts"]["a1"]["state"] = json!("accepted");
+        returned["attempts"]["a1"]["original"] = json!("original-1");
+        let (next, interrupted) = worker_exit(&returned, &exit_report("exit-after-return"), "a1", 101).unwrap();
         assert!(!interrupted);
         assert_eq!(next["attempts"]["a1"]["state"], "accepted");
         assert_eq!(next["attempts"]["a1"]["original"], "original-1");
-        assert!(worker_exit(&records, &report, "unknown", 101).is_err());
+    }
+
+    #[test]
+    fn a_worker_exit_naming_an_unknown_attempt_is_refused() {
+        assert!(worker_exit(&running_attempt(), &exit_report("exit-after-return"), "unknown", 101).is_err());
     }
     #[test]
     fn gap153_delivery_contribution_records_exact_membership() {

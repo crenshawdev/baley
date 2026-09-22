@@ -3,13 +3,17 @@ use super::*;
 use serde_json::json;
 
 #[test]
-fn merge_matrix_preserves_null_absence_arrays_and_provenance() {
+fn deep_merge_inherits_absent_keys_and_replaces_with_null_arrays_and_scalars() {
     let base = json!({"a":{"x":1,"y":2},"b":[1,2],"c":true});
     assert_eq!(
         deep_merge(&base, &json!({"a":{"x":null},"b":[],"c":false})),
         json!({"a":{"x":null,"y":2},"b":[],"c":false})
     );
     assert_eq!(deep_merge(&base, &json!({"a":null}))["a"], Value::Null);
+}
+
+#[test]
+fn merge_keeps_both_raw_layers_records_each_winning_layer_and_fills_defaults() {
     let global = json!({"roles":{"cad-executor":{"model":"one","effort":"high"}},
         "model":{"effort":{"cad-executor":"max"}}, "git":{"protected_branches":["main","stable"]}});
     let repo = json!({"roles":{"cad-executor":{"model":null}},"git":{"protected_branches":[]}});
@@ -245,7 +249,7 @@ fn write_json(path: &std::path::Path, value: Value) {
 }
 
 #[test]
-fn reload_reads_bytes_despite_unchanged_size_time_and_rename() {
+fn reload_reads_a_byte_change_at_equal_size_and_modification_time() {
     use std::fs::{File, FileTimes};
     let dir = tempfile::tempdir().unwrap();
     let paths = config_paths(dir.path());
@@ -270,47 +274,71 @@ fn reload_reads_bytes_despite_unchanged_size_time_and_rename() {
         get(&changed.effective.values, "git.on_protected"),
         Some(&json!("ask"))
     );
-    let replacement = dir.path().join("checkout");
-    std::fs::write(&replacement, changed.repo.bytes.as_ref().unwrap()).unwrap();
-    std::fs::rename(replacement, &paths.repo).unwrap();
-    let renamed = reader.refresh().unwrap();
-    assert!(renamed.number > changed.number);
-    assert_ne!(renamed.repo.stamp, changed.repo.stamp);
-    std::fs::remove_file(&paths.repo).unwrap();
-    let absent = reader.refresh().unwrap();
-    assert!(absent.repo.bytes.is_none());
-    assert!(absent.number > renamed.number);
 }
 
 #[test]
-fn alias_identity_is_resolved_before_reads_and_rechecked_on_retarget() {
-    use std::os::unix::fs::symlink;
-    struct Count {
-        reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    }
-    impl reload::ConfigIo for Count {
-        fn identity(&mut self, path: &std::path::Path) -> cadence::store::Result<std::path::PathBuf> {
-            reload::ConfigIo::identity(&mut reload::FileIo, path)
-        }
-        fn read(&mut self, path: &std::path::Path) -> cadence::store::Result<reload::Input> {
-            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            reload::ConfigIo::read(&mut reload::FileIo, path)
-        }
-    }
+fn reload_reads_a_rename_with_identical_bytes_as_a_new_generation() {
     let dir = tempfile::tempdir().unwrap();
     let paths = config_paths(dir.path());
+    std::fs::write(&paths.repo, b"{\"git\":{\"on_protected\":\"ask\"}}").unwrap();
+    let mut reader = reload::Reload::new(paths.clone(), reload::FileIo);
+    let before = reader.refresh().unwrap();
+    let replacement = dir.path().join("checkout");
+    std::fs::write(&replacement, before.repo.bytes.as_ref().unwrap()).unwrap();
+    std::fs::rename(replacement, &paths.repo).unwrap();
+    let renamed = reader.refresh().unwrap();
+    assert!(renamed.number > before.number);
+    assert_ne!(renamed.repo.stamp, before.repo.stamp);
+}
+
+#[test]
+fn reload_reads_a_removed_layer_as_absent_in_a_new_generation() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = config_paths(dir.path());
+    std::fs::write(&paths.repo, b"{\"git\":{\"on_protected\":\"ask\"}}").unwrap();
+    let mut reader = reload::Reload::new(paths.clone(), reload::FileIo);
+    let present = reader.refresh().unwrap();
+    std::fs::remove_file(&paths.repo).unwrap();
+    let absent = reader.refresh().unwrap();
+    assert!(absent.repo.bytes.is_none());
+    assert!(absent.number > present.number);
+}
+
+/// The file seam, counting its reads.
+struct CountedIo {
+    reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl reload::ConfigIo for CountedIo {
+    fn identity(&mut self, path: &std::path::Path) -> cadence::store::Result<std::path::PathBuf> {
+        reload::ConfigIo::identity(&mut reload::FileIo, path)
+    }
+    fn read(&mut self, path: &std::path::Path) -> cadence::store::Result<reload::Input> {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        reload::ConfigIo::read(&mut reload::FileIo, path)
+    }
+}
+
+/// A repo config and a global path linked to it, read through a counted seam.
+fn aliased(
+    dir: &std::path::Path,
+) -> (reload::Reload<CountedIo>, std::sync::Arc<std::sync::atomic::AtomicUsize>, reload::Paths) {
+    use std::os::unix::fs::symlink;
+    let paths = config_paths(dir);
     write_json(
         &paths.repo,
         json!({"workflow":{"verifier":false,"test_command":"repo-command"}}),
     );
     symlink(&paths.repo, paths.global.as_ref().unwrap()).unwrap();
     let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let mut reader = reload::Reload::new(
-        paths.clone(),
-        Count {
-            reads: count.clone(),
-        },
-    );
+    let reader = reload::Reload::new(paths.clone(), CountedIo { reads: count.clone() });
+    (reader, count, paths)
+}
+
+#[test]
+fn a_global_path_aliasing_the_repo_file_is_read_once_as_the_repo_layer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut reader, count, _) = aliased(dir.path());
     let shared = reader.refresh().unwrap();
     assert!(shared.global.is_none());
     assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -319,6 +347,14 @@ fn alias_identity_is_resolved_before_reads_and_rechecked_on_retarget() {
         get(&shared.effective.values, "workflow.test_command"),
         Some(&json!("repo-command"))
     );
+}
+
+#[test]
+fn a_retargeted_global_link_is_resolved_again_and_separates_the_layers() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut reader, count, paths) = aliased(dir.path());
+    let shared = reader.refresh().unwrap();
     let other = dir.path().join("other.json");
     write_json(&other, json!({"workflow":{"test_command":"trusted"}}));
     std::fs::remove_file(paths.global.as_ref().unwrap()).unwrap();
@@ -331,6 +367,11 @@ fn alias_identity_is_resolved_before_reads_and_rechecked_on_retarget() {
         Some(&json!("trusted"))
     );
     assert!(separated.number > shared.number);
+}
+
+#[test]
+fn a_missing_file_identity_is_its_name_under_the_canonical_parent() {
+    let dir = tempfile::tempdir().unwrap();
     assert_eq!(
         reload::identity(&dir.path().join("missing.json")).unwrap(),
         dir.path().join("missing.json")

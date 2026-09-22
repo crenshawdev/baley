@@ -329,36 +329,61 @@ mod overlay_tests {
         assert!(matches!(query::yielded(&cursor, &elsewhere, &answer), CompatibilityCursor::Assertion { .. }));
     }
 
+    /// The overlay a declared completion for phase 13 gives, with no context.
+    fn declared_overlay(record: &crate::adoption::Record) -> AcceptanceOverlay {
+        AcceptanceOverlay {
+            phases: [("13".to_owned(), AcceptancePhase { published: false, executed: false, completion: Some(record.id.clone()),
+                label: Some("declared-at-import".into()), met: 0, waived: 0, disagreement: None })].into(),
+            contexted: Default::default(),
+        }
+    }
+
+    /// The overlay once phase 13 holds an approved context: no completion.
+    fn contexted_overlay() -> AcceptanceOverlay {
+        AcceptanceOverlay {
+            phases: [("13".to_owned(), AcceptancePhase { published: false, executed: false, completion: None,
+                label: None, met: 0, waived: 0, disagreement: None })].into(),
+            contexted: ["13".to_owned()].into(),
+        }
+    }
+
     #[test]
     fn a_declared_completion_reaches_the_overlay_without_a_context_and_yields_to_one() {
-        let capture = native_capture();
-        // No store at all: the overlay is empty and phase 13 is legacy Executed.
+        // No store at all: the overlay is empty.
         assert_eq!(acceptance_overlay(&serde_json::Value::Null).unwrap(), AcceptanceOverlay::default());
         let record = declared(13);
         let data = crate::adoption::contribute(&serde_json::Value::Null, std::slice::from_ref(&record)).unwrap();
-        let overlay = acceptance_overlay(&data).unwrap();
-        assert_eq!(overlay.phases.keys().collect::<Vec<_>>(), ["13"], "the union carries a phase no context names");
-        assert_eq!(overlay.phases["13"], AcceptancePhase { published: false, executed: false, completion: Some(record.id.clone()),
-            label: Some("declared-at-import".into()), met: 0, waived: 0, disagreement: None });
-        let answer = derive_with(&capture, &overlay).unwrap();
+        // The union carries a phase no context names.
+        assert_eq!(acceptance_overlay(&data).unwrap(), declared_overlay(&record));
+        // An approved context for the phase is native authority: the declaration yields.
+        let mut native = data.clone();
+        native["context"] = serde_json::json!({"schema":"context-1","phases":{"13":{}}});
+        assert_eq!(acceptance_overlay(&native).unwrap(), contexted_overlay());
+        assert_eq!(crate::adoption::records(&native).unwrap(), vec![record], "the record stays in history");
+    }
+
+    #[test]
+    fn a_declared_completion_derives_complete_with_zero_counts() {
+        let capture = native_capture();
+        let answer = derive_with(&capture, &declared_overlay(&declared(13))).unwrap();
         assert_eq!(answer.phases[0].status, LifecycleStatus::Complete, "SUMMARY present, UAT failing, and still complete through the declaration");
         assert_eq!(answer.phases[0].uat, Some(UatCounts::default()));
         assert_eq!(answer.phases[1].status, LifecycleStatus::Executed, "the undeclared phase keeps the legacy table");
+        // With the approved context the native rule sees no completion.
+        assert_eq!(derive_with(&capture, &contexted_overlay()).unwrap().phases[0].status, LifecycleStatus::Planned);
+    }
+
+    #[test]
+    fn a_tick_completed_by_declaration_is_consistent_and_conflicts_without_it() {
+        let capture = native_capture();
         let parsed = capture.declarations.as_ref().unwrap().as_ref().unwrap();
         let cursor = normalize_imported_cursor(&serde_json::Value::Null).unwrap();
-        assert_eq!(check_consistency(parsed, &answer, &cursor), Ok(()), "the tick and the derivation agree");
+        let declared = derive_with(&capture, &declared_overlay(&declared(13))).unwrap();
+        assert_eq!(check_consistency(parsed, &declared, &cursor), Ok(()), "the tick and the derivation agree");
         assert!(matches!(check_consistency(parsed, &derive(&capture).unwrap(), &cursor), Err(DerivationError::StateConflict { .. })),
             "without the declaration the same tick conflicts");
-        // An approved context for the phase is native authority: the declaration
-        // yields, the native rule sees no completion, and the tick disagrees again.
-        let mut native = data.clone();
-        native["context"] = serde_json::json!({"schema":"context-1","phases":{"13":{}}});
-        let overlay = acceptance_overlay(&native).unwrap();
-        assert_eq!(overlay.phases["13"], AcceptancePhase { published: false, executed: false, completion: None,
-            label: None, met: 0, waived: 0, disagreement: None });
-        assert_eq!(derive_with(&capture, &overlay).unwrap().phases[0].status, LifecycleStatus::Planned);
-        assert!(check_consistency(parsed, &derive_with(&capture, &overlay).unwrap(), &cursor).is_err());
-        assert_eq!(crate::adoption::records(&native).unwrap(), vec![record], "the record stays in history");
+        assert!(check_consistency(parsed, &derive_with(&capture, &contexted_overlay()).unwrap(), &cursor).is_err(),
+            "once the declaration yields to a context the tick disagrees again");
     }
 
     #[test]

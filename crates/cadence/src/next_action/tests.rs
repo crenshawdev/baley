@@ -141,62 +141,89 @@ fn fixtures() -> Vec<Fixture> {
     ]
 }
 
-#[test]
-fn authored_w1_w9_and_p12_p89_inventory_and_answers() {
-    let cases = fixtures();
-    assert_eq!(
-        cases.iter().map(|c| c.name).collect::<Vec<_>>(),
-        [
-            "W1",
-            "W2",
-            "W3",
-            "W4",
-            "W5",
-            "W5-skip",
-            "W6",
-            "W6-unreadable",
-            "W7",
-            "W8",
-            "W9",
-            "P12",
-            "P23",
-            "P34",
-            "P45",
-            "P56",
-            "P67",
-            "P78",
-            "P89"
-        ]
-    );
-    for case in cases {
-        let action = select(
-            &case.lifecycle,
-            &case.observations,
-            case.pause.as_ref(),
-            case.skip,
-        )
-        .unwrap();
-        assert_eq!(action.instruction(), case.expected, "{}", case.name);
-        if case.name == "W1" {
-            assert!(matches!(action, Action::Resume(_)));
-        }
-        if case.name == "W6" {
-            assert_eq!(
-                action.reference(),
-                Some(("cadence-core/references/triage-gate.md", "deferred"))
-            );
-        }
-    }
+/// The action `select` answers for the authored progress-table case `name`,
+/// checked against the instruction the table authors for it.
+fn authored(name: &str) -> Action {
+    let case = fixtures().into_iter().find(|case| case.name == name).unwrap();
+    let action = select(
+        &case.lifecycle,
+        &case.observations,
+        case.pause.as_ref(),
+        case.skip,
+    )
+    .unwrap();
+    assert_eq!(action.instruction(), case.expected, "{name}");
+    action
+}
+
+macro_rules! authored_rows {
+    ($($test:ident => $name:literal),* $(,)?) => {
+        $(
+            #[test]
+            fn $test() {
+                authored($name);
+            }
+        )*
+    };
+}
+
+authored_rows! {
+    authored_w2 => "W2",
+    authored_w3 => "W3",
+    authored_w4 => "W4",
+    authored_w5 => "W5",
+    authored_w5_skip => "W5-skip",
+    authored_w6 => "W6",
+    authored_w6_unreadable => "W6-unreadable",
+    authored_w7 => "W7",
+    authored_w8 => "W8",
+    authored_w9 => "W9",
+    authored_p12 => "P12",
+    authored_p23 => "P23",
+    authored_p34 => "P34",
+    authored_p45 => "P45",
+    authored_p56 => "P56",
+    authored_p67 => "P67",
+    authored_p78 => "P78",
+    authored_p89 => "P89",
 }
 
 #[test]
-fn numeric_order_and_different_phase_pause() {
+fn authored_w1_resumes_the_saved_pause() {
+    assert!(matches!(authored("W1"), Action::Resume(_)));
+}
+
+#[test]
+fn the_deferred_queue_answer_names_the_triage_gate_reference() {
+    assert_eq!(
+        authored("W6").reference(),
+        Some(("cadence-core/references/triage-gate.md", "deferred"))
+    );
+}
+
+#[test]
+fn the_lowest_numbered_planned_phase_is_chosen_whatever_the_record_order() {
     let mut case = fixture(
         "order",
         &[LifecycleStatus::Planned, LifecycleStatus::Planned],
         "/cad-execute 1",
     );
     case.lifecycle.phases.reverse();
+    assert_eq!(
+        select(&case.lifecycle, &case.observations, None, false)
+            .unwrap()
+            .instruction(),
+        case.expected
+    );
+}
+
+#[test]
+fn a_pause_saved_for_another_phase_is_not_offered() {
+    let mut case = fixture(
+        "other phase",
+        &[LifecycleStatus::Planned, LifecycleStatus::Planned],
+        "/cad-execute 1",
+    );
     case.pause = Some(Pause {
         phase: PhaseId(2.0),
         next: "different phase".into(),

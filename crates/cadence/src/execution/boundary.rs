@@ -1009,16 +1009,20 @@ mod tests {
         assert!(matches!(oversized.receipt, Receipt::Compact { .. }));
     }
 
-    #[test]
-    fn dispatch_receipt_contains_references_and_never_prompt_or_body() {
-        let fixture = json!({"schema":1,"id":"d1","expected_execution_version":1,
+    /// A dispatch with a 20,000-byte prompt and a private body.
+    fn large_prompt_dispatch() -> ActiveDispatch {
+        serde_json::from_value(json!({"schema":1,"id":"d1","expected_execution_version":1,
             "phase":6,"plan":1,"plan_fingerprint":"f","plan_set_fingerprint":"s",
             "requirements":[],"tasks":[],"suite":"suite","files":[],
             "policy":{"rung":"fixed","branch":"current","reviews":"disabled"},
             "base_sha":"base","prompt":"p".repeat(20000),
-            "prompt_digest":crate::store::model::digest(&vec![b'p'; 20000]),"body":"private body"});
-        let dispatch = serde_json::from_value(fixture).unwrap();
-        let answer = PreparedAnswer::new(Envelope::Ok(Success::dispatch(&dispatch)))
+            "prompt_digest":crate::store::model::digest(&vec![b'p'; 20000]),"body":"private body"}))
+        .unwrap()
+    }
+
+    #[test]
+    fn dispatch_receipt_contains_references_and_never_prompt_or_body() {
+        let answer = PreparedAnswer::new(Envelope::Ok(Success::dispatch(&large_prompt_dispatch())))
         .unwrap();
         assert_eq!(
             serde_json::to_value(&answer.receipt).unwrap(),
@@ -1026,7 +1030,11 @@ mod tests {
                 "prompt_digest":crate::store::model::digest(&vec![b'p'; 20000])})
         );
         assert!(!answer.too_large());
-        let mut oversized = dispatch;
+    }
+
+    #[test]
+    fn a_dispatch_answer_over_the_compact_limit_is_too_large() {
+        let mut oversized = large_prompt_dispatch();
         oversized.id = "d".repeat(MAX_COMPACT_BYTES);
         assert!(PreparedAnswer::new(Envelope::Ok(Success::dispatch(&oversized))).unwrap().too_large());
     }

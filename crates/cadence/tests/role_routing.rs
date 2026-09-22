@@ -325,24 +325,33 @@ fn unsupported_custom_model_is_reported_verbatim_without_reviving_opus() {
     );
 }
 
+/// Resolves the executor with `model` saved as its legacy global model
+/// override, and answers the chosen model and whether it is pinned.
+fn legacy_model(model: &str) -> (Option<String>, bool) {
+    let mut request = input("cad-executor", "high");
+    request.legacy_model = Some(stored(
+        "model.overrides.cad-executor".into(),
+        "global",
+        json!(model),
+    ));
+    let answer = resolve(&request).unwrap();
+    (answer.model, answer.pinned)
+}
+
 #[test]
-fn only_supported_legacy_models_pin_and_invalid_scope_returns_literal_error() {
-    for (model, expected, pinned) in [
-        ("opus", Some("opus"), true),
-        ("sonnet", Some("sonnet"), true),
-        ("haiku", Some("haiku"), true),
-        ("fable", Some("fable"), true),
-        ("custom", None, false),
-    ] {
-        let mut request = input("cad-executor", "high");
-        request.legacy_model = Some(stored(
-            "model.overrides.cad-executor".into(),
-            "global",
-            json!(model),
-        ));
-        let answer = resolve(&request).unwrap();
-        assert_eq!((answer.model.as_deref(), answer.pinned), (expected, pinned));
+fn each_supported_legacy_model_pins() {
+    for model in ["opus", "sonnet", "haiku", "fable"] {
+        assert_eq!(legacy_model(model), (Some(model.into()), true));
     }
+}
+
+#[test]
+fn an_unsupported_legacy_model_does_not_pin() {
+    assert_eq!(legacy_model("custom"), (None, false));
+}
+
+#[test]
+fn resolve_refuses_a_zero_attempt_phase_or_plan_or_a_plan_without_a_phase() {
     for (attempt, phase, plan) in [
         (0, None, None),
         (1, Some(0), None),
@@ -355,6 +364,10 @@ fn only_supported_legacy_models_pin_and_invalid_scope_returns_literal_error() {
         request.plan = plan;
         assert_eq!(resolve(&request), Err(cadence::store::Error::Invalid("route requires a positive attempt and positive phase/plan; a plan requires a phase".into())));
     }
+}
+
+#[test]
+fn resolve_refuses_an_unknown_routing_role() {
     assert_eq!(
         resolve(&input("executor", "high")),
         Err(cadence::store::Error::Invalid(

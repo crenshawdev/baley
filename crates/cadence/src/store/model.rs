@@ -479,20 +479,29 @@ mod tests {
     }
 
     #[test]
-    fn invalid_versions_revisions_and_integrity_are_rejected() {
+    fn validate_items_refuses_an_unsupported_version_or_a_skipped_revision() {
         let mut bad = item();
         bad.version = 99;
         assert!(validate_items(&[bad]).is_err());
         let mut skipped = item();
         skipped.revision = 3;
         assert!(validate_items(&[item(), skipped]).is_err());
+    }
+
+    #[test]
+    fn parse_lines_refuses_an_empty_record_line() {
         assert!(parse_lines::<ItemRecord>(b"{}\n\n").is_err());
+    }
+
+    #[test]
+    fn snapshot_validate_refuses_edited_data_a_wrong_version_or_mismatched_items() {
         let mut snapshot = Snapshot::new(0, b"", b"", Value::Null).unwrap();
         snapshot.data = serde_json::json!("edited");
         assert!(snapshot.validate(b"", b"").is_err());
-        snapshot = Snapshot::new(0, b"", b"", Value::Null).unwrap();
+        let mut snapshot = Snapshot::new(0, b"", b"", Value::Null).unwrap();
         snapshot.version = 99;
         assert!(snapshot.validate(b"", b"").is_err());
+        let snapshot = Snapshot::new(0, b"", b"", Value::Null).unwrap();
         assert!(snapshot.validate(b"edited", b"").is_err());
     }
 

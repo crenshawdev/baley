@@ -479,7 +479,7 @@ pub fn decisions(record: &Record) -> Result<Vec<DecisionRecord>> {
     let mut decisions=vec![decision(record)?];
     if let Event::Checkpoint {records,..}=&record.request.event {
         for (index,evidence) in records.iter().enumerate() {
-            decisions.push(crate::evidence::persistence::history(&format!("task:{}:{index}",record.request_digest),evidence)?);
+            decisions.push(crate::evidence::persistence::history(&format!("task:{}:{index}",record.request_digest),evidence,crate::store::model::stamped_at())?);
         }
     }
     Ok(decisions)

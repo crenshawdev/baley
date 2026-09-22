@@ -802,7 +802,7 @@ impl<I: ConfigIo> Session<I> {
     ) -> Result<View> {
         use cadence::evidence::persistence;
         self.config()?;
-        let decision = persistence::history(operation_id, record)?;
+        let decision = persistence::history(operation_id, record, cadence::store::model::stamped_at())?;
         let current = self.store.request(Operation::ReadVerified).await?;
         // Reconstructing the projection after another write changes attempt data,
         // not the logical input. Recover its immutable receipt before projecting.

@@ -28,8 +28,8 @@ fn capture_retains_result_lines_past_prefix() {
 // indent and repeats cargo's `test result:` line indented under a failure, so
 // every nextest run came back Unknown and cost the owner a classification.
 #[test]
-fn classify_reads_nextest_summaries_and_keeps_their_result_lines() {
-    use super::{receipts::{Observation, Summary}, runner::{capture, classify, valid_result_line}};
+fn classify_reads_nextest_and_cargo_summaries_as_a_pass_or_failure() {
+    use super::{receipts::{Observation, Summary}, runner::{capture, classify}};
     let empty = capture(&b""[..]);
     let green = capture(&b"    Starting 1 test across 1 binary (1 test skipped)\n        PASS [   0.062s] (1/1) cadence::phase32_typed_authoring phase32_plan_body_is_refused\n     Summary [   0.062s] 1 test run: 1 passed, 1 skipped\n"[..]);
     assert_eq!(classify(&empty, &green), Observation::ResultsObserved { summary: Summary::Cargo { failed: false } });
@@ -37,6 +37,11 @@ fn classify_reads_nextest_summaries_and_keeps_their_result_lines() {
     assert_eq!(classify(&empty, &red), Observation::ResultsObserved { summary: Summary::Cargo { failed: true } });
     let summary_only_red = capture(&b"     Summary [   0.066s] 2 tests run: 1 passed, 1 failed\n"[..]);
     assert_eq!(classify(&empty, &summary_only_red), Observation::ResultsObserved { summary: Summary::Cargo { failed: true } });
+}
+
+#[test]
+fn nextest_and_cargo_result_lines_are_valid_and_progress_lines_are_not() {
+    use super::runner::valid_result_line;
     for line in ["     Summary [   0.062s] 1 test run: 1 passed, 1 skipped",
         "        PASS [   0.062s] (1/1) cadence::phase32_typed_authoring phase32_plan_body_is_refused",
         "        FAIL [   0.065s] (1/1) cadence::phase32_typed_authoring phase32_plan_body_is_refused",
@@ -194,44 +199,86 @@ fn native_unit_contract(command: &str) -> (serde_json::Value, std::collections::
     (data, documents, super::admission::Contract {phase:12,occurrence:submission.occurrence,plans:bindings,allocation})
 }
 
+fn assert_admission_refusal(error: crate::store::Error, rule: &str, slot: &str, id: &str) {
+    let crate::store::Error::Invalid(message) = error else {panic!("expected located invalid: {error}")};
+    let diagnostic:crate::plan::model::Diagnostic = serde_json::from_str(message.strip_prefix("plan-refusal:").unwrap()).unwrap();
+    assert_eq!(diagnostic.rule,rule);
+    assert_eq!(diagnostic.slot,slot);
+    if !id.is_empty() {assert_eq!(diagnostic.id.as_deref(),Some(id));}
+}
+
+/// Validation of `data` with one JSON pointer set to `value`, or with the
+/// context namespace removed when the pointer is `/context`.
+fn assert_changed_data_refused(rows: &[(&str, serde_json::Value, &str, &str)]) {
+    use super::admission::validate;
+    let (data, documents, contract) = native_unit_contract("custom-delivery-check");
+    for (pointer,value,rule,slot) in rows {
+        let mut changed=data.clone();
+        if *pointer=="/context" {changed.as_object_mut().unwrap().remove("context");}
+        else {*changed.pointer_mut(pointer).unwrap()=value.clone();}
+        assert_admission_refusal(validate(&changed,&documents,&contract).unwrap_err(),rule,slot,"");
+    }
+}
+
 #[test]
-fn native_admission_validates_authority_and_allocation() {
-    use super::admission::{decode,validate};
+fn a_valid_native_contract_admits_its_plans_tasks_and_maps() {
+    use super::admission::validate;
     let (data, documents, contract) = native_unit_contract("custom-delivery-check");
     let valid = validate(&data,&documents,&contract).unwrap();
     assert_eq!(valid.plans.iter().map(|p| p.plan).collect::<Vec<_>>(), vec![1,2]);
     assert_eq!(valid.plans[0].tasks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["deliver","document"]);
     assert_eq!(valid.maps.len(),2);
     assert_eq!(contract.allocation[1].checks,vec![]);
-    let assert_refusal = |error:crate::store::Error, rule:&str, slot:&str, id:&str| {
-        let crate::store::Error::Invalid(message) = error else {panic!("expected located invalid: {error}")};
-        let diagnostic:crate::plan::model::Diagnostic = serde_json::from_str(message.strip_prefix("plan-refusal:").unwrap()).unwrap();
-        assert_eq!(diagnostic.rule,rule);
-        assert_eq!(diagnostic.slot,slot);
-        if !id.is_empty() {assert_eq!(diagnostic.id.as_deref(),Some(id));}
-    };
+}
+
+#[test]
+fn decode_refuses_a_contract_missing_a_required_field() {
+    use super::admission::decode;
+    let (_, _, contract) = native_unit_contract("custom-delivery-check");
     for field in ["phase","occurrence","plans","allocation"] {
         let mut raw=serde_json::to_value(&contract).unwrap(); raw.as_object_mut().unwrap().remove(field);
-        assert_refusal(decode(raw).unwrap_err(),"admission-shape",&format!("contract.{field}"),"");
+        assert_admission_refusal(decode(raw).unwrap_err(),"admission-shape",&format!("contract.{field}"),"");
     }
-    for (pointer,value,rule,slot) in [
+}
+
+#[test]
+fn admission_refuses_absent_unapproved_or_drifted_context_truths() {
+    assert_changed_data_refused(&[
         ("/context",serde_json::Value::Null,"native-approved-truths","context"),
         ("/context/phases/12/approval/approved",json!(false),"native-approved-truths","context.approval"),
         ("/context/phases/12/truths/0/version",json!(2),"native-approved-truths","context.approval"),
         ("/context/phases/12/submission/truths/0/outcome",json!("another outcome"),"native-approved-truths","context.approval"),
+    ]);
+}
+
+#[test]
+fn admission_refuses_a_stale_publication_receipt_or_map_revision() {
+    assert_changed_data_refused(&[
         ("/plan_publications/phases/12/receipts/unit-publication/payload_digest",json!("stale"),"publication-authority","current.plans[1].receipt"),
         ("/acceptance_maps/phases/12/revisions/0/item_revisions/check~1shared",json!("stale"),"map-authority","current.plans[1].item_revision"),
         ("/acceptance_maps/phases/12/revisions/0/content_revision",json!("stale"),"map-authority","current.plans[1].map_revision"),
-    ] {
-        let mut changed=data.clone();
-        if pointer=="/context" {changed.as_object_mut().unwrap().remove("context");}
-        else {*changed.pointer_mut(pointer).unwrap()=value;}
-        assert_refusal(validate(&changed,&documents,&contract).unwrap_err(),rule,slot,"");
-    }
+    ]);
+}
+
+#[test]
+fn admission_refuses_installed_plan_bytes_that_differ_from_the_publication() {
+    use super::admission::validate;
+    let (data, documents, contract) = native_unit_contract("custom-delivery-check");
     let mut drift=documents.clone(); drift.get_mut("phases/12/PLAN-1.md").unwrap().push('\n');
-    assert_refusal(validate(&data,&drift,&contract).unwrap_err(),"installed-plan","phases/12/PLAN-1.md","1");
+    assert_admission_refusal(validate(&data,&drift,&contract).unwrap_err(),"installed-plan","phases/12/PLAN-1.md","1");
+}
+
+#[test]
+fn admission_refuses_a_blank_check_command() {
+    use super::admission::validate;
     let (blank_data,blank_docs,blank_contract)=native_unit_contract("");
-    assert_refusal(validate(&blank_data,&blank_docs,&blank_contract).unwrap_err(),"check-command","current.plans[1].evidence_map.items[0].spec.command","check/shared");
+    assert_admission_refusal(validate(&blank_data,&blank_docs,&blank_contract).unwrap_err(),"check-command","current.plans[1].evidence_map.items[0].spec.command","check/shared");
+}
+
+#[test]
+fn admission_refuses_an_empty_partial_unknown_stale_or_doubly_owned_allocation() {
+    use super::admission::validate;
+    let (data, documents, contract) = native_unit_contract("custom-delivery-check");
     for (n,rule,slot,id) in [
         (0,"allocation-task","contract.allocation","deliver"),
         (1,"allocation-task","contract.allocation","document"),
@@ -249,7 +296,7 @@ fn native_admission_validates_authority_and_allocation() {
             5=>changed.allocation[0].checks[0].item_revision="stale".into(),6=>changed.allocation[0].checks.clear(),
             7=>changed.allocation[2].checks=changed.allocation[0].checks.clone(),_=>unreachable!(),
         }
-        assert_refusal(validate(&data,&documents,&changed).unwrap_err(),rule,slot,id);
+        assert_admission_refusal(validate(&data,&documents,&changed).unwrap_err(),rule,slot,id);
     }
 }
 
@@ -438,17 +485,23 @@ fn suite_repair_is_plan_level_single_use_and_retains_deviations() {
         "the Git-observed repair must be retained at plan level");
 }
 
+fn overlap_plan_source(plan: u32, files: &str, body: &str) -> String {
+    format!(
+        "---\nphase: 6\nplan: {plan}\nrequirements: [AC2]\nfiles: [{files}]\nexecution:\n  schema: 1\n  suite: cargo test\n  tasks:\n    - id: T{plan}\n      verify: [cargo test task{plan}]\n---\n{body}"
+    )
+}
+
 #[test]
-fn ac2_strict_plan_and_overlap_selection_are_executable_evidence() {
-    let source = |plan, files: &str, body: &str| {
-        format!(
-            "---\nphase: 6\nplan: {plan}\nrequirements: [AC2]\nfiles: [{files}]\nexecution:\n  schema: 1\n  suite: cargo test\n  tasks:\n    - id: T{plan}\n      verify: [cargo test task{plan}]\n---\n{body}"
-        )
-    };
-    let first = parse_plan(source(1, "src/a.rs", "opaque 日本語\n").as_bytes(), 6, 1).unwrap();
-    let second = parse_plan(source(2, "src/a.rs", "second\n").as_bytes(), 6, 2).unwrap();
-    let graph = PlanGraph::build(&[first.clone(), second]).unwrap();
+fn parse_plan_keeps_the_body_bytes_verbatim() {
+    let first = parse_plan(overlap_plan_source(1, "src/a.rs", "opaque 日本語\n").as_bytes(), 6, 1).unwrap();
     assert_eq!(first.body, "opaque 日本語\n");
+}
+
+#[test]
+fn a_plan_sharing_a_file_with_an_earlier_plan_is_ready_only_after_it_completes() {
+    let first = parse_plan(overlap_plan_source(1, "src/a.rs", "opaque 日本語\n").as_bytes(), 6, 1).unwrap();
+    let second = parse_plan(overlap_plan_source(2, "src/a.rs", "second\n").as_bytes(), 6, 2).unwrap();
+    let graph = PlanGraph::build(&[first, second]).unwrap();
     assert_eq!(graph.ready(&BTreeSet::new()), [1]);
     assert_eq!(graph.ready(&BTreeSet::from([1])), [2]);
     assert_eq!(graph.next_ready(&BTreeSet::new()), Some(1));

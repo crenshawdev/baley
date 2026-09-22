@@ -234,6 +234,21 @@ fn queue(root: &Path) -> Queue {
     queue
 }
 
+/// Where a plan file's report lives in its phase: `PLAN.md` reports as plan
+/// 1, and `PLAN-02.md` as plan 2.
+pub fn report_path(phase: PhaseId, plan: &str) -> PathBuf {
+    let digits = plan
+        .strip_prefix("PLAN-")
+        .and_then(|p| p.strip_suffix(".md"))
+        .unwrap_or("1");
+    let number = PhaseId(digits.parse::<f64>().unwrap_or(f64::INFINITY));
+    PathBuf::from(format!(
+        "phases/{}/reports/plan-{}.md",
+        phase.address(),
+        number.address()
+    ))
+}
+
 pub fn capture(selected: &Path, lifecycle: &Lifecycle) -> Result<Observations, DerivationError> {
     let root = ArtifactFiles
         .resolve_root(selected)
@@ -246,16 +261,7 @@ pub fn capture(selected: &Path, lifecycle: &Lifecycle) -> Result<Observations, D
                 .plans
                 .iter()
                 .map(|plan| {
-                    let digits = plan
-                        .strip_prefix("PLAN-")
-                        .and_then(|p| p.strip_suffix(".md"))
-                        .unwrap_or("1");
-                    let number = PhaseId(digits.parse::<f64>().unwrap_or(f64::INFINITY));
-                    let path = PathBuf::from(format!(
-                        "phases/{}/reports/plan-{}.md",
-                        phase.id.address(),
-                        number.address()
-                    ));
+                    let path = report_path(phase.id, plan);
                     let bytes = ArtifactFiles.read(&root.join(&path));
                     Report { path, bytes }
                 })

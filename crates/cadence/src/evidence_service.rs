@@ -169,7 +169,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
             record,
         } => {
             // Replay keeps the original admitted set even if the files later change.
-            let receipt = persistence::history(&operation_id, &record)?;
+            let receipt = persistence::history(&operation_id, &record, cadence::store::model::stamped_at())?;
             if !before.decisions.iter().any(|d| d.id == receipt.id)
                 && let cadence::evidence::Fact::Override(value) = &record.fact
                 && let cadence::evidence::overrides::Meaning::Rerun { admitted_plans } =

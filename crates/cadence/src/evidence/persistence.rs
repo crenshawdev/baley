@@ -50,7 +50,9 @@ pub fn project(data: &Value, record: &Record) -> Result<Value> {
     Ok(result)
 }
 
-pub fn history(operation_id: &str, record: &Record) -> Result<DecisionRecord> {
+/// The decision record that carries `record` under `operation_id`, stamped
+/// `at`. The writer passes the time it writes.
+pub fn history(operation_id: &str, record: &Record, at: Option<u64>) -> Result<DecisionRecord> {
     nonblank("operation identity", operation_id)?;
     record.validate()?;
     Ok(DecisionRecord {
@@ -65,7 +67,7 @@ pub fn history(operation_id: &str, record: &Record) -> Result<DecisionRecord> {
             outcome: MARKER.into(),
             evidence: Evidence::Text(serde_json::to_string(record)?),
         },
-        at: crate::store::model::stamped_at(),
+        at,
     })
 }
 

@@ -90,8 +90,17 @@ fn edit(record: &Recorded, change: impl FnOnce(&mut Value)) -> Recorded {
     .unwrap()
 }
 
+fn unchecked_scan(record: &Recorded) -> Recorded {
+    edit(record, |r| {
+        r["outcome"] = json!("unchecked");
+        r["scan"]["checked"] = json!(false);
+        r["scan"]["inconclusive"] = json!(true);
+        r["scan"]["matches"] = json!([]);
+    })
+}
+
 #[test]
-fn missing_matched_only_unfired_and_unchecked_are_not_permission() {
+fn a_requirement_with_no_observation_is_missing() {
     let record = observation(2, false);
     assert_eq!(
         receipts::status(&wanted(&record), &[], &[], &[])
@@ -99,37 +108,59 @@ fn missing_matched_only_unfired_and_unchecked_are_not_permission() {
             .state,
         State::Missing
     );
+}
+
+#[test]
+fn a_matched_observation_with_no_fire_is_unfired_and_not_permission() {
+    let record = observation(2, false);
     let result = assess(&record, &[], &[]);
     assert_eq!(result.state, State::Unfired);
     assert!(!result.permits_continuation);
+}
+
+#[test]
+fn a_fire_with_no_receipt_is_pending() {
+    let record = observation(2, false);
     let fired = fire(&record);
     assert_eq!(assess(&record, &[fired], &[]).state, State::Pending);
-    let unchecked = edit(&record, |r| {
-        r["outcome"] = json!("unchecked");
-        r["scan"]["checked"] = json!(false);
-        r["scan"]["inconclusive"] = json!(true);
-        r["scan"]["matches"] = json!([]);
-    });
+}
+
+#[test]
+fn an_unchecked_observation_is_unchecked() {
+    let unchecked = unchecked_scan(&observation(2, false));
     assert_eq!(assess(&unchecked, &[], &[]).state, State::Unchecked);
+}
+
+#[test]
+fn history_refuses_a_fire_bound_to_an_unchecked_observation() {
+    let record = observation(2, false);
+    let unchecked = unchecked_scan(&record);
     let mut invalid = fire(&record);
     invalid.binding = Binding::new(wanted(&unchecked).boundary, &unchecked).unwrap();
     assert!(receipts::validate_history(&[unchecked], &[invalid], &[]).is_err());
 }
 
+fn gate_pass(fired: &Fire, evidence_id: &str) -> Receipt {
+    receipt(
+        fired,
+        json!({"kind":"gate-pass","evidence_id":evidence_id}),
+    )
+}
+
 #[test]
-fn exact_committed_and_null_head_staged_records_settle() {
+fn a_staged_resolution_serializes_a_null_head_id_beside_its_index_id() {
+    let record = observation(2, true);
+    let wire = serde_json::to_value(&record.observation.resolution).unwrap();
+    assert!(wire["head_id"].is_null());
+    assert_eq!(wire["index_id"], "d".repeat(40));
+}
+
+#[test]
+fn a_gate_pass_bound_to_the_exact_material_settles_and_permits_continuation() {
     for staged in [false, true] {
         let record = observation(2, staged);
         let fired = fire(&record);
-        if staged {
-            let wire = serde_json::to_value(&record.observation.resolution).unwrap();
-            assert!(wire["head_id"].is_null());
-            assert_eq!(wire["index_id"], "d".repeat(40));
-        }
-        let outcome = receipt(
-            &fired,
-            json!({"kind":"gate-pass","evidence_id":"review-accepted"}),
-        );
+        let outcome = gate_pass(&fired, "review-accepted");
         let result = assess(
             &record,
             std::slice::from_ref(&fired),
@@ -137,6 +168,15 @@ fn exact_committed_and_null_head_staged_records_settle() {
         );
         assert_eq!(result.state, State::Settled);
         assert!(result.permits_continuation);
+    }
+}
+
+#[test]
+fn status_refuses_a_receipt_whose_base_or_tip_differs_from_its_fire() {
+    for staged in [false, true] {
+        let record = observation(2, staged);
+        let fired = fire(&record);
+        let outcome = gate_pass(&fired, "review-accepted");
         for field in ["base", "tip"] {
             let mut wrong = outcome.clone();
             match &mut wrong.fire.binding.material {
@@ -280,59 +320,81 @@ fn clear_inconclusive_and_no_range_keep_distinct_meanings() {
     assert!(result.permits_continuation);
 }
 
-#[test]
-fn consequences_are_distinct_and_override_requires_reason() {
+fn settle(consequence: Value) -> receipts::Status {
     let record = observation(2, true);
     let fired = fire(&record);
-    for consequence in [
-        json!({"kind":"override","reason":"  \n"}),
-        json!({"kind":"gate-pass","evidence_id":""}),
-    ] {
-        let outcome = receipt(&fired, consequence);
-        assert!(outcome.validate(&fired).is_err());
-    }
-    for (consequence, state, permits, deferred) in [
-        (
-            json!({"kind":"override","reason":"Accept for this occurrence and material"}),
-            State::Settled,
-            true,
-            false,
-        ),
-        (
-            json!({"kind":"adjudication","passed":false,"evidence_id":"surviving-findings"}),
-            State::Pending,
-            false,
-            false,
-        ),
-        (
-            json!({"kind":"adjudication","passed":true,"evidence_id":"adjudicated"}),
-            State::Settled,
-            true,
-            false,
-        ),
-        (
-            json!({"kind":"deferral","pending_id":"queue-1","permits_continuation":true}),
-            State::Deferred,
-            true,
-            true,
-        ),
-        (
-            json!({"kind":"deferral","pending_id":"queue-1","permits_continuation":false}),
-            State::Pending,
-            false,
-            true,
-        ),
-    ] {
-        let outcome = receipt(&fired, consequence);
-        let result = assess(&record, std::slice::from_ref(&fired), &[outcome]);
-        assert_eq!(result.state, state);
-        assert_eq!(result.permits_continuation, permits);
-        assert_eq!(!result.deferred_work.is_empty(), deferred);
-    }
+    let outcome = receipt(&fired, consequence);
+    assess(&record, std::slice::from_ref(&fired), &[outcome])
 }
 
 #[test]
-fn one_narrowed_rearm_does_not_pass_its_new_review_and_cannot_rearm_again() {
+fn validate_refuses_a_blank_override_reason() {
+    let fired = fire(&observation(2, true));
+    let outcome = receipt(&fired, json!({"kind":"override","reason":"  \n"}));
+    assert!(outcome.validate(&fired).is_err());
+}
+
+#[test]
+fn validate_refuses_an_empty_gate_pass_evidence_id() {
+    let fired = fire(&observation(2, true));
+    let outcome = receipt(&fired, json!({"kind":"gate-pass","evidence_id":""}));
+    assert!(outcome.validate(&fired).is_err());
+}
+
+#[test]
+fn an_override_with_a_reason_settles_and_permits_continuation() {
+    let result =
+        settle(json!({"kind":"override","reason":"Accept for this occurrence and material"}));
+    assert_eq!(result.state, State::Settled);
+    assert!(result.permits_continuation);
+    assert!(result.deferred_work.is_empty());
+}
+
+#[test]
+fn a_failed_adjudication_stays_pending() {
+    let result =
+        settle(json!({"kind":"adjudication","passed":false,"evidence_id":"surviving-findings"}));
+    assert_eq!(result.state, State::Pending);
+    assert!(!result.permits_continuation);
+    assert!(result.deferred_work.is_empty());
+}
+
+#[test]
+fn a_passed_adjudication_settles_and_permits_continuation() {
+    let result = settle(json!({"kind":"adjudication","passed":true,"evidence_id":"adjudicated"}));
+    assert_eq!(result.state, State::Settled);
+    assert!(result.permits_continuation);
+    assert!(result.deferred_work.is_empty());
+}
+
+#[test]
+fn a_deferral_that_permits_continuation_is_deferred_with_its_work() {
+    let result =
+        settle(json!({"kind":"deferral","pending_id":"queue-1","permits_continuation":true}));
+    assert_eq!(result.state, State::Deferred);
+    assert!(result.permits_continuation);
+    assert!(!result.deferred_work.is_empty());
+}
+
+#[test]
+fn a_deferral_that_withholds_continuation_stays_pending_with_its_work() {
+    let result =
+        settle(json!({"kind":"deferral","pending_id":"queue-1","permits_continuation":false}));
+    assert_eq!(result.state, State::Pending);
+    assert!(!result.permits_continuation);
+    assert!(!result.deferred_work.is_empty());
+}
+
+struct Rearmed {
+    wanted: Requirement,
+    records: [Recorded; 2],
+    one: Fire,
+    two: Fire,
+    rearm: Receipt,
+}
+
+/// A fire rearmed once onto a later index, with its review scope narrowed.
+fn rearmed() -> Rearmed {
     let first = observation(2, true);
     let second = edit(&observation(3, true), |r| {
         r["resolution"]["index_id"] = json!("e".repeat(40))
@@ -348,52 +410,78 @@ fn one_narrowed_rearm_does_not_pass_its_new_review_and_cannot_rearm_again() {
             next_fire: Box::new(two.clone()),
         },
     };
-    let records = [first, second.clone()];
-    let result = receipts::status(
-        &wanted(&second),
-        &records,
-        std::slice::from_ref(&one),
-        std::slice::from_ref(&rearm),
-    )
-    .unwrap();
-    assert_eq!(result.state, State::Unfired);
-    let fires = [one.clone(), two.clone()];
-    let result = receipts::status(
-        &wanted(&second),
-        &records,
-        &fires,
-        std::slice::from_ref(&rearm),
-    )
-    .unwrap();
-    assert_eq!(result.state, State::Pending);
-    assert_eq!(result.pending_fires, vec![two.id.clone()]);
-    let passed = receipt(
-        &two,
-        json!({"kind":"gate-pass","evidence_id":"second-review"}),
-    );
-    assert!(
-        receipts::status(&wanted(&second), &records, &fires, &[rearm, passed])
-            .unwrap()
-            .permits_continuation
-    );
-    let mut three = two.clone();
-    three.id = "fire-third".into();
-    three.rearm_of = Some(two.id.clone());
-    three.binding.observation.generation += 1;
-    assert!(receipts::validate_rearm(&two, &three).is_err());
-    let mut widened = two;
-    widened.review_scope.push("unrelated.rs".into());
-    assert!(receipts::validate_rearm(&one, &widened).is_err());
+    Rearmed {
+        wanted: wanted(&second),
+        records: [first, second],
+        one,
+        two,
+        rearm,
+    }
 }
 
 #[test]
-fn malformed_unknown_short_identity_and_prose_receipts_refuse() {
-    let record = observation(2, true);
-    let fired = fire(&record);
-    let valid = receipt(
-        &fired,
-        json!({"kind":"gate-pass","evidence_id":"review-one"}),
+fn a_narrowed_rearm_is_unfired_until_its_new_fire_exists() {
+    let r = rearmed();
+    let result = receipts::status(
+        &r.wanted,
+        &r.records,
+        std::slice::from_ref(&r.one),
+        std::slice::from_ref(&r.rearm),
+    )
+    .unwrap();
+    assert_eq!(result.state, State::Unfired);
+}
+
+#[test]
+fn a_narrowed_rearm_is_pending_on_its_new_fire() {
+    let r = rearmed();
+    let result = receipts::status(
+        &r.wanted,
+        &r.records,
+        &[r.one, r.two.clone()],
+        std::slice::from_ref(&r.rearm),
+    )
+    .unwrap();
+    assert_eq!(result.state, State::Pending);
+    assert_eq!(result.pending_fires, vec![r.two.id]);
+}
+
+#[test]
+fn a_narrowed_rearm_permits_continuation_after_its_own_pass() {
+    let r = rearmed();
+    let passed = receipt(
+        &r.two,
+        json!({"kind":"gate-pass","evidence_id":"second-review"}),
     );
+    assert!(
+        receipts::status(&r.wanted, &r.records, &[r.one, r.two], &[r.rearm, passed])
+            .unwrap()
+            .permits_continuation
+    );
+}
+
+#[test]
+fn validate_rearm_refuses_rearming_a_rearm() {
+    let r = rearmed();
+    let mut three = r.two.clone();
+    three.id = "fire-third".into();
+    three.rearm_of = Some(r.two.id.clone());
+    three.binding.observation.generation += 1;
+    assert!(receipts::validate_rearm(&r.two, &three).is_err());
+}
+
+#[test]
+fn validate_rearm_refuses_a_rearm_that_widens_the_review_scope() {
+    let r = rearmed();
+    let mut widened = r.two;
+    widened.review_scope.push("unrelated.rs".into());
+    assert!(receipts::validate_rearm(&r.one, &widened).is_err());
+}
+
+#[test]
+fn history_refuses_a_receipt_whose_fire_was_never_recorded() {
+    let record = observation(2, true);
+    let valid = gate_pass(&fire(&record), "review-one");
     assert!(
         receipts::validate_history(
             std::slice::from_ref(&record),
@@ -402,15 +490,30 @@ fn malformed_unknown_short_identity_and_prose_receipts_refuse() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn a_receipt_with_reviewer_prose_does_not_deserialize() {
+    let valid = gate_pass(&fire(&observation(2, true)), "review-one");
     let mut value = serde_json::to_value(&valid).unwrap();
     value["reviewer_prose"] = json!("PASS");
     assert!(serde_json::from_value::<Receipt>(value).is_err());
-    let mut wrong = valid;
+}
+
+#[test]
+fn validate_refuses_abbreviated_object_ids() {
+    let fired = fire(&observation(2, true));
+    let mut wrong = gate_pass(&fired, "review-one");
     wrong.fire.binding.material = MaterialIdentity::Staged {
         base_id: "bbbbbbb".into(),
         index_id: "ddddddd".into(),
     };
     assert!(wrong.validate(&fired).is_err());
+}
+
+#[test]
+fn a_staged_fire_whose_material_also_names_a_head_id_does_not_deserialize() {
+    let fired = fire(&observation(2, true));
     let mut value = serde_json::to_value(&fired).unwrap();
     value["binding"]["material"]["head_id"] = Value::Null;
     assert!(serde_json::from_value::<Fire>(value).is_err());

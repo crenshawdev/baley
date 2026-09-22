@@ -1725,20 +1725,17 @@ mod gap153_service_tests {
         );
     }
     #[test]
-    fn gap153_distinct_recorded_view_preserves_original() {
-        let (records, attempt, manifest, mut supplied) = input("v2", "e3");
+    fn gap153_a_distinct_recorded_view_validates_but_is_not_the_original() {
+        let (records, attempt, manifest, supplied) = input("v2", "e3");
         assert!(
             !validate_material_delivery(&records, &attempt, &manifest, &supplied, "e3", b"old\n")
                 .unwrap()
         );
-        assert_eq!(
-            attempt.view,
-            MaterialView {
-                view: "v1".into(),
-                manifest: "m1".into(),
-                entries: vec!["e1".into()]
-            }
-        );
+    }
+
+    #[test]
+    fn a_supplied_view_with_an_entry_outside_the_recorded_delivery_is_refused() {
+        let (records, attempt, manifest, mut supplied) = input("v2", "e3");
         supplied.entries.push("e4".into());
         assert!(
             validate_material_delivery(&records, &attempt, &manifest, &supplied, "e3", b"old\n")

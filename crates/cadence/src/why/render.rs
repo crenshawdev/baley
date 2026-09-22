@@ -268,15 +268,27 @@ mod tests {
             task: "".into(), description: "".into(), recovered: None, slug: None }
     }
 
-    #[test]
-    fn the_cap_orders_by_date_then_sha_and_states_the_remainder() {
+    fn capped_chain() -> Rendered {
         let entries = [entry("bbbb", 5, Join::Unresolved { gap: None }), entry("aaaa", 9, Join::Unresolved { gap: None }),
             entry("cccc", 5, Join::Unresolved { gap: None })];
-        let rendered = render_chain(&entries, Some(2), None, "p");
+        render_chain(&entries, Some(2), None, "p")
+    }
+
+    #[test]
+    fn the_cap_orders_by_date_then_sha_and_states_the_remainder() {
+        let rendered = capped_chain();
         assert_eq!(rendered.entries.iter().map(|e| e.sha.as_str()).collect::<Vec<_>>(), ["aaaa", "cccc"]);
         assert_eq!((rendered.shown, rendered.total), (2, 3));
         assert!(rendered.text.ends_with("\n\nShowing 2 of 3 commit(s). Pass --top 3 to see the rest."));
-        assert!(rendered.text.starts_with("commit aaaa (aaaa)\ndate: d9\nsubject: s\nphase: not yet joined\nplan task: not yet joined\n"));
+    }
+
+    #[test]
+    fn an_unjoined_entry_spells_every_missing_field_as_not_yet_joined() {
+        assert!(capped_chain().text.starts_with("commit aaaa (aaaa)\ndate: d9\nsubject: s\nphase: not yet joined\nplan task: not yet joined\n"));
+    }
+
+    #[test]
+    fn an_empty_chain_renders_no_commits() {
         assert_eq!(render_chain(&[], None, None, "p").text, "No commits in this chain.");
     }
 
@@ -302,13 +314,26 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_and_off_roadmap_and_unnamed_task_spellings() {
+    fn an_ambiguous_phase_line_lists_every_candidate() {
         let matches = vec![brief("phases/3"), Brief { plan: String::new(), ..brief("_archive-v1/3") }];
         assert_eq!(field_phase(&Join::Ambiguous { matches }).unwrap(),
             "AMBIGUOUS - 2 records name this commit: phases/3 (plan 2, task -); _archive-v1/3 (plan -, task -)");
+    }
+
+    #[test]
+    fn an_off_roadmap_task_phase_line_names_the_slug_and_label() {
         let task = resolved(Brief { slug: Some("fix-it".into()), ..brief("tasks/fix-it") });
         assert_eq!(field_phase(&task).unwrap(), "off-roadmap task fix-it - a /cad-task run, not a roadmap phase (tasks/fix-it)");
+    }
+
+    #[test]
+    fn an_empty_task_cell_reads_task_unnamed() {
+        let task = resolved(Brief { slug: Some("fix-it".into()), ..brief("tasks/fix-it") });
         assert_eq!(field_task(&task).unwrap(), "plan 2, task unnamed");
+    }
+
+    #[test]
+    fn a_resolved_phase_line_names_milestone_phase_and_label() {
         assert_eq!(field_phase(&resolved(brief("phases/3"))).unwrap(), "v1 phase 3 (phases/3)");
     }
 
@@ -320,21 +345,39 @@ Git's default history simplification dropped them, and this chain keeps that sim
 which is how it tracks renames, requires it. 1 of them is a merge.\n  aaaaaaaa (2 parent(s))\n  bbbbbbbb (1 parent(s))\n  see them with: git log --full-history -- src/a.rs");
     }
 
-    #[test]
-    fn review_and_decision_fields_quote_their_records() {
-        let finding = |fix: Option<&str>| Finding { claim: "c".into(), failure_scenario: "f".into(), counter_evidence: None,
+    fn finding(fix: Option<&str>) -> Finding {
+        Finding { claim: "c".into(), failure_scenario: "f".into(), counter_evidence: None,
             fix_commit: fix.map(str::to_owned), file: Some("a.rs".into()), line: Some(4), severity: Some("high".into()),
-            base_id: None, head_id: Some("h".into()), record: "ADJUDICATION-x-1.json".into() };
-        let Join::Resolved(mut inner) = resolved(brief("phases/3")) else { unreachable!() };
+            base_id: None, head_id: Some("h".into()), record: "ADJUDICATION-x-1.json".into() }
+    }
+
+    fn resolved_phase_3() -> Resolved {
+        let Join::Resolved(inner) = resolved(brief("phases/3")) else { unreachable!() };
+        *inner
+    }
+
+    #[test]
+    fn the_review_field_lists_covering_findings_and_flags_unresolvable_ranges() {
+        let mut inner = resolved_phase_3();
         inner.review = ReviewJoin { records: 2, findings: vec![finding(Some("abc"))], unresolved: vec![finding(None)] };
-        inner.decision = DecisionJoin { scope: "plan", ids: vec!["D-02".into()], lines: vec!["D-02: two".into()] };
         // Every line under the head is indented once by `quoted`; the
         // UNRESOLVABLE note carries its own indent on top of that.
         assert_eq!(field_review(&inner).unwrap(), "1 surviving finding(s) cover this commit, and 1 more could not be placed\n\
 \x20 [high] a.rs:4 (ADJUDICATION-x-1.json)\n  claim: c\n  failure_scenario: f\n  fix: abc\n\
 \x20 [high] a.rs:4 (ADJUDICATION-x-1.json)\n  claim: c\n  failure_scenario: f\n  fix: none - confirmed and left standing\n\
 \x20   join UNRESOLVABLE: (no base_id)..h does not resolve in this clone, so whether it covers this commit is unknown");
+    }
+
+    #[test]
+    fn the_decision_field_announces_plan_scope_and_quotes_its_lines() {
+        let mut inner = resolved_phase_3();
+        inner.decision = DecisionJoin { scope: "plan", ids: vec!["D-02".into()], lines: vec!["D-02: two".into()] };
         assert_eq!(field_decision(&inner).unwrap(), "PHASE-SCOPED - cited by the plan's ## Context, not by this task (D-02)\n  D-02: two");
+    }
+
+    #[test]
+    fn a_review_field_with_records_but_no_covering_finding_says_so() {
+        let mut inner = resolved_phase_3();
         inner.review = ReviewJoin { records: 1, findings: vec![], unresolved: vec![] };
         assert_eq!(field_review(&inner).unwrap(), "1 adjudication record(s) read; no surviving finding covers this commit");
     }

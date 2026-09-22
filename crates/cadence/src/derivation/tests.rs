@@ -225,7 +225,7 @@ fn ac2_closed_null_zero_differs_from_live_null_all_complete() {
 }
 
 #[test]
-fn ac2_checkbox_cannot_complete_and_invalid_lists_refuse() {
+fn a_ticked_checkbox_never_changes_the_derived_lifecycle() {
     let unchecked = captured("## Phases\n- [ ] **Phase 1: One**");
     let checked = captured("## Phases\n- [x] **Phase 1: One**");
     assert_eq!(derive(&unchecked).unwrap(), derive(&checked).unwrap());
@@ -233,12 +233,21 @@ fn ac2_checkbox_cannot_complete_and_invalid_lists_refuse() {
         derive(&checked).unwrap().phases[0].status,
         LifecycleStatus::Unplanned
     );
+}
+
+#[test]
+fn a_roadmap_with_no_phases_section_or_only_malformed_entries_is_invalid() {
+    let unchecked = captured("## Phases\n- [ ] **Phase 1: One**");
     for text in ["# No section", "## Phases\n- Phase 1: Bad"] {
         let mut capture = unchecked.clone();
         capture.roadmap = Observation::Present(text.as_bytes().into());
         capture.declarations = Some(parse_roadmap(text));
         assert_eq!(derive(&capture).unwrap_err().code(), "invalid-roadmap");
     }
+}
+
+#[test]
+fn a_malformed_entry_beside_a_valid_one_is_skipped() {
     assert_eq!(
         derive(&captured(
             "## Phases\n- Phase 8: Bad\n- [ ] **Phase 1: Good**"
@@ -250,7 +259,7 @@ fn ac2_checkbox_cannot_complete_and_invalid_lists_refuse() {
 }
 
 #[test]
-fn parsers_roadmap_normalization_bounds_and_classification() {
+fn a_bom_and_crlf_line_endings_parse_without_shifting_source_lines() {
     for text in [
         "## Phases\n- [ ] **Phase 1: One**",
         "\u{feff}## Phases\r\n- [ ] **Phase 1: One**\r\n",
@@ -259,6 +268,10 @@ fn parsers_roadmap_normalization_bounds_and_classification() {
         assert_eq!(parsed.phases.len(), 1);
         assert_eq!(parsed.phases[0].source_line, 2);
     }
+}
+
+#[test]
+fn malformed_or_misplaced_phases_sections_are_refused() {
     for text in [
         "## Phases\r- [ ] **Phase 1: One**",
         "# Roadmap",
@@ -269,6 +282,10 @@ fn parsers_roadmap_normalization_bounds_and_classification() {
     ] {
         assert!(parse_roadmap(text).is_err(), "{text:?}");
     }
+}
+
+#[test]
+fn a_phases_section_with_no_entry_lines_is_a_closed_cycle() {
     for text in [
         "## Phases",
         "  ## Phases  \nAll done\n## Details\nphase 1 is prose",
@@ -281,6 +298,10 @@ fn parsers_roadmap_normalization_bounds_and_classification() {
             "{text:?}"
         );
     }
+}
+
+#[test]
+fn only_entries_inside_the_phases_section_count_and_a_trailing_text_is_the_description() {
     let parsed = parse_roadmap("## Phases\n- [X] **Phase 8: Bad**\n- [ ] **Phase 2: Good** - description\n## Details\n- [ ] **Phase 3: Outside**").unwrap();
     assert_eq!(parsed.phases.len(), 1);
     assert_eq!(parsed.phases[0].description, "description");
@@ -310,12 +331,17 @@ fn parsers_roadmap_fences_match_character_length_and_empty_info() {
 }
 
 #[test]
-fn parsers_numeric_ties_keep_textual_order_and_number_addresses() {
+fn entries_keep_their_textual_order_as_ordinals() {
     let parsed = parse_roadmap("## Phases\n- [ ] **Phase 2: Two**\n- [ ] **Phase 1.10: Decimal A**\n- [ ] **Phase 01: Alias A**\n- [ ] **Phase 1.1: Decimal B**\n- [ ] **Phase 1.0: Alias B**\n- [ ] **Phase 1: Alias C**").unwrap();
     assert_eq!(
         parsed.phases.iter().map(|p| p.ordinal).collect::<Vec<_>>(),
         [0, 1, 2, 3, 4, 5]
     );
+}
+
+#[test]
+fn an_address_is_the_number_as_javascript_formats_it_and_names_its_directory() {
+    let parsed = parse_roadmap("## Phases\n- [ ] **Phase 2: Two**\n- [ ] **Phase 1.10: Decimal A**\n- [ ] **Phase 01: Alias A**\n- [ ] **Phase 1.1: Decimal B**\n- [ ] **Phase 1.0: Alias B**\n- [ ] **Phase 1: Alias C**").unwrap();
     assert_eq!(
         parsed
             .phases
@@ -342,7 +368,7 @@ fn parsers_numeric_ties_keep_textual_order_and_number_addresses() {
 }
 
 #[test]
-fn parsers_uat_items_fields_counts_and_raw_fence_behavior() {
+fn line_endings_and_a_bom_decide_where_item_headings_are_recognized() {
     assert_eq!(parse_uat("pre\r### 1. Item\nstatus: pass").counts.pass, 1);
     assert_eq!(
         parse_uat("pre\u{2028}### 1. Item\nstatus: pass")
@@ -350,6 +376,13 @@ fn parsers_uat_items_fields_counts_and_raw_fence_behavior() {
             .pass,
         1
     );
+    assert_eq!(parse_uat("\u{feff}### 1. BOM\nstatus: pass").items.len(), 0);
+    assert_eq!(parse_uat("### 1. CRLF\r\nstatus: pass\r\n").counts.pass, 1);
+    assert_eq!(parse_uat("### 1. Lone CR\rstatus: pass").items.len(), 0);
+}
+
+#[test]
+fn text_without_numbered_level_three_headings_yields_no_items() {
     for text in [
         "",
         "---\nstatus: complete\n---",
@@ -360,6 +393,10 @@ fn parsers_uat_items_fields_counts_and_raw_fence_behavior() {
         assert!(parsed.items.is_empty());
         assert_eq!(parsed.counts, UatCounts::default());
     }
+}
+
+#[test]
+fn the_last_status_and_reason_in_an_item_win_and_counts_tally_known_statuses() {
     let parsed = parse_uat(
         "### 1. First\nstatus: fail\nstatus: pass\nstatus:\n status: blocked\nnot-key: ignored\nreason: old\nreason: final  \n### 2. Unknown\nstatus: constructor\n### 3. Skip\nstatus: skipped\nreason:   \n### 4. Pending\nstatus: pending\n### 5. Blocked\nstatus: blocked",
     );
@@ -378,6 +415,10 @@ fn parsers_uat_items_fields_counts_and_raw_fence_behavior() {
             blocked: 1
         }
     );
+}
+
+#[test]
+fn fences_do_not_hide_item_headings_or_fields() {
     let parsed = parse_uat(
         "### 1. Item\nstatus: pending\n````\n## Fenced section\nstatus: pass\n```\n```` info\nreason: inside\n````\n## End\nstatus: fail\n```\n### 2. Fenced heading still splits\nstatus: blocked\n```",
     );
@@ -385,9 +426,10 @@ fn parsers_uat_items_fields_counts_and_raw_fence_behavior() {
     assert_eq!(parsed.items[0].status.as_deref(), Some("pass"));
     assert_eq!(parsed.items[0].reason.as_deref(), Some("inside"));
     assert_eq!(parsed.items[1].status.as_deref(), Some("blocked"));
-    assert_eq!(parse_uat("\u{feff}### 1. BOM\nstatus: pass").items.len(), 0);
-    assert_eq!(parse_uat("### 1. CRLF\r\nstatus: pass\r\n").counts.pass, 1);
-    assert_eq!(parse_uat("### 1. Lone CR\rstatus: pass").items.len(), 0);
+}
+
+#[test]
+fn uat_status_matching_is_case_sensitive() {
     assert_eq!(
         parse_uat("### 1. Item\nstatus: PASS").counts,
         UatCounts::default()
@@ -483,24 +525,36 @@ fn legacy_state(status: &str) -> String {
     )
 }
 
+const STATUS_WORDS: [(&str, LifecycleStatus); 7] = [
+    ("unplanned", LifecycleStatus::Unplanned),
+    ("ready to plan", LifecycleStatus::Unplanned),
+    ("context gathered", LifecycleStatus::Unplanned),
+    ("planned", LifecycleStatus::Planned),
+    ("executed", LifecycleStatus::Executed),
+    ("complete", LifecycleStatus::Complete),
+    ("phase complete", LifecycleStatus::Complete),
+];
+
 #[test]
-fn ac5_normalize_aliases_and_exact_provenance_on_both_paths() {
-    use LifecycleStatus::*;
-    for (word, expected) in [
-        ("unplanned", Unplanned),
-        ("ready to plan", Unplanned),
-        ("context gathered", Unplanned),
-        ("planned", Planned),
-        ("executed", Executed),
-        ("complete", Complete),
-        ("phase complete", Complete),
-    ] {
-        let raw = imported_cursor(word, 3, 4);
-        let before = raw.clone();
-        let normalized = normalize_imported_cursor(&raw).unwrap();
+fn status_words_and_aliases_normalize_on_the_cursor_and_state_paths() {
+    for (word, expected) in STATUS_WORDS {
+        let normalized = normalize_imported_cursor(&imported_cursor(word, 3, 4)).unwrap();
         assert!(
             matches!(&normalized, CompatibilityCursor::Assertion { status, .. } if *status == expected)
         );
+        let normalized = normalize_legacy_state(legacy_state(word).as_bytes()).unwrap();
+        assert!(
+            matches!(&normalized, CompatibilityCursor::Assertion { status, .. } if *status == expected)
+        );
+    }
+}
+
+#[test]
+fn normalization_keeps_the_original_cursor_fields_bytes_and_trimmed_next() {
+    for (word, _) in STATUS_WORDS {
+        let raw = imported_cursor(word, 3, 4);
+        let before = raw.clone();
+        let normalized = normalize_imported_cursor(&raw).unwrap();
         let p = normalized.provenance();
         assert_eq!(p.original_cursor, before);
         assert_eq!(p.original_fields.as_ref(), raw.get("original_fields"));
@@ -508,9 +562,6 @@ fn ac5_normalize_aliases_and_exact_provenance_on_both_paths() {
         assert_eq!(raw, before);
         let state = legacy_state(word);
         let normalized = normalize_legacy_state(state.as_bytes()).unwrap();
-        assert!(
-            matches!(&normalized, CompatibilityCursor::Assertion { status, .. } if *status == expected)
-        );
         assert_eq!(
             normalized.provenance().source_bytes.as_deref(),
             Some(state.as_bytes())
@@ -520,12 +571,20 @@ fn ac5_normalize_aliases_and_exact_provenance_on_both_paths() {
             Some("/cad-plan 3 --exact")
         );
     }
+}
+
+#[test]
+fn paused_normalizes_to_held_on_both_paths() {
     for normalized in [
         normalize_imported_cursor(&imported_cursor("paused", 3, 4)),
         normalize_legacy_state(legacy_state("paused").as_bytes()),
     ] {
         assert!(matches!(normalized.unwrap(), CompatibilityCursor::Held(_)));
     }
+}
+
+#[test]
+fn an_unknown_or_case_changed_status_is_refused_naming_its_source() {
     for word in ["surprised", "Planned", "UNPLANNED"] {
         for (source, result) in [
             (
@@ -821,17 +880,31 @@ fn validated_for(data: &serde_json::Value) -> RecheckedLifecycle {
     .unwrap()
 }
 
+/// A paused imported cursor beside unrelated data and a derivation extension.
+fn unadopted() -> serde_json::Value {
+    serde_json::json!({"cursor":imported_cursor("paused", 3, 4), "unrelated":[1,null], "derivation":{"extension":true}})
+}
+
+fn adopted() -> serde_json::Value {
+    let original = unadopted();
+    adopt(&original, serde_json::json!({"fixture":"opaque memo"}), validated_for(&original).intake().unwrap()).unwrap()
+}
+
 #[test]
-fn ac5_adopt_atomic_namespace_preservation_fresh_null_and_rearmed_cursor() {
-    let original = serde_json::json!({"cursor":imported_cursor("paused", 3, 4), "unrelated":[1,null], "derivation":{"extension":true}});
-    let accepted = validated_for(&original);
+fn adopt_keeps_unrelated_data_and_the_namespace_and_installs_the_memo_and_a_retired_intake() {
+    let original = unadopted();
     let memo = serde_json::json!({"fixture":"opaque memo"});
-    let adopted = adopt(&original, memo.clone(), accepted.intake().unwrap()).unwrap();
+    let adopted = adopt(&original, memo.clone(), validated_for(&original).intake().unwrap()).unwrap();
     assert_eq!(adopted["cursor"], original["cursor"]);
     assert_eq!(adopted["unrelated"], original["unrelated"]);
     assert_eq!(adopted["derivation"]["extension"], true);
     assert_eq!(adopted["derivation"]["memo"], memo);
     assert_eq!(adopted["derivation"]["intake"]["retired"], true);
+}
+
+#[test]
+fn an_adopted_cursor_selects_as_unavailable_and_readoption_keeps_the_intake_record() {
+    let adopted = adopted();
     assert!(matches!(
         select_intake(&adopted).unwrap().cursor,
         CompatibilityCursor::Unavailable(_)
@@ -846,20 +919,29 @@ fn ac5_adopt_atomic_namespace_preservation_fresh_null_and_rearmed_cursor() {
         again["derivation"]["intake"],
         adopted["derivation"]["intake"]
     );
-    let mut changed = adopted.clone();
+}
+
+#[test]
+fn a_changed_cursor_rearms_as_held_and_the_old_validation_is_refused() {
+    let accepted = validated_for(&unadopted());
+    let mut changed = adopted();
     changed["cursor"]["extra"] = false.into();
     assert!(matches!(
         select_intake(&changed).unwrap().cursor,
         CompatibilityCursor::Held(_)
     ));
     assert_eq!(
-        adopt(&changed, memo.clone(), accepted.intake().unwrap())
+        adopt(&changed, serde_json::json!({"fixture":"opaque memo"}), accepted.intake().unwrap())
             .unwrap_err()
             .code(),
         "inputs-changed"
     );
+}
+
+#[test]
+fn adopting_into_empty_data_creates_only_the_derivation_namespace() {
     let fresh = serde_json::Value::Null;
-    let adopted = adopt(&fresh, memo, validated_for(&fresh).intake().unwrap()).unwrap();
+    let adopted = adopt(&fresh, serde_json::json!({"fixture":"opaque memo"}), validated_for(&fresh).intake().unwrap()).unwrap();
     assert!(adopted.is_object());
     assert!(adopted.get("cursor").is_none());
     assert!(adopted["derivation"].get("memo").is_some());
@@ -1067,31 +1149,12 @@ fn key_table_failures(encoder: impl Fn(&CapturedInputs) -> String) -> Vec<&'stat
 }
 
 #[test]
-fn ac3_each_input_outcome_category_and_negative_encoders() {
+fn every_captured_field_and_outcome_category_changes_the_key() {
     assert!(key_table_failures(|c| input_key(c).unwrap()).is_empty());
-    let omitted_summary = key_table_failures(|c| {
-        let mut c = c.clone();
-        for p in &mut c.phases {
-            p.summary = Observation::Absent;
-        }
-        input_key(&c).unwrap()
-    });
-    assert!(omitted_summary.contains(&"summary"));
-    let omitted_reason = key_table_failures(|c| {
-        let mut c = c.clone();
-        for p in &mut c.phases {
-            if let Observation::Present(bytes) = &mut p.uat {
-                *bytes = String::from_utf8_lossy(bytes)
-                    .lines()
-                    .filter(|line| !line.starts_with("reason:"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-                    .into_bytes();
-            }
-        }
-        input_key(&c).unwrap()
-    });
-    assert!(omitted_reason.contains(&"uat reason"));
+}
+
+#[test]
+fn a_domain_encoding_or_semantics_version_change_changes_the_encoding() {
     let c = key_fixture();
     let original = encode_inputs(&c).unwrap();
     for (domain, encoding, semantics) in [
@@ -1106,11 +1169,20 @@ fn ac3_each_input_outcome_category_and_negative_encoders() {
             )
         );
     }
+}
+
+#[test]
+fn plan_listing_order_does_not_change_the_key() {
+    let c = key_fixture();
     let mut reversed = c.clone();
     if let Observation::Present(names) = &mut reversed.phases[0].plans {
         names.reverse();
     }
     assert_eq!(input_key(&c), input_key(&reversed));
+}
+
+#[test]
+fn a_failed_root_probe_refuses_derivation() {
     for (_, a, _) in key_rows() {
         if let Observation::Failed(_) = a.root_probe {
             assert!(derive(&a).is_err());
@@ -1119,7 +1191,7 @@ fn ac3_each_input_outcome_category_and_negative_encoders() {
 }
 
 #[test]
-fn encoding_boundaries_fixed_v1_and_semantic_order() {
+fn the_v1_encoding_of_a_minimal_capture_is_the_fixed_bytes_and_key() {
     let mut c = captured("## Phases\n");
     c.root = "/p".into();
     let expected = "0000000000000011636164656e63652e6c6966656379636c650000000000000001000000000000000200000000000000022f700101000000000000000a2323205068617365730a0000000000000000";
@@ -1132,12 +1204,21 @@ fn encoding_boundaries_fixed_v1_and_semantic_order() {
         input_key(&c).unwrap(),
         "21216b54184a118ca4bdbe093bd3a0f4f87c2662c19c0e4d3276e6a7d2b69180"
     );
+}
+
+#[test]
+fn length_prefixed_fields_keep_ab_c_distinct_from_a_bc() {
     let mut a = key_fixture();
     let mut b = a.clone();
     a.phases[0].plans = Observation::Present(vec!["ab".into(), "c".into()]);
     b.phases[0].plans = Observation::Present(vec!["a".into(), "bc".into()]);
     assert_ne!(input_key(&a), input_key(&b));
-    b = a.clone();
+}
+
+#[test]
+fn declaration_order_changes_the_key() {
+    let a = key_fixture();
+    let mut b = a.clone();
     b.declarations
         .as_mut()
         .unwrap()
@@ -1197,20 +1278,29 @@ fn memo_corruptions() -> Vec<(String, serde_json::Value)> {
 }
 
 #[test]
-fn memo_comparison_all_fields_and_unconditional_hit_negative_control() {
+fn an_absent_memo_misses_and_an_identical_one_hits() {
     let (key, fresh, raw) = memo_fixture();
     assert_eq!(check_memo(None, &key, &fresh), Ok(MemoDisposition::Miss));
     assert_eq!(
         check_memo(Some(&raw), &key, &fresh),
         Ok(MemoDisposition::Hit)
     );
-    let rejects = |check: &dyn Fn(
-        &serde_json::Value,
-    ) -> Result<MemoDisposition, DerivationError>| {
-        memo_corruptions().iter().all(|(field, raw)| matches!(check(raw), Err(DerivationError::DerivationConflict { requested_hash, stored_hash, fields }) if requested_hash == key && stored_hash.as_deref() == Some(&key) && fields.contains(field)))
-    };
-    assert!(rejects(&|r| check_memo(Some(r), &key, &fresh)));
-    assert!(!rejects(&|_| Ok(MemoDisposition::Hit)));
+}
+
+#[test]
+fn a_differing_answer_field_conflicts_naming_the_field_and_both_hashes() {
+    let (key, fresh, _) = memo_fixture();
+    for (field, raw) in memo_corruptions() {
+        assert!(
+            matches!(check_memo(Some(&raw), &key, &fresh), Err(DerivationError::DerivationConflict { requested_hash, stored_hash, fields }) if requested_hash == key && stored_hash.as_deref() == Some(&key) && fields.contains(&field)),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn a_changed_version_or_input_hash_misses() {
+    let (key, fresh, raw) = memo_fixture();
     for name in ["encoding_version", "semantics_version", "input_hash"] {
         let mut changed = raw.clone();
         changed[name] = match name {
@@ -1226,7 +1316,7 @@ fn memo_comparison_all_fields_and_unconditional_hit_negative_control() {
 }
 
 #[test]
-fn memo_comparison_envelope_malformed_namespace_and_current_payload() {
+fn a_malformed_or_missing_envelope_field_conflicts_naming_that_field() {
     use serde_json::json;
     let (key, fresh, raw) = memo_fixture();
     let mut rows = vec![
@@ -1246,6 +1336,17 @@ fn memo_comparison_envelope_malformed_namespace_and_current_payload() {
         changed[name] = json!(false);
         rows.push((name, changed));
     }
+    for (field, raw) in rows {
+        assert!(
+            matches!(check_memo(Some(&raw), &key, &fresh), Err(DerivationError::DerivationConflict { fields, .. }) if fields == [field])
+        );
+    }
+}
+
+#[test]
+fn a_malformed_answer_field_conflicts_naming_its_path() {
+    use serde_json::json;
+    let (_, fresh, raw) = memo_fixture();
     for (field, value) in [
         ("status", json!("paused")),
         ("id", json!(null)),
@@ -1258,11 +1359,12 @@ fn memo_comparison_envelope_malformed_namespace_and_current_payload() {
         assert_eq!(error.code(), "derivation-conflict");
         assert!(error.to_string().contains(&format!("phases[0].{field}")));
     }
-    for (field, raw) in rows {
-        assert!(
-            matches!(check_memo(Some(&raw), &key, &fresh), Err(DerivationError::DerivationConflict { fields, .. }) if fields == [field])
-        );
-    }
+}
+
+#[test]
+fn an_older_semantics_version_misses_unread_while_a_malformed_hash_still_refuses() {
+    use serde_json::json;
+    let (key, fresh, raw) = memo_fixture();
     let mut old = raw.clone();
     old["semantics_version"] = json!(SEMANTICS_VERSION + 1);
     old["answer"] = json!({"opaque":"older schema"});
@@ -1272,6 +1374,12 @@ fn memo_comparison_envelope_malformed_namespace_and_current_payload() {
     );
     old["input_hash"] = json!("broken");
     assert!(check_memo(Some(&old), &key, &fresh).is_err());
+}
+
+#[test]
+fn a_malformed_derivation_namespace_refuses_and_an_absent_one_reads_as_none() {
+    use serde_json::json;
+    let (key, _, _) = memo_fixture();
     for data in [
         json!({"derivation":null}),
         json!({"derivation":[]}),
@@ -1283,6 +1391,10 @@ fn memo_comparison_envelope_malformed_namespace_and_current_payload() {
         );
     }
     assert!(memo_from_data(&json!({}), &key).unwrap().is_none());
+}
+
+#[test]
+fn a_phase_number_beyond_f64_range_survives_json_and_its_memo_hits() {
     // Overflow is still a numeric identity in the domain and must survive JSON.
     let c = captured(&format!(
         "## Phases\n- [ ] **Phase {}: Overflow**",

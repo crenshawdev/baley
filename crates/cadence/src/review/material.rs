@@ -812,7 +812,7 @@ mod gap156_tests {
         assert_eq!(result.directories.len(), 4);
     }
     #[test]
-    fn gap156_nested_errors_and_symlinks_never_yield_partial_success() {
+    fn gap156_a_nested_listing_error_fails_the_whole_enumeration() {
         for failure in [
             Error::Io("unreadable nested directory".into()),
             Error::Conflict("replaced nested directory".into()),
@@ -831,6 +831,10 @@ mod gap156_tests {
             });
             assert_eq!(result.unwrap_err().to_string(), message);
         }
+    }
+
+    #[test]
+    fn a_symlink_member_is_refused_as_an_unsupported_node() {
         let result = directory_files("src", &mut |_| {
             Ok(listing("root1", &[("sub", NodeKind::Symlink)]))
         });

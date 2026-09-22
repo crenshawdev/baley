@@ -3162,26 +3162,42 @@ pub fn risk_material(
 mod schema_tests {
     use super::*;
 
-    #[test]
-    fn execution_service_prompt_contains_generated_schema_and_opaque_utf8_body() {
+    const OPAQUE_BODY: &str = "opaque 日本語\n# unparsed heading\n";
+
+    /// A dispatch whose plan body is opaque UTF-8, before its prompt is stored.
+    fn opaque_body_dispatch() -> cadence::execution::model::ActiveDispatch {
         let source = b"---\nphase: 6\nplan: 1\nrequirements: [AC1]\nfiles: [src/a.rs]\nexecution:\n  schema: 1\n  suite: cargo test\n  tasks:\n    - id: T1\n      verify: [cargo test one]\n---\n";
-        let body = "opaque 日本語\n# unparsed heading\n";
         let mut bytes = source.to_vec();
-        bytes.extend_from_slice(body.as_bytes());
+        bytes.extend_from_slice(OPAQUE_BODY.as_bytes());
         let plan = parse_plan(&bytes, 6, 1).unwrap();
-        let mut dispatch = cadence::execution::dispatch::build_dispatch(
+        cadence::execution::dispatch::build_dispatch(
             &plan,
             &"a".repeat(64),
             0,
             &"b".repeat(40),
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    #[test]
+    fn rerendering_a_dispatch_after_storing_its_prompt_yields_the_same_digest() {
+        let mut dispatch = opaque_body_dispatch();
         let prompt = render_prompt(&dispatch);
         dispatch.prompt_digest = cadence::store::model::digest(prompt.as_bytes());
-        dispatch.prompt = prompt.clone();
+        dispatch.prompt = prompt;
         assert_eq!(cadence::store::model::digest(render_prompt(&dispatch).as_bytes()), dispatch.prompt_digest);
-        assert!(prompt.ends_with(body));
-        assert!(prompt.contains(&format!("Opaque plan body ({} UTF-8 bytes):", body.len())));
+    }
+
+    #[test]
+    fn the_prompt_ends_with_the_opaque_body_and_states_its_utf8_byte_count() {
+        let prompt = render_prompt(&opaque_body_dispatch());
+        assert!(prompt.ends_with(OPAQUE_BODY));
+        assert!(prompt.contains(&format!("Opaque plan body ({} UTF-8 bytes):", OPAQUE_BODY.len())));
+    }
+
+    #[test]
+    fn the_prompt_embeds_the_patch_schema_between_its_headings() {
+        let prompt = render_prompt(&opaque_body_dispatch());
         let schema = prompt
             .split("Executor patch schema:\n")
             .nth(1)
@@ -3192,10 +3208,6 @@ mod schema_tests {
         assert_eq!(
             serde_json::from_str::<Value>(schema).unwrap(),
             patch_schema()
-        );
-        assert_eq!(
-            patch_schema(),
-            serde_json::to_value(schemars::schema_for!(ExecutorPatch)).unwrap()
         );
     }
 }

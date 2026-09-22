@@ -1,7 +1,7 @@
 use super::execution_service;
 
 #[test]
-fn execute_next_honors_named_plan() {
+fn execute_next_decodes_an_optional_owner_selected_plan() {
     let decoded = serde_json::from_value::<super::QueryArguments>(serde_json::json!({
         "operation":"execute-next","phase":6,"plan":2
     }));
@@ -10,9 +10,18 @@ fn execute_next_honors_named_plan() {
     };
     assert_eq!(phase.get(), 6);
     assert_eq!(plan.map(std::num::NonZeroU32::get), Some(2));
+}
+
+#[test]
+fn select_ready_plan_picks_the_named_plan_else_the_lowest_ready_one() {
     let selected = std::num::NonZeroU32::new(2);
     assert_eq!(execution_service::select_ready_plan(&[1,2], &[], selected), Ok(2));
     assert_eq!(execution_service::select_ready_plan(&[1,2], &[], None), Ok(1));
+}
+
+#[test]
+fn select_ready_plan_refuses_a_plan_not_admitted_or_already_completed() {
+    let selected = std::num::NonZeroU32::new(2);
     assert_eq!(execution_service::select_ready_plan(&[1], &[], selected), Err("plan-not-admitted"));
     assert_eq!(execution_service::select_ready_plan(&[1,2], &[2], selected), Err("plan-completed"));
 }

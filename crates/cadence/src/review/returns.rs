@@ -638,7 +638,11 @@ mod gap152_tests {
         let (next, replayed) = project_launch_failure(&input, &submitted(), 999).unwrap();
         assert!(replayed);
         assert_eq!(next, input);
-        let receipt = acknowledge_launch_failure(&submitted(), Ok(input), replayed).unwrap();
+    }
+
+    #[test]
+    fn acknowledging_a_replay_reports_it_with_one_durable_terminal() {
+        let receipt = acknowledge_launch_failure(&submitted(), Ok(records(true)), true).unwrap();
         assert!(receipt.replayed);
         assert_eq!(receipt.durable_terminal_count, 1);
     }
@@ -709,7 +713,7 @@ mod gap152_tests {
     }
 
     #[test]
-    fn gap152_selection_omits_unissued_choices_and_reaches_fallback() {
+    fn gap152_selection_omits_an_unissued_choice_so_its_slot_is_offered() {
         let mut input = records(true);
         let mut b = input["attempts"]["a1"].clone();
         b["attempt"] = json!("a2");
@@ -726,7 +730,13 @@ mod gap152_tests {
                 .as_deref(),
             Some("B")
         );
+    }
+
+    #[test]
+    fn selection_falls_back_to_local_when_every_issued_slot_has_failed() {
         let mut exhausted = records(true);
+        let admission: Admission =
+            serde_json::from_value(exhausted["admissions"]["f1"].clone()).unwrap();
         let mut b = exhausted["attempts"]["a1"].clone();
         b["attempt"] = json!("a2");
         b["slot"] = json!("B");

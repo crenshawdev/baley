@@ -636,28 +636,46 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dispatch_is_content_derived_and_only_one_can_be_active() {
-        let plan = plan();
-        let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
-        let first = build_dispatch(&plan, &set, 0, BASE).unwrap();
-        let second = build_dispatch(&plan, &set, 0, BASE).unwrap();
-        assert_eq!(first.id, second.id);
-        let occurrence = ExecutionOccurrence {
+    fn empty_occurrence(plan_set_fingerprint: String) -> ExecutionOccurrence {
+        ExecutionOccurrence {
             phase: 6,
             undone: None,
-            plan_set_fingerprint: set,
+            plan_set_fingerprint,
             version: 0,
             active: None,
             plans: vec![],
             terminal: None,
             receipts: BTreeMap::new(), issues: BTreeMap::new(),
-        };
-        let (admitted, active) = admit_dispatch(&occurrence, first).unwrap();
+        }
+    }
+
+    #[test]
+    fn equal_plan_content_builds_an_equal_dispatch_id() {
+        let plan = plan();
+        let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
+        let first = build_dispatch(&plan, &set, 0, BASE).unwrap();
+        let second = build_dispatch(&plan, &set, 0, BASE).unwrap();
+        assert_eq!(first.id, second.id);
+    }
+
+    #[test]
+    fn admission_records_the_dispatch_as_active_at_execution_version_1() {
+        let plan = plan();
+        let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
+        let dispatch = build_dispatch(&plan, &set, 0, BASE).unwrap();
+        let (admitted, active) = admit_dispatch(&empty_occurrence(set), dispatch).unwrap();
         assert_eq!(active.expected_execution_version, 1);
         assert_eq!(admitted.active.as_ref(), Some(&active));
-        let mut foreign = second;
+    }
+
+    #[test]
+    fn admission_refuses_a_second_dispatch_while_one_is_active() {
+        let plan = plan();
+        let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
+        let first = build_dispatch(&plan, &set, 0, BASE).unwrap();
+        let mut foreign = first.clone();
         foreign.plan = 2;
+        let (admitted, _) = admit_dispatch(&empty_occurrence(set), first).unwrap();
         assert_eq!(
             admit_dispatch(&admitted, foreign).unwrap_err().code,
             "dispatch-conflict"
@@ -673,6 +691,12 @@ mod tests {
         for key in ["lifecycle", "evidence", "arbitrary"] {
             assert_eq!(applied.data.get(key), before.get(key));
         }
+    }
+
+    #[test]
+    fn a_complete_patch_clears_the_active_dispatch_records_the_plan_and_advances_the_version() {
+        let (data, dispatch) = fixture();
+        let applied = apply_executor_patch(&data, &complete_patch(&dispatch)).unwrap();
         let execution: ExecutionSnapshot =
             serde_json::from_value(applied.data["execution"].clone()).unwrap();
         let occurrence = &execution.occurrences["6"];
