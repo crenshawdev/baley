@@ -30,7 +30,7 @@ pub fn acquire_material(
     let mut storage = MaterialStorage::default();
     let retained = match target {
         Target::NamedFile { path, .. } => {
-            super::material::retain_file(manifest, fire, path, source, &mut storage, clock)?
+            super::material::retain_file(manifest, fire, path, source.read(path), &mut storage, clock.now())?
         }
         Target::Directory { path, .. } => {
             super::material::retain_directory(manifest, fire, path, source, &mut storage, clock)?

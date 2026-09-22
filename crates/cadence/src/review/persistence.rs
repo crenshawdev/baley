@@ -172,6 +172,29 @@ pub async fn update(store: &Store, view: &View, name: &str, records: Value) -> R
     commit(store, view, transaction).await
 }
 
+/// What committing review records came back with.
+pub enum Outcome {
+    /// The commit installed: the committed records.
+    Committed(Value),
+    /// Another revision won the race: the winner's records.
+    Lost(Value),
+    /// The commit failed for any other reason, or its answer could not be read.
+    Failed,
+}
+
+/// Commits `proposed` and reads back what the caller settles over: the
+/// committed records, or the records of the revision that won instead.
+pub async fn commit_records(store: &Store, view: &View, name: &str, proposed: Value) -> Outcome {
+    match update(store, view, name, proposed).await {
+        Ok(committed) => records(&committed.snapshot.data).map_or(Outcome::Failed, Outcome::Committed),
+        Err(Error::Conflict(_)) => match read(store).await {
+            Ok(winner) => records(&winner.snapshot.data).map_or(Outcome::Failed, Outcome::Lost),
+            Err(_) => Outcome::Failed,
+        },
+        Err(_) => Outcome::Failed,
+    }
+}
+
 pub fn terminal_count(records: &Value, attempt: &str) -> usize {
     records
         .get("closures")

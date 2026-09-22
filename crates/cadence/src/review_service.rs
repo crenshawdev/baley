@@ -98,29 +98,6 @@ pub struct Output {
 }
 pub type Answer = Result<Envelope<Output>>;
 
-#[cfg(test)]
-tokio::task_local! {
-    static GAP158_ADMISSION_BOUNDARIES: std::sync::Arc<Gap158AdmissionBoundaries>;
-}
-
-#[cfg(test)]
-struct Gap158AdmissionBoundaries {
-    now: u64,
-    acquisitions: std::sync::Mutex<u64>,
-}
-
-#[cfg(test)]
-struct Gap158Clock;
-
-#[cfg(test)]
-impl review::io::Clock for Gap158Clock {
-    fn now(&mut self) -> u64 {
-        GAP158_ADMISSION_BOUNDARIES
-            .try_with(|boundaries| boundaries.now)
-            .unwrap_or_else(|_| review::io::Clock::now(&mut review::material_io::WallClock))
-    }
-}
-
 pub fn refused(reason: impl Into<String>) -> Envelope<Output> {
     Envelope::Refused {
         code: "invalid-review-operation".into(),
@@ -266,20 +243,15 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
     let store = session.review_store();
     let view = persistence::read(store).await?;
     let records = persistence::records(&view.snapshot.data)?;
-    if let Some(replay) = records
-        .get("replays")
-        .and_then(|r| r.get(&request.replay_key))
-    {
-        return output(
-            "review-admit",
-            json!({"fire":replay["fire"],"attempt":replay["attempt"],"replayed":true}),
-        );
+    if let Some(replay) = replayed(&records, &request.replay_key) {
+        return output("review-admit", replay);
     }
     validate_paths(&request.target)?;
     validate_selection(root, &request)?;
     let minimalism = request.specialist == Some(Specialist::Minimalism);
-    let (generation, route, supplied_gate, refresh) = match resolution {
-        AdmissionResolution::Refresh => {
+    let (generation, route, supplied_gate, refresh) = match supplied(&request, resolution)? {
+        Some((generation, route, gate)) => (Some(generation), Some(route), Some(gate), false),
+        None => {
             let generation = if minimalism {
                 None
             } else {
@@ -302,22 +274,6 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
                 .transpose()?;
             (generation, route, None, true)
         }
-        AdmissionResolution::Supplied {
-            generation,
-            route,
-            gate,
-        } => {
-            if request.caller != "execute"
-                || request.trigger != Some(review::policy::OrdinaryTrigger::Diff)
-                || request.specialist.is_some()
-                || !matches!(&request.target, Target::CommittedRange { .. })
-            {
-                return Err(Error::Invalid(
-                    "supplied resolution requires execute diff handoff".into(),
-                ));
-            }
-            (Some(*generation), Some(*route), Some(gate), false)
-        }
     };
     let sequence = records["occurrence_sequence"]
         .as_u64()
@@ -332,68 +288,13 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
         id: request.home.id.clone(),
         occurrence: String::new(),
     };
-    let routing = route.as_ref().map(|route| Routing {
-        answer: route.choice.agent.clone(),
-        evidence: format!("route:{fire}"),
-    });
-    let (gate, trigger, selection, saved_routing) = if let Some(trigger) = &request.trigger {
-        let route = route
-            .as_ref()
-            .ok_or_else(|| Error::Policy("ordinary routing unavailable".into()))?;
-        let routing = routing
-            .as_ref()
-            .ok_or_else(|| Error::Policy("ordinary routing unavailable".into()))?;
-        let name = serde_json::to_value(trigger)?.as_str().unwrap().to_owned();
-        let policy = route
-            .policy
-            .triggers
-            .get(&name)
-            .ok_or_else(|| Error::Policy("unknown review trigger".into()))?;
-        let gate: Gate = match supplied_gate.clone() {
-            Some(gate) => gate,
-            None => serde_json::from_value(json!(policy.gate))?,
-        };
-        let selected = Selection {
-            mode: serde_json::from_value(json!(route.policy.mode))?,
-            choices: policy.reviewers.clone(),
-            fallback: Some("claude-subagent".into()),
-        };
-        let resolved = review::policy::ResolvedOrdinary {
-            trigger: trigger.clone(),
-            gate,
-            routing: routing.clone(),
-            selection: selected,
-            floor_elevated: route.deep_verification,
-            home: home.clone(),
-        };
-        let ordinary = match request.caller.as_str() {
-            "manual-plan" => review::policy::manual_plan_request(resolved),
-            "automatic-plan" => review::policy::automatic_plan_request(resolved),
-            "task" => review::policy::task_review_request(resolved),
-            "execute" => review::policy::execute_review_request(resolved),
-            "debug" => review::policy::debug_review_request(resolved),
-            "verify" => review::policy::verify_review_request(resolved),
-            "pause" => review::policy::ordinary_request("pause", resolved),
-            _ => return Err(Error::Invalid("unsupported ordinary caller".into())),
-        };
-        (
-            Some(ordinary.policy.gate),
-            Some(name),
-            ordinary.policy.selection,
-            Some(routing.clone()),
-        )
-    } else {
-        (
-            None,
-            None,
-            Selection {
-                mode: SelectionMode::Single,
-                choices: vec!["base".into()],
-                fallback: None,
-            },
-            None,
-        )
-    };
+    let Ordinary {
+        routing,
+        gate,
+        trigger,
+        selection,
+        saved_routing,
+    } = ordinary(&request, route.as_ref(), supplied_gate, &fire, &home)?;
     let observed = if request.trigger == Some(review::policy::OrdinaryTrigger::RiskSurface)
         && gate != Some(Gate::Off)
     {
@@ -425,41 +326,7 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
             root: project_root.into(),
             process: Box::new(cadence::process::System),
         };
-        #[cfg(test)]
-        let mut clock = Gap158Clock;
-        #[cfg(not(test))]
         let mut clock = review::material_io::WallClock;
-        #[cfg(test)]
-        let supplied_material = GAP158_ADMISSION_BOUNDARIES
-            .try_with(|boundaries| {
-                *boundaries.acquisitions.lock().unwrap() += 1;
-                (
-                    Manifest {
-                        manifest: manifest_id.clone(),
-                        fire: fire.clone(),
-                        contract: Contract::current(),
-                        target: request.target.clone(),
-                        entries: vec![],
-                    },
-                    persistence::MaterialStorage::default(),
-                )
-            })
-            .ok();
-        #[cfg(test)]
-        let (manifest, storage) = match supplied_material {
-            Some(material) => material,
-            None => acquire_target(
-                &fire,
-                &manifest_id,
-                &request.target,
-                request.decision.as_ref(),
-                &view.snapshot.data,
-                &mut source,
-                &mut git,
-                &mut clock,
-            )?,
-        };
-        #[cfg(not(test))]
         let (manifest, storage) = acquire_target(
             &fire,
             &manifest_id,
@@ -529,35 +396,7 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
                         selection_evidence: routing.evidence.clone(),
                     })
                 })?;
-                Ok(Attempt {
-                    attempt: format!("{fire}-a{}", index + 1),
-                    fire: fire.clone(),
-                    occurrence: String::new(),
-                    round: request.round,
-                    slot: choice.clone(),
-                    fallback_for: None,
-                    view: MaterialView {
-                        view: format!("{fire}-v{}", index + 1),
-                        manifest: manifest_id.clone(),
-                        entries: manifest.entries.iter().map(|e| e.entry.clone()).collect(),
-                    },
-                    requested,
-                    observed_host: None,
-                    observed_model: None,
-                    launch: None,
-                    host_return: None,
-                    state: AttemptState::Intended,
-                    failure: None,
-                    original: None,
-                    observations: vec![],
-                    usage: Usage {
-                        input: None,
-                        output: None,
-                        cost: None,
-                        currency: None,
-                    },
-                    contract: Contract::current(),
-                })
+                Ok(intended_attempt(&fire, index, choice, request.round, &manifest_id, &manifest, requested))
             })
             .collect::<Result<Vec<_>>>()?;
         let admitted = Admission {
@@ -645,6 +484,176 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
     };
     if debug_dispatch { admission().await }
     else { admit_with_policy(policy_trigger, policy_gate, observed.map(|(observation, _)| observation), admission).await }
+}
+
+/// The answer for a replay key already recorded: its saved fire and attempt,
+/// replayed. Nothing else about the request is consulted.
+fn replayed(records: &Value, replay_key: &str) -> Option<Value> {
+    records
+        .get("replays")
+        .and_then(|replays| replays.get(replay_key))
+        .map(|replay| json!({"fire":replay["fire"],"attempt":replay["attempt"],"replayed":true}))
+}
+
+/// The generation, route and gate a supplied resolution carries, taken as
+/// given so routing is not resolved again. Only an execute diff handoff may
+/// supply them. None when the admission resolves from the current config.
+fn supplied(
+    request: &AdmissionRequest,
+    resolution: AdmissionResolution,
+) -> Result<Option<(Generation, super::config_service::Route, Gate)>> {
+    match resolution {
+        AdmissionResolution::Refresh => Ok(None),
+        AdmissionResolution::Supplied {
+            generation,
+            route,
+            gate,
+        } => {
+            if request.caller != "execute"
+                || request.trigger != Some(review::policy::OrdinaryTrigger::Diff)
+                || request.specialist.is_some()
+                || !matches!(&request.target, Target::CommittedRange { .. })
+            {
+                return Err(Error::Invalid(
+                    "supplied resolution requires execute diff handoff".into(),
+                ));
+            }
+            Ok(Some((*generation, *route, gate)))
+        }
+    }
+}
+
+/// What an admission records from its route.
+struct Ordinary {
+    /// The route's answer, with its evidence under the fire.
+    routing: Option<Routing>,
+    gate: Option<Gate>,
+    trigger: Option<String>,
+    selection: Selection,
+    /// The routing saved on the admission: only an ordinary trigger has one.
+    saved_routing: Option<Routing>,
+}
+
+/// The routing, gate, trigger and selection an admission records from its
+/// route. An ordinary trigger records the supplied gate when there is one,
+/// else the trigger's own; a request without a trigger reviews once with the
+/// base reviewer and records no gate.
+fn ordinary(
+    request: &AdmissionRequest,
+    route: Option<&super::config_service::Route>,
+    supplied_gate: Option<Gate>,
+    fire: &str,
+    home: &Home,
+) -> Result<Ordinary> {
+    let routing = route.map(|route| Routing {
+        answer: route.choice.agent.clone(),
+        evidence: format!("route:{fire}"),
+    });
+    let (gate, trigger, selection, saved_routing) = if let Some(trigger) = &request.trigger {
+        let route = route.ok_or_else(|| Error::Policy("ordinary routing unavailable".into()))?;
+        let routing = routing
+            .as_ref()
+            .ok_or_else(|| Error::Policy("ordinary routing unavailable".into()))?;
+        let name = serde_json::to_value(trigger)?.as_str().unwrap().to_owned();
+        let policy = route
+            .policy
+            .triggers
+            .get(&name)
+            .ok_or_else(|| Error::Policy("unknown review trigger".into()))?;
+        let gate: Gate = match supplied_gate {
+            Some(gate) => gate,
+            None => serde_json::from_value(json!(policy.gate))?,
+        };
+        let selected = Selection {
+            mode: serde_json::from_value(json!(route.policy.mode))?,
+            choices: policy.reviewers.clone(),
+            fallback: Some("claude-subagent".into()),
+        };
+        let resolved = review::policy::ResolvedOrdinary {
+            trigger: trigger.clone(),
+            gate,
+            routing: routing.clone(),
+            selection: selected,
+            floor_elevated: route.deep_verification,
+            home: home.clone(),
+        };
+        let ordinary = match request.caller.as_str() {
+            "manual-plan" => review::policy::manual_plan_request(resolved),
+            "automatic-plan" => review::policy::automatic_plan_request(resolved),
+            "task" => review::policy::task_review_request(resolved),
+            "execute" => review::policy::execute_review_request(resolved),
+            "debug" => review::policy::debug_review_request(resolved),
+            "verify" => review::policy::verify_review_request(resolved),
+            "pause" => review::policy::ordinary_request("pause", resolved),
+            _ => return Err(Error::Invalid("unsupported ordinary caller".into())),
+        };
+        (
+            Some(ordinary.policy.gate),
+            Some(name),
+            ordinary.policy.selection,
+            Some(routing.clone()),
+        )
+    } else {
+        (
+            None,
+            None,
+            Selection {
+                mode: SelectionMode::Single,
+                choices: vec!["base".into()],
+                fallback: None,
+            },
+            None,
+        )
+    };
+    Ok(Ordinary {
+        routing,
+        gate,
+        trigger,
+        selection,
+        saved_routing,
+    })
+}
+
+/// A new attempt as admission creates it: intended, with the voice it
+/// requested and nothing observed yet.
+fn intended_attempt(
+    fire: &str,
+    index: usize,
+    slot: &str,
+    round: u64,
+    manifest_id: &str,
+    manifest: &Manifest,
+    requested: RequestedVoice,
+) -> Attempt {
+    Attempt {
+        attempt: format!("{fire}-a{}", index + 1),
+        fire: fire.into(),
+        occurrence: String::new(),
+        round,
+        slot: slot.into(),
+        fallback_for: None,
+        view: MaterialView {
+            view: format!("{fire}-v{}", index + 1),
+            manifest: manifest_id.into(),
+            entries: manifest.entries.iter().map(|e| e.entry.clone()).collect(),
+        },
+        requested,
+        observed_host: None,
+        observed_model: None,
+        launch: None,
+        host_return: None,
+        state: AttemptState::Intended,
+        failure: None,
+        original: None,
+        observations: vec![],
+        usage: Usage {
+            input: None,
+            output: None,
+            cost: None,
+            currency: None,
+        },
+        contract: Contract::current(),
+    }
 }
 
 fn requested_voice(
@@ -909,37 +918,19 @@ fn retain_inline(
         entries: vec![],
     };
     let mut storage = persistence::MaterialStorage::default();
-    struct InlineSource {
-        label: String,
-        bytes: Vec<u8>,
-    }
-    impl review::io::MaterialIo for InlineSource {
-        fn read(&mut self, path: &str) -> Result<cadence::store::Observed> {
-            if path != self.label {
-                return Err(Error::Invalid("unknown inline input".into()));
-            }
-            Ok(cadence::store::Observed {
-                identity: cadence::store::model::digest(&self.bytes),
-                bytes: Some(self.bytes.clone()),
-                directory_identity: "inline".into(),
-            })
-        }
-        fn list(&mut self, _: &str) -> Result<review::io::DirectoryObservation> {
-            Err(Error::Invalid("inline input has no directory".into()))
-        }
-    }
     for (index, (label, bytes)) in entries.into_iter().enumerate() {
-        let mut source = InlineSource {
-            label: label.clone(),
-            bytes,
+        let observed = cadence::store::Observed {
+            identity: cadence::store::model::digest(&bytes),
+            bytes: Some(bytes),
+            directory_identity: "inline".into(),
         };
         let retained = material::retain_file(
             &format!("{id}-inline-{index}"),
             fire,
             &label,
-            &mut source,
+            Ok(observed),
             &mut storage,
-            clock,
+            clock.now(),
         )?;
         manifest.entries.extend(retained.manifest.entries);
     }

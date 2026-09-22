@@ -94,3 +94,30 @@ fn recover_unknown_original_contract_is_unverified() {
         json!({"state":"unverified","reason":"unknown-saved-contract"})
     );
 }
+/// The `F` original, saved under `validator`, with a finding whose text has
+/// quotes, a newline and non-ASCII characters.
+fn saved_under(validator: &str) -> (Value, Value) {
+    let mut input = original_fixture()["F"].clone();
+    input["contract"]["validator"] = json!(validator);
+    input["parsed"]["findings"][0]["claim"] = json!("says \"no\"\nthen ü → ok");
+    let review = records(json!({"schema":"review-1","originals":{"o1":input.clone()}}));
+    (review, input)
+}
+#[test]
+fn an_h4_original_yields_its_saved_findings_exactly() {
+    let (review, input) = saved_under("H4-1");
+    let parsed = originals::saved_original(&review, "o1").unwrap().parsed.unwrap();
+    assert_eq!(serde_json::to_value(parsed.findings).unwrap(), input["parsed"]["findings"]);
+}
+#[test]
+fn an_original_under_another_contract_yields_no_findings() {
+    let (review, _) = saved_under("historical-unknown");
+    assert!(originals::saved_original(&review, "o1").unwrap().parsed.is_none());
+}
+#[test]
+fn reading_an_original_returns_its_exact_saved_raw_bytes() {
+    let input = original_fixture()["Q"].clone();
+    let saved: Vec<u8> = serde_json::from_value(input["raw"].clone()).unwrap();
+    let review = records(json!({"schema":"review-1","originals":{"o1":input}}));
+    assert_eq!(originals::original_read(&review, "o1").unwrap().raw_bytes, saved);
+}

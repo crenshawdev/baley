@@ -84,3 +84,65 @@ fn accept_malformed_return_closes_failed() {
         model::AttemptState::Failed
     );
 }
+/// The new closure a return of `raw` writes over the pending records.
+fn closing(input: &Value, raw: &[u8]) -> (Value, Box<model::Admission>, Box<model::Attempt>) {
+    match decide(input["pending"].clone(), &submission(input, Some(raw))).unwrap() {
+        returns::ReturnDecision::Close { records, admission, attempt } => (records, admission, attempt),
+        returns::ReturnDecision::Replay(_) => panic!("a pending attempt was replayed"),
+    }
+}
+#[test]
+fn a_usable_return_records_a_new_original_with_the_exact_raw_bytes_and_parsed_findings() {
+    let input = fixture();
+    let raw = input["F"].as_str().unwrap().as_bytes();
+    let (records, _, _) = closing(&input, raw);
+    let original = &records["originals"]["o1"];
+    assert_eq!(original["raw"], json!(raw));
+    assert_eq!(original["parsed"], input["original"]["parsed"]);
+}
+#[test]
+fn the_receipt_reports_only_the_findings_digest_and_count() {
+    let input = fixture();
+    let raw = input["F"].as_str().unwrap().as_bytes();
+    let receipt = closed(decide(input["pending"].clone(), &submission(&input, Some(raw))).unwrap());
+    let reported = serde_json::to_value(receipt).unwrap();
+    assert_eq!(
+        reported["findings"],
+        json!({"digest":input["original"]["content"],"count":1})
+    );
+    assert!(reported.get("originals").is_none() && reported.get("original").is_none());
+}
+#[test]
+fn a_failed_commit_replies_delivery_write_failed_unacknowledged() {
+    let input = fixture();
+    let raw = input["F"].as_str().unwrap().as_bytes();
+    let (_, admission, attempt) = closing(&input, raw);
+    let refused = returns::settle(
+        persistence::Outcome::Failed,
+        &admission,
+        &attempt,
+        &submission(&input, Some(raw)),
+    )
+    .unwrap_err();
+    assert_eq!(
+        serde_json::to_value(refused).unwrap(),
+        json!({"code":"delivery-write-failed","attempt":"a1","acknowledged":false})
+    );
+}
+#[test]
+fn a_lost_race_to_a_different_accepted_return_names_the_winners_original() {
+    let input = fixture();
+    let changed = input["Changed"].as_str().unwrap().as_bytes();
+    let (_, admission, attempt) = closing(&input, changed);
+    let refused = returns::settle(
+        persistence::Outcome::Lost(records(accepted(&input))),
+        &admission,
+        &attempt,
+        &submission(&input, Some(changed)),
+    )
+    .unwrap_err();
+    assert_eq!(
+        serde_json::to_value(refused).unwrap(),
+        json!({"code":"conflicting-return","attempt":"a1","original":"o1"})
+    );
+}

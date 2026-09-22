@@ -212,24 +212,31 @@ pub async fn accept_return(
         ReturnDecision::Replay(receipt) => return Ok(*receipt),
         ReturnDecision::Close { records, admission, attempt } => (records, admission, attempt),
     };
-    let committed = match persistence::update(store, &view, &format!("return:{id}"), records).await
-    {
-        Ok(committed) => committed,
-        Err(Error::Conflict(_)) => {
-            let winner = persistence::read(store).await.map_err(|_| delivery(id))?;
-            let records = persistence::records(&winner.snapshot.data).map_err(|_| delivery(id))?;
-            let attempt = persistence::get(&records, "attempts", id).map_err(|_| delivery(id))?;
-            return replay(&records, &admission, &attempt, &submitted);
+    let outcome = persistence::commit_records(store, &view, &format!("return:{id}"), records).await;
+    settle(outcome, &admission, &attempt, &submitted)
+}
+
+/// The receipt once a new closure's commit is settled. When another revision
+/// won the race, the submission is answered as a replay against the winner's
+/// records, so a different accepted return is refused as conflicting. A
+/// failed commit is never acknowledged.
+pub fn settle(
+    outcome: persistence::Outcome,
+    admission: &Admission,
+    attempt: &Attempt,
+    submitted: &ReturnSubmission,
+) -> Result<ReturnReceipt, ReturnError> {
+    let id = &submitted.identity.attempt;
+    match outcome {
+        persistence::Outcome::Committed(records) => {
+            receipt(&records, admission, attempt, false).map_err(|_| delivery(id))
         }
-        Err(_) => return Err(delivery(id)),
-    };
-    receipt(
-        &persistence::records(&committed.snapshot.data).map_err(|_| delivery(id))?,
-        &admission,
-        &attempt,
-        false,
-    )
-    .map_err(|_| delivery(id))
+        persistence::Outcome::Lost(records) => {
+            let attempt = persistence::get(&records, "attempts", id).map_err(|_| delivery(id))?;
+            replay(&records, admission, &attempt, submitted)
+        }
+        persistence::Outcome::Failed => Err(delivery(id)),
+    }
 }
 
 /// What accepting a return does, decided over one snapshot's records.

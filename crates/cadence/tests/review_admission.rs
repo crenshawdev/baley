@@ -107,3 +107,15 @@ fn admission_unavailable_home_refuses() {
         Error::Invalid("durable review home unavailable".into())
     );
 }
+#[test]
+fn an_admission_records_the_supplied_time() {
+    let input = fixture();
+    let basis = view(input["fresh"].clone(), 1);
+    let mut transaction = persistence::transaction(&basis, "caller:k1");
+    admission::contribute_admission(&basis, &mut transaction, pending(&input), &mut FixedClock).unwrap();
+    let replay_key = input["H"]["replay_key"].as_str().unwrap();
+    assert_eq!(
+        transaction.snapshot.unwrap()["review"]["replays"][replay_key]["admitted_at"],
+        100
+    );
+}

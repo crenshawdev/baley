@@ -240,3 +240,25 @@ fn read_directory_acquisition_freezes_members() {
     .unwrap();
     assert_eq!(tree.files, ["a.rs", "b.rs"]);
 }
+
+#[test]
+fn a_named_file_is_retained_as_a_named_file_target_without_a_head() {
+    let retained =
+        material::retain_file("m1", "f1", "a.rs", read_of(&snapshot("file")), &mut Saved::default(), 100)
+            .unwrap();
+    assert_eq!(
+        retained.manifest.target,
+        model::Target::NamedFile {
+            path: "a.rs".into(),
+            head: None,
+        }
+    );
+}
+#[test]
+fn a_named_file_retains_exactly_the_bytes_observed() {
+    let mut saved = Saved::default();
+    let retained =
+        material::retain_file("m1", "f1", "a.rs", read_of(&snapshot("file")), &mut saved, 100).unwrap();
+    let key = retained.manifest.entries[0].retained.clone().unwrap();
+    assert_eq!(saved.files[&key], b"old\n");
+}

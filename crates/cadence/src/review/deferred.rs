@@ -184,27 +184,31 @@ pub async fn enqueue_deferred(
     };
     // One generic contribution commits member, references and the existing index
     // in the same snapshot. No separate queue file participates.
-    match persistence::update(store, &view, &format!("enqueue:{fire}"), records).await {
-        Ok(committed) => {
-            let saved: QueuedMember = persistence::get(
-                &persistence::records(&committed.snapshot.data).map_err(|_| refused(fire))?,
-                "deferred",
-                fire,
-            )
-            .map_err(|_| refused(fire))?;
-            if saved != member {
+    let outcome = persistence::commit_records(store, &view, &format!("enqueue:{fire}"), records).await;
+    settle(fire, &member, outcome)
+}
+
+/// The reply once the new member's commit is settled. A committed member must
+/// read back exactly as proposed. When another revision won the race, its
+/// member stands only if its member, home, references and contract equal the
+/// proposed one, and then with its own time. Anything else is refused.
+pub fn settle(
+    fire: &str,
+    member: &QueuedMember,
+    outcome: persistence::Outcome,
+) -> std::result::Result<EnqueueReply, EnqueueError> {
+    match outcome {
+        persistence::Outcome::Committed(records) => {
+            let saved: QueuedMember =
+                persistence::get(&records, "deferred", fire).map_err(|_| refused(fire))?;
+            if saved != *member {
                 return Err(refused(fire));
             }
             Ok(receipt(&saved))
         }
-        Err(Error::Conflict(_)) => {
-            let winner = persistence::read(store).await.map_err(|_| refused(fire))?;
-            let saved: QueuedMember = persistence::get(
-                &persistence::records(&winner.snapshot.data).map_err(|_| refused(fire))?,
-                "deferred",
-                fire,
-            )
-            .map_err(|_| refused(fire))?;
+        persistence::Outcome::Lost(records) => {
+            let saved: QueuedMember =
+                persistence::get(&records, "deferred", fire).map_err(|_| refused(fire))?;
             if saved.record.member != member.record.member
                 || saved.record.home != member.record.home
                 || saved.record.references != member.record.references
@@ -214,7 +218,7 @@ pub async fn enqueue_deferred(
             }
             Ok(receipt(&saved))
         }
-        Err(_) => Err(refused(fire)),
+        persistence::Outcome::Failed => Err(refused(fire)),
     }
 }
 

@@ -522,13 +522,15 @@ pub fn observed_file(
     (saved, bytes)
 }
 
+/// Retains the named file `path` as it was read at `acquired_at`: a named-file
+/// target with no head, and exactly the bytes observed.
 pub fn retain_file<S: Storage>(
     manifest: &str,
     fire: &str,
     path: &str,
-    source: &mut impl MaterialIo,
+    observation: Result<cadence::store::Observed>,
     store: &mut S,
-    clock: &mut impl Clock,
+    acquired_at: u64,
 ) -> Result<RetainedMaterial> {
     let mut result = empty(
         manifest,
@@ -538,7 +540,7 @@ pub fn retain_file<S: Storage>(
             head: None,
         },
     );
-    let (mut saved, bytes) = observed_file(manifest, path, source.read(path), clock.now());
+    let (mut saved, bytes) = observed_file(manifest, path, observation, acquired_at);
     if let Some(bytes) = bytes {
         retain_bytes(store, &mut saved, &bytes)?;
         result.contents.insert(saved.entry.clone(), bytes);
