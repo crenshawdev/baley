@@ -120,27 +120,34 @@ async fn work(store: &Store, attempt_id: &str, environment: &Environment) -> Res
         Ok(response) => {
             // Accounting describes the call, including charged HTTP failures.
             // Persist it before refusing status; error text is never findings.
-            let extracted = match response.json.as_ref() {
+            let text = match response.json.as_ref() {
                 Some(json) => {
                     let extracted = super::extract(provider, json);
                     super::records::save_response(store, &attempt, provider, &response, &extracted).await?;
-                    Some(extracted)
+                    Some(extracted.text)
                 }
                 None => None,
             };
-            if !(200..300).contains(&response.status) {
-                (None, Some(diagnostics::excerpt(&format!("HTTP {}: {}", response.status, String::from_utf8_lossy(&response.raw)))))
-            } else if let Some(extracted) = extracted {
-                match extracted.text {
-                    Some(text) => (Some(text.into_bytes()), None),
-                    None => (None, Some("missing provider response text".into())),
-                }
-            } else {
-                (None, Some("malformed provider response".into()))
-            }
+            classify(response.status, &response.raw, text)
         }
     };
     Ok(Some(Outcome { raw, failure }))
+}
+
+/// What an answered provider call delivers: its text as the return, or the
+/// failure that closes the attempt. A status outside 2xx fails whatever the
+/// body holds, naming the status in a fenced, bounded excerpt, because error
+/// text is never findings. `text` is None when the body was not JSON and
+/// Some(None) when the JSON held no text.
+pub fn classify(status: u16, body: &[u8], text: Option<Option<String>>) -> (Option<Vec<u8>>, Option<String>) {
+    if !(200..300).contains(&status) {
+        return (None, Some(diagnostics::excerpt(&format!("HTTP {status}: {}", String::from_utf8_lossy(body)))));
+    }
+    match text {
+        Some(Some(text)) => (Some(text.into_bytes()), None),
+        Some(None) => (None, Some("missing provider response text".into())),
+        None => (None, Some("malformed provider response".into())),
+    }
 }
 
 async fn finish(store: &Store, admission: &Admission, attempt: &Attempt, raw: Option<Vec<u8>>, failure: Option<String>) -> Result<()> {

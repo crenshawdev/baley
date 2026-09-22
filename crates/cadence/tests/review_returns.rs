@@ -146,3 +146,11 @@ fn a_lost_race_to_a_different_accepted_return_names_the_winners_original() {
         json!({"code":"conflicting-return","attempt":"a1","original":"o1"})
     );
 }
+#[test]
+fn a_provider_failure_closes_the_attempt_failed_with_no_original() {
+    let input = fixture();
+    let mut submitted = submission(&input, None);
+    submitted.host_failure = Some("HTTP 500: upstream error".into());
+    let result = closed(decide(input["pending"].clone(), &submitted).unwrap());
+    assert_eq!((result.terminal, result.original), (model::AttemptState::Failed, None));
+}

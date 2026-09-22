@@ -9,6 +9,16 @@ fn safe_identity(value: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The provider's own account of a call: the served model, its response id
+/// (Gemini's responseId, every other provider's id) and its request id
+/// (x-request-id, else request-id), each null when absent or unsafe to keep.
+pub fn identity(provider: Provider, response: &Acquired, extracted: &Extracted) -> serde_json::Value {
+    json!({"provider":provider.name(),"response_model":safe_identity(extracted.model.as_deref()),
+        "response_id":safe_identity(response.json.as_ref()
+            .and_then(|json| json[if provider == Provider::Gemini { "responseId" } else { "id" }].as_str())),
+        "request_id":safe_identity(response.headers.get("x-request-id").or_else(|| response.headers.get("request-id")).map(String::as_str))})
+}
+
 pub async fn save_response(store: &Store, attempt: &Attempt, provider: Provider, response: &Acquired, extracted: &Extracted) -> Result<()> {
     // An acknowledgment retry must retain the first saved accounting, even if
     // the caller no longer has usable response bytes.
@@ -18,9 +28,9 @@ pub async fn save_response(store: &Store, attempt: &Attempt, provider: Provider,
     }
     let accounting = usage::normalize(provider, extracted.usage.as_ref());
     let model = safe_identity(extracted.model.as_deref());
-    let response_id = safe_identity(response.json.as_ref()
-        .and_then(|json| json[if provider == Provider::Gemini { "responseId" } else { "id" }].as_str()));
-    let request_id = safe_identity(response.headers.get("x-request-id").or_else(|| response.headers.get("request-id")).map(String::as_str));
+    let mut identity = identity(provider, response, extracted);
+    identity["native_invocation"] = json!(format!("native-invocation:{}", attempt.attempt));
+    identity["native_return"] = json!(format!("native-response:{}", attempt.attempt));
     let mut event = delivery::event(attempt, "usage", ObservationKind::Usage);
     event.usage = accounting.usage();
     event.host = Some(provider.name().into());
@@ -30,10 +40,7 @@ pub async fn save_response(store: &Store, attempt: &Attempt, provider: Provider,
     let mut records = persistence::records(&view.snapshot.data)?;
     persistence::insert(&mut records, "provider_evidence", &attempt.attempt,
         &json!({"attempt":attempt.attempt,"observation":event.observation,"accounting":accounting,
-            "identity":{"provider":provider.name(),"response_model":model,
-                "response_id":response_id,"request_id":request_id,
-                "native_invocation":format!("native-invocation:{}", attempt.attempt),
-                "native_return":format!("native-response:{}", attempt.attempt)}}))?;
+            "identity":identity}))?;
     persistence::update(store, &view, &format!("provider-evidence:{}", attempt.attempt), records).await?;
     Ok(())
 }
@@ -43,8 +50,5 @@ pub async fn save_response(store: &Store, attempt: &Attempt, provider: Provider,
 pub fn consult_response(provider: Provider, response: &Acquired, extracted: &Extracted) -> serde_json::Value {
     json!({"accounting":usage::normalize(provider, extracted.usage.as_ref()),
         "status":response.status,
-        "identity":{"provider":provider.name(),"response_model":safe_identity(extracted.model.as_deref()),
-            "response_id":safe_identity(response.json.as_ref().and_then(|j|
-                j[if provider == Provider::Gemini { "responseId" } else { "id" }].as_str())),
-            "request_id":safe_identity(response.headers.get("x-request-id").or_else(|| response.headers.get("request-id")).map(String::as_str))}})
+        "identity":identity(provider, response, extracted)})
 }

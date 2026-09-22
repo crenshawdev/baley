@@ -431,19 +431,7 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
         if let (Some(routing), Some(route)) = (&routing, &route) {
             persistence::insert(&mut data, "routes", &routing.evidence, route)?;
             if let Some(generation) = &generation {
-                let values = &generation.effective.values;
-                let defaults = review::provider::Settings::default();
-                let settings = review::provider::Settings {
-                    key_file: merge::get(values, "review.key_file").and_then(Value::as_str).map(str::to_owned),
-                    max_prompt_tokens: merge::get(values, "review.max_prompt_tokens")
-                        .and_then(Value::as_u64).filter(|value| *value > 0).unwrap_or(defaults.max_prompt_tokens),
-                    request_timeout_ms: merge::get(values, "review.request_timeout_ms")
-                        .and_then(Value::as_u64).map(review::provider::transport::effective_timeout).unwrap_or(defaults.request_timeout_ms),
-                };
-                let mut settings = serde_json::to_value(settings)?;
-                settings["provider_work_timeout_ms"] = json!(review::provider::transport::PROVIDER_WORK_TIMEOUT_MS);
-                settings["acknowledgment_budget_ms"] = json!(review::provider::transport::ACKNOWLEDGMENT_BUDGET_MS);
-                settings["attempt_budget_ms"] = json!(review::provider::transport::ATTEMPT_BUDGET_MS);
+                let settings = provider_settings(&generation.effective.values)?;
                 persistence::insert(&mut data, "provider_settings", &fire, &settings)?;
             }
         } else {
@@ -484,6 +472,26 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
     };
     if debug_dispatch { admission().await }
     else { admit_with_policy(policy_trigger, policy_gate, observed.map(|(observation, _)| observation), admission).await }
+}
+
+/// The provider settings an admission records from the config: the key file,
+/// the prompt cap, the request timeout (the configured one, capped at the
+/// default and the default when none is set) and the fixed work,
+/// acknowledgment and attempt budgets.
+fn provider_settings(values: &Value) -> Result<Value> {
+    let defaults = review::provider::Settings::default();
+    let settings = review::provider::Settings {
+        key_file: merge::get(values, "review.key_file").and_then(Value::as_str).map(str::to_owned),
+        max_prompt_tokens: merge::get(values, "review.max_prompt_tokens")
+            .and_then(Value::as_u64).filter(|value| *value > 0).unwrap_or(defaults.max_prompt_tokens),
+        request_timeout_ms: merge::get(values, "review.request_timeout_ms")
+            .and_then(Value::as_u64).map(review::provider::transport::effective_timeout).unwrap_or(defaults.request_timeout_ms),
+    };
+    let mut settings = serde_json::to_value(settings)?;
+    settings["provider_work_timeout_ms"] = json!(review::provider::transport::PROVIDER_WORK_TIMEOUT_MS);
+    settings["acknowledgment_budget_ms"] = json!(review::provider::transport::ACKNOWLEDGMENT_BUDGET_MS);
+    settings["attempt_budget_ms"] = json!(review::provider::transport::ATTEMPT_BUDGET_MS);
+    Ok(settings)
 }
 
 /// The answer for a replay key already recorded: its saved fire and attempt,

@@ -140,3 +140,17 @@ fn a_new_attempt_keeps_its_requested_model_and_has_no_observed_model() {
     assert_eq!(attempt.requested.model.as_deref(), Some("opus"));
     assert_eq!(attempt.observed_model, None);
 }
+
+#[test]
+fn provider_settings_record_the_capped_request_timeout_and_the_fixed_budgets() {
+    for (configured, request) in [(json!({}), 540_000), (json!({"review":{"request_timeout_ms":1_000}}), 1_000),
+        (json!({"review":{"request_timeout_ms":999_999}}), 540_000)]
+    {
+        let settings = provider_settings(&configured).unwrap();
+        assert_eq!(
+            [&settings["request_timeout_ms"], &settings["provider_work_timeout_ms"], &settings["acknowledgment_budget_ms"], &settings["attempt_budget_ms"]],
+            [&json!(request), &json!(570_000), &json!(30_000), &json!(600_000)],
+            "{configured}"
+        );
+    }
+}
