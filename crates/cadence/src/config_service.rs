@@ -320,42 +320,19 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
     root: &Path,
     command: Command,
 ) -> Answer {
-    let entry = if let Command::Entry(tokens) = &command {
-        match interview::entry(tokens) {
-            Ok(interview::Entry::ReviewUnavailable { reason }) => {
-                return Ok(refused("review-setup-unavailable", reason));
-            }
-            Ok(entry) => Some(entry),
-            Err(error) => return Ok(refused("invalid-config", error.to_string())),
-        }
-    } else {
-        None
+    let entry = match start(&command) {
+        Start::Answer(answer) => return Ok(*answer),
+        Start::Session(entry) => entry,
+        Start::ObserveOnly => None,
     };
     let unavailable = |error: &dyn std::fmt::Display| {
         let paths = factory
             .active_config_paths(root)
-            .map(|paths| {
-                format!(
-                    "repo: {}; global: {}",
-                    paths.repo.display(),
-                    paths
-                        .global
-                        .map_or_else(|| "unavailable".into(), |path| path.display().to_string())
-                )
-            })
+            .map(|paths| active_layers(&paths))
             .unwrap_or_else(|failure| failure.to_string());
-        refused(
-            "config-unavailable",
-            format!(
-                "{error}; active layers ({paths}); repair the named active file before retrying"
-            ),
-        )
+        config_unavailable(error, &paths)
     };
-    if let Command::Apply(Apply::Interview {
-        accepted, answers, ..
-    }) = &command
-        && (!accepted || answers.is_none())
-    {
+    if matches!(start(&command), Start::ObserveOnly) {
         return Ok(match factory.observe_config(root) {
             Ok((generation, snapshot)) => Envelope::Ok(Output::Unchanged {
                 facts: observed_facts(&generation, snapshot.as_ref(), interview::Mode::Roles),
@@ -446,13 +423,79 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
             }
         }
     };
-    match result {
+    match result.map_err(failure) {
         Ok(output) => Ok(Envelope::Ok(output)),
-        Err(Error::Invalid(reason)) => Ok(refused("invalid-config", reason)),
-        Err(Error::Conflict(reason)) => Ok(refused("config-conflict", reason)),
-        Err(Error::Policy(reason)) => Ok(unavailable(&reason)),
-        Err(error) => Err(error),
+        Err(Failure::Refused(answer)) => Ok(*answer),
+        Err(Failure::Unavailable(reason)) => Ok(unavailable(&reason)),
+        Err(Failure::Error(error)) => Err(error),
     }
+}
+
+/// What a config command needs before anything is read.
+pub enum Start {
+    /// Answered as it stands: no config is read and no session opened.
+    Answer(Box<Envelope<Output>>),
+    /// An interview that was declined or carries no answers only observes the
+    /// config and writes nothing.
+    ObserveOnly,
+    /// Open the session; an entry command carries the entry it parsed to.
+    Session(Option<interview::Entry>),
+}
+
+pub fn start(command: &Command) -> Start {
+    match command {
+        Command::Entry(tokens) => match interview::entry(tokens) {
+            Ok(interview::Entry::ReviewUnavailable { reason }) => {
+                Start::Answer(Box::new(refused("review-setup-unavailable", reason)))
+            }
+            Ok(entry) => Start::Session(Some(entry)),
+            Err(error) => Start::Answer(Box::new(refused("invalid-config", error.to_string()))),
+        },
+        Command::Apply(Apply::Interview { accepted, answers, .. })
+            if !accepted || answers.is_none() =>
+        {
+            Start::ObserveOnly
+        }
+        _ => Start::Session(None),
+    }
+}
+
+/// How a failed config command answers.
+pub enum Failure {
+    /// An invalid request or a conflict, refused with its reason.
+    Refused(Box<Envelope<Output>>),
+    /// A policy failure: the config is unavailable, for this reason.
+    Unavailable(String),
+    /// Anything else fails the call itself.
+    Error(Error),
+}
+
+pub fn failure(error: Error) -> Failure {
+    match error {
+        Error::Invalid(reason) => Failure::Refused(Box::new(refused("invalid-config", reason))),
+        Error::Conflict(reason) => Failure::Refused(Box::new(refused("config-conflict", reason))),
+        Error::Policy(reason) => Failure::Unavailable(reason),
+        error => Failure::Error(error),
+    }
+}
+
+/// The active layer files, named for a reader who has to repair one.
+pub fn active_layers(paths: &crate::config::reload::Paths) -> String {
+    format!(
+        "repo: {}; global: {}",
+        paths.repo.display(),
+        paths
+            .global
+            .as_ref()
+            .map_or_else(|| "unavailable".into(), |path| path.display().to_string())
+    )
+}
+
+pub fn config_unavailable(error: &dyn std::fmt::Display, layers: &str) -> Envelope<Output> {
+    refused(
+        "config-unavailable",
+        format!("{error}; active layers ({layers}); repair the named active file before retrying"),
+    )
 }
 
 pub fn role_input(generation: &Generation, request: &RouteRequest) -> Result<roles::Input> {

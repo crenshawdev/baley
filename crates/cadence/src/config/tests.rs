@@ -621,3 +621,82 @@ fn batch_preparation_empty_and_identical_stored_values_return_no_changes() {
         (json!({"roles":{"cad-executor":{"model":null}}}), vec![])
     );
 }
+
+/// The config schema of the frozen 3.7.12 release, exactly as tagged.
+const FROZEN_SCHEMA: &[u8] = include_bytes!("../../tests/fixtures/v3.7.12/config.schema.json");
+
+fn frozen() -> Value {
+    serde_json::from_slice(FROZEN_SCHEMA).unwrap()
+}
+
+fn frozen_keys() -> std::collections::BTreeSet<String> {
+    frozen()["keys"].as_object().unwrap().keys().cloned().collect()
+}
+
+#[test]
+fn every_frozen_key_has_exactly_one_disposition_and_the_schema_holds_it() {
+    let keys = frozen_keys();
+    assert_eq!(keys, DISPOSITIONS.iter().map(|(key, _)| key.to_string()).collect());
+    assert_eq!(DISPOSITIONS.len(), 94);
+    assert_eq!(schema().keys().filter(|key| keys.contains(*key)).count(), 94);
+}
+
+#[test]
+fn a_frozen_key_is_dead_in_the_schema_exactly_when_its_disposition_retires_it() {
+    for (key, dead) in DISPOSITIONS {
+        assert_eq!(schema()[*key]["disposition"] == "dead", *dead, "{key}");
+    }
+    assert_eq!(DISPOSITIONS.iter().filter(|(_, dead)| *dead).count(), 14);
+}
+
+#[test]
+fn a_dead_key_carries_no_default() {
+    for (key, _) in DISPOSITIONS.iter().filter(|(_, dead)| *dead) {
+        assert!(schema()[*key].get("default").is_none(), "{key}");
+    }
+}
+
+#[test]
+fn every_retired_key_is_a_dead_frozen_key() {
+    for key in RETIRED {
+        assert!(DISPOSITIONS.contains(&(key, true)), "{key}");
+    }
+}
+
+/// Every frozen key set in one layer: a dead key to `false`, and a live key
+/// to its frozen default.
+fn every_frozen_key() -> Value {
+    let frozen = frozen();
+    let mut all = json!({});
+    for (key, dead) in DISPOSITIONS {
+        super::merge::set(&mut all, key, if *dead { json!(false) } else { frozen["keys"][*key]["default"].clone() });
+    }
+    all
+}
+
+#[test]
+fn a_layer_that_sets_a_dead_key_loses_it_with_one_migration_diagnostic_per_layer() {
+    let result = merge(Some(every_frozen_key()), Some(every_frozen_key()), false);
+    assert_eq!(result.diagnostics.migration.len(), 28);
+    for (key, _) in DISPOSITIONS.iter().filter(|(_, dead)| *dead) {
+        assert!(get(&result.values, key).is_none(), "{key}");
+        for layer in [Layer::Global, Layer::Repo] {
+            assert_eq!(
+                result.diagnostics.migration.iter().filter(|d| d.key == *key && d.layer == layer).count(),
+                1,
+                "{key} {layer:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_frozen_risk_surface_defaults_are_kept_as_literal_nulls() {
+    let result = merge(Some(every_frozen_key()), Some(every_frozen_key()), false);
+    for key in [
+        "review.triggers.risk_surface.surfaces",
+        "review.triggers.risk_surface.waive_routing_floor",
+    ] {
+        assert_eq!(get(&result.repo, key), Some(&Value::Null), "{key}");
+    }
+}

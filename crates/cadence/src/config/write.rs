@@ -1,11 +1,11 @@
 //! Config changes join the store transaction; no direct config writer exists.
 use super::{
     GLOBAL_ONLY, Layer, merge,
-    reload::{self, ConfigIo, Paths, Shared},
+    reload::{self, ConfigIo, Generation, Paths, Shared},
     schema,
 };
 use cadence::store::{
-    Error, Result, Storage,
+    Error, Observed, Result, Storage,
     filesystem::Filesystem,
     model::digest,
     transaction::{ExternalChange, Transaction},
@@ -19,8 +19,15 @@ use std::path::{Path, PathBuf};
 pub fn active_paths(legacy: &Paths) -> Result<Paths> {
     let repo = reload::identity(&legacy.repo)?;
     let global = legacy.global.as_deref().map(reload::identity).transpose()?;
+    Ok(versioned(&repo, global.as_deref()))
+}
+
+/// The files config is written to, beside legacy files already resolved:
+/// `config.v4.json` next to the repo file, and next to the global file unless
+/// the global path is the repo file itself, when both layers share the repo's.
+pub fn versioned(repo: &Path, global: Option<&Path>) -> Paths {
     let destination = repo.with_file_name("config.v4.json");
-    Ok(Paths {
+    Paths {
         repo: destination.clone(),
         global: global.map(|path| {
             if path == repo {
@@ -29,7 +36,7 @@ pub fn active_paths(legacy: &Paths) -> Result<Paths> {
                 path.with_file_name("config.v4.json")
             }
         }),
-    })
+    }
 }
 
 pub fn register(root: &Path, active: &Paths) -> Result<Filesystem> {
@@ -154,60 +161,13 @@ impl<I: ConfigIo> ConfigWriter<I> {
             .lock()
             .map_err(|_| Error::Policy("config unavailable".into()))?
             .refresh()
-            .map_err(|error| Error::Policy(format!("config unavailable: {error}")))?;
+            .map_err(unavailable)?;
         if let Some(captured) = &captured {
             captured.validate(&generation)?;
         }
         let check = captured.map(|captured| input_check(self.config.clone(), captured));
-        let (target, path, input) = match layer {
-            Layer::Repo => ("repo-config", &self.active.repo, &generation.repo),
-            Layer::Global => {
-                let path =
-                    self.active.global.as_ref().ok_or_else(|| {
-                        Error::Invalid("global config address unavailable".into())
-                    })?;
-                if path == &self.active.repo {
-                    ("repo-config", path, &generation.repo)
-                } else {
-                    (
-                        "global-config",
-                        path,
-                        generation.global.as_ref().ok_or_else(|| {
-                            Error::Conflict("config layer identity changed".into())
-                        })?,
-                    )
-                }
-            }
-        };
-        // Registered participant paths are session bindings, never silently
-        // rebound by a symlink replacement during a pending config update.
-        if input.identity != *path {
-            return Err(Error::Conflict(
-                "active config identity changed; reopen session before writing config".into(),
-            ));
-        }
-        let mut raw: Value = input
-            .bytes
-            .as_deref()
-            .map(serde_json::from_slice)
-            .transpose()?
-            .unwrap_or_else(|| json!({}));
-        let (proposed, changed_keys) = prepare_batch(layer, &raw, updates)?;
-        raw = proposed;
-        let effective = match target {
-            "repo-config" => merge::merge(
-                generation.effective.raw_global.clone(),
-                Some(raw.clone()),
-                generation.effective.global_intent,
-            ),
-            _ => merge::merge(
-                Some(raw.clone()),
-                generation.effective.raw_repo.clone(),
-                generation.effective.global_intent,
-            ),
-        };
-        reload::validate_effective(&effective)?;
-        if changed_keys.is_empty() {
+        let plan = plan(&generation, &self.active, layer, updates)?;
+        if plan.bytes.is_none() {
             return Ok(Written {
                 view: self
                     .store
@@ -219,35 +179,19 @@ impl<I: ConfigIo> ConfigWriter<I> {
                         None => Operation::Read,
                     })
                     .await?,
-                changed_keys,
-                destination: path.clone(),
+                changed_keys: plan.changed_keys,
+                destination: plan.destination,
                 requested_layer: layer,
             });
         }
-        let bytes = serde_json::to_vec_pretty(&raw)?;
-        let expected = observe(target)?;
-        if expected.bytes != input.bytes {
-            return Err(Error::Conflict(
-                "config changed while preparing update".into(),
-            ));
-        }
+        let change = plan.change(observe(plan.target)?)?;
         let store_generation = self
             .store
             .request(Operation::Read)
             .await?
             .snapshot
             .generation;
-        let transaction = Transaction {
-            id: format!("config:{target}:{store_generation}:{}", digest(&bytes)),
-            items: vec![],
-            decisions: vec![],
-            snapshot: None,
-            external: vec![ExternalChange {
-                target: target.into(),
-                expected,
-                bytes,
-            }],
-        };
+        let transaction = transaction(change, store_generation);
         let operation = match check {
             Some(check) => Operation::CheckedTransact {
                 check,
@@ -258,10 +202,126 @@ impl<I: ConfigIo> ConfigWriter<I> {
         let view = self.store.request(operation).await?;
         Ok(Written {
             view,
-            changed_keys,
-            destination: path.clone(),
+            changed_keys: plan.changed_keys,
+            destination: plan.destination,
             requested_layer: layer,
         })
+    }
+}
+
+/// A config read that failed refuses the write as a policy error.
+pub fn unavailable(error: Error) -> Error {
+    Error::Policy(format!("config unavailable: {error}"))
+}
+
+/// What a config batch writes, decided against the generation it was
+/// prepared from.
+#[derive(Debug, PartialEq)]
+pub struct Plan {
+    /// The store participant the layer is written as.
+    pub target: &'static str,
+    /// The file that participant is.
+    pub destination: PathBuf,
+    /// What the file held in that generation.
+    pub prepared_against: Option<Vec<u8>>,
+    /// The keys the batch changes, sorted.
+    pub changed_keys: Vec<String>,
+    /// The layer to install, pretty-printed; nothing when no key changes.
+    pub bytes: Option<Vec<u8>>,
+}
+
+/// Plan writing `updates` to `layer`. A global write goes to the repo file
+/// when the global path is the repo file itself. The file must still be the
+/// one the session bound, and the layer it makes must leave a valid effective
+/// config.
+pub fn plan(generation: &Generation, active: &Paths, layer: Layer, updates: &[Update]) -> Result<Plan> {
+    let (target, path, input) = match layer {
+        Layer::Repo => ("repo-config", &active.repo, &generation.repo),
+        Layer::Global => {
+            let path = active
+                .global
+                .as_ref()
+                .ok_or_else(|| Error::Invalid("global config address unavailable".into()))?;
+            if path == &active.repo {
+                ("repo-config", path, &generation.repo)
+            } else {
+                (
+                    "global-config",
+                    path,
+                    generation
+                        .global
+                        .as_ref()
+                        .ok_or_else(|| Error::Conflict("config layer identity changed".into()))?,
+                )
+            }
+        }
+    };
+    // Registered participant paths are session bindings, never silently
+    // rebound by a symlink replacement during a pending config update.
+    if input.identity != *path {
+        return Err(Error::Conflict(
+            "active config identity changed; reopen session before writing config".into(),
+        ));
+    }
+    let raw: Value = input
+        .bytes
+        .as_deref()
+        .map(serde_json::from_slice)
+        .transpose()?
+        .unwrap_or_else(|| json!({}));
+    let (proposed, changed_keys) = prepare_batch(layer, &raw, updates)?;
+    let effective = match target {
+        "repo-config" => merge::merge(
+            generation.effective.raw_global.clone(),
+            Some(proposed.clone()),
+            generation.effective.global_intent,
+        ),
+        _ => merge::merge(
+            Some(proposed.clone()),
+            generation.effective.raw_repo.clone(),
+            generation.effective.global_intent,
+        ),
+    };
+    reload::validate_effective(&effective)?;
+    let bytes = if changed_keys.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_vec_pretty(&proposed)?)
+    };
+    Ok(Plan {
+        target,
+        destination: path.clone(),
+        prepared_against: input.bytes.clone(),
+        changed_keys,
+        bytes,
+    })
+}
+
+impl Plan {
+    /// The store change that installs the plan over `expected`, the file as
+    /// observed now. Bytes other than those the plan was prepared against
+    /// mean the file changed in the meantime.
+    pub fn change(&self, expected: Observed) -> Result<ExternalChange> {
+        let bytes = self
+            .bytes
+            .clone()
+            .ok_or_else(|| Error::Invalid("config plan changes nothing".into()))?;
+        if expected.bytes != self.prepared_against {
+            return Err(Error::Conflict("config changed while preparing update".into()));
+        }
+        Ok(ExternalChange { target: self.target.into(), expected, bytes })
+    }
+}
+
+/// The store transaction for one config change, identified by its target, the
+/// store generation it follows and its bytes.
+pub fn transaction(change: ExternalChange, store_generation: u64) -> Transaction {
+    Transaction {
+        id: format!("config:{}:{store_generation}:{}", change.target, digest(&change.bytes)),
+        items: vec![],
+        decisions: vec![],
+        snapshot: None,
+        external: vec![change],
     }
 }
 

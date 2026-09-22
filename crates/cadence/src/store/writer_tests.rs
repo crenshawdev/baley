@@ -544,3 +544,63 @@ mod writes {
         assert_eq!(view(&files).unwrap(), next);
     }
 }
+
+mod checked {
+    use super::super::writer::CheckedPolicy;
+    use super::super::{MutationContext, Policy, Result};
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// A store policy that records each call and allows it.
+    struct Recording(Arc<Mutex<usize>>);
+    impl Policy for Recording {
+        fn validate(&mut self, _: &MutationContext<'_>) -> Result<()> {
+            *self.0.lock().unwrap() += 1;
+            Ok(())
+        }
+    }
+
+    fn checked(check: Result<()>) -> (CheckedPolicy<Recording>, Arc<Mutex<usize>>) {
+        let calls = Arc::new(Mutex::new(0));
+        let check = Box::new(move || check.clone());
+        (CheckedPolicy { policy: Recording(calls.clone()), check: Some(check) }, calls)
+    }
+
+    fn validate(policy: &mut CheckedPolicy<Recording>) -> Result<()> {
+        let snapshot = Snapshot::new(1, b"", b"", serde_json::Value::Null).unwrap();
+        policy.validate(&MutationContext { operation: "store", snapshot: &snapshot })
+    }
+
+    #[test]
+    fn a_failing_input_check_refuses_before_the_store_policy_runs() {
+        let changed = Error::Conflict("interview config inputs changed".into());
+        let (mut policy, calls) = checked(Err(changed.clone()));
+        assert_eq!(validate(&mut policy), Err(changed));
+        assert_eq!(*calls.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn a_passing_input_check_hands_every_validation_to_the_store_policy() {
+        let (mut policy, calls) = checked(Ok(()));
+        validate(&mut policy).unwrap();
+        validate(&mut policy).unwrap();
+        assert_eq!(*calls.lock().unwrap(), 2);
+    }
+
+    #[test]
+    fn a_failing_input_check_refuses_a_routing_admission_too() {
+        let changed = Error::Conflict("interview config inputs changed".into());
+        let (mut policy, calls) = checked(Err(changed.clone()));
+        let snapshot = Snapshot::new(1, b"", b"", serde_json::Value::Null).unwrap();
+        let inputs = cadence::execution::model::ConfigInputs {
+            repo: cadence::execution::model::ConfigInput { identity: "/project/config.v4.json".into(), content: None, stamp: None },
+            global: None,
+            global_alias: false,
+        };
+        assert_eq!(
+            policy.validate_routing_admission(&MutationContext { operation: "store", snapshot: &snapshot }, &inputs),
+            Err(changed)
+        );
+        assert_eq!(*calls.lock().unwrap(), 0);
+    }
+}

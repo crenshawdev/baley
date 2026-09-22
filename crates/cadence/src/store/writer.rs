@@ -412,9 +412,11 @@ fn finish_reply(
     let _ = reply.send(result);
 }
 
-struct CheckedPolicy<P> {
-    policy: P,
-    check: Option<InputCheck>,
+/// The store policy with the captured-input check a caller attached, run
+/// before the policy on every validation.
+pub(crate) struct CheckedPolicy<P> {
+    pub(crate) policy: P,
+    pub(crate) check: Option<InputCheck>,
 }
 
 impl<P: Policy> Policy for CheckedPolicy<P> {
