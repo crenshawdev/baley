@@ -141,7 +141,8 @@ pub fn observe(root: &Path, data: &Value, phase: u32, process: &mut dyn Process)
             let proof = events.iter().find_map(|r| match &r.request.event {
                 history::Event::Close(proof) if r.request.task == task.task => Some(proof), _ => None,
             }).ok_or_else(|| refuse(phase, "verification-execution", "execution.tasks", "close proof absent"))?;
-            receipts::validate_pairs(data, &events, &proof.submission, project, process)?;
+            let facts = receipts::observe_pairs(project, &events, &proof.submission, process);
+            receipts::validate_pairs(data, &events, &proof.submission, &facts)?;
             receipts::validate_close_owner(data, &events, &proof.submission)?;
             receipts::reobserve_source(project, &proof.dispatch, &task.task.task, &proof.source, process)?;
         }

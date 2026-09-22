@@ -331,7 +331,8 @@ async fn native_close_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,ro
                 return Ok(native_error(cadence::execution::admission::refuse(request.task.phase,"task-completed","task",&request.task.task,"task already completed")));
             }
             let project=root.parent().ok_or_else(||Error::Invalid("project root missing".into()))?;
-            if let Err(error)=receipts::validate_pairs(&view.snapshot.data,&records,&request,project, process) {return Ok(native_error(error));}
+            let facts=receipts::observe_pairs(project,&records,&request, process);
+            if let Err(error)=receipts::validate_pairs(&view.snapshot.data,&records,&request,&facts) {return Ok(native_error(error));}
             let active:ActiveDispatch=match serde_json::from_value(view.snapshot.data["execution"]["occurrences"][request.task.phase.to_string()]["active"].clone()) {
                 Ok(active)=>active,Err(error)=>return Ok(native_error(Error::Invalid(error.to_string()))),
             };

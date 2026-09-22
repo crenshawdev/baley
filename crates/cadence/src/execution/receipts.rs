@@ -363,8 +363,90 @@ fn attempt_lineage(records: &[super::history::Record], task: &super::history::Ta
     lineage
 }
 
-pub fn validate_pairs(data: &serde_json::Value, records: &[super::history::Record], input: &Close, project: &std::path::Path, process: &mut dyn Process) -> crate::store::Result<()> {
+/// Everything `validate_pairs` needs to know about the repository, gathered
+/// before it starts judging. An absent fact is a question Git could not
+/// answer, and it invalidates the pair that asked it, which is what a failed
+/// `git` call used to mean in the middle of the judgment.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RepositoryFacts {
+    ancestry: std::collections::BTreeSet<(String, String)>,
+    blobs: std::collections::BTreeMap<(String, String), String>,
+    trees: std::collections::BTreeMap<String, String>,
+}
+
+impl RepositoryFacts {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `ancestor` is reachable from `descendant`.
+    pub fn ancestor(mut self, ancestor: &str, descendant: &str) -> Self {
+        self.ancestry.insert((ancestor.to_owned(), descendant.to_owned()));
+        self
+    }
+
+    /// The digest of `path` as committed at `commit`.
+    pub fn blob(mut self, commit: &str, path: &str, digest: &str) -> Self {
+        self.blobs.insert((commit.to_owned(), path.to_owned()), digest.to_owned());
+        self
+    }
+
+    /// The tree `commit` names.
+    pub fn tree(mut self, commit: &str, tree: &str) -> Self {
+        self.trees.insert(commit.to_owned(), tree.to_owned());
+        self
+    }
+
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
+        self.ancestry.contains(&(ancestor.to_owned(), descendant.to_owned()))
+    }
+
+    fn blob_digest(&self, commit: &str, path: &str) -> Option<&str> {
+        self.blobs.get(&(commit.to_owned(), path.to_owned())).map(String::as_str)
+    }
+
+    fn tree_of(&self, commit: &str) -> Option<&str> {
+        self.trees.get(commit).map(String::as_str)
+    }
+}
+
+/// Ask Git every question `validate_pairs` will ask, and keep the answers as
+/// values. This is the boundary: it decides nothing, and a question Git
+/// refuses is simply left unanswered. It has no unit test, because a test of
+/// it could only hand it the answers it is here to fetch.
+pub fn observe_pairs(project: &std::path::Path, records: &[super::history::Record], input: &Close, process: &mut dyn Process) -> RepositoryFacts {
     use super::{history::Event, runner::{git,git_text}};
+    let mut facts=RepositoryFacts::new();
+    let test_file=|run: &str| records.iter().find_map(|r|match &r.request.event {
+        Event::Launch(launch) if r.request.task==input.task && launch.run_id==run=>Some(launch.material.test_file.clone()), _=>None,
+    });
+    let mut ask_ancestor=|facts: &mut RepositoryFacts, ancestor: &str, descendant: &str| {
+        if git(project,&["merge-base","--is-ancestor",ancestor,descendant], process).is_ok() {
+            *facts=std::mem::take(facts).ancestor(ancestor,descendant);
+        }
+    };
+    for pair in &input.checks {
+        ask_ancestor(&mut facts,&pair.red_commit,&pair.green_commit);
+        ask_ancestor(&mut facts,&pair.green_commit,&input.completion);
+    }
+    for pair in &input.checks {
+        for (commit,run) in [(&pair.red_commit,&pair.red_run),(&pair.green_commit,&pair.green_run),(&input.completion,&pair.green_run)] {
+            let Some(path)=test_file(run) else { continue };
+            if let Ok(bytes)=git(project,&["show",&format!("{commit}:{path}")], process) {
+                facts=facts.blob(commit,&path,&crate::store::model::digest(&bytes));
+            }
+        }
+        for commit in [&pair.red_commit,&pair.green_commit] {
+            if let Ok(tree)=git_text(project,&["rev-parse",&format!("{commit}^{{tree}}")], process) {
+                facts=facts.tree(commit,&tree);
+            }
+        }
+    }
+    facts
+}
+
+pub fn validate_pairs(data: &serde_json::Value, records: &[super::history::Record], input: &Close, facts: &RepositoryFacts) -> crate::store::Result<()> {
+    use super::history::Event;
     let checks=allocated(data,&input.task)?;
     // A task that stopped at a checkpoint resumes in a successor attempt that
     // names its predecessor. Its red runs stay where they were recorded, so a
@@ -392,15 +474,12 @@ pub fn validate_pairs(data: &serde_json::Value, records: &[super::history::Recor
             let (gi,green,_)=get(&pair.green_run,false)?;
             if ri>=gi || red_result.observed_at>green.launched_at || red.material.commit!=pair.red_commit || green.material.commit!=pair.green_commit
                 || red.material.test_file!=green.material.test_file || red.material.test_digest!=green.material.test_digest || red.material.command!=green.material.command {return None}
-            git(project,&["merge-base","--is-ancestor",&pair.red_commit,&pair.green_commit], process).ok()?;
-            git(project,&["merge-base","--is-ancestor",&pair.green_commit,&input.completion], process).ok()?;
+            if !facts.is_ancestor(&pair.red_commit,&pair.green_commit) || !facts.is_ancestor(&pair.green_commit,&input.completion) {return None}
             for (commit,material) in [(&pair.red_commit,&red.material),(&pair.green_commit,&green.material)] {
-                let bytes=git(project,&["show",&format!("{commit}:{}",material.test_file)], process).ok()?;
-                if crate::store::model::digest(&bytes)!=material.test_digest
-                    || git_text(project,&["rev-parse",&format!("{commit}^{{tree}}")], process).ok()?!=material.tree {return None}
+                if facts.blob_digest(commit,&material.test_file)?!=material.test_digest
+                    || facts.tree_of(commit)?!=material.tree {return None}
             }
-            let completion_test=git(project,&["show",&format!("{}:{}",input.completion,green.material.test_file)], process).ok()?;
-            if crate::store::model::digest(&completion_test)!=green.material.test_digest {return None}
+            if facts.blob_digest(&input.completion,&green.material.test_file)?!=green.material.test_digest {return None}
             Some(())
         })().is_some();
         if !valid {invalid.push(check.clone());}
@@ -414,7 +493,8 @@ pub fn validate_pairs(data: &serde_json::Value, records: &[super::history::Recor
 
 pub fn validate_close(data: &serde_json::Value, records: &[super::history::Record], proof: &CloseProof, process: &mut dyn Process) -> crate::store::Result<()> {
     let input=&proof.submission;
-    validate_pairs(data,records,input,&proof.project, process)?;
+    let facts=observe_pairs(&proof.project,records,input, process);
+    validate_pairs(data,records,input,&facts)?;
     let active=&data["execution"]["occurrences"][input.task.phase.to_string()]["active"];
     if serde_json::from_value::<super::model::ActiveDispatch>(active.clone())?!=proof.dispatch || proof.dispatch.plan!=input.task.plan {
         return Err(super::admission::refuse(input.task.phase,"task-dispatch","task",&input.task.task,"task close requires its exact active dispatch"));

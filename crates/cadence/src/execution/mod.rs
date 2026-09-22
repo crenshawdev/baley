@@ -14,3 +14,6 @@ pub mod runner;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod pair_tests;
