@@ -605,37 +605,147 @@ pub fn staged(project: &std::path::Path, process: &mut dyn Process) -> crate::st
     Ok((objects, paths))
 }
 
-pub fn observe_source(project: &std::path::Path, active: &super::model::ActiveDispatch, task_id: &str,
-    completion: &str, evidence: &[String],
-    process: &mut dyn Process,) -> crate::store::Result<SourceMaterial> {
+/// What Git says about the commits a close offers, gathered before anything is
+/// judged about them. Absence is an answer: a commit missing from `present` is
+/// one Git would not read as a commit, and one missing from `after_base` is one
+/// Git would not place after the dispatch base.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceObservation {
+    present: std::collections::BTreeSet<String>,
+    after_base: std::collections::BTreeSet<String>,
+    reachable_from_head: std::collections::BTreeSet<String>,
+    paths: std::collections::BTreeMap<String, Vec<String>>,
+    signed_completion: bool,
+    completion_subject: String,
+    staged_objects: Vec<u8>,
+    staged_paths: Vec<String>,
+}
+
+impl SourceObservation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Git read this commit, placed it after the dispatch base, reached it from
+    /// HEAD, and reported these paths for it.
+    pub fn commit(mut self, commit: &str, paths: &[&str]) -> Self {
+        self.present.insert(commit.to_owned());
+        self.after_base.insert(commit.to_owned());
+        self.reachable_from_head.insert(commit.to_owned());
+        self.paths.insert(commit.to_owned(), paths.iter().map(|path| (*path).to_owned()).collect());
+        self
+    }
+
+    /// Git could not read this commit at all.
+    pub fn absent(mut self, commit: &str) -> Self {
+        self.present.remove(commit);
+        self
+    }
+
+    /// Git read this commit but would not place it after the dispatch base.
+    pub fn before_the_base(mut self, commit: &str) -> Self {
+        self.after_base.remove(commit);
+        self
+    }
+
+    /// Git read this commit but could not reach it from HEAD.
+    pub fn unreachable(mut self, commit: &str) -> Self {
+        self.reachable_from_head.remove(commit);
+        self
+    }
+
+    pub fn completion_subject(mut self, subject: &str) -> Self {
+        self.completion_subject = subject.to_owned();
+        self
+    }
+
+    pub fn signed(mut self, signed: bool) -> Self {
+        self.signed_completion = signed;
+        self
+    }
+
+    pub fn staged(mut self, objects: &[u8], paths: &[&str]) -> Self {
+        self.staged_objects = objects.to_vec();
+        self.staged_paths = paths.iter().map(|path| (*path).to_owned()).collect();
+        self
+    }
+}
+
+/// Ask Git about the commits this close offers. This is the boundary: it makes
+/// no judgment, a question Git refuses is recorded as an unanswered one, and it
+/// has no unit test, because a test of it could only hand it the answers it
+/// exists to fetch. A malformed identifier is never handed to Git at all, since
+/// `judge_source` refuses it on its shape.
+pub fn observe_repository_source(project: &std::path::Path, active: &super::model::ActiveDispatch,
+    completion: &str, evidence: &[String], process: &mut dyn Process,) -> crate::store::Result<SourceObservation> {
     use super::runner::{git, git_text};
-    use crate::{rail::risk::valid_object_id, store::Error};
+    use crate::rail::risk::valid_object_id;
+    let mut observation = SourceObservation::new();
     let head = git_text(project, &["rev-parse", "HEAD"], process)?;
+    for commit in evidence.iter().map(String::as_str).chain(std::iter::once(completion)) {
+        if !valid_object_id(commit) { continue }
+        if git(project, &["cat-file", "-e", &format!("{commit}^{{commit}}")], process).is_ok() {
+            observation.present.insert(commit.to_owned());
+        }
+        if git(project, &["merge-base", "--is-ancestor", &active.base_sha, commit], process).is_ok() {
+            observation.after_base.insert(commit.to_owned());
+        }
+        if git(project, &["merge-base", "--is-ancestor", commit, &head], process).is_ok() {
+            observation.reachable_from_head.insert(commit.to_owned());
+        }
+        if let Ok(paths) = commit_paths(project, commit, process) {
+            observation.paths.insert(commit.to_owned(), paths);
+        }
+    }
+    observation.signed_completion = git(project, &["verify-commit", completion], process).is_ok();
+    observation.completion_subject = git_text(project, &["show", "-s", "--format=%s", completion], process).unwrap_or_default();
+    let (objects, paths) = staged(project, process)?;
+    observation.staged_objects = objects;
+    observation.staged_paths = paths;
+    Ok(observation)
+}
+
+/// Judge what Git said. Every refusal here is a rule of ours over values.
+pub fn judge_source(active: &super::model::ActiveDispatch, task_id: &str, completion: &str,
+    evidence: &[String], observation: &SourceObservation,) -> crate::store::Result<SourceMaterial> {
+    use crate::{rail::risk::valid_object_id, store::Error};
     let mut observed = std::collections::BTreeMap::new();
     let mut out_of_lease = std::collections::BTreeMap::new();
     for commit in evidence.iter().map(String::as_str).chain(std::iter::once(completion)) {
         if !valid_object_id(commit) || commit == active.base_sha {
             return Err(Error::Invalid("evidence commit requires a full object id strictly after the dispatch base".into()));
         }
-        git(project, &["cat-file", "-e", &format!("{commit}^{{commit}}")], process)?;
-        git(project, &["merge-base", "--is-ancestor", &active.base_sha, commit], process)?;
-        git(project, &["merge-base", "--is-ancestor", commit, &head], process)?;
-        let paths = commit_paths(project, commit, process)?;
+        if !observation.present.contains(commit) || !observation.after_base.contains(commit)
+            || !observation.reachable_from_head.contains(commit) {
+            return Err(Error::Invalid("evidence commit must be a commit after the dispatch base and reachable from HEAD".into()));
+        }
+        let paths = observation.paths.get(commit)
+            .ok_or_else(|| Error::Invalid("evidence commit reported no paths".to_owned()))?.clone();
         let outside: Vec<String> = paths.iter()
             .filter(|path| !super::lease::covers(&active.files, &active.directories, path)).cloned().collect();
         if !outside.is_empty() { out_of_lease.insert(commit.to_owned(), outside); }
         observed.insert(commit.to_owned(), paths);
     }
-    git(project, &["verify-commit", completion], process)?;
-    let subject = git_text(project, &["show", "-s", "--format=%s", completion], process)?;
-    if !conventional_subject(&subject, task_id) { return Err(Error::Invalid("completion subject must name its task conventionally".into())); }
-    let (staged_objects, staged_paths) = staged(project, process)?;
-    for path in &staged_paths {
+    if !observation.signed_completion {
+        return Err(Error::Invalid("completion commit requires a valid signature".into()));
+    }
+    if !conventional_subject(&observation.completion_subject, task_id) {
+        return Err(Error::Invalid("completion subject must name its task conventionally".into()));
+    }
+    for path in &observation.staged_paths {
         if !super::lease::covers(&active.files, &active.directories, path) {
             return Err(super::admission::refuse(active.phase, "lease", "staged", path, "out-of-lease staged path"));
         }
     }
-    Ok(SourceMaterial { completion: completion.into(), evidence_commits: evidence.to_vec(), commit_paths: observed, out_of_lease, staged_objects, staged_paths })
+    Ok(SourceMaterial { completion: completion.into(), evidence_commits: evidence.to_vec(), commit_paths: observed,
+        out_of_lease, staged_objects: observation.staged_objects.clone(), staged_paths: observation.staged_paths.clone() })
+}
+
+pub fn observe_source(project: &std::path::Path, active: &super::model::ActiveDispatch, task_id: &str,
+    completion: &str, evidence: &[String],
+    process: &mut dyn Process,) -> crate::store::Result<SourceMaterial> {
+    let observation = observe_repository_source(project, active, completion, evidence, process)?;
+    judge_source(active, task_id, completion, evidence, &observation)
 }
 
 pub fn reobserve_source(project: &std::path::Path, active: &super::model::ActiveDispatch, task_id: &str, expected: &SourceMaterial, process: &mut dyn Process) -> crate::store::Result<()> {

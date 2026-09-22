@@ -23,3 +23,6 @@ mod receipts_fixtures;
 
 #[cfg(test)]
 mod owner_tests;
+
+#[cfg(test)]
+mod source_tests;
