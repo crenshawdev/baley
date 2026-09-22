@@ -5,34 +5,31 @@ use cadence::store::{
     model::{self, DecisionRecord, ItemRecord},
     writer::View,
 };
+use cadence::process::{Launch, Process};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::Path,
-    process::{Command, Stdio},
 };
 
-pub trait ReadGit {
-    fn run(&mut self, root: &Path, args: &[&str]) -> Result<Vec<u8>, String>;
-}
-pub struct Git;
-impl ReadGit for Git {
-    fn run(&mut self, root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-        let output = Command::new("git")
-            .current_dir(root)
-            .args(args)
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .env("GIT_NO_LAZY_FETCH", "1")
-            .env("GIT_LITERAL_PATHSPECS", "1")
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|e| format!("git {} unavailable: {e}", args[0]))?;
-        if !output.status.success() {
-            return Err(format!("git {} failed ({})", args[0], output.status));
-        }
-        Ok(output.stdout)
+/// Read-only git: optional locks off, no lazy fetch, literal pathspecs and no
+/// terminal prompt, so a traversal can never write or reach the network.
+fn read_git(process: &mut dyn Process, root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    let output = process
+        .run(
+            &Launch::new("git")
+                .cwd(root)
+                .args(args)
+                .env("GIT_OPTIONAL_LOCKS", "0")
+                .env("GIT_NO_LAZY_FETCH", "1")
+                .env("GIT_LITERAL_PATHSPECS", "1")
+                .env("GIT_TERMINAL_PROMPT", "0"),
+        )
+        .map_err(|e| format!("git {} unavailable: {e}", args[0]))?;
+    if !output.success() {
+        return Err(format!("git {} failed ({})", args[0], output.status));
     }
+    Ok(output.stdout)
 }
 
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
@@ -179,7 +176,7 @@ fn historical(
     Ok(candidates)
 }
 
-pub fn read(root: &Path, view: &View, live: &[Candidate], git: &mut impl ReadGit) -> History {
+pub fn read(root: &Path, view: &View, live: &[Candidate], process: &mut dyn Process) -> History {
     let mut out = History::default();
     let excluded = super::declined(view);
     let mut seen: BTreeSet<_> = live.iter().map(evidence_key).collect();
@@ -210,23 +207,23 @@ pub fn read(root: &Path, view: &View, live: &[Candidate], git: &mut impl ReadGit
             }
         }
     }
-    let traverse = |git: &mut dyn ReadGit,
+    let traverse = |process: &mut dyn Process,
                     out: &mut History,
                     admit: &mut dyn FnMut(Vec<Candidate>, &mut History)|
      -> Result<(), String> {
-        let shallow = utf8(git.run(root, &["rev-parse", "--is-shallow-repository"])?)?;
+        let shallow = utf8(read_git(process, root, &["rev-parse", "--is-shallow-repository"])?)?;
         if shallow.trim() == "true" {
             out.incomplete.push(
                 "shallow history: ancestors beyond the shallow boundary are unavailable".into(),
             );
         }
-        let top = utf8(git.run(root, &["rev-parse", "--show-toplevel"])?)?;
+        let top = utf8(read_git(process, root, &["rev-parse", "--show-toplevel"])?)?;
         let root = root.canonicalize().map_err(|e| e.to_string())?;
         let relative = root
             .strip_prefix(Path::new(top.trim()))
             .map_err(|_| "planning root outside git worktree".to_string())?;
         let prefix = relative.to_str().ok_or("non-UTF8 planning root")?;
-        let commits = utf8(git.run(&root, &["rev-list", "--topo-order", "HEAD"])?)?;
+        let commits = utf8(read_git(process, &root, &["rev-list", "--topo-order", "HEAD"])?)?;
         if commits.trim().is_empty() {
             return Err("unborn repository: no reachable history".into());
         }
@@ -234,7 +231,8 @@ pub fn read(root: &Path, view: &View, live: &[Candidate], git: &mut impl ReadGit
         let mut visited = BTreeSet::new();
         for commit in commits.lines() {
             out.identities.insert(format!("commit:{commit}"));
-            let tree = git.run(
+            let tree = read_git(
+                process,
                 &root,
                 &["ls-tree", "--full-tree", "-r", "-z", commit, "--", prefix],
             )?;
@@ -274,7 +272,7 @@ pub fn read(root: &Path, view: &View, live: &[Candidate], git: &mut impl ReadGit
                 let bytes = if let Some(bytes) = blobs.get(blob) {
                     bytes.clone()
                 } else {
-                    match git.run(&root, &["cat-file", "blob", blob]) {
+                    match read_git(process, &root, &["cat-file", "blob", blob]) {
                         Ok(bytes) => {
                             blobs.insert(blob.into(), bytes.clone());
                             bytes
@@ -295,7 +293,7 @@ pub fn read(root: &Path, view: &View, live: &[Candidate], git: &mut impl ReadGit
         }
         Ok(())
     };
-    if let Err(e) = traverse(git, &mut out, &mut admit) {
+    if let Err(e) = traverse(process, &mut out, &mut admit) {
         out.incomplete.push(format!("history incomplete: {e}"));
     }
     out

@@ -336,12 +336,12 @@ fn history_answer(
     root: &Path,
     view: &View,
     query: &str,
-    git: &mut impl history::ReadGit,
+    process: &mut dyn cadence::process::Process,
 ) -> Answer {
     let docs = documents::read(root, &mut documents::Files);
     let mut candidates = current(view);
     candidates.extend(docs.candidates);
-    let history = history::read(root, view, &candidates, git);
+    let history = history::read(root, view, &candidates, process);
     candidates.extend(history.candidates);
     let mut result = Corpus::new(candidates, &declined(view))
         .query(query, None, "builtin")
@@ -392,18 +392,18 @@ fn removed_authored_memory_has_exact_commit_and_path_without_duplicate_blobs() {
     fs::remove_file(root.join("phases/1.10/CONTEXT.md")).unwrap();
     git(repo.as_path(), &["add", ".planning/phases/1.10/CONTEXT.md"]);
     commit(repo.as_path(), "docs: phase is pruned");
-    let answer = history_answer(&root, &view(vec![]), "amberfalcon", &mut history::Git);
+    let answer = history_answer(&root, &view(vec![]), "amberfalcon", &mut cadence::process::System);
     assert!(answer.incomplete.is_empty(), "{:?}", answer.incomplete);
     assert_eq!(answer.total, 1);
     assert!(
         matches!(&answer.results[0].provenance,Provenance::Document {path,line:3,commit:Some(sha),..} if path == "phases/1.10/CONTEXT.md" && sha == &containing)
     );
     assert_eq!(
-        history_answer(&root, &view(vec![]), "retainedfalcon", &mut history::Git).total,
+        history_answer(&root, &view(vec![]), "retainedfalcon", &mut cadence::process::System).total,
         1
     );
     assert_eq!(
-        history_answer(&root, &view(vec![]), "amberfalcon", &mut history::Git),
+        history_answer(&root, &view(vec![]), "amberfalcon", &mut cadence::process::System),
         answer
     );
 }
@@ -411,9 +411,12 @@ fn removed_authored_memory_has_exact_commit_and_path_without_duplicate_blobs() {
 #[test]
 fn residue_preserves_label_origin_and_absence_of_invented_history() {
     struct Missing;
-    impl history::ReadGit for Missing {
-        fn run(&mut self, _: &Path, _: &[&str]) -> Result<Vec<u8>, String> {
-            Err("git executable unavailable".into())
+    impl cadence::process::Process for Missing {
+        fn run(
+            &mut self,
+            _: &cadence::process::Launch,
+        ) -> std::io::Result<cadence::process::Output> {
+            Err(std::io::Error::other("git executable unavailable"))
         }
     }
     let dir = temp();
@@ -441,7 +444,7 @@ fn unborn_shallow_and_failed_blob_reads_state_incomplete_coverage() {
     let repo = repository(dir.path());
     let root = repo.as_path().join(".planning");
     put(&root, "PROJECT.md", "livefalcon evidence");
-    let unborn = history_answer(&root, &view(vec![]), "livefalcon", &mut history::Git);
+    let unborn = history_answer(&root, &view(vec![]), "livefalcon", &mut cadence::process::System);
     assert_eq!(unborn.total, 1);
     assert!(
         unborn
@@ -473,7 +476,7 @@ fn unborn_shallow_and_failed_blob_reads_state_incomplete_coverage() {
         &clone.path().join("shallow/.planning"),
         &view(vec![]),
         "livefalcon",
-        &mut history::Git,
+        &mut cadence::process::System,
     );
     assert_eq!(shallow.total, 1);
     assert!(
@@ -483,12 +486,15 @@ fn unborn_shallow_and_failed_blob_reads_state_incomplete_coverage() {
             .any(|r| r.contains("shallow history"))
     );
     struct FailedBlob;
-    impl history::ReadGit for FailedBlob {
-        fn run(&mut self, root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-            if args[0] == "cat-file" {
-                Err("injected missing object".into())
+    impl cadence::process::Process for FailedBlob {
+        fn run(
+            &mut self,
+            launch: &cadence::process::Launch,
+        ) -> std::io::Result<cadence::process::Output> {
+            if launch.args.first().is_some_and(|arg| arg == "cat-file") {
+                Err(std::io::Error::other("injected missing object"))
             } else {
-                history::ReadGit::run(&mut history::Git, root, args)
+                cadence::process::System.run(launch)
             }
         }
     }
@@ -520,7 +526,7 @@ async fn current_decline_suppresses_git_filed_and_store_identity_but_not_indepen
     git(repo.as_path(), &["add", ".planning/items.jsonl"]);
     commit(repo.as_path(), "feat: structured finding is retained");
     assert_eq!(
-        history_answer(&root, &before, "declinedfalcon", &mut history::Git).total,
+        history_answer(&root, &before, "declinedfalcon", &mut cadence::process::System).total,
         1
     );
     let dead = cadence::store::items::revise(
@@ -532,7 +538,7 @@ async fn current_decline_suppresses_git_filed_and_store_identity_but_not_indepen
     .unwrap();
     let after = service.request(Operation::AppendItem(dead)).await.unwrap();
     assert_eq!(
-        history_answer(&root, &after, "declinedfalcon", &mut history::Git).total,
+        history_answer(&root, &after, "declinedfalcon", &mut cadence::process::System).total,
         0
     );
     put(
@@ -540,7 +546,7 @@ async fn current_decline_suppresses_git_filed_and_store_identity_but_not_indepen
         "PROJECT.md",
         "declinedfalcon appears independently in prose",
     );
-    let answer = history_answer(&root, &after, "declinedfalcon", &mut history::Git);
+    let answer = history_answer(&root, &after, "declinedfalcon", &mut cadence::process::System);
     assert_eq!(answer.total, 1);
     assert!(
         matches!(&answer.results[0].provenance,Provenance::Document {path,..} if path == "PROJECT.md")

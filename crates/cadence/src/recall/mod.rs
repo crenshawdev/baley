@@ -435,7 +435,7 @@ pub(crate) mod resident {
             .collect();
         let mut candidates = current(view);
         candidates.extend(docs.candidates);
-        let history = history::read(root, view, &candidates, &mut history::Git);
+        let history = history::read(root, view, &candidates, &mut cadence::process::System);
         candidates.extend(history.candidates);
         let inputs = Inputs {
             store: (
