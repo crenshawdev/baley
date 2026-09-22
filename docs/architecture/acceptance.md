@@ -367,10 +367,11 @@ write coverage, and do not write a second check for a truth.
 **Executor.** For each check your task delivers: write the test first, run
 it, record the commit where it failed; then implement, run it, record the
 commit where it passed. Run only what the task names while working. Close the
-last task, report, and stop; the orchestrator requests the full suite. Unit
-tests beyond the checks are yours: test a unit through what it exposes, fake
-only files, clock, other programs and network, skip trivial code, write the
-expected value by hand.
+last task, report, and stop; the orchestrator requests the full suite. Every
+test you write, the checks included, exercises one unit through what it
+exposes and fakes the outside world: files, clock, other programs, network.
+Never start a program to get an answer, not this project's binary, not git,
+not gpg. Skip trivial code, write the expected value by hand.
 
 **Verifier.** For each evidence item: open it, run it, or trace it. Return a
 verdict per item - accepted, rejected or not seen - with what you observed.
@@ -387,9 +388,11 @@ are written and run.** Five decisions draw it exactly.
 1. **Cadence ships one default test style, as guidance, never as a gate.**
    The executor is told, when the project has set nothing: test a unit through
    what it exposes, not its insides; fake only the outside world - files,
-   clock, other programs, network; do not test trivial code (getters,
-   forwarding, constructors that only store); write the expected value by
-   hand. That is the `classical` preset and the first of the named styles.
+   clock, other programs, network; never start a program to get an answer,
+   the project's own binary, git and gpg included; do not test trivial code
+   (getters, forwarding, constructors that only store); write the expected
+   value by hand. That is the `classical` preset and the first of the named
+   styles.
    Cadence never counts, never measures coverage, never refuses on style.
 2. **CI is not acceptance evidence.** A green pipeline says "nothing we
    already tested broke" - a claim broader than any truth, which is the one

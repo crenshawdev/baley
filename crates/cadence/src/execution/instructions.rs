@@ -7,11 +7,11 @@ use serde_json::{Value, json};
 pub const VERSION: &str = "executor-instructions-1";
 
 /// The design's Executor block, verbatim (`docs/architecture/acceptance.md`).
-pub const EXECUTOR_BLOCK: &str = "**Executor.** For each check your task delivers: write the test first, run it, record the commit where it failed; then implement, run it, record the commit where it passed. Run only what the task names while working. Close the last task, report, and stop; the orchestrator requests the full suite. Unit tests beyond the checks are yours: test a unit through what it exposes, fake only files, clock, other programs and network, skip trivial code, write the expected value by hand.";
+pub const EXECUTOR_BLOCK: &str = "**Executor.** For each check your task delivers: write the test first, run it, record the commit where it failed; then implement, run it, record the commit where it passed. Run only what the task names while working. Close the last task, report, and stop; the orchestrator requests the full suite. Every test you write, the checks included, exercises one unit through what it exposes and fakes the outside world: files, clock, other programs, network. Never start a program to get an answer, not this project's binary, not git, not gpg. Skip trivial code, write the expected value by hand.";
 
 /// The classical default (D-115): guidance when the project has set no test
 /// style, never a gate; nothing about style is refused or counted.
-pub const CLASSICAL_DEFAULT: &str = "Classical default, given because the project has set no test style; it is guidance and never a gate, and nothing about style changes task eligibility or adds a count: test a unit through what it exposes, not its insides; fake only files, clock, other programs and network; skip trivial code such as getters, forwarding and constructors that only store; write the expected value by hand.";
+pub const CLASSICAL_DEFAULT: &str = "Classical default, given because the project has set no test style; it is guidance and never a gate, and nothing about style changes task eligibility or adds a count: test a unit through what it exposes, not its insides; fake only files, clock, other programs and network; never start a program to get an answer, the project's own binary, git and gpg included; skip trivial code such as getters, forwarding and constructors that only store; write the expected value by hand.";
 
 const PROTOCOL: &str = r#"## Native task protocol
 
