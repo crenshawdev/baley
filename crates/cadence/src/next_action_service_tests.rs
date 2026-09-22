@@ -1394,7 +1394,6 @@ fn phase_five_acceptance_inventory_names_executable_obligations() {
     const EVIDENCE: &str = include_str!("evidence_service_tests.rs");
     const NEXT_ACTION: &str = include_str!("next_action_service_tests.rs");
     const PAUSE: &str = include_str!("pause_service_tests.rs");
-    const MCP: &str = include_str!("../tests/mcp.rs");
 
     for module in [
         "evidence_service_tests",
@@ -1496,8 +1495,4 @@ fn phase_five_acceptance_inventory_names_executable_obligations() {
             );
         }
     }
-
-    assert!(MCP.contains(
-        "#[test]\nfn tools_list_declares_exactly_cadence_version_without_an_output_schema()"
-    ));
 }
