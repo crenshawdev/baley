@@ -129,6 +129,9 @@ struct GuardedDocuments<'a, I: ConfigIo> {
 }
 
 impl<I: ConfigIo> ArtifactIo for GuardedDocuments<'_, I> {
+    fn acceptance(&mut self, root: &Path) -> std::result::Result<cadence::derivation::AcceptanceOverlay, cadence::derivation::DerivationError> {
+        self.files.acceptance(root)
+    }
     fn resolve_root(&mut self, selected: &Path) -> std::result::Result<PathBuf, InputFailure> {
         self.files.resolve_root(selected)
     }
@@ -756,28 +759,13 @@ impl<I: ConfigIo> Session<I> {
         if !matches!(operation, Operation::GuardAudit(..)) {
             self.config()?;
         }
-        let operation = match operation {
-            Operation::RewriteSnapshot(value) => {
-                let current = self.store.request(Operation::ReadVerified).await?;
-                Operation::CompareRewriteSnapshot {
-                    expected_generation: current.snapshot.generation,
-                    expected_integrity: current.snapshot.integrity,
-                    data: replace_current(&current.snapshot.data, value)?,
-                }
-            }
-            Operation::Transact(mut transaction) if transaction.snapshot.is_some() => {
-                let current = self.store.request(Operation::ReadVerified).await?;
-                transaction.snapshot = Some(replace_current(
-                    &current.snapshot.data,
-                    transaction.snapshot.take().unwrap(),
-                )?);
-                Operation::CompareTransact {
-                    expected_generation: current.snapshot.generation,
-                    expected_integrity: current.snapshot.integrity,
-                    transaction,
-                }
-            }
-            other => other,
+        let pinned = matches!(&operation, Operation::RewriteSnapshot(_))
+            || matches!(&operation, Operation::Transact(transaction) if transaction.snapshot.is_some());
+        let operation = if pinned {
+            let current = self.store.request(Operation::ReadVerified).await?;
+            conditional(&current, operation)?
+        } else {
+            operation
         };
         self.store.request(operation).await
     }
@@ -795,25 +783,7 @@ impl<I: ConfigIo> Session<I> {
     /// The supplied generation is checked again by the writer on its owner thread.
     pub async fn commit_derivation(&self, expected: &View, data: Value) -> Result<View> {
         let current = self.derivation_view().await?;
-        if current.snapshot.generation != expected.snapshot.generation
-            || current.snapshot.integrity != expected.snapshot.integrity
-        {
-            return Err(Error::Conflict(
-                cadence::store::writer::STALE_SNAPSHOT.into(),
-            ));
-        }
-        if !data.is_object() || data.get("import") != current.snapshot.data.get("import") {
-            return Err(Error::Invalid(
-                "derivation replacement must preserve import manifest".into(),
-            ));
-        }
-        for field in ["source_evidence", "archive", "cursor", LAYERS] {
-            if data.get(field) != current.snapshot.data.get(field) {
-                return Err(Error::Invalid(format!(
-                    "derivation replacement changed provenance: {field}"
-                )));
-            }
-        }
+        check_derivation(&current, expected, &data)?;
         self.store
             .request(Operation::CompareRewriteSnapshot {
                 expected_generation: expected.snapshot.generation,
@@ -928,6 +898,57 @@ impl<I: ConfigIo> Session<I> {
         let view = self.store.request(Operation::Read).await?;
         Ok(config::capture_report(&view.items, bound))
     }
+}
+
+/// The operation a session sends once it has read `current`: a snapshot
+/// rewrite, or a transaction carrying a snapshot, becomes a compare-and-replace
+/// pinned to `current`, with its provenance kept. Anything else is unchanged.
+pub fn conditional(current: &View, operation: Operation) -> Result<Operation> {
+    Ok(match operation {
+        Operation::RewriteSnapshot(value) => Operation::CompareRewriteSnapshot {
+            expected_generation: current.snapshot.generation,
+            expected_integrity: current.snapshot.integrity.clone(),
+            data: replace_current(&current.snapshot.data, value)?,
+        },
+        Operation::Transact(mut transaction) if transaction.snapshot.is_some() => {
+            transaction.snapshot = Some(replace_current(
+                &current.snapshot.data,
+                transaction.snapshot.take().unwrap(),
+            )?);
+            Operation::CompareTransact {
+                expected_generation: current.snapshot.generation,
+                expected_integrity: current.snapshot.integrity.clone(),
+                transaction,
+            }
+        }
+        other => other,
+    })
+}
+
+/// Whether a derivation may replace `current` with `data`: it was derived from
+/// the current snapshot, and it keeps the import manifest and every provenance
+/// field exactly as they are.
+pub fn check_derivation(current: &View, expected: &View, data: &Value) -> Result<()> {
+    if current.snapshot.generation != expected.snapshot.generation
+        || current.snapshot.integrity != expected.snapshot.integrity
+    {
+        return Err(Error::Conflict(
+            cadence::store::writer::STALE_SNAPSHOT.into(),
+        ));
+    }
+    if !data.is_object() || data.get("import") != current.snapshot.data.get("import") {
+        return Err(Error::Invalid(
+            "derivation replacement must preserve import manifest".into(),
+        ));
+    }
+    for field in ["source_evidence", "archive", "cursor", LAYERS] {
+        if data.get(field) != current.snapshot.data.get(field) {
+            return Err(Error::Invalid(format!(
+                "derivation replacement changed provenance: {field}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn replace_current(previous: &Value, value: Value) -> Result<Value> {

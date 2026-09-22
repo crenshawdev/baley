@@ -132,19 +132,6 @@ fn declined_current_and_historical_candidates_never_affect_ranking_or_totals() {
 
 use std::{fs, path::Path};
 
-fn temp() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    assert!(
-        !dir.path().starts_with(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-        )
-    );
-    dir
-}
 fn put(root: &Path, path: &str, text: &str) {
     let dest = root.join(path);
     fs::create_dir_all(dest.parent().unwrap()).unwrap();
@@ -153,7 +140,7 @@ fn put(root: &Path, path: &str, text: &str) {
 
 #[test]
 fn authored_sources_archives_receipts_and_context_selection_are_explicit() {
-    let dir = temp();
+    let dir = tempfile::tempdir().unwrap();
     for (path, term) in [
         ("PROJECT.md", "projectquasar"),
         ("ROADMAP.md", "roadmapquasar"),
@@ -204,8 +191,8 @@ fn authored_sources_archives_receipts_and_context_selection_are_explicit() {
 #[test]
 fn disallowed_files_and_escaping_links_cannot_supply_hits() {
     use std::os::unix::fs::symlink;
-    let dir = temp();
-    let outside = temp();
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
     put(outside.path(), "CONTEXT.md", "escapedquasar");
     for path in [
         "DECLINED.md",
@@ -248,7 +235,7 @@ fn unreadable_permitted_source_states_incomplete_coverage() {
             Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
         }
     }
-    let dir = temp();
+    let dir = tempfile::tempdir().unwrap();
     put(dir.path(), "PROJECT.md", "unreadablequasar");
     let docs = documents::read(dir.path(), &mut Denied);
     assert!(docs.candidates.is_empty());
@@ -288,7 +275,7 @@ fn residue_preserves_label_origin_and_absence_of_invented_history() {
             Err(std::io::Error::other("git executable unavailable"))
         }
     }
-    let dir = temp();
+    let dir = tempfile::tempdir().unwrap();
     put(
         dir.path(),
         "ARCHIVE.md",

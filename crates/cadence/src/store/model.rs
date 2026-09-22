@@ -450,7 +450,7 @@ mod tests {
                 outcome: "pass".into(),
                 evidence: Evidence::Null,
             },
-            at: stamped_at(),
+            at: Some(1_700_000_000),
         }];
         let decision_bytes = render_lines(&decisions).unwrap();
         let parsed: Vec<DecisionRecord> = parse_lines(&decision_bytes).unwrap();

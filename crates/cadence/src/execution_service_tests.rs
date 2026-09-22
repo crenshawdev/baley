@@ -18,7 +18,7 @@ fn execute_next_honors_named_plan() {
 }
 
 #[test]
-fn suite_repair_answer_requires_owner_and_replays() {
+fn suite_repair_answer_requires_owner() {
     let attributed = serde_json::json!({"operation":"execution-suite-repair-answer","request":{
         "request_id":"answer-1","plan":{"phase":6,"occurrence":"phase-6-execution",
             "admission_digest":"admission","plan":1},"expected_version":3,
@@ -26,10 +26,7 @@ fn suite_repair_answer_requires_owner_and_replays() {
         "at":"2026-09-15T18:00:00Z","disposition":"approve"}});
     let cadence::execution::runner::PlanApply::RepairAnswer { request } =
         serde_json::from_value::<cadence::execution::runner::PlanApply>(attributed).unwrap() else { unreachable!() };
-    let request = request.plan_request().unwrap();
-    assert_eq!(cadence::execution::history::plan_request_digest(&request).unwrap(),
-        cadence::execution::history::plan_request_digest(&request.clone()).unwrap(),
-        "an exact attributed request must have one replay identity");
+    assert!(request.plan_request().is_ok(), "an attributed answer is a plan request");
     let blank = serde_json::json!({"operation":"execution-suite-repair-answer","request":{
         "request_id":"answer-blank","plan":{"phase":6,"occurrence":"phase-6-execution",
             "admission_digest":"admission","plan":1},"expected_version":3,

@@ -69,7 +69,9 @@ pub struct AdmissionContribution {
     replayed: bool,
 }
 
-fn allocate(records: &mut Value, replay_key: &str) -> Result<String> {
+/// The occurrence a replay key names: the one already saved for it, or the
+/// next in sequence, recorded in `records`.
+pub fn allocate(records: &mut Value, replay_key: &str) -> Result<String> {
     if let Some(saved) = records
         .get("occurrences")
         .and_then(|values| values.get(replay_key))

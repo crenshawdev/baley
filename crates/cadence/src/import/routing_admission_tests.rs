@@ -5,6 +5,9 @@ use cadence::execution::model::{ConfigInput, ConfigInputs};
 #[derive(Clone)]
 struct InputIo;
 impl ConfigIo for InputIo {
+    fn identity(&mut self, path: &Path) -> Result<std::path::PathBuf> {
+        Ok(path.into())
+    }
     fn read(&mut self, path: &Path) -> Result<Input> {
         Ok(Input {
             identity: path.into(),
@@ -62,7 +65,11 @@ fn recovery_only_requires_current_config_usability() {
         1,
         b"",
         b"",
-        serde_json::json!({"execution":{"historical_route":"different inputs"}}),
+        // A retained active dispatch routed on inputs that no longer match the
+        // current config: the place a route comparison would have to read.
+        serde_json::json!({"execution":{"schema":1,"occurrences":{"8":{"phase":8,"active":{
+            "route":{"inputs":{"repo":{"identity":"/elsewhere/config.json","content":"0".repeat(64),"stamp":null},
+                "global":null,"global_alias":false}}}}}}}),
     )
     .unwrap();
     assert_eq!(
@@ -73,96 +80,79 @@ fn recovery_only_requires_current_config_usability() {
         Ok(())
     );
 }
-#[test]
-fn final_intent_preparation_cannot_admit_a_stale_route() {
-    use cadence::execution::boundary::{BoundaryScope, BoundaryV1, Receipt};
-    use cadence::store::filesystem::{Filesystem, Stage};
-    use cadence::store::writer::BoundaryChange;
-    use serde_json::json;
-    let root = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join("state.json"), r#"{"version":1,"generation":0,"items_digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","decisions_digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","data":{},"operations":{},"integrity":"e9756a2c9107069a015c009d174bacbc989df7121a7646ecc1a770afdfbf35bd"}"#).unwrap();
-    std::fs::write(root.path().join("items.jsonl"), b"").unwrap();
-    std::fs::write(root.path().join("decisions.jsonl"), b"").unwrap();
-    let config_path = root.path().join("config.json");
-    std::fs::write(&config_path, b"{}").unwrap();
-    let mut expected = Reload::new(
-        Paths {
-            repo: config_path.clone(),
-            global: None,
-        },
-        FileIo,
-    )
-    .refresh()
-    .unwrap()
-    .routing_inputs();
-    expected.repo.content =
-        Some("44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a".into());
-    let dispatch = serde_json::from_value(json!({"schema":1,"id":"d".repeat(64),"expected_execution_version":0,"phase":8,"plan":1,
-        "plan_fingerprint":"1".repeat(64),"plan_set_fingerprint":"2".repeat(64),"requirements":["AC10"],"tasks":[{"id":"T1","verify":["verify"]}],"suite":"verify","files":["src/a.rs"],"policy":{"rung":"high","branch":"current","reviews":"disabled"},
-        "route":{"choice":{"role":"cad-executor","agent":"cad-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"pinned":false,"reasons":["fixture selection"],"warnings":[]},"inputs":expected},"base_sha":"3".repeat(40),"prompt":"fixture","prompt_digest":"f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d","body":"fixture"})).unwrap();
-    let policy = SessionPolicy {
+/// The config as it reads after a route was captured against `{}`.
+#[derive(Clone)]
+struct ChangedIo;
+impl ConfigIo for ChangedIo {
+    fn identity(&mut self, path: &Path) -> Result<std::path::PathBuf> {
+        Ok(path.into())
+    }
+    fn read(&mut self, path: &Path) -> Result<Input> {
+        Ok(Input {
+            identity: path.into(),
+            bytes: Some(br#"{"roles":{"cad-executor":{"model":"opus"}}}"#.to_vec()),
+            stamp: None,
+        })
+    }
+}
+
+fn policy_with<I: ConfigIo + Clone>(io: I) -> SessionPolicy<I> {
+    SessionPolicy {
         config: Arc::new(Mutex::new(Reload::new(
             Paths {
-                repo: config_path.clone(),
+                repo: "/project/config.json".into(),
                 global: None,
             },
-            FileIo,
+            io.clone(),
         ))),
         importing: Arc::new(Mutex::new(None)),
-        io: FileIo,
+        io,
         evaluate: Arc::new(crate::config::planning_policy),
+    }
+}
+
+/// The dispatch a prospective snapshot admits carries the route it was chosen
+/// on; the final preparation rechecks that route's captured inputs, and a
+/// config that changed since then refuses the admission.
+#[test]
+fn final_intent_preparation_cannot_admit_a_stale_route() {
+    use serde_json::json;
+    let captured = ConfigInputs {
+        repo: ConfigInput {
+            identity: "/project/config.json".into(),
+            content: Some(cadence::store::model::digest(b"{}")),
+            stamp: None,
+        },
+        global: None,
+        global_alias: false,
     };
-    let storage = Filesystem::new(root.path())
+    let dispatch = json!({"schema":1,"id":"d".repeat(64),"expected_execution_version":0,"phase":8,"plan":1,
+        "plan_fingerprint":"1".repeat(64),"plan_set_fingerprint":"2".repeat(64),"requirements":["AC10"],"tasks":[{"id":"T1","verify":["verify"]}],"suite":"verify","files":["src/a.rs"],"policy":{"rung":"high","branch":"current","reviews":"disabled"},
+        "route":{"choice":{"role":"cad-executor","agent":"cad-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"pinned":false,"reasons":["fixture selection"],"warnings":[]},"inputs":captured},"base_sha":"3".repeat(40),"prompt":"fixture","prompt_digest":"f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d","body":"fixture"});
+    let snapshot = cadence::store::model::Snapshot::new(
+        1,
+        b"",
+        b"",
+        json!({"execution":{"schema":1,"occurrences":{"8":{"phase":8,"plan_set_fingerprint":"2".repeat(64),
+            "version":1,"active":dispatch,"plans":[],"terminal":null,"receipts":{}}}}}),
+    )
+    .unwrap();
+    let route = cadence::store::transaction::active_route(&snapshot, 8)
         .unwrap()
-        .with_probe(move |stage, path| {
-            if stage == Stage::Prepared
-                && path
-                    .file_name()
-                    .is_some_and(|name| name == ".store-intent.json")
-            {
-                std::fs::write(
-                    &config_path,
-                    br#"{"roles":{"cad-executor":{"model":"opus"}}}"#,
-                )?;
-            }
-            Ok(())
-        });
-    tokio::runtime::Runtime::new().unwrap().block_on(async {
-        let store = Store::open(storage, policy).await.unwrap();
-        assert_eq!(
-            store
-                .request(Operation::BoundaryV1 {
-                    expected_generation: 0,
-                    expected_integrity:
-                        "e9756a2c9107069a015c009d174bacbc989df7121a7646ecc1a770afdfbf35bd"
-                            .into(),
-                    operation_id: "fixture-admission".into(),
-                    decision: BoundaryV1 {
-                        codec: 1,
-                        scope: BoundaryScope::Execution { phase: 8 },
-                        tool: cadence::execution::model::BoundaryTool::CadenceQuery,
-                        operation: "execute-next".into(),
-                        request_digest: "4".repeat(64),
-                        outcome: "dispatch".into(),
-                        subject_id: Some("d".repeat(64)),
-                        response_digest: "5".repeat(64),
-                        receipt: Receipt::Dispatch {
-                            dispatch_id: "d".repeat(64),
-                            prompt_bytes: None,
-                            prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into()
-                        },
-                        lease_refusal: None,
-                        located: None
-                    },
-                    change: Box::new(BoundaryChange::Dispatch {
-                        plan_set_fingerprint: "2".repeat(64),
-                        dispatch
-                    })
-                })
-                .await,
-            Err(Error::Conflict(
-                "routing inputs changed before admission".into()
-            ))
-        );
-    });
+        .expect("the phase 8 dispatch carries its route");
+    assert_eq!(route.inputs, captured);
+    let context = MutationContext {
+        operation: "boundary_v1",
+        snapshot: &snapshot,
+    };
+    assert_eq!(
+        policy_with(ChangedIo).validate_routing_admission(&context, &route.inputs),
+        Err(Error::Conflict(
+            "routing inputs changed before admission".into()
+        ))
+    );
+    assert_eq!(
+        policy_with(InputIo).validate_routing_admission(&context, &route.inputs),
+        Ok(())
+    );
 }

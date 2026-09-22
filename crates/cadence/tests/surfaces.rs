@@ -1,5 +1,5 @@
-use cadence::rail::surfaces::{self, Access, Report};
-use std::{collections::BTreeSet, fs, io, path::Path};
+use cadence::rail::surfaces::{self, Access, Kind, Report, Seen, Walk};
+use std::{collections::BTreeSet, fs, path::Path};
 fn put(root: &Path, path: &str, text: &str) {
     let path = root.join(path);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -11,6 +11,20 @@ fn categories(report: &Report) -> Vec<&str> {
         .iter()
         .map(|s| s.category.as_str())
         .collect()
+}
+/// A walk that saw exactly `seen` under a root.
+fn walked(seen: Vec<Seen>) -> Walk {
+    Walk { root: "/project".into(), seen: Ok(seen) }
+}
+fn file(name: &str) -> Seen {
+    Seen::Entry { name: name.into(), label: name.into(), kind: Kind::File }
+}
+fn manifest(name: &str, text: Result<&str, &str>) -> Seen {
+    Seen::Manifest {
+        name: name.into(),
+        label: name.into(),
+        text: text.map(String::from).map_err(String::from),
+    }
 }
 fn observed(root: &Path) -> Report {
     surfaces::detect_observed(root, None, |access, path| {
@@ -61,9 +75,7 @@ fn each_manifest_family_extracts_dependency_names_without_metadata_or_substrings
             vec!["secrets", "untrusted_input"],
         ),
     ] {
-        let temp = tempfile::tempdir().unwrap();
-        put(temp.path(), name, text);
-        let report = observed(temp.path());
+        let report = surfaces::judge(&walked(vec![file(name), manifest(name, Ok(text))]), &[]).unwrap();
         assert!(report.warnings.is_empty(), "{report:?}");
         assert_eq!(categories(&report), expected, "{name}");
     }
@@ -147,37 +159,26 @@ fn two_level_walk_names_extensions_skips_and_symlinks_never_open_source_bodies()
 }
 #[test]
 fn root_refuses_but_child_and_manifest_failures_warn_and_retain_evidence() {
-    let root = tempfile::tempdir().unwrap();
-    assert!(
-        surfaces::detect(&root.path().join("missing"), None)
-            .unwrap_err()
-            .to_string()
-            .contains("no-root")
-    );
-    put(root.path(), "auth/source.rs", "not input");
-    put(root.path(), "package.json", "{");
-    put(root.path(), "requirements.txt", "stripe");
-    put(root.path(), "Cargo.toml", "[dependencies]\ntokio = [");
-    assert!(
-        surfaces::detect_observed(root.path(), None, |_, _| Err(
-            io::ErrorKind::PermissionDenied.into()
-        ))
-        .is_err()
-    );
-    let report = surfaces::detect_observed(root.path(), None, |access, path| {
-        if (access == Access::ListDirectory && path.ends_with("auth"))
-            || (access == Access::ReadManifest && path.ends_with("requirements.txt"))
-        {
-            Err(io::ErrorKind::PermissionDenied.into())
-        } else {
-            Ok(())
-        }
-    })
+    let refused = Walk { root: "/project".into(), seen: Err("permission denied".into()) };
+    assert!(surfaces::judge(&refused, &[]).unwrap_err().to_string().contains("no-root"));
+    let report = surfaces::judge(
+        &walked(vec![
+            Seen::Entry { name: "auth".into(), label: "auth".into(), kind: Kind::Directory },
+            Seen::Unlisted { dir: "auth".into(), error: "permission denied".into() },
+            file("package.json"),
+            manifest("package.json", Ok("{")),
+            file("requirements.txt"),
+            manifest("requirements.txt", Err("permission denied")),
+            file("Cargo.toml"),
+            manifest("Cargo.toml", Ok("[dependencies]\ntokio = [")),
+        ]),
+        &[],
+    )
     .unwrap();
     assert_eq!(categories(&report), ["auth"]);
     assert_eq!(report.warnings.len(), 4, "{report:?}");
     for name in ["auth", "package.json", "requirements.txt", "Cargo.toml"] {
-        assert!(report.warnings.iter().any(|w| w.contains(name)));
+        assert!(report.warnings.iter().any(|w| w.contains(name)), "{name}");
     }
 }
 #[test]

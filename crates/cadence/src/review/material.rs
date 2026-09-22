@@ -76,7 +76,9 @@ pub(crate) fn entry(
     }
 }
 
-pub(crate) fn retain_bytes<S: Storage>(
+/// Retain `bytes` under their content address and mark `entry` available
+/// with it. The store's own sync and confirmation decide success.
+pub fn retain_bytes<S: Storage>(
     store: &mut S,
     entry: &mut MaterialEntry,
     bytes: &[u8],
@@ -319,13 +321,18 @@ fn directory_member(path: &str, member: &str) -> Result<String> {
         .into_owned())
 }
 
+/// A directory's frozen membership: every file below it, by path relative to
+/// it, and each directory's listing as it was observed.
 #[derive(Debug)]
-struct DirectoryFiles {
-    files: Vec<String>,
-    directories: BTreeMap<String, super::io::DirectoryMembers>,
+pub struct DirectoryFiles {
+    pub files: Vec<String>,
+    pub directories: BTreeMap<String, super::io::DirectoryMembers>,
 }
 
-fn directory_files(
+/// Walk the listings `resolve` answers from `root` down. Members are sorted and
+/// de-duplicated; a nonlocal name, a name listed with two kinds, a link or a
+/// special file refuses the whole directory.
+pub fn directory_files(
     root: &str,
     resolve: &mut impl FnMut(&str) -> Result<super::io::DirectoryMembers>,
 ) -> Result<DirectoryFiles> {
@@ -480,6 +487,41 @@ pub fn retain_directory<S: Storage>(
     save(store, result)
 }
 
+/// What one read of a named file becomes: its entry, and the bytes to retain
+/// when there are any. A file that is not there is absent; a read that failed
+/// is unavailable with its reason, never absent.
+pub fn observed_file(
+    manifest: &str,
+    path: &str,
+    observation: Result<cadence::store::Observed>,
+    acquired_at: u64,
+) -> (MaterialEntry, Option<Vec<u8>>) {
+    let mut saved = entry(
+        manifest,
+        path,
+        Side::Snapshot,
+        MaterialRole::Primary,
+        acquired_at,
+        match &observation {
+            Ok(value) => value.identity.clone(),
+            Err(_) => format!("file:{path}"),
+        },
+    );
+    let bytes = match observation {
+        Ok(observed) => {
+            if observed.bytes.is_none() {
+                saved.availability = Availability::Absent;
+            }
+            observed.bytes
+        }
+        Err(error) => {
+            saved.unavailable_reason = Some(error.to_string());
+            None
+        }
+    };
+    (saved, bytes)
+}
+
 pub fn retain_file<S: Storage>(
     manifest: &str,
     fire: &str,
@@ -496,27 +538,10 @@ pub fn retain_file<S: Storage>(
             head: None,
         },
     );
-    let observation = source.read(path);
-    let mut saved = entry(
-        manifest,
-        path,
-        Side::Snapshot,
-        MaterialRole::Primary,
-        clock.now(),
-        match &observation {
-            Ok(value) => value.identity.clone(),
-            Err(_) => format!("file:{path}"),
-        },
-    );
-    match observation {
-        Ok(observed) => match observed.bytes {
-            Some(bytes) => {
-                retain_bytes(store, &mut saved, &bytes)?;
-                result.contents.insert(saved.entry.clone(), bytes);
-            }
-            None => saved.availability = Availability::Absent,
-        },
-        Err(error) => saved.unavailable_reason = Some(error.to_string()),
+    let (mut saved, bytes) = observed_file(manifest, path, source.read(path), clock.now());
+    if let Some(bytes) = bytes {
+        retain_bytes(store, &mut saved, &bytes)?;
+        result.contents.insert(saved.entry.clone(), bytes);
     }
     result.manifest.entries.push(saved);
     save(store, result)
@@ -553,16 +578,11 @@ pub fn retain_staged<S: Storage>(
     retain_git(manifest, fire, target, git, store, clock)
 }
 
-fn retain_git<S: Storage>(
-    manifest: &str,
-    fire: &str,
-    target: &Target,
-    git: &mut impl GitIo,
-    store: &mut S,
-    clock: &mut impl Clock,
-) -> Result<RetainedMaterial> {
-    let observed = git.resolve(target)?;
-    let (resolved, tip, tip_side) = match target {
+/// The target a Git observation resolves `target` to, with the tip object and
+/// the side it is read as. A staged tree needs the index and no head; a range
+/// needs a head.
+pub fn resolve_git_target(target: &Target, observed: &super::io::GitObservation) -> Result<(Target, String, Side)> {
+    Ok(match target {
         Target::StagedTree { .. } => {
             let index = observed
                 .index
@@ -598,31 +618,55 @@ fn retain_git<S: Storage>(
             (resolved, head, Side::Head)
         }
         _ => return Err(Error::Invalid("expected Git target".into())),
-    };
-    let mut result = empty(manifest, fire, resolved);
-    let acquired_at = clock.now();
-    let mut paths = observed.paths;
+    })
+}
+
+/// The objects to read for a Git observation, in order: each changed path once,
+/// its base object and then its tip object.
+pub fn git_reads(observed: &super::io::GitObservation, tip: &str, tip_side: &Side) -> Vec<(String, String, Side)> {
+    let mut paths = observed.paths.clone();
     paths.sort();
     paths.dedup();
-    for path in paths {
-        for (object, side) in [(&observed.base, Side::Base), (&tip, tip_side.clone())] {
-            let mut saved = entry(
-                manifest,
-                &path,
-                side,
-                MaterialRole::Primary,
-                acquired_at,
-                object.clone(),
-            );
-            match git.read_object(object, &path) {
-                Ok(bytes) => {
-                    retain_bytes(store, &mut saved, &bytes)?;
-                    result.contents.insert(saved.entry.clone(), bytes);
-                }
-                Err(error) => saved.unavailable_reason = Some(error.to_string()),
+    paths
+        .into_iter()
+        .flat_map(|path| {
+            [
+                (path.clone(), observed.base.clone(), Side::Base),
+                (path, tip.to_owned(), tip_side.clone()),
+            ]
+        })
+        .collect()
+}
+
+fn retain_git<S: Storage>(
+    manifest: &str,
+    fire: &str,
+    target: &Target,
+    git: &mut impl GitIo,
+    store: &mut S,
+    clock: &mut impl Clock,
+) -> Result<RetainedMaterial> {
+    let observed = git.resolve(target)?;
+    let (resolved, tip, tip_side) = resolve_git_target(target, &observed)?;
+    let mut result = empty(manifest, fire, resolved);
+    let acquired_at = clock.now();
+    for (path, object, side) in git_reads(&observed, &tip, &tip_side) {
+        let mut saved = entry(
+            manifest,
+            &path,
+            side,
+            MaterialRole::Primary,
+            acquired_at,
+            object.clone(),
+        );
+        match git.read_object(&object, &path) {
+            Ok(bytes) => {
+                retain_bytes(store, &mut saved, &bytes)?;
+                result.contents.insert(saved.entry.clone(), bytes);
             }
-            result.manifest.entries.push(saved);
+            Err(error) => saved.unavailable_reason = Some(error.to_string()),
         }
+        result.manifest.entries.push(saved);
     }
     let mut diff = entry(
         manifest,

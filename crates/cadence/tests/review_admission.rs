@@ -1,10 +1,9 @@
 use cadence::review::{admission, io, persistence};
 
-use cadence::store::model::{DECISIONS, ITEMS, STATE, Snapshot};
-use cadence::store::writer::{PlanningPolicy, Store, View};
-use cadence::store::{Error, Observed, Result, Storage};
+use cadence::store::Error;
+use cadence::store::model::Snapshot;
+use cadence::store::writer::View;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 
 struct FixedClock;
 impl io::Clock for FixedClock {
@@ -21,81 +20,6 @@ fn view(data: Value, generation: u64) -> View {
         decisions: vec![],
         snapshot: Snapshot::new(generation, b"", b"", data).unwrap(),
     }
-}
-fn files(view: &View) -> BTreeMap<String, Vec<u8>> {
-    [
-        (ITEMS.into(), vec![]),
-        (DECISIONS.into(), vec![]),
-        (STATE.into(), view.snapshot.render().unwrap()),
-    ]
-    .into()
-}
-struct Filesystem {
-    files: BTreeMap<String, Vec<u8>>,
-    winner: Option<BTreeMap<String, Vec<u8>>>,
-    acquisitions: usize,
-}
-impl Storage for Filesystem {
-    type Prepared = (String, Vec<u8>);
-    fn acquire(&mut self) -> Result<Box<dyn Send>> {
-        self.acquisitions += 1;
-        if self.acquisitions == 2
-            && let Some(winner) = self.winner.take()
-        {
-            self.files = winner;
-        }
-        Ok(Box::new(()))
-    }
-    fn read(&mut self, target: &str) -> Result<Observed> {
-        if ![ITEMS, DECISIONS, STATE, ".store-intent.json"].contains(&target) {
-            panic!("forbidden filesystem read: {target}");
-        }
-        let bytes = self.files.get(target).cloned();
-        Ok(Observed {
-            identity: bytes
-                .as_deref()
-                .map(cadence::store::model::digest)
-                .unwrap_or_default(),
-            bytes,
-            directory_identity: "store1".into(),
-        })
-    }
-    fn prepare(&mut self, target: &str, bytes: &[u8]) -> Result<Self::Prepared> {
-        Ok((target.into(), bytes.into()))
-    }
-    fn install(&mut self, prepared: &Self::Prepared) -> Result<()> {
-        self.files.insert(prepared.0.clone(), prepared.1.clone());
-        Ok(())
-    }
-    fn discard(&mut self, _: Self::Prepared) -> Result<()> {
-        Ok(())
-    }
-    fn confirm(&mut self, target: &str, bytes: &[u8]) -> Result<Observed> {
-        let saved = self.read(target)?;
-        if saved.bytes.as_deref() != Some(bytes) {
-            return Err(Error::Conflict("bytes differ".into()));
-        }
-        Ok(saved)
-    }
-    fn resync(&mut self, target: &str, bytes: &[u8]) -> Result<Observed> {
-        self.confirm(target, bytes)
-    }
-    fn remove(&mut self, target: &str) -> Result<()> {
-        self.files.remove(target);
-        Ok(())
-    }
-}
-async fn store(view: &View, winner: Option<&View>) -> Store {
-    Store::open(
-        Filesystem {
-            files: files(view),
-            winner: winner.map(files),
-            acquisitions: 0,
-        },
-        PlanningPolicy,
-    )
-    .await
-    .unwrap()
 }
 fn pending(input: &Value) -> admission::PendingAdmission {
     admission::PendingAdmission {
@@ -116,71 +40,41 @@ fn saved(input: &Value) -> Value {
     data["review"]["attempts"] = json!({"a1":input["a1"]});
     data
 }
-#[tokio::test]
-async fn admission_replay_ac49() {
+#[test]
+fn admission_replay_ac49() {
     let input = fixture();
     let basis = view(saved(&input), 2);
-    let store = store(&basis, None).await;
-    let transaction = persistence::transaction(&basis, "caller:k1");
+    let mut transaction = persistence::transaction(&basis, "caller:k1");
+    let contribution =
+        admission::contribute_admission(&basis, &mut transaction, pending(&input), &mut FixedClock).unwrap();
     assert_eq!(
-        serde_json::to_value(
-            admission::admit_pending(
-                &store,
-                &basis,
-                transaction,
-                pending(&input),
-                &mut FixedClock
-            )
-            .await
-            .unwrap()
-        )
-        .unwrap(),
+        serde_json::to_value(admission::acknowledge_admission(&basis, contribution).unwrap()).unwrap(),
         json!({"fire":"f1","attempt":"a1","replayed":true})
     );
 }
-#[tokio::test]
-async fn admission_independent_occurrence_ac69() {
+#[test]
+fn admission_independent_occurrence_ac69() {
     let input = fixture();
-    let basis = view(json!({"review":input["sequence"]}), 2);
-    let store = store(&basis, None).await;
-    assert_eq!(
-        admission::allocate_occurrence(&store, "k2", &mut FixedClock)
-            .await
-            .unwrap(),
-        "occ2"
-    );
+    let mut records = persistence::records(&json!({"review":input["sequence"]})).unwrap();
+    assert_eq!(admission::allocate(&mut records, "k2").unwrap(), "occ2");
 }
-#[tokio::test]
-async fn admission_replayed_occurrence_ac70() {
+#[test]
+fn admission_replayed_occurrence_ac70() {
     let input = fixture();
-    let basis = view(json!({"review":input["sequence"]}), 2);
-    let store = store(&basis, None).await;
-    assert_eq!(
-        admission::allocate_occurrence(&store, "k1", &mut FixedClock)
-            .await
-            .unwrap(),
-        "occ1"
-    );
+    let mut records = persistence::records(&json!({"review":input["sequence"]})).unwrap();
+    assert_eq!(admission::allocate(&mut records, "k1").unwrap(), "occ1");
 }
-#[tokio::test]
-async fn admission_fresh_commit() {
+#[test]
+fn admission_fresh_commit() {
     let input = fixture();
     let basis = view(input["fresh"].clone(), 1);
-    let store = store(&basis, None).await;
-    let transaction = persistence::transaction(&basis, "caller:k1");
+    let mut transaction = persistence::transaction(&basis, "caller:k1");
+    let contribution =
+        admission::contribute_admission(&basis, &mut transaction, pending(&input), &mut FixedClock).unwrap();
+    // The view the commit would return: the transaction's snapshot, installed.
+    let committed = view(transaction.snapshot.clone().unwrap(), 2);
     assert_eq!(
-        serde_json::to_value(
-            admission::admit_pending(
-                &store,
-                &basis,
-                transaction,
-                pending(&input),
-                &mut FixedClock
-            )
-            .await
-            .unwrap()
-        )
-        .unwrap(),
+        serde_json::to_value(admission::acknowledge_admission(&committed, contribution).unwrap()).unwrap(),
         json!({"fire":"f1","attempt":"a1","replayed":false})
     );
 }
@@ -201,22 +95,15 @@ fn admission_contribution_preserves_caller_snapshot() {
         json!({"import":{"complete":true},"source_evidence":[{"source":"old"}],"current":{"cursor":2},"other":{"untouched":true}})
     );
 }
-#[tokio::test]
-async fn admission_unavailable_home_refuses() {
+#[test]
+fn admission_unavailable_home_refuses() {
     let input = fixture();
     let basis = view(Value::Null, 0);
-    let store = store(&basis, None).await;
-    let transaction = persistence::transaction(&basis, "caller:k1");
+    let mut transaction = persistence::transaction(&basis, "caller:k1");
     assert_eq!(
-        admission::admit_pending(
-            &store,
-            &basis,
-            transaction,
-            pending(&input),
-            &mut FixedClock
-        )
-        .await
-        .unwrap_err(),
+        admission::contribute_admission(&basis, &mut transaction, pending(&input), &mut FixedClock)
+            .err()
+            .unwrap(),
         Error::Invalid("durable review home unavailable".into())
     );
 }

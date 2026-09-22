@@ -113,7 +113,7 @@ fn prepare(
     // Native acceptance is read from the store files beside the artifacts,
     // before any consistency check, so a natively completed phase agrees
     // with its checked box without SUMMARY.md or UAT.md (D-131).
-    let overlay = observe_acceptance(&capture.root)?;
+    let overlay = io.acceptance(&capture.root)?;
     let answer = derive_with(&capture, &overlay)?;
     let selected_cursor = yielded(cursor, &overlay, &answer);
     if report_conflicts {
@@ -157,7 +157,7 @@ fn recheck(
     // the second observation of a relative selection.
     let second = capture_inputs(&prepared.capture.root, io)?;
     validate_observation_failures(&second)?;
-    if second != prepared.capture || observe_acceptance(&prepared.capture.root)? != prepared.overlay {
+    if second != prepared.capture || io.acceptance(&prepared.capture.root)? != prepared.overlay {
         return Err(DerivationError::InputsChanged);
     }
     if let Some(expected) = &prepared.intake {

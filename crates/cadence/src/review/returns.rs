@@ -127,7 +127,8 @@ fn next_selection(records: &Value, admission: &Admission) -> StoreResult<Option<
     )))
 }
 
-fn receipt(
+/// The receipt for `attempt`'s closure as `records` hold it.
+pub fn receipt(
     records: &Value,
     admission: &Admission,
     attempt: &Attempt,
@@ -206,14 +207,60 @@ pub async fn accept_return(
 ) -> Result<ReturnReceipt, ReturnError> {
     let id = &submitted.identity.attempt;
     let view = persistence::read(store).await.map_err(|_| delivery(id))?;
-    let mut records = persistence::records(&view.snapshot.data).map_err(|_| delivery(id))?;
+    let records = persistence::records(&view.snapshot.data).map_err(|_| delivery(id))?;
+    let (records, admission, attempt) = match decide_return(records, &submitted, clock)? {
+        ReturnDecision::Replay(receipt) => return Ok(*receipt),
+        ReturnDecision::Close { records, admission, attempt } => (records, admission, attempt),
+    };
+    let committed = match persistence::update(store, &view, &format!("return:{id}"), records).await
+    {
+        Ok(committed) => committed,
+        Err(Error::Conflict(_)) => {
+            let winner = persistence::read(store).await.map_err(|_| delivery(id))?;
+            let records = persistence::records(&winner.snapshot.data).map_err(|_| delivery(id))?;
+            let attempt = persistence::get(&records, "attempts", id).map_err(|_| delivery(id))?;
+            return replay(&records, &admission, &attempt, &submitted);
+        }
+        Err(_) => return Err(delivery(id)),
+    };
+    receipt(
+        &persistence::records(&committed.snapshot.data).map_err(|_| delivery(id))?,
+        &admission,
+        &attempt,
+        false,
+    )
+    .map_err(|_| delivery(id))
+}
+
+/// What accepting a return does, decided over one snapshot's records.
+pub enum ReturnDecision {
+    /// The attempt is already closed: the replayed receipt.
+    Replay(Box<ReturnReceipt>),
+    /// A new closure: the records with it written, and the admission and
+    /// attempt the receipt is read for once they are committed.
+    Close {
+        records: Value,
+        admission: Box<Admission>,
+        attempt: Box<Attempt>,
+    },
+}
+
+/// Bind the submission to its attempt, replay a closed attempt, or classify
+/// the return and write its closure into `records`. The clock is read only
+/// for a new closure.
+pub fn decide_return(
+    mut records: Value,
+    submitted: &ReturnSubmission,
+    clock: &mut impl Clock,
+) -> Result<ReturnDecision, ReturnError> {
+    let id = &submitted.identity.attempt;
     let admission: Admission = persistence::get(&records, "admissions", &submitted.identity.fire)
         .map_err(|_| invalid(id, "unknown-fire"))?;
     let mut attempt: Attempt =
         persistence::get(&records, "attempts", id).map_err(|_| invalid(id, "unknown-attempt"))?;
     binding::bind_return(&admission, &attempt, &submitted.identity)
         .map_err(ReturnError::Binding)?;
-    validate_return_launch(&records, &attempt, &submitted)?;
+    validate_return_launch(&records, &attempt, submitted)?;
     if let Some(host_return) = &submitted.host_return {
         let bindings = serde_json::from_value(records["host_returns"].clone())
             .map_err(|_| invalid(id, "unobserved-host-return"))?;
@@ -231,7 +278,7 @@ pub async fn accept_return(
         .and_then(|values| values.get(id))
         .is_some()
     {
-        return replay(&records, &admission, &attempt, &submitted);
+        return replay(&records, &admission, &attempt, submitted).map(|receipt| ReturnDecision::Replay(Box::new(receipt)));
     }
     if matches!(
         attempt.state,
@@ -328,24 +375,11 @@ pub async fn accept_return(
     };
     persistence::insert(&mut records, "closures", id, &closure).map_err(|_| delivery(id))?;
     persistence::put(&mut records, "attempts", id, &attempt).map_err(|_| delivery(id))?;
-    let committed = match persistence::update(store, &view, &format!("return:{id}"), records).await
-    {
-        Ok(committed) => committed,
-        Err(Error::Conflict(_)) => {
-            let winner = persistence::read(store).await.map_err(|_| delivery(id))?;
-            let records = persistence::records(&winner.snapshot.data).map_err(|_| delivery(id))?;
-            let attempt = persistence::get(&records, "attempts", id).map_err(|_| delivery(id))?;
-            return replay(&records, &admission, &attempt, &submitted);
-        }
-        Err(_) => return Err(delivery(id)),
-    };
-    receipt(
-        &persistence::records(&committed.snapshot.data).map_err(|_| delivery(id))?,
-        &admission,
-        &attempt,
-        false,
-    )
-    .map_err(|_| delivery(id))
+    Ok(ReturnDecision::Close {
+        records,
+        admission: Box::new(admission),
+        attempt: Box::new(attempt),
+    })
 }
 
 fn validate_return_launch(

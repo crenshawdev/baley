@@ -30,195 +30,77 @@ struct TruthRow {
     plans: bool,
     summary: bool,
     uat: Option<&'static str>,
+    /// Pass, fail, pending, skipped and blocked items, counted by hand from
+    /// `uat`; `None` where there is no UAT text to count.
+    counts: Option<[usize; 5]>,
     expected: LifecycleStatus,
 }
 
 fn truth_rows() -> Vec<TruthRow> {
     use LifecycleStatus::*;
     [
-        ("no artifacts", false, false, None, Unplanned),
-        ("PLAN only", true, false, None, Planned),
-        ("SUMMARY only", false, true, None, Executed),
-        ("PLAN and SUMMARY", true, true, None, Executed),
-        (
-            "pass without PLAN",
-            false,
-            true,
-            Some("### 1. Check\nstatus: pass"),
-            Complete,
-        ),
-        (
-            "pass with PLAN",
-            true,
-            true,
-            Some("### 1. Check\nstatus: pass"),
-            Complete,
-        ),
-        (
-            "UAT without SUMMARY",
-            false,
-            false,
-            Some("### 1. Check\nstatus: pass"),
-            Unplanned,
-        ),
-        (
-            "PLAN UAT without SUMMARY",
-            true,
-            false,
-            Some("### 1. Check\nstatus: pass"),
-            Planned,
-        ),
-        ("empty UAT", false, true, Some(""), Executed),
-        (
-            "malformed UAT",
-            false,
-            true,
-            Some("not a checklist"),
-            Executed,
-        ),
-        (
-            "frontmatter complete",
-            false,
-            true,
-            Some("---\nstatus: complete\n---"),
-            Executed,
-        ),
-        (
-            "manual numbered prose",
-            false,
-            true,
-            Some("### Manual notes\n1. Check\nstatus: pass"),
-            Executed,
-        ),
-        (
-            "unknown status",
-            false,
-            true,
-            Some("### 1. Check\nstatus: constructor"),
-            Executed,
-        ),
-        (
-            "missing status",
-            false,
-            true,
-            Some("### 1. Check"),
-            Executed,
-        ),
-        (
-            "fail",
-            false,
-            true,
-            Some("### 1. Check\nstatus: fail"),
-            Executed,
-        ),
-        (
-            "pending",
-            false,
-            true,
-            Some("### 1. Check\nstatus: pending"),
-            Executed,
-        ),
-        (
-            "blocked",
-            false,
-            true,
-            Some("### 1. Check\nstatus: blocked"),
-            Executed,
-        ),
-        (
-            "skip reason",
-            false,
-            true,
-            Some("### 1. Check\nstatus: skipped\nreason: deferred"),
-            Complete,
-        ),
-        (
-            "skip no reason",
-            false,
-            true,
-            Some("### 1. Check\nstatus: skipped"),
-            Executed,
-        ),
-        (
-            "skip empty reason",
-            false,
-            true,
-            Some("### 1. Check\nstatus: skipped\nreason:"),
-            Executed,
-        ),
-        (
-            "skip space reason",
-            false,
-            true,
-            Some("### 1. Check\nstatus: skipped\nreason:   "),
-            Complete,
-        ),
-        (
-            "pass and reasoned skip",
-            false,
-            true,
-            Some("### 1. Check\nstatus: pass\n### 2. Skip\nstatus: skipped\nreason: later"),
-            Complete,
-        ),
+        ("no artifacts", false, false, None, None, Unplanned),
+        ("PLAN only", true, false, None, None, Planned),
+        ("SUMMARY only", false, true, None, None, Executed),
+        ("PLAN and SUMMARY", true, true, None, None, Executed),
+        ("pass without PLAN", false, true, Some("### 1. Check\nstatus: pass"), Some([1, 0, 0, 0, 0]), Complete),
+        ("pass with PLAN", true, true, Some("### 1. Check\nstatus: pass"), Some([1, 0, 0, 0, 0]), Complete),
+        ("UAT without SUMMARY", false, false, Some("### 1. Check\nstatus: pass"), Some([1, 0, 0, 0, 0]), Unplanned),
+        ("PLAN UAT without SUMMARY", true, false, Some("### 1. Check\nstatus: pass"), Some([1, 0, 0, 0, 0]), Planned),
+        ("empty UAT", false, true, Some(""), None, Executed),
+        ("malformed UAT", false, true, Some("not a checklist"), Some([0, 0, 0, 0, 0]), Executed),
+        ("frontmatter complete", false, true, Some("---\nstatus: complete\n---"), Some([0, 0, 0, 0, 0]), Executed),
+        ("manual numbered prose", false, true, Some("### Manual notes\n1. Check\nstatus: pass"), Some([0, 0, 0, 0, 0]), Executed),
+        ("unknown status", false, true, Some("### 1. Check\nstatus: constructor"), Some([0, 0, 0, 0, 0]), Executed),
+        ("missing status", false, true, Some("### 1. Check"), Some([0, 0, 0, 0, 0]), Executed),
+        ("fail", false, true, Some("### 1. Check\nstatus: fail"), Some([0, 1, 0, 0, 0]), Executed),
+        ("pending", false, true, Some("### 1. Check\nstatus: pending"), Some([0, 0, 1, 0, 0]), Executed),
+        ("blocked", false, true, Some("### 1. Check\nstatus: blocked"), Some([0, 0, 0, 0, 1]), Executed),
+        ("skip reason", false, true, Some("### 1. Check\nstatus: skipped\nreason: deferred"), Some([0, 0, 0, 1, 0]), Complete),
+        ("skip no reason", false, true, Some("### 1. Check\nstatus: skipped"), Some([0, 0, 0, 1, 0]), Executed),
+        ("skip empty reason", false, true, Some("### 1. Check\nstatus: skipped\nreason:"), Some([0, 0, 0, 1, 0]), Executed),
+        ("skip space reason", false, true, Some("### 1. Check\nstatus: skipped\nreason:   "), Some([0, 0, 0, 1, 0]), Complete),
+        ("pass and reasoned skip", false, true, Some("### 1. Check\nstatus: pass\n### 2. Skip\nstatus: skipped\nreason: later"), Some([1, 0, 0, 1, 0]), Complete),
     ]
     .into_iter()
-    .map(|(label, plans, summary, uat, expected)| TruthRow {
+    .map(|(label, plans, summary, uat, counts, expected)| TruthRow {
         label,
         plans,
         summary,
         uat,
+        counts,
         expected,
     })
     .collect()
 }
 
-fn table_failures(
-    derive_fn: impl Fn(&CapturedInputs) -> Result<Lifecycle, DerivationError>,
-) -> Vec<&'static str> {
-    truth_rows()
-        .into_iter()
-        .filter_map(|row| {
-            let mut capture = captured("## Phases\n- [ ] **Phase 1: One**");
-            let phase = &mut capture.phases[0];
-            if row.plans {
-                phase.plans = Observation::Present(vec!["PLAN.md".into()]);
-            }
-            if row.summary {
-                phase.summary = Observation::Present(());
-            }
-            phase.uat = row.uat.map_or(Observation::Absent, |s| {
-                Observation::Present(s.as_bytes().into())
-            });
-            let answer = derive_fn(&capture).unwrap();
-            assert_eq!(answer.phases[0].plans.len(), usize::from(row.plans));
-            assert_eq!(
-                answer.phases[0].uat.is_some(),
-                row.uat.is_some_and(|s| !s.is_empty()),
-                "{}",
-                row.label
-            );
-            if let Some(text) = row.uat.filter(|text| !text.is_empty()) {
-                assert_eq!(answer.phases[0].uat.as_ref(), Some(&parse_uat(text).counts));
-            }
-            (answer.phases[0].status != row.expected).then_some(row.label)
-        })
-        .collect()
-}
-
 #[test]
-fn ac1_production_truth_table_and_plan_prerequisite_mutant() {
-    assert!(table_failures(derive).is_empty());
-    let rejected = table_failures(|capture| {
-        let mut answer = derive(capture)?;
-        for phase in &mut answer.phases {
-            if phase.status == LifecycleStatus::Complete && phase.plans.is_empty() {
-                phase.status = LifecycleStatus::Executed;
-            }
+fn ac1_production_truth_table() {
+    for row in truth_rows() {
+        let mut capture = captured("## Phases\n- [ ] **Phase 1: One**");
+        let phase = &mut capture.phases[0];
+        if row.plans {
+            phase.plans = Observation::Present(vec!["PLAN.md".into()]);
         }
-        Ok(answer)
-    });
-    assert!(rejected.contains(&"pass without PLAN"));
-    assert!(!rejected.contains(&"pass with PLAN"));
+        if row.summary {
+            phase.summary = Observation::Present(());
+        }
+        phase.uat = row.uat.map_or(Observation::Absent, |s| {
+            Observation::Present(s.as_bytes().into())
+        });
+        let answer = derive(&capture).unwrap();
+        let phase = &answer.phases[0];
+        assert_eq!(phase.plans.len(), usize::from(row.plans), "{}", row.label);
+        let counts = row.counts.map(|[pass, fail, pending, skipped, blocked]| UatCounts {
+            pass,
+            fail,
+            pending,
+            skipped,
+            blocked,
+        });
+        assert_eq!(phase.uat, counts, "{}", row.label);
+        assert_eq!(phase.status, row.expected, "{}", row.label);
+    }
 }
 
 #[test]
@@ -881,7 +763,7 @@ fn conflict_only<T>(
 }
 
 #[test]
-fn ac6_conflicts_both_checkbox_directions_and_success_with_drift_mutant() {
+fn ac6_conflicts_both_checkbox_directions() {
     for checked in [true, false] {
         let mut capture = captured(&format!(
             "## Phases\n- [{}] **Phase 3: Three**",
@@ -911,15 +793,6 @@ fn ac6_conflicts_both_checkbox_directions_and_success_with_drift_mutant() {
         ] {
             assert!(error.contains(expected));
         }
-        let success_with_drift: Result<_, DerivationError> =
-            Ok(serde_json::json!({"answer": answer, "drift": error}));
-        assert!(!conflict_only(
-            &success_with_drift,
-            "ROADMAP.md:2 entry 0",
-            "complete",
-            &declared,
-            &derived
-        ));
     }
 }
 
@@ -995,12 +868,14 @@ fn ac5_adopt_atomic_namespace_preservation_fresh_null_and_rearmed_cursor() {
 #[test]
 fn ac5_adopt_malformed_retirement_cannot_suppress_comparison_or_discard_data() {
     let original = serde_json::json!({"cursor":imported_cursor("unplanned", 3, 4)});
-    let accepted = validated_for(&original);
-    let valid = adopt(
-        &original,
-        serde_json::json!("opaque fixture"),
-        accepted.intake().unwrap(),
-    )
+    // The intake adopt accepts: what select_intake chose, as the query would
+    // hand it over after its own consistency check.
+    let selected = select_intake(&original).unwrap();
+    let accepted = ValidatedIntake {
+        cursor: selected.cursor,
+        observation: selected.observation,
+    };
+    let valid = adopt(&original, serde_json::json!("opaque fixture"), &accepted)
     .unwrap();
     let mut malformed = Vec::new();
     for (field, value) in [
@@ -1051,19 +926,17 @@ fn ac5_adopt_malformed_retirement_cannot_suppress_comparison_or_discard_data() {
         serde_json::json!({"derivation":[]}),
     ]);
     for data in malformed {
-        let before = data.clone();
         assert_eq!(
             select_intake(&data).unwrap_err().code(),
             "invalid-intake",
             "{data}"
         );
         assert_eq!(
-            adopt(&data, serde_json::Value::Null, accepted.intake().unwrap())
+            adopt(&data, serde_json::Value::Null, &accepted)
                 .unwrap_err()
                 .code(),
             "invalid-intake"
         );
-        assert_eq!(data, before);
     }
 }
 

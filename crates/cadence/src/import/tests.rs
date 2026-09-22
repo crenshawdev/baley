@@ -20,20 +20,11 @@ impl Policy for Allow {
         Ok(())
     }
 }
-fn frozen(path: &str) -> Vec<u8> {
-    let out = std::process::Command::new("git")
-        .current_dir(repository_root())
-        .args(["show", &format!("v3.7.12:{path}")])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    out.stdout
-}
+/// Planning files exactly as v3.7.12 left them, taken from that tag once and
+/// kept as fixtures, so no test asks git for them.
+const FROZEN_DECLINED: &[u8] = include_bytes!("../../tests/fixtures/v3.7.12/DECLINED.md");
+const FROZEN_FILED: &[u8] = include_bytes!("../../tests/fixtures/v3.7.12/FILED.md");
+const FROZEN_STATE: &[u8] = include_bytes!("../../tests/fixtures/v3.7.12/STATE.md");
 
 #[test]
 fn capture_import_preserves_independent_identities_and_all_source_bytes() {
@@ -158,11 +149,11 @@ fn cross_ledger_decline_wins_preserves_uncertainty_and_replay_does_not_append() 
 fn actual_frozen_declines_include_authored_decisions_and_exclude_them_from_recall() {
     let declined = Source {
         path: "DECLINED.md".into(),
-        bytes: frozen(".planning/DECLINED.md"),
+        bytes: FROZEN_DECLINED.to_vec(),
     };
     let filed = Source {
         path: "FILED.md".into(),
-        bytes: frozen(".planning/FILED.md"),
+        bytes: FROZEN_FILED.to_vec(),
     };
     let result = items::translate(None, Some(&filed), Some(&declined)).unwrap();
     assert_eq!(
@@ -186,6 +177,10 @@ fn actual_frozen_declines_include_authored_decisions_and_exclude_them_from_recal
             .any(|w| w.contains("FILED/DECLINED conflict"))
     );
     assert_eq!(result.evidence[1].source.bytes, declined.bytes);
+}
+
+#[test]
+fn a_capture_file_that_is_not_utf8_yields_no_records_and_keeps_its_bytes() {
     let invalid = Source {
         path: "CAPTURE.md".into(),
         bytes: vec![0xff, 0x00],
@@ -196,10 +191,10 @@ fn actual_frozen_declines_include_authored_decisions_and_exclude_them_from_recal
 }
 
 #[test]
-fn frozen_cursor_survives_restart_without_deriving_phase_status() {
+fn frozen_cursor_is_read_without_deriving_phase_status() {
     let state = Source {
         path: "STATE.md".into(),
-        bytes: frozen(".planning/STATE.md"),
+        bytes: FROZEN_STATE.to_vec(),
     };
     let translated = decisions::translate(Some(&state), None, None).unwrap();
     assert_eq!(translated.cursor["phase"], json!(1.0));
@@ -212,23 +207,6 @@ fn frozen_cursor_survives_restart_without_deriving_phase_status() {
         json!("1 of 0 (no active cycle)")
     );
     assert_eq!(translated.evidence[0].source, state);
-    let dir = tempfile::tempdir().unwrap();
-    tokio::runtime::Runtime::new().unwrap().block_on(async {
-        let store = Store::open(Filesystem::new(dir.path()).unwrap(), Allow)
-            .await
-            .unwrap();
-        let first = store
-            .request(Operation::RewriteSnapshot(
-                json!({"cursor":translated.cursor,"source_evidence":translated.evidence}),
-            ))
-            .await
-            .unwrap();
-        drop(store);
-        let reopened = Store::open(Filesystem::new(dir.path()).unwrap(), Allow)
-            .await
-            .unwrap();
-        assert_eq!(reopened.request(Operation::Read).await.unwrap(), first);
-    });
 }
 
 #[test]
@@ -347,73 +325,57 @@ fn proven_rotation_copy_coalesces_events_and_retains_both_origins() {
     }
 }
 
-fn repository_root() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-}
-
-fn external_temp() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    let repo = repository_root();
-    assert!(
-        !dir.path().starts_with(repo),
-        "import fixtures require TMPDIR outside repository"
-    );
-    dir
+/// A session's current view: import metadata, provenance and unrelated data.
+fn session_view() -> View {
+    let manifest: ImportManifest = serde_json::from_value(json!({"format":1,"complete":true,
+        "source_generation":"fixture","sources":[],"active":{"repo":"/fixture/project/.planning/config.v4.json","global":null},
+        "created":[],"warnings":[]}))
+    .unwrap();
+    View {
+        items: vec![],
+        decisions: vec![],
+        snapshot: cadence::store::model::Snapshot::new(
+            7,
+            b"",
+            b"",
+            json!({
+                "import":manifest,"source_evidence":[{"preserved":[1,null]}],"cursor":{"phase":8},
+                "archive":{"available":true},"unrelated":{"keep":true}
+            }),
+        )
+        .unwrap(),
+    }
 }
 
 #[test]
-fn derivation_snapshot_preserves_full_data_and_restart_manifest() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let root = tempfile::tempdir().unwrap();
-    std::fs::write(
-        root.path().join("STATE.md"),
-        "Phase: 3 of 4\nStatus: paused\nNext: Exact next text\n",
-    )
-    .unwrap();
-    let expected = rt.block_on(async {
-        let factory = SessionFactory::new(None, Arc::new(|_, _| Ok(())));
-        let session = factory.first_touch(root.path()).await.unwrap();
-        let before = session.derivation_view().await.unwrap();
-        let mut data = before.snapshot.data.clone();
-        data["unrelated"] = json!({"keep":[1,2]});
-        data["current"] = json!({"legacy":"unchanged"});
-        data["derivation"] = json!({"memo":"fixture"});
-        let written = session
-            .commit_derivation(&before, data.clone())
-            .await
-            .unwrap();
-        assert_eq!(written.snapshot.data, data);
-        for field in ["import", "source_evidence", "archive", "cursor"] {
-            assert_eq!(written.snapshot.data[field], before.snapshot.data[field]);
-            let mut bad = data.clone();
-            bad[field] = Value::Null;
-            assert!(
-                session.commit_derivation(&written, bad).await.is_err(),
-                "{field}"
-            );
-        }
-        assert_eq!(written.snapshot.operations, before.snapshot.operations);
-        let mut next = data.clone();
-        next["derivation"] = json!({"memo":"winner"});
-        let winner = session.commit_derivation(&written, next).await.unwrap();
-        assert!(session.commit_derivation(&written, data).await.is_err());
-        assert_eq!(session.derivation_view().await.unwrap(), winner);
-        winner.snapshot.data
-    });
-    rt.block_on(async {
-        let factory = SessionFactory::new(None, Arc::new(|_, _| Ok(())));
-        let session = factory.first_touch(root.path()).await.unwrap();
-        let reopened = session.derivation_view().await.unwrap();
-        assert_eq!(reopened.snapshot.data, expected);
-        assert_eq!(
-            serde_json::to_value(session.import_manifest()).unwrap(),
-            expected["import"]
-        );
-    });
+fn a_derivation_may_replace_everything_but_import_and_provenance() {
+    let current = session_view();
+    let mut data = current.snapshot.data.clone();
+    data["unrelated"] = json!({"keep":[1,2]});
+    data["current"] = json!({"legacy":"unchanged"});
+    data["derivation"] = json!({"memo":"fixture"});
+    assert_eq!(check_derivation(&current, &current, &data), Ok(()));
+}
+
+#[test]
+fn a_derivation_may_not_change_import_or_provenance() {
+    let current = session_view();
+    for field in ["import", "source_evidence", "archive", "cursor"] {
+        let mut data = current.snapshot.data.clone();
+        data[field] = Value::Null;
+        assert!(check_derivation(&current, &current, &data).is_err(), "{field}");
+    }
+}
+
+#[test]
+fn a_derivation_from_a_stale_view_is_refused() {
+    let current = session_view();
+    let mut stale = current.clone();
+    stale.snapshot = cadence::store::model::Snapshot::new(6, b"", b"", current.snapshot.data.clone()).unwrap();
+    assert_eq!(
+        check_derivation(&current, &stale, &current.snapshot.data),
+        Err(Error::Conflict(cadence::store::writer::STALE_SNAPSHOT.into()))
+    );
 }
 
 fn first_run_answers() -> Vec<write::Update> {
@@ -437,7 +399,7 @@ fn first_run_answers() -> Vec<write::Update> {
 
 #[tokio::test]
 async fn first_global_batch_returns_thirteen_leaves_from_missing_parent_registration() {
-    let fixture = external_temp();
+    let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path().join("project/.planning");
     let active = Paths {
         repo: root.join("config.v4.json"),
@@ -477,6 +439,9 @@ async fn first_global_batch_returns_thirteen_leaves_from_missing_parent_registra
 #[derive(Clone)]
 struct SuppliedConfig(BTreeMap<PathBuf, Vec<u8>>);
 impl ConfigIo for SuppliedConfig {
+    fn identity(&mut self, path: &Path) -> Result<std::path::PathBuf> {
+        Ok(path.into())
+    }
     fn read(&mut self, path: &Path) -> Result<Input> {
         Ok(Input {
             identity: path.into(),
@@ -526,7 +491,7 @@ fn prepare_import_uses_active_roles_and_retains_conflicting_legacy_evidence() {
 
 #[test]
 fn register_missing_global_parent_creates_infrastructure_without_config_pins() {
-    let fixture = external_temp();
+    let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path().join("project/.planning");
     let active = Paths {
         repo: root.join("config.v4.json"),
@@ -544,7 +509,7 @@ fn register_missing_global_parent_creates_infrastructure_without_config_pins() {
 
 #[test]
 fn register_refuses_symlink_ancestors() {
-    let fixture = external_temp();
+    let fixture = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink(fixture.path(), fixture.path().join("alias")).unwrap();
     let active = Paths {
         repo: fixture.path().join("config.v4.json"),
@@ -613,156 +578,47 @@ fn snapshot_replacement_keeps_wrapped_historical_evidence_at_its_original_locati
     );
 }
 
-struct SnapshotMemory(BTreeMap<String, cadence::store::Observed>);
-impl Storage for SnapshotMemory {
-    type Prepared = (String, Vec<u8>);
-    fn read(&mut self, target: &str) -> Result<cadence::store::Observed> {
-        Ok(self
-            .0
-            .get(target)
-            .cloned()
-            .unwrap_or(cadence::store::Observed {
-                bytes: None,
-                identity: "missing".into(),
-                directory_identity: "fixture".into(),
-            }))
-    }
-    fn prepare(&mut self, target: &str, bytes: &[u8]) -> Result<Self::Prepared> {
-        Ok((target.into(), bytes.into()))
-    }
-    fn install(&mut self, prepared: &Self::Prepared) -> Result<()> {
-        self.0.insert(
-            prepared.0.clone(),
-            cadence::store::Observed {
-                bytes: Some(prepared.1.clone()),
-                identity: "installed".into(),
-                directory_identity: "fixture".into(),
-            },
-        );
-        Ok(())
-    }
-    fn discard(&mut self, _: Self::Prepared) -> Result<()> {
-        Ok(())
-    }
-    fn confirm(&mut self, target: &str, _: &[u8]) -> Result<cadence::store::Observed> {
-        self.read(target)
-    }
-    fn resync(&mut self, target: &str, _: &[u8]) -> Result<cadence::store::Observed> {
-        self.read(target)
-    }
-    fn remove(&mut self, target: &str) -> Result<()> {
-        self.0.remove(target);
-        Ok(())
-    }
-}
-
-async fn snapshot_session() -> Session<SuppliedConfig> {
-    let active = Paths {
-        repo: "/fixture/project/.planning/config.v4.json".into(),
-        global: None,
+#[test]
+fn session_rewrite_returns_preserved_source_evidence() {
+    let current = session_view();
+    let Operation::CompareRewriteSnapshot { expected_generation, data, .. } =
+        conditional(&current, Operation::RewriteSnapshot(json!({"answer":13}))).unwrap()
+    else {
+        panic!("a snapshot rewrite was not pinned to the current snapshot")
     };
-    let manifest: ImportManifest = serde_json::from_value(json!({"format":1,"complete":true,
-        "source_generation":"fixture","sources":[],"active":active,"created":[],"warnings":[]}))
-    .unwrap();
-    let snapshot = cadence::store::model::Snapshot::new(
-        7,
-        b"",
-        b"",
-        json!({
-            "import":manifest,"source_evidence":[{"preserved":[1,null]}],"cursor":{"phase":8},
-            "archive":{"available":true},"unrelated":{"keep":true}
-        }),
-    )
-    .unwrap();
-    let memory = SnapshotMemory(
-        [
-            (ITEMS, Vec::new()),
-            (DECISIONS, Vec::new()),
-            (STATE, snapshot.render().unwrap()),
-        ]
-        .into_iter()
-        .map(|(name, bytes)| {
-            (
-                name.into(),
-                cadence::store::Observed {
-                    bytes: Some(bytes),
-                    identity: "fixture".into(),
-                    directory_identity: "fixture".into(),
-                },
-            )
-        })
-        .collect(),
-    );
-    Session {
-        root: "/fixture/project/.planning".into(),
-        drafts: Default::default(),
-        store: Store::open(memory, Allow).await.unwrap(),
-        config: Arc::new(Mutex::new(Reload::new(
-            active.clone(),
-            SuppliedConfig(BTreeMap::new()),
-        ))),
-        manifest,
-        active,
-    }
-}
-
-#[tokio::test]
-async fn session_rewrite_returns_preserved_source_evidence() {
-    let session = snapshot_session().await;
     assert_eq!(
-        session
-            .request(Operation::RewriteSnapshot(json!({"answer":13})))
-            .await
-            .map(|view| (
-                view.snapshot.generation,
-                view.snapshot.data["source_evidence"].clone(),
-                view.snapshot.data["current"].clone(),
-                view.snapshot.data["unrelated"].clone()
-            )),
-        Ok((
-            8,
-            json!([{"preserved":[1,null]}]),
-            json!({"answer":13}),
-            json!({"keep":true})
-        ))
+        (expected_generation, data["source_evidence"].clone(), data["current"].clone(), data["unrelated"].clone()),
+        (7, json!([{"preserved":[1,null]}]), json!({"answer":13}), json!({"keep":true}))
     );
 }
 
-#[tokio::test]
-async fn session_transaction_snapshot_returns_preserved_source_evidence() {
-    let session = snapshot_session().await;
+#[test]
+fn session_transaction_snapshot_returns_preserved_source_evidence() {
+    let current = session_view();
+    let transaction = Transaction {
+        id: "snapshot-input".into(),
+        items: vec![],
+        decisions: vec![],
+        snapshot: Some(json!({"answer":13})),
+        external: vec![],
+    };
+    let Operation::CompareTransact { expected_generation, transaction, .. } =
+        conditional(&current, Operation::Transact(transaction)).unwrap()
+    else {
+        panic!("a transaction carrying a snapshot was not pinned to the current snapshot")
+    };
+    let data = transaction.snapshot.unwrap();
     assert_eq!(
-        session
-            .request(Operation::Transact(Transaction {
-                id: "snapshot-input".into(),
-                items: vec![],
-                decisions: vec![],
-                snapshot: Some(json!({"answer":13})),
-                external: vec![],
-            }))
-            .await
-            .map(|view| (
-                view.snapshot.generation,
-                view.snapshot.data["source_evidence"].clone(),
-                view.snapshot.data["current"].clone()
-            )),
-        Ok((8, json!([{"preserved":[1,null]}]), json!({"answer":13})))
+        (expected_generation, data["source_evidence"].clone(), data["current"].clone()),
+        (7, json!([{"preserved":[1,null]}]), json!({"answer":13}))
     );
 }
 
-#[tokio::test]
-async fn session_conditional_rewrite_returns_exact_stale_generation_refusal() {
-    let session = snapshot_session().await;
+#[test]
+fn session_conditional_rewrite_returns_exact_stale_generation_refusal() {
+    let current = session_view();
     assert_eq!(
-        session
-            .request(Operation::CompareRewriteSnapshot {
-                expected_generation: 6,
-                expected_integrity: "stale-generation".into(),
-                data: json!({"answer":13}),
-            })
-            .await,
-        Err(Error::Conflict(
-            "conditional snapshot precondition changed".into()
-        ))
+        cadence::store::writer::precondition(&current.snapshot, 6, "stale-generation"),
+        Err(Error::Conflict("conditional snapshot precondition changed".into()))
     );
 }

@@ -27,6 +27,15 @@ pub struct View {
 /// Owner-serialized precondition; this does not compare-and-swap Markdown files.
 pub const STALE_SNAPSHOT: &str = "conditional snapshot precondition changed";
 
+/// Whether a conditional write's precondition still holds: the snapshot it was
+/// pinned to, by generation and integrity, is the current one.
+pub fn precondition(current: &Snapshot, generation: u64, integrity: &str) -> Result<()> {
+    if generation != current.generation || integrity != current.integrity {
+        return Err(Error::Conflict(STALE_SNAPSHOT.into()));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub enum BoundaryChange {
     Issue {
@@ -805,11 +814,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 data,
             } => {
                 self.revalidate()?;
-                if expected_generation != self.view.snapshot.generation
-                    || expected_integrity != self.view.snapshot.integrity
-                {
-                    return Err(Error::Conflict(STALE_SNAPSHOT.into()));
-                }
+                precondition(&self.view.snapshot, expected_generation, &expected_integrity)?;
                 next.snapshot.data = data;
                 "rewrite_snapshot"
             }
@@ -830,11 +835,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 }
                 if let Some((generation, integrity)) = expected {
                     self.revalidate()?;
-                    if generation != self.view.snapshot.generation
-                        || integrity != self.view.snapshot.integrity
-                    {
-                        return Err(Error::Conflict(STALE_SNAPSHOT.into()));
-                    }
+                    precondition(&self.view.snapshot, generation, &integrity)?;
                 }
                 verification_claim = self.verification_claim(&transaction)?;
                 operations.insert(transaction.id, fingerprint);
@@ -1301,16 +1302,11 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         if operation_id.trim().is_empty() {
             return Err(Error::Invalid("empty operation identity".into()));
         }
-        let fingerprint = operation_fingerprint(&("boundary-operation-v1", &decision, &change))?;
-        if let Some(prior) = self.view.snapshot.operations.get(operation_id) {
-            return if *prior == fingerprint {
-                Ok(self.view.as_ref().clone())
-            } else {
-                Err(Error::Conflict(
-                    "operation identity reused for different content".into(),
-                ))
-            };
-        }
+        let Some(fingerprint) =
+            boundary_operation(&self.view.snapshot.operations, operation_id, &decision, &change)?
+        else {
+            return Ok(self.view.as_ref().clone());
+        };
         let id = decision.identity().map_err(boundary_error)?;
         if self.view.decisions.iter().any(|record| record.id == id) {
             // A distinct caller ID cannot turn the same answer into another mutation.
@@ -1406,40 +1402,13 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 dispatch,
             } => {
                 let phase = dispatch.phase;
-                if let Some(routing) = routing_decision(&dispatch)? {
-                    next.decisions.push(routing);
-                }
-                if decision.scope != (BoundaryScope::Execution { phase })
-                    || decision.tool != BoundaryTool::CadenceQuery
-                    || decision.receipt
-                        != (Receipt::Dispatch {
-                            dispatch_id: dispatch.id.clone(),
-                            prompt_bytes: None,
-                            prompt_digest: dispatch.prompt_digest.clone(),
-                        })
-                    || plan_set_fingerprint != dispatch.plan_set_fingerprint
-                {
-                    return Err(Error::Invalid("dispatch boundary identity mismatch".into()));
-                }
-                let mut execution = execution_snapshot(&next.snapshot.data)?;
-                let occurrence = execution
-                    .occurrences
-                    .entry(phase.to_string())
-                    .or_insert_with(|| ExecutionOccurrence {
-                        phase,
-                        undone: None,
-                        plan_set_fingerprint,
-                        version: dispatch.expected_execution_version,
-                        active: None,
-                        plans: Vec::new(),
-                        terminal: None,
-                        receipts: BTreeMap::new(), issues: BTreeMap::new(),
-                    });
-                let (occurrence, _) =
-                    cadence::execution::dispatch::admit_dispatch(occurrence, dispatch)
-                        .map_err(|error| Error::Conflict(error.to_string()))?;
-                execution.occurrences.insert(phase.to_string(), occurrence);
-                install_execution(&mut next.snapshot.data, execution)?;
+                admit_boundary_dispatch(
+                    &mut next,
+                    &decision,
+                    plan_set_fingerprint,
+                    dispatch,
+                    super::model::stamped_at(),
+                )?;
                 match native_inventory {
                     Some(inventory)=>super::transaction::IntentKind::NativeExecutionDispatchV1 {phase,decision_id:id.clone(),inventory},
                     None=>super::transaction::IntentKind::ExecutionDispatchV1 {phase,decision_id:id.clone()},
@@ -1919,11 +1888,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
 
     fn check_expected(&mut self, generation: u64, integrity: &str) -> Result<()> {
         self.revalidate()?;
-        if generation != self.view.snapshot.generation || integrity != self.view.snapshot.integrity
-        {
-            return Err(Error::Conflict(STALE_SNAPSHOT.into()));
-        }
-        Ok(())
+        precondition(&self.view.snapshot, generation, integrity)
     }
 
     fn rail_receipt(
@@ -2216,6 +2181,71 @@ fn operation_fingerprint(value: &impl Serialize) -> Result<String> {
     Ok(model::digest(&serde_json::to_vec(value)?))
 }
 
+/// The fingerprint a new boundary operation is recorded under, or `None` when
+/// `operation_id` already recorded this same content: a replay, answered with
+/// the current view. Other content under a recorded identity is a conflict.
+pub fn boundary_operation(
+    operations: &BTreeMap<String, String>,
+    operation_id: &str,
+    decision: &BoundaryV1,
+    change: &BoundaryChange,
+) -> Result<Option<String>> {
+    let fingerprint = operation_fingerprint(&("boundary-operation-v1", decision, change))?;
+    match operations.get(operation_id) {
+        None => Ok(Some(fingerprint)),
+        Some(prior) if *prior == fingerprint => Ok(None),
+        Some(_) => Err(Error::Conflict(
+            "operation identity reused for different content".into(),
+        )),
+    }
+}
+
+/// Admits `dispatch` into `next` under the boundary `decision`: the routing
+/// record the dispatch carries, stamped `at`, then the dispatch as its phase's
+/// active one. The boundary must name exactly this dispatch.
+pub fn admit_boundary_dispatch(
+    next: &mut View,
+    decision: &BoundaryV1,
+    plan_set_fingerprint: String,
+    dispatch: ActiveDispatch,
+    at: Option<u64>,
+) -> Result<()> {
+    let phase = dispatch.phase;
+    if let Some(routing) = routing_decision(&dispatch, at)? {
+        next.decisions.push(routing);
+    }
+    if decision.scope != (BoundaryScope::Execution { phase })
+        || decision.tool != BoundaryTool::CadenceQuery
+        || decision.receipt
+            != (Receipt::Dispatch {
+                dispatch_id: dispatch.id.clone(),
+                prompt_bytes: None,
+                prompt_digest: dispatch.prompt_digest.clone(),
+            })
+        || plan_set_fingerprint != dispatch.plan_set_fingerprint
+    {
+        return Err(Error::Invalid("dispatch boundary identity mismatch".into()));
+    }
+    let mut execution = execution_snapshot(&next.snapshot.data)?;
+    let occurrence = execution
+        .occurrences
+        .entry(phase.to_string())
+        .or_insert_with(|| ExecutionOccurrence {
+            phase,
+            undone: None,
+            plan_set_fingerprint,
+            version: dispatch.expected_execution_version,
+            active: None,
+            plans: Vec::new(),
+            terminal: None,
+            receipts: BTreeMap::new(), issues: BTreeMap::new(),
+        });
+    let (occurrence, _) = cadence::execution::dispatch::admit_dispatch(occurrence, dispatch)
+        .map_err(|error| Error::Conflict(error.to_string()))?;
+    execution.occurrences.insert(phase.to_string(), occurrence);
+    install_execution(&mut next.snapshot.data, execution)
+}
+
 fn execution_snapshot(data: &Value) -> Result<ExecutionSnapshot> {
     let object = data
         .as_object()
@@ -2432,7 +2462,9 @@ pub fn confirmed_boundary<'a>(
         .ok_or(Failure::Confirmation)
 }
 
-pub fn routing_decision(dispatch: &ActiveDispatch) -> Result<Option<DecisionRecord>> {
+/// The routing record a dispatch must carry, stamped with `at`. The writer
+/// passes the time it writes; a comparison that ignores the stamp passes none.
+pub fn routing_decision(dispatch: &ActiveDispatch, at: Option<u64>) -> Result<Option<DecisionRecord>> {
     use super::model::{Decision, DecisionRecord, Evidence, Origin};
     cadence::execution::dispatch::validate_route_choice(dispatch)
         .map_err(|error| Error::Invalid(error.to_string()))?;
@@ -2465,12 +2497,12 @@ pub fn routing_decision(dispatch: &ActiveDispatch) -> Result<Option<DecisionReco
             observed_effort: Evidence::Missing,
             receipt: Evidence::Missing,
         },
-        at: super::model::stamped_at(),
+        at,
     })))
 }
 
 pub fn validate_routing(dispatch: &ActiveDispatch, records: &[DecisionRecord]) -> Result<()> {
-    if let Some(expected) = routing_decision(dispatch)? {
+    if let Some(expected) = routing_decision(dispatch, None)? {
         let saved: Vec<&DecisionRecord> =
             records.iter().filter(|record| record.id == expected.id).collect();
         let ok = match saved.as_slice() {

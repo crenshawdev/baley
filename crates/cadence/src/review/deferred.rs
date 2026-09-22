@@ -112,22 +112,31 @@ fn references(records: &Value, admission: &Admission) -> Result<Vec<References>>
     Ok(result)
 }
 
-/// This acknowledges durable enqueue only. Delivery and settlement retain their
-/// own gates. Replay preserves the initial timestamp and never writes a new member.
-pub async fn enqueue_deferred(
-    store: &Store,
+/// What enqueueing `fire` does, decided over one snapshot's review records.
+#[derive(Debug)]
+pub enum Enqueue {
+    /// Nothing to write: the reply is final.
+    Answered(EnqueueReply),
+    /// A new member, and the records with it inserted, to commit.
+    Write { member: Box<QueuedMember>, records: Value },
+}
+
+/// Decide an enqueue from the records alone. A fire not gated deferred is
+/// absent; a member already saved is replayed with its first timestamp; any
+/// binding that does not hold is refused. The clock is read only for a new
+/// member.
+pub fn decide_enqueue(
+    mut records: Value,
     fire: &str,
     clock: &mut impl Clock,
-) -> std::result::Result<EnqueueReply, EnqueueError> {
-    let view = persistence::read(store).await.map_err(|_| refused(fire))?;
-    let mut records = persistence::records(&view.snapshot.data).map_err(|_| refused(fire))?;
+) -> std::result::Result<Enqueue, EnqueueError> {
     let admission: Admission =
         persistence::get(&records, "admissions", fire).map_err(|_| refused(fire))?;
     if admission.fire != fire {
         return Err(refused(fire));
     }
     if admission.gate != Some(Gate::Deferred) {
-        return Ok(EnqueueReply::Absent { member: None });
+        return Ok(Enqueue::Answered(EnqueueReply::Absent { member: None }));
     }
     home(&records, &admission).map_err(|_| refused(fire))?;
     let refs = references(&records, &admission).map_err(|_| refused(fire))?;
@@ -144,7 +153,7 @@ pub async fn enqueue_deferred(
         {
             return Err(refused(fire));
         }
-        return Ok(receipt(&saved));
+        return Ok(Enqueue::Answered(receipt(&saved)));
     }
     let member = QueuedMember {
         record: DeferredMember {
@@ -157,6 +166,22 @@ pub async fn enqueue_deferred(
         state: InitialState::Unruled,
     };
     persistence::insert(&mut records, "deferred", fire, &member).map_err(|_| refused(fire))?;
+    Ok(Enqueue::Write { member: Box::new(member), records })
+}
+
+/// This acknowledges durable enqueue only. Delivery and settlement retain their
+/// own gates. Replay preserves the initial timestamp and never writes a new member.
+pub async fn enqueue_deferred(
+    store: &Store,
+    fire: &str,
+    clock: &mut impl Clock,
+) -> std::result::Result<EnqueueReply, EnqueueError> {
+    let view = persistence::read(store).await.map_err(|_| refused(fire))?;
+    let records = persistence::records(&view.snapshot.data).map_err(|_| refused(fire))?;
+    let (member, records) = match decide_enqueue(records, fire, clock)? {
+        Enqueue::Answered(reply) => return Ok(reply),
+        Enqueue::Write { member, records } => (*member, records),
+    };
     // One generic contribution commits member, references and the existing index
     // in the same snapshot. No separate queue file participates.
     match persistence::update(store, &view, &format!("enqueue:{fire}"), records).await {
@@ -211,7 +236,12 @@ pub struct DeferredInventory {
 /// Unfiltered discovery: no cursor, directory scan, rendering or settlement test.
 pub async fn enumerate_deferred(store: &Store) -> Result<DeferredInventory> {
     let view = persistence::read(store).await?;
-    let records = persistence::records(&view.snapshot.data)?;
+    inventory(&persistence::records(&view.snapshot.data)?)
+}
+
+/// Every deferred member in one snapshot's review records, one row per
+/// member and attempt, each bound to its home and admission.
+pub fn inventory(records: &Value) -> Result<DeferredInventory> {
     let homes: BTreeMap<String, IndexedHome> = records
         .get("homes")
         .cloned()
@@ -227,9 +257,9 @@ pub async fn enumerate_deferred(store: &Store) -> Result<DeferredInventory> {
         {
             continue;
         }
-        let saved: QueuedMember = persistence::get(&records, "deferred", &indexed.fire)?;
-        let admission: Admission = persistence::get(&records, "admissions", &indexed.fire)?;
-        home(&records, &admission)?;
+        let saved: QueuedMember = persistence::get(records, "deferred", &indexed.fire)?;
+        let admission: Admission = persistence::get(records, "admissions", &indexed.fire)?;
+        home(records, &admission)?;
         if saved.record.member != indexed.fire
             || saved.record.home != indexed.home
             || saved.record.references.is_empty()

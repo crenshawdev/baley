@@ -33,6 +33,10 @@ impl MemoryIo {
 }
 
 impl ArtifactIo for MemoryIo {
+    /// No store beside these artifacts: no native acceptance.
+    fn acceptance(&mut self, _: &Path) -> Result<AcceptanceOverlay, DerivationError> {
+        Ok(AcceptanceOverlay::default())
+    }
     fn resolve_root(&mut self, selected: &Path) -> Result<PathBuf, InputFailure> {
         self.record("resolve", selected);
         assert!(selected.is_absolute());
@@ -104,6 +108,9 @@ impl ChangingIo {
 }
 
 impl ArtifactIo for ChangingIo {
+    fn acceptance(&mut self, root: &Path) -> Result<AcceptanceOverlay, DerivationError> {
+        self.active().acceptance(root)
+    }
     fn resolve_root(&mut self, selected: &Path) -> Result<PathBuf, InputFailure> {
         self.captures += 1;
         self.active().resolve_root(selected)

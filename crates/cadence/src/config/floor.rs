@@ -74,105 +74,99 @@ impl Scope {
     }
 }
 
+/// The kind of an entry as `lstat` reports it: a symbolic link is `Symlink`,
+/// never what it points at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Access {
-    Metadata,
-    Canonicalize,
-    ListDirectory,
-    OpenBody,
-    ReadBody,
-    AfterRead,
+pub enum Kind {
+    Directory,
+    File,
+    Symlink,
+    Other,
 }
 
-struct Reader<F> {
-    root: PathBuf,
-    observe: F,
-    bytes: usize,
+/// What the floor knows about one entry. The stamp is device, inode, mode and
+/// both timestamps to the nanosecond, so two observations with the same length
+/// and stamp saw the same entry, unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Meta {
+    pub kind: Kind,
+    pub len: u64,
+    pub stamp: [i64; 7],
 }
 
-fn same(a: &Metadata, b: &Metadata) -> bool {
-    (
-        a.dev(),
-        a.ino(),
-        a.mode(),
-        a.len(),
-        a.mtime(),
-        a.mtime_nsec(),
-        a.ctime(),
-        a.ctime_nsec(),
-    ) == (
-        b.dev(),
-        b.ino(),
-        b.mode(),
-        b.len(),
-        b.mtime(),
-        b.mtime_nsec(),
-        b.ctime(),
-        b.ctime_nsec(),
-    )
-}
-fn failure(reason: &str) -> io::Error {
-    io::Error::other(reason)
+/// Everything the floor asks the filesystem. An implementation only answers;
+/// what an answer means is decided by the reader below.
+pub trait FloorIo {
+    /// A body opened for reading.
+    type Body;
+    fn metadata(&mut self, path: &Path) -> io::Result<Meta>;
+    fn canonicalize(&mut self, path: &Path) -> io::Result<PathBuf>;
+    /// A directory's entries, stopping once there are more than `bound`.
+    fn list(&mut self, path: &Path, bound: usize) -> io::Result<Vec<PathBuf>>;
+    /// Open `real`, a path under `root`, without following any link.
+    fn open(&mut self, root: &Path, real: &Path) -> io::Result<Self::Body>;
+    /// The opened body's own stamp.
+    fn stamp(&mut self, body: &Self::Body) -> io::Result<Meta>;
+    /// Up to `limit` bytes of the opened body. What was read is kept even
+    /// when the read fails part way, because it still counts against the
+    /// total read budget.
+    fn read(&mut self, body: &mut Self::Body, limit: usize) -> (Vec<u8>, io::Result<()>);
 }
 
-impl<F: FnMut(Access, &Path) -> io::Result<()>> Reader<F> {
-    fn metadata(&mut self, path: &Path) -> io::Result<Metadata> {
-        (self.observe)(Access::Metadata, path)?;
-        fs::symlink_metadata(path)
+/// The host filesystem.
+pub struct Host;
+
+fn meta(metadata: &Metadata) -> Meta {
+    let kind = metadata.file_type();
+    Meta {
+        kind: if kind.is_symlink() {
+            Kind::Symlink
+        } else if kind.is_dir() {
+            Kind::Directory
+        } else if kind.is_file() {
+            Kind::File
+        } else {
+            Kind::Other
+        },
+        len: metadata.len(),
+        stamp: [
+            metadata.dev() as i64,
+            metadata.ino() as i64,
+            i64::from(metadata.mode()),
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+        ],
+    }
+}
+
+impl FloorIo for Host {
+    type Body = File;
+    fn metadata(&mut self, path: &Path) -> io::Result<Meta> {
+        fs::symlink_metadata(path).map(|metadata| meta(&metadata))
     }
     fn canonicalize(&mut self, path: &Path) -> io::Result<PathBuf> {
-        (self.observe)(Access::Canonicalize, path)?;
         fs::canonicalize(path)
     }
-    fn contained(&mut self, path: &Path) -> io::Result<PathBuf> {
-        let real = self.canonicalize(path)?;
-        if !real.starts_with(&self.root) {
-            return Err(failure("path resolves outside the project"));
-        }
-        Ok(real)
-    }
-    fn check_parent(&mut self, path: &Path) -> io::Result<()> {
-        let mut parent = path.parent().ok_or_else(|| failure("missing parent"))?;
-        loop {
-            match self.metadata(parent) {
-                Ok(meta) => {
-                    if !meta.is_dir() && !meta.file_type().is_symlink() {
-                        return Err(failure("parent is not a directory"));
-                    }
-                    self.contained(parent)?;
-                    return Ok(());
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    parent = parent
-                        .parent()
-                        .ok_or_else(|| failure("no observable parent"))?;
-                }
-                Err(error) => return Err(error),
+    fn list(&mut self, path: &Path, bound: usize) -> io::Result<Vec<PathBuf>> {
+        let mut entries = vec![];
+        for entry in fs::read_dir(path)? {
+            entries.push(entry?.path());
+            if entries.len() > bound {
+                break;
             }
         }
+        Ok(entries)
     }
-    fn inspect(&mut self, path: &Path) -> io::Result<Option<Metadata>> {
-        self.check_parent(path)?;
-        match self.metadata(path) {
-            Ok(meta) => {
-                if meta.file_type().is_symlink() {
-                    return Err(failure("final symlink is not declared evidence"));
-                }
-                self.contained(path)?;
-                Ok(Some(meta))
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error),
-        }
-    }
-    fn open_contained(&mut self, real: &Path) -> io::Result<File> {
+    fn open(&mut self, root: &Path, real: &Path) -> io::Result<File> {
         let relative = real
-            .strip_prefix(&self.root)
+            .strip_prefix(root)
             .map_err(|_| failure("outside project"))?;
         let mut handle = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-            .open(&self.root)?;
+            .open(root)?;
         let parts: Vec<_> = relative.components().collect();
         for (i, part) in parts.iter().enumerate() {
             use std::{
@@ -203,28 +197,92 @@ impl<F: FnMut(Access, &Path) -> io::Result<()>> Reader<F> {
         }
         Ok(handle)
     }
-    fn body(&mut self, path: &Path, metadata: &Metadata, limit: usize) -> io::Result<Vec<u8>> {
-        if !metadata.is_file() {
+    fn stamp(&mut self, body: &File) -> io::Result<Meta> {
+        body.metadata().map(|metadata| meta(&metadata))
+    }
+    fn read(&mut self, body: &mut File, limit: usize) -> (Vec<u8>, io::Result<()>) {
+        let mut bytes = Vec::new();
+        let read = (&mut *body).take(limit as u64).read_to_end(&mut bytes).map(|_| ());
+        (bytes, read)
+    }
+}
+
+struct Reader<'a, I: FloorIo> {
+    root: PathBuf,
+    io: &'a mut I,
+    bytes: usize,
+}
+
+fn same(a: &Meta, b: &Meta) -> bool {
+    a.len == b.len && a.stamp == b.stamp
+}
+fn failure(reason: &str) -> io::Error {
+    io::Error::other(reason)
+}
+
+impl<I: FloorIo> Reader<'_, I> {
+    fn metadata(&mut self, path: &Path) -> io::Result<Meta> {
+        self.io.metadata(path)
+    }
+    fn contained(&mut self, path: &Path) -> io::Result<PathBuf> {
+        let real = self.io.canonicalize(path)?;
+        if !real.starts_with(&self.root) {
+            return Err(failure("path resolves outside the project"));
+        }
+        Ok(real)
+    }
+    fn check_parent(&mut self, path: &Path) -> io::Result<()> {
+        let mut parent = path.parent().ok_or_else(|| failure("missing parent"))?;
+        loop {
+            match self.metadata(parent) {
+                Ok(meta) => {
+                    if meta.kind != Kind::Directory && meta.kind != Kind::Symlink {
+                        return Err(failure("parent is not a directory"));
+                    }
+                    self.contained(parent)?;
+                    return Ok(());
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    parent = parent
+                        .parent()
+                        .ok_or_else(|| failure("no observable parent"))?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    fn inspect(&mut self, path: &Path) -> io::Result<Option<Meta>> {
+        self.check_parent(path)?;
+        match self.metadata(path) {
+            Ok(meta) => {
+                if meta.kind == Kind::Symlink {
+                    return Err(failure("final symlink is not declared evidence"));
+                }
+                self.contained(path)?;
+                Ok(Some(meta))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+    fn body(&mut self, path: &Path, metadata: &Meta, limit: usize) -> io::Result<Vec<u8>> {
+        if metadata.kind != Kind::File {
             return Err(failure("not a regular file"));
         }
-        if metadata.len() > limit as u64 {
+        if metadata.len > limit as u64 {
             return Err(failure("body size or total read budget exceeded"));
         }
         let real = self.contained(path)?;
-        (self.observe)(Access::OpenBody, path)?;
-        let mut file = self.open_contained(&real)?;
-        if !same(metadata, &file.metadata()?) {
+        let mut body = self.io.open(&self.root, &real)?;
+        if !same(metadata, &self.io.stamp(&body)?) {
             return Err(failure("body replaced before open"));
         }
-        (self.observe)(Access::ReadBody, path)?;
-        let mut bytes = Vec::new();
-        let read = (&mut file).take(limit as u64).read_to_end(&mut bytes);
+        let (bytes, read) = self.io.read(&mut body, limit);
         self.bytes += bytes.len();
         read?;
-        (self.observe)(Access::AfterRead, path)?;
         if bytes.len() > limit
-            || bytes.len() as u64 != metadata.len()
-            || !same(metadata, &file.metadata()?)
+            || bytes.len() as u64 != metadata.len
+            || !same(metadata, &self.io.stamp(&body)?)
             || !same(metadata, &self.metadata(path)?)
             || self.contained(path)? != real
         {
@@ -236,17 +294,13 @@ impl<F: FnMut(Access, &Path) -> io::Result<()>> Reader<F> {
         let before = self
             .inspect(path)?
             .ok_or_else(|| failure("directory missing"))?;
-        if !before.is_dir() {
+        if before.kind != Kind::Directory {
             return Err(failure("not a directory"));
         }
         let real = self.contained(path)?;
-        (self.observe)(Access::ListDirectory, path)?;
-        let mut entries = vec![];
-        for entry in fs::read_dir(path)? {
-            entries.push(entry?.path());
-            if entries.len() > MAX_ENTRIES {
-                return Err(failure("directory exceeds 4096 entry bound"));
-            }
+        let mut entries = self.io.list(path, MAX_ENTRIES)?;
+        if entries.len() > MAX_ENTRIES {
+            return Err(failure("directory exceeds 4096 entry bound"));
         }
         if !same(&before, &self.metadata(path)?) || self.contained(path)? != real {
             return Err(failure("directory changed during enumeration"));
@@ -263,16 +317,18 @@ pub fn read(
     plan: Option<u32>,
     categories: &[String],
 ) -> Result<Scope> {
-    read_observed(planning_root, role, phase, plan, categories, |_, _| Ok(()))
+    read_with(planning_root, role, phase, plan, categories, &mut Host)
 }
 
-pub fn read_observed(
+/// The declared scope of `phase` (or of one `plan` in it), read through `io`.
+/// Every observation failure makes the scope incomplete; none is skipped.
+pub fn read_with(
     planning_root: &Path,
     role: &str,
     phase: Option<u32>,
     plan: Option<u32>,
     categories: &[String],
-    mut observe: impl FnMut(Access, &Path) -> io::Result<()>,
+    io: &mut impl FloorIo,
 ) -> Result<Scope> {
     let mut scope = Scope::pending(role, phase);
     if scope.state == State::Bypassed || phase.is_none() {
@@ -282,8 +338,7 @@ pub fn read_observed(
     scope.reasons.clear();
     let phase = phase.unwrap();
     let project = planning_root.parent().unwrap_or(planning_root);
-    let root = match observe(Access::Canonicalize, project).and_then(|()| fs::canonicalize(project))
-    {
+    let root = match io.canonicalize(project) {
         Ok(root) => root,
         Err(error) => {
             scope.incomplete(project, format!("project canonicalization: {error}"));
@@ -292,7 +347,7 @@ pub fn read_observed(
     };
     let mut reader = Reader {
         root,
-        observe,
+        io,
         bytes: 0,
     };
     let phase_root = planning_root.join(format!("phases/{phase}"));
@@ -385,7 +440,7 @@ pub fn read_observed(
         };
         let mut body = None;
         if let Some(metadata) = metadata {
-            if directory && metadata.is_dir() {
+            if directory && metadata.kind == Kind::Directory {
                 expanded.insert(relative.clone());
                 match reader.list(&path) {
                     Ok(entries) => {
@@ -398,7 +453,7 @@ pub fn read_observed(
                             };
                             match reader.metadata(&entry) {
                                 Ok(meta) => {
-                                    pending.insert((rel.into(), meta.is_dir()));
+                                    pending.insert((rel.into(), meta.kind == Kind::Directory));
                                 }
                                 Err(error) => {
                                     scope.incomplete(

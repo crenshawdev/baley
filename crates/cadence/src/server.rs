@@ -1622,7 +1622,13 @@ mod wire_tests {
             .build()
             .unwrap()
             .block_on(async {
-                let server = CadenceServer::new().bind_project(project.path()).unwrap();
+                // No global config: the server must not read HOME or the
+                // environment to find one.
+                let factory = crate::import::SessionFactory::new(
+                    None,
+                    std::sync::Arc::new(crate::config::planning_policy),
+                );
+                let server = CadenceServer::with_factory(factory).bind_project(project.path()).unwrap();
                 server.call(tool, Some(json!({}))).await
             })
     }

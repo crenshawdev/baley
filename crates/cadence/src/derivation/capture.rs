@@ -11,6 +11,10 @@ pub trait ArtifactIo {
     fn list_phase(&mut self, path: &Path) -> Observation<Vec<String>>;
     fn probe_summary(&mut self, path: &Path) -> Observation<()>;
     fn read(&mut self, path: &Path) -> Observation<Vec<u8>>;
+    /// The native acceptance overlay from the store files beside the
+    /// artifacts. Asked here with the rest, so a substitute answers it
+    /// without reading the host.
+    fn acceptance(&mut self, root: &Path) -> Result<AcceptanceOverlay, DerivationError>;
 }
 
 #[derive(Default)]
@@ -43,6 +47,10 @@ fn observation<T>(path: &Path, result: io::Result<T>) -> Observation<T> {
 }
 
 impl ArtifactIo for ArtifactFiles {
+    fn acceptance(&mut self, root: &Path) -> Result<AcceptanceOverlay, DerivationError> {
+        observe_acceptance(root)
+    }
+
     fn resolve_root(&mut self, selected: &Path) -> Result<PathBuf, InputFailure> {
         let absolute = if selected.is_absolute() {
             selected.to_owned()

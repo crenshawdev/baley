@@ -220,33 +220,78 @@ pub fn detect(root: &Path, answered: Option<Vec<String>>) -> Result<Report> {
 pub fn detect_observed(
     root: &Path,
     answered: Option<Vec<String>>,
-    mut observe: impl FnMut(Access, &Path) -> io::Result<()>,
+    observe: impl FnMut(Access, &Path) -> io::Result<()>,
 ) -> Result<Report> {
     let answered = answered
         .map(validate_surfaces)
         .transpose()?
         .unwrap_or_default();
-    let mut tree = Tree::default();
-    let mut manifests = Vec::new();
-    let mut warnings = Vec::new();
+    judge(&walk(root, observe), &answered)
+}
+
+/// The kind of an entry the walk listed, as the listing reported it: a
+/// symbolic link is `Other`, never what it points at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Directory,
+    File,
+    Other,
+    /// The listing could not say: the error text.
+    Unknown(String),
+}
+
+/// One thing the walk saw, in the order it saw it. Nothing here is judged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Seen {
+    /// A directory below the root could not be listed.
+    Unlisted { dir: String, error: String },
+    /// One entry of a directory below the root could not be read.
+    EntryUnlisted { dir: String, error: String },
+    /// An entry, by its name and its path relative to the root.
+    Entry { name: String, label: String, kind: Kind },
+    /// A manifest-named regular file's text, or why it could not be read.
+    Manifest {
+        name: String,
+        label: String,
+        text: std::result::Result<String, String>,
+    },
+}
+
+/// What a walk of `root` saw: the root's own listing failure, or everything
+/// under it in walk order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Walk {
+    pub root: std::path::PathBuf,
+    pub seen: std::result::Result<Vec<Seen>, String>,
+}
+
+/// Whether the walk descends into a directory named `name` found at `level`:
+/// only the root's own children, and never a build, cache or vendor tree.
+pub fn descends(level: usize, name: &str) -> bool {
+    level == 0 && !SKIP.contains(&name)
+}
+
+/// Whether the walk opens an entry's body: only a regular file named as a
+/// manifest. Source bodies are never read.
+pub fn opens(name: &str, kind: &Kind) -> bool {
+    *kind == Kind::File && MANIFESTS.contains(&name)
+}
+
+/// List the root and its children, reading only manifests. Every outcome is
+/// recorded as seen; no rule about what it means is applied here.
+pub fn walk(root: &Path, mut observe: impl FnMut(Access, &Path) -> io::Result<()>) -> Walk {
+    let refused = |error: io::Error| Walk { root: root.into(), seen: Err(error.to_string()) };
+    let mut seen = Vec::new();
     let mut levels = vec![root.to_path_buf()];
     let mut at = 0;
     while at < levels.len() {
         let dir = levels[at].clone();
-        let listing = observe(Access::ListDirectory, &dir).and_then(|()| fs::read_dir(&dir));
-        let entries = match listing {
+        let relative = dir.strip_prefix(root).unwrap().display().to_string();
+        let entries = match observe(Access::ListDirectory, &dir).and_then(|()| fs::read_dir(&dir)) {
             Ok(entries) => entries,
-            Err(error) if at == 0 => {
-                return Err(Error::Invalid(format!(
-                    "no-root: {} cannot be listed ({error})",
-                    root.display()
-                )));
-            }
+            Err(error) if at == 0 => return refused(error),
             Err(error) => {
-                warnings.push(format!(
-                    "{} could not be listed ({error})",
-                    dir.strip_prefix(root).unwrap().display()
-                ));
+                seen.push(Seen::Unlisted { dir: relative, error: error.to_string() });
                 at += 1;
                 continue;
             }
@@ -255,67 +300,79 @@ pub fn detect_observed(
         for entry in entries {
             match entry {
                 Ok(entry) => collected.push(entry),
-                Err(error) if at == 0 => {
-                    return Err(Error::Invalid(format!(
-                        "no-root: {} cannot be listed ({error})",
-                        root.display()
-                    )));
-                }
-                Err(error) => warnings.push(format!(
-                    "{} entry could not be listed ({error})",
-                    dir.strip_prefix(root).unwrap().display()
-                )),
+                Err(error) if at == 0 => return refused(error),
+                Err(error) => seen.push(Seen::EntryUnlisted { dir: relative.clone(), error: error.to_string() }),
             }
         }
-        let mut entries = collected;
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries {
+        collected.sort_by_key(|e| e.file_name());
+        for entry in collected {
             let name = entry.file_name().to_string_lossy().into_owned();
             let path = entry.path();
-            let label = path
-                .strip_prefix(root)
-                .unwrap()
-                .to_string_lossy()
-                .into_owned();
+            let label = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
             let kind = match entry.file_type() {
-                Ok(kind) => kind,
-                Err(error) => {
-                    warnings.push(format!("{label} metadata unavailable ({error})"));
-                    continue;
-                }
+                Ok(kind) if kind.is_dir() => Kind::Directory,
+                Ok(kind) if kind.is_file() => Kind::File,
+                Ok(_) => Kind::Other,
+                Err(error) => Kind::Unknown(error.to_string()),
             };
-            if kind.is_dir() {
+            if kind == Kind::Directory && descends(at, &name) {
+                levels.push(path.clone());
+            }
+            let manifest = opens(&name, &kind);
+            seen.push(Seen::Entry { name: name.clone(), label: label.clone(), kind });
+            if manifest {
+                let text = observe(Access::ReadManifest, &path)
+                    .and_then(|()| fs::read_to_string(&path))
+                    .map_err(|error| error.to_string());
+                seen.push(Seen::Manifest { name, label, text });
+            }
+        }
+        at += 1;
+    }
+    Walk { root: root.into(), seen: Ok(seen) }
+}
+
+/// The structural report for what a walk saw. A root that could not be listed
+/// refuses; anything below it that could not be listed or read is a warning,
+/// and the evidence found elsewhere stands.
+pub fn judge(walk: &Walk, answered: &[String]) -> Result<Report> {
+    let root = &walk.root;
+    let seen = walk.seen.as_ref().map_err(|error| {
+        Error::Invalid(format!("no-root: {} cannot be listed ({error})", root.display()))
+    })?;
+    let mut tree = Tree::default();
+    let mut manifests = Vec::new();
+    let mut warnings = Vec::new();
+    for event in seen {
+        match event {
+            Seen::Unlisted { dir, error } => warnings.push(format!("{dir} could not be listed ({error})")),
+            Seen::EntryUnlisted { dir, error } => {
+                warnings.push(format!("{dir} entry could not be listed ({error})"))
+            }
+            Seen::Entry { label, kind: Kind::Unknown(error), .. } => {
+                warnings.push(format!("{label} metadata unavailable ({error})"))
+            }
+            Seen::Entry { name, kind: Kind::Directory, .. } => {
                 tree.dirs.insert(name.to_lowercase());
-                if at == 0 && !SKIP.contains(&name.as_str()) {
-                    levels.push(path);
+            }
+            Seen::Entry { name, label, kind } => {
+                tree.files.insert(name.to_lowercase());
+                if let Some((prefix, extension)) = name.rsplit_once('.')
+                    && !prefix.is_empty()
+                {
+                    tree.extensions.insert(format!(".{}", extension.to_lowercase()));
                 }
-                continue;
-            }
-            tree.files.insert(name.to_lowercase());
-            if let Some((prefix, extension)) = name.rsplit_once('.')
-                && !prefix.is_empty()
-            {
-                tree.extensions
-                    .insert(format!(".{}", extension.to_lowercase()));
-            }
-            if !MANIFESTS.contains(&name.as_str()) {
-                continue;
-            }
-            manifests.push(label.clone());
-            if !kind.is_file() {
-                warnings.push(format!("{label} is not a regular manifest; skipped"));
-                continue;
-            }
-            let text = match observe(Access::ReadManifest, &path)
-                .and_then(|()| fs::read_to_string(&path))
-            {
-                Ok(text) => text,
-                Err(error) => {
-                    warnings.push(format!("{label} could not be read ({error})"));
-                    continue;
+                if MANIFESTS.contains(&name.as_str()) {
+                    manifests.push(label.clone());
+                    if *kind != Kind::File {
+                        warnings.push(format!("{label} is not a regular manifest; skipped"));
+                    }
                 }
-            };
-            match manifest_dependencies(&name, &text) {
+            }
+            Seen::Manifest { label, text: Err(error), .. } => {
+                warnings.push(format!("{label} could not be read ({error})"))
+            }
+            Seen::Manifest { name, label, text: Ok(text) } => match manifest_dependencies(name, text) {
                 Ok(deps) => {
                     for dep in deps {
                         let dep = dep.to_lowercase();
@@ -326,9 +383,8 @@ pub fn detect_observed(
                     }
                 }
                 Err(error) => warnings.push(format!("{label} failed to parse ({error})")),
-            }
+            },
         }
-        at += 1;
     }
     let mut report = Report {
         root: root.to_string_lossy().into_owned(),
@@ -377,7 +433,7 @@ pub fn detect_observed(
         }
     }
     report.inconclusive = report.evidenced.is_empty();
-    report.options = interview_options(&report, &answered);
+    report.options = interview_options(&report, answered);
     Ok(report)
 }
 

@@ -5,7 +5,7 @@ use cadence::envelope::Envelope;
 use cadence::execution::boundary::{BoundaryScope, Receipt, Success};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const INTENT: &str = ".store-intent.json";
 
@@ -255,6 +255,40 @@ impl ExternalChange {
             return Err(Error::Conflict(format!("pending participant changed: {}", self.target)));
         }
         Ok(&self.bytes)
+    }
+
+    fn validate_encoded(&self, actual: &Observed, encoding: Encoding, replay: bool) -> Result<&[u8]> {
+        match encoding {
+            Encoding::Digest => self.validate_digest(actual, replay),
+            Encoding::Array | Encoding::Text => self.validate(actual, replay),
+        }
+    }
+}
+
+/// The route `phase`'s active dispatch was admitted on, in the snapshot a
+/// dispatch intent would install. The final preparation rechecks its inputs
+/// against the current config.
+pub fn active_route(
+    prospective: &super::model::Snapshot,
+    phase: u32,
+) -> Result<Option<cadence::execution::model::DispatchRoute>> {
+    Ok(execution_snapshot(prospective)?
+        .occurrences
+        .get(&phase.to_string())
+        .and_then(|occurrence| occurrence.active.as_ref())
+        .and_then(|dispatch| dispatch.route.as_deref().cloned()))
+}
+
+/// The route an intent admits: a dispatch intent's active route, and none for
+/// any other intent.
+fn admission_route(
+    kind: &IntentKind,
+    prospective: &super::model::Snapshot,
+) -> Result<Option<cadence::execution::model::DispatchRoute>> {
+    match kind {
+        IntentKind::ExecutionDispatchV1 { phase, .. }
+        | IntentKind::NativeExecutionDispatchV1 { phase, .. } => active_route(prospective, *phase),
+        _ => Ok(None),
     }
 }
 
@@ -1946,10 +1980,7 @@ fn validate_all<S: Storage>(
     // This entire pass finishes before any participant can change.
     for participant in participants {
         let actual = storage.read(&participant.target)?;
-        match encoding {
-            Encoding::Digest => participant.validate_digest(&actual, replay)?,
-            Encoding::Array | Encoding::Text => participant.validate(&actual, replay)?,
-        };
+        participant.validate_encoded(&actual, encoding, replay)?;
     }
     Ok(())
 }
@@ -2035,15 +2066,7 @@ pub(crate) fn commit<S: Storage, P: Policy>(
     intent.omit_unchanged();
     intent.integrity = intent.digest()?;
     let prospective = snapshot;
-    let route = match &intent.kind {
-        IntentKind::ExecutionDispatchV1 { phase, .. }
-        | IntentKind::NativeExecutionDispatchV1 { phase, .. } => execution_snapshot(prospective)?
-            .occurrences
-            .get(&phase.to_string())
-            .and_then(|occurrence| occurrence.active.as_ref())
-            .and_then(|dispatch| dispatch.route.clone()),
-        _ => None,
-    };
+    let route = admission_route(&intent.kind, prospective)?;
     let bytes = serde_json::to_vec(&intent)?;
     let intent_file = match storage.prepare(INTENT, &bytes) {
         Ok(file) => file,
@@ -2112,19 +2135,53 @@ fn prune_stop(kind: &IntentKind, point: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P, process: &mut dyn Process) -> Result<()> {
-    let Some(bytes) = storage.read(INTENT)?.bytes else {
-        return Ok(());
-    };
-    let mut intent: Intent = serde_json::from_slice(&bytes)?;
-    if serde_json::from_slice::<Value>(&bytes)? != serde_json::to_value(&intent)? {
-        return Err(Error::Invalid("unknown operation intent fields".into()));
+/// An intent read back from the journal: parsed, with no field this binary
+/// does not know, and its integrity checked.
+pub struct Pending(Intent);
+
+impl Pending {
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        let intent: Intent = serde_json::from_slice(bytes)?;
+        if serde_json::from_slice::<Value>(bytes)? != serde_json::to_value(&intent)? {
+            return Err(Error::Invalid("unknown operation intent fields".into()));
+        }
+        intent.validate_integrity()?;
+        Ok(Self(intent))
     }
-    intent.validate_integrity()?;
+
+    /// The targets recovery observes: every participant, and the item and
+    /// decision journals an intent leaves out when it does not change them.
+    pub fn targets(&self) -> BTreeSet<String> {
+        self.0.participants.iter().map(|participant| participant.target.clone())
+            .chain([ITEMS.to_owned(), DECISIONS.to_owned()]).collect()
+    }
+}
+
+/// The unit a pending intent installs, and the snapshot it seals.
+pub struct Recovery {
+    intent: Intent,
+    snapshot: Snapshot,
+}
+
+impl Recovery {
+    /// What recovery writes, in the order it writes it: the state last.
+    pub fn participants(&self) -> &[ExternalChange] {
+        &self.intent.participants
+    }
+}
+
+/// Whether `pending` can still be installed over `current`, each target as it
+/// is now, and what it installs. A participant may be as the intent found it
+/// or already installed, since an interruption can fall between any two
+/// renames; any other bytes are a conflict.
+pub fn recovery(pending: Pending, current: &BTreeMap<String, Observed>, process: &mut dyn Process) -> Result<Recovery> {
+    let Pending(mut intent) = pending;
+    let observed = |target: &str| current.get(target).cloned()
+        .ok_or_else(|| Error::Invalid(format!("recovery target not observed: {target}")));
     let mut installed = false;
     if intent.encoding == Encoding::Digest {
         for participant in &mut intent.participants {
-            let actual = storage.read(&participant.target)?;
+            let actual = observed(&participant.target)?;
             participant.validate_digest(&actual, true)?;
             if participant.installed(&actual, true) {
                 installed = true;
@@ -2135,7 +2192,7 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P, pr
     }
     for target in [ITEMS, DECISIONS] {
         if !intent.participants.iter().any(|participant| participant.target == target) {
-            let expected = storage.read(target)?;
+            let expected = observed(target)?;
             intent.participants.push(Participant {
                 target: target.into(), bytes: expected.bytes.clone().unwrap_or_default(), expected,
             });
@@ -2145,6 +2202,23 @@ pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P, pr
         ITEMS => 1, DECISIONS => 2, STATE => 3, _ => 0,
     });
     let snapshot = if installed { intent.parse_contents()? } else { intent.validate_contents(process)? };
+    for participant in &intent.participants {
+        participant.validate_encoded(&observed(&participant.target)?, intent.encoding, true)?;
+    }
+    Ok(Recovery { intent, snapshot })
+}
+
+pub(crate) fn recover<S: Storage, P: Policy>(storage: &mut S, policy: &mut P, process: &mut dyn Process) -> Result<()> {
+    let Some(bytes) = storage.read(INTENT)?.bytes else {
+        return Ok(());
+    };
+    let pending = Pending::parse(&bytes)?;
+    let mut current = BTreeMap::new();
+    for target in pending.targets() {
+        let observed = storage.read(&target)?;
+        current.insert(target, observed);
+    }
+    let Recovery { intent, snapshot } = recovery(pending, &current, process)?;
     validate_all(storage, &intent.participants, true, &intent.kind, intent.encoding, process)?;
     policy.validate(&MutationContext {
         operation: if matches!(intent.kind, IntentKind::GuardAudit { .. }) {

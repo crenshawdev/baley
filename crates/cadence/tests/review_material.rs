@@ -1,7 +1,7 @@
 use cadence::review::{io, material, model};
 
 use cadence::store::{Error, Observed, Result, Storage};
-use io::{Clock, DirectoryObservation, GitIo, GitObservation, MaterialIo};
+use io::GitObservation;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -11,57 +11,14 @@ fn snapshot(name: &str) -> Value {
     fixtures[name].clone()
 }
 
-struct FixedClock;
-impl Clock for FixedClock {
-    fn now(&mut self) -> u64 {
-        100
-    }
-}
-
-struct Source(Value);
-impl MaterialIo for Source {
-    fn read(&mut self, path: &str) -> Result<Observed> {
-        if self.0["path"] != path {
-            panic!("forbidden source read: {path}");
-        }
-        if let Some(error) = self.0["error"].as_str() {
-            return Err(Error::Io(error.into()));
-        }
-        Ok(Observed {
-            bytes: self.0["bytes"].as_str().map(|s| s.as_bytes().to_vec()),
-            identity: self.0["identity"].as_str().unwrap().into(),
-            directory_identity: "dir1".into(),
-        })
-    }
-    fn list(&mut self, _: &str) -> Result<DirectoryObservation> {
-        panic!("forbidden directory read")
-    }
-}
-
-struct Git {
-    input: Value,
-    resolved: bool,
-}
-impl GitIo for Git {
-    fn resolve(&mut self, _: &model::Target) -> Result<GitObservation> {
-        if self.resolved {
-            panic!("forbidden repeated mutable Git resolution");
-        }
-        self.resolved = true;
-        Ok(GitObservation {
-            base: self.input["base"].as_str().unwrap().into(),
-            head: self.input["head"].as_str().map(str::to_owned),
-            index: self.input["index"].as_str().map(str::to_owned),
-            paths: serde_json::from_value(self.input["paths"].clone()).unwrap(),
-            diff: self.input["diff"].as_str().unwrap().as_bytes().to_vec(),
-        })
-    }
-    fn read_object(&mut self, object: &str, path: &str) -> Result<Vec<u8>> {
-        Ok(self.input["objects"][format!("{object}:{path}")]
-            .as_str()
-            .expect("forbidden Git object read")
-            .as_bytes()
-            .to_vec())
+/// The Git observation a fixture describes, as a value.
+fn observation(input: &Value) -> GitObservation {
+    GitObservation {
+        base: input["base"].as_str().unwrap().into(),
+        head: input["head"].as_str().map(str::to_owned),
+        index: input["index"].as_str().map(str::to_owned),
+        paths: serde_json::from_value(input["paths"].clone()).unwrap(),
+        diff: input["diff"].as_str().unwrap().as_bytes().to_vec(),
     }
 }
 
@@ -113,60 +70,34 @@ impl Storage for Saved {
     }
 }
 
-/// Project the specified target and first retained source observation. Extra
-/// H2 metadata remains on the production result; this is not a second read unit.
-fn acquired(result: material::RetainedMaterial) -> Value {
-    let mut value = serde_json::to_value(&result.manifest.target).unwrap();
-    value["bytes"] = json!(
-        String::from_utf8(result.contents[&result.manifest.entries[0].entry].clone()).unwrap()
-    );
-    value
-}
-
 #[test]
 fn retain_range_ac34() {
     let input = snapshot("range");
     let target = serde_json::from_value(input["target"].clone()).unwrap();
-    let mut git = Git {
-        input,
-        resolved: false,
-    };
+    let observed = observation(&input);
+    let (resolved, tip, side) = material::resolve_git_target(&target, &observed).unwrap();
     assert_eq!(
-        acquired(
-            material::retain_range(
-                "m1",
-                "f1",
-                &target,
-                &mut git,
-                &mut Saved::default(),
-                &mut FixedClock
-            )
-            .unwrap()
-        ),
-        json!({"kind":"committed-range","base":"b1","head":"h1","bytes":"old\n"})
+        serde_json::to_value(&resolved).unwrap(),
+        json!({"kind":"committed-range","base":"b1","head":"h1"})
+    );
+    assert_eq!(
+        material::git_reads(&observed, &tip, &side),
+        [("a.rs".into(), "b1".into(), model::Side::Base), ("a.rs".into(), "h1".into(), model::Side::Head)]
     );
 }
 #[test]
 fn retain_staged_ac35() {
     let input = snapshot("staged");
     let target = serde_json::from_value(input["target"].clone()).unwrap();
-    let mut git = Git {
-        input,
-        resolved: false,
-    };
+    let observed = observation(&input);
+    let (resolved, tip, side) = material::resolve_git_target(&target, &observed).unwrap();
     assert_eq!(
-        acquired(
-            material::retain_staged(
-                "m1",
-                "f1",
-                &target,
-                &mut git,
-                &mut Saved::default(),
-                &mut FixedClock
-            )
-            .unwrap()
-        ),
-        json!({"kind":"staged-tree","base":"b1","index":"t1","head":null,"bytes":"old\n"})
+        serde_json::to_value(&resolved).unwrap(),
+        json!({"kind":"staged-tree","base":"b1","index":"t1","head":null})
+    );
+    assert_eq!(
+        material::git_reads(&observed, &tip, &side),
+        [("a.rs".into(), "b1".into(), model::Side::Base), ("a.rs".into(), "t1".into(), model::Side::Snapshot)]
     );
 }
 #[test]
@@ -185,55 +116,38 @@ fn retain_content_new_ac42() {
         "7aa7a5359173d05b63cfd682e3c38487f3cb4f7f1d60659fe59fab1505977d4c"
     );
 }
+/// One source read of `a.rs` as a fixture describes it, as a value.
+fn read_of(input: &Value) -> Result<Observed> {
+    match input["error"].as_str() {
+        Some(error) => Err(Error::Io(error.into())),
+        None => Ok(Observed {
+            bytes: input["bytes"].as_str().map(|s| s.as_bytes().to_vec()),
+            identity: input["identity"].as_str().unwrap().into(),
+            directory_identity: "dir1".into(),
+        }),
+    }
+}
 #[test]
 fn retain_missing_file() {
-    let mut input = Source(snapshot("missing"));
-    assert_eq!(
-        material::retain_file(
-            "m1",
-            "f1",
-            "a.rs",
-            &mut input,
-            &mut Saved::default(),
-            &mut FixedClock
-        )
-        .unwrap()
-        .manifest
-        .entries[0]
-            .availability,
-        model::Availability::Absent
-    );
+    let (entry, bytes) = material::observed_file("m1", "a.rs", read_of(&snapshot("missing")), 100);
+    assert_eq!((entry.availability, bytes), (model::Availability::Absent, None));
 }
 #[test]
 fn retain_unavailable_file() {
-    let mut input = Source(snapshot("unavailable"));
-    assert_eq!(
-        material::retain_file(
-            "m1",
-            "f1",
-            "a.rs",
-            &mut input,
-            &mut Saved::default(),
-            &mut FixedClock
-        )
-        .unwrap()
-        .manifest
-        .entries[0]
-            .availability,
-        model::Availability::Unavailable
-    );
+    let (entry, bytes) = material::observed_file("m1", "a.rs", read_of(&snapshot("unavailable")), 100);
+    assert_eq!((entry.availability, bytes), (model::Availability::Unavailable, None));
+    assert!(entry.unavailable_reason.unwrap().contains("permission denied"), "the read's reason is kept");
 }
 #[test]
 fn retain_sync_failure() {
-    let mut input = Source(snapshot("file"));
+    let (mut entry, bytes) = material::observed_file("m1", "a.rs", read_of(&snapshot("file")), 100);
     let mut saved = Saved {
         fail_sync: true,
         ..Saved::default()
     };
     assert_eq!(
-        material::retain_file("m1", "f1", "a.rs", &mut input, &mut saved, &mut FixedClock)
-            .unwrap_err(),
-        Error::Io("sync failed".into())
+        material::retain_bytes(&mut saved, &mut entry, &bytes.unwrap()),
+        Err(Error::Io("sync failed".into()))
     );
 }
 
@@ -309,46 +223,20 @@ fn read_changed_retained_bytes() {
     );
 }
 
-struct DirectorySource(Value);
-impl MaterialIo for DirectorySource {
-    fn list(&mut self, path: &str) -> Result<DirectoryObservation> {
-        if path != "dir" {
-            panic!("forbidden directory read");
-        }
-        Ok(DirectoryObservation {
-            identity: "directory1".into(),
-            members: serde_json::from_value(self.0["members"].clone()).unwrap(),
-        })
-    }
-    fn read(&mut self, path: &str) -> Result<Observed> {
-        let bytes = self.0["contents"][path]
-            .as_str()
-            .expect("forbidden member read");
-        Ok(Observed {
-            bytes: Some(bytes.as_bytes().to_vec()),
-            identity: "member1".into(),
-            directory_identity: "directory1".into(),
-        })
-    }
-}
 #[test]
 fn read_directory_acquisition_freezes_members() {
-    let mut input = DirectorySource(read_fixture()["acquire_directory"].clone());
-    assert_eq!(
-        material::retain_directory(
-            "m1",
-            "f1",
-            "dir",
-            &mut input,
-            &mut Saved::default(),
-            &mut FixedClock
-        )
-        .unwrap()
-        .manifest
-        .target,
-        model::Target::Directory {
-            path: "dir".into(),
-            members: vec!["a.rs".into(), "b.rs".into()]
-        }
-    );
+    let input = read_fixture()["acquire_directory"].clone();
+    let listed: Vec<String> = serde_json::from_value(input["members"].clone()).unwrap();
+    let tree = material::directory_files("dir", &mut |path| {
+        assert_eq!(path, "dir", "only the root was listed");
+        Ok(io::DirectoryMembers {
+            identity: "directory1".into(),
+            members: listed
+                .iter()
+                .map(|name| io::DirectoryNode { name: name.clone(), kind: io::NodeKind::File })
+                .collect(),
+        })
+    })
+    .unwrap();
+    assert_eq!(tree.files, ["a.rs", "b.rs"]);
 }

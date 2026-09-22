@@ -172,9 +172,10 @@ pub fn units(content: &str, tree: &Tree, threshold: usize) -> Result<Vec<Unit>, 
 mod tests {
     use super::*;
     use crate::read::outline::{Grammar, PARSE_BUDGET, parse};
+    use std::time::Duration;
 
     fn outline(content: &str, threshold: usize) -> Vec<Unit> {
-        let tree = parse(content, Grammar::Json, PARSE_BUDGET).expect("parse");
+        let tree = parse(content, Grammar::Json, PARSE_BUDGET, &mut || Duration::ZERO).expect("parse");
         units(content, &tree, threshold).expect("units")
     }
 

@@ -625,9 +625,20 @@ fn route_bundle_refuses_invalid_supported_policy() {
     );
 }
 
-use cadence::config::floor::{self, Access, State};
+use cadence::config::floor::{self, FloorIo, Kind, Meta, State};
 use cadence::rail::risk_diff::{DeclaredMatch, DeclaredScan, Withheld, scan_declared};
-use std::{fs, io, path::Path};
+use std::{
+    cell::Cell,
+    collections::BTreeMap,
+    io,
+    path::{Path, PathBuf},
+};
+
+const PROJECT: &str = "/p";
+
+fn planning() -> &'static Path {
+    Path::new("/p/.planning")
+}
 
 fn native_plan(number: u32, files: &[&str], directories: &[&str]) -> String {
     format!(
@@ -636,24 +647,147 @@ fn native_plan(number: u32, files: &[&str], directories: &[&str]) -> String {
         serde_json::to_string(directories).unwrap()
     )
 }
-fn scope_fixture(plans: &[(u32, &[&str], &[&str])], bodies: &[(&str, &[u8])]) -> tempfile::TempDir {
-    let root = tempfile::tempdir().unwrap();
-    fs::create_dir_all(root.path().join(".planning/phases/8")).unwrap();
+
+/// A step the floor takes, for injecting a failure at it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Metadata,
+    Canonicalize,
+    List,
+    Read,
+}
+
+/// An error to inject: an operating-system error number, or a message.
+#[derive(Clone, Copy)]
+enum Failure {
+    Os(i32),
+    Other(&'static str),
+}
+impl Failure {
+    fn error(self) -> io::Error {
+        match self {
+            Failure::Os(code) => io::Error::from_raw_os_error(code),
+            Failure::Other(message) => io::Error::other(message),
+        }
+    }
+}
+
+fn entry(kind: Kind, len: usize) -> Meta {
+    Meta { kind, len: len as u64, stamp: [0; 7] }
+}
+
+/// Scripted filesystem answers for the floor, keyed by path. Nothing is worked
+/// out while the floor runs: a path with no scripted metadata is not found, an
+/// existing path with no scripted canonical form is its own, and a directory
+/// lists exactly what was put in it.
+#[derive(Default)]
+struct Scripted {
+    metadata: BTreeMap<PathBuf, Meta>,
+    canonical: BTreeMap<PathBuf, PathBuf>,
+    listings: BTreeMap<PathBuf, Vec<PathBuf>>,
+    bodies: BTreeMap<PathBuf, Vec<u8>>,
+    /// The stamp a body reports once opened, where it is not its metadata's.
+    opened: BTreeMap<PathBuf, Meta>,
+    /// The stamp a body reports after it was read, where it is not its metadata's.
+    after_read: BTreeMap<PathBuf, Meta>,
+    failures: Vec<(Step, &'static str, Failure)>,
+    opens: Vec<PathBuf>,
+}
+
+struct Opened {
+    path: PathBuf,
+    stamps: Cell<usize>,
+}
+
+impl Scripted {
+    fn fail(&self, step: Step, path: &Path) -> io::Result<()> {
+        match self.failures.iter().find(|(at, suffix, _)| *at == step && path.ends_with(suffix)) {
+            Some((_, _, failure)) => Err(failure.error()),
+            None => Ok(()),
+        }
+    }
+    /// The directory at `relative` under the project, and each directory above
+    /// it, each listed in its parent.
+    fn directory(&mut self, relative: &str) -> PathBuf {
+        let path = Path::new(PROJECT).join(relative);
+        for dir in path.ancestors().filter(|dir| dir.starts_with(PROJECT)) {
+            self.metadata.insert(dir.into(), entry(Kind::Directory, 0));
+            self.listings.entry(dir.into()).or_default();
+            if let Some(parent) = dir.parent().filter(|parent| parent.starts_with(PROJECT)) {
+                let listing = self.listings.entry(parent.into()).or_default();
+                if !listing.iter().any(|known| known == dir) {
+                    listing.push(dir.into());
+                }
+            }
+        }
+        path
+    }
+    /// A regular file at `relative` under the project, holding `bytes`.
+    fn file(&mut self, relative: &str, bytes: &[u8]) -> PathBuf {
+        let path = Path::new(PROJECT).join(relative);
+        let parent = path.parent().unwrap().strip_prefix(PROJECT).unwrap().to_str().unwrap().to_owned();
+        self.directory(&parent);
+        let listing = self.listings.entry(path.parent().unwrap().into()).or_default();
+        if !listing.contains(&path) {
+            listing.push(path.clone());
+        }
+        self.metadata.insert(path.clone(), entry(Kind::File, bytes.len()));
+        self.bodies.insert(path.clone(), bytes.to_vec());
+        path
+    }
+}
+
+impl FloorIo for Scripted {
+    type Body = Opened;
+    fn metadata(&mut self, path: &Path) -> io::Result<Meta> {
+        self.fail(Step::Metadata, path)?;
+        self.metadata.get(path).copied().ok_or_else(|| io::ErrorKind::NotFound.into())
+    }
+    fn canonicalize(&mut self, path: &Path) -> io::Result<PathBuf> {
+        self.fail(Step::Canonicalize, path)?;
+        match self.canonical.get(path) {
+            Some(real) => Ok(real.clone()),
+            None if self.metadata.contains_key(path) => Ok(path.into()),
+            None => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+    fn list(&mut self, path: &Path, bound: usize) -> io::Result<Vec<PathBuf>> {
+        self.fail(Step::List, path)?;
+        Ok(self.listings.get(path).into_iter().flatten().take(bound + 1).cloned().collect())
+    }
+    fn open(&mut self, _: &Path, real: &Path) -> io::Result<Opened> {
+        self.opens.push(real.into());
+        Ok(Opened { path: real.into(), stamps: Cell::new(0) })
+    }
+    fn stamp(&mut self, body: &Opened) -> io::Result<Meta> {
+        let calls = body.stamps.replace(body.stamps.get() + 1);
+        let scripted = if calls == 0 { &self.opened } else { &self.after_read };
+        Ok(scripted.get(&body.path).copied().unwrap_or(self.metadata[&body.path]))
+    }
+    fn read(&mut self, body: &mut Opened, limit: usize) -> (Vec<u8>, io::Result<()>) {
+        if let Err(error) = self.fail(Step::Read, &body.path) {
+            return (vec![], Err(error));
+        }
+        (self.bodies[&body.path].iter().take(limit).copied().collect(), Ok(()))
+    }
+}
+
+/// The project with phase 8's native plans and the given files.
+fn scripted(plans: &[(u32, &[&str], &[&str])], bodies: &[(&str, &[u8])]) -> Scripted {
+    let mut io = Scripted::default();
+    io.directory(".planning/phases/8");
     for (number, files, directories) in plans {
-        fs::write(
-            root.path()
-                .join(format!(".planning/phases/8/PLAN-{number}.md")),
-            native_plan(*number, files, directories),
-        )
-        .unwrap();
+        io.file(
+            &format!(".planning/phases/8/PLAN-{number}.md"),
+            native_plan(*number, files, directories).as_bytes(),
+        );
     }
     for (path, bytes) in bodies {
-        let path = root.path().join(path);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, bytes).unwrap();
+        io.file(path, bytes);
     }
-    root
+    io
 }
+
 fn categories() -> Vec<String> {
     cadence::rail::risk::CATEGORIES
         .iter()
@@ -661,21 +795,21 @@ fn categories() -> Vec<String> {
         .collect()
 }
 
+fn read(io: &mut Scripted, role: &str, plan: Option<u32>) -> floor::Scope {
+    floor::read_with(planning(), role, Some(8), plan, &categories(), io).unwrap()
+}
+
+fn first_reason(scope: &floor::Scope) -> &str {
+    scope.diagnostics[0].reason.as_str()
+}
+
 #[test]
 fn floor_named_plan_is_clean_independently_of_risky_sibling() {
-    let root = scope_fixture(
+    let mut io = scripted(
         &[(1, &["plain.rs"], &[]), (2, &["auth/new.rs"], &[])],
         &[("plain.rs", b"fn main() {}")],
     );
-    let result = floor::read_observed(
-        &root.path().join(".planning"),
-        "cad-executor",
-        Some(8),
-        Some(1),
-        &categories(),
-        |_, _| Ok(()),
-    )
-    .unwrap();
+    let result = read(&mut io, "cad-executor", Some(1));
     assert_eq!(
         (result.state, result.paths, result.matches),
         (State::Complete, vec!["plain.rs".into()], vec![])
@@ -684,16 +818,8 @@ fn floor_named_plan_is_clean_independently_of_risky_sibling() {
 
 #[test]
 fn floor_phase_union_includes_new_file_path_evidence() {
-    let root = scope_fixture(&[(2, &["auth/new.rs"], &[]), (1, &["plain.rs"], &[])], &[]);
-    let result = floor::read_observed(
-        &root.path().join(".planning"),
-        "cad-verifier",
-        Some(8),
-        None,
-        &categories(),
-        |_, _| Ok(()),
-    )
-    .unwrap();
+    let mut io = scripted(&[(2, &["auth/new.rs"], &[]), (1, &["plain.rs"], &[])], &[]);
+    let result = read(&mut io, "cad-verifier", None);
     assert_eq!(
         (result.state, result.paths, result.matches, result.bytes),
         (
@@ -711,22 +837,37 @@ fn floor_phase_union_includes_new_file_path_evidence() {
 
 #[test]
 fn floor_preplan_roles_and_no_phase_do_no_filesystem_access() {
+    struct Forbidden;
+    impl FloorIo for Forbidden {
+        type Body = ();
+        fn metadata(&mut self, _: &Path) -> io::Result<Meta> {
+            panic!("forbidden filesystem observation")
+        }
+        fn canonicalize(&mut self, _: &Path) -> io::Result<PathBuf> {
+            panic!("forbidden filesystem observation")
+        }
+        fn list(&mut self, _: &Path, _: usize) -> io::Result<Vec<PathBuf>> {
+            panic!("forbidden filesystem observation")
+        }
+        fn open(&mut self, _: &Path, _: &Path) -> io::Result<()> {
+            panic!("forbidden filesystem observation")
+        }
+        fn stamp(&mut self, _: &()) -> io::Result<Meta> {
+            panic!("forbidden filesystem observation")
+        }
+        fn read(&mut self, _: &mut (), _: usize) -> (Vec<u8>, io::Result<()>) {
+            panic!("forbidden filesystem observation")
+        }
+    }
     for (role, phase, expected) in [
         ("cad-planner", Some(8), State::Bypassed),
         ("cad-assumptions-analyzer", Some(8), State::Bypassed),
         ("cad-executor", None, State::NotComputed),
     ] {
         assert_eq!(
-            floor::read_observed(
-                Path::new("/unobserved/.planning"),
-                role,
-                phase,
-                Some(1),
-                &categories(),
-                |_, _| panic!("forbidden filesystem observation")
-            )
-            .unwrap()
-            .state,
+            floor::read_with(planning(), role, phase, Some(1), &categories(), &mut Forbidden)
+                .unwrap()
+                .state,
             expected
         );
     }
@@ -734,16 +875,8 @@ fn floor_preplan_roles_and_no_phase_do_no_filesystem_access() {
 
 #[test]
 fn floor_missing_named_plan_does_not_fall_back_to_a_sibling() {
-    let root = scope_fixture(&[(2, &["plain.rs"], &[])], &[]);
-    let result = floor::read_observed(
-        &root.path().join(".planning"),
-        "cad-executor",
-        Some(8),
-        Some(1),
-        &categories(),
-        |_, _| Ok(()),
-    )
-    .unwrap();
+    let mut io = scripted(&[(2, &["plain.rs"], &[])], &[]);
+    let result = read(&mut io, "cad-executor", Some(1));
     assert_eq!(
         (
             result.state,
@@ -765,121 +898,44 @@ fn floor_missing_named_plan_does_not_fall_back_to_a_sibling() {
 #[test]
 fn floor_native_parser_refuses_malformed_and_empty_leases() {
     for (bytes, reason) in [
-        (
-            native_plan(1, &["plain.rs/"], &[]),
-            "plan parse: invalid-path",
-        ),
+        (native_plan(1, &["plain.rs/"], &[]), "plan parse: invalid-path"),
         (native_plan(1, &[], &[]), "plan parse: empty-lease"),
     ] {
-        let root = scope_fixture(&[], &[]);
-        fs::write(root.path().join(".planning/phases/8/PLAN-1.md"), bytes).unwrap();
-        let result = floor::read_observed(
-            &root.path().join(".planning"),
-            "cad-executor",
-            Some(8),
-            Some(1),
-            &categories(),
-            |_, _| Ok(()),
-        )
-        .unwrap();
-        assert_eq!(
-            (result.state, result.diagnostics[0].reason.as_str()),
-            (State::Incomplete, reason)
-        );
+        let mut io = scripted(&[], &[]);
+        io.file(".planning/phases/8/PLAN-1.md", bytes.as_bytes());
+        let result = read(&mut io, "cad-executor", Some(1));
+        assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, reason));
     }
 }
 
 #[test]
 fn floor_plan_identity_cannot_cross_the_named_phase() {
-    let root = scope_fixture(&[(1, &["plain.rs"], &[])], &[]);
-    fs::write(
-        root.path().join(".planning/phases/8/PLAN-1.md"),
-        native_plan(1, &["plain.rs"], &[]).replace("phase: 8", "phase: 9"),
-    )
-    .unwrap();
-    assert_eq!(
-        floor::read_observed(
-            &root.path().join(".planning"),
-            "cad-executor",
-            Some(8),
-            Some(1),
-            &categories(),
-            |_, _| Ok(())
-        )
-        .unwrap()
-        .diagnostics[0]
-            .reason,
-        "plan parse: identity-mismatch"
+    let mut io = scripted(&[], &[]);
+    io.file(
+        ".planning/phases/8/PLAN-1.md",
+        native_plan(1, &["plain.rs"], &[]).replace("phase: 8", "phase: 9").as_bytes(),
     );
+    let result = read(&mut io, "cad-executor", Some(1));
+    assert_eq!(first_reason(&result), "plan parse: identity-mismatch");
 }
 
 #[test]
 fn floor_unreadable_sibling_keeps_union_incomplete() {
-    let root = scope_fixture(&[(1, &["plain.rs"], &[]), (2, &["auth/new.rs"], &[])], &[]);
-    let result = floor::read_observed(
-        &root.path().join(".planning"),
-        "cad-verifier",
-        Some(8),
-        None,
-        &categories(),
-        |access, path| {
-            if access == Access::ReadBody && path.ends_with("PLAN-2.md") {
-                Err(io::Error::other("injected plan read"))
-            } else {
-                Ok(())
-            }
-        },
-    )
-    .unwrap();
+    let mut io = scripted(&[(1, &["plain.rs"], &[]), (2, &["auth/new.rs"], &[])], &[]);
+    io.failures.push((Step::Read, "PLAN-2.md", Failure::Other("injected plan read")));
+    let result = read(&mut io, "cad-verifier", None);
     assert_eq!(
-        (
-            result.state,
-            result.paths,
-            result.diagnostics[0].reason.as_str()
-        ),
-        (
-            State::Incomplete,
-            vec!["plain.rs".into()],
-            "plan read: injected plan read"
-        )
+        (result.state.clone(), result.paths.clone(), first_reason(&result)),
+        (State::Incomplete, vec!["plain.rs".into()], "plan read: injected plan read")
     );
 }
 
 #[test]
 fn floor_neutral_path_metadata_failures_never_become_new_files() {
-    for (code, message) in [
-        (
-            libc::EACCES,
-            "metadata or containment: Permission denied (os error 13)",
-        ),
-        (
-            libc::ELOOP,
-            "metadata or containment: Too many levels of symbolic links (os error 40)",
-        ),
-        (
-            libc::ENOTDIR,
-            "metadata or containment: Not a directory (os error 20)",
-        ),
-    ] {
-        let root = scope_fixture(
-            &[(1, &["plain.rs"], &[])],
-            &[("plain.rs", b"jwt.verify(token)")],
-        );
-        let result = floor::read_observed(
-            &root.path().join(".planning"),
-            "cad-executor",
-            Some(8),
-            Some(1),
-            &categories(),
-            |access, path| {
-                if access == Access::Metadata && path.ends_with("plain.rs") {
-                    Err(io::Error::from_raw_os_error(code))
-                } else {
-                    Ok(())
-                }
-            },
-        )
-        .unwrap();
+    for code in [libc::EACCES, libc::ELOOP, libc::ENOTDIR] {
+        let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", b"jwt.verify(token)")]);
+        io.failures.push((Step::Metadata, "plain.rs", Failure::Os(code)));
+        let result = read(&mut io, "cad-executor", Some(1));
         assert_eq!(
             (result.state, result.matches, result.diagnostics),
             (
@@ -887,7 +943,7 @@ fn floor_neutral_path_metadata_failures_never_become_new_files() {
                 vec![],
                 vec![floor::Diagnostic {
                     path: "plain.rs".into(),
-                    reason: message.into()
+                    reason: format!("metadata or containment: {}", io::Error::from_raw_os_error(code))
                 }]
             )
         );
@@ -896,217 +952,116 @@ fn floor_neutral_path_metadata_failures_never_become_new_files() {
 
 #[test]
 fn floor_source_read_and_canonicalization_failures_are_incomplete() {
-    for (access, expected) in [
-        (Access::ReadBody, "body read: injected failure"),
-        (
-            Access::Canonicalize,
-            "metadata or containment: injected failure",
-        ),
+    for (step, expected) in [
+        (Step::Read, "body read: injected failure"),
+        (Step::Canonicalize, "metadata or containment: injected failure"),
     ] {
-        let root = scope_fixture(
-            &[(1, &["plain.rs"], &[])],
-            &[("plain.rs", b"jwt.verify(token)")],
-        );
-        let result = floor::read_observed(
-            &root.path().join(".planning"),
-            "cad-executor",
-            Some(8),
-            Some(1),
-            &categories(),
-            |a, path| {
-                if a == access && path.ends_with("plain.rs") {
-                    Err(io::Error::other("injected failure"))
-                } else {
-                    Ok(())
-                }
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            (result.state, result.diagnostics[0].reason.as_str()),
-            (State::Incomplete, expected)
-        );
+        let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", b"jwt.verify(token)")]);
+        io.failures.push((step, "plain.rs", Failure::Other("injected failure")));
+        let result = read(&mut io, "cad-executor", Some(1));
+        assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, expected));
     }
 }
 
 #[test]
 fn floor_outside_symlinked_parent_refuses_existing_and_missing_leaves() {
     for exists in [false, true] {
-        let outside = tempfile::tempdir().unwrap();
+        let mut io = scripted(&[(1, &["link/plain.rs"], &[])], &[]);
+        io.metadata.insert("/p/link".into(), entry(Kind::Symlink, 0));
+        io.canonical.insert("/p/link".into(), "/outside".into());
         if exists {
-            fs::write(outside.path().join("plain.rs"), b"jwt.verify(token)").unwrap();
+            io.metadata.insert("/p/link/plain.rs".into(), entry(Kind::File, 17));
+            io.canonical.insert("/p/link/plain.rs".into(), "/outside/plain.rs".into());
         }
-        let root = scope_fixture(&[(1, &["link/plain.rs"], &[])], &[]);
-        std::os::unix::fs::symlink(outside.path(), root.path().join("link")).unwrap();
-        let result = floor::read_observed(
-            &root.path().join(".planning"),
-            "cad-executor",
-            Some(8),
-            Some(1),
-            &categories(),
-            |_, _| Ok(()),
-        )
-        .unwrap();
+        let result = read(&mut io, "cad-executor", Some(1));
         assert_eq!(
-            (
-                result.state,
-                result.bytes,
-                result.diagnostics[0].reason.as_str()
-            ),
-            (
-                State::Incomplete,
-                0,
-                "metadata or containment: path resolves outside the project"
-            )
+            (result.state.clone(), result.bytes, first_reason(&result)),
+            (State::Incomplete, 0, "metadata or containment: path resolves outside the project")
         );
     }
 }
 
 #[test]
 fn floor_final_symlink_and_fifo_are_rejected_before_open() {
-    for symlink in [false, true] {
-        let root = scope_fixture(&[(1, &["plain.rs"], &[])], &[]);
-        if symlink {
-            std::os::unix::fs::symlink("/dev/zero", root.path().join("plain.rs")).unwrap();
-        } else {
-            use std::{ffi::CString, os::unix::ffi::OsStrExt};
-            let path = CString::new(root.path().join("plain.rs").as_os_str().as_bytes()).unwrap();
-            let result = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
-            if result != 0 {
-                panic!("fixture FIFO: {}", io::Error::last_os_error());
-            }
-        }
-        let result = floor::read_observed(
-            &root.path().join(".planning"),
-            "cad-executor",
-            Some(8),
-            Some(1),
-            &categories(),
-            |access, path| {
-                if path.ends_with("plain.rs") && access == Access::OpenBody {
-                    panic!("nonregular body opened");
-                }
-                Ok(())
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            (
-                result.state,
-                result.bytes,
-                result.diagnostics[0].reason.as_str()
-            ),
-            (
-                State::Incomplete,
-                0,
-                if symlink {
-                    "metadata or containment: final symlink is not declared evidence"
-                } else {
-                    "body read: not a regular file"
-                }
-            )
-        );
-    }
-}
-
-#[test]
-fn floor_body_growth_and_replacement_are_incomplete() {
-    for access in [Access::OpenBody, Access::ReadBody, Access::AfterRead] {
-        let root = scope_fixture(&[(1, &["plain.rs"], &[])], &[("plain.rs", b"safe")]);
-        let result = floor::read_observed(
-            &root.path().join(".planning"),
-            "cad-executor",
-            Some(8),
-            Some(1),
-            &categories(),
-            |a, path| {
-                if a == access && path.ends_with("plain.rs") {
-                    if access == Access::OpenBody {
-                        let replacement = path.with_extension("replacement");
-                        fs::write(&replacement, b"safe")?;
-                        fs::rename(replacement, path)?;
-                    } else {
-                        fs::write(path, b"jwt.verify(token)")?;
-                    }
-                }
-                Ok(())
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            (result.state, result.diagnostics[0].reason.as_str()),
-            (
-                State::Incomplete,
-                if access == Access::OpenBody {
-                    "body read: body replaced before open"
-                } else {
-                    "body read: body replaced or grew during read"
-                }
-            )
-        );
-    }
-}
-
-#[test]
-fn floor_body_size_and_invalid_utf8_are_incomplete() {
-    for (bytes, expected) in [
-        (
-            vec![b'x'; floor::MAX_BODY_BYTES + 1],
-            "body read: body size or total read budget exceeded",
-        ),
-        (vec![255], "body is not UTF-8"),
+    for (kind, expected) in [
+        (Kind::Symlink, "metadata or containment: final symlink is not declared evidence"),
+        (Kind::Other, "body read: not a regular file"),
     ] {
-        let root = scope_fixture(&[(1, &["plain.rs"], &[])], &[("plain.rs", &bytes)]);
-        let result = floor::read_observed(
-            &root.path().join(".planning"),
-            "cad-executor",
-            Some(8),
-            Some(1),
-            &categories(),
-            |_, _| Ok(()),
-        )
-        .unwrap();
+        let mut io = scripted(&[(1, &["plain.rs"], &[])], &[]);
+        io.metadata.insert("/p/plain.rs".into(), entry(kind, 0));
+        let result = read(&mut io, "cad-executor", Some(1));
+        assert_eq!((result.state.clone(), result.bytes, first_reason(&result)), (State::Incomplete, 0, expected));
+        assert!(!io.opens.iter().any(|path| path.ends_with("plain.rs")), "{kind:?} body opened");
+    }
+}
+
+#[test]
+fn floor_a_body_replaced_before_open_is_incomplete() {
+    let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", b"safe")]);
+    io.opened.insert("/p/plain.rs".into(), Meta { stamp: [1; 7], ..entry(Kind::File, 4) });
+    let result = read(&mut io, "cad-executor", Some(1));
+    assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, "body read: body replaced before open"));
+}
+
+#[test]
+fn floor_a_body_that_changes_while_it_is_read_is_incomplete() {
+    let grew = |io: &mut Scripted| {
+        io.bodies.insert("/p/plain.rs".into(), b"jwt.verify(token)".to_vec());
+    };
+    let restamped = |io: &mut Scripted| {
+        io.after_read.insert("/p/plain.rs".into(), Meta { stamp: [1; 7], ..entry(Kind::File, 4) });
+    };
+    for change in [grew, restamped] {
+        let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", b"safe")]);
+        change(&mut io);
+        let result = read(&mut io, "cad-executor", Some(1));
         assert_eq!(
-            (result.state, result.diagnostics[0].reason.as_str()),
-            (State::Incomplete, expected)
+            (result.state.clone(), first_reason(&result)),
+            (State::Incomplete, "body read: body replaced or grew during read")
         );
     }
 }
 
 #[test]
-fn floor_directory_walk_ignores_ignore_rules_and_deduplicates_overlap() {
-    let root = scope_fixture(
-        &[(1, &["src/plain.rs"], &["src", "src/auth"])],
-        &[
-            ("src/plain.rs", b"safe"),
-            ("src/auth/new.rs", b"safe"),
-            ("src/.gitignore", b"*"),
-        ],
+fn floor_a_body_over_the_size_bound_is_incomplete() {
+    let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", &vec![b'x'; floor::MAX_BODY_BYTES + 1])]);
+    let result = read(&mut io, "cad-executor", Some(1));
+    assert_eq!(
+        (result.state.clone(), first_reason(&result)),
+        (State::Incomplete, "body read: body size or total read budget exceeded")
     );
-    let result = floor::read_observed(
-        &root.path().join(".planning"),
-        "cad-executor",
-        Some(8),
-        Some(1),
-        &categories(),
-        |_, _| Ok(()),
-    )
-    .unwrap();
+}
+
+#[test]
+fn floor_a_body_that_is_not_utf8_is_incomplete() {
+    let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", &[255])]);
+    let result = read(&mut io, "cad-executor", Some(1));
+    assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, "body is not UTF-8"));
+}
+
+#[test]
+fn floor_directory_walk_reads_every_entry_whatever_an_ignore_file_says() {
+    let mut io = scripted(&[(1, &[], &["src"])], &[("src/plain.rs", b"safe"), ("src/.gitignore", b"*")]);
+    let result = read(&mut io, "cad-executor", Some(1));
+    assert_eq!(
+        (result.state, result.paths, result.bytes),
+        (State::Complete, vec!["src".into(), "src/.gitignore".into(), "src/plain.rs".into()], 5)
+    );
+}
+
+#[test]
+fn floor_directory_walk_reads_an_overlapping_declaration_once() {
+    let mut io = scripted(
+        &[(1, &["src/plain.rs"], &["src", "src/auth"])],
+        &[("src/plain.rs", b"safe"), ("src/auth/new.rs", b"safe")],
+    );
+    let result = read(&mut io, "cad-executor", Some(1));
     assert_eq!(
         (result.state, result.paths, result.bytes),
         (
             State::Complete,
-            vec![
-                "src",
-                "src/.gitignore",
-                "src/auth",
-                "src/auth/new.rs",
-                "src/plain.rs"
-            ]
-            .into_iter()
-            .map(str::to_owned)
-            .collect::<Vec<_>>(),
-            9
+            vec!["src".into(), "src/auth".into(), "src/auth/new.rs".into(), "src/plain.rs".into()],
+            8
         )
     );
 }
@@ -1117,72 +1072,30 @@ fn floor_directory_and_phase_enumeration_failures_are_incomplete() {
         ("src", Some(1), "directory enumeration: injected listing"),
         ("phases/8", None, "phase listing: injected listing"),
     ] {
-        let root = scope_fixture(&[(1, &[], &["src"])], &[("src/plain.rs", b"safe")]);
-        let result = floor::read_observed(
-            &root.path().join(".planning"),
-            "cad-executor",
-            Some(8),
-            plan,
-            &categories(),
-            |access, path| {
-                if access == Access::ListDirectory && path.ends_with(suffix) {
-                    Err(io::Error::other("injected listing"))
-                } else {
-                    Ok(())
-                }
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            (result.state, result.diagnostics[0].reason.as_str()),
-            (State::Incomplete, reason)
-        );
+        let mut io = scripted(&[(1, &[], &["src"])], &[("src/plain.rs", b"safe")]);
+        io.failures.push((Step::List, suffix, Failure::Other("injected listing")));
+        let result = read(&mut io, "cad-executor", plan);
+        assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, reason));
     }
 }
 
 #[test]
 fn floor_directory_walk_entry_bound_reports_incomplete() {
-    let root = scope_fixture(&[(1, &[], &["src"])], &[]);
-    fs::create_dir(root.path().join("src")).unwrap();
-    for i in 0..4097 {
-        fs::write(root.path().join(format!("src/{i}")), b"").unwrap();
-    }
-    assert_eq!(
-        floor::read_observed(
-            &root.path().join(".planning"),
-            "cad-executor",
-            Some(8),
-            Some(1),
-            &categories(),
-            |_, _| Ok(())
-        )
-        .unwrap()
-        .diagnostics[0]
-            .reason,
-        "directory enumeration: directory exceeds 4096 entry bound"
-    );
+    let mut io = scripted(&[(1, &[], &["src"])], &[]);
+    let src = io.directory("src");
+    io.listings.insert(src.clone(), (0..4097).map(|i| src.join(i.to_string())).collect());
+    let result = read(&mut io, "cad-executor", Some(1));
+    assert_eq!(first_reason(&result), "directory enumeration: directory exceeds 4096 entry bound");
 }
 
 #[test]
 fn floor_total_source_read_budget_is_not_silently_truncated() {
-    let root = scope_fixture(&[(1, &[], &["src"])], &[]);
-    fs::create_dir(root.path().join("src")).unwrap();
+    let mut io = scripted(&[(1, &[], &["src"])], &[]);
+    let body = vec![b'x'; 512 * 1024];
     for i in 0..33 {
-        fs::write(
-            root.path().join(format!("src/{i:02}.md")),
-            vec![b'x'; 512 * 1024],
-        )
-        .unwrap();
+        io.file(&format!("src/{i:02}.md"), &body);
     }
-    let result = floor::read_observed(
-        &root.path().join(".planning"),
-        "cad-executor",
-        Some(8),
-        Some(1),
-        &categories(),
-        |_, _| Ok(()),
-    )
-    .unwrap();
+    let result = read(&mut io, "cad-executor", Some(1));
     assert_eq!(
         (result.state, result.bytes, result.diagnostics),
         (

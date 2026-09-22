@@ -1,39 +1,9 @@
 use super::*;
-use std::fs;
+use crate::process::Recorded;
 
-fn repo(process: &mut dyn Process) -> tempfile::TempDir {
-    let temp = tempfile::tempdir().unwrap();
-    assert!(temp.path().starts_with("/tmp"));
-    git::run(temp.path(), ["init", "-b", "main"], process).unwrap();
-    fs::write(temp.path().join("baseline"), "baseline\n").unwrap();
-    git::run(temp.path(), ["add", "--", "baseline"], process).unwrap();
-    commit(temp.path());
-    temp
-}
-
-fn commit(root: &Path) {
-    let output = std::process::Command::new("git")
-        .current_dir(root)
-        .args([
-            "-c",
-            "user.name=Pause Fixture",
-            "-c",
-            "user.email=pause@example.invalid",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-m",
-            "test fixture",
-        ])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
+/// Capture refuses before it asks git anything, so none of these checks needs
+/// a repository: the project path only has to be absolute.
+const PROJECT: &str = "/project";
 
 fn input(root: &Path) -> Input {
     Input {
@@ -58,10 +28,7 @@ fn input(root: &Path) -> Input {
 }
 
 #[test]
-fn capture_refuses_missing_or_multiline_input_and_unsafe_paths_without_mutation() {
-    let process = &mut cadence::process::System;
-    let temp = repo(process);
-    let before = git::observe(temp.path(), process).unwrap();
+fn capture_refuses_a_missing_blank_or_multiline_note_before_asking_git() {
     for note in [
         None,
         Some(""),
@@ -69,11 +36,18 @@ fn capture_refuses_missing_or_multiline_input_and_unsafe_paths_without_mutation(
         Some("first\nsecond"),
         Some("first\rsecond"),
     ] {
-        let mut request = input(temp.path());
+        let process = &mut Recorded::new();
+        let mut request = input(Path::new(PROJECT));
         request.sentence = note.map(str::to_owned);
-        assert!(capture(request, None, process).is_err());
+        assert!(capture(request, None, process).is_err(), "{note:?}");
+        assert!(process.launches().is_empty(), "{note:?}");
     }
-    let mut request = input(temp.path());
+}
+
+#[test]
+fn capture_refuses_a_missing_phase_before_asking_git() {
+    let process = &mut Recorded::new();
+    let mut request = input(Path::new(PROJECT));
     request.phase = None;
     assert!(
         capture(request, None, process)
@@ -81,10 +55,16 @@ fn capture_refuses_missing_or_multiline_input_and_unsafe_paths_without_mutation(
             .to_string()
             .contains("missing pause phase")
     );
+    assert!(process.launches().is_empty());
+}
+
+#[test]
+fn capture_refuses_an_unsafe_authorized_path_before_asking_git() {
     for path in ["../outside", "/absolute", ".git/index", ""] {
-        let mut request = input(temp.path());
+        let process = &mut Recorded::new();
+        let mut request = input(Path::new(PROJECT));
         request.authorized.insert(path.into());
-        assert!(capture(request, None, process).is_err());
+        assert!(capture(request, None, process).is_err(), "{path}");
+        assert!(process.launches().is_empty(), "{path}");
     }
-    assert_eq!(git::observe(temp.path(), process).unwrap(), before);
 }

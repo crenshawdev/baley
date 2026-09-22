@@ -38,10 +38,16 @@ pub struct ReviewInput {
 
 async fn saved_input(store: &Store, id: &str) -> Result<ReviewInput> {
     let view = persistence::read(store).await?;
-    let records = persistence::records(&view.snapshot.data)?;
-    let attempt: Attempt = persistence::get(&records, "attempts", id)?;
-    let admission: Admission = persistence::get(&records, "admissions", &attempt.fire)?;
-    let manifest: Manifest = persistence::get(&records, "manifests", &admission.artifact)?;
+    input_from_records(&persistence::records(&view.snapshot.data)?, id)
+}
+
+/// The consumer input for attempt `id`, from one snapshot's review records:
+/// the attempt, its admission and manifest bound to each other, and what its
+/// saved original says was delivered.
+pub fn input_from_records(records: &serde_json::Value, id: &str) -> Result<ReviewInput> {
+    let attempt: Attempt = persistence::get(records, "attempts", id)?;
+    let admission: Admission = persistence::get(records, "admissions", &attempt.fire)?;
+    let manifest: Manifest = persistence::get(records, "manifests", &admission.artifact)?;
     if attempt.attempt != id
         || admission.fire != attempt.fire
         || admission.round != attempt.round
@@ -55,7 +61,7 @@ async fn saved_input(store: &Store, id: &str) -> Result<ReviewInput> {
     let original = attempt
         .original
         .as_deref()
-        .map(|id| originals::saved_original(&records, id))
+        .map(|id| originals::saved_original(records, id))
         .transpose()?;
     if let Some(original) = &original
         && (original.attempt.as_deref() != Some(id)
@@ -157,7 +163,13 @@ pub async fn unruled_members(store: &Store) -> Result<Vec<crate::milestone::pref
     Ok(result)
 }
 pub async fn read_specialist_result(store: &Store, attempt: &str) -> Result<ReviewInput> {
-    let input = saved_input(store, attempt).await?;
+    let view = persistence::read(store).await?;
+    specialist_from_records(&persistence::records(&view.snapshot.data)?, attempt)
+}
+
+/// The consumer input for a specialist attempt; any other attempt is refused.
+pub fn specialist_from_records(records: &serde_json::Value, attempt: &str) -> Result<ReviewInput> {
+    let input = input_from_records(records, attempt)?;
     if input.admission.specialist.is_none() {
         return Err(Error::Invalid("not a specialist review".into()));
     }

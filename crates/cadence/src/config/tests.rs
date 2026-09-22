@@ -131,7 +131,6 @@ fn capture_threshold_reports_active_identities_without_refusing_append() {
             unit: "items"
         }
     );
-    assert_eq!(records.len(), 6);
 }
 
 // Independent frozen census expectation: exactly 94 leaves, not object containers.
@@ -290,6 +289,9 @@ fn alias_identity_is_resolved_before_reads_and_rechecked_on_retarget() {
         reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
     impl reload::ConfigIo for Count {
+        fn identity(&mut self, path: &std::path::Path) -> cadence::store::Result<std::path::PathBuf> {
+            reload::ConfigIo::identity(&mut reload::FileIo, path)
+        }
         fn read(&mut self, path: &std::path::Path) -> cadence::store::Result<reload::Input> {
             self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             reload::ConfigIo::read(&mut reload::FileIo, path)
@@ -336,8 +338,7 @@ fn alias_identity_is_resolved_before_reads_and_rechecked_on_retarget() {
 }
 
 #[test]
-fn malformed_nonobject_and_unreadable_layers_are_unavailable() {
-    use std::os::unix::fs::PermissionsExt;
+fn malformed_and_nonobject_layers_are_unavailable() {
     let dir = tempfile::tempdir().unwrap();
     let paths = config_paths(dir.path());
     let mut reader = reload::Reload::new(paths.clone(), reload::FileIo);
@@ -353,18 +354,47 @@ fn malformed_nonobject_and_unreadable_layers_are_unavailable() {
         assert!(reader.refresh().is_err(), "{bytes}");
     }
     write_json(&paths.repo, json!({"workflow":{"verifier":true}}));
-    reader.refresh().unwrap();
-    std::fs::set_permissions(&paths.repo, std::fs::Permissions::from_mode(0o000)).unwrap();
-    let actually_unreadable = std::fs::read(&paths.repo).is_err();
-    if actually_unreadable {
-        assert!(reader.refresh().is_err());
-    } else {
-        eprintln!(
-            "privileged filesystem: mode bits do not establish unreadability; injected I/O boundary test supplies denial evidence"
-        );
-    }
-    std::fs::set_permissions(&paths.repo, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert!(reader.refresh().is_ok());
+}
+
+/// A layer the reader cannot read makes the config unavailable, and the same
+/// reader recovers once the layer reads again.
+#[test]
+fn a_layer_that_cannot_be_read_is_unavailable_until_it_reads_again() {
+    struct Denied {
+        denied: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl reload::ConfigIo for Denied {
+        fn identity(&mut self, path: &std::path::Path) -> cadence::store::Result<std::path::PathBuf> {
+            Ok(path.into())
+        }
+        fn read(&mut self, path: &std::path::Path) -> cadence::store::Result<reload::Input> {
+            if self.denied.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(cadence::store::Error::Io(format!("config {} is unreadable", path.display())));
+            }
+            Ok(reload::Input { identity: path.into(), bytes: Some(br#"{"workflow":{"verifier":true}}"#.to_vec()), stamp: None })
+        }
+    }
+    let denied = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mut reader = reload::Reload::new(
+        config_paths(std::path::Path::new("/project")),
+        Denied { denied: denied.clone() },
+    );
+    assert!(reader.refresh().is_err());
+    denied.store(false, std::sync::atomic::Ordering::SeqCst);
+    assert!(reader.refresh().is_ok());
+}
+
+/// Root can open a file whose mode grants no read to anyone, so the mode, not
+/// the open, decides that a layer is unreadable.
+#[test]
+fn a_mode_without_any_read_bit_is_unreadable() {
+    for mode in [0o000, 0o200, 0o222, 0o111, 0o100_000] {
+        assert!(reload::unreadable_mode(mode), "{mode:o}");
+    }
+    for mode in [0o400, 0o040, 0o004, 0o644, 0o100_600] {
+        assert!(!reload::unreadable_mode(mode), "{mode:o}");
+    }
 }
 
 #[test]

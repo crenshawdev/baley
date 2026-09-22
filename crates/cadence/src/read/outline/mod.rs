@@ -272,26 +272,35 @@ fn markdown_marker_columns_are_bounded(content: &str) -> bool {
     })
 }
 
-/// Parse `content` with `grammar`, giving up once `budget` of wall-clock time
-/// has elapsed. A cancelled parse is `None`, exactly like a failed one, so no
+/// A reading of the monotonic clock: the time elapsed since this reader was
+/// made. Parsing asks the time only through a reader like this, so a caller
+/// can hand it a fixed one and the result no longer depends on how fast the
+/// machine ran.
+pub fn monotonic() -> impl FnMut() -> Duration {
+    let origin = Instant::now();
+    move || origin.elapsed()
+}
+
+/// Parse `content` with `grammar`, giving up once `budget` has elapsed on the
+/// `now` reader. A cancelled parse is `None`, exactly like a failed one, so no
 /// caller can treat a half-built tree as an outline.
-pub fn parse(content: &str, grammar: Grammar, budget: Duration) -> Option<Tree> {
+pub fn parse(content: &str, grammar: Grammar, budget: Duration, now: &mut dyn FnMut() -> Duration) -> Option<Tree> {
     if grammar == Grammar::Markdown && !markdown_marker_columns_are_bounded(content) {
         return None;
     }
     let mut parser = Parser::new();
     parser.set_language(&grammar.language()).ok()?;
 
-    let deadline = Instant::now().checked_add(budget)?;
+    let deadline = now().checked_add(budget)?;
     // Checked before the first step as well as inside the callback: tree-sitter
     // runs the progress callback every few hundred parse operations, so an
     // input small enough to finish inside one batch would never consult the
     // budget and a zero budget would not bind.
-    if Instant::now() >= deadline {
+    if now() >= deadline {
         return None;
     }
     let mut cancel = |_: &ParseState| {
-        if Instant::now() >= deadline { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
+        if now() >= deadline { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
     };
 
     let bytes = content.as_bytes();
@@ -308,8 +317,8 @@ pub fn parse(content: &str, grammar: Grammar, budget: Duration) -> Option<Tree> 
 /// `threshold` is the response bound the outline is served against. Only the
 /// JSON extractor consults it, to decide which members are large enough to
 /// descend into; the others take their shape from the grammar alone.
-pub fn units(content: &str, grammar: Grammar, budget: Duration, threshold: usize) -> Result<Vec<Unit>, OutlineError> {
-    let tree = parse(content, grammar, budget).ok_or(OutlineError::NotParsed)?;
+pub fn units(content: &str, grammar: Grammar, budget: Duration, threshold: usize, now: &mut dyn FnMut() -> Duration) -> Result<Vec<Unit>, OutlineError> {
+    let tree = parse(content, grammar, budget, now).ok_or(OutlineError::NotParsed)?;
     match grammar {
         Grammar::C => c::units(content, &tree),
         Grammar::JavaScript => javascript::units(content, &tree),
@@ -331,12 +340,13 @@ pub struct Outline {
     pub error: Option<OutlineError>,
 }
 
-/// The outline of `path`'s `content` under the default parse budget.
-pub fn outline(path: &Path, content: &str, threshold: usize) -> Outline {
+/// The outline of `path`'s `content` under the default parse budget, timed on
+/// the `now` reader.
+pub fn outline(path: &Path, content: &str, threshold: usize, now: &mut dyn FnMut() -> Duration) -> Outline {
     let Some(grammar) = grammar_for_path(path) else {
         return Outline { grammar: None, units: Vec::new(), error: None };
     };
-    match units(content, grammar, PARSE_BUDGET, threshold) {
+    match units(content, grammar, PARSE_BUDGET, threshold, now) {
         Ok(units) => Outline { grammar: Some(grammar), units, error: None },
         Err(error) => Outline { grammar: Some(grammar), units: Vec::new(), error: Some(error) },
     }
@@ -375,9 +385,15 @@ mod tests {
 
     const SOURCE: &str = "function alpha() {\n  return 1;\n}\n";
 
+    /// A clock that never moves: every parse here finishes inside any budget
+    /// above zero, however slow the machine running it.
+    fn still() -> Duration {
+        Duration::ZERO
+    }
+
     #[test]
     fn a_parse_within_the_default_budget_returns_a_tree() {
-        let tree = parse(SOURCE, Grammar::JavaScript, PARSE_BUDGET).expect("a three-line file parses inside the budget");
+        let tree = parse(SOURCE, Grammar::JavaScript, PARSE_BUDGET, &mut still).expect("a three-line file parses inside the budget");
         assert_eq!(tree.root_node().kind(), "program");
     }
 
@@ -385,7 +401,7 @@ mod tests {
     /// tree-sitter happens to run its progress callback.
     #[test]
     fn a_zero_budget_returns_no_tree_for_the_same_input() {
-        assert!(parse(SOURCE, Grammar::JavaScript, Duration::ZERO).is_none());
+        assert!(parse(SOURCE, Grammar::JavaScript, Duration::ZERO, &mut still).is_none());
     }
 
     /// 2000 balanced brackets nest past the 1024 cap; the walk abandons the
@@ -393,7 +409,7 @@ mod tests {
     #[test]
     fn a_tree_deeper_than_the_cap_is_abandoned_rather_than_walked() {
         let content = format!("{}{}", "[".repeat(2000), "]".repeat(2000));
-        let tree = parse(&content, Grammar::JavaScript, PARSE_BUDGET).expect("parse");
+        let tree = parse(&content, Grammar::JavaScript, PARSE_BUDGET, &mut still).expect("parse");
         assert_eq!(walk(&tree, |_, _| {}), Err(OutlineError::TooDeep));
     }
 
@@ -403,7 +419,7 @@ mod tests {
     #[test]
     fn a_markdown_file_nesting_containers_past_the_scanner_buffer_is_not_parsed() {
         let content = format!("{}# buried\n", ">".repeat(2000));
-        assert!(parse(&content, Grammar::Markdown, PARSE_BUDGET).is_none());
+        assert!(parse(&content, Grammar::Markdown, PARSE_BUDGET, &mut still).is_none());
     }
 
     #[test]
@@ -415,7 +431,7 @@ mod tests {
             "> quoted\n>> deeper\n",
             "\t- tab indented\n",
         ] {
-            assert!(parse(content, Grammar::Markdown, PARSE_BUDGET).is_some(), "refused ordinary markdown: {content:?}");
+            assert!(parse(content, Grammar::Markdown, PARSE_BUDGET, &mut still).is_some(), "refused ordinary markdown: {content:?}");
         }
     }
 
@@ -434,7 +450,7 @@ mod tests {
 
     #[test]
     fn a_file_with_no_grammar_has_no_units_and_no_error() {
-        let outline = outline(Path::new("Cargo.toml"), "[package]\nname = \"x\"\n", 65_536);
+        let outline = outline(Path::new("Cargo.toml"), "[package]\nname = \"x\"\n", 65_536, &mut still);
         assert!(outline.grammar.is_none());
         assert!(outline.units.is_empty());
         assert!(outline.error.is_none());

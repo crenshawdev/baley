@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use crate::envelope::Refusal;
 use std::path::{Component, Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const ANSWER_BOUND: usize = super::slice::ANSWER_BOUND;
 /// Ceiling on one hit's body. Under the answer bound by enough that a hit's
@@ -249,21 +249,21 @@ fn file_blocks(file: usize, hits: &FileHits, units: &[Unit]) -> (Vec<Block>, Vec
 }
 
 /// Lay a hit list out as blocks and sites, resolving units file by file until
-/// the aggregate parse budget is spent.
-fn plan_answer(files: &[FileHits], aggregate: Duration) -> Answer {
+/// the aggregate parse budget is spent on the `now` reader.
+fn plan_answer(files: &[FileHits], aggregate: Duration, now: &mut dyn FnMut() -> Duration) -> Answer {
     let mut blocks: Vec<Block> = Vec::new();
     let mut sites: Vec<Site> = Vec::new();
-    let started = Instant::now();
+    let started = now();
     let mut stopped = false;
     for (index, file) in files.iter().enumerate() {
         let base = blocks.len();
         // The files still to resolve are not skipped and their hits are not
         // dropped: they take the window path.
-        let units = if stopped || started.elapsed() >= aggregate {
+        let units = if stopped || now().saturating_sub(started) >= aggregate {
             stopped = true;
             Vec::new()
         } else {
-            outline::outline(&file.path, &file.content, ANSWER_BOUND).units
+            outline::outline(&file.path, &file.content, ANSWER_BOUND, now).units
         };
         let (file_blocks, of_line) = file_blocks(index, file, &units);
         blocks.extend(file_blocks);
@@ -303,7 +303,7 @@ impl ReadDomain {
         // The walk is sorted, but these are the canonical paths, and a symlink
         // can resolve out of the walk's order. Paging compares sites by path.
         files.sort_by(|left, right| left.path.cmp(&right.path));
-        let answer = plan_answer(&files, AGGREGATE_PARSE_BUDGET);
+        let answer = plan_answer(&files, AGGREGATE_PARSE_BUDGET, &mut outline::monotonic());
         self.render(resumes, &files, &answer, resume)
     }
 
@@ -457,11 +457,11 @@ mod tests {
     #[test]
     fn a_spent_aggregate_budget_still_places_every_match_in_a_window() {
         let file = hits("fn alpha() {\n    let needle = 1;\n    needle\n}\n", &[2, 3]);
-        let resolved = plan_answer(std::slice::from_ref(&file), Duration::from_secs(5));
+        let resolved = plan_answer(std::slice::from_ref(&file), Duration::from_secs(5), &mut || Duration::ZERO);
         assert!(!resolved.stopped);
         assert_eq!(resolved.blocks.len(), 1);
         assert_eq!(resolved.blocks[0].unit.as_ref().map(|unit| unit.name.as_str()), Some("alpha"));
-        let spent = plan_answer(std::slice::from_ref(&file), Duration::ZERO);
+        let spent = plan_answer(std::slice::from_ref(&file), Duration::ZERO, &mut || Duration::ZERO);
         assert!(spent.stopped);
         assert_eq!(spent.sites.len(), 2);
         assert!(spent.blocks.iter().all(|block| block.unit.is_none()));

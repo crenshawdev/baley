@@ -135,32 +135,22 @@ fn malformed_members_and_directory_member_symlinks_remain_unreadable() {
 
 #[test]
 fn absent_homes_are_empty_unreadable_homes_are_explicit() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let life = lifecycle(root, true);
-    assert_eq!(capture(root, &life).unwrap().queue, Queue::default());
-    fs::write(root.join("phases"), "not a directory").unwrap();
-    fs::write(root.join("deferred"), "not a directory").unwrap();
-    let q = capture(root, &life).unwrap().queue;
-    assert_eq!(q.unreadable.len(), 2);
-    assert!(q.members.is_empty());
-    assert!(q.needs_triage());
+    use std::io::ErrorKind;
+    assert_eq!(unlisted_home("phases", ErrorKind::NotFound), None);
+    for error in [ErrorKind::NotADirectory, ErrorKind::PermissionDenied, ErrorKind::Other] {
+        assert_eq!(unlisted_home("deferred", error), Some("deferred".into()), "{error:?}");
+    }
+    let unreadable = Queue { members: vec![], unreadable: vec!["phases".into(), "deferred".into()] };
+    assert!(unreadable.needs_triage());
+    assert!(!Queue::default().needs_triage());
 }
 
 #[test]
 fn closed_residue_uses_legal_names_and_live_directories_are_not_residue() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    for name in [
-        "1", "1.10", "1.1", "2", "02", "0", "1.0", "1.2.3", "archive",
-    ] {
-        fs::create_dir_all(root.join("phases").join(name)).unwrap();
-    }
-    let closed = lifecycle(root, true);
-    assert_eq!(
-        capture(root, &closed).unwrap().residue,
-        ["1", "1.1", "1.10", "2"]
-    );
-    let live = lifecycle(root, false);
-    assert!(capture(root, &live).unwrap().residue.is_empty());
+    let names = || {
+        ["1", "1.10", "1.1", "2", "02", "0", "1.0", "1.2.3", "archive"]
+            .map(String::from)
+    };
+    assert_eq!(residue(Cycle::Closed, names()), ["1", "1.1", "1.10", "2"]);
+    assert!(residue(Cycle::Live, names()).is_empty());
 }

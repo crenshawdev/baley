@@ -40,15 +40,29 @@ pub struct Input {
     pub stamp: Option<(u64, u64, u32)>,
 }
 
+/// A mode that grants no read to anyone. Root opens such a file anyway, so the
+/// bits decide that a layer is unreadable, not whether the open succeeded.
+pub fn unreadable_mode(mode: u32) -> bool {
+    mode & 0o444 == 0
+}
+
 /// Failure injection uses the same boundary as real read errors, not permission
 /// bits that a privileged process might ignore.
+///
+/// Resolving a layer's path is asked here too, because it touches the
+/// filesystem: a substitute answers it without looking at the host.
 pub trait ConfigIo: Send + 'static {
+    fn identity(&mut self, path: &Path) -> Result<PathBuf>;
     fn read(&mut self, resolved: &Path) -> Result<Input>;
 }
 
 #[derive(Clone, Copy)]
 pub struct FileIo;
 impl ConfigIo for FileIo {
+    fn identity(&mut self, path: &Path) -> Result<PathBuf> {
+        identity(path)
+    }
+
     fn read(&mut self, path: &Path) -> Result<Input> {
         let mut file = match fs::File::open(path) {
             Ok(file) => file,
@@ -68,7 +82,7 @@ impl ConfigIo for FileIo {
             Err(e) => return Err(Error::Io(format!("config {}: {e}", path.display()))),
         };
         let metadata = file.metadata()?;
-        if metadata.mode() & 0o444 == 0 {
+        if unreadable_mode(metadata.mode()) {
             return Err(Error::Io(format!(
                 "config {} is unreadable",
                 path.display()
@@ -161,8 +175,11 @@ impl<I: ConfigIo> Reload<I> {
     }
 
     fn load(&mut self) -> Result<Generation> {
-        let repo_id = identity(&self.paths.repo)?;
-        let global_id = self.paths.global.as_deref().map(identity).transpose()?;
+        let repo_id = self.io.identity(&self.paths.repo)?;
+        let global_id = match self.paths.global.as_deref() {
+            Some(global) => Some(self.io.identity(global)?),
+            None => None,
+        };
         let alias = global_id.as_ref() == Some(&repo_id);
         let global = match global_id {
             Some(id) if id != repo_id => Some(self.io.read(&id)?),

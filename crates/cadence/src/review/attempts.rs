@@ -29,7 +29,9 @@ pub struct ObservationReceipt {
     pub durable_usage_observation_count: usize,
 }
 
-fn receipt(records: &Value, event: &Observation, replayed: bool) -> Result<ObservationReceipt> {
+/// The receipt for `event` as `records` hold it. An observation id saved with
+/// different content is a reused identity and is refused.
+pub fn receipt(records: &Value, event: &Observation, replayed: bool) -> Result<ObservationReceipt> {
     let saved: Observation = persistence::get(records, "observations", &event.observation)?;
     if &saved != event {
         return Err(Error::Conflict("observation identity reused".into()));
@@ -79,29 +81,12 @@ pub async fn record_observation(
     event: Observation,
     clock: &mut impl Clock,
 ) -> Result<ObservationReceipt> {
-    if event.kind == ObservationKind::LaunchFailure {
-        return Err(Error::Invalid(
-            "launch-failure-requires-return-identity".into(),
-        ));
-    }
-    if event.observation.is_empty()
-        || event.reference.is_empty()
-        || event.reference.chars().count() > 4096
-    {
-        return Err(Error::Invalid(
-            "invalid observation reference or identity".into(),
-        ));
-    }
+    validate_observation(&event)?;
     let view = persistence::read(store).await?;
-    let mut records = persistence::records(&view.snapshot.data)?;
-    if records
-        .get("observations")
-        .and_then(|values| values.get(&event.observation))
-        .is_some()
-    {
-        return receipt(&records, &event, true);
-    }
-    records = contribute_observation(records, &event, clock.now())?;
+    let records = match decide_observation(persistence::records(&view.snapshot.data)?, &event, clock)? {
+        Recording::Replay(receipt) => return Ok(*receipt),
+        Recording::Contribute(records) => records,
+    };
     let committed = match persistence::update(
         store,
         &view,
@@ -122,6 +107,46 @@ pub async fn record_observation(
         &event,
         false,
     )
+}
+
+/// An observation this binary can record at all: never a launch failure,
+/// which needs a return identity, and never an empty or oversized reference.
+pub fn validate_observation(event: &Observation) -> Result<()> {
+    if event.kind == ObservationKind::LaunchFailure {
+        return Err(Error::Invalid(
+            "launch-failure-requires-return-identity".into(),
+        ));
+    }
+    if event.observation.is_empty()
+        || event.reference.is_empty()
+        || event.reference.chars().count() > 4096
+    {
+        return Err(Error::Invalid(
+            "invalid observation reference or identity".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// What recording an observation does, decided over one snapshot's records.
+pub enum Recording {
+    /// Already saved: its receipt, replayed.
+    Replay(Box<ObservationReceipt>),
+    /// New: the records with the observation contributed, to commit.
+    Contribute(Value),
+}
+
+/// Replay an observation already saved, or contribute a new one to `records`.
+/// The clock is read only for a new observation.
+pub fn decide_observation(records: Value, event: &Observation, clock: &mut impl Clock) -> Result<Recording> {
+    if records
+        .get("observations")
+        .and_then(|values| values.get(&event.observation))
+        .is_some()
+    {
+        return receipt(&records, event, true).map(|receipt| Recording::Replay(Box::new(receipt)));
+    }
+    contribute_observation(records, event, clock.now()).map(Recording::Contribute)
 }
 
 fn contribute_observation(mut records: Value, event: &Observation, at: u64) -> Result<Value> {

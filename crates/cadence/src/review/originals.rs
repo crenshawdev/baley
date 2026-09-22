@@ -22,7 +22,9 @@ pub struct OriginalRead {
     pub record: Original,
 }
 
-pub(crate) fn saved_original(records: &Value, id: &str) -> Result<Original> {
+/// The original saved as `id`. One saved under a contract this binary does not
+/// know reads as unverified, never as parsed findings.
+pub fn saved_original(records: &Value, id: &str) -> Result<Original> {
     let mut saved: Value = persistence::get(records, "originals", id)?;
     if saved["contract"]["validator"] != "H4-1" {
         saved["parsed"] = Value::Null;
@@ -39,7 +41,12 @@ pub(crate) fn saved_original(records: &Value, id: &str) -> Result<Original> {
 
 pub async fn read_original(store: &Store, id: &str) -> Result<OriginalRead> {
     let view = persistence::read(store).await?;
-    let original = saved_original(&persistence::records(&view.snapshot.data)?, id)?;
+    original_read(&persistence::records(&view.snapshot.data)?, id)
+}
+
+/// The saved original `id` with its identity and finding ids.
+pub fn original_read(records: &Value, id: &str) -> Result<OriginalRead> {
+    let original = saved_original(records, id)?;
     let finding_ids = original
         .citations
         .iter()
@@ -68,7 +75,12 @@ pub struct VoiceOriginals {
 
 pub async fn read_voice_originals(store: &Store, fire: &str) -> Result<VoiceOriginals> {
     let view = persistence::read(store).await?;
-    let records = persistence::records(&view.snapshot.data)?;
+    voice_originals(&persistence::records(&view.snapshot.data)?, fire)
+}
+
+/// Each slot's accepted original for `fire`, and its findings, with every
+/// original bound to its own attempt and at most one per slot.
+pub fn voice_originals(records: &Value, fire: &str) -> Result<VoiceOriginals> {
     let attempts: BTreeMap<String, Attempt> = records
         .get("attempts")
         .cloned()
@@ -81,7 +93,7 @@ pub async fn read_voice_originals(store: &Store, fire: &str) -> Result<VoiceOrig
     };
     for attempt in attempts.values().filter(|attempt| attempt.fire == fire) {
         if let Some(id) = &attempt.original {
-            let original = saved_original(&records, id)?;
+            let original = saved_original(records, id)?;
             if original.attempt.as_deref() != Some(&attempt.attempt)
                 || original.artifact.as_deref() != Some(&attempt.view.manifest)
             {

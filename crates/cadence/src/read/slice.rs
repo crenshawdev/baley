@@ -17,7 +17,7 @@ fn refusal(slot: &str, code: &str, reason: impl Into<String>) -> Value {
 /// A file with no grammar, and a file whose grammar found nothing to name, is
 /// one unit spanning the whole file, so every file stays readable by name.
 pub(super) fn nameable_units(path: &Path, content: &str) -> (Vec<Unit>, Vec<&'static str>) {
-    let outline = outline::outline(path, content, ANSWER_BOUND);
+    let outline = outline::outline(path, content, ANSWER_BOUND, &mut outline::monotonic());
     let notes = outline.error.map(outline::OutlineError::note).into_iter().collect();
     if outline.units.is_empty() { (source::fallback(path, content), notes) } else { (outline.units, notes) }
 }

@@ -110,9 +110,10 @@ pub fn units(content: &str, tree: &Tree) -> Result<Vec<Unit>, OutlineError> {
 mod tests {
     use super::*;
     use crate::read::outline::{Grammar, PARSE_BUDGET, parse};
+    use std::time::Duration;
 
     fn outline(content: &str) -> Vec<Unit> {
-        let tree = parse(content, Grammar::C, PARSE_BUDGET).expect("parse");
+        let tree = parse(content, Grammar::C, PARSE_BUDGET, &mut || Duration::ZERO).expect("parse");
         units(content, &tree).expect("units")
     }
 

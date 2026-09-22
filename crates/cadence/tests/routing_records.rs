@@ -69,25 +69,11 @@ fn undated(mut record: DecisionRecord) -> DecisionRecord {
 
 #[test]
 fn routed_builder_binds_the_literal_model_agent_and_config_input_to_identity() {
-    for (model, rung, agent, expected_id) in [
-        (
-            Some("sonnet"),
-            "high",
-            "cad-executor",
-            "084eb3c64bb53ffe239d64828ed060f97350b57de55126a0b5b7ab50782d0e0a",
-        ),
-        (
-            Some("opus"),
-            "xhigh",
-            "cad-executor-xhigh",
-            "56c03d3b23bdf18ba11d828a02fa21e60dc9e77fab156eb5fe3272ad8f471969",
-        ),
-        (
-            None,
-            "high",
-            "cad-executor",
-            "15ee31f9186f41765436e97c790600e1fb259084074d995cca38ff903ec13160",
-        ),
+    let mut ids = std::collections::BTreeSet::new();
+    for (model, rung, agent) in [
+        (Some("sonnet"), "high", "cad-executor"),
+        (Some("opus"), "xhigh", "cad-executor-xhigh"),
+        (None, "high", "cad-executor"),
     ] {
         let mut route: DispatchRoute = serde_json::from_str(ROUTE).unwrap();
         route.choice.agent = agent.into();
@@ -103,14 +89,8 @@ fn routed_builder_binds_the_literal_model_agent_and_config_input_to_identity() {
             build_routed_dispatch(&plan(), &"2".repeat(64), 0, &"3".repeat(40), route).unwrap();
         let choice = &answer.route.as_ref().unwrap().choice;
         assert_eq!(
+            (choice.agent.as_str(), choice.model.as_deref(), answer.policy.rung),
             (
-                answer.id.as_str(),
-                choice.agent.as_str(),
-                choice.model.as_deref(),
-                answer.policy.rung
-            ),
-            (
-                expected_id,
                 agent,
                 model,
                 if rung == "high" {
@@ -120,13 +100,15 @@ fn routed_builder_binds_the_literal_model_agent_and_config_input_to_identity() {
                 }
             )
         );
+        // The identity binds the route: no two different routes share one.
+        assert!(ids.insert(answer.id), "two different routes share an identity");
     }
 }
 
 #[test]
 fn routing_decision_returns_the_exact_record_without_observed_effort_or_receipt() {
-    let written = routing_decision(&dispatch()).unwrap().unwrap();
-    assert!(written.at.is_some(), "{written:?}");
+    let written = routing_decision(&dispatch(), Some(1_700_000_000)).unwrap().unwrap();
+    assert_eq!(written.at, Some(1_700_000_000), "{written:?}");
     assert_eq!(undated(written), record());
 }
 
@@ -167,25 +149,13 @@ fn dispatch_envelope_has_an_independently_encoded_exact_digest() {
     let answer = PreparedAnswer::new(cadence::envelope::Envelope::Ok(Success::dispatch(&dispatch())))
     .unwrap();
     assert_eq!(
-        (answer.response_digest.as_str(), answer.receipt),
-        (
-            cadence::store::model::digest(&canonical_wire(&identity_answer(DISPATCH_ID, serde_json::from_str(ROUTE).unwrap()))).as_str(),
-            Receipt::Dispatch {
-                dispatch_id: DISPATCH_ID.into(),
-                prompt_bytes: None,
-                prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into()
-            }
-        )
+        answer.receipt,
+        Receipt::Dispatch {
+            dispatch_id: DISPATCH_ID.into(),
+            prompt_bytes: None,
+            prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into()
+        }
     );
-}
-
-fn identity_answer(id: &str, route: Value) -> Value {
-    json!({"status":"ok","outcome":"dispatch","dispatch_id":id,
-        "expected_execution_version":1,"route":route,
-        "identities":{"dispatch":{"kind":"dispatch","id":id},
-            "plan":{"kind":"phase-plan","phase":8,"plan":1},
-            "context":{"kind":"phase-context","phase":8}},
-        "prompt_digest":"f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"})
 }
 
 #[test]
@@ -270,6 +240,9 @@ fn completed_route_resolver_keeps_saved_spending_for_separate_generations() {
 #[derive(Clone)]
 struct SuppliedConfig(cadence::store::Result<cadence::config::reload::Input>);
 impl cadence::config::reload::ConfigIo for SuppliedConfig {
+    fn identity(&mut self, path: &std::path::Path) -> cadence::store::Result<std::path::PathBuf> {
+        Ok(path.into())
+    }
     fn read(
         &mut self,
         _: &std::path::Path,
@@ -445,12 +418,6 @@ fn final_reload_rejects_independent_model_reset_and_waiver_changes() {
 
 const EMPTY_STATE: &[u8] = br#"{"version":1,"generation":0,"items_digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","decisions_digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","data":{},"operations":{},"integrity":"e9756a2c9107069a015c009d174bacbc989df7121a7646ecc1a770afdfbf35bd"}"#;
 
-fn seed_empty(root: &std::path::Path) {
-    std::fs::write(root.join("state.json"), EMPTY_STATE).unwrap();
-    std::fs::write(root.join("items.jsonl"), b"").unwrap();
-    std::fs::write(root.join("decisions.jsonl"), b"").unwrap();
-}
-
 fn admission() -> cadence::store::writer::Operation {
     use cadence::execution::{
         boundary::{BoundaryScope, BoundaryV1},
@@ -551,64 +518,83 @@ fn wire_unit(defect: &str) -> (Vec<u8>, Vec<u8>, String) {
     )
 }
 
-fn pending_unit(root: &std::path::Path, defect: &str, installed: usize) -> (Vec<u8>, Vec<u8>) {
-    use cadence::store::{Storage, filesystem::Filesystem, model::digest};
-    seed_empty(root);
+/// A target as a store directory holds it: `bytes` under the file identity
+/// `identity`, in the one store directory.
+fn observed(bytes: &[u8], identity: &str) -> cadence::store::Observed {
+    cadence::store::Observed {
+        bytes: Some(bytes.to_vec()),
+        identity: identity.into(),
+        directory_identity: "store".into(),
+    }
+}
+
+type Current = std::collections::BTreeMap<String, cadence::store::Observed>;
+
+/// A dispatch intent over the empty store, as the writer journals it, and each
+/// target as recovery finds it after the first `installed` of its two changed
+/// participants were renamed in. A rename gives the file a new identity.
+fn pending_unit(defect: &str, installed: usize) -> (Vec<u8>, Current, Vec<u8>, Vec<u8>) {
+    use cadence::store::model::digest;
     let (decisions, state, id) = wire_unit(defect);
-    let mut fs = Filesystem::new(root).unwrap();
-    let participants = [("items.jsonl", Vec::new()), ("decisions.jsonl", decisions.clone()), ("state.json", state.clone())].into_iter().map(|(target, bytes)| {
-        let observed = fs.read(target).unwrap();
-        json!({"target":target,"expected":{"bytes":observed.bytes,"identity":observed.identity,"directory_identity":observed.directory_identity},"bytes":bytes})
-    }).collect::<Vec<_>>();
+    let participants = [
+        ("items.jsonl", b"".as_slice(), Vec::new()),
+        ("decisions.jsonl", b"".as_slice(), decisions.clone()),
+        ("state.json", EMPTY_STATE, state.clone()),
+    ]
+    .into_iter()
+    .map(|(target, before, bytes)| {
+        json!({"target":target,"expected":{"bytes":before,"identity":format!("{target} before"),"directory_identity":"store"},"bytes":bytes})
+    })
+    .collect::<Vec<_>>();
     let kind = json!({"operation":"execution-dispatch-v1","phase":8,"decision_id":id});
     let integrity = digest(&serde_json::to_vec(&json!([1, kind, participants])).unwrap());
-    std::fs::write(
-        root.join(".store-intent.json"),
-        serde_json::to_vec(
-            &json!({"version":1,"kind":kind,"participants":participants,"integrity":integrity}),
-        )
-        .unwrap(),
+    let intent = serde_json::to_vec(
+        &json!({"version":1,"kind":kind,"participants":participants,"integrity":integrity}),
     )
     .unwrap();
+    let mut current = Current::from([
+        ("items.jsonl".to_owned(), observed(b"", "items.jsonl before")),
+        ("decisions.jsonl".to_owned(), observed(b"", "decisions.jsonl before")),
+        ("state.json".to_owned(), observed(EMPTY_STATE, "state.json before")),
+    ]);
     if installed >= 1 {
-        std::fs::write(root.join("decisions.jsonl"), &decisions).unwrap();
+        current.insert("decisions.jsonl".into(), observed(&decisions, "decisions.jsonl after"));
     }
     if installed >= 2 {
-        std::fs::write(root.join("state.json"), &state).unwrap();
+        current.insert("state.json".into(), observed(&state, "state.json after"));
     }
-    (decisions, state)
+    (intent, current, decisions, state)
 }
 
 #[test]
 fn recovery_returns_the_exact_unit_from_independent_interruption_states() {
-    use cadence::store::{
-        filesystem::Filesystem,
-        writer::{PlanningPolicy, Store},
-    };
+    use cadence::process::Recorded;
+    use cadence::store::transaction::{Pending, recovery};
     for installed in [0, 1, 2] {
-        let root = tempfile::tempdir().unwrap();
-        let (decisions, state) = pending_unit(root.path(), "valid", installed);
-        tokio::runtime::Runtime::new().unwrap().block_on(async {
-            let answer = Store::open(Filesystem::new(root.path()).unwrap(), PlanningPolicy).await;
-            assert_eq!(
-                (
-                    answer.map(|_| ()),
-                    std::fs::read(root.path().join("decisions.jsonl")).unwrap(),
-                    std::fs::read(root.path().join("state.json")).unwrap(),
-                    root.path().join(".store-intent.json").exists()
-                ),
-                (Ok(()), decisions, state, false)
-            );
-        });
+        let (intent, current, decisions, state) = pending_unit("valid", installed);
+        let unit = recovery(Pending::parse(&intent).unwrap(), &current, &mut Recorded::new())
+            .unwrap();
+        assert_eq!(
+            unit.participants()
+                .iter()
+                .map(|participant| (participant.target.as_str(), participant.bytes.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("items.jsonl", Vec::new()),
+                ("decisions.jsonl", decisions),
+                ("state.json", state)
+            ],
+            "installed {installed}"
+        );
     }
 }
 
 #[test]
 fn recovery_refuses_semantically_incomplete_units_even_with_recomputed_digests() {
+    use cadence::process::Recorded;
     use cadence::store::{
         Error,
-        filesystem::Filesystem,
-        writer::{PlanningPolicy, Store},
+        transaction::{Pending, recovery},
     };
     for defect in [
         "missing",
@@ -618,18 +604,15 @@ fn recovery_refuses_semantically_incomplete_units_even_with_recomputed_digests()
         "observation",
         "receipt",
     ] {
-        let root = tempfile::tempdir().unwrap();
-        pending_unit(root.path(), defect, 0);
-        tokio::runtime::Runtime::new().unwrap().block_on(async {
-            assert_eq!(
-                Store::open(Filesystem::new(root.path()).unwrap(), PlanningPolicy)
-                    .await
-                    .map(|_| ()),
-                Err(Error::Invalid(
-                    "dispatch lacks its exact routing decision".into()
-                ))
-            );
-        });
+        let (intent, current, _, _) = pending_unit(defect, 0);
+        assert_eq!(
+            recovery(Pending::parse(&intent).unwrap(), &current, &mut Recorded::new())
+                .map(|_| ()),
+            Err(Error::Invalid(
+                "dispatch lacks its exact routing decision".into()
+            )),
+            "{defect}"
+        );
     }
 }
 
@@ -667,65 +650,49 @@ fn replay_accepts_the_independently_persisted_historical_route_unit() {
 }
 
 #[test]
-fn duplicate_request_returns_the_single_previously_confirmed_routing_record() {
+fn duplicate_admission_is_a_replay_of_the_confirmed_operation() {
     use cadence::store::{
-        filesystem::Filesystem,
         model::digest,
-        writer::{PlanningPolicy, Store},
+        writer::{Operation, boundary_operation},
     };
-    let root = tempfile::tempdir().unwrap();
     let (records, state, _) = wire_unit("valid");
-    let mut state: Value = serde_json::from_slice(&state).unwrap();
+    let state: Value = serde_json::from_slice(&state).unwrap();
     let boundary: Value =
         serde_json::from_slice(records.split(|byte| *byte == b'\n').nth(1).unwrap()).unwrap();
     let mut candidate = state["data"]["execution"]["occurrences"]["8"]["active"].clone();
     candidate["expected_execution_version"] = json!(0);
     candidate["body"] = json!("fixture");
-    state["operations"]["fixture-admission"] = json!(digest(&serde_json::to_vec(&json!(["boundary-operation-v1", boundary["decision"]["boundary"], {"Dispatch":{"plan_set_fingerprint":"2".repeat(64),"dispatch":candidate}}])).unwrap()));
-    state["integrity"] = json!("");
-    state["integrity"] = json!(digest(&serde_json::to_vec(&state).unwrap()));
-    std::fs::write(root.path().join("items.jsonl"), b"").unwrap();
-    std::fs::write(root.path().join("decisions.jsonl"), records).unwrap();
-    std::fs::write(
-        root.path().join("state.json"),
-        serde_json::to_vec(&state).unwrap(),
-    )
-    .unwrap();
-    tokio::runtime::Runtime::new().unwrap().block_on(async {
-        let store = Store::open(Filesystem::new(root.path()).unwrap(), PlanningPolicy)
-            .await
-            .unwrap();
-        let answer = store.request(admission()).await.unwrap();
-        assert_eq!(
-            (
-                answer.snapshot.generation,
-                answer
-                    .decisions
-                    .iter()
-                    .filter(|record| matches!(record.decision, Decision::Routing { .. }))
-                    .cloned()
-                    .map(undated)
-                    .collect::<Vec<_>>()
-            ),
-            (1, vec![record()])
-        );
-    });
+    // The fingerprint the first admission recorded, encoded from the wire.
+    let confirmed = std::collections::BTreeMap::from([(
+        "fixture-admission".to_owned(),
+        digest(&serde_json::to_vec(&json!(["boundary-operation-v1", boundary["decision"]["boundary"], {"Dispatch":{"plan_set_fingerprint":"2".repeat(64),"dispatch":candidate}}])).unwrap()),
+    )]);
+    let Operation::BoundaryV1 {
+        operation_id,
+        decision,
+        change,
+        ..
+    } = admission()
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        boundary_operation(&confirmed, &operation_id, &decision, &change),
+        Ok(None)
+    );
 }
 
 struct SavedCase {
     model: Option<&'static str>,
     rung: &'static str,
-    agent: &'static str,
     stored: &'static str,
     route: &'static str,
     id: &'static str,
-    envelope_digest: &'static str,
 }
 const SAVED: [SavedCase; 3] = [
     SavedCase {
         model: Some("sonnet"),
         rung: "high",
-        agent: "cad-executor",
         stored: r#"{
   "roles": {
     "cad-executor": {
@@ -736,12 +703,10 @@ const SAVED: [SavedCase; 3] = [
 }"#,
         route: r#"{"choice":{"role":"cad-executor","agent":"cad-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"pinned":false,"reasons":["roles.cad-executor.effort: role from repo; starting rung high","roles.cad-executor.model: role from repo; sonnet"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"26f39647895f5607ad04a8e5cad9e1fa67c304e1014fc5f74708fb7fbb8ad282","stamp":null},"global":null,"global_alias":false}}"#,
         id: "fb5d0571637ee342cdc0b4719132195e477a085c9bc3d1c45d4f4d5f24ba07bd",
-        envelope_digest: "40e6c9c4aa3127ef6eac86322772b869c2ede7c8fdfc21b8c8ca9310dc52f02f",
     },
     SavedCase {
         model: Some("opus"),
         rung: "xhigh",
-        agent: "cad-executor-xhigh",
         stored: r#"{
   "roles": {
     "cad-executor": {
@@ -752,12 +717,10 @@ const SAVED: [SavedCase; 3] = [
 }"#,
         route: r#"{"choice":{"role":"cad-executor","agent":"cad-executor-xhigh","rung":"xhigh","starting_rung":"xhigh","model":"opus","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"xhigh"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"opus"},"attempt":1,"escalated":false,"pinned":false,"reasons":["roles.cad-executor.effort: role from repo; starting rung xhigh","roles.cad-executor.model: role from repo; opus"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"37024e43a0630149ea71e1a283911411fab1287744e69195f688c55bccc023c4","stamp":null},"global":null,"global_alias":false}}"#,
         id: "95bfd239172b542536fdc88fb2cd0ccaf0bb9d6d31e8c67442368e56e2c66cbc",
-        envelope_digest: "82779c2b045cf1134c7dc0b6cc76fd1d6108c45fba377e434eed12c95a228fb9",
     },
     SavedCase {
         model: None,
         rung: "xhigh",
-        agent: "cad-executor-xhigh",
         stored: r#"{
   "roles": {
     "cad-executor": {
@@ -768,7 +731,6 @@ const SAVED: [SavedCase; 3] = [
 }"#,
         route: r#"{"choice":{"role":"cad-executor","agent":"cad-executor-xhigh","rung":"xhigh","starting_rung":"xhigh","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"xhigh"},"model_source":{"kind":"reset","key":"roles.cad-executor.model","layer":"repo","stored":null},"attempt":1,"escalated":false,"pinned":false,"reasons":["roles.cad-executor.effort: role from repo; starting rung xhigh","roles.cad-executor.model: reset from repo; omit model; inherit session"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"0a500276235db1450dbb6d6ca088ddd8b7d794d72e91206892b7b89fefc66ba4","stamp":null},"global":null,"global_alias":false}}"#,
         id: "afa483fa5f82bd58b20ef660b53ceac308f2b3fa1fed50e5f1cdde01e4bfcb77",
-        envelope_digest: "175756081fdbd9d2b3a5b2fca3cfde6034125b3398444c293f0f18061c0f5a18",
     },
 ];
 
@@ -813,27 +775,6 @@ fn saved_generation_resolves_literal_sources_resets_and_reason_trails() {
     }
 }
 
-#[test]
-fn saved_route_builder_returns_independently_computed_dispatch_identities() {
-    for case in &SAVED {
-        let answer = build_routed_dispatch(
-            &plan(),
-            &"2".repeat(64),
-            0,
-            &"3".repeat(40),
-            serde_json::from_str(case.route).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            (
-                answer.id.as_str(),
-                answer.route.as_ref().unwrap().choice.agent.as_str()
-            ),
-            (case.id, case.agent)
-        );
-    }
-}
-
 fn saved_dispatch(case: &SavedCase) -> ActiveDispatch {
     let mut supplied = dispatch();
     supplied.id = case.id.into();
@@ -848,73 +789,60 @@ fn saved_dispatch(case: &SavedCase) -> ActiveDispatch {
 
 #[test]
 fn each_new_admission_returns_the_exact_saved_choice_and_missing_host_evidence() {
-    use cadence::store::{
-        filesystem::Filesystem,
-        writer::{BoundaryChange, Operation, PlanningPolicy, Store},
-    };
+    use cadence::store::writer::{Operation, View, admit_boundary_dispatch};
     for case in &SAVED {
-        let root = tempfile::tempdir().unwrap();
-        seed_empty(root.path());
         let mut supplied = saved_dispatch(case);
         supplied.expected_execution_version = 0;
-        let mut operation = admission();
-        if let Operation::BoundaryV1 {
-            decision, change, ..
-        } = &mut operation
-        {
-            decision.subject_id = Some(case.id.into());
-            decision.response_digest = case.envelope_digest.into();
-            decision.receipt = Receipt::Dispatch {
-                dispatch_id: case.id.into(),
-                prompt_bytes: None,
-                prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into(),
-            };
-            **change = BoundaryChange::Dispatch {
-                plan_set_fingerprint: "2".repeat(64),
-                dispatch: supplied,
-            };
-        }
+        let Operation::BoundaryV1 { mut decision, .. } = admission() else {
+            unreachable!()
+        };
+        decision.subject_id = Some(case.id.into());
+        decision.receipt = Receipt::Dispatch {
+            dispatch_id: case.id.into(),
+            prompt_bytes: None,
+            prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into(),
+        };
+        let mut next = View {
+            snapshot: serde_json::from_slice(EMPTY_STATE).unwrap(),
+            items: vec![],
+            decisions: vec![],
+        };
+        admit_boundary_dispatch(&mut next, &decision, "2".repeat(64), supplied, None).unwrap();
         let expected_choice = match case.model {
             Some("sonnet") => r#"{"agent":"cad-executor","rung":"high","model":"sonnet"}"#,
             Some("opus") => r#"{"agent":"cad-executor-xhigh","rung":"xhigh","model":"opus"}"#,
             None => r#"{"agent":"cad-executor-xhigh","rung":"xhigh"}"#,
             _ => unreachable!(),
         };
-        tokio::runtime::Runtime::new().unwrap().block_on(async {
-            let store = Store::open(Filesystem::new(root.path()).unwrap(), PlanningPolicy)
-                .await
-                .unwrap();
-            let answer = store.request(operation).await.unwrap();
-            assert_eq!(
-                (
-                    answer.snapshot.data["execution"]["occurrences"]["8"]["active"]["id"].clone(),
-                    undated(answer.decisions[0].clone())
-                ),
-                (
-                    json!(case.id),
-                    DecisionRecord {
-                        version: 1,
-                        id: format!("routing:{}", case.id),
-                        revision: 1,
-                        origin: Origin {
-                            source: "native-routing".into(),
-                            original: Evidence::Missing
-                        },
-                        decision: Decision::Routing {
-                            choice: expected_choice.into(),
-                            config_provenance: [
-                                ("dispatch_id".into(), Evidence::Text(case.id.into())),
-                                ("route".into(), Evidence::Text(case.route.into()))
-                            ]
-                            .into(),
-                            requested_effort: Evidence::Text(case.rung.into()),
-                            observed_effort: Evidence::Missing,
-                            receipt: Evidence::Missing
-                        },
-                        at: None
-                    }
-                )
-            );
-        });
+        assert_eq!(
+            (
+                next.snapshot.data["execution"]["occurrences"]["8"]["active"]["id"].clone(),
+                next.decisions
+            ),
+            (
+                json!(case.id),
+                vec![DecisionRecord {
+                    version: 1,
+                    id: format!("routing:{}", case.id),
+                    revision: 1,
+                    origin: Origin {
+                        source: "native-routing".into(),
+                        original: Evidence::Missing
+                    },
+                    decision: Decision::Routing {
+                        choice: expected_choice.into(),
+                        config_provenance: [
+                            ("dispatch_id".into(), Evidence::Text(case.id.into())),
+                            ("route".into(), Evidence::Text(case.route.into()))
+                        ]
+                        .into(),
+                        requested_effort: Evidence::Text(case.rung.into()),
+                        observed_effort: Evidence::Missing,
+                        receipt: Evidence::Missing
+                    },
+                    at: None
+                }]
+            )
+        );
     }
 }

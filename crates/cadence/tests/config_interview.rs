@@ -392,6 +392,9 @@ fn invalid_floor_null_returns_literal_validation_failure() {
 #[derive(Clone)]
 struct ConfigMemory(std::sync::Arc<std::sync::Mutex<Option<Vec<u8>>>>);
 impl cadence::config::reload::ConfigIo for ConfigMemory {
+    fn identity(&mut self, path: &std::path::Path) -> cadence::store::Result<std::path::PathBuf> {
+        Ok(path.into())
+    }
     fn read(&mut self, path: &std::path::Path) -> cadence::store::Result<Input> {
         Ok(Input {
             identity: path.into(),

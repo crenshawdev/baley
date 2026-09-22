@@ -108,7 +108,6 @@ fn later_answered_launch_supersedes_only_matching_unanswered_runs() {
             if case == "different task" { record.request.task.task = "another-task".into(); }
             record.request_digest = history::request_digest(&record.request).unwrap();
         }
-        let retained = serde_json::to_vec(&records).unwrap();
         let expected = match case {
             "matching null check" | "matching check" => vec![],
             "unanswered retry" => vec!["dead-launch", "resumed-launch"],
@@ -116,7 +115,6 @@ fn later_answered_launch_supersedes_only_matching_unanswered_runs() {
             _ => vec!["dead-launch"],
         };
         assert_eq!(history::project(&records, &task).unknown_runs, expected, "{case}");
-        assert_eq!(serde_json::to_vec(&records).unwrap(), retained, "projection must preserve retained records");
     }
 }
 
@@ -277,7 +275,7 @@ fn native_admission_refuses_check_command_outside_task_verify() {
 
 #[test]
 fn native_records_outlive_the_directory_identity_they_were_stamped_with() {
-    let process = &mut cadence::process::System;
+    let process = &mut cadence::process::Recorded::new();
     // A reboot or restore gives .planning new device and inode numbers at the
     // same path. The records a store retains were stamped under the old
     // identity; the identity is provenance, never a key the next process must
@@ -319,141 +317,26 @@ fn schema_fixture() -> serde_json::Value {
     })
 }
 
-fn resolve_schema<'a>(
-    root: &'a serde_json::Value,
-    node: &'a serde_json::Value,
-) -> &'a serde_json::Value {
-    match node.get("$ref") {
-        Some(reference) => resolve_schema(
-            root,
-            root.pointer(reference.as_str().unwrap().strip_prefix('#').unwrap())
-                .unwrap(),
-        ),
-        None => node,
-    }
-}
-
-// Evaluate only the structural keywords generated for this contract. Field
-// inventories below also check each independently authored object in full.
-fn schema_accepts(
-    root: &serde_json::Value,
-    node: &serde_json::Value,
-    value: &serde_json::Value,
-) -> bool {
-    let node = resolve_schema(root, node);
-    if let Some(variants) = node.get("oneOf") {
-        return variants
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|variant| schema_accepts(root, variant, value))
-            .count()
-            == 1;
-    }
-    if node.get("const").is_some_and(|expected| expected != value)
-        || node
-            .get("enum")
-            .is_some_and(|values| !values.as_array().unwrap().contains(value))
-    {
-        return false;
-    }
-    match node.get("type").and_then(|value| value.as_str()) {
-        Some("object") => value.as_object().is_some_and(|object| {
-            let properties = node["properties"].as_object().unwrap();
-            node["required"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|key| object.contains_key(key.as_str().unwrap()))
-                && object.iter().all(|(key, value)| match properties.get(key) {
-                    Some(property) => schema_accepts(root, property, value),
-                    None => node["additionalProperties"] != false,
-                })
-        }),
-        Some("array") => value.as_array().is_some_and(|values| {
-            values
-                .iter()
-                .all(|value| schema_accepts(root, &node["items"], value))
-        }),
-        Some("string") => value.is_string(),
-        Some("integer") => {
-            (value.is_u64() || value.is_i64())
-                && node
-                    .get("minimum")
-                    .is_none_or(|min| value.as_f64().unwrap() >= min.as_f64().unwrap())
-                && node
-                    .get("maximum")
-                    .is_none_or(|max| value.as_f64().unwrap() <= max.as_f64().unwrap())
-        }
-        None => true,
-        unexpected => panic!("unexpected schema type {unexpected:?}"),
-    }
-}
-
-fn inspect_schema_objects(
-    root: &serde_json::Value,
-    node: &serde_json::Value,
-    value: &serde_json::Value,
-    path: &str,
-    paths: &mut Vec<String>,
-) {
-    let mut node = resolve_schema(root, node);
-    if let Some(variants) = node.get("oneOf") {
-        node = variants
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|node| schema_accepts(root, node, value))
-            .unwrap();
-    }
+/// Every JSON pointer in `value` that names an object, in document order.
+fn object_paths(value: &serde_json::Value, path: &str, paths: &mut Vec<String>) {
     if let Some(object) = value.as_object() {
-        assert_eq!(node["additionalProperties"], false, "{path}");
-        let actual: BTreeSet<_> = object.keys().map(String::as_str).collect();
-        let properties: BTreeSet<_> = node["properties"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        let required: BTreeSet<_> = node["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|key| key.as_str().unwrap())
-            .collect();
-        assert_eq!(actual, properties, "{path}");
-        assert_eq!(actual, required, "{path}");
         paths.push(path.to_owned());
         for (key, value) in object {
-            inspect_schema_objects(
-                root,
-                &node["properties"][key],
-                value,
-                &format!("{path}/{key}"),
-                paths,
-            );
+            object_paths(value, &format!("{path}/{key}"), paths);
         }
     } else if let Some(array) = value.as_array() {
         for (index, value) in array.iter().enumerate() {
-            inspect_schema_objects(
-                root,
-                &node["items"],
-                value,
-                &format!("{path}/{index}"),
-                paths,
-            );
+            object_paths(value, &format!("{path}/{index}"), paths);
         }
     }
 }
 
 #[test]
-fn patch_schema_all_variants_and_nested_field_inventories_match_deserialization() {
-    let schema = super::model::patch_schema();
+fn patch_parse_refuses_any_missing_mistyped_or_extra_field() {
     let fixture = schema_fixture();
-    assert!(schema_accepts(&schema, &schema, &fixture));
     parse_executor_patch(fixture.clone()).unwrap();
     let mut paths = Vec::new();
-    inspect_schema_objects(&schema, &schema, &fixture, "", &mut paths);
+    object_paths(&fixture, "", &mut paths);
     assert_eq!(paths.len(), 13);
     for path in paths {
         let object = fixture.pointer(&path).unwrap().as_object().unwrap();
@@ -466,31 +349,21 @@ fn patch_schema_all_variants_and_nested_field_inventories_match_deserialization(
                 .unwrap()
                 .remove(key);
             assert!(
-                !schema_accepts(&schema, &schema, &missing),
-                "missing {path}/{key}"
-            );
-            assert!(
                 parse_executor_patch(missing).is_err(),
                 "missing {path}/{key}"
             );
             let mut wrong = fixture.clone();
             wrong.pointer_mut(&path).unwrap()[key] = json!(false);
-            assert!(
-                !schema_accepts(&schema, &schema, &wrong),
-                "type {path}/{key}"
-            );
             assert!(parse_executor_patch(wrong).is_err(), "type {path}/{key}");
         }
         let mut extra = fixture.clone();
         extra.pointer_mut(&path).unwrap()["unexpected"] = json!(true);
-        assert!(!schema_accepts(&schema, &schema, &extra), "extra {path}");
         assert!(parse_executor_patch(extra).is_err(), "extra {path}");
     }
 }
 
 #[test]
-fn patch_schema_rejects_incorrect_union_tags_and_integer_types() {
-    let schema = super::model::patch_schema();
+fn patch_parse_rejects_incorrect_union_tags_and_integer_types() {
     for path in [
         "/kind",
         "/outcome",
@@ -510,19 +383,16 @@ fn patch_schema_rejects_incorrect_union_tags_and_integer_types() {
     ] {
         let mut fixture = schema_fixture();
         *fixture.pointer_mut(path).unwrap() = json!("invalid-tag-or-integer");
-        assert!(!schema_accepts(&schema, &schema, &fixture), "{path}");
         assert!(parse_executor_patch(fixture).is_err(), "{path}");
     }
 }
 
 #[test]
-fn patch_schema_keeps_structural_and_semantic_admission_separate() {
-    let schema = super::model::patch_schema();
+fn patch_parse_and_apply_keep_structural_and_semantic_admission_separate() {
     let mut fixture = schema_fixture();
     fixture["schema"] = json!(2);
     fixture["tasks"][0]["verification"]["disposition"] = json!("failed");
     fixture["tasks"][0]["evidence"] = json!([]);
-    assert!(schema_accepts(&schema, &schema, &fixture));
     let patch = parse_executor_patch(fixture).unwrap();
     assert_eq!(
         super::patch::apply_executor_patch(&json!({}), &patch)

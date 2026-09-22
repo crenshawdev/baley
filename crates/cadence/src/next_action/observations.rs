@@ -130,14 +130,35 @@ fn queue_member(path: PathBuf, phase: &str, name: &str, value: Value) -> Option<
     })
 }
 
+/// What a queue home that could not be listed contributes: nothing when it
+/// does not exist, and the home itself as unreadable for any other failure.
+pub fn unlisted_home(home: &str, error: std::io::ErrorKind) -> Option<PathBuf> {
+    (error != std::io::ErrorKind::NotFound).then(|| home.into())
+}
+
+/// The phase directories left behind by a closed cycle: the legal phase
+/// names among `names`, in numeric order. A live cycle leaves no residue.
+pub fn residue(cycle: Cycle, names: impl IntoIterator<Item = String>) -> Vec<String> {
+    if cycle != Cycle::Closed {
+        return Vec::new();
+    }
+    let mut residue: Vec<String> = names.into_iter().filter(|n| legal_phase(n)).collect();
+    residue.sort_by(|a, b| {
+        a.parse::<f64>()
+            .unwrap_or(f64::INFINITY)
+            .total_cmp(&b.parse::<f64>().unwrap_or(f64::INFINITY))
+            .then_with(|| a.cmp(b))
+    });
+    residue
+}
+
 fn queue(root: &Path) -> Queue {
     let mut queue = Queue::default();
     for home in ["phases", "deferred"] {
         let entries = match fs::read_dir(root.join(home)) {
             Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(_) => {
-                queue.unreadable.push(home.into());
+            Err(e) => {
+                queue.unreadable.extend(unlisted_home(home, e.kind()));
                 continue;
             }
         };
@@ -242,25 +263,20 @@ pub fn capture(selected: &Path, lifecycle: &Lifecycle) -> Result<Observations, D
             (phase.id, reports)
         })
         .collect();
-    let mut residue = Vec::new();
-    if lifecycle.cycle == Cycle::Closed
-        && let Ok(entries) = fs::read_dir(root.join("phases"))
-    {
-        residue = entries
-            .filter_map(Result::ok)
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| legal_phase(n))
-            .collect();
-        residue.sort_by(|a, b| {
-            a.parse::<f64>()
-                .unwrap_or(f64::INFINITY)
-                .total_cmp(&b.parse::<f64>().unwrap_or(f64::INFINITY))
-                .then_with(|| a.cmp(b))
-        });
-    }
+    let names = match lifecycle.cycle {
+        Cycle::Closed => fs::read_dir(root.join("phases"))
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Cycle::Live => Vec::new(),
+    };
     Ok(Observations {
         reports,
         queue: queue(&root),
-        residue,
+        residue: residue(lifecycle.cycle, names),
     })
 }

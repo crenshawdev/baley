@@ -1,10 +1,6 @@
-use cadence::review::{io, model, returns};
+use cadence::review::{io, model, persistence, returns};
 
-use cadence::store::model::{DECISIONS, ITEMS, STATE, Snapshot};
-use cadence::store::writer::{PlanningPolicy, Store, View};
-use cadence::store::{Error, Observed, Result, Storage};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 struct FixedClock;
 impl io::Clock for FixedClock {
     fn now(&mut self) -> u64 {
@@ -14,94 +10,22 @@ impl io::Clock for FixedClock {
 fn fixture() -> Value {
     serde_json::from_str(include_str!("fixtures/phase9/h4-returns.json")).unwrap()
 }
-fn view(records: Value, generation: u64) -> View {
-    View {
-        items: vec![],
-        decisions: vec![],
-        snapshot: Snapshot::new(generation, b"", b"", json!({"review":records})).unwrap(),
-    }
+/// The review records one snapshot holds.
+fn records(review: Value) -> Value {
+    persistence::records(&json!({"review":review})).unwrap()
 }
-fn files(view: &View) -> BTreeMap<String, Vec<u8>> {
-    [
-        (ITEMS.into(), vec![]),
-        (DECISIONS.into(), vec![]),
-        (STATE.into(), view.snapshot.render().unwrap()),
-    ]
-    .into()
+fn decide(review: Value, submitted: &returns::ReturnSubmission) -> Result<returns::ReturnDecision, returns::ReturnError> {
+    returns::decide_return(records(review), submitted, &mut FixedClock)
 }
-struct Filesystem {
-    files: BTreeMap<String, Vec<u8>>,
-    winner: Option<BTreeMap<String, Vec<u8>>>,
-    acquisitions: usize,
-    fail_sync: bool,
-}
-impl Storage for Filesystem {
-    type Prepared = (String, Vec<u8>);
-    fn acquire(&mut self) -> Result<Box<dyn Send>> {
-        self.acquisitions += 1;
-        if self.acquisitions == 3
-            && let Some(winner) = self.winner.take()
-        {
-            self.files = winner;
+/// The receipt for a new closure, read from the records it would commit.
+fn closed(decision: returns::ReturnDecision) -> returns::ReturnReceipt {
+    match decision {
+        returns::ReturnDecision::Close { records, admission, attempt } => {
+            returns::receipt(&records, &admission, &attempt, false).unwrap()
         }
-        Ok(Box::new(()))
-    }
-    fn read(&mut self, target: &str) -> Result<Observed> {
-        if ![ITEMS, DECISIONS, STATE, ".store-intent.json"].contains(&target) {
-            panic!("forbidden filesystem read: {target}");
-        }
-        let bytes = self.files.get(target).cloned();
-        Ok(Observed {
-            identity: bytes
-                .as_deref()
-                .map(cadence::store::model::digest)
-                .unwrap_or_default(),
-            bytes,
-            directory_identity: "store1".into(),
-        })
-    }
-    fn prepare(&mut self, target: &str, bytes: &[u8]) -> Result<Self::Prepared> {
-        Ok((target.into(), bytes.into()))
-    }
-    fn install(&mut self, prepared: &Self::Prepared) -> Result<()> {
-        if self.fail_sync && prepared.0 == STATE {
-            return Err(Error::Io("result-store sync failed".into()));
-        }
-        self.files.insert(prepared.0.clone(), prepared.1.clone());
-        Ok(())
-    }
-    fn discard(&mut self, _: Self::Prepared) -> Result<()> {
-        Ok(())
-    }
-    fn confirm(&mut self, target: &str, bytes: &[u8]) -> Result<Observed> {
-        let saved = self.read(target)?;
-        if saved.bytes.as_deref() != Some(bytes) {
-            return Err(Error::Conflict("bytes differ".into()));
-        }
-        Ok(saved)
-    }
-    fn resync(&mut self, target: &str, bytes: &[u8]) -> Result<Observed> {
-        self.confirm(target, bytes)
-    }
-    fn remove(&mut self, target: &str) -> Result<()> {
-        self.files.remove(target);
-        Ok(())
+        returns::ReturnDecision::Replay(_) => panic!("a pending attempt was replayed"),
     }
 }
-async fn store(view: &View, winner: Option<&View>, fail_sync: bool) -> Store {
-    Store::open(
-        Filesystem {
-            files: files(view),
-            winner: winner.map(files),
-            acquisitions: 0,
-            fail_sync,
-        },
-        PlanningPolicy,
-    )
-    .await
-    .unwrap()
-}
-
 fn submission(input: &Value, raw: Option<&[u8]>) -> returns::ReturnSubmission {
     returns::ReturnSubmission {
         identity: serde_json::from_value(input["identity"].clone()).unwrap(),
@@ -121,61 +45,42 @@ fn accepted(input: &Value) -> Value {
     records["original_sequence"] = json!(1);
     records
 }
-#[tokio::test]
-async fn accept_replay_ac46() {
+#[test]
+fn accept_replay_ac46() {
     let input = fixture();
-    let basis = view(accepted(&input), 3);
-    let store = store(&basis, None, false).await;
     let submitted = submission(&input, Some(input["F"].as_str().unwrap().as_bytes()));
-    let result = returns::accept_return(&store, submitted, &mut FixedClock)
-        .await
-        .unwrap();
+    let Ok(returns::ReturnDecision::Replay(result)) = decide(accepted(&input), &submitted) else {
+        panic!("a closed attempt was not replayed")
+    };
     assert_eq!(
         json!({"attempt":result.attempt,"findings":result.findings,"terminal":result.terminal,"replayed":result.replayed}),
         json!({"attempt":"a1","findings":{"digest":input["original"]["content"],"count":1},"terminal":"accepted","replayed":true})
     );
 }
-#[tokio::test]
-async fn accept_conflict_ac47() {
+#[test]
+fn accept_conflict_ac47() {
     let input = fixture();
-    let basis = view(accepted(&input), 3);
-    let store = store(&basis, None, false).await;
     let submitted = submission(&input, Some(input["Changed"].as_str().unwrap().as_bytes()));
     assert_eq!(
-        serde_json::to_value(
-            returns::accept_return(&store, submitted, &mut FixedClock)
-                .await
-                .unwrap_err()
-        )
-        .unwrap(),
+        serde_json::to_value(decide(accepted(&input), &submitted).err().unwrap()).unwrap(),
         json!({"code":"conflicting-return","attempt":"a1","original":"o1"})
     );
 }
-#[tokio::test]
-async fn accept_missing_return_closes_failed() {
+#[test]
+fn accept_missing_return_closes_failed() {
     let input = fixture();
-    let basis = view(input["pending"].clone(), 2);
-    let store = store(&basis, None, false).await;
-    let submitted = submission(&input, None);
-    let result = returns::accept_return(&store, submitted, &mut FixedClock)
-        .await
-        .unwrap();
+    let result = closed(decide(input["pending"].clone(), &submission(&input, None)).unwrap());
     assert_eq!(
         json!({"terminal":result.terminal,"findings":result.findings,"terminal_count":result.durable_terminal_count}),
         json!({"terminal":"failed","findings":null,"terminal_count":1})
     );
 }
-#[tokio::test]
-async fn accept_malformed_return_closes_failed() {
+#[test]
+fn accept_malformed_return_closes_failed() {
     let input = fixture();
-    let basis = view(input["pending"].clone(), 2);
-    let store = store(&basis, None, false).await;
     let submitted = submission(&input, Some(b"{\"findings\":"));
     assert_eq!(
-        returns::accept_return(&store, submitted, &mut FixedClock)
-            .await
-            .unwrap()
-            .terminal,
+        closed(decide(input["pending"].clone(), &submitted).unwrap()).terminal,
         model::AttemptState::Failed
     );
 }
