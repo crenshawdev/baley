@@ -12,3 +12,6 @@ pub mod validation;
 
 #[cfg(test)]
 mod limits_tests;
+
+#[cfg(test)]
+mod validation_tests;
