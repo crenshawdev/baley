@@ -20,7 +20,9 @@ pub trait ArtifactIo {
 #[derive(Default)]
 pub struct ArtifactFiles;
 
-fn failure(path: &Path, error: io::Error) -> InputFailure {
+/// The input failure an I/O error on `path` is: a symlink loop, a path too
+/// long or otherwise invalid, a permission denial, a non-directory, or other.
+pub(crate) fn failure(path: &Path, error: io::Error) -> InputFailure {
     let category = match error.raw_os_error() {
         Some(libc::ELOOP) => InputFailureCategory::SymlinkLoop,
         Some(libc::ENAMETOOLONG) => InputFailureCategory::InvalidPath,
@@ -38,7 +40,9 @@ fn failure(path: &Path, error: io::Error) -> InputFailure {
     }
 }
 
-fn observation<T>(path: &Path, result: io::Result<T>) -> Observation<T> {
+/// What an I/O result on `path` observed: present, absent when not found, and
+/// otherwise a failure that is never taken for absence.
+pub(crate) fn observation<T>(path: &Path, result: io::Result<T>) -> Observation<T> {
     match result {
         Ok(value) => Observation::Present(value),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Observation::Absent,
@@ -59,17 +63,7 @@ impl ArtifactIo for ArtifactFiles {
                 .map_err(|e| failure(selected, e))?
                 .join(selected)
         };
-        let mut normalized = PathBuf::new();
-        for component in absolute.components() {
-            match component {
-                Component::CurDir => {}
-                Component::ParentDir => {
-                    normalized.pop();
-                }
-                component => normalized.push(component.as_os_str()),
-            }
-        }
-        Ok(normalized)
+        Ok(normalize(&absolute))
     }
 
     fn probe_root(&mut self, root: &Path) -> Observation<()> {
@@ -121,7 +115,9 @@ impl ArtifactIo for ArtifactFiles {
     }
 }
 
-fn admitted(name: &str) -> bool {
+/// Whether a phase directory entry is a plan: `PLAN.md`, or `PLAN-` and ASCII
+/// digits and `.md`.
+pub(crate) fn admitted(name: &str) -> bool {
     name == "PLAN.md"
         || name
             .strip_prefix("PLAN-")
@@ -179,4 +175,20 @@ pub fn capture_inputs(
         declarations,
         phases,
     })
+}
+
+/// An absolute path with `.` dropped and `..` popping its parent, worked out
+/// from the text alone: no link is followed and nothing is read.
+pub(crate) fn normalize(absolute: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }

@@ -455,3 +455,29 @@ fn capture_retains_raw_bytes_and_decodes_with_replacement() {
         "Bad \u{fffd}"
     );
 }
+
+#[test]
+fn an_absent_root_reads_no_roadmap_and_declares_nothing() {
+    let mut io = MemoryIo::one();
+    io.probes.remove(Path::new("/planning"));
+    let captured = capture_inputs(Path::new("/planning"), &mut io).unwrap();
+    assert_eq!(captured.root_probe, Observation::Absent);
+    assert_eq!(captured.roadmap, Observation::Absent);
+    assert!(captured.declarations.is_none());
+    assert!(captured.phases.is_empty());
+    assert!(!io.calls.iter().any(|(operation, _)| operation == "read"), "{:?}", io.calls);
+}
+
+#[test]
+fn a_phase_listing_admits_only_plan_names_and_sorts_them() {
+    let mut io = MemoryIo::one();
+    io.lists.insert(
+        "/planning/phases/1".into(),
+        Observation::Present(vec!["PLAN-2.md".into(), "notes.md".into(), "PLAN.md".into(), "PLAN-10.md".into(), "PLAN-x.md".into()]),
+    );
+    let captured = capture_inputs(Path::new("/planning"), &mut io).unwrap();
+    assert_eq!(
+        captured.phases[0].plans,
+        Observation::Present(vec!["PLAN-10.md".into(), "PLAN-2.md".into(), "PLAN.md".into()])
+    );
+}

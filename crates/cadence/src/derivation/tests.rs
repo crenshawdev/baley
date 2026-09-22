@@ -1409,3 +1409,144 @@ fn a_phase_number_beyond_f64_range_survives_json_and_its_memo_hits() {
         Ok(MemoDisposition::Hit)
     );
 }
+
+#[test]
+fn each_io_error_is_the_failure_category_it_names_and_keeps_its_path() {
+    use std::io::{Error, ErrorKind};
+    let path = std::path::Path::new("/planning/phases/1/UAT.md");
+    for (error, category) in [
+        (Error::from_raw_os_error(libc::ELOOP), InputFailureCategory::SymlinkLoop),
+        (Error::from_raw_os_error(libc::ENAMETOOLONG), InputFailureCategory::InvalidPath),
+        (Error::from(ErrorKind::InvalidInput), InputFailureCategory::InvalidPath),
+        (Error::from(ErrorKind::PermissionDenied), InputFailureCategory::PermissionDenied),
+        (Error::from(ErrorKind::NotADirectory), InputFailureCategory::NotDirectory),
+        (Error::other("artifact is not a regular readable file"), InputFailureCategory::OtherIo),
+    ] {
+        let failure = capture::failure(path, error);
+        assert_eq!((failure.path.as_path(), failure.category), (path, category));
+    }
+}
+
+#[test]
+fn not_found_is_absent_and_no_other_error_is_ever_taken_for_absence() {
+    use std::io::{Error, ErrorKind};
+    let path = std::path::Path::new("/planning/phases/1/SUMMARY.md");
+    assert_eq!(capture::observation(path, Ok(())), Observation::Present(()));
+    assert_eq!(capture::observation::<()>(path, Err(Error::from(ErrorKind::NotFound))), Observation::Absent);
+    assert!(matches!(
+        capture::observation::<()>(path, Err(Error::from(ErrorKind::PermissionDenied))),
+        Observation::Failed(failure) if failure.category == InputFailureCategory::PermissionDenied
+    ));
+}
+
+#[test]
+fn only_plan_md_and_plan_dash_ascii_digits_md_are_plans() {
+    for name in ["PLAN.md", "PLAN-1.md", "PLAN-02.md", "PLAN-123.md"] {
+        assert!(capture::admitted(name), "{name}");
+    }
+    for name in ["plan.md", "PLAN-.md", "PLAN-1a.md", "PLAN-١.md", "PLAN-1.md.bak", "PLAN-1.MD", "PLAN-1", "SUMMARY.md"] {
+        assert!(!capture::admitted(name), "{name}");
+    }
+}
+
+#[test]
+fn a_root_is_normalized_from_its_text_dropping_dot_and_popping_dot_dot() {
+    use std::path::{Path, PathBuf};
+    for (selected, normalized) in [
+        ("/project/./.planning", "/project/.planning"),
+        ("/project/src/../.planning", "/project/.planning"),
+        ("/project/.planning/phases/..", "/project/.planning"),
+        ("/..", "/"),
+    ] {
+        assert_eq!(capture::normalize(Path::new(selected)), PathBuf::from(normalized), "{selected}");
+    }
+}
+
+#[test]
+fn the_first_disagreeing_entry_is_refused_even_when_two_entries_share_an_address() {
+    let capture = captured("## Phases\n- [ ] **Phase 3.0: First**\n- [x] **Phase 3: Second**");
+    let answer = derive(&capture).unwrap();
+    let cursor = normalize_imported_cursor(&serde_json::Value::Null).unwrap();
+    let result = check_consistency(validate_inputs(&capture).unwrap(), &answer, &cursor);
+    assert!(conflict_only(&result, "ROADMAP.md:3 entry 1", "complete", "true", "false"), "{result:?}");
+}
+
+#[test]
+fn a_disagreeing_cursor_names_its_source_the_field_and_both_values() {
+    let live = captured("## Phases\n- [ ] **Phase 3: Three**");
+    let closed = captured("## Phases\nNo active phases.");
+    for (capture, word, phase, total, field, declared, derived) in [
+        (&live, "planned", 3, 4, "status", "planned", "unplanned"),
+        (&live, "unplanned", 2, 4, "phase", "2", "3"),
+        (&closed, "complete", 99, 4, "total", "4", "0"),
+    ] {
+        let result = agreement(capture, word, phase, total);
+        assert!(conflict_only(&result, "data.cursor", field, declared, derived), "{field}: {result:?}");
+    }
+}
+
+#[test]
+fn an_intake_observed_again_must_equal_the_one_the_answer_was_made_with() {
+    let observed = IntakeObservation::from_data(&unadopted());
+    assert_eq!(recheck_intake(&observed, &observed.clone()), Ok(()));
+    let changed = IntakeObservation::from_data(&serde_json::json!({"cursor": imported_cursor("planned", 3, 4)}));
+    assert_eq!(recheck_intake(&observed, &changed), Err(DerivationError::InputsChanged));
+}
+
+/// A planning root holding one unticked phase 3, for the intake queries.
+fn one_phase_root() -> tempfile::TempDir {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("ROADMAP.md"), "## Phases\n- [ ] **Phase 3: Three**").unwrap();
+    temp
+}
+
+#[test]
+fn a_cursor_other_than_the_one_observed_cannot_be_prepared_with_that_intake() {
+    let temp = one_phase_root();
+    let selected = select_intake(&unadopted()).unwrap();
+    let other = IntakeObservation::from_data(&serde_json::json!({"cursor": imported_cursor("unplanned", 3, 4)}));
+    assert_eq!(
+        prepare_query_with_intake(temp.path(), &mut ArtifactFiles, &selected.cursor, &other).map(|_| ()),
+        Err(DerivationError::InputsChanged)
+    );
+}
+
+#[test]
+fn an_answer_made_with_intake_is_not_rechecked_without_observing_the_intake_again() {
+    let temp = one_phase_root();
+    let selected = select_intake(&unadopted()).unwrap();
+    let prepared =
+        prepare_query_with_intake(temp.path(), &mut ArtifactFiles, &selected.cursor, &selected.observation).unwrap();
+    assert_eq!(recheck_query(&prepared, &mut ArtifactFiles).map(|_| ()), Err(DerivationError::InputsChanged));
+}
+
+#[test]
+fn an_intake_that_changed_before_the_recheck_refuses_the_query() {
+    let temp = one_phase_root();
+    let selected = select_intake(&unadopted()).unwrap();
+    let changed = IntakeObservation::from_data(&serde_json::json!({"cursor": imported_cursor("unplanned", 3, 4)}));
+    assert_eq!(
+        query_with_intake(temp.path(), &mut ArtifactFiles, &selected.cursor, &selected.observation, &mut FixedIntake(changed))
+            .map(|_| ()),
+        Err(DerivationError::InputsChanged)
+    );
+}
+
+#[test]
+fn a_retired_cursor_no_longer_holds_back_a_lifecycle_that_moved_past_it() {
+    let mut capture = captured("## Phases\n- [x] **Phase 3: Three**\n- [ ] **Phase 4: Four**");
+    complete(&mut capture.phases[0]);
+    let answer = derive(&capture).unwrap();
+    assert_eq!(answer.current.map(PhaseId::address), Some("4".to_string()));
+    let retired = select_intake(&adopted()).unwrap().cursor;
+    assert!(matches!(retired, CompatibilityCursor::Unavailable(_)));
+    assert_eq!(check_consistency(validate_inputs(&capture).unwrap(), &answer, &retired), Ok(()));
+    let unretired = normalize_imported_cursor(&imported_cursor("unplanned", 3, 4)).unwrap();
+    assert!(conflict_only(
+        &check_consistency(validate_inputs(&capture).unwrap(), &answer, &unretired),
+        "data.cursor",
+        "phase",
+        "3",
+        "4"
+    ));
+}

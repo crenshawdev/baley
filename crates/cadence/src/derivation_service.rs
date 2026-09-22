@@ -59,6 +59,24 @@ fn publication_error(error: Error) -> DerivationError {
         store_error(error)
     }
 }
+/// Whether a checked query writes its memo. The store must still be the one
+/// the answer was checked against, `checked`: the same generation, integrity
+/// and intake. Then it writes only when the stored memo missed or an intake
+/// is still waiting to be adopted; otherwise it answers from the store.
+pub fn publish(
+    checked: &cadence::store::model::Snapshot,
+    latest: &cadence::store::model::Snapshot,
+    intake: &IntakeObservation,
+    disposition: MemoDisposition,
+    pending: bool,
+) -> Result<bool, DerivationError> {
+    if latest.generation != checked.generation || latest.integrity != checked.integrity {
+        return Err(DerivationError::InputsChanged);
+    }
+    recheck_intake(intake, &IntakeObservation::from_data(&latest.data))?;
+    Ok(disposition == MemoDisposition::Miss || pending)
+}
+
 struct Intake(IntakeObservation);
 impl IntakeIo for Intake {
     fn observe_intake(&mut self) -> Result<IntakeObservation, DerivationError> {
@@ -168,16 +186,14 @@ async fn checked<I: ConfigIo + Clone + Sync>(
     .await
     .map_err(|_| store_error(Error::Closed))??;
     let latest = session.derivation_view().await.map_err(store_error)?;
-    if latest.snapshot.generation != view.snapshot.generation
-        || latest.snapshot.integrity != view.snapshot.integrity
-    {
-        return Err(DerivationError::InputsChanged);
-    }
-    recheck_intake(
+    let writes = publish(
+        &view.snapshot,
+        &latest.snapshot,
         rechecked.intake().expect("selected intake").observation(),
-        &IntakeObservation::from_data(&latest.snapshot.data),
+        disposition,
+        pending,
     )?;
-    let published = if disposition == MemoDisposition::Miss || pending {
+    let published = if writes {
         let data = rechecked.adopt_memo(&view.snapshot.data, &memo)?;
         #[cfg(test)]
         {
@@ -194,4 +210,79 @@ async fn checked<I: ConfigIo + Clone + Sync>(
         latest
     };
     Ok((rechecked, published))
+}
+
+#[cfg(test)]
+mod publish_tests {
+    use super::*;
+    use cadence::store::model::Snapshot;
+    use serde_json::json;
+
+    /// A store snapshot holding `data` at `generation`.
+    fn snapshot(generation: u64, data: serde_json::Value) -> Snapshot {
+        Snapshot::new(generation, b"", b"", data).unwrap()
+    }
+
+    fn paused() -> serde_json::Value {
+        json!({"cursor": {"status": "paused"}})
+    }
+
+    #[test]
+    fn a_memo_miss_or_a_pending_intake_is_published() {
+        let checked = snapshot(3, paused());
+        let intake = IntakeObservation::from_data(&checked.data);
+        for (disposition, pending) in [(MemoDisposition::Miss, false), (MemoDisposition::Hit, true), (MemoDisposition::Miss, true)] {
+            assert_eq!(publish(&checked, &checked.clone(), &intake, disposition, pending), Ok(true), "{disposition:?} {pending}");
+        }
+    }
+
+    #[test]
+    fn a_memo_hit_with_nothing_pending_answers_without_writing() {
+        let checked = snapshot(3, paused());
+        let intake = IntakeObservation::from_data(&checked.data);
+        assert_eq!(publish(&checked, &checked.clone(), &intake, MemoDisposition::Hit, false), Ok(false));
+    }
+
+    #[test]
+    fn a_store_that_moved_on_since_the_check_refuses_as_inputs_changed() {
+        let checked = snapshot(3, paused());
+        let intake = IntakeObservation::from_data(&checked.data);
+        for latest in [snapshot(4, paused()), snapshot(3, json!({"cursor": {"status": "paused"}, "other": 1}))] {
+            assert_eq!(
+                publish(&checked, &latest, &intake, MemoDisposition::Miss, false),
+                Err(DerivationError::InputsChanged)
+            );
+        }
+    }
+
+    #[test]
+    fn an_intake_that_differs_from_the_one_checked_refuses_as_inputs_changed() {
+        let checked = snapshot(3, paused());
+        let other = IntakeObservation::from_data(&json!({"cursor": {"status": "planned"}}));
+        assert_eq!(
+            publish(&checked, &checked.clone(), &other, MemoDisposition::Hit, false),
+            Err(DerivationError::InputsChanged)
+        );
+    }
+
+    #[test]
+    fn a_publication_refused_as_stale_is_inputs_changed() {
+        assert_eq!(publication_error(Error::Conflict(STALE_SNAPSHOT.into())), DerivationError::InputsChanged);
+    }
+
+    #[test]
+    fn any_other_store_failure_is_a_store_error_naming_its_kind() {
+        for (error, kind) in [
+            (Error::Conflict("other".into()), "conflict"),
+            (Error::Policy("config unavailable".into()), "policy"),
+            (Error::Io("disk".into()), "io"),
+            (Error::Invalid("bad".into()), "invalid"),
+            (Error::Closed, "closed"),
+        ] {
+            assert_eq!(
+                publication_error(error.clone()),
+                DerivationError::Store { kind: kind.into(), detail: error.to_string() }
+            );
+        }
+    }
 }
