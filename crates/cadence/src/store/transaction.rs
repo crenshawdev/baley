@@ -1967,20 +1967,35 @@ fn validate_all<S: Storage>(
         cadence::execution::receipts::reobserve_source(&proof.project,&proof.dispatch,&request.task.task,&proof.source, process)?;
     }
     if let IntentKind::NativeAdmissionV1 {request,root_binding,inventory}=kind {
-        let observed=storage.read(&format!("phase-plan-inventory:{}",request.contract.phase))?;
-        if observed!=*inventory || storage.read(STATE)?.directory_identity!=*root_binding {
-            return Err(cadence::execution::admission::refuse(request.contract.phase,"admission-inputs-changed","contract.plans","","installed PLAN inventory or root changed before confirmation"));
-        }
+        let phase=request.contract.phase;
+        let observed=storage.read(&format!("phase-plan-inventory:{phase}"))?;
+        admission_inputs_hold(phase,inventory,root_binding,&observed,&storage.read(STATE)?)?;
     }
-    if let IntentKind::NativeExecutionDispatchV1 {phase,inventory,..}=kind
-        && storage.read(&format!("phase-plan-inventory:{phase}"))?!=*inventory
-    {
-        return Err(cadence::execution::admission::refuse(*phase,"admission-inputs-changed","contract.plans","","installed PLAN inventory changed before dispatch confirmation"));
+    if let IntentKind::NativeExecutionDispatchV1 {phase,inventory,..}=kind {
+        dispatch_inputs_hold(*phase,inventory,&storage.read(&format!("phase-plan-inventory:{phase}"))?)?;
     }
     // This entire pass finishes before any participant can change.
     for participant in participants {
         let actual = storage.read(&participant.target)?;
         participant.validate_encoded(&actual, encoding, replay)?;
+    }
+    Ok(())
+}
+
+/// A native admission confirms only against the installed PLAN inventory it
+/// was prepared from, in the store it was bound to.
+pub(crate) fn admission_inputs_hold(phase: u32, prepared: &Observed, root_binding: &str, inventory: &Observed, state: &Observed) -> Result<()> {
+    if inventory != prepared || state.directory_identity != root_binding {
+        return Err(cadence::execution::admission::refuse(phase,"admission-inputs-changed","contract.plans","","installed PLAN inventory or root changed before confirmation"));
+    }
+    Ok(())
+}
+
+/// A native dispatch confirms only against the installed PLAN inventory it was
+/// prepared from.
+pub(crate) fn dispatch_inputs_hold(phase: u32, prepared: &Observed, inventory: &Observed) -> Result<()> {
+    if inventory != prepared {
+        return Err(cadence::execution::admission::refuse(phase,"admission-inputs-changed","contract.plans","","installed PLAN inventory changed before dispatch confirmation"));
     }
     Ok(())
 }

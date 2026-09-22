@@ -261,3 +261,42 @@ fn a_statement_at_material_the_green_run_never_recorded_is_missing() {
         vec!["check/A".to_owned()]
     );
 }
+
+// The rule is what a caller reads to learn which check to go back to.
+#[test]
+fn a_refused_inspection_names_the_owner_inspection_rule_and_its_check() {
+    let mut statement = statement("check/A");
+    statement.approval.submission.evidence = vec!["red-check/A".into()];
+    let crate::store::Error::Invalid(message) = validate_inspection(&honest_records("check/A"), &task(), &statement).unwrap_err() else {
+        panic!("an inspection refusal is a located invalid request");
+    };
+    let diagnostic: crate::plan::model::Diagnostic = serde_json::from_str(message.strip_prefix("plan-refusal:").unwrap()).unwrap();
+    assert_eq!((diagnostic.rule.as_str(), diagnostic.slot.as_str(), diagnostic.id.as_deref()), ("owner-inspection", "statement", Some("check/A")));
+}
+
+#[test]
+fn a_statement_the_owner_did_not_approve_is_not_eligible() {
+    let mut statement = statement("check/A");
+    statement.approval.approved = false;
+    let evidence = ["red-check/A".to_owned(), "green-check/A".to_owned()];
+    assert!(!owner_eligible(&statement, &check("check/A"), TEST_DIGEST, &evidence));
+}
+
+// The executor cannot stand in for the owner: an attest request carries the
+// owner's own approval, and a flag or a role it sets for itself is refused.
+#[test]
+fn an_attest_request_cannot_replace_the_owners_approval_with_a_flag_or_a_role() {
+    use super::receipts::OwnerApply;
+    let request = |statement: serde_json::Value| serde_json::json!({"operation":"execution-owner-attest","request":{
+        "request_id":"executor","task":task(),"attempt":"attempt","expected_version":4,"statement":statement}});
+    let honest = serde_json::to_value(statement("check/A")).unwrap();
+    assert!(serde_json::from_value::<OwnerApply>(request(honest.clone())).is_ok());
+    let mut unapproved = honest.clone();
+    unapproved.as_object_mut().unwrap().remove("approval");
+    unapproved["no_stub"] = true.into();
+    let mut self_assigned = honest;
+    self_assigned["role"] = "owner".into();
+    for statement in [unapproved, self_assigned] {
+        assert!(serde_json::from_value::<OwnerApply>(request(statement.clone())).is_err(), "{statement}");
+    }
+}

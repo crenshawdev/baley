@@ -499,27 +499,9 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             format!("Continue dispatch {} with execution-authorize or retire it", interruption.id),
             Some(interruption.id), Some(located)).await;
     }
-    if lifecycle.cycle != Cycle::Live {
-        return record_refusal(
-            &session,
-            &view,
-            phase,
-            BoundaryTool::CadenceQuery,
-            "query-next",
-            &raw_request,
-            "closed-cycle",
-            "execution requires the live planning cycle",
-            None,
-        )
-        .await;
-    }
-    let phase_record = match lifecycle
-        .phases
-        .iter()
-        .find(|record| record.id.number() == f64::from(phase))
-    {
-        Some(record) => record.clone(),
-        None => {
+    let phase_record = match executable_phase(lifecycle, phase) {
+        Ok(record) => record,
+        Err((code, reason)) => {
             return record_refusal(
                 &session,
                 &view,
@@ -527,47 +509,13 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 BoundaryTool::CadenceQuery,
                 "query-next",
                 &raw_request,
-                "unknown-phase",
-                "the lifecycle does not contain the requested phase",
+                code,
+                reason,
                 None,
             )
             .await;
         }
     };
-    if lifecycle
-        .current
-        .is_none_or(|current| current.number() != f64::from(phase))
-    {
-        return record_refusal(
-            &session,
-            &view,
-            phase,
-            BoundaryTool::CadenceQuery,
-            "query-next",
-            &raw_request,
-            "phase-not-current",
-            "the requested phase is not the derived current phase",
-            None,
-        )
-        .await;
-    }
-    if !matches!(
-        phase_record.status,
-        LifecycleStatus::Planned | LifecycleStatus::Executed
-    ) {
-        return record_refusal(
-            &session,
-            &view,
-            phase,
-            BoundaryTool::CadenceQuery,
-            "query-next",
-            &raw_request,
-            "lifecycle-refusal",
-            format!("phase status {:?} cannot execute", phase_record.status),
-            None,
-        )
-        .await;
-    }
     if let Err(reason) =
         execution_ready(&root,&view.snapshot.data, phase)
     {
@@ -685,34 +633,23 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
         }
         // A native phase authorizes continuation before any replay; see below.
         if let Some(active) = occurrence.active.as_ref().filter(|_| !native) {
-            let Some(plan) = plans.values.iter().find(|plan| plan.plan == active.plan) else {
-                return record_refusal(
-                    &session,
-                    &view,
-                    phase,
-                    BoundaryTool::CadenceQuery,
-                    "query-next",
-                    &raw_request,
-                    "active-plan-missing",
-                    "the active dispatch plan is no longer admitted",
-                    Some(active.id.clone()),
-                )
-                .await;
+            let plan = match active_plan(active, &plans.values) {
+                Ok(plan) => plan,
+                Err((code, reason)) => {
+                    return record_refusal(
+                        &session,
+                        &view,
+                        phase,
+                        BoundaryTool::CadenceQuery,
+                        "query-next",
+                        &raw_request,
+                        code,
+                        reason,
+                        Some(active.id.clone()),
+                    )
+                    .await;
+                }
             };
-            if active.plan_fingerprint != plan.fingerprint {
-                return record_refusal(
-                    &session,
-                    &view,
-                    phase,
-                    BoundaryTool::CadenceQuery,
-                    "query-next",
-                    &raw_request,
-                    "plan-changed",
-                    "the active plan bytes differ from the admitted fingerprint",
-                    Some(active.id.clone()),
-                )
-                .await;
-            }
             let project = match root.parent() {
                 Some(project) => project,
                 None => {
@@ -845,9 +782,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             .await;
         }
     };
-    let suite_repair_approved = matches!(continuation.decision,
-        ContinuationDecision::RepairSuite { approved: true, .. });
-    if !matches!(continuation.decision, ContinuationDecision::Continue { .. }) && !suite_repair_approved {
+    if !may_continue(&continuation.decision) {
         view = match session.derivation_view().await {
             Ok(latest) => latest,
             Err(error) => return store_refusal(phase, error),
@@ -1281,12 +1216,10 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
                     "owner selected plan {} while plan {} has the active dispatch",
                     selected_plan.expect("selected plan").get(), active.plan), Some(active.id.clone())).await;
             }
-            let Some(plan) = plans.values.iter().find(|plan| plan.plan == active.plan) else {
-                return refuse("active-plan-missing", "the active dispatch plan is no longer admitted".into(), Some(active.id.clone())).await;
+            let plan = match active_plan(active, &plans.values) {
+                Ok(plan) => plan,
+                Err((code, reason)) => return refuse(code, reason, Some(active.id.clone())).await,
             };
-            if active.plan_fingerprint != plan.fingerprint {
-                return refuse("plan-changed", "the active plan bytes differ from the admitted fingerprint".into(), Some(active.id.clone())).await;
-            }
             if active.expected_execution_version != occurrence.version || occurrence.version == 0 {
                 return refuse("invalid-active-dispatch", "active dispatch execution version is inconsistent".into(), Some(active.id.clone())).await;
             }
@@ -1710,7 +1643,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             )
             .await;
         };
-        let Some(plan) = plans.values.iter().find(|plan| plan.plan == active.plan) else {
+        if let Err((code, reason)) = active_plan(active, &plans.values) {
             return record_refusal(
                 &session,
                 &view,
@@ -1718,22 +1651,8 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                 BoundaryTool::CadenceApply,
                 "apply-executor-patch",
                 &request,
-                "active-plan-missing",
-                "the active dispatch plan is no longer admitted",
-                Some(patch.dispatch_id.clone()),
-            )
-            .await;
-        };
-        if active.plan_fingerprint != plan.fingerprint {
-            return record_refusal(
-                &session,
-                &view,
-                phase,
-                BoundaryTool::CadenceApply,
-                "apply-executor-patch",
-                &request,
-                "plan-changed",
-                "the active plan bytes differ from the admitted fingerprint",
+                code,
+                reason,
                 Some(patch.dispatch_id.clone()),
             )
             .await;
@@ -2236,19 +2155,24 @@ async fn reobserve<I: ConfigIo>(
 async fn git_head(project: &Path) -> Result<String, String> {
     let project = project.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        let output = git_output(
+        head_sha(&git_output(
             &project,
             &["rev-parse", "--verify", "HEAD"],
             &mut cadence::process::System,
-        )?;
-        let sha = output.trim().to_owned();
-        if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err("Git HEAD is not a full commit SHA".into());
-        }
-        Ok(sha)
+        )?)
     })
     .await
     .map_err(|_| "Git observation task closed".to_owned())?
+}
+
+/// The commit `git rev-parse --verify HEAD` printed, when it is a full
+/// 40-digit hexadecimal SHA.
+fn head_sha(output: &str) -> Result<String, String> {
+    let sha = output.trim();
+    if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Git HEAD is not a full commit SHA".into());
+    }
+    Ok(sha.to_owned())
 }
 
 async fn validate_commits(
@@ -2281,88 +2205,117 @@ fn validate_commits_blocking(
     head: &str,
     process: &mut (dyn Process + Send),
 ) -> Result<BTreeMap<String, Vec<String>>, (&'static str, String)> {
-    let completed = patch.tasks.iter().filter_map(|task| match task {
-        cadence::execution::model::TaskOutcome::Completed {
-            task_id, commit, ..
-        } => Some((task_id, commit)),
-        cadence::execution::model::TaskOutcome::Blocked { .. }
-        | cadence::execution::model::TaskOutcome::NotRun { .. } => None,
-    });
-    let mut prior = active.base_sha.as_str();
+    judge_commits(&active.base_sha, &observe_commits(project, active, patch, head, process))
+}
+
+/// What Git reports about one completed task's commit, each answer as it
+/// came back.
+#[derive(Clone, Debug)]
+pub(crate) struct CommitFacts {
+    pub(crate) task_id: String,
+    pub(crate) commit: String,
+    pub(crate) exists: Result<(), String>,
+    /// Whether the commit before it in task order, the dispatch base for the
+    /// first, is an ancestor of it.
+    pub(crate) follows_prior: Result<bool, String>,
+    /// Whether the commit is an ancestor of the current HEAD.
+    pub(crate) under_head: Result<bool, String>,
+    pub(crate) signature: Result<(), String>,
+    pub(crate) subject: Result<String, String>,
+    pub(crate) paths: Result<Vec<String>, String>,
+}
+
+/// Ask Git about every completed task's commit, in task order. Nothing is
+/// judged here, and every answer is kept, failures included.
+fn observe_commits(
+    project: &Path,
+    active: &ActiveDispatch,
+    patch: &ExecutorPatch,
+    head: &str,
+    process: &mut (dyn Process + Send),
+) -> Vec<CommitFacts> {
+    let mut prior = active.base_sha.clone();
+    let mut facts = Vec::new();
+    for task in &patch.tasks {
+        let cadence::execution::model::TaskOutcome::Completed { task_id, commit, .. } = task else {
+            continue;
+        };
+        facts.push(CommitFacts {
+            task_id: task_id.clone(),
+            commit: commit.clone(),
+            exists: git_success(project, &["cat-file", "-e", &format!("{commit}^{{commit}}")], process),
+            follows_prior: git_status(project, &["merge-base", "--is-ancestor", &prior, commit], process),
+            under_head: git_status(project, &["merge-base", "--is-ancestor", commit, head], process),
+            signature: git_success(project, &["verify-commit", commit], process),
+            subject: git_output(project, &["show", "-s", "--format=%s", commit], process),
+            paths: observe_commit_paths(project, commit, process),
+        });
+        prior = commit.clone();
+    }
+    facts
+}
+
+/// Every path a commit changes against each of its parents. A combined merge
+/// diff omits paths changed against only one parent and is insufficient
+/// lease evidence, so every parent is compared explicitly.
+fn observe_commit_paths(project: &Path, commit: &str, process: &mut (dyn Process + Send)) -> Result<Vec<String>, String> {
+    let parents = git_output(project, &["show", "-s", "--format=%P", commit], process)?;
+    let parents = parents.split_whitespace().collect::<Vec<_>>();
+    let mut observed = BTreeSet::new();
+    for parent in parents.iter().copied().map(Some).chain(parents.is_empty().then_some(None)) {
+        let mut args = vec![
+            "diff-tree",
+            "--root",
+            "--no-commit-id",
+            "--name-status",
+            "-r",
+            "-z",
+            "-M",
+            "--no-ext-diff",
+            "--no-textconv",
+        ];
+        if let Some(parent) = parent {
+            args.push(parent);
+        }
+        args.extend([commit, "--"]);
+        observed.extend(read_name_status(&git_output_bytes(project, &args, process)?)?);
+    }
+    Ok(observed.into_iter().collect())
+}
+
+/// Whether the completed tasks' commits hold up, in task order, and each
+/// one's changed paths. The first failure is the answer: a commit completing
+/// two tasks, one Git cannot read, one not strictly after the commit before it
+/// or not under HEAD, an unsigned one, or one whose subject is not
+/// conventional or does not name its task.
+pub(crate) fn judge_commits(
+    base: &str,
+    commits: &[CommitFacts],
+) -> Result<BTreeMap<String, Vec<String>>, (&'static str, String)> {
+    let mut prior = base;
     let mut seen = BTreeSet::new();
     let mut paths = BTreeMap::new();
-    for (task_id, commit) in completed {
-        if !seen.insert(commit.clone()) {
-            return Err((
-                "reused-commit",
-                "one commit cannot complete two tasks".into(),
-            ));
+    for facts in commits {
+        let commit = &facts.commit;
+        if !seen.insert(commit) {
+            return Err(("reused-commit", "one commit cannot complete two tasks".into()));
         }
-        git_success(
-            project,
-            &["cat-file", "-e", &format!("{commit}^{{commit}}")],
-            process,
-        )
-        .map_err(|reason| ("missing-commit", reason))?;
-        if commit == prior
-            || !git_status(project, &["merge-base", "--is-ancestor", prior, commit], process)
-                .map_err(|reason| ("git-order", reason))?
-        {
-            return Err((
-                "git-order",
-                format!("commit {commit} is not strictly after {prior}"),
-            ));
+        facts.exists.clone().map_err(|reason| ("missing-commit", reason))?;
+        if commit == prior || !facts.follows_prior.clone().map_err(|reason| ("git-order", reason))? {
+            return Err(("git-order", format!("commit {commit} is not strictly after {prior}")));
         }
-        if !git_status(project, &["merge-base", "--is-ancestor", commit, head], process)
-            .map_err(|reason| ("git-order", reason))?
-        {
-            return Err((
-                "git-order",
-                format!("commit {commit} is not an ancestor of current HEAD"),
-            ));
+        if !facts.under_head.clone().map_err(|reason| ("git-order", reason))? {
+            return Err(("git-order", format!("commit {commit} is not an ancestor of current HEAD")));
         }
-        git_success(project, &["verify-commit", commit], process)
-            .map_err(|reason| ("bad-signature", reason))?;
-        let subject = git_output(project, &["show", "-s", "--format=%s", commit], process)
-            .map_err(|reason| ("commit-subject", reason))?;
-        if !conventional_subject(subject.trim(), task_id) {
+        facts.signature.clone().map_err(|reason| ("bad-signature", reason))?;
+        let subject = facts.subject.clone().map_err(|reason| ("commit-subject", reason))?;
+        if !conventional_subject(subject.trim(), &facts.task_id) {
             return Err((
                 "commit-subject",
-                format!("commit {commit} subject is not conventional or does not name {task_id}"),
+                format!("commit {commit} subject is not conventional or does not name {}", facts.task_id),
             ));
         }
-        // Compare every parent explicitly. A combined merge diff omits paths
-        // changed against only one parent and is insufficient lease evidence.
-        let parents = git_output(project, &["show", "-s", "--format=%P", commit], process)
-            .map_err(|reason| ("commit-paths", reason))?;
-        let parents = parents.split_whitespace().collect::<Vec<_>>();
-        let mut observed = BTreeSet::new();
-        for parent in parents
-            .iter()
-            .copied()
-            .map(Some)
-            .chain(parents.is_empty().then_some(None))
-        {
-            let mut args = vec![
-                "diff-tree",
-                "--root",
-                "--no-commit-id",
-                "--name-status",
-                "-r",
-                "-z",
-                "-M",
-                "--no-ext-diff",
-                "--no-textconv",
-            ];
-            if let Some(parent) = parent {
-                args.push(parent);
-            }
-            args.extend([commit, "--"]);
-            let output =
-                git_output_bytes(project, &args, process).map_err(|reason| ("commit-paths", reason))?;
-            observed.extend(read_name_status(&output).map_err(|reason| ("commit-paths", reason))?);
-        }
-        paths.insert(commit.clone(), observed.into_iter().collect());
+        paths.insert(commit.clone(), facts.paths.clone().map_err(|reason| ("commit-paths", reason))?);
         prior = commit;
     }
     Ok(paths)
@@ -2662,6 +2615,49 @@ fn public_request_digest(tool: BoundaryTool, raw: Option<&Value>) -> String {
     )
 }
 
+/// Whether the derived lifecycle lets `phase` execute: a live cycle, a phase it
+/// knows, the current one, and planned or executed. Answers the phase's record,
+/// or the refusal's code and reason.
+pub(crate) fn executable_phase(
+    lifecycle: &cadence::derivation::Lifecycle,
+    phase: u32,
+) -> Result<cadence::derivation::PhaseRecord, (&'static str, String)> {
+    if lifecycle.cycle != Cycle::Live {
+        return Err(("closed-cycle", "execution requires the live planning cycle".into()));
+    }
+    let Some(record) = lifecycle.phases.iter().find(|record| record.id.number() == f64::from(phase)) else {
+        return Err(("unknown-phase", "the lifecycle does not contain the requested phase".into()));
+    };
+    if lifecycle.current.is_none_or(|current| current.number() != f64::from(phase)) {
+        return Err(("phase-not-current", "the requested phase is not the derived current phase".into()));
+    }
+    if !matches!(record.status, LifecycleStatus::Planned | LifecycleStatus::Executed) {
+        return Err(("lifecycle-refusal", format!("phase status {:?} cannot execute", record.status)));
+    }
+    Ok(record.clone())
+}
+
+/// The plan a retained active dispatch is re-issued from: still admitted, and
+/// with the bytes the dispatch was admitted on.
+pub(crate) fn active_plan<'a>(
+    active: &ActiveDispatch,
+    plans: &'a [ExecutionPlan],
+) -> Result<&'a ExecutionPlan, (&'static str, String)> {
+    let Some(plan) = plans.iter().find(|plan| plan.plan == active.plan) else {
+        return Err(("active-plan-missing", "the active dispatch plan is no longer admitted".into()));
+    };
+    if active.plan_fingerprint != plan.fingerprint {
+        return Err(("plan-changed", "the active plan bytes differ from the admitted fingerprint".into()));
+    }
+    Ok(plan)
+}
+
+/// Whether a continuation decision lets new work be dispatched: an accepted
+/// continuation, or an approved plan suite repair.
+pub(crate) fn may_continue(decision: &ContinuationDecision) -> bool {
+    matches!(decision, ContinuationDecision::Continue { .. } | ContinuationDecision::RepairSuite { approved: true, .. })
+}
+
 /// A continuation refusal names the answer that is missing and the call that
 /// supplies it. Without this the caller learns only that something is pending
 /// and has to read `next_action::continuation` to find out what.
@@ -2720,7 +2716,22 @@ async fn begin<I: ConfigIo + Clone + Sync>(
     Ok((root, session, view))
 }
 
-fn dispatch_phase(view: &View, id: &str) -> Result<Option<u32>, Failure> {
+/// The phase whose scope records a malformed request: an apply naming a
+/// dispatch the store knows goes under that dispatch's phase, and anything
+/// else under the root refusal scope, phase 0.
+pub(crate) fn refusal_phase(view: &View, tool: BoundaryTool, raw: Option<&Value>) -> Result<u32, Failure> {
+    if tool != BoundaryTool::CadenceApply {
+        return Ok(0);
+    }
+    match raw.and_then(|value| value.get("dispatch_id")).and_then(Value::as_str) {
+        Some(id) => Ok(dispatch_phase(view, id)?.unwrap_or(0)),
+        None => Ok(0),
+    }
+}
+
+/// The phase whose occurrence holds dispatch `id`, active or received. A
+/// dispatch held by two occurrences means the store is unsound.
+pub(crate) fn dispatch_phase(view: &View, id: &str) -> Result<Option<u32>, Failure> {
     let execution = execution_snapshot(view).map_err(|_| Failure::Store)?;
     let matches = execution
         .occurrences
@@ -2773,18 +2784,7 @@ pub async fn refuse_arguments<I: ConfigIo + Clone + Sync>(
     failure: ValidationFailure,
 ) -> Answer {
     let (_, session, view) = begin(factory, root).await?;
-    let phase = if tool == BoundaryTool::CadenceApply {
-        match raw
-            .as_ref()
-            .and_then(|value| value.get("dispatch_id"))
-            .and_then(Value::as_str)
-        {
-            Some(id) => dispatch_phase(&view, id)?.unwrap_or(0),
-            None => 0,
-        }
-    } else {
-        0
-    };
+    let phase = refusal_phase(&view, tool, raw.as_ref())?;
     if let Some(answer) = terminal_answer(&session, &view, &scope(phase)).await? {
         return Ok(answer);
     }
@@ -3212,39 +3212,26 @@ mod schema_tests {
     }
 }
 
+/// What the review handoff does with one completed receipt.
 #[derive(Debug, PartialEq)]
-enum ExecutionReviewDecision {
+pub(crate) enum ExecutionReviewDecision {
+    /// Nothing: the diff gate is off, so no material is gathered.
     Skip,
+    /// Answer from the replay saved for this receipt.
     Replay {
         fire: String,
         attempt: String,
     },
+    /// Gather the receipt's material and ask review to admit it at this gate.
     Admit {
-        request: Value,
         gate: cadence::review::model::Gate,
     },
 }
 
-#[cfg(test)]
-struct Gap158AdmissionStub {
-    calls: std::sync::Mutex<Vec<Value>>,
-    answer: std::sync::Mutex<Option<Envelope<super::review_service::Output>>>,
-}
-
-#[cfg(test)]
-struct Gap158MaterialStub {
-    calls: std::sync::Mutex<Vec<Value>>,
-    material: std::sync::Mutex<Option<cadence::rail::risk::MaterialIdentity>>,
-}
-
-#[cfg(test)]
-tokio::task_local! {
-    static GAP158_ADMISSION_STUB: std::sync::Arc<Gap158AdmissionStub>;
-    static GAP158_MATERIAL_STUB: std::sync::Arc<Gap158MaterialStub>;
-}
-
-fn execution_review_decision(
-    completed: Option<Value>,
+/// A saved replay answers first. Otherwise the resolved diff gate decides:
+/// off skips the receipt before any material is gathered, anything else is
+/// admitted.
+pub(crate) fn execution_review_decision(
     gate: Option<cadence::review::model::Gate>,
     saved: Option<&Value>,
 ) -> cadence::store::Result<ExecutionReviewDecision> {
@@ -3260,10 +3247,8 @@ fn execution_review_decision(
                 .into(),
         });
     }
-    match (completed, gate) {
-        (Some(request), Some(gate)) if gate != cadence::review::model::Gate::Off => {
-            Ok(ExecutionReviewDecision::Admit { request, gate })
-        }
+    match gate {
+        Some(gate) if gate != cadence::review::model::Gate::Off => Ok(ExecutionReviewDecision::Admit { gate }),
         _ => Ok(ExecutionReviewDecision::Skip),
     }
 }
@@ -3313,41 +3298,39 @@ pub async fn review_handoff<I: ConfigIo + Clone + Sync>(
                 &session.derivation_view().await?.snapshot.data,
             )?;
             let saved = records.get("replays").and_then(|r| r.get(&key));
-            let mut supplied = None;
-            let decision = if saved.is_some() {
-                execution_review_decision(None, None, saved)?
-            } else {
-                let generation = session.config()?;
-                let route = super::config_service::route_at(
-                    &generation,
-                    &super::config_service::RouteRequest {
-                        role: "cad-reviewer".into(),
-                        phase: std::num::NonZeroU32::new(phase),
-                        plan: std::num::NonZeroU32::new(receipt.outcome.plan),
-                        attempt: None,
-                    },
-                    root,
-                )?;
-                let policy = route
-                    .policy
-                    .triggers
-                    .get("diff")
-                    .ok_or_else(|| Error::Policy("missing diff policy".into()))?;
-                let gate = serde_json::from_value(json!(policy.gate))?;
-                if gate == cadence::review::model::Gate::Off {
-                    continue;
+            // A saved replay needs no configuration; otherwise the diff gate is
+            // resolved first, so a gate that is off gathers no material.
+            let resolved = match saved {
+                Some(_) => None,
+                None => {
+                    let generation = session.config()?;
+                    let route = super::config_service::route_at(
+                        &generation,
+                        &super::config_service::RouteRequest {
+                            role: "cad-reviewer".into(),
+                            phase: std::num::NonZeroU32::new(phase),
+                            plan: std::num::NonZeroU32::new(receipt.outcome.plan),
+                            attempt: None,
+                        },
+                        root,
+                    )?;
+                    let policy = route
+                        .policy
+                        .triggers
+                        .get("diff")
+                        .ok_or_else(|| Error::Policy("missing diff policy".into()))?;
+                    let gate: cadence::review::model::Gate = serde_json::from_value(json!(policy.gate))?;
+                    Some((gate, generation, route))
                 }
-                #[cfg(test)]
-                let material = match GAP158_MATERIAL_STUB.try_with(|stub| {
-                    stub.calls.lock().unwrap().push(json!({
-                        "phase":phase,
-                        "plan":receipt.outcome.plan,
-                        "dispatch":receipt.dispatch_id
-                    }));
-                    stub.material.lock().unwrap().take()
-                }) {
-                    Ok(Some(material)) => material,
-                    _ => risk_material(
+            };
+            let fire = match execution_review_decision(resolved.as_ref().map(|(gate, ..)| gate.clone()), saved)? {
+                ExecutionReviewDecision::Skip => continue,
+                ExecutionReviewDecision::Replay { fire, .. } => fire,
+                ExecutionReviewDecision::Admit { gate } => {
+                    let (_, generation, route) = resolved.ok_or_else(|| {
+                        Error::Invalid("missing execution review resolution".into())
+                    })?;
+                    let material = risk_material(
                         &view,
                         root,
                         phase,
@@ -3355,68 +3338,16 @@ pub async fn review_handoff<I: ConfigIo + Clone + Sync>(
                         receipt.outcome.plan,
                         &receipt.dispatch_id,
                     )
-                    .map_err(Error::Invalid)?,
-                };
-                #[cfg(not(test))]
-                let material = risk_material(
-                    &view,
-                    root,
-                    phase,
-                    &scope.occurrence,
-                    receipt.outcome.plan,
-                    &receipt.dispatch_id,
-                )
-                .map_err(Error::Invalid)?;
-                let cadence::rail::risk::MaterialIdentity::Committed { base_id, head_id } =
-                    material
-                else {
-                    return Err(Error::Invalid(
-                        "completed execution requires a committed range".into(),
-                    ));
-                };
-                let request = json!({"replay_key":key,"caller":"execute","trigger":"diff","specialist":null,
-                    "project":scope.project,"cycle":scope.cycle,"home":{"kind":"phase","id":phase.to_string()},
-                    "discriminator":scope.occurrence,"phase":phase,"plan":receipt.outcome.plan,
-                    "anchor":receipt.transition_id,"round":1,"target":{"kind":"committed-range","base":base_id,"head":head_id}});
-                supplied = Some((generation, route));
-                execution_review_decision(Some(request), Some(gate), None)?
-            };
-            let fire = match decision {
-                ExecutionReviewDecision::Skip => continue,
-                ExecutionReviewDecision::Replay { fire, .. } => fire,
-                ExecutionReviewDecision::Admit { request, gate } => {
-                    let (generation, route) = supplied.take().ok_or_else(|| {
-                        Error::Invalid("missing execution review resolution".into())
-                    })?;
-                    #[cfg(test)]
-                    let stubbed = GAP158_ADMISSION_STUB
-                        .try_with(|stub| {
-                            stub.calls.lock().unwrap().push(json!({
-                                "gate":gate,
-                                "routing":{"answer":route.choice.agent}
-                            }));
-                            stub.answer.lock().unwrap().take()
-                        })
-                        .ok()
-                        .flatten();
-                    #[cfg(test)]
-                    let answer = match stubbed {
-                        Some(answer) => answer,
-                        None => {
-                            super::review_service::admit(
-                                factory,
-                                root,
-                                request,
-                                super::review_service::AdmissionResolution::Supplied {
-                                    generation: Box::new(generation),
-                                    route: Box::new(route),
-                                    gate,
-                                },
-                            )
-                            .await?
-                        }
+                    .map_err(Error::Invalid)?;
+                    let cadence::rail::risk::MaterialIdentity::Committed { base_id, head_id } = material else {
+                        return Err(Error::Invalid(
+                            "completed execution requires a committed range".into(),
+                        ));
                     };
-                    #[cfg(not(test))]
+                    let request = json!({"replay_key":key,"caller":"execute","trigger":"diff","specialist":null,
+                        "project":scope.project,"cycle":scope.cycle,"home":{"kind":"phase","id":phase.to_string()},
+                        "discriminator":scope.occurrence,"phase":phase,"plan":receipt.outcome.plan,
+                        "anchor":receipt.transition_id,"round":1,"target":{"kind":"committed-range","base":base_id,"head":head_id}});
                     let answer = super::review_service::admit(
                         factory,
                         root,
@@ -3480,17 +3411,10 @@ mod gap151_boundary_tests {
     use cadence::review::model::Gate;
 
     #[test]
-    fn gap151_completed_diff_requests_admission() {
-        let request = json!({"dispatch":"d1","caller":"execute","trigger":"diff","target":{"base":"b1","head":"h1"}});
-        let decision =
-            execution_review_decision(Some(request), Some(Gate::Advisory), None).unwrap();
-        let ExecutionReviewDecision::Admit { request, gate } = decision else {
-            panic!("admission required")
-        };
-        assert_eq!(gate, Gate::Advisory);
+    fn gap151_a_completed_receipt_under_a_live_gate_is_admitted_at_that_gate() {
         assert_eq!(
-            request,
-            json!({"dispatch":"d1","caller":"execute","trigger":"diff","target":{"base":"b1","head":"h1"}})
+            execution_review_decision(Some(Gate::Advisory), None).unwrap(),
+            ExecutionReviewDecision::Admit { gate: Gate::Advisory }
         );
     }
 
@@ -3498,12 +3422,7 @@ mod gap151_boundary_tests {
     fn gap151_replay_precedes_changed_policy_and_material() {
         let saved = json!({"replay_key":"k1","fire":"f1","attempt":"a1"});
         assert_eq!(
-            execution_review_decision(
-                Some(json!({"target":{"base":"other","head":"changed"}})),
-                Some(Gate::Off),
-                Some(&saved)
-            )
-            .unwrap(),
+            execution_review_decision(Some(Gate::Off), Some(&saved)).unwrap(),
             ExecutionReviewDecision::Replay {
                 fire: "f1".into(),
                 attempt: "a1".into()
@@ -3512,15 +3431,454 @@ mod gap151_boundary_tests {
     }
 
     #[test]
-    fn gap151_absent_artifact_and_fresh_off_admit_nothing() {
+    fn gap151_an_off_or_unresolved_gate_skips_the_receipt_before_any_material() {
+        assert_eq!(execution_review_decision(Some(Gate::Off), None).unwrap(), ExecutionReviewDecision::Skip);
+        assert_eq!(execution_review_decision(None, None).unwrap(), ExecutionReviewDecision::Skip);
+    }
+
+    #[test]
+    fn a_saved_replay_without_its_fire_or_attempt_is_refused() {
+        for saved in [json!({"attempt":"a1"}), json!({"fire":"f1"})] {
+            assert!(matches!(execution_review_decision(Some(Gate::Advisory), Some(&saved)), Err(Error::Invalid(_))), "{saved}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod commit_tests {
+    use super::*;
+
+    const BASE: &str = "0000000000000000000000000000000000000000";
+
+    /// A commit Git reports as present, after the one before it, under HEAD,
+    /// signed, with a conventional subject naming its task, changing `paths`.
+    fn good(task: &str, commit: &str, paths: &[&str]) -> CommitFacts {
+        CommitFacts {
+            task_id: task.into(),
+            commit: commit.into(),
+            exists: Ok(()),
+            follows_prior: Ok(true),
+            under_head: Ok(true),
+            signature: Ok(()),
+            subject: Ok(format!("feat(exec): do the work for {task}")),
+            paths: Ok(paths.iter().map(|path| path.to_string()).collect()),
+        }
+    }
+
+    fn commit(n: char) -> String {
+        n.to_string().repeat(40)
+    }
+
+    fn refused(commits: &[CommitFacts]) -> (&'static str, String) {
+        judge_commits(BASE, commits).unwrap_err()
+    }
+
+    #[test]
+    fn commits_that_hold_up_answer_each_ones_changed_paths() {
+        let (a, b) = (commit('a'), commit('b'));
         assert_eq!(
-            execution_review_decision(None, Some(Gate::Advisory), None).unwrap(),
-            ExecutionReviewDecision::Skip
+            judge_commits(BASE, &[good("P1-T1", &a, &["src/a.rs"]), good("P1-T2", &b, &["src/b.rs", "src/c.rs"])]),
+            Ok(BTreeMap::from([
+                (a, vec!["src/a.rs".to_string()]),
+                (b, vec!["src/b.rs".to_string(), "src/c.rs".to_string()]),
+            ]))
+        );
+    }
+
+    #[test]
+    fn one_commit_completing_two_tasks_is_refused() {
+        let a = commit('a');
+        assert_eq!(
+            refused(&[good("P1-T1", &a, &[]), good("P1-T2", &a, &[])]),
+            ("reused-commit", "one commit cannot complete two tasks".to_string())
+        );
+    }
+
+    #[test]
+    fn a_commit_git_cannot_read_is_missing() {
+        let mut missing = good("P1-T1", &commit('a'), &[]);
+        missing.exists = Err("git cat-file failed".into());
+        assert_eq!(refused(&[missing]), ("missing-commit", "git cat-file failed".to_string()));
+    }
+
+    #[test]
+    fn a_commit_that_is_the_base_or_not_after_the_one_before_it_is_out_of_order() {
+        let a = commit('a');
+        let mut late = good("P1-T2", &commit('b'), &[]);
+        late.follows_prior = Ok(false);
+        assert_eq!(refused(&[good("P1-T1", BASE, &[])]), ("git-order", format!("commit {BASE} is not strictly after {BASE}")));
+        assert_eq!(
+            refused(&[good("P1-T1", &a, &[]), late]),
+            ("git-order", format!("commit {} is not strictly after {a}", commit('b')))
+        );
+    }
+
+    #[test]
+    fn a_commit_not_under_the_current_head_is_out_of_order() {
+        let mut detached = good("P1-T1", &commit('a'), &[]);
+        detached.under_head = Ok(false);
+        assert_eq!(refused(&[detached]), ("git-order", format!("commit {} is not an ancestor of current HEAD", commit('a'))));
+    }
+
+    #[test]
+    fn an_unsigned_commit_is_refused_with_gits_reason() {
+        let mut unsigned = good("P1-T1", &commit('a'), &[]);
+        unsigned.signature = Err("no signature found".into());
+        assert_eq!(refused(&[unsigned]), ("bad-signature", "no signature found".to_string()));
+    }
+
+    #[test]
+    fn a_subject_that_is_not_conventional_or_names_another_task_is_refused() {
+        for subject in ["did the work for P1-T1", "feat(exec): do the work for P1-T9"] {
+            let mut wrong = good("P1-T1", &commit('a'), &[]);
+            wrong.subject = Ok(subject.into());
+            assert_eq!(
+                refused(&[wrong]),
+                ("commit-subject", format!("commit {} subject is not conventional or does not name P1-T1", commit('a'))),
+                "{subject}"
+            );
+        }
+    }
+
+    #[test]
+    fn paths_git_cannot_list_refuse_the_patch() {
+        let mut unlisted = good("P1-T1", &commit('a'), &[]);
+        unlisted.paths = Err("git diff-tree failed".into());
+        assert_eq!(refused(&[unlisted]), ("commit-paths", "git diff-tree failed".to_string()));
+    }
+
+    #[test]
+    fn the_first_failure_in_task_order_is_the_answer() {
+        let mut unsigned = good("P1-T2", &commit('b'), &[]);
+        unsigned.signature = Err("no signature found".into());
+        let mut missing = good("P1-T3", &commit('c'), &[]);
+        missing.exists = Err("missing".into());
+        assert_eq!(
+            refused(&[good("P1-T1", &commit('a'), &[]), unsigned, missing]),
+            ("bad-signature", "no signature found".to_string())
+        );
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    use cadence::derivation::{CapturedInputs, Observation, PhaseObservation, derive, parse_roadmap};
+
+    /// The lifecycle of a roadmap whose phases hold `plans` plan files each.
+    fn lifecycle(roadmap: &str, plans: &[&[&str]]) -> cadence::derivation::Lifecycle {
+        let parsed = parse_roadmap(roadmap).unwrap();
+        let phases = parsed
+            .phases
+            .iter()
+            .zip(plans)
+            .map(|(phase, names)| PhaseObservation {
+                relative_path: phase.relative_path.clone(),
+                plans: Observation::Present(names.iter().map(|name| name.to_string()).collect()),
+                summary: Observation::Absent,
+                uat: Observation::Absent,
+            })
+            .collect();
+        derive(&CapturedInputs {
+            root: "/project/.planning".into(),
+            root_probe: Observation::Present(()),
+            roadmap: Observation::Present(roadmap.as_bytes().to_vec()),
+            declarations: Some(Ok(parsed)),
+            phases,
+        })
+        .unwrap()
+    }
+
+    const TWO: &str = "## Phases\n- [ ] **Phase 3: Three**\n- [ ] **Phase 4: Four**";
+
+    fn refusal(result: Result<cadence::derivation::PhaseRecord, (&'static str, String)>) -> (&'static str, String) {
+        result.unwrap_err()
+    }
+
+    #[test]
+    fn the_current_planned_phase_executes() {
+        let record = executable_phase(&lifecycle(TWO, &[&["PLAN.md"], &[]]), 3).unwrap();
+        assert_eq!((record.id.address(), record.status), ("3".to_string(), LifecycleStatus::Planned));
+    }
+
+    #[test]
+    fn a_closed_cycle_executes_nothing() {
+        assert_eq!(
+            refusal(executable_phase(&lifecycle("## Phases\nNo active phases.", &[]), 3)),
+            ("closed-cycle", "execution requires the live planning cycle".to_string())
+        );
+    }
+
+    #[test]
+    fn a_phase_the_lifecycle_does_not_hold_is_unknown() {
+        assert_eq!(
+            refusal(executable_phase(&lifecycle(TWO, &[&["PLAN.md"], &[]]), 9)),
+            ("unknown-phase", "the lifecycle does not contain the requested phase".to_string())
+        );
+    }
+
+    #[test]
+    fn a_phase_after_the_current_one_is_not_current() {
+        assert_eq!(
+            refusal(executable_phase(&lifecycle(TWO, &[&["PLAN.md"], &["PLAN.md"]]), 4)),
+            ("phase-not-current", "the requested phase is not the derived current phase".to_string())
+        );
+    }
+
+    #[test]
+    fn an_unplanned_current_phase_cannot_execute() {
+        assert_eq!(
+            refusal(executable_phase(&lifecycle(TWO, &[&[], &[]]), 3)),
+            ("lifecycle-refusal", "phase status Unplanned cannot execute".to_string())
+        );
+    }
+
+    fn plan(number: u32, suite: &str) -> ExecutionPlan {
+        let source = format!(
+            "---\nphase: 6\nplan: {number}\nrequirements: [AC1]\nfiles: [src/a.rs]\nexecution:\n  schema: 1\n  suite: {suite}\n  tasks:\n    - id: T1\n      verify: [cargo test one]\n---\nbody\n"
+        );
+        parse_plan(source.as_bytes(), 6, number).unwrap()
+    }
+
+    fn active(on: &ExecutionPlan) -> ActiveDispatch {
+        cadence::execution::dispatch::build_dispatch(on, &"a".repeat(64), 0, &"b".repeat(40)).unwrap()
+    }
+
+    #[test]
+    fn a_retained_dispatch_is_reissued_from_its_unchanged_admitted_plan() {
+        let plans = [plan(1, "cargo test"), plan(2, "cargo test")];
+        assert_eq!(active_plan(&active(&plans[1]), &plans).unwrap(), &plans[1]);
+    }
+
+    #[test]
+    fn a_retained_dispatch_whose_plan_is_no_longer_admitted_is_refused() {
+        let dispatched = plan(2, "cargo test");
+        assert_eq!(
+            active_plan(&active(&dispatched), &[plan(1, "cargo test")]).map(|_| ()),
+            Err(("active-plan-missing", "the active dispatch plan is no longer admitted".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_retained_dispatch_whose_plan_bytes_changed_is_refused() {
+        let dispatched = plan(1, "cargo test");
+        assert_eq!(
+            active_plan(&active(&dispatched), &[plan(1, "cargo nextest run")]).map(|_| ()),
+            Err(("plan-changed", "the active plan bytes differ from the admitted fingerprint".to_string()))
+        );
+    }
+
+    #[test]
+    fn only_an_accepted_continuation_or_an_approved_suite_repair_dispatches_work() {
+        use ContinuationDecision as D;
+        assert!(may_continue(&D::Continue { answer: None, override_id: None, rerun_plans: vec![] }));
+        assert!(may_continue(&D::RepairSuite { question_id: "q1".into(), approved: true }));
+        for decision in [
+            D::AwaitAcceptance,
+            D::RepairSuite { question_id: "q1".into(), approved: false },
+            D::Revise,
+            D::FreshCheck,
+            D::OverrideRequired,
+        ] {
+            assert!(!may_continue(&decision), "{decision:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod refusal_scope_tests {
+    use super::*;
+    use cadence::execution::model::ExecutionOccurrence;
+
+    fn dispatch(phase: u32, plan: u32) -> ActiveDispatch {
+        let source = format!(
+            "---\nphase: {phase}\nplan: {plan}\nrequirements: [AC1]\nfiles: [src/a.rs]\nexecution:\n  schema: 1\n  suite: cargo test\n  tasks:\n    - id: T1\n      verify: [cargo test one]\n---\nbody\n"
+        );
+        let plan = parse_plan(source.as_bytes(), phase, plan).unwrap();
+        cadence::execution::dispatch::build_dispatch(&plan, &"a".repeat(64), 0, &"b".repeat(40)).unwrap()
+    }
+
+    fn occurrence(phase: u32, active: Option<ActiveDispatch>) -> ExecutionOccurrence {
+        ExecutionOccurrence {
+            phase,
+            undone: None,
+            plan_set_fingerprint: "plans".into(),
+            version: 1,
+            active,
+            plans: vec![],
+            terminal: None,
+            receipts: BTreeMap::new(),
+            issues: BTreeMap::new(),
+        }
+    }
+
+    /// A store view whose execution namespace holds `occurrences`.
+    fn view(occurrences: Vec<ExecutionOccurrence>) -> View {
+        let execution = ExecutionSnapshot {
+            schema: cadence::execution::model::EXECUTION_SCHEMA,
+            occurrences: occurrences.into_iter().map(|o| (o.phase.to_string(), o)).collect(),
+        };
+        let data = json!({"execution": serde_json::to_value(execution).unwrap()});
+        View { items: vec![], decisions: vec![], snapshot: cadence::store::model::Snapshot::new(1, b"", b"", data).unwrap() }
+    }
+
+    #[test]
+    fn a_malformed_apply_naming_an_active_dispatch_is_refused_under_its_phase() {
+        let active = dispatch(5, 1);
+        let store = view(vec![occurrence(5, Some(active.clone())), occurrence(6, None)]);
+        assert_eq!(refusal_phase(&store, BoundaryTool::CadenceApply, Some(&json!({"dispatch_id": active.id}))), Ok(5));
+    }
+
+    #[test]
+    fn a_malformed_apply_naming_no_known_dispatch_is_refused_under_the_root_scope() {
+        let store = view(vec![occurrence(5, Some(dispatch(5, 1)))]);
+        for raw in [Some(json!({"dispatch_id": "foreign"})), Some(json!({"phase": 5})), Some(json!({"dispatch_id": 7})), None] {
+            assert_eq!(refusal_phase(&store, BoundaryTool::CadenceApply, raw.as_ref()), Ok(0), "{raw:?}");
+        }
+    }
+
+    /// An occurrence with no active dispatch whose applied receipts hold
+    /// `dispatch`: its patch has landed.
+    fn received(phase: u32, dispatch: &str) -> ExecutionOccurrence {
+        let outcome = cadence::execution::model::PlanOutcome {
+            dispatch_id: dispatch.into(),
+            phase,
+            plan: 1,
+            disposition: PlanDisposition::Complete,
+            tasks: vec![],
+            deviations: vec![],
+            blockers: vec![],
+            commit_paths: BTreeMap::new(),
+            transition_id: "t1".into(),
+        };
+        let receipt = cadence::execution::model::AppliedReceipt {
+            dispatch_id: dispatch.into(),
+            request_digest: "r".repeat(64),
+            transition_id: "t1".into(),
+            outcome,
+        };
+        ExecutionOccurrence { receipts: BTreeMap::from([(dispatch.into(), receipt)]), ..occurrence(phase, None) }
+    }
+
+    #[test]
+    fn a_malformed_apply_naming_a_dispatch_whose_patch_landed_is_refused_under_its_phase() {
+        let store = view(vec![occurrence(5, Some(dispatch(5, 1))), received(6, "d1")]);
+        assert_eq!(refusal_phase(&store, BoundaryTool::CadenceApply, Some(&json!({"dispatch_id": "d1"}))), Ok(6));
+    }
+
+    #[test]
+    fn a_request_is_identified_by_its_tool_operation_and_raw_arguments() {
+        let digest = |bytes: &str| cadence::store::model::digest(bytes.as_bytes());
+        assert_eq!(
+            public_request_digest(BoundaryTool::CadenceApply, Some(&json!({"phase": 3}))),
+            digest(r#"["execution-request-v1","cadence-apply","executor",{"phase":3}]"#)
         );
         assert_eq!(
-            execution_review_decision(Some(json!({"dispatch":"d1"})), Some(Gate::Off), None)
-                .unwrap(),
-            ExecutionReviewDecision::Skip
+            public_request_digest(BoundaryTool::CadenceQuery, None),
+            digest(r#"["execution-request-v1","cadence-query","execute-next",null]"#)
         );
+    }
+
+    #[test]
+    fn a_closed_resident_and_changed_routing_inputs_keep_their_own_failure_and_the_rest_are_store_failures() {
+        assert_eq!(store_failure(Error::Closed), Failure::Closed);
+        assert_eq!(store_failure(Error::Conflict("routing inputs changed before admission".into())), Failure::RoutingInputsChanged);
+        for other in [Error::Conflict("stale snapshot".into()), Error::Invalid("unreadable configuration".into())] {
+            assert_eq!(store_failure(other.clone()), Failure::Store, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_query_is_refused_under_the_root_scope_whatever_it_names() {
+        let active = dispatch(5, 1);
+        let store = view(vec![occurrence(5, Some(active.clone()))]);
+        assert_eq!(refusal_phase(&store, BoundaryTool::CadenceQuery, Some(&json!({"dispatch_id": active.id}))), Ok(0));
+    }
+
+    #[test]
+    fn a_dispatch_held_by_two_occurrences_is_an_unsound_store() {
+        let active = dispatch(5, 1);
+        let store = view(vec![occurrence(5, Some(active.clone())), occurrence(6, Some(active.clone()))]);
+        assert!(matches!(dispatch_phase(&store, &active.id), Err(Failure::Store)));
+    }
+}
+
+#[cfg(test)]
+mod reissue_tests {
+    use super::*;
+
+    /// A dispatch admitted on executor `agent` with `prompt` retained.
+    fn admitted(agent: &str, prompt: &str) -> ActiveDispatch {
+        serde_json::from_value(json!({
+            "schema":1,"id":"d","expected_execution_version":1,"phase":6,"plan":1,
+            "plan_fingerprint":"f","plan_set_fingerprint":"s","requirements":[],"tasks":[],
+            "suite":"cargo test","files":[],"policy":{"rung":"fixed","branch":"current","reviews":"disabled"},
+            "route":{"choice":{"role":"cad-executor","agent":agent,"rung":"xhigh","starting_rung":"xhigh","model":"opus",
+                "effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"xhigh"},
+                "model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"opus"},
+                "attempt":1,"escalated":false,"pinned":false,"reasons":[],"warnings":[]},
+                "inputs":{"repo":{"identity":"/project/.planning/config.json","content":"0".repeat(64),"stamp":null},
+                "global":null,"global_alias":false}},
+            "base_sha":"b".repeat(40),"prompt":prompt,
+            "prompt_digest":cadence::store::model::digest(prompt.as_bytes()),"body":""
+        }))
+        .unwrap()
+    }
+
+    fn plan() -> ExecutionPlan {
+        let source = "---\nphase: 6\nplan: 1\nrequirements: [AC1]\nfiles: [src/a.rs]\nexecution:\n  schema: 1\n  suite: cargo test\n  tasks:\n    - id: T1\n      verify: [cargo test one]\n---\nthe plan body\n";
+        parse_plan(source.as_bytes(), 6, 1).unwrap()
+    }
+
+    #[test]
+    fn a_reissued_dispatch_keeps_its_admitted_executor_and_prompt_and_takes_the_plan_body() {
+        let active = admitted("cad-executor-xhigh", "the admitted prompt");
+        let Response::Dispatch { dispatch, prompt } = dispatch_response(&active, &plan()) else {
+            panic!("a retained prompt re-issues the dispatch");
+        };
+        assert_eq!(dispatch.route.as_ref().unwrap().choice.agent, "cad-executor-xhigh");
+        assert_eq!(prompt, "the admitted prompt");
+        assert_eq!(*dispatch, ActiveDispatch { body: "the plan body\n".into(), ..active });
+    }
+
+    #[test]
+    fn a_prompt_that_no_longer_matches_its_digest_refuses_the_reissue() {
+        let mut active = admitted("cad-executor", "the admitted prompt");
+        active.prompt = "edited".into();
+        assert!(matches!(
+            dispatch_response(&active, &plan()),
+            Response::Refused { phase: 6, code, .. } if code == "prompt-integrity"
+        ));
+    }
+
+    #[test]
+    fn a_dispatch_whose_prompt_was_not_retained_cannot_be_read_back() {
+        let mut digested = admitted("cad-executor", "the admitted prompt");
+        digested.prompt.clear();
+        let mut counted = admitted("cad-executor", "");
+        counted.prompt_digest.clear();
+        counted.prompt_bytes = Some(12);
+        for active in [digested, counted] {
+            assert_eq!(retained_prompt(&active).unwrap_err().0, "prompt-not-retained", "{active:?}");
+        }
+    }
+
+    #[test]
+    fn a_dispatch_admitted_without_a_prompt_reissues_an_empty_one() {
+        let mut active = admitted("cad-executor", "");
+        active.prompt_digest.clear();
+        assert_eq!(retained_prompt(&active), Ok(String::new()));
+    }
+
+    #[test]
+    fn a_full_hexadecimal_sha_is_the_head_without_its_line_end() {
+        assert_eq!(head_sha(&format!("{}\n", "0a".repeat(20))), Ok("0a".repeat(20)));
+    }
+
+    #[test]
+    fn a_short_long_or_non_hexadecimal_answer_is_not_a_head() {
+        for output in ["a".repeat(39), "a".repeat(41), "g".repeat(40), String::new()] {
+            assert_eq!(head_sha(&output), Err("Git HEAD is not a full commit SHA".to_string()), "{output}");
+        }
     }
 }

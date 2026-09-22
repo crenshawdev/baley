@@ -749,7 +749,13 @@ pub fn observe_source(project: &std::path::Path, active: &super::model::ActiveDi
 }
 
 pub fn reobserve_source(project: &std::path::Path, active: &super::model::ActiveDispatch, task_id: &str, expected: &SourceMaterial, process: &mut dyn Process) -> crate::store::Result<()> {
-    if observe_source(project, active, task_id, &expected.completion, &expected.evidence_commits, process)? != *expected {
+    source_unchanged(&observe_source(project, active, task_id, &expected.completion, &expected.evidence_commits, process)?, expected)
+}
+
+/// A retained close's source still stands only when a fresh observation finds
+/// exactly the material it retained.
+pub fn source_unchanged(fresh: &SourceMaterial, retained: &SourceMaterial) -> crate::store::Result<()> {
+    if fresh != retained {
         return Err(crate::store::Error::Conflict("native source or staged inputs changed".into()));
     }
     Ok(())

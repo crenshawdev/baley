@@ -542,6 +542,19 @@ fn recovery_installs_a_registered_config_participant_with_the_unit() {
 }
 
 #[test]
+fn recovery_keeps_an_outside_participant_that_already_landed_and_only_resyncs_it() {
+    let mut disk = interrupted(Fault::Before(Confirm(at(GLOBAL))), with_config());
+    assert_eq!(disk.bytes(GLOBAL), Some(b"new: config\n".to_vec()));
+    let mut policy = allow(&disk);
+    assert_eq!(recover_on(&mut disk, &mut policy), Ok(()));
+    let requests = disk.requests();
+    assert!(requests.contains(&Resync(at(GLOBAL))), "{requests:?}");
+    assert!(!requests.iter().any(|request| matches!(request, Prepare(target) | Install(target) if target == GLOBAL)), "{requests:?}");
+    assert_eq!(disk.bytes(GLOBAL), Some(b"new: config\n".to_vec()));
+    assert_written(&disk);
+}
+
+#[test]
 fn a_tampered_intent_is_refused_before_any_write() {
     let mut disk = nothing_installed();
     let mut intent: serde_json::Value = serde_json::from_slice(&disk.bytes(INTENT).unwrap()).unwrap();
@@ -595,4 +608,50 @@ fn a_commit_never_parses_the_state_it_installs() {
         commit_to(&mut disk, &mut policy, participants).unwrap()
     });
     assert_eq!(parses, 0);
+}
+
+mod native_inputs {
+    use super::super::transaction::{admission_inputs_hold, dispatch_inputs_hold};
+    use super::*;
+
+    fn inventory(bytes: &[u8], identity: &str) -> Observed {
+        Observed { bytes: Some(bytes.to_vec()), identity: identity.into(), directory_identity: "phase-12".into() }
+    }
+
+    fn state(directory: &str) -> Observed {
+        Observed { bytes: Some(b"{}".to_vec()), identity: "state".into(), directory_identity: directory.into() }
+    }
+
+    fn rule(result: Result<()>) -> String {
+        let Err(Error::Invalid(message)) = result else { panic!("not a located refusal: {result:?}") };
+        let diagnostic: crate::plan::model::Diagnostic = serde_json::from_str(message.strip_prefix("plan-refusal:").unwrap()).unwrap();
+        diagnostic.rule
+    }
+
+    #[test]
+    fn an_admission_confirms_against_the_inventory_and_store_it_was_prepared_in() {
+        let prepared = inventory(b"PLAN-1.md", "inode-1");
+        assert_eq!(admission_inputs_hold(12, &prepared, "store", &prepared.clone(), &state("store")), Ok(()));
+    }
+
+    #[test]
+    fn an_admission_whose_plan_inventory_changed_before_confirmation_is_refused() {
+        let prepared = inventory(b"PLAN-1.md", "inode-1");
+        for changed in [inventory(b"PLAN-1.md\nPLAN-2.md", "inode-1"), inventory(b"PLAN-1.md", "inode-2")] {
+            assert_eq!(rule(admission_inputs_hold(12, &prepared, "store", &changed, &state("store"))), "admission-inputs-changed");
+        }
+    }
+
+    #[test]
+    fn an_admission_whose_store_is_no_longer_the_bound_one_is_refused() {
+        let prepared = inventory(b"PLAN-1.md", "inode-1");
+        assert_eq!(rule(admission_inputs_hold(12, &prepared, "store", &prepared.clone(), &state("another-store"))), "admission-inputs-changed");
+    }
+
+    #[test]
+    fn a_dispatch_confirms_only_against_the_inventory_it_was_prepared_from() {
+        let prepared = inventory(b"PLAN-1.md", "inode-1");
+        assert_eq!(dispatch_inputs_hold(12, &prepared, &prepared.clone()), Ok(()));
+        assert_eq!(rule(dispatch_inputs_hold(12, &prepared, &inventory(b"PLAN-1.md\nPLAN-2.md", "inode-1"))), "admission-inputs-changed");
+    }
 }

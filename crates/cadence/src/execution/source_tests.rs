@@ -148,3 +148,28 @@ fn a_staged_path_inside_the_lease_is_carried_into_the_material() {
     assert_eq!(material.staged_paths, [OWNED]);
     assert_eq!(material.staged_objects, b"raw");
 }
+
+#[test]
+fn a_retained_source_stands_when_a_fresh_observation_finds_the_same_material() {
+    let retained = judged(&honest()).expect("an accepted close");
+    assert_eq!(super::receipts::source_unchanged(&retained.clone(), &retained), Ok(()));
+}
+
+#[test]
+fn a_retained_source_is_in_conflict_when_a_fresh_observation_differs() {
+    let retained = judged(&honest()).expect("an accepted close");
+    let moved = judged(&SourceObservation::new()
+        .commit(GREEN, &[OWNED, OUTSIDE])
+        .commit(DONE, &[OWNED])
+        .signed(true)
+        .completion_subject(SUBJECT)
+        .staged(b"", &[])).expect("an accepted close");
+    let mut staged = retained.clone();
+    staged.staged_paths = vec![OWNED.to_owned()];
+    for fresh in [moved, staged] {
+        assert_eq!(
+            super::receipts::source_unchanged(&fresh, &retained),
+            Err(crate::store::Error::Conflict("native source or staged inputs changed".into()))
+        );
+    }
+}

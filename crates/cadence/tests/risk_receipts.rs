@@ -126,9 +126,11 @@ fn a_fire_with_no_receipt_is_pending() {
 }
 
 #[test]
-fn an_unchecked_observation_is_unchecked() {
+fn an_unchecked_observation_is_unchecked_and_not_permission() {
     let unchecked = unchecked_scan(&observation(2, false));
-    assert_eq!(assess(&unchecked, &[], &[]).state, State::Unchecked);
+    let result = assess(&unchecked, &[], &[]);
+    assert_eq!(result.state, State::Unchecked);
+    assert!(!result.permits_continuation);
 }
 
 #[test]

@@ -307,6 +307,15 @@ mod boundaries {
     }
 
     #[test]
+    fn a_store_holding_a_boundary_decision_in_the_legacy_format_is_refused_for_execution() {
+        use super::super::writer::require_current_execution;
+        assert_eq!(
+            require_current_execution(&view_with(vec![logged(3, 0, false)], &[])),
+            Err(cadence::execution::boundary::Failure::LegacyExecution)
+        );
+    }
+
+    #[test]
     fn a_blank_operation_identity_is_refused() {
         assert_eq!(
             prior(&view_with(vec![], &[]), " \t", "content", 3),
@@ -352,6 +361,40 @@ mod scoped {
 
     fn admit(decisions: &[DecisionRecord], decision: &BoundaryV1) -> ScopedAdmission {
         scoped_admission(decisions, "new-decision", decision, &BoundaryChange::Observe, 300, Some(9)).unwrap()
+    }
+
+    fn view_of(decisions: Vec<DecisionRecord>, data: serde_json::Value) -> View {
+        View { items: vec![], decisions, snapshot: Snapshot::new(1, b"", b"", data).unwrap() }
+    }
+
+    /// The terminal log-bound decision of `scope`, written by hand.
+    fn terminal(scope: BoundaryScope) -> DecisionRecord {
+        let mut record = logged(scope, "log-bound", 256);
+        let Decision::BoundaryV1(value) = &mut record.decision else { unreachable!() };
+        value.terminal = true;
+        record
+    }
+
+    #[test]
+    fn a_scope_holding_its_terminal_decision_is_answered_by_it_and_no_other_scope_is() {
+        use super::super::writer::terminal_v1;
+        let mut decisions = log(PHASE, "executor", 256);
+        decisions.push(terminal(PHASE));
+        let id = decisions[256].id.clone();
+        let view = view_of(decisions, serde_json::Value::Null);
+        assert_eq!(terminal_v1(&view, &PHASE).map(|found| found.id), Some(id.as_str()));
+        assert!(terminal_v1(&view, &BoundaryScope::Execution { phase: 4 }).is_none());
+        assert!(terminal_v1(&view_of(log(PHASE, "executor", 256), serde_json::Value::Null), &PHASE).is_none());
+    }
+
+    #[test]
+    fn an_execution_occurrence_with_no_scoped_decision_is_in_the_legacy_format() {
+        use super::super::writer::require_current_execution;
+        use cadence::execution::boundary::Failure;
+        let data = json!({"execution": {"occurrences": {"3": {"active": null}}}});
+        assert_eq!(require_current_execution(&view_of(vec![], data.clone())), Err(Failure::LegacyExecution));
+        assert_eq!(require_current_execution(&view_of(log(BoundaryScope::Execution { phase: 4 }, "executor", 1), data.clone())), Err(Failure::LegacyExecution));
+        assert_eq!(require_current_execution(&view_of(log(PHASE, "executor", 1), data)), Ok(()));
     }
 
     #[test]

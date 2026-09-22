@@ -737,10 +737,10 @@ mod tests {
         let occurrence = &execution.occurrences["6"];
         assert!(occurrence.active.is_some());
         assert!(occurrence.plans.is_empty());
-        assert!(matches!(
+        assert_eq!(
             occurrence.terminal,
-            Some(TerminalOutcome::JudgmentStop { .. })
-        ));
+            Some(TerminalOutcome::JudgmentStop { dispatch_id: dispatch.id.clone(), blocker_ids: vec!["B1".into()] })
+        );
     }
 
     #[test]
@@ -1007,5 +1007,97 @@ mod tests {
                 "invalid-patch"
             );
         }
+    }
+
+    const SECOND: &str = "4444444444444444444444444444444444444444";
+
+    /// The complete patch applied, ready for Git's observed paths.
+    fn applied() -> (PatchApplication, ExecutorPatch) {
+        let (data, dispatch) = fixture();
+        let patch = complete_patch(&dispatch);
+        (apply_executor_patch(&data, &patch).unwrap(), patch)
+    }
+
+    fn paths(rows: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
+        rows.iter().map(|(commit, paths)| (commit.to_string(), paths.iter().map(|path| path.to_string()).collect())).collect()
+    }
+
+    #[test]
+    fn observed_paths_are_bound_to_the_outcome_its_receipt_and_its_plan_row() {
+        let (application, patch) = applied();
+        let observed = paths(&[(COMMIT, &["src/lib.rs"]), (SECOND, &["src/lib.rs"])]);
+        let bound = attach_commit_paths(application, &observed, &[]).unwrap();
+        let execution: ExecutionSnapshot = serde_json::from_value(bound.data["execution"].clone()).unwrap();
+        let occurrence = &execution.occurrences["6"];
+        assert_eq!(bound.outcome.commit_paths, observed);
+        assert_eq!(occurrence.receipts[&patch.dispatch_id].outcome.commit_paths, observed);
+        assert_eq!(occurrence.plans[0].commit_paths, observed);
+    }
+
+    #[test]
+    fn observed_paths_must_name_exactly_the_completed_commits() {
+        for observed in [
+            paths(&[(COMMIT, &["src/lib.rs"])]),
+            paths(&[(COMMIT, &["src/lib.rs"]), (SECOND, &["src/lib.rs"]), (BASE, &["src/lib.rs"])]),
+        ] {
+            assert_eq!(attach_commit_paths(applied().0, &observed, &[]).unwrap_err().code, "commit-path-set", "{observed:?}");
+        }
+    }
+
+    #[test]
+    fn observed_paths_must_be_unique_sorted_relative_paths() {
+        let committed: [&[&str]; 3] = [&["src/lib.rs", "src/lib.rs"], &["src/z.rs", "src/a.rs"], &["../lib.rs"]];
+        for bad in committed {
+            let observed = paths(&[(COMMIT, bad), (SECOND, &["src/lib.rs"])]);
+            assert_eq!(attach_commit_paths(applied().0, &observed, &[]).unwrap_err().code, "commit-path-set", "{bad:?}");
+            let observed = paths(&[(COMMIT, &["src/lib.rs"]), (SECOND, &["src/lib.rs"])]);
+            let staged = bad.iter().map(|path| path.to_string()).collect::<Vec<_>>();
+            assert_eq!(attach_commit_paths(applied().0, &observed, &staged).unwrap_err().code, "commit-path-set", "staged {bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_committed_or_staged_path_outside_the_lease_is_refused_with_where_it_was_seen() {
+        let observed = paths(&[(COMMIT, &["src/lib.rs", "src/other.rs"]), (SECOND, &["src/lib.rs"])]);
+        let error = attach_commit_paths(applied().0, &observed, &["notes.md".into()]).unwrap_err();
+        let undeclared = error.undeclared.expect("the refusal carries its evidence");
+        assert_eq!(error.code, "undeclared-files");
+        assert_eq!(undeclared.committed, paths(&[(COMMIT, &["src/other.rs"])]));
+        assert_eq!(undeclared.staged, ["notes.md"]);
+    }
+
+    #[test]
+    fn a_replay_must_observe_the_paths_its_receipt_recorded() {
+        let (application, patch) = applied();
+        let observed = paths(&[(COMMIT, &["src/lib.rs"]), (SECOND, &["src/lib.rs"])]);
+        let bound = attach_commit_paths(application, &observed, &[]).unwrap();
+        let replay = || apply_executor_patch(&bound.data, &patch).unwrap();
+        assert_eq!(attach_commit_paths(replay(), &observed, &[]).unwrap().outcome.commit_paths, observed);
+        let changed = paths(&[(COMMIT, &["src/lib.rs"]), (SECOND, &[])]);
+        assert_eq!(attach_commit_paths(replay(), &changed, &[]).unwrap_err().code, "commit-path-conflict");
+    }
+
+    #[test]
+    fn a_replayed_patch_returns_its_original_answer_after_the_next_dispatch() {
+        let first_plan = plan();
+        let second_plan = parse_plan(
+            b"---\nphase: 6\nplan: 2\nrequirements: [AC4]\nfiles: [src/lib.rs]\nexecution:\n  schema: 1\n  suite: cargo test\n  tasks:\n    - id: T1\n      verify: [cargo test one]\n---\nBuild more.\n",
+            6,
+            2,
+        )
+        .unwrap();
+        let set = plan_set_fingerprint(&[first_plan.clone(), second_plan.clone()]).unwrap();
+        let (occurrence, dispatch) = admit_dispatch(&empty_occurrence(set.clone()), build_dispatch(&first_plan, &set, 0, BASE).unwrap()).unwrap();
+        let data = json!({"execution": ExecutionSnapshot { schema: EXECUTION_SCHEMA, occurrences: BTreeMap::from([("6".into(), occurrence)]) }});
+        let patch = complete_patch(&dispatch);
+        let first = apply_executor_patch(&data, &patch).unwrap();
+        let mut execution: ExecutionSnapshot = serde_json::from_value(first.data["execution"].clone()).unwrap();
+        let after = &execution.occurrences["6"];
+        let (after, _) = admit_dispatch(after, build_dispatch(&second_plan, &set, after.version, BASE).unwrap()).unwrap();
+        execution.occurrences.insert("6".into(), after);
+        let next = json!({"execution": execution});
+        let replay = apply_executor_patch(&next, &patch).unwrap();
+        assert_eq!(replay.disposition, ApplicationDisposition::Replay);
+        assert_eq!((&replay.transition_id, &replay.outcome, &replay.data), (&first.transition_id, &first.outcome, &next));
     }
 }

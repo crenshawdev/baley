@@ -1,10 +1,7 @@
-//! Core shard of the executable phase-6 acceptance inventory.
-//!
-//! Each test-binary shard checks the harness registry and then invokes every
-//! mapped evidence function. A source-level test name is never counted as a
-//! pass. Real-host invocation, a real model executor, actual host permission
-//! denial and model-produced work remain PLAN-2 UAT obligations, not Cargo
-//! claims.
+//! Execution decisions checked over values: run capture and classification,
+//! executor patch parsing, plan readiness, native plan admission and its
+//! extensions, native task events, and recovery of a task event's intent.
+//! Nothing here starts a program, runs a model executor or touches a disk.
 use super::{
     patch::parse_executor_patch,
     plan::{PlanGraph, parse_plan},
@@ -525,4 +522,259 @@ fn ac5_unknown_patch_keys_are_executable_evidence() {
         parse_executor_patch(value).unwrap_err().code,
         "invalid-patch"
     );
+}
+
+const ROOT: &str = "46:1;";
+
+fn admit(id: &str, expected: u64, contract: &super::admission::Contract) -> super::admission::Request {
+    super::admission::Request { request_id: id.into(), expected_set_version: expected, contract: contract.clone() }
+}
+
+/// The fixture's phase as it stood with only plan 1 published, before plan 2
+/// was added at a new gap identity.
+fn native_unit_contract_before_plan_2() -> (serde_json::Value, std::collections::BTreeMap<String, String>, super::admission::Contract) {
+    let (mut data, mut documents, mut contract) = native_unit_contract("custom-delivery-check");
+    let occurrence = data.pointer_mut("/plan_publications/phases/12").unwrap();
+    occurrence["publications"].as_object_mut().unwrap().remove("2");
+    occurrence["high_water"] = json!(1);
+    occurrence["consumed"] = json!([1]);
+    occurrence["receipts"]["unit-publication"]["results"].as_array_mut().unwrap().retain(|r| r["identity"]["plan"] != 2);
+    data.pointer_mut("/acceptance_maps/phases/12/revisions").unwrap().as_array_mut().unwrap().retain(|r| r["identity"]["plan"] != 2);
+    documents.remove("phases/12/PLAN-2.md");
+    contract.plans.retain(|binding| binding.plan == 1);
+    contract.allocation.retain(|assignment| assignment.plan == 1);
+    (data, documents, contract)
+}
+
+/// The whole fixture phase with plan 1 already admitted, its admission record
+/// changed by `edit` first.
+fn plan_1_admitted(edit: impl FnOnce(&mut serde_json::Value)) -> (serde_json::Value, std::collections::BTreeMap<String, String>, super::admission::Contract) {
+    use super::admission::{NAMESPACE, contribute};
+    let (before, before_documents, first) = native_unit_contract_before_plan_2();
+    let (mut admitted, _) = contribute(&before, &before_documents, ROOT, &admit("admit", 0, &first)).unwrap();
+    edit(&mut admitted[NAMESPACE]["phases"]["12"][0]);
+    let (mut data, documents, contract) = native_unit_contract("custom-delivery-check");
+    data[NAMESPACE] = admitted[NAMESPACE].clone();
+    (data, documents, contract)
+}
+
+#[test]
+fn a_first_admission_is_recorded_at_set_version_1_with_its_request() {
+    use super::admission::{contribute, records};
+    let (data, documents, contract) = native_unit_contract("custom-delivery-check");
+    let request = admit("admit", 0, &contract);
+    let (after, record) = contribute(&data, &documents, ROOT, &request).unwrap();
+    assert_eq!((record.set_version, &record.request), (1, &request));
+    assert_eq!(records(&after, 12).unwrap(), [record]);
+}
+
+#[test]
+fn an_identical_admission_request_replays_without_changing_the_store() {
+    use super::admission::contribute;
+    let (data, documents, contract) = native_unit_contract("custom-delivery-check");
+    let request = admit("admit", 0, &contract);
+    let (after, record) = contribute(&data, &documents, ROOT, &request).unwrap();
+    assert_eq!(contribute(&after, &documents, ROOT, &request).unwrap(), (after, record));
+}
+
+#[test]
+fn a_reused_admission_request_id_naming_another_contract_is_refused() {
+    use super::admission::contribute;
+    let (data, documents, contract) = native_unit_contract("custom-delivery-check");
+    let (after, _) = contribute(&data, &documents, ROOT, &admit("admit", 0, &contract)).unwrap();
+    let mut other = contract.clone();
+    other.allocation.pop();
+    assert_admission_refusal(
+        contribute(&after, &documents, ROOT, &admit("admit", 0, &other)).unwrap_err(),
+        "admission-request-reuse", "request_id", "admit",
+    );
+}
+
+#[test]
+fn an_admission_must_name_the_current_set_version() {
+    use super::admission::contribute;
+    let (data, documents, contract) = native_unit_contract("custom-delivery-check");
+    assert_admission_refusal(
+        contribute(&data, &documents, ROOT, &admit("early", 1, &contract)).unwrap_err(),
+        "admission-set-version", "expected_set_version", "early",
+    );
+    let (after, _) = contribute(&data, &documents, ROOT, &admit("admit", 0, &contract)).unwrap();
+    assert_admission_refusal(
+        contribute(&after, &documents, ROOT, &admit("stale", 0, &contract)).unwrap_err(),
+        "admission-set-version", "expected_set_version", "stale",
+    );
+}
+
+#[test]
+fn an_admission_must_cover_every_current_publication() {
+    use super::admission::validate;
+    let (data, documents, mut contract) = native_unit_contract("custom-delivery-check");
+    contract.plans.retain(|binding| binding.plan == 1);
+    assert_admission_refusal(validate(&data, &documents, &contract).unwrap_err(), "admission-plan-set", "contract.plans", "");
+}
+
+#[test]
+fn an_extension_is_appended_at_the_next_set_version_leaving_the_first_record_as_it_was() {
+    use super::admission::{NAMESPACE, contribute, records};
+    let (data, documents, contract) = plan_1_admitted(|_| {});
+    let first = data[NAMESPACE]["phases"]["12"][0].clone();
+    let (after, extension) = contribute(&data, &documents, ROOT, &admit("extend", 1, &contract)).unwrap();
+    assert_eq!((extension.set_version, &extension.request.contract), (2, &contract));
+    assert_eq!(after[NAMESPACE]["phases"]["12"][0], first);
+    assert_eq!(records(&after, 12).unwrap().len(), 2);
+}
+
+#[test]
+fn an_extension_must_keep_each_admitted_plan_binding() {
+    use super::admission::contribute;
+    let (data, documents, contract) =
+        plan_1_admitted(|record| record["request"]["contract"]["plans"][0]["content_revision"] = json!("earlier"));
+    assert_admission_refusal(
+        contribute(&data, &documents, ROOT, &admit("extend", 1, &contract)).unwrap_err(),
+        "admitted-plan", "contract.plans", "1",
+    );
+}
+
+#[test]
+fn an_extension_cannot_move_an_admitted_check() {
+    use super::admission::contribute;
+    let (data, documents, contract) =
+        plan_1_admitted(|record| record["request"]["contract"]["allocation"][0]["checks"] = json!([]));
+    assert_admission_refusal(
+        contribute(&data, &documents, ROOT, &admit("extend", 1, &contract)).unwrap_err(),
+        "admission-reassignment", "contract.allocation", "deliver",
+    );
+}
+
+#[test]
+fn an_extension_must_add_a_plan() {
+    use super::admission::contribute;
+    let (data, documents, contract) = native_unit_contract("custom-delivery-check");
+    let (after, _) = contribute(&data, &documents, ROOT, &admit("admit", 0, &contract)).unwrap();
+    assert_admission_refusal(
+        contribute(&after, &documents, ROOT, &admit("again", 1, &contract)).unwrap_err(),
+        "admission-extension", "contract.plans", "",
+    );
+}
+
+#[test]
+fn only_a_plan_an_admission_names_is_admitted() {
+    use crate::plan::validation::admitted;
+    let (data, _, _) = plan_1_admitted(|_| {});
+    let (before, _, _) = native_unit_contract("custom-delivery-check");
+    assert!(admitted(&data, 12, 1).unwrap());
+    assert!(!admitted(&data, 12, 2).unwrap());
+    assert!(!admitted(&before, 12, 1).unwrap());
+}
+
+/// The fixture admitted, and the request that starts task `deliver` of plan 1.
+fn native_task_started() -> (serde_json::Value, super::history::Request) {
+    use super::history::{Event, Request, Task};
+    let (data, documents, contract) = native_unit_contract("custom-delivery-check");
+    let (data, basis) = super::admission::contribute(&data, &documents, ROOT, &admit("admit", 0, &contract)).unwrap();
+    let task = Task { phase: 12, occurrence: "active-cycle:phase:12".into(), admission_digest: basis.request_digest.clone(),
+        plan: 1, task: "deliver".into() };
+    let checks = basis.request.contract.allocation[0].checks.clone();
+    let start = Request { request_id: "event-0".into(), task, attempt: "attempt-1".into(), expected_version: 0,
+        event: Event::Attempt { predecessor: None, checks, base_commit: "unit-base".into() } };
+    (data, start)
+}
+
+fn progress(start: &super::history::Request, id: &str, expected_version: u64) -> super::history::Request {
+    super::history::Request { request_id: id.into(), expected_version, event: super::history::Event::AcknowledgedProgress {
+        text: "delivered the parcel".into(), evidence: vec![], commit: "a".repeat(40) }, ..start.clone() }
+}
+
+#[test]
+fn each_task_event_is_recorded_at_the_next_version_with_its_request() {
+    use super::history::{contribute, records};
+    let process = &mut cadence::process::Recorded::new();
+    let (data, start) = native_task_started();
+    let (data, first) = contribute(&data, ROOT, &start, process).unwrap();
+    let next = progress(&start, "event-1", 1);
+    let (data, second) = contribute(&data, ROOT, &next, process).unwrap();
+    assert_eq!((first.version, &first.request, second.version, &second.request), (1, &start, 2, &next));
+    assert_eq!(records(&data, 12).unwrap(), [first, second]);
+}
+
+#[test]
+fn a_reused_task_request_id_naming_another_event_is_refused() {
+    use super::history::contribute;
+    let process = &mut cadence::process::Recorded::new();
+    let (data, start) = native_task_started();
+    let (data, _) = contribute(&data, ROOT, &start, process).unwrap();
+    assert_admission_refusal(
+        contribute(&data, ROOT, &progress(&start, "event-0", 1), process).unwrap_err(),
+        "task-request-reuse", "request_id", "event-0",
+    );
+}
+
+#[test]
+fn a_task_event_naming_a_stale_version_is_refused() {
+    use super::history::contribute;
+    let process = &mut cadence::process::Recorded::new();
+    let (data, start) = native_task_started();
+    let (data, _) = contribute(&data, ROOT, &start, process).unwrap();
+    for stale in [0, 2] {
+        assert_admission_refusal(
+            contribute(&data, ROOT, &progress(&start, "event-1", stale), process).unwrap_err(),
+            "task-version", "task", "deliver",
+        );
+    }
+}
+
+/// The intent the writer records for starting task `deliver`: items, decisions
+/// and state, each with the bytes it replaces. `edit` changes the recorded
+/// state data first. Answers the intent, what storage holds before any of it
+/// landed, and the three participants' recorded bytes.
+fn native_task_intent(edit: impl FnOnce(&mut serde_json::Value)) -> (Vec<u8>, std::collections::BTreeMap<String, crate::store::Observed>, Vec<Vec<u8>>) {
+    use crate::store::model::{DECISIONS, ITEMS, STATE, Snapshot, digest, render_lines};
+    let (data, start) = native_task_started();
+    let (mut next, record) = super::history::contribute(&data, ROOT, &start, &mut cadence::process::Recorded::new()).unwrap();
+    edit(&mut next);
+    let decisions = render_lines(&super::history::decisions(&record).unwrap()).unwrap();
+    let before = serde_json::to_vec(&Snapshot::new(1, b"", b"", data).unwrap()).unwrap();
+    let after = serde_json::to_vec(&Snapshot::new(2, b"", &decisions, next).unwrap()).unwrap();
+    let rows = [(ITEMS, Vec::new(), Vec::new()), (DECISIONS, Vec::new(), decisions), (STATE, before, after)];
+    let participants: Vec<_> = rows.iter().map(|(target, old, new)| json!({"target":target,
+        "expected":{"bytes":old,"identity":format!("{target} before"),"directory_identity":ROOT},"bytes":new})).collect();
+    let kind = json!({"operation":"native-task-v1","request":start,"root_binding":ROOT});
+    let integrity = digest(&serde_json::to_vec(&json!([1, kind, participants])).unwrap());
+    let intent = serde_json::to_vec(&json!({"version":1,"kind":kind,"participants":participants,"integrity":integrity})).unwrap();
+    let current = rows.iter().map(|(target, old, _)| (target.to_string(), crate::store::Observed {
+        bytes: Some(old.clone()), identity: format!("{target} before"), directory_identity: ROOT.into() })).collect();
+    (intent, current, rows.into_iter().map(|(_, _, new)| new).collect())
+}
+
+#[test]
+fn a_task_event_whose_confirmation_failed_is_completed_from_its_recorded_intent() {
+    use crate::store::transaction::{Pending, recovery};
+    let (intent, current, recorded) = native_task_intent(|_| {});
+    let unit = recovery(Pending::parse(&intent).unwrap(), &current, &mut cadence::process::Recorded::new()).unwrap();
+    assert_eq!(unit.participants().iter().map(|participant| participant.bytes.clone()).collect::<Vec<_>>(), recorded);
+}
+
+#[test]
+fn a_task_intent_whose_state_is_not_the_events_transition_is_refused() {
+    use crate::store::transaction::{Pending, recovery};
+    let (intent, current, _) = native_task_intent(|next| next["native_tasks"]["phases"]["12"][0]["version"] = json!(5));
+    assert_eq!(
+        recovery(Pending::parse(&intent).unwrap(), &current, &mut cadence::process::Recorded::new()).map(|_| ()),
+        Err(crate::store::Error::Invalid("native task intent differs from validated immutable transition".into()))
+    );
+}
+
+// Retained execution bases, publications and truths sit beside the admission
+// records, so an extension that touched them would rewrite accepted history.
+#[test]
+fn an_extension_changes_nothing_outside_the_admission_records() {
+    use super::admission::{NAMESPACE, contribute};
+    let (data, documents, contract) = plan_1_admitted(|_| {});
+    let (after, _) = contribute(&data, &documents, ROOT, &admit("extend", 1, &contract)).unwrap();
+    let outside = |data: &serde_json::Value| {
+        let mut data = data.clone();
+        data.as_object_mut().unwrap().remove(NAMESPACE);
+        data
+    };
+    assert_eq!(outside(&after), outside(&data));
 }
