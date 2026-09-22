@@ -60,13 +60,39 @@ async fn recheck_continuation(
         // which every caller compares after this recapture; only the artifact
         // capture and material need an independent second observation here.
         let current = derivation::capture_inputs(&capture.root, (driver.artifacts)().as_mut())?;
-        if current != capture || material_observations(&capture.root, &material) != observed {
-            return Err(DerivationError::InputsChanged);
-        }
-        Ok(())
+        let reobserved = material_observations(&capture.root, &material);
+        recheck_holds(&capture, &current, &observed, &reobserved)
     })
     .await
     .map_err(|_| store_error(Error::Closed))?
+}
+
+/// A continuation stands only when the lifecycle capture and the checked
+/// material read the same on the recheck as when it was decided.
+pub(super) fn recheck_holds(
+    capture: &cadence::derivation::CapturedInputs,
+    recaptured: &cadence::derivation::CapturedInputs,
+    observed: &cadence::evidence::material::Observations,
+    reobserved: &cadence::evidence::material::Observations,
+) -> Result<(), DerivationError> {
+    if recaptured != capture || reobserved != observed {
+        return Err(DerivationError::InputsChanged);
+    }
+    Ok(())
+}
+
+/// The record that asks a checkpoint's question in `scope`, and the decision
+/// once it is recorded: waiting on that same gate.
+pub(super) fn ask(
+    scope: &cadence::evidence::Scope,
+    gate: cadence::evidence::gates::Gate,
+) -> (cadence::evidence::Record, cadence::next_action::continuation::Decision) {
+    let record = cadence::evidence::Record {
+        version: cadence::evidence::VERSION,
+        scope: scope.clone(),
+        fact: Fact::Gate(gate.clone()),
+    };
+    (record, cadence::next_action::continuation::Decision::Wait(gate))
 }
 
 /// Reads one named occurrence. The phase 6 dispatcher consumes this decision.
@@ -77,7 +103,7 @@ pub async fn continuation<I: ConfigIo + Clone + Sync>(
     driver: &Driver,
 ) -> Result<cadence::next_action::continuation::Continuation, DerivationError> {
     use cadence::{
-        evidence::{self, material},
+        evidence::material,
         next_action::continuation::{self, Decision},
     };
     scope.validate().map_err(store_error)?;
@@ -129,26 +155,13 @@ pub async fn continuation<I: ConfigIo + Clone + Sync>(
             selected.decision = decision;
         }
     }
-    #[cfg(test)]
-    {
-        let event = driver.event.clone();
-        tokio::task::spawn_blocking(move || {
-            event(super::derivation_service::Event::RoutingObserved)
-        })
-        .await
-        .map_err(|_| store_error(Error::Closed))?;
-    }
     recheck_continuation(checked.capture(), &material, &observed, driver).await?;
     let latest = session.derivation_view().await.map_err(store_error)?;
     if latest.snapshot != view.snapshot || session.config().map_err(store_error)? != config {
         return Err(DerivationError::InputsChanged);
     }
     if let Decision::NeedQuestion(gate) = selected.decision {
-        let record = evidence::Record {
-            version: evidence::VERSION,
-            scope: scope.clone(),
-            fact: Fact::Gate(gate.clone()),
-        };
+        let (record, waiting) = ask(scope, gate);
         let operation = format!(
             "continuation-question:{}",
             record.key().map_err(store_error)?
@@ -157,7 +170,7 @@ pub async fn continuation<I: ConfigIo + Clone + Sync>(
             .commit_evidence(&view, &operation, &record)
             .await
             .map_err(store_error)?;
-        selected.decision = Decision::Wait(gate);
+        selected.decision = waiting;
         recheck_continuation(checked.capture(), &material, &observed, driver).await?;
         if session
             .derivation_view()
@@ -173,7 +186,7 @@ pub async fn continuation<I: ConfigIo + Clone + Sync>(
     Ok(selected)
 }
 
-fn pause(view: &View) -> Result<Option<Pause>, DerivationError> {
+pub(super) fn pause(view: &View) -> Result<Option<Pause>, DerivationError> {
     let records: Vec<_> = persistence::read(&view.snapshot.data)
         .map_err(store_error)?
         .into_values()
@@ -223,13 +236,24 @@ fn pause(view: &View) -> Result<Option<Pause>, DerivationError> {
     })
 }
 
+/// Whether the effective config skips discussion for an unplanned phase. A
+/// config that does not say controls nothing, so the query refuses.
+pub(super) fn skip_discuss(values: &serde_json::Value) -> Result<bool, DerivationError> {
+    merge::get(values, "workflow.skip_discuss")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| {
+            store_error(Error::Policy(
+                "next-action controlling config unavailable".into(),
+            ))
+        })
+}
+
 /// The undo mirror uses the selector with prospective lifecycle and retained
 /// pause/interruption authority. Queue rules follow Planned in this selector.
 pub fn undo_next(root: &Path, lifecycle: &derivation::Lifecycle, view: &View, config: &serde_json::Value) -> Result<String, DerivationError> {
     let observed = observations::capture(root, lifecycle)?;
     let paused = pause(view)?;
-    let skip = merge::get(config, "workflow.skip_discuss").and_then(serde_json::Value::as_bool)
-        .ok_or_else(|| store_error(Error::Policy("next-action controlling config unavailable".into())))?;
+    let skip = skip_discuss(config)?;
     let interruption = match lifecycle.current.and_then(|p| p.address().parse::<u32>().ok()) {
         Some(phase) => cadence::execution::history::interrupted_dispatch(&view.snapshot.data, phase, view.snapshot.generation).map_err(store_error)?,
         None => None,
@@ -254,13 +278,7 @@ pub async fn query_checked<I: ConfigIo + Clone + Sync>(
     let root = checked.capture().root.clone();
     let session = factory.first_touch(&root).await.map_err(store_error)?;
     let config = session.config().map_err(store_error)?;
-    let skip = merge::get(&config.effective.values, "workflow.skip_discuss")
-        .and_then(serde_json::Value::as_bool)
-        .ok_or_else(|| {
-            store_error(Error::Policy(
-                "next-action controlling config unavailable".into(),
-            ))
-        })?;
+    let skip = skip_discuss(&config.effective.values)?;
     let paused = pause(&view)?;
     let task_root = root.clone();
     let lifecycle = checked.answer().clone();
@@ -306,34 +324,55 @@ pub async fn query_checked<I: ConfigIo + Clone + Sync>(
     };
     let answer = next_action::select_with_interruptions(checked.answer(), &observed, paused.as_ref(), skip, conflicts,
         interruption.as_ref().map(|i| i.id.as_str()));
-    #[cfg(test)]
-    {
-        let event = driver.event.clone();
-        tokio::task::spawn_blocking(move || {
-            event(super::derivation_service::Event::RoutingObserved)
-        })
-        .await
-        .map_err(|_| store_error(Error::Closed))?;
-    }
     let task_driver = driver.clone();
-    tokio::task::spawn_blocking(move || {
+    let task_capture = checked.capture().clone();
+    let (current, lifecycle) = tokio::task::spawn_blocking(move || {
         let mut current = observations::capture(&root, checked.answer())?;
         observations::include_reviews(&mut current.queue, members, unreadable);
         let lifecycle = derivation::capture_inputs(&root, (task_driver.artifacts)().as_mut())?;
-        if current != observed || &lifecycle != checked.capture() {
-            return Err(DerivationError::InputsChanged);
-        }
-        Ok(())
+        Ok::<_, DerivationError>((current, lifecycle))
     })
     .await
     .map_err(|_| store_error(Error::Closed))??;
     let latest = session.derivation_view().await.map_err(store_error)?;
-    if cadence::review::persistence::records(&latest.snapshot.data).map_err(store_error)? != records
+    let after = Consumed {
+        observed: current,
+        capture: lifecycle,
+        reviews: cadence::review::persistence::records(&latest.snapshot.data).map_err(store_error)?,
+        snapshot: latest.snapshot.clone(),
+        config: session.config().map_err(store_error)?,
+    };
+    let before = Consumed {
+        observed,
+        capture: task_capture,
+        reviews: records,
+        snapshot: view.snapshot,
+        config,
+    };
+    held(&before, &after)?;
+    Ok(answer)
+}
+
+/// What a next-action answer was selected from.
+pub(super) struct Consumed {
+    pub(super) observed: observations::Observations,
+    pub(super) capture: derivation::CapturedInputs,
+    pub(super) reviews: serde_json::Value,
+    pub(super) snapshot: cadence::store::model::Snapshot,
+    pub(super) config: crate::config::reload::Generation,
+}
+
+/// An answer is served only when everything it was selected from reads the
+/// same after selection: the reports, queue and residue observed, the
+/// lifecycle capture, the review records, the store snapshot and the config.
+pub(super) fn held(before: &Consumed, after: &Consumed) -> Result<(), DerivationError> {
+    if after.observed != before.observed
+        || after.capture != before.capture
+        || after.reviews != before.reviews
+        || after.snapshot != before.snapshot
+        || after.config != before.config
     {
         return Err(DerivationError::InputsChanged);
     }
-    if latest.snapshot != view.snapshot || session.config().map_err(store_error)? != config {
-        return Err(DerivationError::InputsChanged);
-    }
-    Ok(answer)
+    Ok(())
 }
