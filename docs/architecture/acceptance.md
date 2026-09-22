@@ -226,9 +226,22 @@ still counts. The judgment is per check and is the same at either time.
 Per-task stops cost a human round trip per task with no added judgment, while
 task close continues to check the red/green pair, named verify runs and source.
 
-That is all. Granularity, isolation, "one function per test", mocking style -
-the old rules 2, 4, 8 and 9 - are not here. They are the project's test-style
-choices, and the project's CI enforces them or does not.
+That is all Cadence refuses on. Granularity, isolation, "one function per
+test", the old rules 2, 4, 8 and 9, are still the project's choices and the
+project's CI enforces them or does not.
+
+**2026-09-22 — decided by John Crenshaw.** What a check may fake is not one of
+those choices, because the check's own grammar already asks. A check names its
+`boundary`, which is the one unit it exercises, and its `fakes`, which name
+every filesystem, process and clock seam that unit touches. A check does not
+start a program to get its answer, not another binary, not the project's own,
+not git, not gpg. A check that starts the whole thing is testing the end, and a
+test of the end tells you something broke without telling you what. This is the
+classical default from the last section, said again where the planner writes
+checks, because saying it once in the guidance and nothing in the grammar is
+how a phase of full-run checks got written. The binary parses none of it and
+refuses nothing new on it. The planner is told, the executor is told, and the
+owner reads the plan.
 
 ## Verify: a decision, not a count
 
