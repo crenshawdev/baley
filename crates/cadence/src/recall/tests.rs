@@ -167,7 +167,7 @@ fn declined_current_and_historical_candidates_never_affect_ranking_or_totals() {
     assert_eq!(actual.total, 1);
 }
 
-use std::{fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
 fn put(root: &Path, path: &str, text: &str) {
     let dest = root.join(path);
@@ -271,28 +271,6 @@ fn unreadable_permitted_source_states_incomplete_coverage() {
     assert!(docs.incomplete[0].contains("PROJECT.md: source unavailable"));
 }
 
-fn history_answer(
-    root: &Path,
-    view: &View,
-    query: &str,
-    process: &mut dyn cadence::process::Process,
-) -> Answer {
-    let docs = documents::read(root, &mut documents::Files);
-    let mut candidates = current(view);
-    candidates.extend(docs.candidates);
-    let history = history::read(root, view, &candidates, process);
-    candidates.extend(history.candidates);
-    let mut result = Corpus::new(candidates, &declined(view))
-        .query(query, None, "builtin")
-        .unwrap();
-    result.incomplete = docs
-        .incomplete
-        .into_iter()
-        .chain(history.incomplete)
-        .collect();
-    result
-}
-
 #[test]
 fn an_archive_residue_line_yields_its_label_origin_and_phase_and_no_commit() {
     let candidates = history::residue(
@@ -337,4 +315,242 @@ fn a_git_launch_failure_is_incomplete_coverage_while_archive_residue_still_answe
             .total,
         1
     );
+}
+
+#[test]
+fn one_query_answers_a_record_hit_and_a_document_hit_together() {
+    let store = view(vec![item("orbit-item", "orbit from the store")]);
+    let mut candidates = current(&store);
+    candidates.extend(documents::snippets("PROJECT.md", "orbit from a document\n", None));
+    let answer = Corpus::new(candidates, &declined(&store))
+        .query("orbit", None, "builtin")
+        .unwrap();
+    assert!(answer.results.iter().any(|hit| matches!(
+        &hit.provenance,
+        Provenance::Record { id, revision: 1, .. } if id == "orbit-item"
+    )));
+    assert!(answer.results.iter().any(|hit| matches!(
+        &hit.provenance,
+        Provenance::Document { path, .. } if path == "PROJECT.md"
+    )));
+}
+
+#[test]
+fn a_paragraph_snippet_cites_its_first_line_and_keeps_its_continuation() {
+    let snippets = documents::snippets(
+        "PROJECT.md",
+        "# Project\n\norbit starts here\nand carries on here\n",
+        None,
+    );
+    let paragraph = snippets
+        .iter()
+        .find(|c| c.text.starts_with("orbit starts here"))
+        .unwrap();
+    assert!(paragraph.text.contains("and carries on here"));
+    assert!(matches!(&paragraph.provenance, Provenance::Document { line: 3, .. }));
+}
+
+/// Git's answers, supplied: the planning root is `/repo/.planning`, commits
+/// come newest first, each commit lists `(path, blob)` rows under the root,
+/// and each blob answers its text or a read failure.
+#[derive(Default)]
+struct Answers {
+    shallow: bool,
+    commits: Vec<&'static str>,
+    trees: BTreeMap<&'static str, Vec<(&'static str, &'static str)>>,
+    blobs: BTreeMap<&'static str, std::result::Result<String, &'static str>>,
+}
+
+impl history::ReadGit for Answers {
+    fn shallow(&mut self) -> std::result::Result<Vec<u8>, String> {
+        Ok(if self.shallow { "true\n" } else { "false\n" }.into())
+    }
+    fn toplevel(&mut self) -> std::result::Result<Vec<u8>, String> {
+        Ok(b"/repo\n".to_vec())
+    }
+    fn commits(&mut self) -> std::result::Result<Vec<u8>, String> {
+        Ok(self.commits.iter().map(|c| format!("{c}\n")).collect::<String>().into())
+    }
+    fn tree(&mut self, commit: &str, _: &str) -> std::result::Result<Vec<u8>, String> {
+        Ok(self.trees[commit]
+            .iter()
+            .map(|(path, blob)| format!("100644 blob {blob}\t.planning/{path}\0"))
+            .collect::<String>()
+            .into())
+    }
+    fn blob(&mut self, id: &str) -> std::result::Result<Vec<u8>, String> {
+        self.blobs[id].clone().map(String::into_bytes).map_err(String::from)
+    }
+}
+
+fn traverse(store: &View, git: &mut Answers) -> history::History {
+    history::traverse(Path::new("/repo/.planning"), store, BTreeSet::new(), git)
+}
+
+/// PROJECT.md was removed in c3; c2 and c1 both hold the same blob of it.
+fn removed_project() -> Answers {
+    Answers {
+        commits: vec!["c3", "c2", "c1"],
+        trees: BTreeMap::from([
+            ("c3", vec![]),
+            ("c2", vec![("PROJECT.md", "b1")]),
+            ("c1", vec![("PROJECT.md", "b1")]),
+        ]),
+        blobs: BTreeMap::from([("b1", Ok("# Project\n\nremoved orbit\n".into()))]),
+        ..Answers::default()
+    }
+}
+
+#[test]
+fn a_removed_document_cites_its_path_line_and_the_newest_commit_holding_it() {
+    let history = traverse(&view(vec![]), &mut removed_project());
+    let paragraph = history
+        .candidates
+        .iter()
+        .find(|c| c.text == "removed orbit")
+        .unwrap();
+    assert_eq!(
+        paragraph.provenance,
+        Provenance::Document {
+            path: "PROJECT.md".into(),
+            line: 3,
+            heading: "Project".into(),
+            commit: Some("c2".into()),
+        }
+    );
+}
+
+#[test]
+fn a_blob_held_by_several_commits_yields_one_candidate() {
+    let history = traverse(&view(vec![]), &mut removed_project());
+    assert_eq!(
+        history.candidates.iter().filter(|c| c.text == "removed orbit").count(),
+        1
+    );
+}
+
+#[test]
+fn an_unborn_repository_reports_history_incomplete() {
+    let history = traverse(&view(vec![]), &mut Answers::default());
+    assert_eq!(
+        history.incomplete,
+        ["history incomplete: unborn repository: no reachable history"]
+    );
+}
+
+#[test]
+fn a_shallow_repository_adds_a_shallow_history_note() {
+    let mut git = Answers {
+        shallow: true,
+        commits: vec!["c1"],
+        trees: BTreeMap::from([("c1", vec![])]),
+        ..Answers::default()
+    };
+    assert_eq!(
+        traverse(&view(vec![]), &mut git).incomplete,
+        ["shallow history: ancestors beyond the shallow boundary are unavailable"]
+    );
+}
+
+#[test]
+fn a_failed_blob_read_names_its_commit_and_path_and_the_other_hits_stay() {
+    let mut git = Answers {
+        commits: vec!["c1"],
+        trees: BTreeMap::from([("c1", vec![("PROJECT.md", "b1"), ("ROADMAP.md", "b2")])]),
+        blobs: BTreeMap::from([
+            ("b1", Err("git cat-file failed (exit status: 128)")),
+            ("b2", Ok("roadmap orbit\n".into())),
+        ]),
+        ..Answers::default()
+    };
+    let history = traverse(&view(vec![]), &mut git);
+    assert_eq!(
+        history.incomplete,
+        ["c1:PROJECT.md: git cat-file failed (exit status: 128)"]
+    );
+    assert!(history.candidates.iter().any(|c| c.text == "roadmap orbit"));
+}
+
+#[test]
+fn a_declined_item_has_no_history_candidates_while_a_document_with_its_text_answers() {
+    let filed = "- 2026-09-01 github GH-1 abc123: declined orbit\n";
+    let id = crate::import::items::translate(
+        None,
+        Some(&crate::import::Source {
+            path: "FILED.md".into(),
+            bytes: filed.into(),
+        }),
+        None,
+    )
+    .unwrap()
+    .records[0]
+        .id
+        .clone();
+    let captured = item(&id, "declined orbit");
+    let mut declined = captured.clone();
+    declined.revision = 2;
+    declined.disposition = Disposition::Declined {
+        reason: "not wanted".into(),
+    };
+    let mut git = Answers {
+        commits: vec!["c1"],
+        trees: BTreeMap::from([(
+            "c1",
+            vec![("FILED.md", "b1"), ("items.jsonl", "b2"), ("PROJECT.md", "b3")],
+        )]),
+        blobs: BTreeMap::from([
+            ("b1", Ok(filed.into())),
+            ("b2", Ok(serde_json::to_string(&captured).unwrap() + "\n")),
+            ("b3", Ok("declined orbit\n".into())),
+        ]),
+        ..Answers::default()
+    };
+    let history = traverse(&view(vec![captured, declined]), &mut git);
+    assert!(history.candidates.iter().all(|c| c.item_id.as_deref() != Some(id.as_str())));
+    assert!(history.candidates.iter().any(|c| matches!(
+        &c.provenance,
+        Provenance::Document { path, .. } if path == "PROJECT.md"
+    )));
+}
+
+/// The cache key over a store at `generation`, a config at `config`, one
+/// document with digest `document`, and history that reached `commit`.
+fn inputs(generation: u64, config: u64, document: &str, commit: &str) -> resident::Inputs {
+    let store = View {
+        snapshot: Snapshot::new(generation, b"", b"", serde_json::Value::Null).unwrap(),
+        ..view(vec![])
+    };
+    let docs = documents::Documents {
+        identities: BTreeMap::from([("PROJECT.md".to_string(), document.to_string())]),
+        ..documents::Documents::default()
+    };
+    let history = history::History {
+        identities: BTreeSet::from([format!("commit:{commit}")]),
+        ..history::History::default()
+    };
+    resident::Inputs::new(&store, config, docs, BTreeMap::new(), history)
+}
+
+#[test]
+fn a_warm_corpus_is_rebuilt_when_the_store_documents_config_or_history_change() {
+    let warm = resident::Cached {
+        inputs: inputs(1, 1, "d1", "c1"),
+        corpus: Corpus::new(vec![], &BTreeSet::new()),
+        phase: None,
+    };
+    assert!(warm.answers(&inputs(1, 1, "d1", "c1"), None));
+    for changed in [
+        inputs(2, 1, "d1", "c1"),
+        inputs(1, 2, "d1", "c1"),
+        inputs(1, 1, "d2", "c1"),
+        inputs(1, 1, "d1", "c2"),
+    ] {
+        assert!(!warm.answers(&changed, None));
+    }
+}
+
+#[test]
+fn the_backend_is_the_one_the_reloaded_config_names() {
+    let values = serde_json::json!({"memory": {"backend": "none"}});
+    assert_eq!(resident::backend(&values).unwrap(), "none");
 }

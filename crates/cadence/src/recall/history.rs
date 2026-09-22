@@ -176,19 +176,67 @@ fn historical(
     Ok(candidates)
 }
 
+/// What the traversal asks git. Each answer is git's raw output; reading it is
+/// the traversal's work, so a test can hand it the answers.
+pub trait ReadGit {
+    /// `rev-parse --is-shallow-repository`
+    fn shallow(&mut self) -> Result<Vec<u8>, String>;
+    /// `rev-parse --show-toplevel`
+    fn toplevel(&mut self) -> Result<Vec<u8>, String>;
+    /// `rev-list --topo-order HEAD`, newest first.
+    fn commits(&mut self) -> Result<Vec<u8>, String>;
+    /// The `ls-tree -z` rows of `commit` under `prefix`.
+    fn tree(&mut self, commit: &str, prefix: &str) -> Result<Vec<u8>, String>;
+    /// `cat-file blob`
+    fn blob(&mut self, id: &str) -> Result<Vec<u8>, String>;
+}
+
+/// Git run in the planning root through the read-only launch above.
+struct Git<'a> {
+    process: &'a mut dyn Process,
+    root: &'a Path,
+}
+
+impl ReadGit for Git<'_> {
+    fn shallow(&mut self) -> Result<Vec<u8>, String> {
+        read_git(self.process, self.root, &["rev-parse", "--is-shallow-repository"])
+    }
+    fn toplevel(&mut self) -> Result<Vec<u8>, String> {
+        read_git(self.process, self.root, &["rev-parse", "--show-toplevel"])
+    }
+    fn commits(&mut self) -> Result<Vec<u8>, String> {
+        read_git(self.process, self.root, &["rev-list", "--topo-order", "HEAD"])
+    }
+    fn tree(&mut self, commit: &str, prefix: &str) -> Result<Vec<u8>, String> {
+        read_git(
+            self.process,
+            self.root,
+            &["ls-tree", "--full-tree", "-r", "-z", commit, "--", prefix],
+        )
+    }
+    fn blob(&mut self, id: &str) -> Result<Vec<u8>, String> {
+        read_git(self.process, self.root, &["cat-file", "blob", id])
+    }
+}
+
+/// Keeps each candidate once, and none that a declined item owns.
+fn admit(
+    candidates: Vec<Candidate>,
+    excluded: &BTreeSet<String>,
+    seen: &mut BTreeSet<String>,
+    out: &mut History,
+) {
+    for c in candidates {
+        if c.item_id.as_ref().is_none_or(|id| !excluded.contains(id)) && seen.insert(evidence_key(&c))
+        {
+            out.candidates.push(c);
+        }
+    }
+}
+
 pub fn read(root: &Path, view: &View, live: &[Candidate], process: &mut dyn Process) -> History {
     let mut out = History::default();
-    let excluded = super::declined(view);
     let mut seen: BTreeSet<_> = live.iter().map(evidence_key).collect();
-    let mut admit = |candidates: Vec<Candidate>, out: &mut History| {
-        for c in candidates {
-            if c.item_id.as_ref().is_none_or(|id| !excluded.contains(id))
-                && seen.insert(evidence_key(&c))
-            {
-                out.candidates.push(c);
-            }
-        }
-    };
     // ARCHIVE is compatibility input only. It remains available even when git
     // itself is absent; no reconstructed full document or invented commit.
     let archive = root.join("ARCHIVE.md");
@@ -201,100 +249,126 @@ pub fn read(root: &Path, view: &View, live: &[Candidate], process: &mut dyn Proc
                 Ok(text) => {
                     out.identities
                         .insert(format!("ARCHIVE.md:{}", model::digest(text.as_bytes())));
-                    admit(residue("ARCHIVE.md", &text, None), &mut out);
+                    let excluded = super::declined(view);
+                    admit(residue("ARCHIVE.md", &text, None), &excluded, &mut seen, &mut out);
                 }
                 Err(e) => out.incomplete.push(format!("ARCHIVE.md unavailable: {e}")),
             }
         }
     }
-    let traverse = |process: &mut dyn Process,
-                    out: &mut History,
-                    admit: &mut dyn FnMut(Vec<Candidate>, &mut History)|
-     -> Result<(), String> {
-        let shallow = utf8(read_git(process, root, &["rev-parse", "--is-shallow-repository"])?)?;
-        if shallow.trim() == "true" {
-            out.incomplete.push(
-                "shallow history: ancestors beyond the shallow boundary are unavailable".into(),
-            );
-        }
-        let top = utf8(read_git(process, root, &["rev-parse", "--show-toplevel"])?)?;
-        let root = root.canonicalize().map_err(|e| e.to_string())?;
-        let relative = root
-            .strip_prefix(Path::new(top.trim()))
-            .map_err(|_| "planning root outside git worktree".to_string())?;
-        let prefix = relative.to_str().ok_or("non-UTF8 planning root")?;
-        let commits = utf8(read_git(process, &root, &["rev-list", "--topo-order", "HEAD"])?)?;
-        if commits.trim().is_empty() {
-            return Err("unborn repository: no reachable history".into());
-        }
-        let mut blobs = BTreeMap::<String, Vec<u8>>::new();
-        let mut visited = BTreeSet::new();
-        for commit in commits.lines() {
-            out.identities.insert(format!("commit:{commit}"));
-            let tree = read_git(
-                process,
-                &root,
-                &["ls-tree", "--full-tree", "-r", "-z", commit, "--", prefix],
-            )?;
-            for row in tree.split(|b| *b == 0).filter(|row| !row.is_empty()) {
-                let row = std::str::from_utf8(row).map_err(|_| "non-UTF8 tree path")?;
-                let (meta, full_path) = row.split_once('\t').ok_or("invalid git tree record")?;
-                let path = if prefix.is_empty() {
-                    full_path
-                } else {
-                    full_path
-                        .strip_prefix(prefix)
-                        .and_then(|s| s.strip_prefix('/'))
-                        .ok_or("git path outside planning root")?
-                };
-                if !documents::eligible(path)
-                    && !matches!(
-                        path,
-                        "items.jsonl" | "decisions.jsonl" | "FILED.md" | "ARCHIVE.md"
-                    )
-                {
-                    continue;
-                }
-                let meta: Vec<_> = meta.split_whitespace().collect();
-                if meta.len() != 3 {
-                    return Err("invalid git tree metadata".into());
-                }
-                if !matches!(meta[0], "100644" | "100755") || meta[1] != "blob" {
-                    out.incomplete
-                        .push(format!("{commit}:{path}: non-file source skipped"));
-                    continue;
-                }
-                let blob = meta[2];
-                out.identities.insert(format!("{path}:{blob}"));
-                if !visited.insert((path.to_string(), blob.to_string())) {
-                    continue;
-                }
-                let bytes = if let Some(bytes) = blobs.get(blob) {
-                    bytes.clone()
-                } else {
-                    match read_git(process, &root, &["cat-file", "blob", blob]) {
-                        Ok(bytes) => {
-                            blobs.insert(blob.into(), bytes.clone());
-                            bytes
-                        }
-                        Err(e) => {
-                            out.incomplete.push(format!("{commit}:{path}: {e}"));
-                            continue;
-                        }
-                    }
-                };
-                match historical(path, &bytes, commit, view) {
-                    Ok(candidates) => admit(candidates, out),
-                    Err(e) => out
-                        .incomplete
-                        .push(format!("{commit}:{path}: unavailable source: {e}")),
-                }
-            }
-        }
-        Ok(())
+    let history = match root.canonicalize() {
+        Ok(root) => traverse(&root, view, seen, &mut Git { process, root: &root }),
+        Err(e) => History {
+            incomplete: vec![format!("history incomplete: {e}")],
+            ..History::default()
+        },
     };
-    if let Err(e) = traverse(process, &mut out, &mut admit) {
+    out.candidates.extend(history.candidates);
+    out.identities.extend(history.identities);
+    out.incomplete.extend(history.incomplete);
+    out
+}
+
+/// History as git answers it for the canonical planning `root`: newest commit
+/// first, each path's blob read once, nothing a declined item owns and nothing
+/// already in `seen`. Every answer git could not give is named as incomplete
+/// coverage instead of failing the read.
+pub fn traverse(
+    root: &Path,
+    view: &View,
+    mut seen: BTreeSet<String>,
+    git: &mut dyn ReadGit,
+) -> History {
+    let mut out = History::default();
+    let excluded = super::declined(view);
+    if let Err(e) = walk(root, view, &excluded, &mut seen, git, &mut out) {
         out.incomplete.push(format!("history incomplete: {e}"));
     }
     out
+}
+
+fn walk(
+    root: &Path,
+    view: &View,
+    excluded: &BTreeSet<String>,
+    seen: &mut BTreeSet<String>,
+    git: &mut dyn ReadGit,
+    out: &mut History,
+) -> Result<(), String> {
+    let shallow = utf8(git.shallow()?)?;
+    if shallow.trim() == "true" {
+        out.incomplete.push(
+            "shallow history: ancestors beyond the shallow boundary are unavailable".into(),
+        );
+    }
+    let top = utf8(git.toplevel()?)?;
+    let relative = root
+        .strip_prefix(Path::new(top.trim()))
+        .map_err(|_| "planning root outside git worktree".to_string())?;
+    let prefix = relative.to_str().ok_or("non-UTF8 planning root")?;
+    let commits = utf8(git.commits()?)?;
+    if commits.trim().is_empty() {
+        return Err("unborn repository: no reachable history".into());
+    }
+    let mut blobs = BTreeMap::<String, Vec<u8>>::new();
+    let mut visited = BTreeSet::new();
+    for commit in commits.lines() {
+        out.identities.insert(format!("commit:{commit}"));
+        let tree = git.tree(commit, prefix)?;
+        for row in tree.split(|b| *b == 0).filter(|row| !row.is_empty()) {
+            let row = std::str::from_utf8(row).map_err(|_| "non-UTF8 tree path")?;
+            let (meta, full_path) = row.split_once('\t').ok_or("invalid git tree record")?;
+            let path = if prefix.is_empty() {
+                full_path
+            } else {
+                full_path
+                    .strip_prefix(prefix)
+                    .and_then(|s| s.strip_prefix('/'))
+                    .ok_or("git path outside planning root")?
+            };
+            if !documents::eligible(path)
+                && !matches!(
+                    path,
+                    "items.jsonl" | "decisions.jsonl" | "FILED.md" | "ARCHIVE.md"
+                )
+            {
+                continue;
+            }
+            let meta: Vec<_> = meta.split_whitespace().collect();
+            if meta.len() != 3 {
+                return Err("invalid git tree metadata".into());
+            }
+            if !matches!(meta[0], "100644" | "100755") || meta[1] != "blob" {
+                out.incomplete
+                    .push(format!("{commit}:{path}: non-file source skipped"));
+                continue;
+            }
+            let blob = meta[2];
+            out.identities.insert(format!("{path}:{blob}"));
+            if !visited.insert((path.to_string(), blob.to_string())) {
+                continue;
+            }
+            let bytes = if let Some(bytes) = blobs.get(blob) {
+                bytes.clone()
+            } else {
+                match git.blob(blob) {
+                    Ok(bytes) => {
+                        blobs.insert(blob.into(), bytes.clone());
+                        bytes
+                    }
+                    Err(e) => {
+                        out.incomplete.push(format!("{commit}:{path}: {e}"));
+                        continue;
+                    }
+                }
+            };
+            match historical(path, &bytes, commit, view) {
+                Ok(candidates) => admit(candidates, excluded, seen, out),
+                Err(e) => out
+                    .incomplete
+                    .push(format!("{commit}:{path}: unavailable source: {e}")),
+            }
+        }
+    }
+    Ok(())
 }

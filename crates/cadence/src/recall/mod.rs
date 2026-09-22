@@ -407,8 +407,11 @@ pub(crate) mod resident {
         requests: mpsc::Sender<Request>,
     }
 
+    /// What a warm corpus was built from: the store by generation and
+    /// digests, the config by generation, each document by digest and file
+    /// identity, and history by the commits and blobs it reached.
     #[derive(PartialEq, Eq)]
-    struct Inputs {
+    pub(super) struct Inputs {
         store: (u64, String, String),
         config: u64,
         documents: BTreeMap<String, String>,
@@ -416,14 +419,43 @@ pub(crate) mod resident {
         history: BTreeSet<String>,
         incomplete: Vec<String>,
     }
+    impl Inputs {
+        pub(super) fn new(
+            view: &View,
+            config: u64,
+            docs: documents::Documents,
+            file_ids: BTreeMap<String, (u64, u64)>,
+            history: history::History,
+        ) -> Self {
+            Self {
+                store: (
+                    view.snapshot.generation,
+                    view.snapshot.items_digest.clone(),
+                    view.snapshot.decisions_digest.clone(),
+                ),
+                config,
+                documents: docs.identities,
+                file_ids,
+                history: history.identities,
+                incomplete: docs.incomplete.into_iter().chain(history.incomplete).collect(),
+            }
+        }
+    }
     pub(crate) struct Cached {
-        inputs: Inputs,
-        corpus: Corpus,
-        phase: Option<u32>,
+        pub(super) inputs: Inputs,
+        pub(super) corpus: Corpus,
+        pub(super) phase: Option<u32>,
+    }
+    impl Cached {
+        /// The warm corpus answers only while everything it was built from,
+        /// and the phase it was built for, is unchanged.
+        pub(super) fn answers(&self, inputs: &Inputs, phase: Option<u32>) -> bool {
+            self.inputs == *inputs && self.phase == phase
+        }
     }
 
     fn prepare(root: &Path, view: &View, config: &Generation) -> (Inputs, Vec<Candidate>) {
-        let docs = documents::read(root, &mut documents::Files);
+        let mut docs = documents::read(root, &mut documents::Files);
         let file_ids = docs
             .identities
             .keys()
@@ -434,26 +466,18 @@ pub(crate) mod resident {
             })
             .collect();
         let mut candidates = current(view);
-        candidates.extend(docs.candidates);
-        let history = history::read(root, view, &candidates, &mut cadence::process::System);
-        candidates.extend(history.candidates);
-        let inputs = Inputs {
-            store: (
-                view.snapshot.generation,
-                view.snapshot.items_digest.clone(),
-                view.snapshot.decisions_digest.clone(),
-            ),
-            config: config.number,
-            documents: docs.identities,
-            file_ids,
-            history: history.identities,
-            incomplete: docs
-                .incomplete
-                .into_iter()
-                .chain(history.incomplete)
-                .collect(),
-        };
-        (inputs, candidates)
+        candidates.extend(std::mem::take(&mut docs.candidates));
+        let mut history = history::read(root, view, &candidates, &mut cadence::process::System);
+        candidates.extend(std::mem::take(&mut history.candidates));
+        (Inputs::new(view, config.number, docs, file_ids, history), candidates)
+    }
+
+    /// The backend recall answers with, as the config reloaded for this
+    /// request names it.
+    pub(super) fn backend(values: &serde_json::Value) -> Result<&str> {
+        merge::get(values, "memory.backend")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| Error::Policy("recall controlling config unavailable".into()))
     }
 
     pub(crate) async fn answer<I: ConfigIo>(
@@ -469,9 +493,7 @@ pub(crate) mod resident {
         // generation during I/O; rechecking below catches that too.
         let view = session.shared_derivation_view().await?;
         let config = session.config()?;
-        let backend = merge::get(&config.effective.values, "memory.backend")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| Error::Policy("recall controlling config unavailable".into()))?;
+        let backend = backend(&config.effective.values)?;
         // Validate arguments and backend before any expensive corpus read.
         let empty = Corpus::new(vec![], &BTreeSet::new());
         let disabled = empty.query_phase(query, limit, backend, phase).map_err(Error::Invalid)?;
@@ -494,7 +516,7 @@ pub(crate) mod resident {
                 "recall inputs changed during preparation; retry with current generation".into(),
             ));
         }
-        if cache.as_ref().is_none_or(|cached| cached.inputs != inputs || cached.phase != phase) {
+        if cache.as_ref().is_none_or(|cached| !cached.answers(&inputs, phase)) {
             *cache = Some(Cached {
                 inputs,
                 corpus: Corpus::new(candidates, &declined(&latest)),

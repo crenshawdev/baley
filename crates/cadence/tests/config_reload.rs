@@ -30,9 +30,13 @@ struct Layers {
 
 impl Layers {
     fn write(&self, path: &str, value: Value) {
+        self.write_bytes(path, &serde_json::to_vec(&value).unwrap());
+    }
+
+    fn write_bytes(&self, path: &str, bytes: &[u8]) {
         let mut files = self.files.lock().unwrap();
         files.retain(|(held, _)| held != Path::new(path));
-        files.push((path.into(), serde_json::to_vec(&value).unwrap()));
+        files.push((path.into(), bytes.to_vec()));
     }
 
     fn fail(&self, failing: bool) {
@@ -95,6 +99,16 @@ fn a_failed_read_discards_the_cached_generation_so_the_next_read_is_a_new_one() 
     layers.fail(false);
     let next = reload.refresh().unwrap();
     assert!(next.number > first.number, "{} after {}", next.number, first.number);
+}
+
+#[test]
+fn an_invalid_layer_is_refused_rather_than_answered_from_the_cached_generation() {
+    let layers = Layers::default();
+    layers.write(REPO, json!({"workflow":{"verifier":true}}));
+    let mut reload = Reload::new(paths(), layers.clone());
+    reload.refresh().unwrap();
+    layers.write_bytes(REPO, b"{");
+    assert!(matches!(reload.refresh(), Err(Error::Invalid(_))));
 }
 
 fn snapshot() -> Snapshot {
