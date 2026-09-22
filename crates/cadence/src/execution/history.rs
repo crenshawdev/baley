@@ -742,7 +742,6 @@ pub fn suite_failed(result: &RunResult) -> bool {
     matches!(result.observation, Observation::ResultsObserved { .. })
         && (result.disposition != (Disposition::Exited { code: 0 }) || match &result.observation {
             Observation::ResultsObserved { summary: Summary::Cargo { failed } } => *failed,
-            Observation::ResultsObserved { summary: Summary::Unittest { failed, failures, errors } } => *failed || *failures > 0 || *errors > 0,
             Observation::Unknown => false,
         })
 }

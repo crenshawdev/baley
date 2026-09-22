@@ -50,8 +50,7 @@ pub fn acceptable(result: &RunResult) -> bool {
         return false;
     }
     let passed = matches!(&result.observation,
-        Observation::ResultsObserved { summary: Summary::Cargo { failed: false } }
-        | Observation::ResultsObserved { summary: Summary::Unittest { failed: false, failures: 0, errors: 0 } });
+        Observation::ResultsObserved { summary: Summary::Cargo { failed: false } });
     let nonempty = [&result.stdout, &result.stderr].iter().any(|capture| {
         String::from_utf8_lossy(&capture.bytes).lines().chain(capture.result_lines.iter().map(String::as_str)).any(|line| {
             let words: Vec<_> = line.split_whitespace().collect();
@@ -247,14 +246,5 @@ mod tests {
         let candidate: RunResult = serde_json::from_value(serde_json::to_value(candidate).unwrap()).unwrap();
         assert!(!candidate.stderr.bytes.is_empty(), "text captures restore bytes on read");
         assert!(acceptable(&candidate));
-
-        let mut candidate = result;
-        candidate.observation = Observation::ResultsObserved {
-            summary: Summary::Unittest { failed: false, failures: 0, errors: 0 },
-        };
-        for (line, expected) in [("Ran 1 test in 0.001s", true), ("Ran 0 tests in 0.001s", false)] {
-            candidate.stderr = Capture::new(vec![], true, vec![line.into(), "OK".into()]);
-            assert_eq!(acceptable(&candidate), expected, "{line}");
-        }
     }
 }

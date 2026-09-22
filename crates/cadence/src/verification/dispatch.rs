@@ -148,7 +148,7 @@ mod tests {
     // carries no event list at all.
     #[test]
     fn prompt_names_runs_by_identity_and_never_carries_bytes() {
-        let material = json!({"commit":"1".repeat(40),"tree":"2".repeat(40),"test_file":"tests/one.py","test_digest":"3".repeat(64),"command":"python3 tests/one.py"});
+        let material = json!({"commit":"1".repeat(40),"tree":"2".repeat(40),"test_file":"tests/one.rs","test_digest":"3".repeat(64),"command":"cargo test --test one"});
         let stdout = json!({"bytes":[116,101,115,116,32,114,101,115,117,108,116,58,32,111,107,10],"digest":"f".repeat(64),"complete":true,"result_lines":["test result: ok"]});
         let stderr = json!({"bytes":[],"digest":"0".repeat(64),"complete":true});
         let execution = json!({"events":[

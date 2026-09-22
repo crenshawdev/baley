@@ -73,13 +73,10 @@ operational input or from `execution-history`:
 
 Red and green (D-109): a run is `results observed` only when its retained
 output carries a recognized line, a complete cargo or libtest `test result:`
-line or the Python unittest `Ran N tests` summary (singular `test` allowed)
-with `OK` or `FAILED (...)`; everything else is Unknown, including a terminated
-custom command with complete captures. A recognized failing summary is a
-reported failure, not yet a behavioral red: unittest is red-eligible only with
-`failures` above zero and `errors` at zero, errors are a failed attempt and
-never red, and cargo's `test result: FAILED` is red-eligible with its cause
-left to inspection. An Unknown run becomes red- or green-eligible only through
+line or a nextest `Summary` line; everything else is Unknown, including a
+terminated custom command with complete captures. A recognized failing summary
+is a reported failure, not yet a behavioral red: cargo's `test result: FAILED`
+is red-eligible with its cause left to inspection. An Unknown run becomes red- or green-eligible only through
 the owner's separate `execution-classify-run` record bound to that run's output
 digest and check revision; the binary infers nothing from arbitrary output and
 never relabels the Unknown observation.

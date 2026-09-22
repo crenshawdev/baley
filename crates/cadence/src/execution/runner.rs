@@ -602,11 +602,6 @@ pub(crate) fn nextest_summary(line: &str) -> Option<NextestSummary> {
 }
 
 pub fn classify(stdout: &Capture, stderr: &Capture) -> Observation {
-    let ran = regex::Regex::new(r"^Ran [0-9]+ tests?( in .+)?$").expect("fixed grammar");
-    let failed = regex::Regex::new(r"^FAILED \(([^()]*)\)$").expect("fixed grammar");
-    let counts = regex::Regex::new(r"^(failures|errors|skipped|expected failures|unexpected successes)=([0-9]+)$").expect("fixed grammar");
-    let mut python_ran = false;
-    let mut python_outcome = None;
     for capture in [stdout, stderr] {
         for line in lines(capture) {
             let line = line.trim_start();
@@ -618,20 +613,7 @@ pub fn classify(stdout: &Capture, stderr: &Capture) -> Observation {
             if let Some(summary) = nextest_summary(line) {
                 return Observation::ResultsObserved { summary: Summary::Cargo { failed: summary.failed } };
             }
-            if ran.is_match(line) { python_ran = true; }
-            if line == "OK" { python_outcome = Some(Summary::Unittest { failed: false, failures: 0, errors: 0 }); }
-            if let Some(found) = failed.captures(line) {
-                let mut failures = 0; let mut errors = 0; let mut valid = true;
-                for part in found[1].split(", ") {
-                    if let Some(count) = counts.captures(part) {
-                        let Ok(value) = count[2].parse::<u64>() else { valid = false; break };
-                        match &count[1] { "failures" => failures = value, "errors" => errors = value, _ => {} }
-                    } else { valid = false; }
-                }
-                if valid { python_outcome = Some(Summary::Unittest { failed: true, failures, errors }); }
-            }
         }
     }
-    if python_ran && let Some(summary) = python_outcome { return Observation::ResultsObserved { summary } }
     Observation::Unknown
 }

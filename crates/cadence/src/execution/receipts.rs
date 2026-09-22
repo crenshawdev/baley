@@ -109,7 +109,6 @@ pub enum Observation {
 #[serde(tag = "runner", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Summary {
     Cargo { failed: bool },
-    Unittest { failed: bool, failures: u64, errors: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,7 +340,6 @@ fn run_eligible(records: &[super::history::Record], task: &super::history::Task,
     if !disposition || !result.material_unchanged {return false}
     match &result.observation {
         Observation::ResultsObserved {summary:Summary::Cargo {failed}}=>if red {*failed}else{!*failed},
-        Observation::ResultsObserved {summary:Summary::Unittest {failed,failures,errors}}=>if red {*failed && *failures>0 && *errors==0}else{!*failed && *failures==0 && *errors==0},
         Observation::Unknown=>records.iter().any(|r|r.request.task==*task && matches!(&r.request.event,
             super::history::Event::OwnerClassification(statement) if statement.submission.run_id==result.run_id
                 && statement.submission.check==*check && statement.submission.output_identity==result.output_identity()
