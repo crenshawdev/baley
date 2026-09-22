@@ -6,3 +6,6 @@ pub mod report;
 pub mod reconcile;
 pub mod instructions;
 pub mod cleanup;
+
+#[cfg(test)]
+mod effects_tests;

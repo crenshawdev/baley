@@ -149,3 +149,6 @@ impl Capture {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod branch_tests;

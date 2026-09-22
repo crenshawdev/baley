@@ -93,18 +93,27 @@ pub fn freeze(root: &Path, changes: &BTreeMap<String, Option<Vec<u8>>>, phases: 
     freeze_message(root, changes, phases, &format!("chore: prune milestone phases {}\n\nRetain completed phase evidence in the single parent tree.\n", phases.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")), process)
 }
 
-pub fn freeze_message(root: &Path, changes: &BTreeMap<String, Option<Vec<u8>>>, phases: &[u32], message: &str, process: &mut dyn Process) -> Result<Seal> {
-    let parent = git::resolve_commit(root,"HEAD", process)?;
-    let reference = text(root,&["symbolic-ref","-q","HEAD"], process)?;
-    if !reference.starts_with("refs/heads/") { return Err(Error::Policy("prune needs a branch ref".into())); }
+/// Read `ls-tree -r -z --full-tree` into path, mode and object id. Git's NUL
+/// protocol keeps pathnames intact; a row that does not carry a mode, a type
+/// and an object id before its tab is not a tree entry and is refused rather
+/// than read past.
+pub fn parse_tree(output: &[u8]) -> Result<BTreeMap<String, (String, String)>> {
     let mut entries = BTreeMap::new();
-    for record in git::run(root,["ls-tree","-r","-z","--full-tree",&parent], process)?.split(|b| *b == 0).filter(|b| !b.is_empty()) {
+    for record in output.split(|b| *b == 0).filter(|b| !b.is_empty()) {
         let record = std::str::from_utf8(record).map_err(|_| Error::Invalid("undecodable Git pathname".into()))?;
         let (header,path) = record.split_once('\t').ok_or_else(|| Error::Invalid("invalid Git tree row".into()))?;
         let fields: Vec<_> = header.split(' ').collect();
         if fields.len()!=3 { return Err(Error::Invalid("invalid Git tree entry".into())); }
         entries.insert(path.to_owned(),(fields[0].to_owned(),fields[2].to_owned()));
     }
+    Ok(entries)
+}
+
+pub fn freeze_message(root: &Path, changes: &BTreeMap<String, Option<Vec<u8>>>, phases: &[u32], message: &str, process: &mut dyn Process) -> Result<Seal> {
+    let parent = git::resolve_commit(root,"HEAD", process)?;
+    let reference = text(root,&["symbolic-ref","-q","HEAD"], process)?;
+    if !reference.starts_with("refs/heads/") { return Err(Error::Policy("prune needs a branch ref".into())); }
+    let mut entries = parse_tree(&git::run(root,["ls-tree","-r","-z","--full-tree",&parent], process)?)?;
     for path in entries.keys() {
         if phases.iter().any(|p| path.starts_with(&format!(".planning/phases/{p}/"))) && !changes.contains_key(path) {
             return Err(Error::Conflict(format!("tracked prune input is missing: {path}")));

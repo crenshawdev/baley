@@ -43,6 +43,37 @@ fn document(path: &Path) -> Result<String> {
     }
 }
 
+/// Read `for-each-ref --format=%(refname) %(objectname)` into branch name and
+/// commit. Splitting this from the call is what makes the shape checkable.
+pub fn parse_branches(refs: &str) -> Result<BTreeMap<String, String>> {
+    refs.lines()
+        .map(|line| {
+            let (name, sha) = line
+                .split_once(' ')
+                .ok_or_else(|| Error::Invalid("invalid branch observation".into()))?;
+            Ok((
+                name.strip_prefix("refs/heads/").unwrap_or(name).into(),
+                sha.into(),
+            ))
+        })
+        .collect()
+}
+
+/// The branch this work is measured against: the one the policy names when it
+/// exists, and otherwise the first protected branch that does. A policy naming
+/// a branch nobody has chooses nothing rather than falling back, because the
+/// owner said which one they meant.
+pub fn choose_base(policy: &Policy, branches: &BTreeMap<String, String>) -> Option<String> {
+    match &policy.base {
+        Some(name) => branches.contains_key(name).then(|| name.clone()),
+        None => policy
+            .protected
+            .iter()
+            .find(|name| branches.contains_key(*name))
+            .cloned(),
+    }
+}
+
 pub fn observe(root: &Path, planning: &Path, policy: &Policy, process: &mut dyn Process) -> Result<Observed> {
     let branch = text(git::run(root, ["branch", "--show-current"], process)?)?
         .trim_end_matches('\n')
@@ -59,26 +90,8 @@ pub fn observe(root: &Path, planning: &Path, policy: &Policy, process: &mut dyn 
         ],
         process,
     )?)?;
-    let branches: BTreeMap<String, String> = refs
-        .lines()
-        .map(|line| {
-            let (name, sha) = line
-                .split_once(' ')
-                .ok_or_else(|| Error::Invalid("invalid branch observation".into()))?;
-            Ok((
-                name.strip_prefix("refs/heads/").unwrap_or(name).into(),
-                sha.into(),
-            ))
-        })
-        .collect::<Result<_>>()?;
-    let base = match &policy.base {
-        Some(name) => branches.contains_key(name).then(|| name.clone()),
-        None => policy
-            .protected
-            .iter()
-            .find(|name| branches.contains_key(*name))
-            .cloned(),
-    };
+    let branches = parse_branches(&refs)?;
+    let base = choose_base(policy, &branches);
     let shared_history = if let Some(base) = &base {
         let output = process.run(
             &Launch::new("git")
