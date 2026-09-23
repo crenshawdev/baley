@@ -59,20 +59,6 @@ pub(super) fn with_skipped(mut answer: serde_json::Value, skipped: &Skipped) -> 
     answer
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn skipped_crossings_keep_a_bounded_note_and_mark_omissions() {
-        let mut skipped = super::Skipped::default();
-        for _ in 0..200 {
-            skipped.push(crate::acquisition::Crossing { file: "src/large.rs".into(), size: 16_777_217, bound: 16_777_216 });
-        }
-        assert_eq!(skipped.notes[0], "src/large.rs: size 16777217 exceeds acquisition bound 16777216");
-        assert_eq!(skipped.notes.last().unwrap(), "additional acquisition crossings omitted at the skipped-note bound of 8192 bytes");
-        assert!(serde_json::to_vec(&skipped.notes).unwrap().len() <= 8192);
-    }
-}
-
 pub fn line_starts(content: &str) -> Vec<usize> {
     let mut starts = vec![0];
     starts.extend(content.match_indices('\n').map(|(index, _)| index + 1));
@@ -88,4 +74,18 @@ pub fn fallback(path: &Path, content: &str) -> Vec<Unit> {
     let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("source").to_owned();
     let last_line = content.split_inclusive('\n').count().max(1);
     vec![Unit { name: name.clone(), bare: name, kind: "source", first_line: 1, last_line, first_byte: 0, last_byte: content.len() }]
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn skipped_crossings_keep_a_bounded_note_and_mark_omissions() {
+        let mut skipped = super::Skipped::default();
+        for _ in 0..200 {
+            skipped.push(crate::acquisition::Crossing { file: "src/large.rs".into(), size: 16_777_217, bound: 16_777_216 });
+        }
+        assert_eq!(skipped.notes[0], "src/large.rs: size 16777217 exceeds acquisition bound 16777216");
+        assert_eq!(skipped.notes.last().unwrap(), "additional acquisition crossings omitted at the skipped-note bound of 8192 bytes");
+        assert!(serde_json::to_vec(&skipped.notes).unwrap().len() <= 8192);
+    }
 }
