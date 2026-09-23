@@ -23,6 +23,7 @@ pub struct SearchRequest {
     pub scope: Scope,
     pub case_insensitive: Option<bool>,
     pub cursor: Option<String>,
+    pub limit: Option<NonZeroU32>,
 }
 
 /// Which files a scope holds, with a reference to read each one.

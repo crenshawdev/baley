@@ -13,6 +13,7 @@ use globset::{GlobBuilder, GlobMatcher};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{Searcher, SearcherBuilder, sinks::UTF8};
 use ignore::WalkBuilder;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::envelope::Refusal;
@@ -45,7 +46,7 @@ const WINDOW_NAME: &str = "(no enclosing unit)";
 /// of magnitude above the clean parse rate for those same bytes. Spending it
 /// costs a unit resolution and never a hit: the files still to resolve take
 /// the window path and the answer says so.
-const AGGREGATE_PARSE_BUDGET: Duration = Duration::from_secs(5);
+pub(super) const AGGREGATE_PARSE_BUDGET: Duration = Duration::from_secs(5);
 
 const STOPPED_NOTE: &str = "unit resolution stopped at the aggregate parse budget; later files are line windows";
 const BOUNDED_NOTE: &str = "search answer was bounded; repeat the same search with this cursor to continue";
@@ -130,15 +131,15 @@ pub(super) fn matching_lines(searcher: &mut Searcher, matcher: &RegexMatcher, co
 }
 
 /// One file that matched, with everything the answer needs from it.
-struct FileHits {
+pub(super) struct FileHits {
     /// The canonical path `source::content` resolved.
-    path: PathBuf,
-    revision: String,
+    pub(super) path: PathBuf,
+    pub(super) revision: String,
     /// The content the matching ran against, kept so the answer renders from
     /// the same bytes the line numbers refer to.
-    content: String,
+    pub(super) content: String,
     /// 1-based matching line numbers, ascending.
-    lines: Vec<usize>,
+    pub(super) lines: Vec<usize>,
 }
 
 /// One contiguous run of one file that the answer serves, and the unit of
@@ -174,7 +175,7 @@ struct Site {
     block: usize,
 }
 
-struct Answer {
+pub(super) struct Answer {
     blocks: Vec<Block>,
     sites: Vec<Site>,
     /// Whether unit resolution stopped at the aggregate parse budget.
@@ -250,7 +251,7 @@ fn file_blocks(file: usize, hits: &FileHits, units: &[Unit]) -> (Vec<Block>, Vec
 
 /// Lay a hit list out as blocks and sites, resolving units file by file until
 /// the aggregate parse budget is spent on the `now` reader.
-fn plan_answer(files: &[FileHits], aggregate: Duration, now: &mut dyn FnMut() -> Duration) -> Answer {
+pub(super) fn plan_answer(files: &[FileHits], aggregate: Duration, now: &mut dyn FnMut() -> Duration) -> Answer {
     let mut blocks: Vec<Block> = Vec::new();
     let mut sites: Vec<Site> = Vec::new();
     let started = now();
@@ -281,6 +282,23 @@ fn block_unit(block: &Block, hits: &FileHits) -> Unit {
         Some(unit) => unit.clone(),
         None => outline::Lines::new(&hits.content).unit(WINDOW_NAME.into(), WINDOW_NAME.into(), "window", block.first_line, block.last_line),
     }
+}
+
+#[derive(Serialize)]
+pub(super) struct Row {
+    pub(super) file: String,
+    pub(super) line: usize,
+    pub(super) text: String,
+    pub(super) name: String,
+    pub(super) kind: &'static str,
+    #[serde(skip)]
+    pub(super) target: Unit,
+    #[serde(skip)]
+    pub(super) file_index: usize,
+}
+
+pub(super) fn rows(_files: &[FileHits], _answer: &Answer, _project: &Path) -> Vec<Row> {
+    Vec::new()
 }
 
 impl ReadDomain {
@@ -406,6 +424,9 @@ impl ReadDomain {
             "matches":answer.sites.len(),"files":files.len(),"blocks":answer.blocks.len(),"served":emitted.len()}), skipped)
     }
 }
+
+#[cfg(test)]
+mod row_tests;
 
 #[cfg(test)]
 mod tests {
