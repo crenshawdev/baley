@@ -50,6 +50,7 @@ pub struct ReadRequest {
     pub location: Option<String>,
     pub file: Option<String>,
     pub unit: Option<String>,
+    pub cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]

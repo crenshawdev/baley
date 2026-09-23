@@ -71,5 +71,20 @@ pub(super) fn line_text(line: &str) -> String {
     }
 }
 
+/// The longest whole-character prefix whose JSON string contents fit.
+pub(super) fn fit_text(room: usize, text: &str) -> usize {
+    let mut remaining = room;
+    for (offset, character) in text.char_indices() {
+        let cost = match character {
+            '"' | '\\' | '\u{0008}' | '\u{000c}' | '\n' | '\r' | '\t' => 2,
+            '\u{0000}'..='\u{001f}' => 6,
+            _ => character.len_utf8(),
+        };
+        if cost > remaining { return offset; }
+        remaining -= cost;
+    }
+    text.len()
+}
+
 #[cfg(test)]
 mod tests;

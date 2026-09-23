@@ -52,3 +52,11 @@ fn a_line_over_200_characters_is_cut_with_the_marker() {
     assert_eq!(line_text(&format!("needle{}", "x".repeat(294))), format!("needle{}…", "x".repeat(194)));
     assert_eq!(line_text(&"é".repeat(201)), format!("{}…", "é".repeat(200)));
 }
+
+#[test]
+fn a_slice_body_is_cut_where_its_escaped_length_would_cross() {
+    assert_eq!(fit_text(65_000, &"\"".repeat(40_000)), 32_500);
+    assert_eq!(fit_text(13, "\u{0001}\u{0001}\u{0001}"), 2);
+    assert_eq!(fit_text(5, "éééé"), 4);
+    assert_eq!(fit_text(10, "abc"), 3);
+}
