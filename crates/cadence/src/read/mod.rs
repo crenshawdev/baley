@@ -15,7 +15,7 @@ pub mod source;
 
 use crate::process::Process;
 use location::Registry;
-use model::{DocumentRequest, DocumentSearchRequest, ListRequest, ReadRequest, SearchRequest, SymbolSearchRequest};
+use model::{CallSearchRequest, DocumentRequest, DocumentSearchRequest, ListRequest, ReadRequest, SearchRequest, SymbolSearchRequest};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -25,6 +25,7 @@ pub use location::Capability;
 pub enum Query {
     Search(SearchRequest),
     SymbolSearch(SymbolSearchRequest),
+    CallSearch(CallSearchRequest),
     List(ListRequest),
     Read(ReadRequest),
     Document(DocumentRequest),
@@ -50,6 +51,7 @@ impl ReadDomain {
         match query {
             Query::Search(request) => self.search(request),
             Query::SymbolSearch(request) => self.symbol_search(request),
+            Query::CallSearch(request) => self.call_search(request),
             Query::List(request) => self.list(request),
             Query::Read(request) => self.read(request),
             Query::Document(request) => self.document(request, process),
