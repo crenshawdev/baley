@@ -37,8 +37,12 @@ fn a_row_no_page_can_hold_is_passed_and_named() {
 }
 
 #[test]
-fn a_limit_over_the_maximum_is_refused_naming_it() {
+fn an_absent_limit_defaults_to_50() {
     assert_eq!(limit(None).unwrap(), 50);
+}
+
+#[test]
+fn a_limit_over_the_maximum_is_refused_naming_it() {
     assert_eq!(limit(NonZeroU32::new(200)).unwrap(), 200);
     let refusal = limit(NonZeroU32::new(201)).unwrap_err();
     assert_eq!(refusal["code"], "invalid-limit");
