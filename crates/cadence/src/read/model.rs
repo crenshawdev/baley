@@ -26,6 +26,16 @@ pub struct SearchRequest {
     pub limit: Option<NonZeroU32>,
 }
 
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolSearchRequest {
+    pub name: String,
+    pub scope: Scope,
+    pub case_insensitive: Option<bool>,
+    pub limit: Option<NonZeroU32>,
+    pub cursor: Option<String>,
+}
+
 /// Which files a scope holds, with a reference to read each one.
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

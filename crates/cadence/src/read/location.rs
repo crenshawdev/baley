@@ -15,6 +15,7 @@ const MAX_CAPABILITIES: usize = 1024;
 #[derive(Clone, PartialEq, Eq)]
 pub enum Resumes {
     Search { pattern: String, scope: Scope, case_insensitive: bool },
+    SymbolSearch { name: String, scope: Scope, case_insensitive: bool },
     List { scope: Scope },
     Outline { path: PathBuf, unit: Option<String> },
 }
@@ -25,7 +26,7 @@ pub enum Capability {
     File { path: PathBuf, revision: String },
     /// Where a bounded answer resumes: the first site it did not serve, bound
     /// to the request it was issued for. A list site is a file and line 0;
-    /// an outline stores its next unit's ordinal in the line slot.
+    /// outlines and symbol searches store the next unit's ordinal in the line slot.
     Cursor { resumes: Resumes, file: PathBuf, line: usize },
 }
 

@@ -293,6 +293,8 @@ enum QueryArguments {
     },
     #[serde(rename = "search")]
     Search(cadence::read::model::SearchRequest),
+    #[serde(rename = "symbol-search")]
+    SymbolSearch(cadence::read::model::SymbolSearchRequest),
     #[serde(rename = "list")]
     List(cadence::read::model::ListRequest),
     #[serde(rename = "read")]
@@ -1058,9 +1060,10 @@ impl PublicServer {
                     };
                     return structured_result(Ok(QueryOutput::Read(answer)));
                 }
-                if raw.as_ref().and_then(|value| value["operation"].as_str()).is_some_and(|operation| matches!(operation, "search" | "list" | "read" | "document" | "document-search")) {
+                if raw.as_ref().and_then(|value| value["operation"].as_str()).is_some_and(|operation| matches!(operation, "search" | "symbol-search" | "list" | "read" | "document" | "document-search")) {
                     let query = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
                         Ok(QueryArguments::Search(request)) => cadence::read::Query::Search(request),
+                        Ok(QueryArguments::SymbolSearch(request)) => cadence::read::Query::SymbolSearch(request),
                         Ok(QueryArguments::List(request)) => cadence::read::Query::List(request),
                         Ok(QueryArguments::Read(request)) => cadence::read::Query::Read(request),
                         Ok(QueryArguments::Document(request)) => cadence::read::Query::Document(request),
@@ -1223,7 +1226,7 @@ impl PublicServer {
                     Some(QueryArguments::ContextIntake { .. }) => {
                         unreachable!("context intake is decoded before execution fallback")
                     }
-                    Some(QueryArguments::Search(_) | QueryArguments::List(_) | QueryArguments::Read(_) | QueryArguments::Document(_) | QueryArguments::DocumentSearch(_)) => unreachable!("read operation routed before generic query"),
+                    Some(QueryArguments::Search(_) | QueryArguments::SymbolSearch(_) | QueryArguments::List(_) | QueryArguments::Read(_) | QueryArguments::Document(_) | QueryArguments::DocumentSearch(_)) => unreachable!("read operation routed before generic query"),
                     Some(QueryArguments::Schema { .. }) => unreachable!("schema routed before generic query"),
                     Some(QueryArguments::Help { .. }) => unreachable!("help routed before generic query"),
                     Some(QueryArguments::Progress {}) => unreachable!("progress routed before generic query"),
