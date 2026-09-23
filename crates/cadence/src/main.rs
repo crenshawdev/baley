@@ -3,6 +3,8 @@ pub mod config;
 mod guard;
 #[path = "import/binary.rs"]
 pub mod import;
+#[cfg(test)]
+mod instruction_lint;
 mod instruction_surfaces;
 mod review_ingress;
 mod server;
