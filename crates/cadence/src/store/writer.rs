@@ -39,6 +39,18 @@ pub struct DrainLimit {
     pub bound: std::time::Duration,
 }
 
+pub fn drain_limit_diagnostic(limit: &DrainLimit) -> String {
+    let seconds = limit.bound.as_secs();
+    match &limit.open_write {
+        Some(id) => format!(
+            "cadence: shutdown drain reached {seconds} seconds; open admitted write {id} left to journal recovery."
+        ),
+        None => format!(
+            "cadence: shutdown drain reached {seconds} seconds while joining writers; any open intent is left to journal recovery."
+        ),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DrainAction {
     Admit,

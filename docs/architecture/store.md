@@ -105,55 +105,55 @@ and integrity metadata. Renames provide process-kill old-or-new atomicity; they 
 not prove durability against power loss. AC8 requires syscall-order verification
 of successful file and directory synchronization before acknowledgement.
 
-## Process-kill regression guard (AC4)
+## Shutdown cutoff and bound
 
-`cargo test -p cadence --lib store::crash_tests` drives the production writer in child
-processes. Test-driver callbacks park at partial temporary writing, completed
-file synchronization, rename before directory synchronization, and completed
-directory synchronization before reply. The parent observes a barrier and sends
-SIGKILL, then compares every semantic target with independently recorded complete
-old/new byte strings. Initial creation uses absence as the old candidate. Replay
-is also killed at deterministic production stages. Acknowledged operations
-survive a normal child restart; stable operation retries do not duplicate records.
-The callbacks that block or kill are confined to the library test driver;
-normal filesystem construction has a no-op observer and no process barriers.
+The stdio ingress reserves capacity before decoding a tool request, then admits
+the complete decoded request under the same lock that closes admission. Its
+sequence number records transport order. An observed stdin EOF or received
+SIGTERM closes admission atomically; a request that reaches admission after that
+cutoff is refused. Bytes still buffered or partially decoded are not admitted.
+Capacity is awaited: ingress retains at most 32 queued calls beside the active
+call, and the resident and writer queues retain their 32-entry bounds.
 
-This guards the old-or-new property already provided by frozen `atomicWrite`'s
-write-then-rename implementation (`v3.7.12`, planning-files.mjs:2787-2788), whose
-comment explicitly declines fsync while promising no torn file. Process kill
-leaves the kernel and its caches alive. Power loss can persist a rename without
-its file data and is a different failure model. These tests do not simulate power
-failure and do not prove AC8's successful-fsync-before-acknowledgement ordering.
+The retained ingress worker owns each admitted call independently of the MCP
+handler's reply future. It selects the earliest pending admission, runs handlers
+in that order into the resident, and retains work when the caller cancels.
+Caller cancellation is a structural contract here; live acceptance of it remains
+unverified until phase 18.
 
-## Synchronization ordering fixture (AC8)
+`SERVER_DRAIN_BOUND` in `store::writer` is exactly
+`Duration::from_secs(10)`, with no configuration key. EOF and SIGTERM record one
+monotonic cutoff, and all handler draining, resident draining and writer joins
+share its deadline. Successful shutdown explicitly closes the resident and
+writer receivers, drains queued work, and joins the resident task and every
+SessionFactory-owned writer thread, including writers opened before a later
+initialization failure.
 
-Run `cargo test -p cadence --lib store::crash_tests::ac8_syscall_order` on Linux with
-`strace` installed and permission to trace a spawned child. The fixture runs
-`strace -f -yy -o <trace>` without status filtering, so all threads share one
-ordered output. Missing strace, denied tracing, or missing request markers is
-reported as **BLOCKED AC8**, via a failing test, never as a skipped/pass result.
-This machine does not have strace; AC8 remains unverified here.
+With work still open, `Drain::step` requests Wait at 9.999 seconds and returns a
+typed DrainLimit at exactly 10 seconds or later. The stderr diagnostic names the
+bound and open admitted request identity (admission sequence plus JSON-RPC id).
+If only a writer join remains, it says so without inventing an open request.
+An empty, completed drain requests normal join even when observed after the
+bound. Shutdown neither acknowledges an unfinished write nor removes or adopts
+its intent. Expiry exits without waiting indefinitely for a blocked syscall or
+runtime blocking-pool teardown. Any open intent is left to the existing restart
+contract above: validate the entire intent and all participants before replay.
 
-The driver initializes the store before a synchronous request-specific START
-pipe marker, then admits exactly one measured snapshot write. The writer's common
-`finish_reply` operation writes a synchronous, unbuffered PRESEND pipe marker
-immediately before its actual success send. The caller must receive that exact
-request's success reply and writes a separate REPLY marker. The receiver marker
-is only receipt evidence; PRESEND is the acknowledgement-order evidence.
+## In-process evidence and its limits
 
-The checker joins unfinished/resumed calls by TID, tracking entry and completion
-separately. It binds the measured rename to its exact sibling temporary filename
-and matches fsync descriptors by decoded paths. The temporary fsync must complete
-successfully before rename starts; rename must complete before a successful
-containing-directory fsync; that sync must complete before the writer's PRESEND
-marker. Failed, missing, or reordered calls fail the check. Initialization and
-other request intervals cannot supply this proof.
+The writer tests call production `Drain::step` with supplied admission state,
+completion prefix, open-write identity and elapsed durations. The sole shutdown
+check distinguishes Wait at 9.999 seconds from DrainLimit at 10 and 11 seconds.
+Separate tests detect post-cutoff admission, selection out of admission order,
+and needless waiting or a limit when nothing remains. Formatter tests detect a
+wrong or omitted bound, a lost open-write identity, an invented identity during
+join, or wording that claims shutdown acknowledged the open write.
 
-Two separate negative controls omit only temporary-file synchronization or only
-directory synchronization at the real adapter's sync sites. They preserve the
-same replacement and reply path, must receive a success reply, and must each be
-rejected by the same checker. All omission settings and pre-send callbacks are
-`cfg(test)` only. The integration driver compiles the exact production store
-source with that configuration rather than maintaining another implementation.
-Production builds have no omission controls or marker callbacks. No synthetic
-trace or process-kill result is accepted as evidence for AC8.
+These are constituent decisions, with no clock reads, signals, child processes,
+store transaction or filesystem in the shutdown tests. They do not exercise the
+assembled serve workflow. Actual EOF/SIGTERM delivery, caller cancellation,
+elapsed exit timing, thread joins, journal acknowledgements after restart, real
+crash survival and physical durability remain unverified until the phase 18
+live acceptance gate. The former process-kill and strace test drivers are gone;
+they are not runnable evidence. The file-sync, rename, directory-sync and
+validated-recovery requirements above remain the durability contract.

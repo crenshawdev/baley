@@ -318,7 +318,10 @@ fn run_serve(project_root: Option<std::path::PathBuf>) -> std::process::ExitCode
         };
         let drained = match admission.drain(&handler).await {
             Ok(()) => true,
-            Err(review_ingress::ShutdownError::Limit(_limit)) => false,
+            Err(review_ingress::ShutdownError::Limit(limit)) => {
+                eprintln!("{}", cadence::store::writer::drain_limit_diagnostic(&limit));
+                false
+            }
             Err(review_ingress::ShutdownError::Worker) => {
                 eprintln!("cadence: shutdown worker failed");
                 false

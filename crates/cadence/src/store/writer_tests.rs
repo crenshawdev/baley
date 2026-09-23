@@ -12,6 +12,26 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 #[test]
+fn drain_limit_diagnostic_names_the_open_write_and_bound() {
+    let limit = super::writer::DrainLimit {
+        open_write: Some("drain-02".into()),
+        bound: std::time::Duration::from_secs(10),
+    };
+    assert_eq!(super::writer::drain_limit_diagnostic(&limit),
+        "cadence: shutdown drain reached 10 seconds; open admitted write drain-02 left to journal recovery.");
+}
+
+#[test]
+fn drain_limit_diagnostic_names_the_open_write_and_bound_without_inventing_a_write() {
+    let limit = super::writer::DrainLimit {
+        open_write: None,
+        bound: std::time::Duration::from_secs(10),
+    };
+    assert_eq!(super::writer::drain_limit_diagnostic(&limit),
+        "cadence: shutdown drain reached 10 seconds while joining writers; any open intent is left to journal recovery.");
+}
+
+#[test]
 fn serve_drains_admitted_writes_on_transport_end() {
     let admissions = [
         super::writer::Admission { sequence: 1, id: "drain-01".into() },
