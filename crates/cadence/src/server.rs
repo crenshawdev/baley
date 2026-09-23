@@ -671,6 +671,16 @@ static QUERY_OPERATIONS: LazyLock<Vec<(String, Value)>> = LazyLock::new(|| {
     operations
 });
 
+#[cfg(test)]
+pub(crate) fn query_operation_names() -> impl Iterator<Item = &'static str> {
+    QUERY_OPERATIONS.iter().map(|(name, _)| name.as_str())
+}
+
+#[cfg(test)]
+pub(crate) fn apply_operation_names() -> impl Iterator<Item = &'static str> {
+    APPLY_OPERATIONS.names.iter().map(|(name, _)| name.as_str())
+}
+
 fn query_schema() -> Value {
     minimal_schema(
         "query",

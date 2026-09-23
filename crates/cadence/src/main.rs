@@ -3,6 +3,7 @@ pub mod config;
 mod guard;
 #[path = "import/binary.rs"]
 pub mod import;
+mod instruction_surfaces;
 mod review_ingress;
 mod server;
 
@@ -92,175 +93,54 @@ fn main() -> std::process::ExitCode {
 }
 
 fn run_command(command: Command) -> std::process::ExitCode {
-    match command {
-        Command::HelpInstructions => {
-            use std::io::Write;
-            match std::io::stdout().lock().write_all(cadence::help::instructions::markdown().as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
+    use std::io::{Read, Write};
+    let arguments: Vec<&str> = match &command {
+        Command::Serve => return run_serve(None),
+        Command::Guard => return guard::run(),
         Command::SkillDescription { name } => {
-            use std::io::{Read, Write};
             let mut markdown = String::new();
             if std::io::stdin().read_to_string(&mut markdown).is_err() {
                 return std::process::ExitCode::FAILURE;
             }
-            let Some(rendered) = cadence::help::table::render_description(&name, &markdown) else {
+            let Some(rendered) = cadence::help::table::render_description(name, &markdown) else {
                 eprintln!("cadence: unknown user skill or missing description front matter");
                 return std::process::ExitCode::FAILURE;
             };
-            match std::io::stdout().lock().write_all(rendered.as_bytes()) {
+            return match std::io::stdout().lock().write_all(rendered.as_bytes()) {
                 Ok(()) => std::process::ExitCode::SUCCESS,
                 Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::SpikeInstructions => {
-            use std::io::Write;
-            match std::io::stdout().lock().write_all(cadence::spike::instructions::markdown().as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::DebugInstructions => {
-            use std::io::Write;
-            match std::io::stdout().lock().write_all(cadence::debug::instructions::markdown().as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::UndoInstructions => {
-            use std::io::Write;
-            match std::io::stdout().lock().write_all(cadence::undo::instructions::markdown().as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::LandInstructions => {
-            use std::io::Write;
-            match std::io::stdout().lock().write_all(cadence::landing::instructions::markdown().as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::MilestoneInstructions => {
-            use std::io::Write;
-            match std::io::stdout().lock().write_all(cadence::milestone::instructions::markdown().as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::SuggestInstructions => {
-            use std::io::Write;
-            match std::io::stdout().lock().write_all(cadence::suggest::instructions::markdown().as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::WhyInstructions => {
-            use std::io::Write;
-            match std::io::stdout().lock().write_all(cadence::why::instructions::markdown().as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::ProgressInstructions => {
-            use std::io::Write;
-            match std::io::stdout().lock().write_all(cadence::progress::instructions::markdown().as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::CaptureInstructions => {
-            use std::io::Write;
-            match std::io::stdout().lock().write_all(cadence::capture::instructions::markdown().as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::AuditInstructions { coverage } => {
-            use std::io::Write;
-            let rendered = cadence::verification::instructions::audit_frontdoor_markdown(coverage);
-            match std::io::stdout().lock().write_all(rendered.as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::ReviewInstructions { alias } => {
-            use std::io::Write;
-            let command = alias.as_deref().unwrap_or(cadence::review::selection::CANONICAL);
-            let Some(rendered) = cadence::review::instructions::frontdoor_markdown(command) else {
-                eprintln!("cadence: {command} is not a review command");
-                return std::process::ExitCode::FAILURE;
             };
-            match std::io::stdout().lock().write_all(rendered.as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
         }
-        Command::VerifierInstructions { frontdoor } => {
-            use std::io::Write;
-            let rendered = if frontdoor {
-                cadence::verification::instructions::frontdoor_markdown()
-            } else {
-                cadence::verification::instructions::contract_markdown()
-            };
-            match std::io::stdout().lock().write_all(rendered.as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::Serve => run_serve(None),
-        Command::Guard => guard::run(),
-        Command::PlanInstructions => {
-            use std::io::Write;
-            match std::io::stdout()
-                .lock()
-                .write_all(cadence::plan::instructions::markdown().as_bytes())
-            {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::ContextInstructions => {
-            use std::io::Write;
-            match std::io::stdout()
-                .lock()
-                .write_all(cadence::context::instructions::markdown().as_bytes())
-            {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::ReadInstructions => {
-            use std::io::Write;
-            match std::io::stdout()
-                .lock()
-                .write_all(cadence::read::instructions::markdown().as_bytes())
-            {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::ExecutorInstructions { frontdoor } => {
-            use std::io::Write;
-            let rendered = if frontdoor {
-                cadence::execution::instructions::frontdoor_markdown()
-            } else {
-                cadence::execution::instructions::contract_markdown()
-            };
-            match std::io::stdout().lock().write_all(rendered.as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
-        Command::TaskInstructions => {
-            use std::io::Write;
-            match std::io::stdout().lock().write_all(cadence::task::instructions::markdown().as_bytes()) {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(_) => std::process::ExitCode::FAILURE,
-            }
-        }
+        Command::HelpInstructions => vec!["help-instructions"],
+        Command::SpikeInstructions => vec!["spike-instructions"],
+        Command::DebugInstructions => vec!["debug-instructions"],
+        Command::UndoInstructions => vec!["undo-instructions"],
+        Command::LandInstructions => vec!["land-instructions"],
+        Command::MilestoneInstructions => vec!["milestone-instructions"],
+        Command::SuggestInstructions => vec!["suggest-instructions"],
+        Command::WhyInstructions => vec!["why-instructions"],
+        Command::ProgressInstructions => vec!["progress-instructions"],
+        Command::CaptureInstructions => vec!["capture-instructions"],
+        Command::ContextInstructions => vec!["context-instructions"],
+        Command::PlanInstructions => vec!["plan-instructions"],
+        Command::ReadInstructions => vec!["read-instructions"],
+        Command::TaskInstructions => vec!["task-instructions"],
+        Command::ExecutorInstructions { frontdoor: false } => vec!["executor-instructions"],
+        Command::ExecutorInstructions { frontdoor: true } => vec!["executor-instructions", "--frontdoor"],
+        Command::VerifierInstructions { frontdoor: false } => vec!["verifier-instructions"],
+        Command::VerifierInstructions { frontdoor: true } => vec!["verifier-instructions", "--frontdoor"],
+        Command::ReviewInstructions { alias: None } => vec!["review-instructions"],
+        Command::ReviewInstructions { alias: Some(alias) } => vec!["review-instructions", "--alias", alias],
+        Command::AuditInstructions { coverage: false } => vec!["audit-instructions"],
+        Command::AuditInstructions { coverage: true } => vec!["audit-instructions", "--coverage"],
+    };
+    let Some(rendered) = instruction_surfaces::render(&arguments) else {
+        eprintln!("cadence: {} is not a review command", arguments[2]);
+        return std::process::ExitCode::FAILURE;
+    };
+    match std::io::stdout().lock().write_all(rendered.as_bytes()) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(_) => std::process::ExitCode::FAILURE,
     }
 }
 

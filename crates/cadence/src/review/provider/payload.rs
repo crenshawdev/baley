@@ -8,6 +8,11 @@ use serde_json::{Value, json};
 // instruction-file option or user override.
 const BRIEF: &str = include_str!("reviewer-brief.md");
 
+/// The exact compiled fragment embedded in provider instructions.
+pub fn brief() -> &'static str {
+    BRIEF
+}
+
 pub struct Prepared {
     pub instruction: String,
     pub artifact: String,
