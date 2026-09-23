@@ -402,6 +402,7 @@ Delivery order after phase 11 is 27, 28, 29, 12, 13, then 14 onward; see
 - [ ] **Phase 15: Landing and milestones** - `cad-land`, `cad-milestone`, `cad-undo`
 - [ ] **Phase 16: Support** - `cad-debug`, `cad-spike`, `cad-help`
 - [ ] **Phase 17: Contract enforcement** - the residual obligations that live today as prose instructions and belong to no single cluster
+- [ ] **Phase 39: How a plan becomes tests** - the compiled context, plan and review instructions carry the owner's test-derivation rules, truths name the decision a unit test can prove, and the binary's own test-file rule is stated where the planner reads it
 - [ ] **Phase 18: The acceptance gate** - scenario-bounded workflow episodes, asserted with contract checks rather than an output diff
 - [ ] **Phase 19: The release path** - a tagged release that publishes four checksum-verified archives, and a SessionStart hook that fetches and installs the pinned binary
 - [ ] **Phase 20: Filing port** - human-chosen issue filing on GitHub with fingerprint deduplication and ambiguous-create reconciliation, GH-250/251 repaired
@@ -1538,3 +1539,31 @@ carries the failing test names. D-169, phase-local: the plans land by hand
 under the executor block, red then green, signed, because the rules they
 replace would block their own native execution; verification runs natively.
 Phase 31's close is the first consumer and the first dogfood.
+
+### Phase 39: How a plan becomes tests
+
+**Goal.** Cadence's compiled planning instructions still describe tests the
+way they did before the owner's 2026-09-22 test rules. `plan-instructions`
+says to write every check at one unit and never start a program, and that
+much holds. It never states the binary's own close rule, that a check's test
+file is byte-identical at its red commit, its green commit and the task's
+completion (`execution/receipts.rs`), so a planner that puts a check's tests
+beside the code they test writes a task that can never close, and the phase
+17 re-plan did exactly that twice. The context instructions still produce
+truths about the running program, T4 to T7 of phase 17 among them, that no
+unit test can prove, so every plan splits its truth by hand and argues about
+what is left. This phase carries the owner's Prompt 2 of 2026-09-22, how
+Cadence derives tests for the projects it manages, into the compiled
+context, plan and review instructions. A truth names the decision the
+project owns and lists the running-program part for live verification. A
+plan derives its tests from approved behavior, one responsibility and one
+behavior each, expected values from the requirement, each case naming the
+defect it catches, and stops when a case catches nothing new. A test depends
+only on the project's language toolchain and test libraries from that
+language's own ecosystem, never on the machine it runs on. What a unit test
+can't prove stays an open verification obligation that passing tests don't
+close. The binary's test-file rule is stated where the planner reads it. It's
+product behavior for managed projects and language-neutral, and it lands
+before phase 18 so the live acceptance gate runs on the fixed instructions.
+Prompt 2's own text is the specification, and the context carries it
+verbatim.
