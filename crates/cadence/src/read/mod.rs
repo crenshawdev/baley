@@ -1,4 +1,5 @@
 mod bound;
+mod calls;
 mod symbols;
 pub mod document;
 pub mod instructions;
