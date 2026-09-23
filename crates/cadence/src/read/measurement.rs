@@ -10,6 +10,12 @@ use std::{
 };
 
 const BASELINE: u64 = 183_000;
+const SHELL_READ_PROGRAMS: &[&str] = &[
+    "cat", "head", "tail", "less", "more", "nl", "wc", "grep", "rg", "find", "ls", "tree",
+];
+const KNOWN_NON_READ_ITEMS: &[&str] = &[
+    "AgentMessage", "Reasoning", "FileChange", "UserMessage", "ContextCompaction",
+];
 
 pub enum Host {
     Claude,
@@ -23,11 +29,128 @@ pub struct Tally {
 }
 
 pub fn count_reads(
-    _host: Host,
-    _records: &[Value],
-    _read_lines: &BTreeMap<String, u64>,
+    host: Host,
+    records: &[Value],
+    read_lines: &BTreeMap<String, u64>,
 ) -> Result<BTreeMap<String, Tally>, Value> {
-    Ok(BTreeMap::new())
+    let mut counts = BTreeMap::<String, Tally>::new();
+    let mut tally = |kind: String, bytes: u64| {
+        let entry = counts.entry(kind).or_default();
+        entry.calls += 1;
+        entry.bytes += bytes;
+    };
+    match host {
+        Host::Claude => {
+            let blocks: Vec<_> = records.iter()
+                .filter_map(|record| record.pointer("/message/content").and_then(Value::as_array))
+                .flatten().collect();
+            let results: BTreeMap<_, _> = blocks.iter()
+                .filter(|block| block["type"] == "tool_result")
+                .filter_map(|block| block["tool_use_id"].as_str().map(|id| (id, &block["content"])))
+                .collect();
+            let mut seen = BTreeSet::new();
+            for block in blocks.iter().filter(|block| block["type"] == "tool_use") {
+                let id = block["id"].as_str()
+                    .ok_or_else(|| refusal("document-incomplete", "an actual tool use has no identity"))?;
+                if !seen.insert(id) { continue }
+                let Some(kind) = claude_read_kind(block["name"].as_str().unwrap_or(""), &block["input"], read_lines) else {
+                    continue;
+                };
+                let content = results.get(id)
+                    .ok_or_else(|| refusal("document-incomplete", "a counted read has no recorded tool result"))?;
+                tally(kind, content.as_str().map_or_else(|| text_bytes(content), |text| text.len() as u64));
+            }
+        }
+        Host::Codex => {
+            for record in records.iter().filter(|record|
+                record["type"] == "event_msg" && record["payload"]["type"] == "item_completed")
+            {
+                if let Some((kind, bytes)) = codex_read(&record["payload"]["item"]) {
+                    tally(kind, bytes);
+                }
+            }
+        }
+    }
+    Ok(counts)
+}
+
+fn text_bytes(content: &Value) -> u64 {
+    content.as_array().into_iter().flatten()
+        .filter(|item| item["type"] == "text")
+        .filter_map(|item| item["text"].as_str())
+        .map(|text| text.len() as u64).sum()
+}
+
+fn query_kind(input: &Value) -> String {
+    input["operation"].as_str()
+        .map_or_else(|| "unclassified".into(), |operation| format!("cadence_query {operation}"))
+}
+
+fn read_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    ["read", "search", "grep", "glob"].iter().any(|word| lower.contains(word))
+}
+
+fn claude_read_kind(name: &str, input: &Value, read_lines: &BTreeMap<String, u64>) -> Option<String> {
+    let kind = match name {
+        "mcp__cadence__cadence_query" => return Some(query_kind(input)),
+        "Grep" | "Glob" => name,
+        "Read" => {
+            match input["file_path"].as_str().and_then(|path| read_lines.get(path)) {
+                None => "unclassified",
+                Some(total) => match input["limit"].as_u64() {
+                    None => "Read whole",
+                    Some(limit) if input["offset"].as_u64().unwrap_or(1) == 1 && limit >= *total => "Read whole",
+                    Some(_) => "Read ranged",
+                },
+            }
+        }
+        "Bash" => {
+            let mut command = input["command"].as_str().unwrap_or("").trim();
+            while command.split_whitespace().next() == Some("cd") {
+                let Some((_, rest)) = command.split_once("&&") else { break };
+                command = rest.trim();
+            }
+            if ["cargo build", "cargo check", "cargo test", "npm test", "pnpm test", "git status"]
+                .iter().any(|prefix| command.starts_with(prefix))
+            {
+                return None;
+            }
+            if command.split_whitespace().next().is_some_and(|word| SHELL_READ_PROGRAMS.contains(&word)) {
+                "shell read"
+            } else {
+                "unclassified"
+            }
+        }
+        _ if read_name(name) => "unclassified",
+        _ => return None,
+    };
+    Some(kind.into())
+}
+
+fn codex_read(item: &Value) -> Option<(String, u64)> {
+    match item["type"].as_str() {
+        Some("McpToolCall") => {
+            let tool = item["tool"].as_str().unwrap_or("");
+            let kind = if item["server"] == "cadence" && tool == "cadence_query" {
+                query_kind(&item["arguments"])
+            } else if read_name(tool) {
+                "unclassified".into()
+            } else {
+                return None;
+            };
+            Some((kind, text_bytes(&item["result"]["content"])))
+        }
+        Some("CommandExecution") => {
+            let is_read = item["parsed_cmd"].as_array().is_some_and(|commands|
+                !commands.is_empty() && commands.iter().all(|command|
+                    matches!(command["type"].as_str(), Some("read" | "search" | "list_files"))));
+            let kind = if is_read { "shell read" } else { "unclassified" };
+            Some((kind.into(), item["aggregated_output"].as_str().unwrap_or("").len() as u64))
+        }
+        Some(kind) if KNOWN_NON_READ_ITEMS.contains(&kind) => None,
+        _ => Some(("unclassified".into(), 0)),
+    }
 }
 
 pub struct Report {
@@ -166,7 +289,21 @@ pub fn resolve(planning_root: &Path, identity: &DocumentIdentity) -> Result<Repo
             return Err(refusal("document-incomplete", "the Claude planner record changed during measurement"));
         }
     }
-    measure(&project, phase.get(), session_id, first_turn, last_turn, sources)
+    let mut read_lines = BTreeMap::new();
+    for block in sources.iter().flat_map(|source| &source.records)
+        .filter_map(|record| record.pointer("/message/content").and_then(Value::as_array))
+        .flatten().filter(|block| block["type"] == "tool_use" && block["name"] == "Read")
+    {
+        let Some(raw_path) = block["input"]["file_path"].as_str() else { continue };
+        if read_lines.contains_key(raw_path) { continue }
+        let path = PathBuf::from(raw_path);
+        let path = if path.is_absolute() { path } else { project.join(path) };
+        let Ok(path) = fs::canonicalize(path) else { continue };
+        if !path.starts_with(&project) { continue }
+        let Ok((_, _, content)) = super::source::content(&project, &path) else { continue };
+        read_lines.insert(raw_path.to_owned(), content.lines().count() as u64);
+    }
+    measure(&read_lines, phase.get(), session_id, first_turn, last_turn, sources)
 }
 
 fn valid_uuid(value: &str) -> bool {
@@ -253,15 +390,11 @@ fn agent_calls(records: &[Value], required_type: Option<&str>) -> BTreeSet<Strin
         .filter_map(|block| block["id"].as_str().map(str::to_owned)).collect()
 }
 
-fn measure(project: &Path, phase: u32, session_id: &str, first_turn: &str, last_turn: &str,
+fn measure(read_lines: &BTreeMap<String, u64>, phase: u32, session_id: &str, first_turn: &str, last_turn: &str,
     sources: Vec<Source>) -> Result<Report, Value>
 {
     let mut hasher = Sha256::new();
     let mut tool_ids = BTreeSet::new();
-    let mut tool_results = BTreeSet::new();
-    let mut read_tool_ids = BTreeSet::new();
-    let mut whole_file_reads = 0;
-    let mut unclassified_reads = 0;
     let mut assistant_messages = BTreeSet::new();
     let mut usages = BTreeMap::<(String, String), Value>::new();
     let mut worker_ids = Vec::new();
@@ -278,11 +411,6 @@ fn measure(project: &Path, phase: u32, session_id: &str, first_turn: &str, last_
             let record_session = record["sessionId"].as_str().unwrap_or(session_id).to_owned();
             if let Some(content) = record.pointer("/message/content").and_then(Value::as_array) {
                 for block in content {
-                    if block["type"] == "tool_result"
-                        && let Some(id) = block["tool_use_id"].as_str()
-                    {
-                        tool_results.insert(id.to_owned());
-                    }
                     if block["type"] != "tool_use" { continue }
                     let id = block["id"].as_str()
                         .ok_or_else(|| refusal("document-incomplete", "an actual tool use has no identity"))?;
@@ -295,10 +423,6 @@ fn measure(project: &Path, phase: u32, session_id: &str, first_turn: &str, last_
                     {
                         phase_seen = true;
                     }
-                    let (reads, whole, unclassified) = classify_read(project, name, input);
-                    if reads > 0 { read_tool_ids.insert(id.to_owned()); }
-                    whole_file_reads += whole;
-                    unclassified_reads += unclassified;
                 }
             }
             if record["type"] == "assistant" {
@@ -322,9 +446,11 @@ fn measure(project: &Path, phase: u32, session_id: &str, first_turn: &str, last_
     if usages.keys().cloned().collect::<BTreeSet<_>>() != assistant_messages {
         return Err(refusal("document-incomplete", "an assistant message has no final usage"));
     }
-    if read_tool_ids.iter().any(|id| !tool_results.contains(id)) {
-        return Err(refusal("document-incomplete", "a counted read has no recorded tool result"));
-    }
+    let records: Vec<_> = sources.iter().flat_map(|source| source.records.iter().cloned()).collect();
+    let counts = count_reads(Host::Claude, &records, read_lines)?;
+    let read_count = counts.values().map(|tally| tally.calls).sum();
+    let whole_file_reads = counts.get("Read whole").map_or(0, |tally| tally.calls);
+    let unclassified_reads = counts.get("unclassified").map_or(0, |tally| tally.calls);
     let mut usage = Usage::default();
     for value in usages.values() {
         usage.input = add(usage.input, usage_field(value, "input_tokens")?)?;
@@ -339,7 +465,6 @@ fn measure(project: &Path, phase: u32, session_id: &str, first_turn: &str, last_
     }
     worker_ids.sort();
     worker_ids.dedup();
-    let read_count = read_tool_ids.len() as u64;
     let source_digest = format!("{:x}", hasher.finalize());
     let difference = i128::from(token_total) - i128::from(BASELINE);
     let ratio = token_total as f64 / BASELINE as f64;
@@ -382,39 +507,6 @@ fn usage_field(usage: &Value, field: &str) -> Result<u64, Value> {
 fn add(left: u64, right: u64) -> Result<u64, Value> {
     left.checked_add(right)
         .ok_or_else(|| refusal("document-incomplete", "planner-round token arithmetic overflowed"))
-}
-
-fn classify_read(project: &Path, name: &str, input: &Value) -> (u64, u64, u64) {
-    if name == "mcp__cadence__cadence_query" { return (1, 0, 0) }
-    if matches!(name, "Grep" | "Glob") { return (1, 0, 0) }
-    if name == "Read" {
-        let Some(path) = input["file_path"].as_str() else { return (1, 0, 1) };
-        let path = PathBuf::from(path);
-        let path = if path.is_absolute() { path } else { project.join(path) };
-        let Ok(path) = fs::canonicalize(path) else { return (1, 0, 1) };
-        if !path.starts_with(project) { return (1, 0, 1) }
-        let Ok((_, _, content)) = super::source::content(project, &path) else { return (1, 0, 1) };
-        let total = content.lines().count() as u64;
-        let offset = input["offset"].as_u64().unwrap_or(1).max(1);
-        let Some(limit) = input["limit"].as_u64() else { return (1, 1, 0) };
-        return (1, u64::from(offset == 1 && limit >= total), 0);
-    }
-    if name == "Bash" {
-        let command = input["command"].as_str().unwrap_or("");
-        if ["cargo build", "cargo check", "cargo test", "npm test", "pnpm test", "git status"]
-            .iter().any(|prefix| command.trim_start().starts_with(prefix))
-        {
-            return (0, 0, 0);
-        }
-        return (1, 0, 1);
-    }
-    let lower = name.to_ascii_lowercase();
-    if lower.contains("read") || lower.contains("search") || lower.contains("grep")
-        || lower.contains("glob")
-    {
-        return (1, 0, 1);
-    }
-    (0, 0, 0)
 }
 
 #[cfg(test)]
