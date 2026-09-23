@@ -163,6 +163,54 @@ handling, and malformed or incomplete historical input. It does not measure
 resident memory or prove every assembled read/search/recall/store route avoids
 whole-file loading; that live acceptance remains phase 18's gate.
 
+## Git subprocess deadlines
+
+`git_process::Caller` registers all resident-owned git launch builders.
+`GUARD_GIT_DEADLINE` is 10 seconds and `GUARD_REAP_RESERVE` is 1 second:
+GuardBranch enforces 9 seconds of work within the hook's nominal 10-second
+envelope. Its limit names 9 seconds. `OTHER_GIT_DEADLINE` is 60 seconds for
+every other caller, including landing. These constants are not configuration
+keys. Each registered launch owns its process group; argument, environment,
+stdin, inheritance and capture policies stay with the caller. Recall retains
+its acquisition caps, literal pathspecs and no-lazy-fetch environment.
+
+`process::validate_launch` is mandatory before System run/start constructs
+a Command and before Recorded records a request or consumes an observation.
+A literal or path-form git executable, including a variable program, requires
+the private registration issued by git_process and its exact work deadline.
+Clearing the timeout or owned group, changing the deadline, or changing a
+registered descriptor to another executable class refuses before spawn.
+The validated descriptor borrows immutable material for its consumer.
+Recorded supplies neither registration nor deadline policy.
+
+System starts the elapsed deadline immediately before spawning, before stdin
+delivery. Stdin delivery and output drainage run concurrently with the wait,
+so a blocked pipe cannot prevent observing expiry. Expiry requests group and
+child termination, waits for the child, and joins the pipe workers before
+returning an explicit `ErrorKind::TimedOut` observation. Cleanup failures are
+errors, never successful completion. An unrelated signal, including SIGKILL,
+is not evidence of a deadline. `git_process::finish` converts only the timeout
+observation into a typed limit naming argv and the enforced bound; store
+errors retain that type. Guard diagnostics, rail diagnostics, pause/task
+errors, recall coverage, read refusals and why answers retain the named limit.
+Why's optional corpus reads and comparand report incomplete coverage.
+
+The configured sh command in execution and gpg.program signing remain outside
+the git registry; landing gh keeps its 60-second timeout. A configured direct
+git executable still passes the same gate. This does not inspect commands
+inside shell scripts. A direct std::process::Command or tokio::process spawn
+elsewhere would bypass the gate; the manual construction trace, not a source
+scan test, checks for that bypass.
+
+Value tests check completion interpretation, caller deadline selection,
+launch admission, diagnostic preservation and the cleanup request at expiry.
+They start no program and use no live clock. They do not establish real
+elapsed deadlines, guard delivery before the hook cutoff, termination,
+reaping, pipe completion or assembled caller propagation. Those remain at
+phase 18's live acceptance gate. A caller driven through Recorded gets the
+same admission check in tests; callers without such a test are checked only
+when they run live.
+
 ## Shutdown cutoff and bound
 
 The stdio ingress reserves capacity before decoding a tool request, then admits

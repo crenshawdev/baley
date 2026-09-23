@@ -143,6 +143,34 @@ impl Launch {
     }
 }
 
+/// An immutable launch that passed the process construction gate.
+#[derive(Debug)]
+pub struct ValidatedLaunch<'a>(&'a Launch);
+
+impl ValidatedLaunch<'_> {
+    pub fn descriptor(&self) -> &Launch { self.0 }
+}
+
+/// Validate borrowed launch material before a Command or recorded observation
+/// can be obtained. The borrow prevents mutation until the consumer is done.
+pub fn validate_launch(launch: &Launch) -> std::io::Result<ValidatedLaunch<'_>> {
+    let is_git = Path::new(&launch.program).file_name() == Some(OsStr::new("git"));
+    match (is_git, launch.git_caller()) {
+        (true, Some(caller)) => {
+            if launch.timeout != Some(crate::git_process::deadline(caller).work) || !launch.own_group {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,
+                    "registered git launch requires its caller deadline and owned process group"));
+            }
+        }
+        (true, None) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,
+            "git launch requires a registered caller")),
+        (false, Some(_)) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,
+            "registered git launch cannot change executable identity")),
+        (false, None) => {}
+    }
+    Ok(ValidatedLaunch(launch))
+}
+
 /// What a finished child left behind.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Output {
@@ -221,7 +249,8 @@ pub trait Child {
 pub struct System;
 
 impl System {
-    fn command(launch: &Launch) -> Command {
+    fn command(validated: &ValidatedLaunch<'_>) -> Command {
+        let launch = validated.descriptor();
         let mut command = Command::new(&launch.program);
         command.args(&launch.args);
         if let Some(cwd) = &launch.cwd {
@@ -313,7 +342,9 @@ struct SystemChild {
 
 impl SystemChild {
     fn spawn(launch: &Launch) -> std::io::Result<Self> {
-        let mut command = System::command(launch);
+        let validated = validate_launch(launch)?;
+        let launch = validated.descriptor();
+        let mut command = System::command(&validated);
         // Includes spawn and all stdin delivery, not just the wait.
         let started = Instant::now();
         let mut child = command.spawn()?;
@@ -332,11 +363,11 @@ impl SystemChild {
 
     fn observe_exit(&mut self) -> std::io::Result<ExitStatus> {
         loop {
-            if deadline_action(self.timeout, self.started.elapsed()) == DeadlineAction::KillAndReap {
-                return Err(std::io::ErrorKind::TimedOut.into());
-            }
             if let Some(status) = self.child.try_wait()? {
                 return Ok(status);
+            }
+            if deadline_action(self.timeout, self.started.elapsed()) == DeadlineAction::KillAndReap {
+                return Err(std::io::ErrorKind::TimedOut.into());
             }
             if self.timeout.is_none() {
                 return self.child.wait();
@@ -452,6 +483,8 @@ impl Recorded {
 
 impl Process for Recorded {
     fn run(&mut self, launch: &Launch) -> std::io::Result<Output> {
+        let validated = validate_launch(launch)?;
+        let launch = validated.descriptor();
         self.launches.push(launch.clone());
         self.scripted
             .pop_front()
