@@ -1576,16 +1576,27 @@ and takes no limit, so a one-line match costs the full function. Searching
 `read_to_string` on 2026-09-23 returned `main.rs::run_command` whole, 172
 lines for one matching line, with nine more bodies beside it, under a 64 KB
 answer bound. Every phase still to come reads through this surface, Codex
-workers and Claude alike. This phase adds three read-only answers. A search
-mode returns the file, the line, the matching line and the enclosing unit's
-name, with a limit, and the caller reads a unit by name only when it needs
-one. A symbol lookup builds a project index from the tree-sitter outlines
-the read layer already produces and answers a name fragment with issued
-locations. A call-site query finds the calls to a name through the same
-grammars; it's syntactic, not type-resolved, and says so. No language server
-and no new program, since the grammars and ripgrep's crates are already in
-the binary. It lands after phase 17, whose plan 5 changes how search handles
+workers and Claude alike. This phase adds three read-only answers. Search
+returns the file, the line, the matching line and the enclosing unit's
+name, with a limit, and the caller reads a unit by name only when it
+needs one. A symbol lookup builds a project index from the tree-sitter
+outlines the read layer already produces and answers a name fragment with
+issued locations. A call-site query finds the calls to a name through the
+same grammars; it's syntactic, not type-resolved, and says so. Find-first
+becomes the default answer of `search`, so an agent that never heard of
+it still gets the cheap answer, and a whole unit comes back only when it
+asks to read one. It only pays if every agent uses it, so the phase carries
+it to all of them: the compiled executor, verifier, planner, reviewer and
+read contracts, the MCP server's instructions and the tool's description
+all say locate first and read by unit second, and a hand-dispatched Codex
+or Claude worker gets it from the contract its prompt carries. The read
+measurement the binary already takes from host transcripts counts native
+Grep and Read against `cadence_query` reads before and after, so whether
+agents switched is measured, not assumed. Refusing a host's native grep
+in the guard is undecided and waits on GH-285. No language server and no
+new program, since the grammars and ripgrep's crates are already in the
+binary. It lands after phase 17, whose plan 5 changes how search handles
 oversized files, and before phase 18 so the acceptance gate covers it. The
 ideas come from comparing RustRover's MCP tools with Cadence's read surface;
-the write-side idea from the same comparison, edits by location guarded by
-revision and lease, is undecided and waits on GH-284.
+the write-side idea from the same comparison, edits by location guarded
+by revision and lease, is undecided and waits on GH-284.
