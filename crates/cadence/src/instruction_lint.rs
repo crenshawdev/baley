@@ -165,3 +165,41 @@ fn schema_defaults_match_their_declared_domain() {
             "{key}: default {default} is outside its declared domain {spec}");
     }
 }
+
+#[test]
+fn rendered_files_obey_named_byte_ceilings() {
+    let ceilings = [
+        ("skills/cad-help/SKILL.md", 1024),
+        ("skills/cad-spike/SKILL.md", 6144),
+        ("skills/cad-debug/SKILL.md", 15360),
+        ("skills/cad-undo/SKILL.md", 4096),
+        ("skills/cad-land/SKILL.md", 8192),
+        ("skills/cad-milestone/SKILL.md", 6144),
+        ("skills/cad-suggest/SKILL.md", 1536),
+        ("skills/cad-why/SKILL.md", 4096),
+        ("skills/cad-progress/SKILL.md", 1024),
+        ("skills/cad-capture/SKILL.md", 1536),
+        ("skills/cad-context/SKILL.md", 24576),
+        ("skills/cad-plan/SKILL.md", 57344),
+        ("skills/cad-executor-contract/SKILL.md", 28672),
+        ("skills/cad-execute/SKILL.md", 20480),
+        ("skills/cad-verifier-contract/SKILL.md", 18432),
+        ("skills/cad-verify/SKILL.md", 18432),
+        ("skills/cad-review/SKILL.md", 12288),
+        ("skills/cad-decision-review/SKILL.md", 12288),
+        ("skills/cad-minimalism-review/SKILL.md", 12288),
+        ("skills/cad-plan-review/SKILL.md", 12288),
+        ("skills/cad-audit/SKILL.md", 9216),
+        ("skills/cad-coverage/SKILL.md", 9216),
+        ("skills/cad-read-contract/SKILL.md", 6144),
+        ("skills/cad-task/SKILL.md", 32768),
+    ];
+    for file in RENDERED_PROJECT_FILES {
+        let ceiling = ceilings.iter().find(|(path, _)| *path == file.path)
+            .unwrap_or_else(|| panic!("{}: missing named byte ceiling", file.path)).1;
+        let rendered = super::instruction_surfaces::render(file.command)
+            .unwrap_or_else(|| panic!("{}: missing renderer", file.path));
+        assert!(rendered.len() <= ceiling,
+            "{}: {} UTF-8 bytes exceed the {ceiling}-byte ceiling", file.path, rendered.len());
+    }
+}

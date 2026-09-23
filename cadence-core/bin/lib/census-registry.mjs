@@ -15,7 +15,7 @@
 // `assert.equal(..., <2+ digit literal>)` calls and 147 on a looser shape, the
 // large majority fixture-derived rather than tree-derived. So the register IS
 // the record, the same species of stated table as `lib/deferred-reads.mjs`'s
-// register, self-verify's CONTRACTS and `lib/rung-agent.mjs`'s RUNG_FILES.
+// register, arg-contract's CONTRACTS and `lib/rung-agent.mjs`'s RUNG_FILES.
 //
 // WHAT A ROW COSTS. A row is added in the commit that plants the marker at the
 // asserting site, and it is not deleted without deleting the census. Deleting
@@ -64,8 +64,8 @@
 // Pure in the sense `lib/lease-grammar.mjs` and `lib/debt-markers.mjs` are:
 // classify, never emit, no fs, no git, no envelope. The caller owns the tree
 // walk, the file reads and the verdict. It takes no CONTRACTS row and no CLI
-// entry point, for the reason self-verify.mjs check 14 states about
-// `lib/*.mjs`: they are modules prose never invokes.
+// entry point: `lib/*.mjs` files are modules, not CLI commands.
+// Native git deadlines use process.rs's registered launch gate, not a source census.
 'use strict';
 
 import { covers, intersects } from './lease-grammar.mjs';
@@ -116,24 +116,38 @@ export const CENSUSES = Object.freeze([
   }),
   entry({
     id: 'weight-budgets',
-    holder: 'cadence-core/bin/weight-budgets.json',
-    counts: 'a UTF-8 byte ceiling for each budgeted prose surface',
-    // Row (d) stretches criterion 1's "the test that asserts it" to a non-test
-    // asserting site on purpose (D-08). It is the one census every
-    // prose-editing plan in this repository invalidates.
-    asserted_by: "`cadence-core/bin/self-verify.mjs`'s budget check, the "
-      + '`budget-overrun` arm',
-    // Five directory leases, measured 2026-08-24 to cover all 111 budgeted
-    // keys. Copying the key list in would be a second copy of
-    // weight-budgets.json, and is refused for the reason lib/lease-grammar.mjs
-    // exists.
+    holder: 'crates/cadence/src/instruction_lint.rs',
+    counts: 'the literal UTF-8 ceilings for the 24 binary-rendered skill files',
+    asserted_by: 'instruction_lint::rendered_files_obey_named_byte_ceilings',
     subjects: [
-      'agents/',
-      'cadence-core/references/',
-      'cadence-core/templates/',
-      'cadence-core/workflows/',
-      'skills/',
+      'crates/cadence/src/execution/render.rs',
+      'crates/cadence/src/instruction_surfaces.rs',
+      'crates/cadence/src/help/table.rs',
+      'crates/cadence/src/capture/instructions.rs',
+      'crates/cadence/src/context/instructions.rs',
+      'crates/cadence/src/debug/instructions.rs',
+      'crates/cadence/src/execution/instructions.rs',
+      'crates/cadence/src/help/instructions.rs',
+      'crates/cadence/src/landing/instructions.rs',
+      'crates/cadence/src/milestone/instructions.rs',
+      'crates/cadence/src/plan/instructions.rs',
+      'crates/cadence/src/progress/instructions.rs',
+      'crates/cadence/src/read/instructions.rs',
+      'crates/cadence/src/review/instructions.rs',
+      'crates/cadence/src/spike/instructions.rs',
+      'crates/cadence/src/suggest/instructions.rs',
+      'crates/cadence/src/task/instructions.rs',
+      'crates/cadence/src/undo/instructions.rs',
+      'crates/cadence/src/verification/instructions.rs',
+      'crates/cadence/src/why/instructions.rs',
     ],
+  }),
+  entry({
+    id: 'rendered-skill-files',
+    holder: 'crates/cadence/src/guard/tests.rs',
+    counts: 'the existing 24 rendered project files protected by the guard',
+    asserted_by: 'rendered_skill_files_are_protected',
+    subjects: ['crates/cadence/src/execution/render.rs'],
   }),
   entry({
     id: 'rung-agent-files',
@@ -259,7 +273,7 @@ export const CENSUS_TOKEN = 'CADENCE-CENSUS';
 // census-registry.test.mjs reads every `.mjs` under cadence-core/bin/, this one
 // included, so a spelled-out head here would be ingested as a real marked site
 // and would need an exclusion list to undo - the second-list failure
-// `lib/merge-warnings.mjs` and `helper-census.test.mjs` both refuse.
+// `helper-census.test.mjs` refuses.
 const MARKER_HEAD = `${CENSUS_TOKEN}:`;
 
 /** The one named field a marker carries after its id. */

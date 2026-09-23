@@ -140,9 +140,8 @@ test('evaluateFlag: the stated table', () => {
 // --- the row door, and the key it resolves a row by --------------------------
 
 test('subcommandKey: the words a script was invoked with, resolved to its table key', () => {
-  // A MOVE out of self-verify.mjs, not a second copy: the prose lint resolves
-  // the same key for a spelling it finds in a workflow, and an adopting
-  // dispatch has to reach the same row for the same words.
+  // The retired prose lint and the adopting dispatch shared this resolver.
+  // The surviving dispatch still reaches the same row for the same words.
   const ROWS = [
     [['cursor', 'set'], 'cursor set', 'the six two-word families consume their second word'],
     [['deferred', 'record'], 'deferred record', 'the sixth family: the deferred queue takes two operations'],
@@ -313,8 +312,7 @@ test('the settle-receipt presence rule is declared, and every flag it names is o
 
   // Every flag every rule names is declared on that same subcommand's own
   // CONTRACTS row. A misspelled one is a rule that silently never fires, and a
-  // flag no row declares is a requirement self-verify check 2 reports the prose
-  // for spelling.
+  // flag no row declares is a requirement outside that row's grammar.
   for (const [script, rules] of Object.entries(PRESENCE_RULES)) {
     for (const [sub, r] of Object.entries(rules)) {
       const row = (CONTRACTS[script] || {})[sub];
@@ -397,8 +395,7 @@ test('the module file itself is pure: no emit, no process, no filesystem', () =>
 test('every flag in every row declares a complete grammar', () => {
   // A row added later WITHOUT one must redden here rather than picking up a
   // silent default: a defaulted disposition is the same species of hole as a
-  // deleted CONTRACTS row, which self-verify check 14 exists to catch from the
-  // tree side. This is that check for the value grammar.
+  // deleted CONTRACTS row. This assertion checks the value grammar.
   let entries = 0;
   for (const [script, row] of Object.entries(CONTRACTS)) {
     for (const [sub, flags] of Object.entries(row)) {

@@ -41,8 +41,7 @@
 // the sentence an UNCONDITIONALLY required flag would need is the generic one
 // it rejects, while a conditional rule's diagnostic IS the flags it names.
 // They are a SECOND declared structure beside `CONTRACTS` and never a fifth
-// field inside a row: `flagNames` is `Object.keys(row)`, self-verify check 2
-// unions those keys as the FLAG names prose may spell, planning/trace.mjs's
+// field inside a row: `flagNames` is `Object.keys(row)`, planning/trace.mjs's
 // `TRACE_GRAMMAR` spreads both trace rows as flag specs, and
 // arg-contract.test.mjs asserts every row key holds exactly `bare`, `required`,
 // `type` and `value` - all four would read a non-flag key as a flag name.
@@ -123,7 +122,7 @@
 //
 // THE TABLE MOVED HERE, it was not copied (D-06). `CONTRACTS` was defined in
 // self-verify.mjs beside the prose lint that reads it; it is defined here now
-// and self-verify.mjs imports it. Two tables is the drift ARG-06 exists to end
+// and the surviving seam CLIs import it. Two tables is the drift ARG-06 exists to end
 // reintroduced by the fix - a flag added to one and not the other is either
 // silently accepted at the CLI or reported `unknown-flag` against correct
 // prose. The prose side reads flag NAMES through `flagNames` rather than
@@ -144,8 +143,8 @@
 // the filesystem, and holds no state. The caller owns its envelope.
 //
 // ONE HARD BOUNDARY: this module governs VALUE grammar only. It never refuses
-// an UNDECLARED flag at runtime - flag membership is self-verify check 2's
-// prose-side job, and a runtime refusal would break callers no decision here
+// an UNDECLARED flag at runtime. The prose-side flag lint is retired, and a
+// runtime refusal would break callers no decision here
 // asks about. Nor does it own any refusal WORDING: the caller composes the
 // sentence, which is what leaves a bin free to keep a diagnostic no row can
 // state (planning.mjs's decimal-phase answer is the case). The table's own completeness is likewise a TEST-time question,
@@ -359,8 +358,7 @@ const TWO_WORD = new Set(['cursor', 'uat', 'renumber', 'trace', 'risk-check', 'd
  *
  * It answers about SPELLING alone and never about membership: a key no table
  * declares comes back unchanged, and the caller decides whether an unknown
- * subcommand is a refusal (planning.mjs's `usage` line) or a report
- * (self-verify.mjs's `unknown-subcommand` problem).
+ * subcommand is a refusal (planning.mjs's `usage` line).
  * @param {string[]} words the positional words, subcommand first
  * @returns {string} the table key, `''` for the bare form
  */
@@ -1287,8 +1285,8 @@ export const CONTRACTS = {
 // arm the rule, and `requires` the flags ONE of which must then be present.
 // Every flag a rule names is declared on that same subcommand's `CONTRACTS`
 // row, which arg-contract.test.mjs walks: a rule naming a flag no row declares
-// is a requirement a caller cannot satisfy without tripping self-verify check
-// 2, and a misspelled one is a rule that silently never fires.
+// is a requirement outside that row's grammar, and a misspelled one is a rule
+// that silently never fires.
 //
 // THE ONE RULE TODAY, and what it closes. A review fire is settled by an
 // `adjudication`, `gate_pass` or `override` receipt, and the figures it settles
@@ -1318,10 +1316,8 @@ export const PRESENCE_RULES = {
 };
 
 /**
- * The flag NAMES a row declares, for the prose lint that reads this table from
- * the other side. self-verify.mjs check 2 asks it twice per invocation it finds
- * in prose - once for the subcommand's own row and once for the script's `'*'`
- * row - and unions the two.
+ * The flag NAMES a row declares. Callers combine the subcommand's own row
+ * with the script's `'*'` row when both apply.
  *
  * It exists so the lint never spreads a row DIRECTLY: a row is a value-grammar
  * object, and a check that spread one would read its four grammar fields as
