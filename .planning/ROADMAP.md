@@ -1592,8 +1592,9 @@ all say locate first and read by unit second, and a hand-dispatched Codex
 or Claude worker gets it from the contract its prompt carries. The read
 measurement the binary already takes from host transcripts counts native
 Grep and Read against `cadence_query` reads before and after, so whether
-agents switched is measured, not assumed. Refusing a host's native grep
-in the guard is undecided and waits on GH-285. No language server and no
+agents switched is measured, not assumed. A guard refusing native grep
+was declined in GH-285: Claude Code's own Grep already locates first, and
+Read can't be refused because Edit needs it. No language server and no
 new program, since the grammars and ripgrep's crates are already in the
 binary. It lands after phase 17, whose plan 5 changes how search handles
 oversized files, and before phase 18 so the acceptance gate covers it. The
