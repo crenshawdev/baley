@@ -402,6 +402,7 @@ Delivery order after phase 11 is 27, 28, 29, 12, 13, then 14 onward; see
 - [ ] **Phase 15: Landing and milestones** - `cad-land`, `cad-milestone`, `cad-undo`
 - [ ] **Phase 16: Support** - `cad-debug`, `cad-spike`, `cad-help`
 - [ ] **Phase 17: Contract enforcement** - the residual obligations that live today as prose instructions and belong to no single cluster
+- [ ] **Phase 40: Find first, read second** - search answers with locations and a limit, a symbol lookup built from the grammar outlines, and call sites of a name, so a caller reads only the unit it needs
 - [ ] **Phase 39: How a plan becomes tests** - the compiled context, plan and review instructions carry the owner's test-derivation rules, truths name the decision a unit test can prove, and the binary's own test-file rule is stated where the planner reads it
 - [ ] **Phase 18: The acceptance gate** - scenario-bounded workflow episodes, asserted with contract checks rather than an output diff
 - [ ] **Phase 19: The release path** - a tagged release that publishes four checksum-verified archives, and a SessionStart hook that fetches and installs the pinned binary
@@ -1567,3 +1568,24 @@ product behavior for managed projects and language-neutral, and it lands
 before phase 18 so the live acceptance gate runs on the fixed instructions.
 Prompt 2's own text is the specification, and the context carries it
 verbatim.
+
+### Phase 40: Find first, read second
+
+**Goal.** Cadence's `search` answers every hit with the whole unit around it
+and takes no limit, so a one-line match costs the full function. Searching
+`read_to_string` on 2026-09-23 returned `main.rs::run_command` whole, 172
+lines for one matching line, with nine more bodies beside it, under a 64 KB
+answer bound. Every phase still to come reads through this surface, Codex
+workers and Claude alike. This phase adds three read-only answers. A search
+mode returns the file, the line, the matching line and the enclosing unit's
+name, with a limit, and the caller reads a unit by name only when it needs
+one. A symbol lookup builds a project index from the tree-sitter outlines
+the read layer already produces and answers a name fragment with issued
+locations. A call-site query finds the calls to a name through the same
+grammars; it's syntactic, not type-resolved, and says so. No language server
+and no new program, since the grammars and ripgrep's crates are already in
+the binary. It lands after phase 17, whose plan 5 changes how search handles
+oversized files, and before phase 18 so the acceptance gate covers it. The
+ideas come from comparing RustRover's MCP tools with Cadence's read surface;
+the write-side idea from the same comparison, edits by location guarded by
+revision and lease, is undecided and waits on GH-284.
