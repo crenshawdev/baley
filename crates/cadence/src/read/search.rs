@@ -383,9 +383,13 @@ impl ReadDomain {
             let room = bound::room(&envelope);
             if room == 0 { break; }
             let candidate = bound::page(&wire[..=index], room, limit);
-            // Added metadata may push a previously admitted row out. Keep the
-            // preceding page in that case and retry this row on the next page.
-            if candidate.next.is_some() || !candidate.served.starts_with(&page.served) { break; }
+            // Earlier metadata must not turn a later row into an oversized
+            // skip: retry it with a fresh envelope before passing it over.
+            // Added metadata can also displace a previously admitted row.
+            if candidate.next.is_some()
+                || !candidate.served.starts_with(&page.served)
+                || (index > 0 && candidate.passed.last() == Some(&index))
+            { break; }
             page = candidate;
             end = index + 1;
             if page.served.len() == limit { break; }
