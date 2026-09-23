@@ -11,6 +11,25 @@ use std::{
 
 const BASELINE: u64 = 183_000;
 
+pub enum Host {
+    Claude,
+    Codex,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Tally {
+    pub calls: u64,
+    pub bytes: u64,
+}
+
+pub fn count_reads(
+    _host: Host,
+    _records: &[Value],
+    _read_lines: &BTreeMap<String, u64>,
+) -> Result<BTreeMap<String, Tally>, Value> {
+    Ok(BTreeMap::new())
+}
+
 pub struct Report {
     pub revision: String,
     pub body: String,
@@ -399,20 +418,4 @@ fn classify_read(project: &Path, name: &str, input: &Value) -> (u64, u64, u64) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::classify_read;
-    use serde_json::json;
-    use std::path::Path;
-
-    /// Every `cadence_query` operation is a read through the boundary; the
-    /// tool is the contract, not a hand-kept list of its operation names.
-    #[test]
-    fn every_query_operation_counts_as_one_read() {
-        let project = Path::new("/nonexistent");
-        for operation in ["search", "route", "config-facts", "verify-next", "execute-next", "review-next", "review-roster"] {
-            let input = json!({"operation": operation});
-            assert_eq!(classify_read(project, "mcp__cadence__cadence_query", &input), (1, 0, 0),
-                "{operation} is a cadence_query operation and must count as one classified read");
-        }
-    }
-}
+mod tests;
