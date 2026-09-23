@@ -23,7 +23,13 @@ pub(super) fn longest_token(prefix: &str) -> String {
     format!("{prefix}-0000000000000000-{}", u64::MAX)
 }
 
-pub(super) fn fit(_room: usize, rows: &[Value]) -> usize {
+pub(super) fn fit(room: usize, rows: &[Value]) -> usize {
+    let mut remaining = room;
+    for (index, row) in rows.iter().enumerate() {
+        let cost = serde_json::to_vec(row).unwrap().len() + 1;
+        if cost > remaining { return index; }
+        remaining -= cost;
+    }
     rows.len()
 }
 
