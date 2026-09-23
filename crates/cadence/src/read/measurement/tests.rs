@@ -120,13 +120,32 @@ fn a_rollout_is_selected_by_its_session_id() {
         "rollout-2026-09-23T12-26-12-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
         "rollout-2026-09-23T11-53-22-01a0cef8-bb58-7f22-8729-5c0e1e82b0f9.jsonl".into(),
     ];
-    let session = "01a0cf16-cbd7-7910-be17-2003ce72549d";
-    assert_eq!(rollout_for(&names, session).unwrap(), 0);
+    assert_eq!(rollout_for(&names, "01a0cf16-cbd7-7910-be17-2003ce72549d").unwrap(), 0);
+}
+
+#[test]
+fn a_session_id_no_rollout_carries_is_not_found() {
+    let names = vec![
+        "rollout-2026-09-23T12-26-12-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
+        "rollout-2026-09-23T11-53-22-01a0cef8-bb58-7f22-8729-5c0e1e82b0f9.jsonl".into(),
+    ];
     assert_eq!(rollout_for(&names, "01a0cf16-cbd7-7910-be17-2003ce725490").unwrap_err()["code"], "document-not-found");
-    let duplicates = vec![
-        names[0].clone(),
+}
+
+#[test]
+fn two_rollouts_with_one_session_id_are_ambiguous() {
+    let names = vec![
+        "rollout-2026-09-23T12-26-12-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
         "rollout-2026-09-23T13-00-00-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
     ];
-    assert_eq!(rollout_for(&duplicates, session).unwrap_err()["code"], "document-ambiguous");
+    assert_eq!(rollout_for(&names, "01a0cf16-cbd7-7910-be17-2003ce72549d").unwrap_err()["code"], "document-ambiguous");
+}
+
+#[test]
+fn a_session_id_that_is_not_a_uuid_is_refused() {
+    let names = vec![
+        "rollout-2026-09-23T12-26-12-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
+        "rollout-2026-09-23T11-53-22-01a0cef8-bb58-7f22-8729-5c0e1e82b0f9.jsonl".into(),
+    ];
     assert_eq!(rollout_for(&names, "01a0cf16").unwrap_err()["code"], "document-identity");
 }
