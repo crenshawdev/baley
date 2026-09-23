@@ -105,6 +105,7 @@ pub enum DocumentIdentity {
         first_turn: String,
         last_turn: String,
     },
+    CodexRollout { session_id: String },
 }
 
 /// One named span of a file: a function, a heading, a JSON member, or the

@@ -1,4 +1,4 @@
-use super::{Host, Tally, count_reads};
+use super::{Host, Tally, count_reads, report_lines, rollout_for, select_workers};
 use serde_json::json;
 use std::collections::BTreeMap;
 
@@ -78,4 +78,55 @@ fn transcript_reads_are_counted_by_kind() {
             ("unclassified".into(), Tally { calls: 3, bytes: 7 }),
         ])
     );
+}
+
+#[test]
+fn every_agent_call_in_the_episode_selects_its_worker() {
+    let main = vec![json!({"message": {"content": [
+        {"type": "tool_use", "id": "a1", "name": "Agent", "input": {"subagent_type": "general-purpose"}},
+        {"type": "tool_use", "id": "a2", "name": "Agent", "input": {"subagent_type": "cad-planner"}}
+    ]}})];
+    let workers = vec![
+        ("a1".into(), vec![json!({"message": {"content": [
+            {"type": "tool_use", "id": "a3", "name": "Agent", "input": {"subagent_type": "general-purpose"}}
+        ]}})]),
+        ("a2".into(), vec![]),
+        ("a3".into(), vec![]),
+        ("zz".into(), vec![]),
+    ];
+    assert_eq!(select_workers(&main, &workers), vec![0, 1, 2]);
+}
+
+#[test]
+fn an_episode_without_agent_calls_selects_no_worker() {
+    let main = vec![json!({"message": {"content": [{"type": "text", "text": "planning"}]}})];
+    let workers = vec![("a9".into(), vec![])];
+    assert_eq!(select_workers(&main, &workers), Vec::<usize>::new());
+}
+
+#[test]
+fn the_report_lists_each_kind_with_its_calls_and_bytes() {
+    let counts = BTreeMap::from([
+        ("Grep".into(), Tally { calls: 2, bytes: 30 }),
+        ("cadence_query read".into(), Tally { calls: 1, bytes: 50 }),
+    ]);
+    assert_eq!(report_lines(&counts),
+        "reads[Grep]: 2 calls, 30 bytes\nreads[cadence_query read]: 1 calls, 50 bytes\n");
+}
+
+#[test]
+fn a_rollout_is_selected_by_its_session_id() {
+    let names = vec![
+        "rollout-2026-09-23T12-26-12-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
+        "rollout-2026-09-23T11-53-22-01a0cef8-bb58-7f22-8729-5c0e1e82b0f9.jsonl".into(),
+    ];
+    let session = "01a0cf16-cbd7-7910-be17-2003ce72549d";
+    assert_eq!(rollout_for(&names, session).unwrap(), 0);
+    assert_eq!(rollout_for(&names, "01a0cf16-cbd7-7910-be17-2003ce725490").unwrap_err()["code"], "document-not-found");
+    let duplicates = vec![
+        names[0].clone(),
+        "rollout-2026-09-23T13-00-00-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
+    ];
+    assert_eq!(rollout_for(&duplicates, session).unwrap_err()["code"], "document-ambiguous");
+    assert_eq!(rollout_for(&names, "01a0cf16").unwrap_err()["code"], "document-identity");
 }

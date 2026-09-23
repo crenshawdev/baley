@@ -227,47 +227,42 @@ pub fn resolve(planning_root: &Path, identity: &DocumentIdentity) -> Result<Repo
     }];
     let subagents = host_root.join(session_id).join("subagents");
     let candidates = subagent_candidates(&subagents)?;
-    let mut pending = agent_calls(&sources[0].records, Some("cad-planner"));
-    let mut included = BTreeSet::new();
-    loop {
-        let mut changed = false;
-        for (path, meta_path) in &candidates {
-            if included.contains(path) { continue }
-            let meta_bytes = fs::read(meta_path)
-                .map_err(|_| refusal("document-incomplete", "a planner worker correlation record is unavailable"))?;
-            let meta: Value = serde_json::from_slice(&meta_bytes)
-                .map_err(|_| refusal("document-incomplete", "a planner worker correlation record is invalid"))?;
-            let Some(tool_id) = meta["toolUseId"].as_str() else {
-                return Err(refusal("document-incomplete", "a planner worker correlation id is missing"));
-            };
-            if !pending.contains(tool_id) { continue }
-            let bytes = fs::read(path)
-                .map_err(|_| refusal("document-incomplete", "a planner worker record is unavailable"))?;
-            let worker_records = records(&bytes)?;
-            validate_record_scope(&worker_records, &project, session_id)?;
-            let file_id = path.file_stem().and_then(|value| value.to_str())
-                .and_then(|value| value.strip_prefix("agent-"))
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| refusal("document-incomplete", "a planner worker identity is invalid"))?;
-            let worker_ids: BTreeSet<_> = worker_records.iter()
-                .filter_map(|record| record["agentId"].as_str()).collect();
-            if worker_ids != BTreeSet::from([file_id]) {
-                return Err(refusal("document-ambiguous", "a planner worker record has inconsistent identity"));
-            }
-            pending.extend(agent_calls(&worker_records, None));
-            sources.push(Source {
-                label: format!("worker:{file_id}.jsonl"),
-                path: path.clone(),
-                bytes,
-                records: worker_records,
-            });
-            included.insert(path.clone());
-            changed = true;
-        }
-        if !changed { break }
+    let mut workers = Vec::new();
+    let mut worker_bytes = Vec::new();
+    for (path, meta_path) in &candidates {
+        let meta_bytes = fs::read(meta_path)
+            .map_err(|_| refusal("document-incomplete", "a planner worker correlation record is unavailable"))?;
+        let meta: Value = serde_json::from_slice(&meta_bytes)
+            .map_err(|_| refusal("document-incomplete", "a planner worker correlation record is invalid"))?;
+        let Some(tool_id) = meta["toolUseId"].as_str() else {
+            return Err(refusal("document-incomplete", "a planner worker correlation id is missing"));
+        };
+        let bytes = fs::read(path)
+            .map_err(|_| refusal("document-incomplete", "a planner worker record is unavailable"))?;
+        workers.push((tool_id.to_owned(), records(&bytes)?));
+        worker_bytes.push(bytes);
     }
-    if sources.len() == 1 {
-        return Err(refusal("document-incomplete", "the requested round has no correlated Claude planner worker"));
+    let mut pending = agent_calls(&sources[0].records, None);
+    for index in select_workers(&sources[0].records, &workers) {
+        let path = &candidates[index].0;
+        let worker_records = &workers[index].1;
+        validate_record_scope(worker_records, &project, session_id)?;
+        let file_id = path.file_stem().and_then(|value| value.to_str())
+            .and_then(|value| value.strip_prefix("agent-"))
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| refusal("document-incomplete", "a planner worker identity is invalid"))?;
+        let worker_ids: BTreeSet<_> = worker_records.iter()
+            .filter_map(|record| record["agentId"].as_str()).collect();
+        if worker_ids != BTreeSet::from([file_id]) {
+            return Err(refusal("document-ambiguous", "a planner worker record has inconsistent identity"));
+        }
+        pending.extend(agent_calls(worker_records, None));
+        sources.push(Source {
+            label: format!("worker:{file_id}.jsonl"),
+            path: path.clone(),
+            bytes: std::mem::take(&mut worker_bytes[index]),
+            records: worker_records.clone(),
+        });
     }
     let correlated_tools: BTreeSet<_> = candidates.iter().filter_map(|(_, meta_path)| {
         let bytes = fs::read(meta_path).ok()?;
@@ -390,6 +385,26 @@ fn agent_calls(records: &[Value], required_type: Option<&str>) -> BTreeSet<Strin
         .filter_map(|block| block["id"].as_str().map(str::to_owned)).collect()
 }
 
+fn select_workers(main: &[Value], workers: &[(String, Vec<Value>)]) -> Vec<usize> {
+    let mut pending = agent_calls(main, None);
+    let mut selected = BTreeSet::new();
+    loop {
+        let before = selected.len();
+        for (index, (tool_id, records)) in workers.iter().enumerate() {
+            if pending.contains(tool_id) && selected.insert(index) {
+                pending.extend(agent_calls(records, None));
+            }
+        }
+        if selected.len() == before { break }
+    }
+    selected.into_iter().collect()
+}
+
+fn report_lines(counts: &BTreeMap<String, Tally>) -> String {
+    counts.iter().map(|(kind, tally)|
+        format!("reads[{kind}]: {} calls, {} bytes\n", tally.calls, tally.bytes)).collect()
+}
+
 fn measure(read_lines: &BTreeMap<String, u64>, phase: u32, session_id: &str, first_turn: &str, last_turn: &str,
     sources: Vec<Source>) -> Result<Report, Value>
 {
@@ -480,6 +495,7 @@ fn measure(read_lines: &BTreeMap<String, u64>, phase: u32, session_id: &str, fir
         "read_count: {read_count}\n",
         "whole_file_reads: {whole_file_reads}\n",
         "unclassified_reads: {unclassified_reads}\n",
+        "{reads}",
         "input_tokens: {input_tokens}\n",
         "cache_creation_input_tokens: {cache_creation_input_tokens}\n",
         "cache_read_input_tokens: {cache_read_input_tokens}\n",
@@ -493,6 +509,7 @@ fn measure(read_lines: &BTreeMap<String, u64>, phase: u32, session_id: &str, fir
     ), phase=phase, session_id=session_id, first_turn=first_turn, last_turn=last_turn,
         worker_ids=worker_ids.join(","), source_digest=source_digest, read_count=read_count,
         whole_file_reads=whole_file_reads, unclassified_reads=unclassified_reads,
+        reads=report_lines(&counts),
         input_tokens=usage.input, cache_creation_input_tokens=usage.cache_creation,
         cache_read_input_tokens=usage.cache_read, output_tokens=usage.output,
         token_total=token_total, difference=difference, ratio=ratio);
@@ -507,6 +524,85 @@ fn usage_field(usage: &Value, field: &str) -> Result<u64, Value> {
 fn add(left: u64, right: u64) -> Result<u64, Value> {
     left.checked_add(right)
         .ok_or_else(|| refusal("document-incomplete", "planner-round token arithmetic overflowed"))
+}
+
+pub struct RolloutReport {
+    pub revision: String,
+    pub body: String,
+}
+
+fn rollout_for(names: &[String], session_id: &str) -> Result<usize, Value> {
+    if !valid_uuid(session_id) {
+        return Err(refusal("document-identity", "codex-rollout session id must be a UUID"));
+    }
+    let suffix = format!("-{session_id}.jsonl");
+    let mut matches = names.iter().enumerate().filter(|(_, name)|
+        name.strip_prefix("rollout-")
+            .and_then(|rest| rest.strip_suffix(&suffix))
+            .is_some_and(|time| !time.is_empty()));
+    let (index, _) = matches.next()
+        .ok_or_else(|| refusal("document-not-found", "the requested Codex rollout is absent"))?;
+    if matches.next().is_some() {
+        return Err(refusal("document-ambiguous", "several Codex rollouts carry the requested session id"));
+    }
+    Ok(index)
+}
+
+pub fn resolve_rollout(session_id: &str) -> Result<RolloutReport, Value> {
+    if !valid_uuid(session_id) {
+        return Err(refusal("document-identity", "codex-rollout session id must be a UUID"));
+    }
+    let home = std::env::var_os("HOME").filter(|value| !value.is_empty())
+        .ok_or_else(|| refusal("document-unavailable", "the Codex host home is unavailable"))?;
+    let host_root = PathBuf::from(home).join(".codex/sessions");
+    let unavailable = |_| refusal("document-unavailable", "the Codex rollout names cannot be listed");
+    let mut directories = if host_root.is_dir() { vec![host_root] } else { Vec::new() };
+    for _ in 0..3 {
+        let mut nested = Vec::new();
+        for directory in directories {
+            for entry in fs::read_dir(directory).map_err(unavailable)? {
+                let entry = entry.map_err(unavailable)?;
+                if entry.file_type().map_err(unavailable)?.is_dir() {
+                    nested.push(entry.path());
+                }
+            }
+        }
+        directories = nested;
+    }
+    let mut names = Vec::new();
+    let mut paths = Vec::new();
+    for directory in directories {
+        for entry in fs::read_dir(directory).map_err(unavailable)? {
+            let entry = entry.map_err(unavailable)?;
+            if entry.file_type().map_err(unavailable)?.is_file() {
+                names.push(entry.file_name().to_string_lossy().into_owned());
+                paths.push(entry.path());
+            }
+        }
+    }
+    let index = rollout_for(&names, session_id)?;
+    let bytes = fs::read(&paths[index])
+        .map_err(|_| refusal("document-unavailable", "the requested Codex rollout cannot be read"))?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| refusal("document-incomplete", "the Codex rollout is not UTF-8"))?;
+    let records: Vec<Value> = text.lines().map(|line| serde_json::from_str(line)
+        .map_err(|_| refusal("document-incomplete", "the Codex rollout contains invalid JSON")))
+        .collect::<Result<_, _>>()?;
+    let counts = count_reads(Host::Codex, &records, &BTreeMap::new())?;
+    let read_count: u64 = counts.values().map(|tally| tally.calls).sum();
+    let unclassified_reads = counts.get("unclassified").map_or(0, |tally| tally.calls);
+    let source_digest = format!("{:x}", Sha256::digest(&bytes));
+    let body = format!(concat!(
+        "Codex rollout measurement\n",
+        "host: codex\n",
+        "session_id: {session_id}\n",
+        "source_digest: {source_digest}\n",
+        "read_count: {read_count}\n",
+        "unclassified_reads: {unclassified_reads}\n",
+        "{reads}",
+    ), session_id=session_id, source_digest=source_digest, read_count=read_count,
+        unclassified_reads=unclassified_reads, reads=report_lines(&counts));
+    Ok(RolloutReport { revision: source_digest, body })
 }
 
 #[cfg(test)]
