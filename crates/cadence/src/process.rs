@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 /// What to run, and how to hold it while it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Launch {
+    git_registration: Option<crate::git_process::Registration>,
     pub program: OsString,
     pub args: Vec<OsString>,
     /// Where the child runs. `None` leaves it in this process's own directory,
@@ -49,6 +50,7 @@ pub struct Launch {
 impl Launch {
     pub fn new(program: impl AsRef<OsStr>) -> Self {
         Self {
+            git_registration: None,
             program: program.as_ref().to_owned(),
             args: Vec::new(),
             cwd: None,
@@ -65,6 +67,16 @@ impl Launch {
     pub fn cwd(mut self, cwd: impl AsRef<Path>) -> Self {
         self.cwd = Some(cwd.as_ref().to_owned());
         self
+    }
+
+    pub(crate) fn registered_git(registration: crate::git_process::Registration) -> Self {
+        let mut launch = Self::new("git");
+        launch.git_registration = Some(registration);
+        launch
+    }
+
+    pub(crate) fn git_caller(&self) -> Option<crate::git_process::Caller> {
+        self.git_registration.as_ref().map(|registration| registration.caller())
     }
 
     pub fn arg(mut self, arg: impl AsRef<OsStr>) -> Self {
