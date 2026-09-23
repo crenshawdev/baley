@@ -428,3 +428,51 @@ fn blob_length(path: &str, permit: &BlobPermit, acquired: u64) -> Result<(), Str
     if acquired != permit.size { return Err(format!("{path}: git blob length differs from size observation")); }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn oversized_blob_metadata_refuses_content_acquisition() {
+        for path in ["PROJECT.md", "ARCHIVE.md", "FILED.md", "phases/17/CONTEXT.md"] {
+            assert_eq!(super::blob_preflight(path, b"16777217\n"),
+                Err(format!("{path}: size 16777217 exceeds acquisition bound 16777216")));
+            assert_eq!(super::blob_preflight(path, b"16777216\n"),
+                Ok(super::BlobPermit { size: 16_777_216, bound: 16_777_216 }));
+        }
+        for path in ["items.jsonl", "decisions.jsonl"] {
+            assert_eq!(super::blob_preflight(path, b"1073741825\n"),
+                Err(format!("{path}: size 1073741825 exceeds acquisition bound 1073741824")));
+            assert_eq!(super::blob_preflight(path, b"1073741824\n"),
+                Ok(super::BlobPermit { size: 1_073_741_824, bound: 1_073_741_824 }));
+        }
+    }
+
+    #[test]
+    fn invalid_blob_size_refuses_content_acquisition() {
+        for size in [b"".as_slice(), b"-1", b"+1", b"1.5", b"blob 3", b"18446744073709551616", b"\xff"] {
+            assert_eq!(super::blob_preflight("PROJECT.md", size),
+                Err("PROJECT.md: invalid git blob size".into()));
+        }
+    }
+
+    #[test]
+    fn a_truncated_git_capture_is_not_a_complete_blob() {
+        let mut output = cadence::process::Output::exited(0, b"abcd", b"");
+        assert_eq!(super::git_output("cat-file", 4, output.clone()), Ok(b"abcd".to_vec()));
+        output.stdout_complete = false;
+        assert_eq!(super::git_output("cat-file", 4, output),
+            Err("git cat-file output exceeds retained-byte bound 4".into()));
+    }
+
+    #[test]
+    fn a_blob_length_mismatch_refuses_the_bytes() {
+        let permit = super::BlobPermit { size: 3, bound: 16_777_216 };
+        assert_eq!(super::blob_length("PROJECT.md", &permit, 3), Ok(()));
+        for size in [2, 4] {
+            assert_eq!(super::blob_length("PROJECT.md", &permit, size),
+                Err("PROJECT.md: git blob length differs from size observation".into()));
+        }
+        assert_eq!(super::blob_length("PROJECT.md", &permit, 16_777_217),
+            Err("PROJECT.md: size 16777217 exceeds acquisition bound 16777216".into()));
+    }
+}

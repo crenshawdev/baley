@@ -105,6 +105,64 @@ and integrity metadata. Renames provide process-kill old-or-new atomicity; they 
 not prove durability against power loss. AC8 requires syscall-order verification
 of successful file and directory synchronization before acknowledgement.
 
+## Acquisition bounds
+
+`acquisition::MAX_SOURCE_BYTES` is 16 MiB (16777216 bytes) and
+`acquisition::MAX_STORE_BYTES` is 1 GiB (1073741824 bytes). Both are `u64`
+constants in `crates/cadence/src/acquisition.rs`, not configuration keys.
+`acquisition::decide` admits sizes at the bound and refuses larger observations
+with a typed `{file, size, bound}` crossing, before content reads or reservations
+based on the observed length. These limits govern acquisition, independently of
+answer sizes, grammar outline thresholds and parser budgets.
+
+The read layer's source path, issued slices, search and list use the source
+bound. An issued file that grows over it returns an incomplete answer with the
+crossing and no body before revision comparison. Unissued references still
+refuse. Search and list skip crossings, retain notes within an 8192-byte note
+budget and remain incomplete even with no continuation cursor. Direct ROADMAP
+document text and measurement's project-confined source classification also use
+the source gate. A source that cannot be acquired for measurement stays
+unclassified. Measurement's host session transcripts, subagent transcripts,
+correlation metadata and transcript rechecks remain outside this source bound.
+
+Recall gates authored document walk observations, `Files::text`, and ARCHIVE
+at the source bound. Historical authored blobs use that bound; historical
+items and decisions use the store bound. `ReadGit::blob_size` provides raw size
+bytes; production Git uses `cat-file -s` with a 32-byte response cap instead of
+reading the blob. The existing in-memory adapters inherit a default that reads
+the blob to report its true length. The pure preflight parses size and selects
+class before requesting content; `Process` caps retained blob output at the
+selected bound. Truncated captures or lengths differing from the size
+observation are incomplete coverage. Every historical path, including one that
+reuses cached blob bytes, passes preflight for its own class.
+
+The filesystem store adapter bounds its file participants, including recovery
+intent, before loading. The independent cache gates state, items and decisions
+on metadata before reuse and on cold reads before parse/hash/load. Import's
+pre-open and config-observation store inputs use `ConfigIo::read_store`:
+`FileIo` explicitly selects the store bound, while existing in-memory readers
+inherit a default delegating to `read`. Ordinary configuration reads and their
+existing limits are unchanged; the input's role selects the route, not its
+basename. Map-view gates intent/state/items/decisions before both its cached
+metadata branch and content branch; projection text uses the source bound.
+Crossings become `store::Error::Invalid` with the actual file, size and bound,
+or map-view's existing inconsistent-inputs answer, never an absent/default input.
+
+Filesystem acquisition observes path and opened-handle metadata, retains
+regular-file and caller confinement checks, and delegates capped requests to
+`Read::take` without reserving the reported file size. Its pure revalidation
+judge refuses changed identity, metadata or length and names any observed
+growth over the bound. This detects observed races, not an atomic filesystem
+snapshot. The store limit guards corrupt or hand-edited input; it does not
+solve aggregate heap use or GH-264.
+
+Unit evidence supplies metadata, crossings and raw Git size bytes directly.
+It detects missing or off-by-one guards, swapped classes, lost crossing fields,
+acceptance of changed observations, suppression by cached state or stale-revision
+handling, and malformed or incomplete historical input. It does not measure
+resident memory or prove every assembled read/search/recall/store route avoids
+whole-file loading; that live acceptance remains phase 18's gate.
+
 ## Shutdown cutoff and bound
 
 The stdio ingress reserves capacity before decoding a tool request, then admits
