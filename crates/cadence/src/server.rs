@@ -895,11 +895,32 @@ where
 }
 
 /// The server's answer to the host's initialize request.
-fn info() -> ServerInfo {
+pub(crate) fn info() -> ServerInfo {
     let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
         .with_server_info(Implementation::new("cadence", env!("CARGO_PKG_VERSION")));
     info.instructions = Some(cadence::read::instructions::CONTRACT.to_owned());
     info
+}
+
+pub(crate) fn tools() -> Vec<Tool> {
+    vec![
+        tool(
+            "cadence_version",
+            "Report this binary's version, OS and architecture without changing state.",
+            serde_json::to_value(schemars::schema_for!(VersionArguments))
+                .expect("version schema"),
+        ),
+        tool(
+            "cadence_query",
+            "Read the bound project's records, configuration, routing, evidence and source without changing state; request shapes come from cadence_query {\"operation\":\"schema\",\"tool\":\"query\",\"for\":\"<operation>\"} and the compiled contracts.",
+            query_schema(),
+        ),
+        tool(
+            "cadence_apply",
+            "Change the bound project through one replay-safe operation that is refused with a located rule when it cannot apply; request shapes come from cadence_query {\"operation\":\"schema\",\"tool\":\"apply\",\"for\":\"<operation>\"} and the compiled contracts.",
+            apply_schema(),
+        ),
+    ]
 }
 
 impl ServerHandler for PublicServer {
@@ -913,24 +934,7 @@ impl ServerHandler for PublicServer {
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult {
-            tools: vec![
-                tool(
-                    "cadence_version",
-                    "Report this binary's version, OS and architecture without changing state.",
-                    serde_json::to_value(schemars::schema_for!(VersionArguments))
-                        .expect("version schema"),
-                ),
-                tool(
-                    "cadence_query",
-                    "Read the bound project's records, configuration, routing, evidence and source without changing state; request shapes come from cadence_query {\"operation\":\"schema\",\"tool\":\"query\",\"for\":\"<operation>\"} and the compiled contracts.",
-                    query_schema(),
-                ),
-                tool(
-                    "cadence_apply",
-                    "Change the bound project through one replay-safe operation that is refused with a located rule when it cannot apply; request shapes come from cadence_query {\"operation\":\"schema\",\"tool\":\"apply\",\"for\":\"<operation>\"} and the compiled contracts.",
-                    apply_schema(),
-                ),
-            ],
+            tools: tools(),
             ..Default::default()
         })
     }

@@ -203,3 +203,83 @@ fn rendered_files_obey_named_byte_ceilings() {
             "{}: {} UTF-8 bytes exceed the {ceiling}-byte ceiling", file.path, rendered.len());
     }
 }
+
+#[test]
+fn compiled_contracts_locate_first() {
+    let expected = "Locate first, read second: find source with `search`, `symbol-search` or `call-search`, whose rows carry issued locations and never bodies, then `read` one unit at a time by its issued `location` or by unit name under its issued `file_reference`.";
+    let carriers = [
+        "skills/cad-context/SKILL.md",
+        "skills/cad-plan/SKILL.md",
+        "skills/cad-executor-contract/SKILL.md",
+        "skills/cad-execute/SKILL.md",
+        "skills/cad-task/SKILL.md",
+        "skills/cad-verifier-contract/SKILL.md",
+        "skills/cad-verify/SKILL.md",
+        "skills/cad-review/SKILL.md",
+        "skills/cad-decision-review/SKILL.md",
+        "skills/cad-minimalism-review/SKILL.md",
+        "skills/cad-plan-review/SKILL.md",
+        "skills/cad-audit/SKILL.md",
+        "skills/cad-coverage/SKILL.md",
+        "skills/cad-read-contract/SKILL.md",
+        "executor dispatch_text",
+        "server initialize instructions",
+    ];
+    let surfaces = compiled_read_surfaces();
+    for carrier in carriers {
+        let (_, text) = surfaces
+            .iter()
+            .find(|(name, _)| *name == carrier)
+            .unwrap_or_else(|| panic!("{carrier}: missing compiled surface"));
+        assert!(text.contains(expected), "{carrier}: missing locate-first sentence");
+    }
+}
+
+#[test]
+fn no_compiled_surface_carries_a_phase_31_measurement_paragraph() {
+    let retired_openings = [
+        "For the read-layer cycle-purpose close handoff, measure a new real Claude Code planning episode after this read contract is installed.",
+        "For the read-layer cycle-purpose close, schedule a new real Claude-host planning",
+        "For a read-layer cycle-purpose truth, inspect a new real Claude-host planning",
+    ];
+    for (surface, text) in compiled_read_surfaces() {
+        for opening in retired_openings {
+            assert!(
+                !text.contains(opening),
+                "{surface}: retains phase 31 measurement paragraph starting {opening:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_query_tool_description_says_locate_first() {
+    let expected = "Locate source first with search, symbol-search or call-search, then read one unit by its issued location or unit name.";
+    let tools = super::server::tools();
+    let query = tools
+        .iter()
+        .find(|tool| tool.name == "cadence_query")
+        .expect("cadence_query tool");
+    let description = query.description.as_deref().expect("cadence_query description");
+    assert!(
+        description.contains(expected),
+        "cadence_query description: missing locate-first sentence"
+    );
+}
+
+fn compiled_read_surfaces() -> Vec<(&'static str, String)> {
+    let mut surfaces: Vec<_> = RENDERED_PROJECT_FILES
+        .iter()
+        .map(|file| {
+            let rendered = super::instruction_surfaces::render(file.command)
+                .unwrap_or_else(|| panic!("{}: missing renderer", file.path));
+            (file.path, rendered)
+        })
+        .collect();
+    surfaces.push(("executor dispatch_text", instructions::dispatch_text()));
+    surfaces.push((
+        "server initialize instructions",
+        super::server::info().instructions.expect("initialize instructions"),
+    ));
+    surfaces
+}
