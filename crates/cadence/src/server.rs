@@ -912,7 +912,7 @@ pub(crate) fn tools() -> Vec<Tool> {
         ),
         tool(
             "cadence_query",
-            "Read the bound project's records, configuration, routing, evidence and source without changing state; request shapes come from cadence_query {\"operation\":\"schema\",\"tool\":\"query\",\"for\":\"<operation>\"} and the compiled contracts.",
+            "Read the bound project's records, configuration, routing, evidence and source without changing state; request shapes come from cadence_query {\"operation\":\"schema\",\"tool\":\"query\",\"for\":\"<operation>\"} and the compiled contracts. Locate source first with search, symbol-search or call-search, then read one unit by its issued location or unit name.",
             query_schema(),
         ),
         tool(
