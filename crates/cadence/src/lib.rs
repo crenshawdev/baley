@@ -1,5 +1,8 @@
 extern crate self as cadence;
 
+/// Metadata admission and bounded acquisition of source and store inputs.
+pub mod acquisition;
+
 /// Completion declared at import for ticked phases the documents cannot derive.
 pub mod adoption;
 /// The owner's typed captures: a kind, a phase, and no prose to parse back.
