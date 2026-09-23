@@ -168,21 +168,8 @@ impl<I: ConfigIo> ConfigWriter<I> {
         let check = captured.map(|captured| input_check(self.config.clone(), captured));
         let plan = plan(&generation, &self.active, layer, updates)?;
         if plan.bytes.is_none() {
-            return Ok(Written {
-                view: self
-                    .store
-                    .request(match check {
-                        Some(check) => Operation::CheckedTransact {
-                            check,
-                            transaction: None,
-                        },
-                        None => Operation::Read,
-                    })
-                    .await?,
-                changed_keys: plan.changed_keys,
-                destination: plan.destination,
-                requested_layer: layer,
-            });
+            let view = self.store.request(request(None, check)).await?;
+            return Ok(written(view, plan, layer));
         }
         let change = plan.change(observe(plan.target)?)?;
         let store_generation = self
@@ -192,21 +179,26 @@ impl<I: ConfigIo> ConfigWriter<I> {
             .snapshot
             .generation;
         let transaction = transaction(change, store_generation);
-        let operation = match check {
-            Some(check) => Operation::CheckedTransact {
-                check,
-                transaction: Some(transaction),
-            },
-            None => Operation::Transact(transaction),
-        };
-        let view = self.store.request(operation).await?;
-        Ok(Written {
-            view,
-            changed_keys: plan.changed_keys,
-            destination: plan.destination,
-            requested_layer: layer,
-        })
+        let view = self.store.request(request(Some(transaction), check)).await?;
+        Ok(written(view, plan, layer))
     }
+}
+
+/// The store request that carries a batch: a plain read when the plan changes
+/// nothing, so no generation is spent, else its transaction, under the
+/// captured-input check when there is one.
+pub fn request(transaction: Option<Transaction>, check: Option<cadence::store::writer::InputCheck>) -> Operation {
+    match (transaction, check) {
+        (None, None) => Operation::Read,
+        (transaction, Some(check)) => Operation::CheckedTransact { check, transaction },
+        (Some(transaction), None) => Operation::Transact(transaction),
+    }
+}
+
+/// What a batch reports: the store view after it, the keys it changed, the
+/// file it wrote to and the layer it was asked for.
+pub fn written(view: View, plan: Plan, layer: Layer) -> Written {
+    Written { view, changed_keys: plan.changed_keys, destination: plan.destination, requested_layer: layer }
 }
 
 /// A config read that failed refuses the write as a policy error.

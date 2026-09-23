@@ -174,6 +174,92 @@ fn a_later_generation_in_a_replaced_store_directory_is_an_external_change() {
     );
 }
 
+/// Phase 6's execution with plan 1 admitted as its active dispatch, which
+/// carries the plan body.
+fn admitted_execution() -> cadence::execution::model::ExecutionSnapshot {
+    use cadence::execution::{
+        dispatch::{admit_dispatch, build_dispatch},
+        model::{EXECUTION_SCHEMA, ExecutionOccurrence, ExecutionSnapshot},
+        plan::{parse_plan, plan_set_fingerprint},
+    };
+    let plan = parse_plan(
+        b"---\nphase: 6\nplan: 1\nrequirements: [AC4]\nfiles: [src/lib.rs]\nexecution:\n  schema: 1\n  suite: cargo test\n  tasks:\n    - id: T1\n      verify: [cargo test one]\n---\nBuild it.\n",
+        6,
+        1,
+    )
+    .unwrap();
+    let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
+    let candidate = build_dispatch(&plan, &set, 0, &"1".repeat(40)).unwrap();
+    assert!(!candidate.body.is_empty(), "the fixture's dispatch carries its body");
+    let occurrence = ExecutionOccurrence {
+        phase: 6, undone: None, plan_set_fingerprint: set, version: 0, active: None,
+        plans: vec![], terminal: None, receipts: BTreeMap::new(), issues: BTreeMap::new(),
+    };
+    let (occurrence, _) = admit_dispatch(&occurrence, candidate).unwrap();
+    ExecutionSnapshot { schema: EXECUTION_SCHEMA, occurrences: BTreeMap::from([("6".into(), occurrence)]) }
+}
+
+#[test]
+fn installing_execution_leaves_every_other_namespace_as_it_was() {
+    use super::writer::install_execution;
+    let mut data = json!({"lifecycle": {"status": "planned"}, "evidence": [{"id": "seed"}]});
+    install_execution(&mut data, admitted_execution()).unwrap();
+    assert_eq!(
+        (&data["lifecycle"], &data["evidence"]),
+        (&json!({"status": "planned"}), &json!([{"id": "seed"}]))
+    );
+}
+
+#[test]
+fn installing_execution_keeps_the_plan_body_out_of_the_snapshot() {
+    use super::writer::install_execution;
+    let mut data = json!({});
+    install_execution(&mut data, admitted_execution()).unwrap();
+    assert!(data["execution"]["occurrences"]["6"]["active"].is_object());
+    assert!(data["execution"]["occurrences"]["6"]["active"].get("body").is_none());
+}
+
+/// A decision record in the legacy boundary class, as the pre-v1 writer left it.
+fn legacy_boundary_line() -> String {
+    let digest = "a".repeat(64);
+    format!(
+        concat!(
+            r#"{{"version":1,"id":"{d}","revision":1,"origin":{{"source":"execution-boundary","original":"missing"}},"#,
+            r#""decision":{{"class":"boundary","phase":3,"tool":"cadence-apply","operation":"execution-refusal","#,
+            r#""request_digest":"{d}","outcome":"refused","subject_id":null,"store_generation":1,"prompt_digest":null,"#,
+            r#""response_digest":"{d}","terminal":false}},"at":1}}"#
+        ),
+        d = digest
+    )
+}
+
+#[test]
+fn a_legacy_boundary_record_writes_back_byte_identically_and_validates() {
+    let line = legacy_boundary_line();
+    let record: super::model::DecisionRecord = serde_json::from_str(&line).unwrap();
+    assert_eq!(serde_json::to_string(&record).unwrap(), line);
+    assert_eq!(super::model::validate_decisions(&[record]), Ok(()));
+}
+
+/// A sealed snapshot of a store whose execution is in the legacy format.
+fn legacy_snapshot() -> Vec<u8> {
+    use super::writer::install_execution;
+    let mut data = json!({"other": true});
+    install_execution(&mut data, admitted_execution()).unwrap();
+    Snapshot::sealed(1, b"", b"", data, BTreeMap::new()).unwrap().1
+}
+
+#[test]
+fn a_legacy_execution_snapshot_writes_back_byte_identically() {
+    let bytes = legacy_snapshot();
+    assert_eq!(Snapshot::parse(&bytes, b"", b"").unwrap().render().unwrap(), bytes);
+}
+
+#[test]
+fn reading_a_legacy_execution_snapshot_repairs_nothing() {
+    assert!(Snapshot::parse(&legacy_snapshot(), b"", b"").unwrap().repaired.is_empty());
+}
+
 mod boundaries {
     use super::super::model::{Decision, DecisionRecord, digest};
     use super::super::writer::{BoundaryAdmission, Prior, boundary_admission, prior};
@@ -326,6 +412,20 @@ mod boundaries {
             prior(&view_with(vec![], &[]), " \t", "content", 3),
             Err(Error::Invalid("empty operation identity".into()))
         );
+    }
+
+    #[test]
+    fn a_refusal_appends_its_decision_and_changes_no_data() {
+        use super::super::writer::append_admitted_boundary;
+        let mut view = View {
+            items: vec![],
+            decisions: log(3, 2),
+            snapshot: Snapshot::new(3, b"", b"", json!({"execution": {"schema": 1}, "other": true})).unwrap(),
+        };
+        let data = view.snapshot.data.clone();
+        let admitted = boundary_admission(&view.decisions, &request(3, "refused"), 4, Some(7)).unwrap();
+        append_admitted_boundary(&mut view, admitted).unwrap();
+        assert_eq!((view.decisions.len(), &view.snapshot.data), (3, &data));
     }
 }
 
@@ -503,6 +603,120 @@ mod scoped {
             confirmed_boundary(&view, &boundary(PHASE, "executor", "later")).map(|found| found.id.to_string()),
             Ok(id)
         );
+    }
+
+    #[test]
+    fn a_caller_transaction_may_not_carry_a_phase_summary() {
+        use super::super::writer::caller_target;
+        assert_eq!(caller_target("phase-summary:3"), Ok(false));
+        assert_eq!(caller_target("repo-config"), Ok(true));
+    }
+
+    #[test]
+    fn a_summary_rendered_by_another_version_is_refused() {
+        use super::super::writer::supported_render;
+        let current = cadence::execution::render::SUMMARY_RENDER_VERSION;
+        assert!(supported_render(current));
+        assert!(!supported_render(current + 1));
+    }
+
+    #[test]
+    fn a_risk_pending_patch_is_accepted_only_while_it_leaves_the_phase_open() {
+        use super::super::writer::patch_boundary_valid;
+        use cadence::execution::model::{ExecutorPatch, PatchKind, PlanDisposition};
+        let answer = PreparedAnswer::new(Envelope::Refused { code: "risk-pending".into(), reason: "review pending".into() }).unwrap();
+        let decision = BoundaryV1::new(PHASE, BoundaryTool::CadenceApply, "executor".into(), digest(b"patch"), Some("d-1".into()), &answer);
+        let patch = ExecutorPatch {
+            schema: 1, kind: PatchKind::Executor, dispatch_id: "d-1".into(), expected_execution_version: 1,
+            outcome: PlanDisposition::Complete, tasks: vec![], deviations: vec![], blockers: vec![],
+        };
+        let render = cadence::execution::render::SUMMARY_RENDER_VERSION;
+        assert!(patch_boundary_valid(&decision, &patch, render, false));
+        assert!(!patch_boundary_valid(&decision, &patch, render, true));
+    }
+
+    fn step(view: &View, operation: &str, decision: &BoundaryV1) -> super::super::writer::BoundaryStep {
+        super::super::writer::boundary_step(view, operation, decision, &BoundaryChange::Observe, 300, Some(9)).unwrap()
+    }
+
+    #[test]
+    fn a_later_request_in_a_scope_holding_its_terminal_is_answered_without_a_write() {
+        use super::super::writer::BoundaryStep;
+        let mut decisions = log(PHASE, "executor", 256);
+        decisions.push(terminal(PHASE));
+        let view = view_of(decisions, serde_json::Value::Null);
+        assert_eq!(step(&view, "later", &boundary(PHASE, "executor", "later")), BoundaryStep::Replay);
+    }
+
+    #[test]
+    fn an_operation_already_recorded_with_the_same_content_is_answered_without_a_write() {
+        use super::super::writer::{BoundaryStep, boundary_operation};
+        let decision = boundary(PHASE, "executor", "again");
+        let fingerprint = boundary_operation(&BTreeMap::new(), "op-1", &decision, &BoundaryChange::Observe).unwrap().unwrap();
+        let mut view = view_of(vec![], serde_json::Value::Null);
+        view.snapshot.operations.insert("op-1".into(), fingerprint);
+        assert_eq!(step(&view, "op-1", &decision), BoundaryStep::Replay);
+    }
+
+    #[test]
+    fn the_write_after_a_scope_uses_256_is_its_terminal_step() {
+        use super::super::writer::BoundaryStep;
+        let view = view_of(log(PHASE, "executor", 256), serde_json::Value::Null);
+        assert!(matches!(step(&view, "next", &boundary(PHASE, "executor", "next")), BoundaryStep::Terminal(_)));
+    }
+
+    #[test]
+    fn a_terminal_decision_changes_no_data_and_no_operations() {
+        use super::super::writer::{BoundaryStep, terminal_next};
+        // A log the store's own validation accepts: each record under its identity.
+        let valid: Vec<DecisionRecord> = (0..256)
+            .map(|index| {
+                let boundary = boundary(PHASE, "executor", &format!("valid {index}"));
+                DecisionRecord {
+                    version: VERSION,
+                    id: boundary.identity().unwrap(),
+                    revision: 1,
+                    origin: Origin { source: "execution-boundary-v1".into(), original: Evidence::Missing },
+                    decision: Decision::BoundaryV1(BoundaryRecordV1 { boundary, store_generation: index as u64 + 1, terminal: false }),
+                    at: Some(1),
+                }
+            })
+            .collect();
+        let mut view = view_of(valid, json!({"execution": {"schema": 1}}));
+        view.snapshot.operations.insert("op-1".into(), "fp".into());
+        let BoundaryStep::Terminal(record) = step(&view, "next", &boundary(PHASE, "executor", "next")) else {
+            panic!("no terminal step")
+        };
+        let next = terminal_next(&view, *record).unwrap();
+        assert_eq!(
+            (&next.snapshot.data, &next.snapshot.operations, next.decisions.len()),
+            (&view.snapshot.data, &view.snapshot.operations, 257)
+        );
+    }
+
+    #[test]
+    fn a_root_refusal_logs_its_decision_and_operation_and_changes_no_data() {
+        use super::super::writer::boundary_tail;
+        let view = view_of(vec![], json!({"execution": {"schema": 1}, "other": true}));
+        let refusal = boundary(BoundaryScope::RootRefusal, "executor", "refused");
+        let (next, operations) = boundary_tail(view.clone(), refusal, "op-1", "fp".into(), 2, Some(9)).unwrap();
+        assert_eq!(
+            (&next.snapshot.data, operations.get("op-1").map(String::as_str), next.decisions.len()),
+            (&view.snapshot.data, Some("fp"), 1)
+        );
+    }
+
+    #[test]
+    fn a_boundary_write_on_a_legacy_store_keeps_its_data_operations_and_decision_bytes() {
+        use super::super::writer::boundary_tail;
+        let legacy: DecisionRecord = serde_json::from_str(&super::legacy_boundary_line()).unwrap();
+        let mut view = view_of(vec![legacy], json!({"execution": {"schema": 1}, "other": true}));
+        view.snapshot.operations.insert("earlier".into(), "fp-earlier".into());
+        let refusal = boundary(BoundaryScope::RootRefusal, "executor", "refused");
+        let (next, operations) = boundary_tail(view.clone(), refusal, "op-1", "fp".into(), 2, Some(9)).unwrap();
+        assert_eq!(next.snapshot.data, view.snapshot.data);
+        assert_eq!(operations.get("earlier").map(String::as_str), Some("fp-earlier"));
+        assert_eq!(serde_json::to_string(&next.decisions[0]).unwrap(), super::legacy_boundary_line());
     }
 }
 

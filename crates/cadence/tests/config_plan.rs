@@ -207,6 +207,22 @@ fn a_plan_that_changes_nothing_has_no_change_to_install() {
 }
 
 #[test]
+fn a_plan_that_changes_nothing_is_only_a_read_of_the_store() {
+    use cadence::config::write::request;
+    use cadence::store::writer::Operation;
+    assert!(matches!(request(None, None), Operation::Read));
+}
+
+#[test]
+fn a_batch_reports_the_layer_it_was_asked_for() {
+    use cadence::config::write::written;
+    use cadence::store::{model::Snapshot, writer::View};
+    let planned = repo_plan();
+    let view = View { items: vec![], decisions: vec![], snapshot: Snapshot::new(0, b"", b"", json!({})).unwrap() };
+    assert_eq!(written(view, planned, Layer::Global).requested_layer, Layer::Global);
+}
+
+#[test]
 fn a_value_changed_and_then_changed_back_is_written_both_times() {
     let key = "roles.cad-executor.effort";
     for (stored, requested) in [("high", "low"), ("low", "high")] {

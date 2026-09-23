@@ -877,3 +877,53 @@ fn a_routed_dispatch_answer_carries_its_route() {
     };
     assert_eq!(route, active.route);
 }
+
+/// The routed dispatch the wire fixture admits, with a plan body.
+fn routed_dispatch() -> cadence::execution::model::ActiveDispatch {
+    let (_, state, _) = wire_unit("valid");
+    let state: Value = serde_json::from_slice(&state).unwrap();
+    let mut active = state["data"]["execution"]["occurrences"]["8"]["active"].clone();
+    active["body"] = json!("Build the thing.\n");
+    serde_json::from_value(active).unwrap()
+}
+
+/// The prompt as specified, section by section, with `lease` as the lease
+/// paragraph when there is one.
+fn specified_prompt(dispatch: &cadence::execution::model::ActiveDispatch, schema: &Value, lease: &str) -> String {
+    let operational = serde_json::to_string_pretty(&cadence::execution::render::prompt_operational(dispatch)).unwrap();
+    format!(
+        "Cadence native execution dispatch\n\nOperational input:\n{operational}\n\nExecutor patch schema:\n{}\n\nInstructions:\n{}\n\n\
+Complete tasks in listed order. Use one distinct signed commit per completed task. Run each task's exact verification commands and the suite. \
+Return exactly one executor patch matching this schema. Stop at the first blocker and mark all later tasks not-run.{lease}\n\n\
+Opaque plan body (17 UTF-8 bytes):\nBuild the thing.\n",
+        serde_json::to_string_pretty(schema).unwrap(),
+        cadence::read::instructions::CONTRACT,
+    )
+}
+
+#[test]
+fn the_dispatch_prompt_without_the_lease_section_is_the_specified_bytes() {
+    let dispatch = routed_dispatch();
+    let schema = json!({"type": "object"});
+    assert_eq!(
+        cadence::execution::render::render_dispatch_prompt(&dispatch, &schema, false),
+        specified_prompt(&dispatch, &schema, "")
+    );
+}
+
+#[test]
+fn the_dispatch_prompt_with_the_lease_section_is_the_specified_bytes() {
+    let dispatch = routed_dispatch();
+    let schema = json!({"type": "object"});
+    let lease = "\nThe lease has zero exemptions: all reported commit paths and the whole staged set must be covered by files or directories, \
+including both rename endpoints, new files, lockfiles and reports. A repairable mistake within this lease is not a blocker; correct it and rerun \
+the required verification. If an undeclared-files refusal occurs, stop execution, preserve the rejected SHAs and request operator-controlled repair. \
+Cadence leaves Git and the index untouched and the dispatch open. Do not push, reset, amend, revert or force-push automatically. After operator \
+repair, resubmit a corrected full patch with the same dispatch ID and execution version, within the unchanged lease and plan fingerprint. An \
+undeclared necessary file requires an operator planning correction; changing the lease or body cannot repair this active dispatch.";
+    assert_eq!(
+        cadence::execution::render::render_dispatch_prompt(&dispatch, &schema, true),
+        specified_prompt(&dispatch, &schema, lease)
+    );
+}
+

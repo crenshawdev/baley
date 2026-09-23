@@ -2420,7 +2420,7 @@ mod intent_encoding_tests {
 
     // An intent as the binary wrote it before GH-261: every participant's
     // bytes, old and new, as JSON integer arrays, and no encoding field.
-    const LEGACY: &str = r#"{"version":1,"kind":{"operation":"store"},"participants":[{"target":"items.jsonl","expected":{"bytes":[],"identity":"1:2:420","directory_identity":"1:1;"},"bytes":[]},{"target":"decisions.jsonl","expected":{"bytes":[],"identity":"1:2:420","directory_identity":"1:1;"},"bytes":[123,34,118,101,114,115,105,111,110,34,58,49,44,34,105,100,34,58,34,100,34,44,34,114,101,118,105,115,105,111,110,34,58,49,44,34,111,114,105,103,105,110,34,58,123,34,115,111,117,114,99,101,34,58,34,116,34,44,34,111,114,105,103,105,110,97,108,34,58,34,109,105,115,115,105,110,103,34,125,44,34,100,101,99,105,115,105,111,110,34,58,123,34,99,108,97,115,115,34,58,34,103,97,116,101,34,44,34,111,117,116,99,111,109,101,34,58,34,100,34,44,34,101,118,105,100,101,110,99,101,34,58,110,117,108,108,125,125,10]},{"target":"state.json","expected":{"bytes":[123,34,111,108,100,34,58,116,114,117,101,125],"identity":"1:2:420","directory_identity":"1:1;"},"bytes":[123,34,110,101,119,34,58,116,114,117,101,125]}],"integrity":"815a063018f8b7b1abb8ec163a37fc705e60463b24d0aee3700a0577827b0b9f"}"#;
+    pub(super) const LEGACY: &str = r#"{"version":1,"kind":{"operation":"store"},"participants":[{"target":"items.jsonl","expected":{"bytes":[],"identity":"1:2:420","directory_identity":"1:1;"},"bytes":[]},{"target":"decisions.jsonl","expected":{"bytes":[],"identity":"1:2:420","directory_identity":"1:1;"},"bytes":[123,34,118,101,114,115,105,111,110,34,58,49,44,34,105,100,34,58,34,100,34,44,34,114,101,118,105,115,105,111,110,34,58,49,44,34,111,114,105,103,105,110,34,58,123,34,115,111,117,114,99,101,34,58,34,116,34,44,34,111,114,105,103,105,110,97,108,34,58,34,109,105,115,115,105,110,103,34,125,44,34,100,101,99,105,115,105,111,110,34,58,123,34,99,108,97,115,115,34,58,34,103,97,116,101,34,44,34,111,117,116,99,111,109,101,34,58,34,100,34,44,34,101,118,105,100,101,110,99,101,34,58,110,117,108,108,125,125,10]},{"target":"state.json","expected":{"bytes":[123,34,111,108,100,34,58,116,114,117,101,125],"identity":"1:2:420","directory_identity":"1:1;"},"bytes":[123,34,110,101,119,34,58,116,114,117,101,125]}],"integrity":"815a063018f8b7b1abb8ec163a37fc705e60463b24d0aee3700a0577827b0b9f"}"#;
 
     fn participants() -> Vec<Participant> {
         let expected = |bytes: &[u8]| Observed { bytes: Some(bytes.to_vec()), identity: "1:2:420".into(), directory_identity: "1:1;".into() };
@@ -2573,3 +2573,251 @@ mod intent_encoding_tests {
         assert_eq!(expected["digest"], model::digest(old_state));
     }
 }
+
+#[cfg(test)]
+mod recovery_rule_tests {
+    //! What recovery accepts or refuses in a pending intent, over intents
+    //! sealed by hand: nothing here reads a file.
+    use super::*;
+    use crate::process::Recorded;
+    use cadence::envelope::Envelope;
+    use cadence::execution::boundary::{BoundaryScope, BoundaryV1, PreparedAnswer};
+    use cadence::execution::model::{BoundaryTool, EXECUTION_SCHEMA, ExecutionOccurrence, ExecutionSnapshot};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    fn participant(target: &str, bytes: &[u8]) -> Participant {
+        Participant {
+            target: target.into(),
+            expected: Observed { bytes: None, identity: "1:2:420".into(), directory_identity: "1:1;".into() },
+            bytes: bytes.to_vec(),
+        }
+    }
+
+    fn sealed(kind: IntentKind, participants: Vec<Participant>) -> Intent {
+        let mut intent = Intent::new(kind, participants);
+        intent.integrity = intent.digest().unwrap();
+        intent
+    }
+
+    fn journals(decisions: &[u8]) -> Vec<Participant> {
+        vec![participant(ITEMS, b""), participant(DECISIONS, decisions), participant(STATE, b"{}")]
+    }
+
+    /// One way to alter an intent as the journal holds it.
+    type Alteration = Box<dyn Fn(&mut Value)>;
+
+    /// `intent` as the journal holds it, altered each way in turn: every one refuses.
+    fn assert_each_alteration_refused(intent: &Value, bytes_of_state: Value) {
+        let alterations: Vec<Alteration> = vec![
+            Box::new(|intent| intent["version"] = json!(99)),
+            Box::new(|intent| intent["kind"] = json!({"operation": "execution-refusal", "phase": 3})),
+            Box::new(|intent| intent["unknown"] = json!(true)),
+            Box::new(|intent| intent["kind"]["unknown"] = json!(true)),
+            Box::new(move |intent| intent["participants"][2]["bytes"] = bytes_of_state.clone()),
+        ];
+        for alter in alterations {
+            let mut altered = intent.clone();
+            alter(&mut altered);
+            assert!(Pending::parse(&serde_json::to_vec(&altered).unwrap()).is_err(), "{altered}");
+        }
+    }
+
+    #[test]
+    fn a_sealed_intent_altered_in_its_version_kind_fields_or_participants_is_refused() {
+        let good = serde_json::to_value(sealed(IntentKind::Store, journals(b""))).unwrap();
+        assert!(Pending::parse(&serde_json::to_vec(&good).unwrap()).is_ok());
+        assert_each_alteration_refused(&good, json!("{\"changed\":true}"));
+    }
+
+    #[test]
+    fn a_legacy_intent_altered_in_its_version_kind_fields_or_participants_is_refused() {
+        let legacy = super::intent_encoding_tests::LEGACY;
+        assert!(Pending::parse(legacy.as_bytes()).is_ok());
+        assert_each_alteration_refused(&serde_json::from_str(legacy).unwrap(), json!([123, 125]));
+    }
+
+    fn refusal(scope: BoundaryScope, name: &str) -> BoundaryV1 {
+        let answer = PreparedAnswer::new(Envelope::Refused { code: "refused".into(), reason: name.into() }).unwrap();
+        BoundaryV1::new(scope, BoundaryTool::CadenceApply, "executor".into(), model::digest(name.as_bytes()), None, &answer)
+    }
+
+    fn record(boundary: BoundaryV1, store_generation: u64, terminal: bool) -> DecisionRecord {
+        DecisionRecord {
+            version: model::VERSION,
+            id: boundary.identity().unwrap(),
+            revision: 1,
+            origin: model::Origin { source: "execution-boundary-v1".into(), original: model::Evidence::Missing },
+            decision: model::Decision::BoundaryV1(model::BoundaryRecordV1 { boundary, store_generation, terminal }),
+            at: Some(1),
+        }
+    }
+
+    fn log(records: &[DecisionRecord]) -> Vec<u8> {
+        records.iter().map(|record| serde_json::to_string(record).unwrap() + "\n").collect::<String>().into_bytes()
+    }
+
+    fn observation(scope: BoundaryScope, id: &str, participants: Vec<Participant>) -> Intent {
+        sealed(IntentKind::BoundaryObservationV1 { scope, decision_id: id.into() }, participants)
+    }
+
+    fn at(generation: u64) -> Snapshot {
+        Snapshot::new(generation, b"", b"", json!({})).unwrap()
+    }
+
+    #[test]
+    fn a_refusal_observation_intent_with_its_logged_decision_is_accepted() {
+        let decision = record(refusal(BoundaryScope::RootRefusal, "r"), 5, false);
+        let intent = observation(BoundaryScope::RootRefusal, &decision.id, journals(b""));
+        assert_eq!(intent.validate_boundary_v1(&at(5), &log(&[decision]), None), Ok(()));
+    }
+
+    #[test]
+    fn a_terminal_observation_intent_is_accepted() {
+        let scope = BoundaryScope::Execution { phase: 3 };
+        let mut records: Vec<DecisionRecord> = (0..256)
+            .map(|index| record(refusal(scope.clone(), &format!("r{index}")), index as u64 + 1, false))
+            .collect();
+        records.push(record(BoundaryV1::terminal(scope.clone()).unwrap(), 257, true));
+        let intent = observation(scope, &records[256].id, journals(b""));
+        assert_eq!(intent.validate_boundary_v1(&at(257), &log(&records), None), Ok(()));
+    }
+
+    #[test]
+    fn an_intent_naming_another_decision_scope_or_generation_is_refused() {
+        let decision = record(refusal(BoundaryScope::RootRefusal, "r"), 5, false);
+        let decisions = log(std::slice::from_ref(&decision));
+        for (intent, generation) in [
+            (observation(BoundaryScope::RootRefusal, "another", journals(b"")), 5),
+            (observation(BoundaryScope::Execution { phase: 3 }, &decision.id, journals(b"")), 5),
+            (observation(BoundaryScope::RootRefusal, &decision.id, journals(b"")), 6),
+        ] {
+            assert!(intent.validate_boundary_v1(&at(generation), &decisions, None).is_err());
+        }
+    }
+
+    #[test]
+    fn an_observation_intent_with_a_config_summary_or_extra_participant_is_refused() {
+        let decision = record(refusal(BoundaryScope::RootRefusal, "r"), 5, false);
+        let decisions = log(std::slice::from_ref(&decision));
+        let mut extra = journals(b"");
+        extra.insert(0, participant("phase-summary:3", b"# Summary"));
+        for (participants, summary) in [
+            (vec![participant("repo-config", b"{}"), participant(DECISIONS, b""), participant(STATE, b"{}")], None),
+            (journals(b""), Some(3)),
+            (extra, None),
+        ] {
+            let intent = observation(BoundaryScope::RootRefusal, &decision.id, participants);
+            assert!(intent.validate_boundary_v1(&at(5), &decisions, summary).is_err());
+        }
+    }
+
+    #[test]
+    fn an_intent_participant_outside_the_store_files_is_refused() {
+        let mut participants = journals(b"");
+        participants.insert(0, participant("../escape", b"x"));
+        let intent = sealed(IntentKind::Store, participants);
+        assert!(intent.validate_sealed(&at(1), &mut Recorded::new()).is_err());
+    }
+
+    #[test]
+    fn a_store_intent_carrying_a_phase_summary_is_refused() {
+        let mut participants = journals(b"");
+        participants.insert(0, participant("phase-summary:3", b"# Summary"));
+        let intent = sealed(IntentKind::Store, participants);
+        assert!(intent.validate_sealed(&at(1), &mut Recorded::new()).is_err());
+    }
+
+    #[test]
+    fn a_rail_receipt_intent_adding_only_its_projection_is_accepted() {
+        use cadence::rail::receipts::{Apply, Binding, Boundary, Fire, RecordedFact};
+        use cadence::rail::risk::{self, Recorded as Scan};
+        let scan = Scan::new(serde_json::from_value(json!({
+            "version":1, "request_id":"scan-2", "request_digest":"a".repeat(64),
+            "scope":{"project":"/tmp/project","planning_root":"/tmp/project/.planning",
+                "cycle":"live","occurrence":"run-one","phase":7,"worker":"4","plan":null},
+            "source":{"kind":"committed","base":"HEAD~1","head":"HEAD"},
+            "resolution":{"kind":"committed","base_id":"b".repeat(40),"head_id":"c".repeat(40)},
+            "outcome":"checked", "surfaces":["auth"],
+            "scan":{"checked":true,"categories":["auth"],"matches":[{"category":"auth","signal":"path segment auth"}],
+                "inconclusive":false,"empty":false}, "diagnostics":[]
+        })).unwrap(), 2).unwrap();
+        let boundary = Boundary { scope: scan.observation.scope.clone(), run_id: "run-one".into(), after_generation: 1 };
+        let fire = Fire { id: "fire-2".into(), binding: Binding::new(boundary, &scan).unwrap(), review_scope: vec!["auth/login.rs".into()], rearm_of: None };
+        let record = RecordedFact::new(Apply::Fire { request_id: "fire-request".into(), fire: Box::new(fire) }, 3).unwrap();
+        let old_data = risk::project(&json!({}), &scan).unwrap();
+        let (_, old_state) = Snapshot::sealed(2, b"", b"", old_data.clone(), BTreeMap::new()).unwrap();
+        let decisions = model::render_lines(&[super::super::writer::rail_fact_record(&record).unwrap()]).unwrap();
+        let new_data = cadence::rail::receipts::project(&old_data, &record).unwrap();
+        let (snapshot, new_state) = Snapshot::sealed(3, b"", &decisions, new_data, BTreeMap::new()).unwrap();
+        let before = |bytes: &[u8]| Observed { bytes: Some(bytes.to_vec()), identity: "1:2:420".into(), directory_identity: "1:1;".into() };
+        let participants = vec![
+            Participant { target: ITEMS.into(), expected: before(b""), bytes: b"".to_vec() },
+            Participant { target: DECISIONS.into(), expected: before(b""), bytes: decisions },
+            Participant { target: STATE.into(), expected: before(&old_state), bytes: new_state },
+        ];
+        let intent = sealed(IntentKind::RailReceipt { record: Box::new(record) }, participants);
+        assert_eq!(intent.validate_rail_receipt(&snapshot), Ok(()));
+    }
+
+    /// A legacy boundary decision for phase 3 written at generation 1.
+    fn legacy_decision() -> Vec<u8> {
+        let digest = "a".repeat(64);
+        let record = DecisionRecord {
+            version: model::VERSION,
+            id: digest.clone(),
+            revision: 1,
+            origin: model::Origin { source: "execution-boundary".into(), original: model::Evidence::Missing },
+            decision: model::Decision::Boundary {
+                phase: 3, tool: "cadence-apply".into(), operation: "execution-refusal".into(),
+                request_digest: digest.clone(), outcome: "refused".into(), subject_id: None,
+                store_generation: 1, prompt_digest: None, response_digest: digest, terminal: false,
+            },
+            at: Some(1),
+        };
+        log(&[record])
+    }
+
+    /// The store at generation 1 holding `data` and the legacy decision, and
+    /// its journal participants.
+    fn legacy_store(data: Value) -> (Snapshot, Vec<Participant>) {
+        let decisions = legacy_decision();
+        let (snapshot, state) = Snapshot::sealed(1, b"", &decisions, data, BTreeMap::new()).unwrap();
+        let participants = vec![participant(ITEMS, b""), participant(DECISIONS, &decisions), participant(STATE, &state)];
+        (snapshot, participants)
+    }
+
+    #[test]
+    fn a_legacy_refusal_intent_with_its_generation_boundary_decision_is_accepted() {
+        let (snapshot, participants) = legacy_store(json!({}));
+        let intent = sealed(IntentKind::ExecutionRefusal { phase: 3 }, participants);
+        assert_eq!(intent.validate_sealed(&snapshot, &mut Recorded::new()), Ok(()));
+    }
+
+    #[test]
+    fn a_legacy_execution_intent_without_its_generation_boundary_decision_is_refused() {
+        let intent = sealed(IntentKind::ExecutionRefusal { phase: 3 }, journals(b""));
+        assert!(intent.validate_sealed(&at(1), &mut Recorded::new()).is_err());
+    }
+
+    #[test]
+    fn a_legacy_patch_intent_with_its_rendered_summary_is_accepted() {
+        let execution = ExecutionSnapshot {
+            schema: EXECUTION_SCHEMA,
+            occurrences: BTreeMap::from([("3".into(), ExecutionOccurrence {
+                phase: 3, undone: None, plan_set_fingerprint: "f".repeat(64), version: 1, active: None,
+                plans: vec![], terminal: None, receipts: BTreeMap::new(), issues: BTreeMap::new(),
+            })]),
+        };
+        let summary = cadence::execution::render::render_phase_summary(&execution, 3).unwrap();
+        let (snapshot, mut participants) = legacy_store(json!({"execution": execution}));
+        participants.insert(0, participant("phase-summary:3", &summary));
+        let kind = IntentKind::ExecutionPatch {
+            phase: 3,
+            render_version: cadence::execution::render::SUMMARY_RENDER_VERSION,
+            summary: true,
+        };
+        assert_eq!(sealed(kind, participants).validate_sealed(&snapshot, &mut Recorded::new()), Ok(()));
+    }
+}
+

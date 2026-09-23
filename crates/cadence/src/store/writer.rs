@@ -955,12 +955,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     _ => return Err(Error::Invalid("projection participant needs its owning intent".into())),
                 }
             }
-            if phase.is_none()
-                && plan_target.is_none()
-                && uat_phase.is_none()
-                && projection.is_none()
-                && !matches!(change.target.as_str(), "repo-config" | "global-config")
-            {
+            if !caller_target(&change.target)? {
                 return Err(Error::Invalid("unknown external participant".into()));
             }
             change.validate(&self.storage.read(&change.target)?, false)?;
@@ -1291,49 +1286,34 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             cadence::plan::persistence::require_execution_ready(&self.view.snapshot.data,dispatch.phase,&inventory.documents)?;
             Some(observed)
         } else {None};
-        if !decision.scope.valid() {
-            return Err(Error::Invalid("invalid boundary scope".into()));
-        }
-        if !decision.is_native_refusal() && terminal_v1(&self.view, &decision.scope).is_some() {
-            return Ok(self.view.as_ref().clone());
-        }
-        decision.validate(false).map_err(boundary_error)?;
-        if decision.is_native_refusal() && !matches!(change, BoundaryChange::Observe) {
-            return Err(Error::Invalid("native refusal must be an observation".into()));
-        }
-        if operation_id.trim().is_empty() {
-            return Err(Error::Invalid("empty operation identity".into()));
-        }
-        let Some(fingerprint) =
-            boundary_operation(&self.view.snapshot.operations, operation_id, &decision, &change)?
-        else {
-            return Ok(self.view.as_ref().clone());
+        let (fingerprint, id) = match boundary_step(
+            &self.view,
+            operation_id,
+            &decision,
+            &change,
+            self.next_generation()?,
+            model::stamped_at(),
+        )? {
+            BoundaryStep::Replay => return Ok(self.view.as_ref().clone()),
+            BoundaryStep::Terminal(record) => {
+                let kind = super::transaction::IntentKind::BoundaryObservationV1 {
+                    scope: match &record.decision {
+                        model::Decision::BoundaryV1(value) => value.boundary.scope.clone(),
+                        _ => unreachable!(),
+                    },
+                    decision_id: record.id.clone(),
+                };
+                let next = terminal_next(&self.view, *record)?;
+                return self.persist(
+                    next,
+                    self.view.snapshot.operations.clone(),
+                    Vec::new(),
+                    "boundary_terminal_v1",
+                    kind,
+                );
+            }
+            BoundaryStep::Proceed { fingerprint, id } => (fingerprint, id),
         };
-        let id = decision.identity().map_err(boundary_error)?;
-        let admission = scoped_admission(&self.view.decisions, &id, &decision, &change,
-            self.next_generation()?, model::stamped_at())?;
-        if admission == ScopedAdmission::Replay {
-            return Ok(self.view.as_ref().clone());
-        }
-        if let ScopedAdmission::Terminal(record) = admission {
-            let kind = super::transaction::IntentKind::BoundaryObservationV1 {
-                scope: match &record.decision {
-                    model::Decision::BoundaryV1(value) => value.boundary.scope.clone(),
-                    _ => unreachable!(),
-                },
-                decision_id: record.id.clone(),
-            };
-            let mut next = self.view.as_ref().clone();
-            next.decisions.push(*record);
-            model::validate_decisions(&next.decisions)?;
-            return self.persist(
-                next,
-                self.view.snapshot.operations.clone(),
-                Vec::new(),
-                "boundary_terminal_v1",
-                kind,
-            );
-        }
         self.check_expected(expected_generation, expected_integrity)?;
         if let Some(evidence) = &decision.lease_refusal {
             if !matches!(change, BoundaryChange::Observe) {
@@ -1458,23 +1438,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     return Err(Error::Invalid("patch lacks execution scope".into()));
                 };
                 cadence::plan::persistence::require_legacy_execution(&self.view.snapshot.data,phase)?;
-                let risk_pending = matches!(&decision.receipt, Receipt::Compact {
-                    envelope: Envelope::Refused { code, .. }
-                } if code == "risk-pending")
-                    && !complete_phase
-                    && patch.outcome == PlanDisposition::Complete;
-                if render_version != cadence::execution::render::SUMMARY_RENDER_VERSION
-                    || decision.tool != BoundaryTool::CadenceApply
-                    || decision.subject_id.as_ref() != Some(&patch.dispatch_id)
-                    || (!risk_pending
-                        && !matches!(
-                            &decision.receipt,
-                            Receipt::Compact {
-                                envelope: Envelope::Ok(_)
-                            }
-                        ))
-                    || (complete_phase && patch.outcome != PlanDisposition::Complete)
-                {
+                if !patch_boundary_valid(&decision, &patch, render_version, complete_phase) {
                     return Err(Error::Invalid("invalid execution patch operation".into()));
                 }
                 let application =
@@ -1565,11 +1529,14 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             }
             install_execution(&mut next.snapshot.data, execution)?;
         }
-        next.decisions
-            .push(record_v1(decision, self.next_generation()?, false, model::stamped_at())?);
-        model::validate_decisions(&next.decisions)?;
-        let mut operations = next.snapshot.operations.clone();
-        operations.insert(operation_id.to_owned(), fingerprint);
+        let (next, operations) = boundary_tail(
+            next,
+            decision,
+            operation_id,
+            fingerprint,
+            self.next_generation()?,
+            model::stamped_at(),
+        )?;
         self.persist(next, operations, participants, "boundary_v1", kind)
     }
 
@@ -1671,7 +1638,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         render_version: u32,
         complete_phase: bool,
     ) -> Result<View> {
-        if render_version != cadence::execution::render::SUMMARY_RENDER_VERSION
+        if !supported_render(render_version)
             || decision.subject_id.as_deref() != Some(patch.dispatch_id.as_str())
             || (complete_phase && patch.outcome != PlanDisposition::Complete)
         {
@@ -1855,15 +1822,11 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     ) -> Result<View> {
         use cadence::rail::receipts;
         record.validate().map_err(rail_error)?;
-        if let Some(old) = receipts::read(&self.view.snapshot.data)
+        let saved = receipts::read(&self.view.snapshot.data)
             .map_err(rail_error)?
-            .remove(&record.fact.key().map_err(rail_error)?)
-        {
-            return if old == record && model::retained(&self.view.decisions, &rail_fact_record(&record)?) {
-                Ok(self.view.as_ref().clone())
-            } else {
-                Err(Error::Conflict("receipt request identity reused".into()))
-            };
+            .remove(&record.fact.key().map_err(rail_error)?);
+        if rail_receipt_replays(saved.as_ref(), &record, &self.view.decisions)? {
+            return Ok(self.view.as_ref().clone());
         }
         self.check_expected(expected_generation, expected_integrity)?;
         if record.confirmation.generation != self.next_generation()? {
@@ -2019,7 +1982,22 @@ pub(super) fn rail_record(record: &cadence::rail::risk::Recorded) -> Result<Deci
     )?)?)
 }
 
-pub(super) fn rail_fact_record(
+/// Whether a rail fact is already recorded: the identical fact with its
+/// decision still in the log is answered from the view as it is, and any other
+/// fact under the same request identity is refused.
+pub fn rail_receipt_replays(
+    saved: Option<&cadence::rail::receipts::RecordedFact>,
+    record: &cadence::rail::receipts::RecordedFact,
+    decisions: &[DecisionRecord],
+) -> Result<bool> {
+    match saved {
+        None => Ok(false),
+        Some(old) if old == record && model::retained(decisions, &rail_fact_record(record)?) => Ok(true),
+        Some(_) => Err(Error::Conflict("receipt request identity reused".into())),
+    }
+}
+
+pub fn rail_fact_record(
     record: &cadence::rail::receipts::RecordedFact,
 ) -> Result<DecisionRecord> {
     // The process-crash target compiles the writer in its own module. Decode the
@@ -2082,6 +2060,118 @@ pub(crate) enum ScopedAdmission {
     Terminal(Box<DecisionRecord>),
     /// A write to make.
     Proceed,
+}
+
+/// Whether a caller's own transaction may carry `target`: a plan, context or
+/// UAT document, a verification projection, or a config layer. Every other
+/// file, a phase SUMMARY.md included, has an owning operation instead.
+pub(crate) fn caller_target(target: &str) -> Result<bool> {
+    Ok(super::filesystem::phase_plan_target(target)?.is_some()
+        || super::filesystem::phase_context_target(target)?.is_some()
+        || super::filesystem::phase_uat_target(target)?.is_some()
+        || super::filesystem::projection_target(target).is_some()
+        || matches!(target, "repo-config" | "global-config"))
+}
+
+/// Whether a patch's SUMMARY.md is rendered by the version this binary renders.
+pub(crate) fn supported_render(version: u32) -> bool {
+    version == cadence::execution::render::SUMMARY_RENDER_VERSION
+}
+
+/// Whether a boundary may carry `patch`: the supported render, the executor's
+/// tool, the patch's own dispatch, and an Ok answer, or a risk-pending refusal
+/// for a complete plan that does not complete the phase. Completing the phase
+/// needs a complete plan.
+pub(crate) fn patch_boundary_valid(
+    decision: &BoundaryV1,
+    patch: &ExecutorPatch,
+    render_version: u32,
+    complete_phase: bool,
+) -> bool {
+    let risk_pending = matches!(&decision.receipt, Receipt::Compact {
+        envelope: Envelope::Refused { code, .. }
+    } if code == "risk-pending")
+        && !complete_phase
+        && patch.outcome == PlanDisposition::Complete;
+    supported_render(render_version)
+        && decision.tool == BoundaryTool::CadenceApply
+        && decision.subject_id.as_ref() == Some(&patch.dispatch_id)
+        && (risk_pending
+            || matches!(&decision.receipt, Receipt::Compact { envelope: Envelope::Ok(_) }))
+        && (!complete_phase || patch.outcome == PlanDisposition::Complete)
+}
+
+/// What a scoped boundary write does before anything is written.
+#[derive(Debug, PartialEq)]
+pub(crate) enum BoundaryStep {
+    /// Answered from the view as it is: nothing is written.
+    Replay,
+    /// The scope's terminal log-bound decision is written instead.
+    Terminal(Box<DecisionRecord>),
+    /// A write to make under this fingerprint and decision identity.
+    Proceed { fingerprint: String, id: String },
+}
+
+/// Decides a scoped boundary write against the view. A scope that holds its
+/// terminal answers every later ordinary request from the view, as does an
+/// operation already recorded with the same content or a decision already
+/// logged for an observation. A scope at its limit gets its terminal.
+pub(crate) fn boundary_step(
+    view: &View,
+    operation_id: &str,
+    decision: &BoundaryV1,
+    change: &BoundaryChange,
+    store_generation: u64,
+    at: Option<u64>,
+) -> Result<BoundaryStep> {
+    if !decision.scope.valid() {
+        return Err(Error::Invalid("invalid boundary scope".into()));
+    }
+    if !decision.is_native_refusal() && terminal_v1(view, &decision.scope).is_some() {
+        return Ok(BoundaryStep::Replay);
+    }
+    decision.validate(false).map_err(boundary_error)?;
+    if decision.is_native_refusal() && !matches!(change, BoundaryChange::Observe) {
+        return Err(Error::Invalid("native refusal must be an observation".into()));
+    }
+    if operation_id.trim().is_empty() {
+        return Err(Error::Invalid("empty operation identity".into()));
+    }
+    let Some(fingerprint) = boundary_operation(&view.snapshot.operations, operation_id, decision, change)? else {
+        return Ok(BoundaryStep::Replay);
+    };
+    let id = decision.identity().map_err(boundary_error)?;
+    Ok(match scoped_admission(&view.decisions, &id, decision, change, store_generation, at)? {
+        ScopedAdmission::Replay => BoundaryStep::Replay,
+        ScopedAdmission::Terminal(record) => BoundaryStep::Terminal(record),
+        ScopedAdmission::Proceed => BoundaryStep::Proceed { fingerprint, id },
+    })
+}
+
+/// The view a scope's terminal decision leaves: the same data and operations,
+/// with the terminal appended to the log.
+pub(crate) fn terminal_next(view: &View, record: DecisionRecord) -> Result<View> {
+    let mut next = view.clone();
+    next.decisions.push(record);
+    model::validate_decisions(&next.decisions)?;
+    Ok(next)
+}
+
+/// Seals a boundary write: `decision` logged at `store_generation`, and
+/// `operation_id` recorded under `fingerprint`. The data is `next`'s own.
+pub(crate) fn boundary_tail(
+    mut next: View,
+    decision: BoundaryV1,
+    operation_id: &str,
+    fingerprint: String,
+    store_generation: u64,
+    at: Option<u64>,
+) -> Result<(View, BTreeMap<String, String>)> {
+    next.decisions.push(record_v1(decision, store_generation, false, at)?);
+    model::validate_decisions(&next.decisions)?;
+    let mut operations = next.snapshot.operations.clone();
+    operations.insert(operation_id.to_owned(), fingerprint);
+    Ok((next, operations))
 }
 
 /// What a scoped boundary write becomes against the decision log, written at
@@ -2205,7 +2295,7 @@ pub(crate) fn sealed(
     Ok((next, participants))
 }
 
-fn append_admitted_boundary(next: &mut View, admission: BoundaryAdmission) -> Result<()> {
+pub(crate) fn append_admitted_boundary(next: &mut View, admission: BoundaryAdmission) -> Result<()> {
     let BoundaryAdmission::Proceed(record) = admission else {
         return Err(Error::Invalid("boundary decision was not admitted".into()));
     };
@@ -2368,7 +2458,7 @@ fn execution_snapshot(data: &Value) -> Result<ExecutionSnapshot> {
     }
 }
 
-fn install_execution(data: &mut Value, execution: ExecutionSnapshot) -> Result<()> {
+pub(crate) fn install_execution(data: &mut Value, execution: ExecutionSnapshot) -> Result<()> {
     if execution.schema != EXECUTION_SCHEMA {
         return Err(Error::Invalid("unsupported execution schema".into()));
     }
