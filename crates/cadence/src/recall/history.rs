@@ -5,7 +5,7 @@ use cadence::store::{
     model::{self, DecisionRecord, ItemRecord},
     writer::View,
 };
-use cadence::process::{Launch, Process};
+use cadence::process::Process;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -19,16 +19,15 @@ fn read_git(process: &mut dyn Process, root: &Path, args: &[&str]) -> Result<Vec
 }
 
 fn read_git_capped(process: &mut dyn Process, root: &Path, args: &[&str], bound: usize) -> Result<Vec<u8>, String> {
-    let output = process
-        .run(
-            &Launch::new("git")
+    let output = cadence::git_process::run(
+            &cadence::git_process::launch(cadence::git_process::Caller::RecallHistory)
                 .cwd(root)
                 .args(args)
                 .limit(bound)
                 .env("GIT_OPTIONAL_LOCKS", "0")
                 .env("GIT_NO_LAZY_FETCH", "1")
                 .env("GIT_LITERAL_PATHSPECS", "1")
-                .env("GIT_TERMINAL_PROMPT", "0"),
+                .env("GIT_TERMINAL_PROMPT", "0"), process,
         )
         .map_err(|e| format!("git {} unavailable: {e}", args[0]))?;
     git_output(args[0], bound, output)

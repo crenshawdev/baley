@@ -220,7 +220,7 @@ pub fn now() -> u64 {
 }
 
 pub fn git(project: &Path, args: &[&str], process: &mut dyn Process) -> Result<Vec<u8>> {
-    let output = process.run(&crate::process::Launch::new("git").args(args).cwd(project))?;
+    let output = crate::git_process::run(&crate::git_process::launch(crate::git_process::Caller::ExecutionRunner).args(args).cwd(project), process)?;
     if !output.success() { return Err(Error::Invalid(format!("Git observation failed: {}", String::from_utf8_lossy(&output.stderr)))) }
     Ok(output.stdout)
 }

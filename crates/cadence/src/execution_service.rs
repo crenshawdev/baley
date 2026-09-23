@@ -2,7 +2,7 @@
 //!
 //! The resident calls these functions directly. They never send another
 //! resident request, so the single owner cannot deadlock itself.
-use cadence::process::{Launch, Process};
+use cadence::process::Process;
 use super::derivation_service::{self, Driver};
 use crate::{
     config::reload::ConfigIo,
@@ -2401,8 +2401,8 @@ fn git_output_bytes(
     args: &[&str],
     process: &mut dyn Process,
 ) -> Result<Vec<u8>, String> {
-    let output = process
-        .run(&Launch::new("git").arg("-C").arg(project).args(args))
+    let output = cadence::git_process::run(
+        &cadence::git_process::launch(cadence::git_process::Caller::ExecutionOutput).arg("-C").arg(project).args(args), process)
         .map_err(|error| format!("cannot run git: {error}"))?;
     if output.success() {
         Ok(output.stdout)
@@ -2422,8 +2422,8 @@ fn git_success(project: &Path, args: &[&str], process: &mut (dyn Process + Send)
 /// This one inherits the server's own stdin, stdout and stderr, as it always
 /// has; nothing here reads the child's output.
 fn git_status(project: &Path, args: &[&str], process: &mut dyn Process) -> Result<bool, String> {
-    let output = process
-        .run(&Launch::new("git").arg("-C").arg(project).args(args).inherit())
+    let output = cadence::git_process::run(
+        &cadence::git_process::launch(cadence::git_process::Caller::ExecutionStatus).arg("-C").arg(project).args(args).inherit(), process)
         .map_err(|error| format!("cannot run git: {error}"))?;
     match output.code() {
         Some(0) => Ok(true),

@@ -1,5 +1,5 @@
 //! Bash decisions use a short-lived writer, independent of the resident queue.
-use cadence::process::{Launch, Process};
+use cadence::process::Process;
 use cadence::rail::branch::{self, Permission};
 use cadence::store::model::digest;
 use cadence::store::writer::audit::{self, Audit, Outcome, PolicyEvidence, Verb};
@@ -260,16 +260,23 @@ fn read_policy(
 }
 
 fn branch_observation(cwd: &Path, process: &mut dyn Process) -> (Option<String>, Vec<audit::Unavailable>) {
-    let observed = process.run(
-        &Launch::new("git")
+    let observed = cadence::git_process::run(
+        &cadence::git_process::launch(cadence::git_process::Caller::GuardBranch)
             .cwd(cwd)
             .unset("GIT_DIR")
             .unset("GIT_WORK_TREE")
             .unset("GIT_COMMON_DIR")
             .unset("GIT_NAMESPACE")
-            .args(["symbolic-ref", "--quiet", "--short", "HEAD"]),
+            .args(["symbolic-ref", "--quiet", "--short", "HEAD"]), process,
     );
+    branch_answer(observed)
+}
+
+fn branch_answer(observed: Result<cadence::process::Output, cadence::git_process::Error>) -> (Option<String>, Vec<audit::Unavailable>) {
     match observed {
+        Err(cadence::git_process::Error::Limit(limit)) => (
+            None, vec![unavailable("Git", limit.to_string())],
+        ),
         Ok(output) if output.success() => {
             if let Ok(name) = String::from_utf8(output.stdout) {
                 let name = name.trim_end_matches('\n');
@@ -518,6 +525,20 @@ pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_branch_timeout_names_the_command_and_bound() {
+        let (branch, failures) = super::branch_answer(Err(cadence::git_process::Error::Limit(
+            cadence::git_process::Limit {
+                command: "git symbolic-ref --quiet --short HEAD".into(),
+                bound: std::time::Duration::from_secs(9),
+            },
+        )));
+        assert_eq!(branch, None);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].input, "Git");
+        assert_eq!(failures[0].reason, "git symbolic-ref --quiet --short HEAD exceeded git deadline of 9 seconds");
+    }
+
     use super::{Verb, verb};
 
     // The Bash guard decides on a Git push or commit, never on the files a

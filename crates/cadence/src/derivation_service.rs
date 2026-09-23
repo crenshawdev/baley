@@ -44,6 +44,7 @@ pub fn store_error(error: Error) -> DerivationError {
         Error::Invalid(_) => "invalid",
         Error::Conflict(_) => "conflict",
         Error::Io(_) => "io",
+        Error::GitLimit(_) => "git-limit",
         Error::Policy(_) => "policy",
         Error::Closed => "closed",
     };
@@ -217,6 +218,17 @@ mod publish_tests {
     use super::*;
     use cadence::store::model::Snapshot;
     use serde_json::json;
+
+    #[test]
+    fn a_git_deadline_has_a_distinct_store_classification() {
+        assert_eq!(store_error(Error::GitLimit(cadence::git_process::Limit {
+            command: "git status".into(),
+            bound: std::time::Duration::from_secs(60),
+        })), DerivationError::Store {
+            kind: "git-limit".into(),
+            detail: "git status exceeded git deadline of 60 seconds".into(),
+        });
+    }
 
     /// A store snapshot holding `data` at `generation`.
     fn snapshot(generation: u64, data: serde_json::Value) -> Snapshot {

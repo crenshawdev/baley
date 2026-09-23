@@ -22,9 +22,9 @@ pub struct Seal {
 }
 
 fn input(root: &Path, args: &[&str], bytes: &[u8], index: Option<&Path>, process: &mut dyn Process) -> Result<Vec<u8>> {
-    let mut launch = Launch::new("git").cwd(root).args(args).stdin(bytes);
+    let mut launch = crate::git_process::launch(crate::git_process::Caller::RailCommitInput).cwd(root).args(args).stdin(bytes);
     if let Some(index) = index { launch = launch.env("GIT_INDEX_FILE", index); }
-    let output = process.run(&launch)?;
+    let output = crate::git_process::run(&launch, process)?;
     if !output.success() { return Err(Error::Io(format!("git {args:?}: {}", String::from_utf8_lossy(&output.stderr)))); }
     Ok(output.stdout)
 }
@@ -36,7 +36,7 @@ fn object(root: &Path, kind: &str, bytes: Vec<u8>, process: &mut dyn Process) ->
     Ok(Object { kind: kind.into(), id, bytes })
 }
 fn optional_config(root: &Path, key: &str, process: &mut dyn Process) -> Result<Option<String>> {
-    let output = process.run(&Launch::new("git").cwd(root).args(["config", "--get", key]))?;
+    let output = crate::git_process::run(&crate::git_process::launch(crate::git_process::Caller::RailConfig).cwd(root).args(["config", "--get", key]), process)?;
     match output.code() {
         Some(0) => Ok(Some(String::from_utf8_lossy(&output.stdout).trim_end().into())),
         Some(1) => Ok(None),

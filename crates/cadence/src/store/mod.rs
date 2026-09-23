@@ -19,13 +19,17 @@ pub enum Error {
     Invalid(String),
     Conflict(String),
     Io(String),
+    GitLimit(crate::git_process::Limit),
     Policy(String),
     Closed,
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
+        match self {
+            Self::GitLimit(limit) => limit.fmt(f),
+            _ => write!(f, "{self:?}"),
+        }
     }
 }
 impl std::error::Error for Error {}
@@ -40,6 +44,15 @@ impl From<std::io::Error> for Error {
     }
 }
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<crate::git_process::Error> for Error {
+    fn from(error: crate::git_process::Error) -> Self {
+        match error {
+            crate::git_process::Error::Limit(limit) => Self::GitLimit(limit),
+            crate::git_process::Error::Io(error) => error.into(),
+        }
+    }
+}
 
 /// Domain inputs only: policy implementations must reload their authoritative
 /// inputs on every call. There is deliberately no default permission provider.
@@ -101,4 +114,18 @@ pub trait Storage: Send + 'static {
     fn confirm(&mut self, target: &str, bytes: &[u8]) -> Result<Observed>;
     fn resync(&mut self, target: &str, bytes: &[u8]) -> Result<Observed>;
     fn remove(&mut self, target: &str) -> Result<()>;
+}
+
+#[cfg(test)]
+mod git_limit_tests {
+    #[test]
+    fn a_git_limit_keeps_its_type_and_names_the_enforced_bound() {
+        let error = super::Error::from(crate::git_process::Error::Limit(crate::git_process::Limit {
+            command: "git diff --cached".into(),
+            bound: std::time::Duration::from_secs(60),
+        }));
+        assert!(matches!(&error, super::Error::GitLimit(limit)
+            if limit.command == "git diff --cached" && limit.bound == std::time::Duration::from_secs(60)));
+        assert_eq!(error.to_string(), "git diff --cached exceeded git deadline of 60 seconds");
+    }
 }

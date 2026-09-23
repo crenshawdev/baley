@@ -3,7 +3,7 @@ use super::{
     risk::{MaterialIdentity, Resolution, Source},
     risk_diff::{self, Scan},
 };
-use crate::process::{Launch, Process};
+use crate::process::Process;
 use crate::store::{Error, Result};
 use std::{
     ffi::OsStr,
@@ -15,15 +15,15 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = process.run(
-        &Launch::new("git")
+    let output = crate::git_process::run(
+        &crate::git_process::launch(crate::git_process::Caller::RailRead)
             .cwd(root)
             .args(args)
             .env("GIT_OPTIONAL_LOCKS", "0")
             .unset("GIT_LITERAL_PATHSPECS")
             .unset("GIT_GLOB_PATHSPECS")
             .unset("GIT_NOGLOB_PATHSPECS")
-            .unset("GIT_ICASE_PATHSPECS"),
+            .unset("GIT_ICASE_PATHSPECS"), process,
     )?;
     if !output.success() {
         return Err(Error::Invalid(format!(

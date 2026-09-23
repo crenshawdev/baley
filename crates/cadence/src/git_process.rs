@@ -90,8 +90,16 @@ impl std::error::Error for Error {}
 
 /// Interpret one completion; only an explicit timeout observation is a limit.
 pub fn finish(caller: Caller, args: &[OsString], answer: io::Result<Output>) -> Result<Output, Error> {
-    let _ = (caller, args);
-    answer.map_err(Error::Io)
+    answer.map_err(|error| {
+        if error.kind() == io::ErrorKind::TimedOut {
+            Error::Limit(Limit {
+                command: format!("git {}", args.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>().join(" ")),
+                bound: deadline(caller).work,
+            })
+        } else {
+            Error::Io(error)
+        }
+    })
 }
 
 pub fn run(launch: &Launch, process: &mut dyn Process) -> Result<Output, Error> {

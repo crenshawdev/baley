@@ -1,5 +1,5 @@
 //! Pause-local branch policy. Observations and decisions remain separate.
-use crate::process::{Launch, Process};
+use crate::process::Process;
 use super::git;
 use crate::{
     evidence::gates::{Gate, OptionChoice, Purpose, State},
@@ -106,10 +106,10 @@ pub fn observe(root: &Path, planning: &Path, policy: &Policy, process: &mut dyn 
     let branches = parse_branches(&refs)?;
     let base = choose_base(policy, &branches);
     let shared_history = if let Some(base) = &base {
-        let output = process.run(
-            &Launch::new("git")
+        let output = crate::git_process::run(
+            &crate::git_process::launch(crate::git_process::Caller::PauseMergeBase)
                 .cwd(root)
-                .args(["merge-base", branches[base].as_str(), head.as_str()]),
+                .args(["merge-base", branches[base].as_str(), head.as_str()]), process,
         )?;
         read_merge_base(output.code(), &output.stdout, &output.stderr)?
     } else {

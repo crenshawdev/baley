@@ -61,7 +61,10 @@ pub fn query(root: &Path, request: &Request, process: &mut dyn Process) -> Value
 
     // The explicit not-in-history probe, run before either chain query so a
     // mistyped path is answered by the smallest invocation that can answer it.
-    let probe = git::run(root, &git::probe_argv(path), process);
+    let probe = match git::run(root, &git::probe_argv(path), process) {
+        Ok(run) => run,
+        Err(limit) => return git_limit(limit),
+    };
     match git::classify(&probe) {
         git::Outcome::NotInHistory => return json!({
             "status":"ok","path":path,"line":line,"result":"not-in-history",
@@ -74,6 +77,10 @@ pub fn query(root: &Path, request: &Request, process: &mut dyn Process) -> Value
     let chain = match request.line {
         None => git::run(root, &git::bare_argv(path), process),
         Some(line) => git::run(root, &git::line_argv(path, line), process),
+    };
+    let chain = match chain {
+        Ok(run) => run,
+        Err(limit) => return git_limit(limit),
     };
     match git::classify(&chain) {
         git::Outcome::NotInHistory => return json!({
@@ -89,13 +96,13 @@ pub fn query(root: &Path, request: &Request, process: &mut dyn Process) -> Value
         git::Outcome::Ok => {}
     }
 
-    let index = corpus::build_index(root, process);
+    let mut index = corpus::build_index(root, process);
     let raws = git::parse_entries(&chain.stdout);
     // The bare arm only: the line arm carries its own simplification. A
     // comparand that could not run makes the answer thinner, not wrong.
     let excluded = match request.line {
         None => {
-            let comparand = git::run(root, &git::comparand_argv(path), process);
+            let comparand = corpus::coverage(git::run(root, &git::comparand_argv(path), process), &mut index.warnings);
             comparand.ok().then(|| git::excluded_from(&raws, &git::parse_comparand(&comparand.stdout)))
         }
         Some(_) => None,
@@ -110,4 +117,22 @@ pub fn query(root: &Path, request: &Request, process: &mut dyn Process) -> Value
         "excluded":excluded,
         "warnings":warnings,
     })
+}
+
+fn git_limit(limit: cadence::git_process::Limit) -> Value {
+    Refusal::new("git-limit", limit.to_string()).slot("path").value()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_git_limit_refuses_why_with_its_command_and_bound() {
+        let answer = super::git_limit(cadence::git_process::Limit {
+            command: "git log -- a.rs".into(),
+            bound: std::time::Duration::from_secs(60),
+        });
+        assert_eq!(answer["status"], "refused");
+        assert_eq!(answer["code"], "git-limit");
+        assert_eq!(answer["reason"], "git log -- a.rs exceeded git deadline of 60 seconds");
+    }
 }

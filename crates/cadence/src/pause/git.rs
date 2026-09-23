@@ -1,5 +1,5 @@
 //! Git process boundary. Paths are OS strings, never shell commands or quoted text.
-use crate::process::{Launch, Process};
+use crate::process::Process;
 use crate::rail::{git as shared_git, risk::MaterialIdentity};
 use crate::store::{Error, Result};
 use std::{
@@ -59,12 +59,12 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = process.run(
-        &Launch::new("git")
+    let output = crate::git_process::run(
+        &crate::git_process::launch(crate::git_process::Caller::PauseRead)
             .cwd(root)
             .args(args)
             .env("GIT_OPTIONAL_LOCKS", "0")
-            .env("GIT_LITERAL_PATHSPECS", "1"),
+            .env("GIT_LITERAL_PATHSPECS", "1"), process,
     )?;
     if !output.success() {
         return Err(Error::Invalid(format!(
@@ -283,7 +283,7 @@ impl TempIndex {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut launch = Launch::new("git")
+        let mut launch = crate::git_process::launch(crate::git_process::Caller::PauseIndex)
             .cwd(root)
             .args(args)
             .env("GIT_OPTIONAL_LOCKS", "0")
@@ -291,7 +291,7 @@ impl TempIndex {
         if let Some(bytes) = input {
             launch = launch.stdin(bytes);
         }
-        let output = process.run(&launch)?;
+        let output = crate::git_process::run(&launch, process)?;
         if !output.success() {
             return Err(Error::Invalid(format!(
                 "Git failed ({}): {}",

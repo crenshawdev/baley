@@ -625,18 +625,18 @@ pub fn parse_prune_records(stdout: &str) -> Vec<Prune> {
 
 /// The nearest containing release tag, peeled to its commit. An earlier
 /// ancestor release cannot label a later close; names break equal-distance ties.
-fn prune_labels(repo: &Path, commits: &[String], process: &mut dyn Process) -> BTreeMap<String, Option<String>> {
+fn prune_labels(repo: &Path, commits: &[String], warnings: &mut Vec<String>, process: &mut dyn Process) -> BTreeMap<String, Option<String>> {
     let release = re(r"^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$");
-    let out = git::run(repo, &git_args(&["tag", "--list"]), process);
+    let out = coverage(git::run(repo, &git_args(&["tag", "--list"]), process), warnings);
     let tags: Vec<_> = out.stdout.lines().filter(|tag| release.is_match(tag)).collect();
     commits.iter().map(|commit| {
         let mut candidates = Vec::new();
         for tag in &tags {
-            let peeled = git::run(repo, &git_args(&["rev-parse", "--verify", &format!("refs/tags/{tag}^{{commit}}") ]), process);
+            let peeled = coverage(git::run(repo, &git_args(&["rev-parse", "--verify", &format!("refs/tags/{tag}^{{commit}}") ]), process), warnings);
             if !peeled.ok() { continue; }
             let tip = peeled.stdout.trim();
-            if !git::run(repo, &git_args(&["merge-base", "--is-ancestor", commit, tip]), process).ok() { continue; }
-            let distance = git::run(repo, &git_args(&["rev-list", "--count", "--ancestry-path", &format!("{commit}..{tip}")]), process);
+            if !coverage(git::run(repo, &git_args(&["merge-base", "--is-ancestor", commit, tip]), process), warnings).ok() { continue; }
+            let distance = coverage(git::run(repo, &git_args(&["rev-list", "--count", "--ancestry-path", &format!("{commit}..{tip}")]), process), warnings);
             if distance.ok() && let Ok(distance) = distance.stdout.trim().parse::<u64>() { candidates.push((distance,(*tag).to_owned())); }
         }
         candidates.sort();
@@ -648,12 +648,13 @@ fn prune_labels(repo: &Path, commits: &[String], process: &mut dyn Process) -> B
 pub fn find_prune_commits(repo: &Path, process: &mut dyn Process) -> (Vec<Prune>, Vec<String>) {
     let args = git_args(&["log", "--full-history", "-M", "--diff-filter=D", "--name-only",
         "--format=%x01%H%x1f%cI%x1f%ct%x1f%P", "--", PRUNED_SUMMARY]);
-    let out = git::run(repo, &args, process);
-    if !out.ok() && out.stdout.is_empty() { return (Vec::new(), Vec::new()); }
+    let mut warnings = Vec::new();
+    let out = coverage(git::run(repo, &args, process), &mut warnings);
+    if !out.ok() && out.stdout.is_empty() { return (Vec::new(), warnings); }
     let mut prunes = parse_prune_records(&out.stdout);
-    let labels = prune_labels(repo, &prunes.iter().map(|p| p.commit.clone()).collect::<Vec<_>>(), process);
+    let labels = prune_labels(repo, &prunes.iter().map(|p| p.commit.clone()).collect::<Vec<_>>(), &mut warnings, process);
     for prune in &mut prunes { prune.label = labels.get(&prune.commit).cloned().flatten(); }
-    let warnings = prunes.iter().filter_map(|prune| prune.refused.clone()).collect();
+    warnings.extend(prunes.iter().filter_map(|prune| prune.refused.clone()));
     (prunes, warnings)
 }
 
@@ -680,7 +681,7 @@ pub fn build_recovered_index(repo: &Path, process: &mut dyn Process) -> (Tier, V
         let Some(parent) = &prune.parent else { continue };
         for (phase, path) in &prune.phases {
             let dir = recovered_dir(prune, phase, path);
-            let out = git::run(repo, &git_args(&["show", &format!("{parent}:{path}")]), process);
+            let out = coverage(git::run(repo, &git_args(&["show", &format!("{parent}:{path}")]), process), &mut tier.warnings);
             if !out.ok() {
                 tier.warnings.push(format!("{path} could not be recovered from {}; its commits are not indexed", &parent[..parent.len().min(8)]));
                 continue;
@@ -736,12 +737,12 @@ fn brief(row: &Row) -> Brief {
 
 /// Read one named artifact of a directory: from disk, or from the recovered
 /// tree through `git show`. A disk read that fails for a reason other than
-/// absence warns; a recovered read that fails is silently empty.
+/// absence warns; a recovered timeout always names incomplete coverage.
 fn pull(dir: &Dir, repo: &Path, name: &str, warnings: &mut Vec<String>, process: &mut dyn Process) -> String {
     match &dir.path {
         None => {
             let Some(at) = &dir.recovered else { return String::new() };
-            let out = git::run(repo, &git_args(&["show", &format!("{}:{}/{name}", at.parent, at.tree)]), process);
+            let out = coverage(git::run(repo, &git_args(&["show", &format!("{}:{}/{name}", at.parent, at.tree)]), process), warnings);
             if out.ok() { out.stdout } else { String::new() }
         }
         Some(path) => match read_artifact(&path.join(name)) {
@@ -786,11 +787,11 @@ pub fn read_phase_records(dir: Option<&Dir>, plan_cell: &str, repo: &Path, proce
     records
 }
 
-fn list_record_names(dir: &Dir, repo: &Path, process: &mut dyn Process) -> Vec<String> {
+fn list_record_names(dir: &Dir, repo: &Path, warnings: &mut Vec<String>, process: &mut dyn Process) -> Vec<String> {
     let mut names: Vec<String> = match &dir.path {
         None => {
             let Some(at) = &dir.recovered else { return Vec::new() };
-            let out = git::run(repo, &git_args(&["ls-tree", "--name-only", &format!("{}:{}", at.parent, at.tree)]), process);
+            let out = coverage(git::run(repo, &git_args(&["ls-tree", "--name-only", &format!("{}:{}", at.parent, at.tree)]), process), warnings);
             if !out.ok() { return Vec::new(); }
             out.stdout.split('\n').map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned).collect()
         }
@@ -806,7 +807,7 @@ pub fn read_adjudications(dir: Option<&Dir>, repo: &Path, process: &mut dyn Proc
     let mut warnings = Vec::new();
     let mut records = Vec::new();
     let Some(dir) = dir else { return (records, warnings) };
-    for name in list_record_names(dir, repo, process) {
+    for name in list_record_names(dir, repo, &mut warnings, process) {
         let before = warnings.len();
         let text = pull(dir, repo, &name, &mut warnings, process);
         if warnings.len() > before { continue; }
@@ -820,15 +821,15 @@ pub fn read_adjudications(dir: Option<&Dir>, repo: &Path, process: &mut dyn Proc
 fn is_commit_id(text: &str) -> bool { (4..=40).contains(&text.len()) && is_hex(text) }
 
 /// The commits in `base..head`, or none when the range does not resolve.
-pub fn range_members(repo: &Path, base: &str, head: &str, process: &mut dyn Process) -> Option<BTreeSet<String>> {
+pub fn range_members(repo: &Path, base: &str, head: &str, warnings: &mut Vec<String>, process: &mut dyn Process) -> Option<BTreeSet<String>> {
     if !is_commit_id(base) || !is_commit_id(head) { return None; }
-    let out = git::run(repo, &git_args(&["rev-list", &format!("{base}..{head}")]), process);
+    let out = coverage(git::run(repo, &git_args(&["rev-list", &format!("{base}..{head}")]), process), warnings);
     if !out.ok() { return None; }
     Some(out.stdout.split('\n').map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect())
 }
 
 /// The paths each commit touched, one `git show` for the whole set.
-pub fn touched_paths(repo: &Path, shas: &[String], process: &mut dyn Process) -> BTreeMap<String, Vec<String>> {
+pub fn touched_paths(repo: &Path, shas: &[String], warnings: &mut Vec<String>, process: &mut dyn Process) -> BTreeMap<String, Vec<String>> {
     let mut out = BTreeMap::new();
     let mut ids: Vec<String> = Vec::new();
     for sha in shas {
@@ -837,7 +838,7 @@ pub fn touched_paths(repo: &Path, shas: &[String], process: &mut dyn Process) ->
     if ids.is_empty() { return out; }
     let mut args = git_args(&["show", "--name-only", "-M", "--format=%x01%H"]);
     args.extend(ids);
-    let res = git::run(repo, &args, process);
+    let res = coverage(git::run(repo, &args, process), warnings);
     let mut current: Option<String> = None;
     for line in res.stdout.split('\n') {
         if let Some(rest) = line.strip_prefix('\x01') {
@@ -938,7 +939,7 @@ pub fn join_chain(repo: &Path, path: &str, index: &Index, raws: &[RawEntry], pro
                         let members = match (&survivor.base_id, &survivor.head_id) {
                             (Some(base), Some(head)) => {
                                 let range = format!("{base}..{head}");
-                                ranges.entry(range).or_insert_with(|| range_members(repo, base, head, process)).clone()
+                                ranges.entry(range).or_insert_with(|| range_members(repo, base, head, &mut warnings, process)).clone()
                             }
                             _ => None,
                         };
@@ -966,7 +967,7 @@ pub fn join_chain(repo: &Path, path: &str, index: &Index, raws: &[RawEntry], pro
     let open: Vec<String> = entries.iter()
         .filter(|entry| matches!(entry.join, Join::Unresolved { .. })).map(|entry| entry.sha.clone()).collect();
     if !open.is_empty() {
-        let paths = touched_paths(repo, &open, process);
+        let paths = touched_paths(repo, &open, &mut warnings, process);
         let archive = archive_sections(&repo.join(".planning"));
         for entry in &mut entries {
             if !matches!(entry.join, Join::Unresolved { .. }) { continue; }
@@ -983,8 +984,30 @@ pub fn join_chain(repo: &Path, path: &str, index: &Index, raws: &[RawEntry], pro
     (entries, warnings)
 }
 
+/// A missing git contribution narrows coverage; it never certifies absence.
+pub fn coverage(answer: Result<git::Run, crate::git_process::Limit>, warnings: &mut Vec<String>) -> git::Run {
+    match answer {
+        Ok(run) => run,
+        Err(limit) => {
+            warnings.push(format!("history incomplete: {limit}"));
+            git::Run { status: 1, stdout: String::new(), stderr: String::new() }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_git_limit_names_incomplete_corpus_coverage() {
+        let mut warnings = Vec::new();
+        let run = super::coverage(Err(crate::git_process::Limit {
+            command: "git show parent:SUMMARY.md".into(),
+            bound: std::time::Duration::from_secs(60),
+        }), &mut warnings);
+        assert!(!run.ok());
+        assert_eq!(warnings, ["history incomplete: git show parent:SUMMARY.md exceeded git deadline of 60 seconds"]);
+    }
+
     use super::*;
 
     #[test]

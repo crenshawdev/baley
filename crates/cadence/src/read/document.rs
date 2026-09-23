@@ -6,7 +6,7 @@ use super::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::process::{Launch, Process};
+use crate::process::Process;
 use crate::envelope::Refusal;
 use std::path::Path;
 
@@ -75,8 +75,8 @@ fn dispatch(root: &Path, identity: &DocumentIdentity, id: &str, process: &mut dy
         "expected_execution_version":active.expected_execution_version,"lease":{"files":active.files,"directories":active.directories},
         "commands":{},"continuation":null,"policy":active.policy,"route":active.route
     }));
-    let head = process
-        .run(&Launch::new("git").args(["rev-parse", "HEAD"]).cwd(root.parent().unwrap_or(root)))
+    let head = cadence::git_process::run(
+        &cadence::git_process::launch(cadence::git_process::Caller::ReadDocumentHead).args(["rev-parse", "HEAD"]).cwd(root.parent().unwrap_or(root)), process)
         .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?;
     if !head.success() { return Err(refusal("head", "document-unavailable", "cannot observe project head")); }
     operational["head"] = json!(String::from_utf8_lossy(&head.stdout).trim());

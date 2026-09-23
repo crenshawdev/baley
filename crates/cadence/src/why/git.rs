@@ -5,7 +5,8 @@
 //! no git bytes onward, because a `fatal:` line reaching an answer is how a
 //! credential leaked once.
 
-use crate::process::{Launch, Output, Process};
+use crate::process::{Output, Process};
+use crate::git_process::{self, Caller, Limit};
 use std::path::Path;
 
 /// One finished git invocation. A spawn failure is a non-zero status with
@@ -21,26 +22,27 @@ impl Run {
 }
 
 /// Run `git -C <dir> <args>`, never panicking on the repository's state.
-pub fn run(dir: &Path, args: &[String], process: &mut dyn Process) -> Run {
-    finish(process.run(&Launch::new("git").arg("-C").arg(dir).args(args)))
+pub fn run(dir: &Path, args: &[String], process: &mut dyn Process) -> Result<Run, Limit> {
+    finish(git_process::run(&git_process::launch(Caller::WhyRead).arg("-C").arg(dir).args(args), process))
 }
 
 /// Run git with bytes on stdin, for the batched object probe.
-pub fn run_with_input(dir: &Path, args: &[String], input: &str, process: &mut dyn Process) -> Run {
-    finish(process.run(&Launch::new("git").arg("-C").arg(dir).args(args).stdin(input.as_bytes())))
+pub fn run_with_input(dir: &Path, args: &[String], input: &str, process: &mut dyn Process) -> Result<Run, Limit> {
+    finish(git_process::run(&git_process::launch(Caller::WhyInput).arg("-C").arg(dir).args(args).stdin(input.as_bytes()), process))
 }
 
 /// One shape for both arms: a program that could not start is a non-zero
 /// status carrying its message, exactly as a git failure is.
-fn finish(answer: std::io::Result<Output>) -> Run {
-    match answer {
+fn finish(answer: Result<Output, git_process::Error>) -> Result<Run, Limit> {
+    Ok(match answer {
         Ok(output) => Run {
             status: output.code().unwrap_or(1),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         },
-        Err(error) => Run { status: 1, stdout: String::new(), stderr: error.to_string() },
-    }
+        Err(git_process::Error::Limit(limit)) => return Err(limit),
+        Err(git_process::Error::Io(error)) => Run { status: 1, stdout: String::new(), stderr: error.to_string() },
+    })
 }
 
 fn argv(parts: &[&str]) -> Vec<String> { parts.iter().map(|part| (*part).to_owned()).collect() }
@@ -155,6 +157,17 @@ pub fn classify(run: &Run) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_deadline_is_not_classified_as_missing_history() {
+        let answer = finish(Err(git_process::Error::Limit(Limit {
+            command: "git log -- a.rs".into(),
+            bound: std::time::Duration::from_secs(60),
+        })));
+        let Err(limit) = answer else { panic!("deadline became an ordinary git answer"); };
+        assert_eq!(limit.command, "git log -- a.rs");
+        assert_eq!(limit.bound, std::time::Duration::from_secs(60));
+    }
 
     #[test]
     fn a_clean_exit_with_no_output_is_not_in_history() {

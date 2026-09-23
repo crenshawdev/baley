@@ -14,8 +14,27 @@ const OUTPUT_BOUND: usize = 65_536;
 /// One owned subprocess: its own group so a descendant cannot outlive it, a
 /// minute to finish, and a bounded capture of what it said.
 pub fn run(root: &Path, invocation: &Invocation, process: &mut dyn Process) -> Result<String> {
-    let output = process.run(
-        &Launch::new(&invocation.program)
+    let launch = invocation_launch(root, invocation);
+    let output = if invocation.program == "git" {
+        crate::git_process::run(&launch, process)?
+    } else {
+        process.run(&launch)?
+    };
+    if !output.success() || !output.complete() {
+        return Err(Error::Invalid(format!("{} returned {}; output exceeded bound: {}; {}",
+            invocation.program, output.status, !output.complete(),
+            String::from_utf8_lossy(&output.stderr))));
+    }
+    String::from_utf8(output.stdout).map_err(|_| Error::Invalid("subprocess output is not UTF-8".into()))
+}
+
+fn invocation_launch(root: &Path, invocation: &Invocation) -> Launch {
+    let launch = if invocation.program == "git" {
+        crate::git_process::launch(crate::git_process::Caller::LandingGit)
+    } else {
+        Launch::new(&invocation.program).timeout(Duration::from_secs(60)).own_group()
+    };
+    launch
             .args(&invocation.args)
             .cwd(root)
             .own_group()
@@ -23,14 +42,6 @@ pub fn run(root: &Path, invocation: &Invocation, process: &mut dyn Process) -> R
             .env("GH_PROMPT_DISABLED", "1")
             .env("GIT_OPTIONAL_LOCKS", "0")
             .limit(OUTPUT_BOUND)
-            .timeout(Duration::from_secs(60)),
-    )?;
-    if !output.success() || !output.complete() {
-        return Err(Error::Invalid(format!("{} returned {}; output exceeded bound: {}; {}",
-            invocation.program, output.status, !output.complete(),
-            String::from_utf8_lossy(&output.stderr))));
-    }
-    String::from_utf8(output.stdout).map_err(|_| Error::Invalid("subprocess output is not UTF-8".into()))
 }
 
 pub fn observe(root: &Path, args: &[&str], process: &mut dyn Process) -> Result<String> {
@@ -147,6 +158,23 @@ pub fn perform(root: &Path, invocation: &Invocation, authorization: &Authorize, 
                 return Err(Error::Invalid("forge did not confirm merge; reconciliation required".into()));
             }
             Ok(result)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn landing_git_is_registered_and_gh_keeps_its_existing_bound() {
+        for program in ["git", "gh"] {
+            let invocation = super::Invocation { program: program.into(), args: vec!["status".into()] };
+            let launch = super::invocation_launch(std::path::Path::new("/project"), &invocation);
+            assert_eq!(launch.git_caller(), if program == "git" { Some(crate::git_process::Caller::LandingGit) } else { None });
+            assert_eq!(launch.timeout, Some(std::time::Duration::from_secs(60)));
+            assert!(launch.own_group);
+            assert_eq!(launch.limit, 65_536);
+            assert_eq!(launch.args, ["status"]);
+            assert_eq!(launch.cwd.as_deref(), Some(std::path::Path::new("/project")));
         }
     }
 }

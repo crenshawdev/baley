@@ -267,82 +267,113 @@ impl System {
 
 impl Process for System {
     fn run(&mut self, launch: &Launch) -> std::io::Result<Output> {
-        let mut command = Self::command(launch);
-        let mut child = command.spawn()?;
-        let out_stream = child.stdout.take();
-        let err_stream = child.stderr.take();
-        let mut input = child.stdin.take();
+        let mut child = SystemChild::spawn(launch)?;
+        let out_stream = child.stdout();
+        let err_stream = child.stderr();
         let limit = launch.limit;
-
         std::thread::scope(|scope| {
             let out = out_stream.map(|stream| scope.spawn(move || bounded(stream, limit)));
             let err = err_stream.map(|stream| scope.spawn(move || bounded(stream, limit)));
-            // Written after the readers start, so a child that answers while it
-            // is still being fed cannot fill a pipe and stall both sides.
-            if let Some(bytes) = &launch.stdin
-                && let Some(mut stdin) = input.take()
-            {
-                stdin.write_all(bytes)?;
-            }
-            drop(input);
-
-            let status = match launch.timeout {
-                None => child.wait()?,
-                Some(limit) => {
-                    let started = Instant::now();
-                    loop {
-                        if let Some(status) = child.try_wait()? {
-                            break status;
-                        }
-                        if started.elapsed() >= limit {
-                            child.kill()?;
-                            break child.wait()?;
-                        }
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                }
-            };
-            if launch.own_group {
-                // Close the pipes a descendant still holds, so the readers end.
-                // Safety: a kill on a process group this call created.
-                unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-            }
-
-            let (stdout, stdout_complete) = match out {
-                Some(handle) => handle.join().expect("stdout reader")?,
-                None => (Vec::new(), true),
-            };
-            let (stderr, stderr_complete) = match err {
-                Some(handle) => handle.join().expect("stderr reader")?,
-                None => (Vec::new(), true),
-            };
+            let status = child.wait();
+            // Always join the drains after cleanup, including on timeout.
+            let stdout = out.map(|handle| handle.join().expect("stdout reader")).transpose();
+            let stderr = err.map(|handle| handle.join().expect("stderr reader")).transpose();
+            let status = status?;
+            let (stdout, stdout_complete) = stdout?.unwrap_or((Vec::new(), true));
+            let (stderr, stderr_complete) = stderr?.unwrap_or((Vec::new(), true));
             Ok(Output { status, stdout, stderr, stdout_complete, stderr_complete })
         })
     }
 
     fn start(&mut self, launch: &Launch) -> std::io::Result<Box<dyn Child>> {
-        Ok(Box::new(SystemChild(Self::command(launch).spawn()?)))
+        Ok(Box::new(SystemChild::spawn(launch)?))
     }
 }
 
-/// A real child of this process.
-struct SystemChild(std::process::Child);
+/// Signaling and waiting remain observations gathered by SystemChild.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeadlineAction { Wait, KillAndReap }
+
+pub fn deadline_action(timeout: Option<Duration>, elapsed: Duration) -> DeadlineAction {
+    if timeout.is_some_and(|limit| elapsed >= limit) {
+        DeadlineAction::KillAndReap
+    } else {
+        DeadlineAction::Wait
+    }
+}
+
+/// A real child of this process, including its stdin worker and deadline.
+struct SystemChild {
+    child: std::process::Child,
+    started: Instant,
+    timeout: Option<Duration>,
+    own_group: bool,
+    input: Option<std::thread::JoinHandle<std::io::Result<()>>>,
+}
+
+impl SystemChild {
+    fn spawn(launch: &Launch) -> std::io::Result<Self> {
+        let mut command = System::command(launch);
+        // Includes spawn and all stdin delivery, not just the wait.
+        let started = Instant::now();
+        let mut child = command.spawn()?;
+        let input = child.stdin.take().zip(launch.stdin.clone()).map(|(mut stdin, bytes)| {
+            std::thread::spawn(move || stdin.write_all(&bytes))
+        });
+        Ok(Self { child, started, timeout: launch.timeout, own_group: launch.own_group, input })
+    }
+
+    fn kill_group(&self) {
+        if self.own_group {
+            // Safety: this group was created for this owned child.
+            unsafe { libc::kill(-(self.child.id() as i32), libc::SIGKILL) };
+        }
+    }
+
+    fn observe_exit(&mut self) -> std::io::Result<ExitStatus> {
+        loop {
+            if deadline_action(self.timeout, self.started.elapsed()) == DeadlineAction::KillAndReap {
+                return Err(std::io::ErrorKind::TimedOut.into());
+            }
+            if let Some(status) = self.child.try_wait()? {
+                return Ok(status);
+            }
+            if self.timeout.is_none() {
+                return self.child.wait();
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
 
 impl Child for SystemChild {
     fn stdout(&mut self) -> Option<Box<dyn Read + Send>> {
-        self.0.stdout.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>)
+        self.child.stdout.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>)
     }
 
     fn stderr(&mut self) -> Option<Box<dyn Read + Send>> {
-        self.0.stderr.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>)
+        self.child.stderr.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>)
     }
 
     fn wait(&mut self) -> std::io::Result<ExitStatus> {
-        self.0.wait()
+        let status = self.observe_exit();
+        // Kill the group before joining any pipe worker. A descendant may
+        // retain either end even after the immediate child has exited.
+        self.kill_group();
+        if status.is_err() {
+            let _ = self.child.kill();
+            self.child.wait()?;
+        }
+        let input = self.input.take().map(|handle| handle.join().expect("stdin writer")).transpose();
+        // The timeout observation takes precedence over cleanup's broken pipe.
+        let status = status?;
+        input?;
+        Ok(status)
     }
 
     fn kill(&mut self) -> std::io::Result<()> {
-        self.0.kill()
+        self.kill_group();
+        self.child.kill()
     }
 }
 
