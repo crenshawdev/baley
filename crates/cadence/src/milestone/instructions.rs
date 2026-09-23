@@ -22,12 +22,12 @@ allowed-tools:
    milestone-read invokes verification-audit for each selected phase. Preserve
    those outcomes; invent no audit verdict or bypass. A refusal stops the action.
 3. Obtain the owner's explicit choice to close only, close and prune, or leave
-   the selection open. To close, send only the returned `actions.close` typed payload
+   the selection open. To close, send only the returned answer field `actions.close` typed payload
    unchanged to cadence_apply. Display the returned close record or exact refusal.
    Reuse the same request for a retry; changed inputs require a fresh read and
    owner choice. A ready close records readiness only; it changes no documents.
    Read milestone-read again with the same occurrence and selection. After the
-   owner's choice to prune, send its returned `actions.prune` typed payload
+   owner's choice to prune, send its returned answer field `actions.prune` typed payload
    unchanged to cadence_apply. This is milestone-prune: it names the ready close
    id, expected generation, exact phase selection and request_id. The binary
    owns every removal, document replacement and single-parent commit.
@@ -55,7 +55,7 @@ allowed-tools:
    landing, expected_generation, version, tag and manifest {path, format:"json"}.
    This records a release read; it does not bump or tag. Show the named manifest,
    requested version/tag and any collision's exact tag and peeled commit. Show
-   both drift values: manifest_version and newest.tag/version/commit. A missing
+   both drift values: manifest_version and answer field `newest.tag`/version/commit. A missing
    or unreadable input is a refusal, never evidence of an empty tag inventory.
 7. Present the complete immutable release report, including id, digest, observed
    manifest bytes, tag inventory and HEAD. Ask the owner to confirm this exact

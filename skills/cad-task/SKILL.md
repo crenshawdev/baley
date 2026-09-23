@@ -32,7 +32,7 @@ done in this context; `--plan` may dispatch one executor.
    `protected-branch` answer as the policy's disposition: with `ask`, put the
    gate's options to the owner through `AskUserQuestion`; `create` means make
    and switch to the named work branch and open again, `abort` means stop.
-   With `refuse`, stop. Keep the accepted `task.token`.
+   With `refuse`, stop. Keep the accepted answer field `task.token`.
 3. Inline: read through `cadence_query`, make the change, verify by observed
    behavior, and commit each logical change as one conventional commit of
    specific files. Planned: write the plan as one to three atomic tasks, each
@@ -71,7 +71,7 @@ Cadence is the only project read surface. Use `cadence_query` with `search` to f
 
 Process records never use file paths. Call `document` with an identity such as `{"kind":"phase-context","phase":31}`, `{"kind":"phase-plan","phase":31,"plan":2}` or `{"kind":"dispatch","id":"<issued id>"}` and no `part` to get its bounded index, then repeat the identity with a returned part such as `truth:T1`, `task:P31-2-T1`, or `row`. Dispatches serve identity, goal, context, notes, tasks, allocated checks, completed history, continuation, suite, lease, commands, policy and route. Phase plans also serve their typed goal, context, notes and `evidence:<item id>` parts. When native execution records exist, their `execution` part serves the same plan state as `execution-history`, including `round` (dispatch_id, host, tokens, wire_bytes, owner, at and request_id) and `completion` (suite_run, request_id and the settlement material base/head). The `round` and `completion` fields are omitted until their events are recorded. Follow numbered continuation parts such as `notes:2` in index order; each is at most 24,576 bytes. A `dispatch-superseded` refusal identifies the changed slot and current issued id. `document-search` takes a `phase` and a `pattern` and returns which parts of that phase's records match, as identities and parts for `document`, without bodies. A refusal's issued location or identity is the only address for inspecting the named fault. Main threads and workers use this same contract on the already configured Cadence MCP connection; a worker must not define or launch another server.
 
-Drafts use `{"kind":"plan-draft","phase":N,"plan":k,"digest":"<submission_digest>"}` or `{"kind":"context-draft","phase":N,"digest":"<submission_digest>"}`. Compose each plan identity from the draft answer's `documents[i].identity.phase`, `documents[i].identity.plan` and `submission_digest`; compose a context identity from its phase and `submission_digest`. No extra draft-identity field is returned. Call `document` without `part`, then read every returned part in index order and show those rendered parts to the owner before approval. Draft parts concatenate byte for byte to the rendered document. After explicit approval, send `plan-submit` or `context-submit` with `phase` and `approval: {approved: true, owner, at, submission_digest}`, with no `submission`. Drafts live only in the resident's memory and are lost on restart. A `stale-draft` refusal names the newest draft `identity` and changed `part`; read that location and obtain fresh approval of the complete newest draft. An `unknown-draft` refusal names the phase identity; create and read a fresh draft before requesting approval again.
+Drafts use `{"kind":"plan-draft","phase":N,"plan":k,"digest":"<submission_digest>"}` or `{"kind":"context-draft","phase":N,"digest":"<submission_digest>"}`. Compose each plan identity from the draft answer's answer field `documents[i].identity.phase`, answer field `documents[i].identity.plan` and `submission_digest`; compose a context identity from its phase and `submission_digest`. No extra draft-identity field is returned. Call `document` without `part`, then read every returned part in index order and show those rendered parts to the owner before approval. Draft parts concatenate byte for byte to the rendered document. After explicit approval, send `plan-submit` or `context-submit` with `phase` and `approval: {approved: true, owner, at, submission_digest}`, with no `submission`. Drafts live only in the resident's memory and are lost on restart. A `stale-draft` refusal names the newest draft `identity` and changed `part`; read that location and obtain fresh approval of the complete newest draft. An `unknown-draft` refusal names the phase identity; create and read a fresh draft before requesting approval again.
 
 For the read-layer cycle-purpose close handoff, measure a new real Claude Code planning episode after this read contract is installed. The dispatch that installed the layer required direct project reads and is not the qualifying round; Codex is not a supported measurement host. Select the actual round boundaries from the host episode, then call `document` with `{"kind":"planner-round","phase":31,"session_id":"<Claude session UUID>","first_turn":"<actual first-turn UUID>","last_turn":"<actual last-turn UUID>"}` and part `report`. Show the owner that binary report unchanged, including its host/session/turn/worker boundaries, source digest, `read_count`, `whole_file_reads`, `unclassified_reads`, the four raw token components and `token_total`, and the numerical difference and ratio against `baseline_planner_median: 183000`. Missing, incomplete, ambiguous, nonzero whole-file or nonzero unclassified results are evidence to retain, never values to replace or a model-authored pass. The historical median's raw samples and aggregation procedure were not supplied, so claim like-for-like savings only after that procedure is confirmed.
 
@@ -92,8 +92,8 @@ inline or planned, opened and closed through `mcp__cadence__cadence_apply`.
    (`permission` `ask` with the gate's options, or `refuse`); there is no
    bypass and no recorded proceed for a task, so create and switch to an
    authorized work branch, then open again with a fresh `request_id`. The
-   accepted answer carries `task.token` (the per-run token every later call
-   echoes), `task.start` (HEAD at open) and `root`: `absent` means the run is
+   accepted answer carries answer field `task.token` (the per-run token every later call
+   echoes), answer field `task.start` (HEAD at open) and `root`: `absent` means the run is
    ephemeral, held in the resident's memory, and its record will be called
    unrecorded; `present` means the record is written under the planning root
    before done.
@@ -109,11 +109,11 @@ inline or planned, opened and closed through `mcp__cadence__cadence_apply`.
    project has none and pass it here. The binary reads the commits and files
    of `start..HEAD` from git, scans that range against the surfaces with the
    shared risk classifier, and answers:
-   - `outcome: done` with `record.risk` `skipped` (HEAD did not move),
-     `clear`, or `advisory` under a non-blocking gate, and `record.recording`
+   - `outcome: done` with answer field `record.risk` `skipped` (HEAD did not move),
+     `clear`, or `advisory` under a non-blocking gate, and answer field `record.recording`
      `unrecorded` with its reason or `recorded` with the path;
    - `risk-blocked` when a surface matched or the scan was inconclusive under
-     a blocking gate: the task is not done, `details.record` names the matched
+     a blocking gate: the task is not done, answer field `details.record` names the matched
      surfaces and signals, and the matched material was held per run in
      temporary storage that is gone with the answer. Fix, commit, and close
      again with a fresh `request_id`; the token stays open.

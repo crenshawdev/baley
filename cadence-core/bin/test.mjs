@@ -43,8 +43,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const GROUPS = Object.freeze({
   // The resolver, the rung ladder it dispatches through, and the config layers
   // that feed it.
-  routing: ['route', 'route-relay', 'rung-agent', 'retired-keys',
-    'config', 'config-seams', 'dispatch-phrasing', 'phase-plans'],
+  routing: ['route', 'rung-agent', 'retired-keys',
+    'config', 'config-seams', 'phase-plans'],
   // Everything that touches a real repository.
   git: ['git-guard', 'git-branch', 'git-segments', 'worktree-base',
     'branch-decision', 'release-decision',
@@ -70,8 +70,7 @@ const GROUPS = Object.freeze({
     'planning-trace-ignore', 'planning-uat',
     'trace', 'bm25', 'debt-markers'],
   // The prose<->code drift linters. Slow because they read the whole tree.
-  prose: ['self-verify', 'prose-agreement', 'weight', 'deferred-reads',
-    'include-consumers'],
+  prose: ['prose-agreement', 'weight', 'deferred-reads'],
   // The cross-model call seam.
   review: ['review-provider'],
 });

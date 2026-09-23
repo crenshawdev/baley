@@ -21,7 +21,7 @@ Cadence is the only project read surface. Use `cadence_query` with `search` to f
 
 Process records never use file paths. Call `document` with an identity such as `{"kind":"phase-context","phase":31}`, `{"kind":"phase-plan","phase":31,"plan":2}` or `{"kind":"dispatch","id":"<issued id>"}` and no `part` to get its bounded index, then repeat the identity with a returned part such as `truth:T1`, `task:P31-2-T1`, or `row`. Dispatches serve identity, goal, context, notes, tasks, allocated checks, completed history, continuation, suite, lease, commands, policy and route. Phase plans also serve their typed goal, context, notes and `evidence:<item id>` parts. When native execution records exist, their `execution` part serves the same plan state as `execution-history`, including `round` (dispatch_id, host, tokens, wire_bytes, owner, at and request_id) and `completion` (suite_run, request_id and the settlement material base/head). The `round` and `completion` fields are omitted until their events are recorded. Follow numbered continuation parts such as `notes:2` in index order; each is at most 24,576 bytes. A `dispatch-superseded` refusal identifies the changed slot and current issued id. `document-search` takes a `phase` and a `pattern` and returns which parts of that phase's records match, as identities and parts for `document`, without bodies. A refusal's issued location or identity is the only address for inspecting the named fault. Main threads and workers use this same contract on the already configured Cadence MCP connection; a worker must not define or launch another server.
 
-Drafts use `{"kind":"plan-draft","phase":N,"plan":k,"digest":"<submission_digest>"}` or `{"kind":"context-draft","phase":N,"digest":"<submission_digest>"}`. Compose each plan identity from the draft answer's `documents[i].identity.phase`, `documents[i].identity.plan` and `submission_digest`; compose a context identity from its phase and `submission_digest`. No extra draft-identity field is returned. Call `document` without `part`, then read every returned part in index order and show those rendered parts to the owner before approval. Draft parts concatenate byte for byte to the rendered document. After explicit approval, send `plan-submit` or `context-submit` with `phase` and `approval: {approved: true, owner, at, submission_digest}`, with no `submission`. Drafts live only in the resident's memory and are lost on restart. A `stale-draft` refusal names the newest draft `identity` and changed `part`; read that location and obtain fresh approval of the complete newest draft. An `unknown-draft` refusal names the phase identity; create and read a fresh draft before requesting approval again.
+Drafts use `{"kind":"plan-draft","phase":N,"plan":k,"digest":"<submission_digest>"}` or `{"kind":"context-draft","phase":N,"digest":"<submission_digest>"}`. Compose each plan identity from the draft answer's answer field `documents[i].identity.phase`, answer field `documents[i].identity.plan` and `submission_digest`; compose a context identity from its phase and `submission_digest`. No extra draft-identity field is returned. Call `document` without `part`, then read every returned part in index order and show those rendered parts to the owner before approval. Draft parts concatenate byte for byte to the rendered document. After explicit approval, send `plan-submit` or `context-submit` with `phase` and `approval: {approved: true, owner, at, submission_digest}`, with no `submission`. Drafts live only in the resident's memory and are lost on restart. A `stale-draft` refusal names the newest draft `identity` and changed `part`; read that location and obtain fresh approval of the complete newest draft. An `unknown-draft` refusal names the phase identity; create and read a fresh draft before requesting approval again.
 
 For the read-layer cycle-purpose close handoff, measure a new real Claude Code planning episode after this read contract is installed. The dispatch that installed the layer required direct project reads and is not the qualifying round; Codex is not a supported measurement host. Select the actual round boundaries from the host episode, then call `document` with `{"kind":"planner-round","phase":31,"session_id":"<Claude session UUID>","first_turn":"<actual first-turn UUID>","last_turn":"<actual last-turn UUID>"}` and part `report`. Show the owner that binary report unchanged, including its host/session/turn/worker boundaries, source digest, `read_count`, `whole_file_reads`, `unclassified_reads`, the four raw token components and `token_total`, and the numerical difference and ratio against `baseline_planner_median: 183000`. Missing, incomplete, ambiguous, nonzero whole-file or nonzero unclassified results are evidence to retain, never values to replace or a model-authored pass. The historical median's raw samples and aggregation procedure were not supplied, so claim like-for-like savings only after that procedure is confirmed.
 
@@ -44,7 +44,7 @@ The dispatch's operational input is the binary's authority: its executable
 named `verify` commands, current state, uncertainty and retained checkpoints;
 `checks` carries every check those tasks deliver with its id, item revision,
 owning task and specification; `completed` is history and is never worked
-again; an approved `suite.state.repair_question` makes a new plan-level issue
+again; an approved dispatch field `suite.state.repair_question` makes a new plan-level issue
 whose executable task list is empty; `suite` (the admitted command and the runner's current suite state),
 `lease` and `commands` come from the admitted plan. The authored goal, context,
 notes and task actions describe the work, and cannot change these
@@ -71,7 +71,7 @@ operational input or from `execution-history`:
    `completion` (suite_run, request_id and the settlement material base/head)
    once recorded; absent fields are omitted. The `phase-plan` document's
    `execution` part serves the same state when native execution records exist.
-4. `execution-task-progress` with `event.kind` `progress`, `deviation` or
+4. `execution-task-progress` with request field `event.kind` `progress`, `deviation` or
    `failed-attempt`: acknowledge work as it lands. A commit the history has not
    acknowledged is visible uncertainty; the owner reconciles it before any
    redispatch, and nothing reruns a task blindly.
@@ -156,7 +156,7 @@ never replace an admitted command at run time. When the project root carries
 no manifest the binary knows, the dispatch warns and requires those explicit
 commands; it never guesses a runner. No test style, preset or count is a gate.
 
-Source lease (D-170): `lease.files` and `lease.directories` are the planner's
+Source lease (D-170): dispatch field `lease.files` and dispatch field `lease.directories` are the planner's
 expectation, written before the code existed. A path in an evidence or
 completion commit that falls outside them does not refuse the close; it is
 retained as a deviation on the plan record, named per path with the commit as
@@ -179,7 +179,7 @@ a decimal legacy address such as `"phase":"27.1"` is its one string form.
 
 Before execute-next, read `plan-read` and `evidence-read` with the integer
 phase. Copy the occurrence and each current publication's
-plan number, `approval.submission.request_id`, content `revision` and
+plan number, answer field `approval.submission.request_id`, content `revision` and
 `map_revision`. Copy canonical check ids and `item_revision` from evidence-read.
 Explicitly allocate every ordered task, including tasks delivering no checks
 with `checks:[]`; allocate each current canonical check exactly once across

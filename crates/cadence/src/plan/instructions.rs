@@ -90,7 +90,7 @@ live observations with a reason explaining what change would break each item.
 An observation is supplementary to the truth's check. This API accepts only its
 specification and `status: "pending"`; it has no observation-result field.
 
-Put the typed map in `content.evidence_map` as `{"mode":"attached","items":[...]}`.
+Put the typed map in request field `content.evidence_map` as `{"mode":"attached","items":[...]}`.
 Each item has an opaque, nonblank, occurrence-scoped `id`, one `kind`, a `spec`,
 its own nonblank `reason` (what change would break this evidence), and explicit
 `associations: [{truth_id, truth_version, reason}]`. Each association has its own
@@ -199,7 +199,7 @@ project-relative `files`, optional `directories`, the prose strings `goal`,
 `context` and `notes`, typed `tasks`, the nonblank full-suite command `suite`,
 and the explicit `evidence_map` mode above. Each task is
 `{id, title, files, action, verify}`: use a stable unique id, project-relative
-task files that are also present in content.files, prose title and action, and
+task files that are also present in request field `content.files`, prose title and action, and
 a nonempty narrow verify command array. Planning neither runs these commands
 nor certifies acceptance readiness; the executor runs the suite once at plan
 close. The binary derives retained execution metadata and renders every Markdown
@@ -216,14 +216,14 @@ When the complete draft's plan count is known, ask the binary for a fresh previe
 ```
 
 `count` is 1 through 64. Omit it for readback. Preview acquires no writer and
-reserves nothing. Keep the returned `occurrence`, `inventory.basis` and ordered
+reserves nothing. Keep the returned `occurrence`, answer field `inventory.basis` and ordered
 `targets`. Numbers are monotonic within the explicit active-cycle phase occurrence,
 including known deleted plans, reports and execution identities. Never choose a
 hole, normalize an alias or reset a counter. Cycle migration is deferred.
 
 Construct a `plan-submit` request for `mcp__cadence__cadence_apply`. Its `submission`
 contains `phase`, returned `occurrence`, a fresh durable caller `request_id`,
-`inventory_basis` copied from `inventory.basis`, and ordered `plans`. Each entry
+`inventory_basis` copied from answer field `inventory.basis`, and ordered `plans`. Each entry
 contains its exact returned `target: {phase, plan}` and matching `content` as above.
 There is no caller-controlled path and no separate gap operation. Preserve all
 typed content and the order shown to the owner. Before approval, send the
@@ -295,7 +295,7 @@ Legacy aliases remain read-only even when the canonical filename is absent.
 Explicitly resubmit and revalidate the map with every replacement. Changed typed
 content is a new publication even when the map's bytes are identical.
 Old immutable map/item payloads and original receipt results remain readable;
-`plan-read.map_history` marks retired contributions `superseded` with their
+answer field `plan-read.map_history` marks retired contributions `superseded` with their
 `superseded_by` publication binding. Only the newly approved map may be current.
 An explicitly provisional mapless replacement removes the old contribution from
 current coverage while retaining its historical payload and retirement relation.
@@ -393,14 +393,14 @@ and correct the complete request:
 - `check-command` and `check-expected`: supply the nonblank command or explicit
   literal/property value. The full item id and exact JSON path identify the
   missing, malformed or blank field. Expected-container errors locate
-  `spec.expected`, invalid tags locate `.kind`, and invalid values locate `.value`.
+  request field `spec.expected`, invalid tags locate `.kind`, and invalid values locate `.value`.
   Auxiliary check/link shape failures retain `evidence-item-shape` and their
   actual field path, including malformed nested approval/replacement copies.
-- `truth-check-limit`: `id` is the full truth id, `slot` is `submission.plans`,
+- `truth-check-limit`: `id` is the full truth id, `slot` is request field `submission.plans`,
   and `details` contains `truth_id`, `truth_version`, and `checks`. Each check
   has `id` and every `origins: [{phase, plan, source, slot}]`; `source` is
-  `saved` or `proposed`. Saved paths use `current.plans[N].evidence_map.items[j]`,
-  proposed paths use `submission.plans[i].content.evidence_map.items[j]`.
+  `saved` or `proposed`. Saved paths use answer field `current.plans[N].evidence_map.items[j]`,
+  proposed paths use request field `submission.plans[i].content.evidence_map.items[j]`.
   Truth/check ids sort by full UTF-8 spelling, versions numerically, origins by
   numeric phase/plan, source and numeric item position. Reordered inputs retain
   accurate paths. Inspect all origins, keep one distinct shared definition,
@@ -430,7 +430,7 @@ and correct the complete request:
   conflicting contributions together in a newly previewed and approved batch.
 - `evidence-map-mode`: choose attached evidence or explicit provisional authoring.
 - `typed-content`: remove the named `body` or `execution` field, or correct a
-  task file that is absent from content.files; the binary renders Markdown and
+  task file that is absent from request field `content.files`; the binary renders Markdown and
   derives execution metadata from `suite` and typed tasks.
 - `preview-scope` or `batch-size`: match the bound phase and use submission or
   count, not both; allocation previews accept 1 through 64 plans.

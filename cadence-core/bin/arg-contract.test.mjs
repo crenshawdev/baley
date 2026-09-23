@@ -420,10 +420,10 @@ test('every flag in every row declares a complete grammar', () => {
     }
   }
   // The walk reached the whole table, so no arm above is vacuous.
-  // CADENCE-CENSUS: arg-contract-flag-entries | asserts: the CONTRACTS table declares 177 flag entries across 15 top-level rows
-  // 177 after retiring the task-record subcommand's five flags (phase 17 plan 2); 182 before.
-  assert.equal(entries, 177, `the table declares ${entries} flag entries`);
-  assert.equal(Object.keys(CONTRACTS).length, 15, 'one row per top-level bin script');
+  // CADENCE-CENSUS: arg-contract-flag-entries | asserts: the CONTRACTS table declares 176 flag entries across 14 top-level rows
+  // Retiring self-verify removes its one root flag and top-level row.
+  assert.equal(entries, 176, `the table declares ${entries} flag entries`);
+  assert.equal(Object.keys(CONTRACTS).length, 14, 'one row per top-level bin script');
 });
 
 test('the declarations the CONTEXT decisions bind are the ones in the table', () => {
@@ -433,8 +433,6 @@ test('the declarations the CONTEXT decisions bind are the ones in the table', ()
   const PINNED = [
     ['planning.mjs', '*', '--dir', { value: 'refuse', bare: 'refuse' },
       'AC1: --dir "" answered ok:true about a tree the caller never named'],
-    ['self-verify.mjs', '*', '--root', { value: 'refuse', bare: 'refuse' },
-      'the same rail on the linter that reports about a tree'],
     // REVERSED by CER-01 D-09, and pinned in its new direction for the same
     // reason it was pinned in the old one: the declaration IS the contract, so a
     // flip back would be a silently different refusal at route.mjs's door.

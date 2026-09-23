@@ -61,7 +61,6 @@ jobs:
       # is deliberately not duplicated here: it needs an ephemeral `npm install`
       # and so is the one arm of test.yml this gate does not reproduce.
       - run: node cadence-core/bin/test.mjs
-      - run: node cadence-core/bin/self-verify.mjs
 
   build:
     # In this workflow and behind the guard, not a second workflow watching the

@@ -21,7 +21,7 @@
 // copy of the body.
 //
 // The rules are LEXICAL, which means a rule can match its own source - the
-// discipline lib/merge-warnings.mjs states, where the fix belongs at the
+// discipline of fixing a self-match at the
 // mention or in the pattern and never in a second exclusion list. Every pattern
 // below is therefore built from an escaped string: the text a rule matches does
 // not appear verbatim anywhere in this file, so this file is censused by the
@@ -89,10 +89,8 @@ const HELPERS = [
     // The try/catch pair, not the readFileSync call alone: the '' is the
     // contract, and the null-returning readers elsewhere are different ones.
     re: new RegExp("return readFileSync\\(file, 'utf8'\\);[\\s\\S]{0,20}?catch \\{ return ''; \\}", 'g'),
-    note: 'Import { readText } from ./lib/seam-input.mjs. Two OTHER file '
-      + 'readers in this tree are deliberately not it and are not exemptions: '
-      + 'lib/include-consumers.mjs returns null behind an isFile() guard and '
-      + "planning/core.mjs's read() returns null, because both callers act on the "
+    note: 'Import { readText } from ./lib/seam-input.mjs. '
+      + "planning/core.mjs's read() returns null because its caller acts on the "
       + "difference between absent and empty that '' collapses (D-04).",
   },
   {

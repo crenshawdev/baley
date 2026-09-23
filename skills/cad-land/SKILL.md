@@ -23,7 +23,7 @@ allowed-tools:
    discrepancy, then land-read again. A failed or ambiguous read stops without
    a success receipt or a repeated mutation. Reuse the same request on transport
    interruption; after resolving a retained discrepancy, read a fresh `resume`.
-   If `landing.release` is present, display its release id/digest, named manifest,
+   If answer field `landing.release` is present, display its release id/digest, named manifest,
    version, exact tag and bump commit. Release confirmation grants no external
    authorization and creates no tag; use the updated source commit from this read.
 2. For an external step, show the proposed exact step: push, open, merge or tag-push. Obtain its request
@@ -48,7 +48,7 @@ allowed-tools:
    `confirm-merge` as the next step and obtain that record before any cleanup.
 5. When `next_step` is `confirm-merge`, display the merged landing identity:
    landing id and generation, exact source/base/remote, the merge receipt's forge
-   and PR number, and the observed merged commit at `git.remote.base_head`.
+   and PR number, and the observed merged commit at answer field `git.remote.base_head`.
    If an observation is unavailable, stop and show it; never guess a commit.
    Obtain the land-confirm-merge schema through cadence_query
    `{"operation":"schema","tool":"apply","for":"land-confirm-merge"}`.

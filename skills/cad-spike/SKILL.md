@@ -23,12 +23,12 @@ Use cadence_query schema with tool apply and for set to spike-open,
 spike-observation, spike-verdict or spike-close for the exact request shape.
 Each cadence_apply operation carries request with request_id, slug and
 expected_version. Open uses expected_version 0; later mutations copy the last
-returned record.version. Use distinct request IDs for new mutations. Retry an
+returned answer field `record.version`. Use distinct request IDs for new mutations. Retry an
 uncertain delivery with the identical request_id and inputs; changed-input
 replay is refused. A replay returns its original answer, not a newer record.
 
 Choose a slug of 1..80 lowercase letters, digits or hyphens, starting with a
-letter and ending without a hyphen. There is no spike query operation: readback
+letter and ending without a hyphen. There is no spike query operation. Readback
 comes from the operation answer, which carries record and projection, and the
 binary-rendered SPIKE.md. Never reconstruct authority from historical Markdown.
 Existing historical spike directories are not imported or overwritten.
@@ -74,7 +74,7 @@ than SPIKE.md. Never use Write, Edit or Bash to change it, stage it or commit it
    If later criteria were not run because an earlier criterion failed, record
    that fact and reason for each; never invent a successful measurement.
    Foreign criterion identities and duplicate observations are refused.
-   Read each answer and retain its record.version for the next mutation.
+   Read each answer and retain its answer field `record.version` for the next mutation.
 
 6. Call spike-verdict with verdict and criteria containing every recorded
    criterion id in its original order. All criteria need one recorded result.

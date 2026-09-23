@@ -97,14 +97,14 @@ applies a finding: no file is changed, deleted, staged or committed.
    A refused answer names what is missing, ambiguous or unresolvable in its
    reason: report that request and stop. Never widen a target to its parent
    directory, the whole phase or the tree, and never substitute a paragraph of
-   your own for the resolved document. Retain `result.kind`, `result.target`,
-   `result.material`, `result.intent` and `result.admission`.
+   your own for the resolved document. Retain answer field `result.kind`, answer field `result.target`,
+   answer field `result.material`, answer field `result.intent` and answer field `result.admission`.
 2. Admit. Call cadence_apply `{{"operation":"review-admit","request":<result.admission, unchanged>}}`.
    Only an answer with an admitted fire proceeds; a replayed answer names the
    review already admitted for this selection.
 3. Deliver. Call cadence_query `{{"operation":"review-next","fire":<fire>}}` and
-   follow only the saved dispatch: invoke Task with `dispatch.agent` and exactly
-   `dispatch.prompt`, passing `dispatch.model` only when present. Forward the
+   follow only the saved dispatch: invoke Task with dispatch field `dispatch.agent` and exactly
+   dispatch field `dispatch.prompt`, passing dispatch field `dispatch.model` only when present. Forward the
    actual launch and return events with review-observation. Read retained
    material with document identity `{{kind: review-entry, attempt, entry}}`:
    read its index, compact entry metadata, lines:<n> and text:<n> parts, following

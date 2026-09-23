@@ -96,38 +96,6 @@ function entry(e) {
  */
 export const CENSUSES = Object.freeze([
   entry({
-    id: 'self-verify-merge-layers',
-    holder: 'cadence-core/bin/self-verify.test.mjs',
-    // `mergeLayers` is written here WITHOUT its opening paren on purpose. The
-    // merge-warnings rule matches the name followed by `(` on any non-comment
-    // line, so spelling the callsite out in this row's prose made the registry
-    // itself the thirteenth file carrying a callsite - self-verify red, and
-    // check 12 red at seventeen over thirteen. The fix belongs at the MENTION,
-    // which is the discipline lib/merge-warnings.mjs states and the same one
-    // that keeps this file's own marker head built rather than written.
-    counts: 'sixteen `mergeLayers` callsites over twelve files, each in one '
-      + 'of the two warning-surfacing arms',
-    asserted_by: 'the test named `check 12: the live tree is SIXTEEN callsites '
-      + 'over TWELVE files, each in an arm`',
-    // The twelve files that carry a callsite today. lib/config-merge.mjs is
-    // deliberately NOT a subject: that test's own `skip` excludes it, so
-    // editing it cannot move the count.
-    subjects: [
-      'cadence-core/bin/config.mjs',
-      'cadence-core/bin/forge.mjs',
-      'cadence-core/bin/git-branch.mjs',
-      'cadence-core/bin/git-guard.mjs',
-      'cadence-core/bin/issue-check.mjs',
-      'cadence-core/bin/issue-filing.mjs',
-      'cadence-core/bin/planning/capture-check.mjs',
-      'cadence-core/bin/planning/core.mjs',
-      'cadence-core/bin/planning/risk-check.mjs',
-      'cadence-core/bin/planning/trace.mjs',
-      'cadence-core/bin/review-provider.mjs',
-      'cadence-core/bin/route.mjs',
-    ],
-  }),
-  entry({
     id: 'arg-contract-flag-entries',
     holder: 'cadence-core/bin/arg-contract.test.mjs',
     counts: 'the flag entries the `CONTRACTS` table declares and its top-level row count',
@@ -166,30 +134,6 @@ export const CENSUSES = Object.freeze([
       'cadence-core/workflows/',
       'skills/',
     ],
-  }),
-  entry({
-    id: 'text-transport-register',
-    holder: 'cadence-core/bin/text-transport.test.mjs',
-    counts: "the register's own row count and its derived-row count - 36 and 20",
-    asserted_by: 'the test named `the register pins its row count`',
-    subjects: ['cadence-core/bin/lib/text-transport.mjs'],
-  }),
-  entry({
-    id: 'capture-writers-register',
-    holder: 'cadence-core/bin/capture-writers.test.mjs',
-    counts: "the register's 4 rows, none of them durable - a durable row is a "
-      + 'reported problem on the live tree, so the second figure is the '
-      + "classification's own floor rather than a tally",
-    asserted_by: 'the test named `the register pins its row count`',
-    subjects: ['cadence-core/bin/lib/capture-writers.mjs'],
-  }),
-  entry({
-    id: 'bulk-output-register',
-    holder: 'cadence-core/bin/bulk-output.test.mjs',
-    counts: "the register's row count and its two transport splits - 15, 4 "
-      + 'redirect and 2 file',
-    asserted_by: 'the test named `the register pins its row count`',
-    subjects: ['cadence-core/bin/lib/bulk-output.mjs'],
   }),
   entry({
     id: 'rung-agent-files',
@@ -237,21 +181,6 @@ export const CENSUSES = Object.freeze([
     // 2026-08-25 and moves this row from 4 of 46 plans refused to 18, against
     // the half-the-plans rail's bound of 23 - a cost paid for nothing (D-11).
     subjects: ['cadence-core/bin/planning/'],
-  }),
-  entry({
-    id: 'reference-router-branches',
-    holder: 'cadence-core/bin/reference-routers.test.mjs',
-    counts: "the register's row count and the number of ROUTERS those rows "
-      + 'span - 7 over 2',
-    asserted_by: 'the test named `the register pins its row count and its router count`',
-    // The MODULE, not `cadence-core/references/`. Both numbers are read off
-    // `ROUTERS` itself, so the only edit that can move either one is an edit to
-    // this file - the same subject every other register census in this table
-    // carries. The wide directory lease was measured on 2026-08-25 and refuses
-    // 21 of the 37 plans declaring under `cadence-core/bin/`, past the
-    // half-the-plans rail `planning-lease-check.test.mjs` asserts, because a
-    // reference cold-split without a new ROUTER row moves no count at all.
-    subjects: ['cadence-core/bin/lib/reference-routers.mjs'],
   }),
   entry({
     id: 'seam-call-counts',

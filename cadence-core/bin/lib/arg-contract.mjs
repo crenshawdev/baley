@@ -1238,15 +1238,6 @@ export const CONTRACTS = {
       '--role': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
     },
   },
-  // Two scripts with no subcommand at all. They carry rows because check 14
-  // requires one, and the rows have teeth: the bare form's flag list is what
-  // check 2 lints `self-verify.mjs --root <path>` against.
-  'self-verify.mjs': {
-    '*': {
-      '--root': { required: false, type: 'string', value: 'refuse', bare: 'refuse' },
-    },
-    '': {},
-  },
   // git-guard.mjs is the commit hook - it reads its input on stdin and takes
   // no flags, so the bare form allows none.
   'git-guard.mjs': {

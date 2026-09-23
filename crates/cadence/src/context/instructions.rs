@@ -170,8 +170,8 @@ same binary operation. Never work around a refusal by editing a file directly.
   named truth and its distinct owner attestation.
 - `seven-truths` / `truths`: explain "split the phase" and end this publication
   attempt until the owner resolves the phase boundary.
-- `identity-collision`: identify the full ID, phase and `truths.id`,
-  `durable_decisions.id`, or `decisions.id` slot. Do not renumber silently.
+- `identity-collision`: identify the full ID, phase and request field `truths.id`,
+  request field `durable_decisions.id`, or request field `decisions.id` slot. Do not renumber silently.
 - `exact-set-approval` / `approval`: present the actual full set again and obtain
   the missing or corrected approval evidence.
 - `native-context-exists`: a first approval already exists; revision is outside

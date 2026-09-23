@@ -35,7 +35,7 @@ done in this context; `--plan` may dispatch one executor.
    `protected-branch` answer as the policy's disposition: with `ask`, put the
    gate's options to the owner through `AskUserQuestion`; `create` means make
    and switch to the named work branch and open again, `abort` means stop.
-   With `refuse`, stop. Keep the accepted `task.token`.
+   With `refuse`, stop. Keep the accepted answer field `task.token`.
 3. Inline: read through `cadence_query`, make the change, verify by observed
    behavior, and commit each logical change as one conventional commit of
    specific files. Planned: write the plan as one to three atomic tasks, each

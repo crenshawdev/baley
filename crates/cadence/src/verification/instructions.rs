@@ -47,7 +47,7 @@ exit zero as acceptance. An item whose check could not have failed is rejected.
 Return ONE atomic complete phase-attempt patch through verification-submit.
 Submit {"request_id":"...","attempt":"<retained attempt id>","items":[...]}.
 The service resolves the basis from that retained attempt. A fresh patch with
-basis is refused at patch.basis; exact historical requests retain their receipt.
+basis is refused at request field `patch.basis`; exact historical requests retain their receipt.
 Provide exactly one verdict per canonical item, not one per alias; inspect
 every association. Each verdict is accepted, rejected or not_seen, with what
 you actually observed and independent run references for checks. Explicit
@@ -210,9 +210,9 @@ allowed-tools:
 
 Parse the phase as a positive JSON integer. Call cadence_query
 `{{"operation":"verify-next","phase":13}}` with the selected integer.
-Retain `attempt.id`, `identities` and `route`. A refusal is not a dispatch.
-Invoke Task with `route.choice.agent`, the phase and the supplied
-verification-attempt identity; pass `route.choice.model` only when present.
+Retain answer field `attempt.id`, `identities` and `route`. A refusal is not a dispatch.
+Invoke Task with answer field `route.choice.agent`, the phase and the supplied
+verification-attempt identity; pass answer field `route.choice.model` only when present.
 Tell the verifier to read the identity's index and every part. The binary selects
 the rung. The verifier sends independent verification-run calls and one
 complete attempt-named item patch. Read verification-read for its bounded index

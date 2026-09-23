@@ -36,9 +36,9 @@ Parse $ARGUMENTS:
 - Otherwise the remaining text is a new symptom.
 
 Use cadence_query schema with tool apply or query and for set to the operation
-name for its exact request shape. Debug mutations carry request.request_id, slug
+name for its exact request shape. Debug mutations carry request field `request.request_id`, slug
 and expected_version. Open uses expected_version 0; later steps copy the last
-returned record.version. Slugs contain 1..80 lowercase letters, digits or
+returned answer field `record.version`. Slugs contain 1..80 lowercase letters, digits or
 hyphens, start with a letter and do not end with a hyphen. Supply no document
 path. For new mutations choose distinct request IDs; retry an uncertain delivery
 with the identical request_id and inputs. Changed-input replay is refused.
@@ -52,10 +52,10 @@ from it. Read project code through Cadence search/read using issued references.
 1. For a new session, capture the exact failing signal, reproduction and what
    success looks like. Ask only for missing information. Call debug-open with
    that symptom; it initializes status open and attempt_count 0.
-   Show record.recall's backend, total and bounded results, with each snippet's
+   Show answer field `record.recall`'s backend, total and bounded results, with each snippet's
    source and phase when present. Preserve provenance and incomplete coverage;
    never invent a phase for a phaseless hit. Recall is candidate evidence,
-   never a confirmed hypothesis. Under memory.backend none, the answer has no
+   never a confirmed hypothesis. Under config key `memory.backend` none, the answer has no
    hits and reads no corpus; an unset key uses the schema default builtin.
    Continue presents the retained snapshot, even if the corpus or backend changed.
    For an explicit recall request, call cadence_query
@@ -103,30 +103,30 @@ top rank.
 </method>
 
 <consult>
-After recording an attempt, hypothesis or observation, inspect record.consults.
+After recording an attempt, hypothesis or observation, inspect answer field `record.consults`.
 The binary records one offer per dead-end epoch when the attempt count reaches
-review.consult.attempt_threshold or every member of a nonempty hypothesis list
+config key `review.consult.attempt_threshold` or every member of a nonempty hypothesis list
 is refuted. An empty hypothesis list is not a dead end. The effective merged
-configuration must enable review.consult.enabled and assign a provider model at
-review.consult.tier. Defaults are disabled, flagship tier, high effort and an
+configuration must enable config key `review.consult.enabled` and assign a provider model at
+config key `review.consult.tier`. Defaults are disabled, flagship tier, high effort and an
 attempt threshold of 3. No configured provider model means no offer; there is
 no claude-subagent consult. Reads and another failed attempt do not create a
 second offer. A genuinely new recorded observation opens the next epoch;
 repeating identical evidence does not.
 
-For an offered entry whose epoch equals record.epoch, show its recorded id,
+For an offered entry whose epoch equals answer field `record.epoch`, show its recorded id,
 provider/model and effort. Ask the owner to choose Consult or Keep going without
 it. Wait for explicit owner acceptance or decline; an offer never spends tokens.
 Read the debug-consult schema and call cadence_apply with operation debug-consult
 and request {request_id, slug, expected_version, offer, epoch, decision}. Copy
-record.version, the offer id and its epoch; decision is accept or decline,
+answer field `record.version`, the offer id and its epoch; decision is accept or decline,
 matching the owner's actual choice. Use a distinct request ID for each choice.
 Decline is remembered for that epoch; do not repeatedly ask after a decline.
 
 Acceptance journals its intent and the fenced, capped situation before the
 native provider call. The situation comes from the recorded symptom, hypotheses,
 observations and failed attempts. It is not a host-written prompt file. Report
-success only from the persisted result: record.consults contains the typed
+success only from the persisted result: answer field `record.consults` contains the typed
 angles, retained provider evidence or failure. Retry a lost acknowledgment with
 the identical request ID and inputs. A debug-consult-pending refusal means the
 accepted external spend has an uncertain result; show it unchanged and do not
@@ -169,7 +169,7 @@ reproduction mark resolved; a failed reproduction records a failed attempt and
 keeps the session open. debug-attempt separately records a failed attempt
 {description, result}; do not count the same failure twice.
 
-Read the retained record.review join through debug-status or debug-continue:
+Read the retained answer field `record.review` join through debug-status or debug-continue:
 it names the occurrence, exact material, observation, admission request and
 issued fire. A same-fix retry resumes this coordination without a second scan
 or fire. A blocking admitted fire keeps resolve pending; changed material
@@ -186,7 +186,7 @@ and do not settle the receipts rail. Preserve any refusal and its exact next
 action; a pending blocking fire is not a resolved debug session.
 
 Show every pending fire ID, returned original and finding identity, and the
-actual findings from record.review.history. review-original reads the retained
+actual findings from answer field `record.review.history`. review-original reads the retained
 return by its original identity. Show accepted receipt IDs and consequences
 beside the exact fire, base, index, surfaces and review_scope they name. Never
 turn report prose into a review-return, adjudication or settlement record.
@@ -194,7 +194,7 @@ turn report prose into a review-return, adjudication or settlement record.
 For a blocking fire, present the owner's choices: a real gate-pass supported by
 its evidence_id, an explicit reasoned override, or one narrowed re-arm. Use the
 risk-consequence schema: request_id and receipt {id, fire, consequence}, copying
-the entire exact fire from record.review.history. Gate-pass uses consequence
+the entire exact fire from answer field `record.review.history`. Gate-pass uses consequence
 {kind:"gate-pass", evidence_id}; override uses {kind:"override", reason} with
 the owner's actual nonblank reason. A blank override is refused. Neither raw
 findings, an adjudication nor a deferral permission clears this debug gate.

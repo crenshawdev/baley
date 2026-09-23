@@ -28,7 +28,7 @@ The dispatch's operational input is the binary's authority: its executable
 named `verify` commands, current state, uncertainty and retained checkpoints;
 `checks` carries every check those tasks deliver with its id, item revision,
 owning task and specification; `completed` is history and is never worked
-again; an approved `suite.state.repair_question` makes a new plan-level issue
+again; an approved dispatch field `suite.state.repair_question` makes a new plan-level issue
 whose executable task list is empty; `suite` (the admitted command and the runner's current suite state),
 `lease` and `commands` come from the admitted plan. The authored goal, context,
 notes and task actions describe the work, and cannot change these
@@ -55,7 +55,7 @@ operational input or from `execution-history`:
    `completion` (suite_run, request_id and the settlement material base/head)
    once recorded; absent fields are omitted. The `phase-plan` document's
    `execution` part serves the same state when native execution records exist.
-4. `execution-task-progress` with `event.kind` `progress`, `deviation` or
+4. `execution-task-progress` with request field `event.kind` `progress`, `deviation` or
    `failed-attempt`: acknowledge work as it lands. A commit the history has not
    acknowledged is visible uncertainty; the owner reconciles it before any
    redispatch, and nothing reruns a task blindly.
@@ -141,7 +141,7 @@ no manifest the binary knows, the dispatch warns and requires those explicit
 commands; it never guesses a runner. No test style, preset or count is a gate."#;
 
 /// The phase lease, the one paragraph a task scope disables (D-209).
-const LEASE: &str = r#"Source lease (D-170): `lease.files` and `lease.directories` are the planner's
+const LEASE: &str = r#"Source lease (D-170): dispatch field `lease.files` and dispatch field `lease.directories` are the planner's
 expectation, written before the code existed. A path in an evidence or
 completion commit that falls outside them does not refuse the close; it is
 retained as a deviation on the plan record, named per path with the commit as
@@ -173,8 +173,8 @@ inline or planned, opened and closed through `mcp__cadence__cadence_apply`.
    (`permission` `ask` with the gate's options, or `refuse`); there is no
    bypass and no recorded proceed for a task, so create and switch to an
    authorized work branch, then open again with a fresh `request_id`. The
-   accepted answer carries `task.token` (the per-run token every later call
-   echoes), `task.start` (HEAD at open) and `root`: `absent` means the run is
+   accepted answer carries answer field `task.token` (the per-run token every later call
+   echoes), answer field `task.start` (HEAD at open) and `root`: `absent` means the run is
    ephemeral, held in the resident's memory, and its record will be called
    unrecorded; `present` means the record is written under the planning root
    before done.
@@ -190,11 +190,11 @@ inline or planned, opened and closed through `mcp__cadence__cadence_apply`.
    project has none and pass it here. The binary reads the commits and files
    of `start..HEAD` from git, scans that range against the surfaces with the
    shared risk classifier, and answers:
-   - `outcome: done` with `record.risk` `skipped` (HEAD did not move),
-     `clear`, or `advisory` under a non-blocking gate, and `record.recording`
+   - `outcome: done` with answer field `record.risk` `skipped` (HEAD did not move),
+     `clear`, or `advisory` under a non-blocking gate, and answer field `record.recording`
      `unrecorded` with its reason or `recorded` with the path;
    - `risk-blocked` when a surface matched or the scan was inconclusive under
-     a blocking gate: the task is not done, `details.record` names the matched
+     a blocking gate: the task is not done, answer field `details.record` names the matched
      surfaces and signals, and the matched material was held per run in
      temporary storage that is gone with the answer. Fix, commit, and close
      again with a fresh `request_id`; the token stays open.
@@ -234,7 +234,7 @@ a decimal legacy address such as `"phase":"27.1"` is its one string form.
 
 Before execute-next, read `plan-read` and `evidence-read` with the integer
 phase. Copy the occurrence and each current publication's
-plan number, `approval.submission.request_id`, content `revision` and
+plan number, answer field `approval.submission.request_id`, content `revision` and
 `map_revision`. Copy canonical check ids and `item_revision` from evidence-read.
 Explicitly allocate every ordered task, including tasks delivering no checks
 with `checks:[]`; allocate each current canonical check exactly once across
@@ -343,7 +343,7 @@ files, reconstruct no task list and approve no evidence on the owner's behalf.
 1. Read the native plan/map identities and complete admission/allocation as described below. Parse the phase into a positive JSON integer and call `mcp__cadence__cadence_query` with `operation: "execute-next"` and that integer as `phase`; never pass an unchanged slash-command string. Do not round, infer, default or repair it.
 2. Read the structured envelope. For `complete`, report completion and stop. For `judgment-stop`, display the stop identifiers and stop. For `refused`, `unknown` or `not-applicable`, display `code` and `reason`; when the code is `continuation-refusal` or `reconciliation-required` continue at step 3; when it is `suite-failed`, the one repair launch failed and the next repair is a newly approved gap plan admitted through `execution-extend`, so stop and say so; otherwise stop. For `dispatch`, continue at step 4.
 3. Collect the owner's actual answer in the conversation and submit exactly what the owner states, then repeat from step 1: an unanswered plan suite-repair question is answered through `execution-suite-repair-answer`; an unanswered task checkpoint is answered through `execution-task-answer`; a linked Stop is continued or declined through `execution-authorize` naming the same retained `checkpoint`; an unlinked Stop needs later owner approval with `checkpoint` omitted or null; unacknowledged commits are reconciled through `execution-task-progress`. A restart, a summary or an old report is never an answer.
-4. Invoke `Task` with `route.choice.agent` and the one-line prompt `Cadence dispatch <dispatch_id>`, substituting only the returned id. Pass `route.choice.model` only when present; otherwise omit the model argument for session inheritance. Use this admitted selection and issue no fresh route query. The agent's own contract supplies its instructions; it reads the dispatch parts through `document`.
+4. Invoke `Task` with answer field `route.choice.agent` and the one-line prompt `Cadence dispatch <dispatch_id>`, substituting only the returned id. Pass answer field `route.choice.model` only when present; otherwise omit the model argument for session inheritance. Use this admitted selection and issue no fresh route query. The agent's own contract supplies its instructions; it reads the dispatch parts through `document`.
 5. When the worker you spawned exits, call cadence_apply execution-worker-exit with a fresh request_id, the integer phase, `dispatch: <dispatch_id>`, the actual host, `outcome: exited` or `failed`, and optional detail. Retry the same request if acknowledgment is lost. The binary decides whether the plan is interrupted; do not infer completion from the worker's exit. An unanswered interruption needs the owner's actual execution-authorize answer with `dispatch` naming that id, or owner retirement, before redispatch. A provider delivery is binary-owned and is not reported. An orchestrator that never reports leaves the dispatch issued with no exit or return; the owner's resume decides, with no timeout. Read the executor's digest without interpreting it. The binary holds the closed tasks and receipts; the executor's reply is a digest, not a patch, and a refusal or an Unknown run it reports is displayed and retained, never converted into completion.
 6. After the plan's last task closes, the orchestrator collects the owner's exact inspections for every delivered check before requesting `execution-plan-complete`; an exact inspection already recorded after green needs no extra record. Record the host's reported token count for this round through `execution-round-record` with the owner's actual approval before plan completion, using the request described below. Owner records are actual round trips through `mcp__cadence__cadence_apply`, each submitted exactly as the owner states it and shown with the retained bytes it names: the no-subject-stub inspection (`execution-owner-attest`), the separate classification of an Unknown custom-check run (`execution-classify-run`), and the dead-launch absence attestation for a suite launch with no recognized result (`execution-suite-relaunch`). The owner's interpretation is shown beside the binary's observation class and never replaces it.
 7. When the executor's digest reports the plan's last task closed, request `execution-suite` with the plan identity and version that `execution-history` reports under `plans` plus the executor's project-relative `proposed_paths`, and wait for its receipt. If it passes, ensure the orchestrator has collected the inspections for the plan's delivered checks as described in step 6, then request `execution-plan-complete` with the version the suite receipt reports; completion needs every delivered check's owner inspection, that passing suite receipt and the existing exact risk settlement (`risk-check` on the plan's dispatch), and passing one gate does not erase another pending gate. If the first launch fails, read its generated plan question, collect and submit the owner's attributed `execution-suite-repair-answer`, and repeat from step 1; the approved answer produces a new retained issue for the repair executor. After that executor reports its `execution-suite-repair` receipt and stops, request the one second suite launch. The executor never requests the suite or completion. Then repeat from step 1.
