@@ -316,6 +316,13 @@ fn translate_config(global: Option<Value>, repo: Option<Value>) -> Result<Effect
 fn observe<I: ConfigIo>(io: &mut I, path: &Path) -> Result<Input> {
     io.read(&reload::identity(path)?)
 }
+
+// The same pure interpreter is used by store open and pre-open session input.
+use cadence::acquisition::store_error as store_input_error;
+
+fn observe_store<I: ConfigIo>(io: &mut I, path: &Path) -> Result<Input> {
+    io.read_store(&reload::identity(path)?).map_err(store_input_error)
+}
 fn guard(path: PathBuf, input: &Input) -> SourceGuard {
     SourceGuard {
         path,
@@ -1044,7 +1051,7 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
         };
         let active = write::active_paths(&legacy)?;
         let mut io = self.io.clone();
-        let snapshot = observe(&mut io, &root.join(STATE))?
+        let snapshot = observe_store(&mut io, &root.join(STATE))?
             .bytes
             .as_deref()
             .map(serde_json::from_slice::<Snapshot>)
@@ -1111,7 +1118,7 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
             global: self.global.clone(),
         };
         let mut io = self.io.clone();
-        let state = observe(&mut io, &root.join(STATE))?.bytes;
+        let state = observe_store(&mut io, &root.join(STATE))?.bytes;
         let imported = state
             .as_deref()
             .map(serde_json::from_slice::<Snapshot>)
@@ -1193,8 +1200,8 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
             ));
         }
         let mut io = self.io.clone();
-        let pending = observe(&mut io, &root.join(INTENT))?.bytes;
-        let state = observe(&mut io, &root.join(STATE))?.bytes;
+        let pending = observe_store(&mut io, &root.join(INTENT))?.bytes;
+        let state = observe_store(&mut io, &root.join(STATE))?.bytes;
         let mut pending_audit = false;
         let mut owns_global = false;
         let pending_import = if let Some(bytes) = &pending {
@@ -1246,8 +1253,9 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
             },
         ));
         if pending.is_none() && state.is_none() {
-            for path in [root.join(ITEMS), root.join(DECISIONS), active.repo.clone()].into_iter() {
-                if observe(&mut io, &path)?.bytes.is_some() {
+            for (path, store) in [(root.join(ITEMS), true), (root.join(DECISIONS), true), (active.repo.clone(), false)] {
+                let input = if store { observe_store(&mut io, &path)? } else { observe(&mut io, &path)? };
+                if input.bytes.is_some() {
                     return Err(Error::Conflict(format!(
                         "unrelated partial output: {}",
                         path.display()

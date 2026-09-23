@@ -292,10 +292,13 @@ impl ReadDomain {
         let resume = match self.resume(request.cursor.as_deref(), &resumes) { Ok(resume) => resume, Err(answer) => return answer };
         let candidates = match self.candidates(&request.scope) { Ok(paths) => paths, Err(answer) => return answer };
         let mut files = Vec::new();
+        let mut skipped = source::Skipped::default();
         for candidate in candidates {
-            // A candidate that fails a read gate is skipped silently: not a
-            // refusal, and never named.
-            let Ok((path, revision, content)) = source::content(&self.project, &candidate) else { continue };
+            let (path, revision, content) = match source::content(&self.project, &candidate) {
+                Ok(content) => content,
+                Err(crate::acquisition::Error::Crossing(crossing)) => { skipped.push(crossing); continue; }
+                Err(_) => continue,
+            };
             let lines = matching_lines(&mut searcher, &matcher, &content);
             if lines.is_empty() { continue; }
             files.push(FileHits { path, revision, content, lines });
@@ -304,7 +307,7 @@ impl ReadDomain {
         // can resolve out of the walk's order. Paging compares sites by path.
         files.sort_by(|left, right| left.path.cmp(&right.path));
         let answer = plan_answer(&files, AGGREGATE_PARSE_BUDGET, &mut outline::monotonic());
-        self.render(resumes, &files, &answer, resume)
+        self.render(resumes, &files, &answer, resume, &skipped)
     }
 
     /// The files a scope names, in path order. Named scopes come from the
@@ -338,7 +341,7 @@ impl ReadDomain {
     /// Render blocks in site order from the cursor, bounded by
     /// [`ANSWER_BOUND`], deduplicated by coverage, and issue a cursor for the
     /// first site the answer did not reach.
-    fn render(&mut self, resumes: Resumes, files: &[FileHits], answer: &Answer, resume: Option<(PathBuf, usize)>) -> Value {
+    fn render(&mut self, resumes: Resumes, files: &[FileHits], answer: &Answer, resume: Option<(PathBuf, usize)>, skipped: &source::Skipped) -> Value {
         // Paging starts at the first site at or after the cursor. Sites
         // survive a re-partition, so the site the caller was told to resume
         // at is still there whatever the parse budget did on this call.
@@ -355,7 +358,8 @@ impl ReadDomain {
         let envelope = json!({"status":"ok","kind":"search","bound":ANSWER_BOUND,"incomplete":true,"cursor":placeholder,
             "hits":[],"notes":[STOPPED_NOTE, BOUNDED_NOTE, EXHAUSTED_NOTE],
             "matches":answer.sites.len(),"files":files.len(),"blocks":answer.blocks.len(),"served":answer.blocks.len()});
-        let budget = ANSWER_BOUND.saturating_sub(serde_json::to_vec(&envelope).map_or(0, |bytes| bytes.len()));
+        let budget = ANSWER_BOUND.saturating_sub(serde_json::to_vec(&envelope).map_or(0, |bytes| bytes.len()))
+            .saturating_sub(serde_json::to_vec(&skipped.notes).map_or(0, |bytes| bytes.len()));
         let mut used = 0usize;
         let mut hits: Vec<Value> = Vec::new();
         let mut emitted: Vec<usize> = Vec::new();
@@ -398,13 +402,23 @@ impl ReadDomain {
         if answer.stopped { notes.push(STOPPED_NOTE); }
         if next.is_some() { notes.push(BOUNDED_NOTE); }
         if resume.is_some() && emitted.is_empty() { notes.push(EXHAUSTED_NOTE); }
-        json!({"status":"ok","kind":"search","bound":ANSWER_BOUND,"incomplete":next.is_some(),"cursor":next,"hits":hits,"notes":notes,
-            "matches":answer.sites.len(),"files":files.len(),"blocks":answer.blocks.len(),"served":emitted.len()})
+        source::with_skipped(json!({"status":"ok","kind":"search","bound":ANSWER_BOUND,"incomplete":next.is_some(),"cursor":next,"hits":hits,"notes":notes,
+            "matches":answer.sites.len(),"files":files.len(),"blocks":answer.blocks.len(),"served":emitted.len()}), skipped)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_crossing_is_named_in_an_incomplete_search() {
+        let mut skipped = super::source::Skipped::default();
+        skipped.push(crate::acquisition::Crossing { file: "src/large.rs".into(), size: 16_777_217, bound: 16_777_216 });
+        let answer = super::source::with_skipped(serde_json::json!({"kind":"search","incomplete":false,
+            "hits":[{"file":"src/small.rs","body":"match"}],"notes":[]}), &skipped);
+        assert_eq!(answer["incomplete"], true);
+        assert_eq!(answer["hits"], serde_json::json!([{"file":"src/small.rs","body":"match"}]));
+        assert_eq!(answer["notes"], serde_json::json!(["src/large.rs: size 16777217 exceeds acquisition bound 16777216"]));
+    }
     use super::*;
 
     fn unit(name: &str, first: usize, last: usize) -> Unit {

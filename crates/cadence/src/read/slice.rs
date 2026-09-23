@@ -47,9 +47,7 @@ impl ReadDomain {
     }
 
     fn current(&self, path: &Path, expected: &str) -> Result<String, Value> {
-        let (_, revision, content) = source::content(&self.project, path).map_err(|reason| refusal("location", "location-not-issued", reason))?;
-        if revision != expected { return Err(refusal("location", "stale-location", "source changed; reacquire through search")); }
-        Ok(content)
+        current_answer(expected, source::content(&self.project, path))
     }
 
     fn read_location(&mut self, token: &str) -> Value {
@@ -126,5 +124,28 @@ impl ReadDomain {
         let mut answer = json!({"status":"ok","kind":"outline","bound":ANSWER_BOUND,"source_revision":revision,"rows":rows,"notes":notes,"incomplete":false,"continuation":Value::Null});
         if let Some(reason) = reason { answer["reason"] = json!(reason); }
         answer
+    }
+}
+
+fn current_answer(expected: &str, acquired: Result<(PathBuf, String, String), crate::acquisition::Error>) -> Result<String, Value> {
+    let (_, revision, content) = acquired.map_err(|error| match error {
+        crate::acquisition::Error::Crossing(crossing) => source::incomplete(crossing),
+        error => refusal("location", "location-not-issued", error.to_string()),
+    })?;
+    if revision != expected { return Err(refusal("location", "stale-location", "source changed; reacquire through search")); }
+    Ok(content)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn an_issued_file_crossing_precedes_stale_revision() {
+        let answer = super::current_answer("issued-old-revision", Err(crate::acquisition::Error::Crossing(
+            crate::acquisition::Crossing { file: "src/large.rs".into(), size: 16_777_217, bound: 16_777_216 }
+        ))).unwrap_err();
+        assert_eq!(answer["incomplete"], true);
+        assert_eq!(answer["crossing"], serde_json::json!({"file":"src/large.rs","size":16_777_217,"bound":16_777_216}));
+        assert!(answer.get("body").is_none());
+        assert!(answer.get("code").is_none());
     }
 }

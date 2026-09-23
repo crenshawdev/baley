@@ -374,7 +374,7 @@ fn classify_read(project: &Path, name: &str, input: &Value) -> (u64, u64, u64) {
         let path = if path.is_absolute() { path } else { project.join(path) };
         let Ok(path) = fs::canonicalize(path) else { return (1, 0, 1) };
         if !path.starts_with(project) { return (1, 0, 1) }
-        let Ok(content) = fs::read_to_string(path) else { return (1, 0, 1) };
+        let Ok((_, _, content)) = super::source::content(project, &path) else { return (1, 0, 1) };
         let total = content.lines().count() as u64;
         let offset = input["offset"].as_u64().unwrap_or(1).max(1);
         let Some(limit) = input["limit"].as_u64() else { return (1, 1, 0) };

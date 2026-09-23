@@ -242,8 +242,11 @@ fn attempt_execution(snapshot: &cadence::store::cache::SharedSnapshot,
 }
 
 fn roadmap(root: &Path, phase: u32) -> Result<Resolved, Value> {
-    let text = std::fs::read_to_string(root.join("ROADMAP.md"))
-        .map_err(|_| refusal("identity", "document-not-found", "roadmap authority is absent"))?;
+    let text = crate::acquisition::text(&root.join("ROADMAP.md"), crate::acquisition::Class::Source)
+        .map_err(|error| match error {
+            crate::acquisition::Error::Crossing(crossing) => super::source::incomplete(crossing),
+            _ => refusal("identity", "document-not-found", "roadmap authority is absent"),
+        })?;
     let parsed = cadence::derivation::parse_roadmap(&text)
         .map_err(|error| refusal("identity", "document-invalid", format!("roadmap authority is invalid: {error:?}")))?;
     let matches = parsed

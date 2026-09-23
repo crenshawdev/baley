@@ -17,6 +17,18 @@ use std::{collections::{BTreeMap, BTreeSet}, path::Path, time::SystemTime};
 const SCHEMA: &str = "acceptance-map-view-1";
 const INTENT: &str = ".store-intent.json";
 
+#[derive(Debug, PartialEq, Eq)]
+enum InputAction { Metadata, Content }
+
+fn input_action(path: &str, class: cadence::acquisition::Class, size: u64, cached: bool)
+    -> std::result::Result<InputAction, cadence::acquisition::Error>
+{
+    cadence::acquisition::permit(path, class, size)?;
+    Ok(if cached && [STATE, ITEMS, DECISIONS].contains(&path) {
+        InputAction::Metadata
+    } else { InputAction::Content })
+}
+
 #[derive(PartialEq, Eq)]
 struct Input {
     bytes: Option<Vec<u8>>,
@@ -25,22 +37,23 @@ struct Input {
 }
 
 fn observe(root: &Path, path: &str, cached: bool) -> std::io::Result<Input> {
-    let metadata_only = cached && [STATE, ITEMS, DECISIONS].contains(&path);
+    use cadence::acquisition::{self, Class, Observation};
+    let name = path;
+    let class = if [INTENT, STATE, ITEMS, DECISIONS].contains(&name) { Class::Store } else { Class::Source };
     let path = root.join(path);
     let before = match std::fs::metadata(&path) {
         Ok(meta) => meta,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Input { bytes: None, modified: None, identity: None }),
         Err(error) => return Err(error),
     };
-    if metadata_only {
+    if input_action(name, class, before.len(), cached).map_err(std::io::Error::other)? == InputAction::Metadata {
         return Ok(Input { bytes: None, modified: before.modified().ok(),
             identity: Some(cadence::store::cache::FileIdentity::new(&before)) });
     }
-    let bytes = std::fs::read(&path)?;
+    let bytes = acquisition::read(&path, class).map_err(std::io::Error::other)?;
     let after = std::fs::metadata(&path)?;
-    if before.modified().ok() != after.modified().ok() || before.len() != after.len() {
-        return Err(std::io::Error::other("input changed while reading"));
-    }
+    acquisition::revalidate(name, class, &Observation::from_metadata(&before),
+        &Observation::from_metadata(&after), bytes.len() as u64).map_err(std::io::Error::other)?;
     Ok(Input { bytes: Some(bytes), modified: after.modified().ok(), identity: None })
 }
 
@@ -109,10 +122,14 @@ pub fn read(root: &Path, phase: u32) -> Result<Answer> {
         }
     }
     let assembled = assemble(data, phase, &before);
-    let changed: Vec<_> = before.iter().filter_map(|(path, input)| {
-        let after = observe(root, path, cached.is_some());
-        (!after.is_ok_and(|after| after == *input)).then(|| path.clone())
-    }).collect();
+    let mut changed = Vec::new();
+    for (path, input) in &before {
+        match observe(root, path, cached.is_some()) {
+            Ok(after) if after == *input => {},
+            Ok(_) => changed.push(path.clone()),
+            Err(error) => return Ok(inconsistent(phase, vec![path.clone()], error.to_string())),
+        }
+    }
     let changed = if changed.is_empty() && cadence::store::cache::identity(root).ok() != store_identity {
         vec![STATE.into(), ITEMS.into(), DECISIONS.into()]
     } else { changed };
@@ -269,5 +286,24 @@ fn canonical(value: &Value) -> Value {
         }
         Value::Array(array) => Value::Array(array.iter().map(canonical).collect()),
         value => value.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn oversized_input_refuses_even_with_cached_snapshot() {
+        for path in ["state.json", "items.jsonl", "decisions.jsonl", ".store-intent.json"] {
+            for cached in [false, true] {
+                let error = super::input_action(path, cadence::acquisition::Class::Store, 1_073_741_825, cached).unwrap_err();
+                assert!(matches!(error, cadence::acquisition::Error::Crossing(cadence::acquisition::Crossing {
+                    file, size: 1_073_741_825, bound: 1_073_741_824,
+                }) if file == path));
+                let expected = if cached && path != ".store-intent.json" {
+                    super::InputAction::Metadata
+                } else { super::InputAction::Content };
+                assert_eq!(super::input_action(path, cadence::acquisition::Class::Store, 1_073_741_824, cached).unwrap(), expected);
+            }
+        }
     }
 }

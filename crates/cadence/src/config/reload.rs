@@ -54,6 +54,10 @@ pub fn unreadable_mode(mode: u32) -> bool {
 pub trait ConfigIo: Send + 'static {
     fn identity(&mut self, path: &Path) -> Result<PathBuf>;
     fn read(&mut self, resolved: &Path) -> Result<Input>;
+    /// Store input is a separate acquisition class; ordinary config stays unchanged.
+    fn read_store(&mut self, resolved: &Path) -> std::result::Result<Input, cadence::acquisition::Error> {
+        self.read(resolved).map_err(cadence::acquisition::Error::Store)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -61,6 +65,28 @@ pub struct FileIo;
 impl ConfigIo for FileIo {
     fn identity(&mut self, path: &Path) -> Result<PathBuf> {
         identity(path)
+    }
+
+    fn read_store(&mut self, path: &Path) -> std::result::Result<Input, cadence::acquisition::Error> {
+        use cadence::acquisition::{self, Class};
+        let mut file = match fs::File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if fs::symlink_metadata(path).is_ok() {
+                    return Err(acquisition::Error::Store(Error::Io(format!(
+                        "existing config/input cannot be read: {}", path.display()))));
+                }
+                return Ok(Input { identity: path.into(), bytes: None, stamp: None });
+            }
+            Err(error) => return Err(acquisition::Error::Store(Error::Io(format!("config {}: {error}", path.display())))),
+        };
+        let metadata = file.metadata()?;
+        if unreadable_mode(metadata.mode()) {
+            return Err(acquisition::Error::Store(Error::Io(format!("config {} is unreadable", path.display()))));
+        }
+        let bytes = acquisition::read_opened(path, &mut file, &metadata, Class::Store)?;
+        Ok(Input { identity: path.into(), bytes: Some(bytes),
+            stamp: Some((metadata.dev(), metadata.ino(), metadata.mode())) })
     }
 
     fn read(&mut self, path: &Path) -> Result<Input> {

@@ -3,7 +3,7 @@ use crate::process::Process;
 use super::{Error, Observed, Result, Storage};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -544,13 +544,15 @@ impl Storage for Filesystem {
         if metadata.mode() & 0o444 == 0 {
             return Err(Error::Io(format!("unreadable file: {}", target.display())));
         }
+        crate::acquisition::permit(&target.to_string_lossy(), crate::acquisition::Class::Store, metadata.len())
+            .map_err(crate::acquisition::store_error)?;
         let mut file = File::open(&target)?;
         let opened = file.metadata()?;
         if opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
             return Err(Error::Conflict("file replaced during read".into()));
         }
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
+        let bytes = crate::acquisition::read_opened(&target, &mut file, &opened, crate::acquisition::Class::Store)
+            .map_err(crate::acquisition::store_error)?;
         let directory_identity = identity.clone();
         identity.push_str(&format!(
             "{}:{}:{}",

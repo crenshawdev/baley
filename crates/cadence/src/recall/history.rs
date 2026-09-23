@@ -15,19 +15,31 @@ use std::{
 /// Read-only git: optional locks off, no lazy fetch, literal pathspecs and no
 /// terminal prompt, so a traversal can never write or reach the network.
 fn read_git(process: &mut dyn Process, root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    read_git_capped(process, root, args, usize::MAX)
+}
+
+fn read_git_capped(process: &mut dyn Process, root: &Path, args: &[&str], bound: usize) -> Result<Vec<u8>, String> {
     let output = process
         .run(
             &Launch::new("git")
                 .cwd(root)
                 .args(args)
+                .limit(bound)
                 .env("GIT_OPTIONAL_LOCKS", "0")
                 .env("GIT_NO_LAZY_FETCH", "1")
                 .env("GIT_LITERAL_PATHSPECS", "1")
                 .env("GIT_TERMINAL_PROMPT", "0"),
         )
         .map_err(|e| format!("git {} unavailable: {e}", args[0]))?;
+    git_output(args[0], bound, output)
+}
+
+fn git_output(command: &str, bound: usize, output: cadence::process::Output) -> Result<Vec<u8>, String> {
     if !output.success() {
-        return Err(format!("git {} failed ({})", args[0], output.status));
+        return Err(format!("git {command} failed ({})", output.status));
+    }
+    if !output.stdout_complete || output.stdout.len() > bound {
+        return Err(format!("git {command} output exceeds retained-byte bound {bound}"));
     }
     Ok(output.stdout)
 }
@@ -189,6 +201,13 @@ pub trait ReadGit {
     fn tree(&mut self, commit: &str, prefix: &str) -> Result<Vec<u8>, String>;
     /// `cat-file blob`
     fn blob(&mut self, id: &str) -> Result<Vec<u8>, String>;
+    /// Provided for existing in-memory readers; production queries size without content.
+    fn blob_size(&mut self, id: &str) -> Result<Vec<u8>, String> {
+        self.blob(id).map(|bytes| bytes.len().to_string().into_bytes())
+    }
+    fn blob_bounded(&mut self, id: &str, _bound: u64) -> Result<Vec<u8>, String> {
+        self.blob(id)
+    }
 }
 
 /// Git run in the planning root through the read-only launch above.
@@ -215,7 +234,13 @@ impl ReadGit for Git<'_> {
         )
     }
     fn blob(&mut self, id: &str) -> Result<Vec<u8>, String> {
-        read_git(self.process, self.root, &["cat-file", "blob", id])
+        self.blob_bounded(id, cadence::acquisition::MAX_SOURCE_BYTES)
+    }
+    fn blob_size(&mut self, id: &str) -> Result<Vec<u8>, String> {
+        read_git_capped(self.process, self.root, &["cat-file", "-s", id], 32)
+    }
+    fn blob_bounded(&mut self, id: &str, bound: u64) -> Result<Vec<u8>, String> {
+        read_git_capped(self.process, self.root, &["cat-file", "blob", id], bound as usize)
     }
 }
 
@@ -245,7 +270,7 @@ pub fn read(root: &Path, view: &View, live: &[Candidate], process: &mut dyn Proc
             out.incomplete
                 .push("ARCHIVE.md: linked or non-file residue skipped".into());
         } else {
-            match fs::read_to_string(&archive) {
+            match cadence::acquisition::text(&archive, cadence::acquisition::Class::Source) {
                 Ok(text) => {
                     out.identities
                         .insert(format!("ARCHIVE.md:{}", model::digest(text.as_bytes())));
@@ -348,20 +373,26 @@ fn walk(
             if !visited.insert((path.to_string(), blob.to_string())) {
                 continue;
             }
+            let permit = match git.blob_size(blob).and_then(|size| blob_preflight(path, &size)) {
+                Ok(permit) => permit,
+                Err(error) => { out.incomplete.push(format!("{commit}:{path}: {error}")); continue; }
+            };
             let bytes = if let Some(bytes) = blobs.get(blob) {
                 bytes.clone()
             } else {
-                match git.blob(blob) {
-                    Ok(bytes) => {
-                        blobs.insert(blob.into(), bytes.clone());
-                        bytes
-                    }
+                match git.blob_bounded(blob, permit.bound) {
+                    Ok(bytes) => bytes,
                     Err(e) => {
                         out.incomplete.push(format!("{commit}:{path}: {e}"));
                         continue;
                     }
                 }
             };
+            if let Err(error) = blob_length(path, &permit, bytes.len() as u64) {
+                out.incomplete.push(format!("{commit}:{path}: {error}"));
+                continue;
+            }
+            blobs.entry(blob.into()).or_insert_with(|| bytes.clone());
             match historical(path, &bytes, commit, view) {
                 Ok(candidates) => admit(candidates, excluded, seen, out),
                 Err(e) => out
@@ -370,5 +401,30 @@ fn walk(
             }
         }
     }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct BlobPermit { size: u64, bound: u64 }
+
+/// Parse Git's observation and select the acquisition class before asking for content.
+fn blob_preflight(path: &str, size: &[u8]) -> Result<BlobPermit, String> {
+    let raw = std::str::from_utf8(size).map_err(|_| format!("{path}: invalid git blob size"))?.trim();
+    if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(format!("{path}: invalid git blob size"));
+    }
+    let size = raw.parse::<u64>().map_err(|_| format!("{path}: invalid git blob size"))?;
+    let class = if matches!(path, "items.jsonl" | "decisions.jsonl") {
+        cadence::acquisition::Class::Store
+    } else { cadence::acquisition::Class::Source };
+    let bound = cadence::acquisition::permit(path, class, size).map_err(|error| error.to_string())?;
+    Ok(BlobPermit { size, bound })
+}
+
+fn blob_length(path: &str, permit: &BlobPermit, acquired: u64) -> Result<(), String> {
+    if acquired > permit.bound {
+        return Err(cadence::acquisition::Crossing { file: path.into(), size: acquired, bound: permit.bound }.to_string());
+    }
+    if acquired != permit.size { return Err(format!("{path}: git blob length differs from size observation")); }
     Ok(())
 }

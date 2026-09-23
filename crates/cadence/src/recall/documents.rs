@@ -102,7 +102,7 @@ impl ReadDocuments for Files {
             .collect()
     }
     fn text(&mut self, path: &Path) -> io::Result<String> {
-        fs::read_to_string(path)
+        cadence::acquisition::text(path, cadence::acquisition::Class::Source).map_err(io::Error::other)
     }
 }
 
@@ -137,6 +137,17 @@ pub fn step(name: &str, seen: &Seen) -> Step {
     } else {
         Step::Skip
     }
+}
+
+fn bounded_step(name: &str, seen: &Seen, size: u64) -> Result<Step, cadence::acquisition::Crossing> {
+    let step = step(name, seen);
+    if step == Step::Read
+        && let cadence::acquisition::Action::Refuse(crossing) =
+            cadence::acquisition::decide(name, cadence::acquisition::Class::Source, size)
+    {
+        return Err(crossing);
+    }
+    Ok(step)
 }
 
 pub fn read(root: &Path, io: &mut impl ReadDocuments) -> Documents {
@@ -189,7 +200,11 @@ pub fn read(root: &Path, io: &mut impl ReadDocuments) -> Documents {
                 dir: metadata.is_dir(),
                 file: metadata.is_file(),
             };
-            match step(name, &seen) {
+            let next = match bounded_step(name, &seen, metadata.len()) {
+                Ok(next) => next,
+                Err(crossing) => { out.incomplete.push(crossing.to_string()); continue; }
+            };
+            match next {
                 Step::Refuse => out
                     .incomplete
                     .push(format!("{name}: linked or escaping source skipped")),
@@ -305,4 +320,16 @@ pub fn snippets(path: &str, text: &str, commit: Option<&str>) -> Vec<Candidate> 
     }
     flush(&mut body, start, &title, &mut result);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_source_crossing_skips_the_document_with_its_name() {
+        let seen = super::Seen { link: false, contained: true, dir: false, file: true };
+        assert_eq!(super::bounded_step("PROJECT.md", &seen, 16_777_217),
+            Err(cadence::acquisition::Crossing { file: "PROJECT.md".into(), size: 16_777_217, bound: 16_777_216 }));
+        assert_eq!(super::bounded_step("PROJECT.md", &seen, 16_777_216), Ok(super::Step::Read));
+        assert_eq!(super::bounded_step("PROJECT.md", &super::Seen { link: true, ..seen }, 16_777_217), Ok(super::Step::Refuse));
+    }
 }

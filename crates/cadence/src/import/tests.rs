@@ -7,6 +7,15 @@ use cadence::store::{
 };
 use serde_json::json;
 
+#[test]
+fn a_store_crossing_refuses_session_input() {
+    let error = store_input_error(cadence::acquisition::Error::Crossing(cadence::acquisition::Crossing {
+        file: ".planning/state.json".into(), size: 1_073_741_825, bound: 1_073_741_824,
+    }));
+    assert!(matches!(error, cadence::store::Error::Invalid(reason)
+        if reason == ".planning/state.json: size 1073741825 exceeds acquisition bound 1073741824"));
+}
+
 fn source(path: &str, text: &str) -> Source {
     Source {
         path: path.into(),

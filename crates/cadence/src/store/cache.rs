@@ -26,6 +26,10 @@ pub fn identity(root: &Path) -> Result<Identity> {
         files.push(match std::fs::symlink_metadata(&path) {
             Ok(link) => {
                 let target = std::fs::metadata(&path)?;
+                if !name.is_empty() {
+                    crate::acquisition::permit(&path.to_string_lossy(), crate::acquisition::Class::Store, target.len())
+                        .map_err(crate::acquisition::store_error)?;
+                }
                 let normalize = |m: &std::fs::Metadata| {
                     let mut identity = FileIdentity::new(m);
                     if name.is_empty() { identity.length = 0; identity.modified = (0, 0); identity.changed = (0, 0); }
@@ -111,13 +115,15 @@ pub fn read(root: &Path) -> Result<Option<SharedSnapshot>> {
     if let Some(view) = views().reuse(&root, &before) {
         return Ok(Some(SharedSnapshot(view)));
     }
-    let bytes = match std::fs::read(root.join(model::STATE)) {
+    let bytes = match crate::acquisition::read(&root.join(model::STATE), crate::acquisition::Class::Store) {
         Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.into()),
+        Err(crate::acquisition::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(crate::acquisition::store_error(e)),
     };
-    let items = std::fs::read(root.join(model::ITEMS))?;
-    let decisions = std::fs::read(root.join(model::DECISIONS))?;
+    let items = crate::acquisition::read(&root.join(model::ITEMS), crate::acquisition::Class::Store)
+        .map_err(crate::acquisition::store_error)?;
+    let decisions = crate::acquisition::read(&root.join(model::DECISIONS), crate::acquisition::Class::Store)
+        .map_err(crate::acquisition::store_error)?;
     #[cfg(test)]
     crate::context::persistence::READ_PARSES.with(|count| count.set(count.get() + 1));
     let snapshot = Snapshot::parse(&bytes, &items, &decisions)?;

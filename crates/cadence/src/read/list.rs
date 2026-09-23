@@ -26,10 +26,15 @@ impl ReadDomain {
         let candidates = match self.candidates(&request.scope) { Ok(paths) => paths, Err(answer) => return answer };
         // Every entry is a file the layer will serve: the same gates as a read,
         // so a listed file is never one a later read refuses.
-        let mut files: Vec<_> = candidates.iter()
-            .filter_map(|candidate| source::content(&self.project, candidate).ok())
-            .map(|(path, revision, content)| (path, revision, content.len()))
-            .collect();
+        let mut skipped = source::Skipped::default();
+        let mut files = Vec::new();
+        for candidate in candidates {
+            match source::content(&self.project, &candidate) {
+                Ok((path, revision, content)) => files.push((path, revision, content.len())),
+                Err(crate::acquisition::Error::Crossing(crossing)) => skipped.push(crossing),
+                Err(_) => {},
+            }
+        }
         files.sort_by(|left, right| left.0.cmp(&right.0));
         let start = match &resume {
             None => 0,
@@ -38,7 +43,8 @@ impl ReadDomain {
         let placeholder = format!("cur-{}-{}", "0".repeat(16), u64::MAX);
         let envelope = json!({"status":"ok","kind":"list","bound":ANSWER_BOUND,"incomplete":true,"cursor":placeholder,
             "files":[],"notes":[BOUNDED_NOTE, EXHAUSTED_NOTE],"total":files.len(),"served":files.len()});
-        let budget = ANSWER_BOUND.saturating_sub(serde_json::to_vec(&envelope).map_or(0, |bytes| bytes.len()));
+        let budget = ANSWER_BOUND.saturating_sub(serde_json::to_vec(&envelope).map_or(0, |bytes| bytes.len()))
+            .saturating_sub(serde_json::to_vec(&skipped.notes).map_or(0, |bytes| bytes.len()));
         let mut used = 0usize;
         let mut entries = Vec::new();
         let mut next = None;
@@ -57,7 +63,22 @@ impl ReadDomain {
         let mut notes = Vec::new();
         if next.is_some() { notes.push(BOUNDED_NOTE); }
         if resume.is_some() && entries.is_empty() { notes.push(EXHAUSTED_NOTE); }
-        json!({"status":"ok","kind":"list","bound":ANSWER_BOUND,"incomplete":next.is_some(),"cursor":next,
-            "files":entries,"notes":notes,"total":files.len(),"served":entries.len()})
+        source::with_skipped(json!({"status":"ok","kind":"list","bound":ANSWER_BOUND,"incomplete":next.is_some(),"cursor":next,
+            "files":entries,"notes":notes,"total":files.len(),"served":entries.len()}), &skipped)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_crossing_keeps_the_list_incomplete_without_a_cursor() {
+        let mut skipped = super::source::Skipped::default();
+        skipped.push(crate::acquisition::Crossing { file: "large.md".into(), size: 16_777_217, bound: 16_777_216 });
+        let answer = super::source::with_skipped(serde_json::json!({"kind":"list","files":[],
+            "incomplete":false,"cursor":null,"notes":[]}), &skipped);
+        assert_eq!(answer["incomplete"], true);
+        assert_eq!(answer["files"], serde_json::json!([]));
+        assert_eq!(answer["notes"], serde_json::json!(["large.md: size 16777217 exceeds acquisition bound 16777216"]));
+        assert!(answer["cursor"].is_null());
     }
 }
