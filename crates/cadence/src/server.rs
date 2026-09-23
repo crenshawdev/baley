@@ -745,6 +745,10 @@ pub struct PublicServer {
 }
 
 impl PublicServer {
+    pub async fn shutdown(&self) -> cadence::store::Result<()> {
+        self.server.service.shutdown().await
+    }
+
     // Public calls await resident mailbox replies, not native provider work.
     // Dropping a tool's reply receiver leaves accepted mailbox work and the
     // separately owned provider task alive; review-next reconnects by fire.
@@ -922,8 +926,11 @@ impl ServerHandler for PublicServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        if let Some(reply) = context.extensions.get::<crate::review_ingress::AdmittedReply>() {
+            return reply.receive().await;
+        }
         self.call(request.name.as_ref(), request.arguments.map(Value::Object)).await
     }
 }

@@ -264,18 +264,14 @@ fn run_command(command: Command) -> std::process::ExitCode {
     }
 }
 
-/// Serve MCP on stdio until the host closes stdin.
-///
-/// One process per session, shared by the main thread and every subagent, so
-/// the runtime is multi-threaded rather than current-thread: two dispatches
-/// can be in flight at once and neither may hold the other behind it.
+/// Serve MCP until EOF or SIGTERM, then drain under one shared deadline.
 fn run_serve(project_root: Option<std::path::PathBuf>) -> std::process::ExitCode {
     let project = match project_root.map(Ok).unwrap_or_else(std::env::current_dir) {
         Ok(project) => project,
         Err(_) => return std::process::ExitCode::FAILURE,
     };
     let runtime = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
-    runtime.block_on(async {
+    let outcome = runtime.block_on(async {
         let handler = match server::CadenceServer::new().bind_project(&project) {
             Ok(handler) => handler,
             Err(_) => {
@@ -283,32 +279,59 @@ fn run_serve(project_root: Option<std::path::PathBuf>) -> std::process::ExitCode
                 return std::process::ExitCode::FAILURE;
             }
         };
-        let (transport, input_failed) =
-            review_ingress::InputTransport::new(tokio::io::stdin(), tokio::io::stdout());
-        let service = match handler.serve(transport).await {
-            Ok(service) => service,
-            // The host closed the pipe before it ever initialized - it quit
-            // during startup, or spawned us to look and went away. That is
-            // the session ending, not a server that failed to start, and
-            // panicking on it writes a stack-trace hint into the host's MCP
-            // log for an ordinary shutdown. Exit quietly and let it be.
-            Err(ServerInitializeError::ConnectionClosed(_) | ServerInitializeError::Cancelled) => {
-                return if input_failed.load(std::sync::atomic::Ordering::Acquire) {
-                    std::process::ExitCode::FAILURE
-                } else {
-                    std::process::ExitCode::SUCCESS
-                };
+        let admission = review_ingress::AdmissionQueue::new(handler.clone());
+        #[cfg(unix)]
+        let mut terminate = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(signal) => signal,
+            Err(error) => {
+                eprintln!("cadence: cannot listen for SIGTERM: {error}");
+                return std::process::ExitCode::FAILURE;
             }
-            // Everything else is a real failure to start and stays loud.
-            Err(err) => panic!("failed to start MCP server on stdio: {err}"),
         };
-        // Returns when the transport ends - which is what closing stdin does -
-        // so the process exits with the session rather than outliving it.
-        service.waiting().await.expect("MCP server task panicked");
-        if input_failed.load(std::sync::atomic::Ordering::Acquire) {
-            std::process::ExitCode::FAILURE
-        } else {
-            std::process::ExitCode::SUCCESS
+        #[cfg(unix)]
+        {
+            let admission = admission.clone();
+            tokio::spawn(async move {
+                terminate.recv().await;
+                admission.close();
+            });
         }
-    })
+        let (transport, input_failed) = review_ingress::InputTransport::new(
+            tokio::io::stdin(), tokio::io::stdout(), admission.clone());
+        let service_handler = handler.clone();
+        let mut service = tokio::spawn(async move {
+            match service_handler.serve(transport).await {
+                Ok(service) => service.waiting().await.map(|_| ()),
+                Err(ServerInitializeError::ConnectionClosed(_) | ServerInitializeError::Cancelled) => Ok(()),
+                Err(error) => {
+                    eprintln!("cadence: failed to start MCP server: {error}");
+                    return false;
+                }
+            }.is_ok()
+        });
+        let service_ok = tokio::select! {
+            _ = admission.closed() => true,
+            result = &mut service => {
+                admission.close();
+                result.unwrap_or(false)
+            }
+        };
+        let drained = match admission.drain(&handler).await {
+            Ok(()) => true,
+            Err(review_ingress::ShutdownError::Limit(_limit)) => false,
+            Err(review_ingress::ShutdownError::Worker) => {
+                eprintln!("cadence: shutdown worker failed");
+                false
+            }
+        };
+        if service_ok && drained && !input_failed.load(std::sync::atomic::Ordering::Acquire) {
+            std::process::ExitCode::SUCCESS
+        } else {
+            std::process::ExitCode::FAILURE
+        }
+    });
+    // stdin and storage can be in blocking syscalls. Never add an unbounded
+    // runtime destructor wait to the coordinator's ten-second deadline.
+    runtime.shutdown_timeout(std::time::Duration::ZERO);
+    outcome
 }

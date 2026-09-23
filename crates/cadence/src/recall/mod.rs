@@ -239,6 +239,7 @@ pub(crate) mod resident {
     };
 
     enum Request {
+        Shutdown,
         Debug {
             root: PathBuf,
             command: crate::server::debug_service::Command,
@@ -402,9 +403,12 @@ pub(crate) mod resident {
             reply: oneshot::Sender<Result<Answer>>,
         },
     }
+    type ResidentWorker = tokio::task::JoinHandle<Result<()>>;
+
     #[derive(Clone)]
     pub struct Resident {
         requests: mpsc::Sender<Request>,
+        worker: std::sync::Arc<tokio::sync::Mutex<Option<ResidentWorker>>>,
     }
 
     /// What a warm corpus was built from: the store by generation and
@@ -543,13 +547,14 @@ pub(crate) mod resident {
             driver: Driver,
         ) -> Self {
             let (requests, mut receiver) = mpsc::channel::<Request>(32);
-            tokio::spawn(async move {
+            let worker = tokio::spawn(async move {
                 let mut caches = BTreeMap::<PathBuf, Option<Cached>>::new();
                 let mut read_domains = BTreeMap::<PathBuf, cadence::read::ReadDomain>::new();
                 // Treeless task episodes live here for the run and nowhere else (D-209).
                 let mut task_episodes = crate::server::task_service::Episodes::default();
                 while let Some(request) = receiver.recv().await {
                     match request {
+                        Request::Shutdown => receiver.close(),
                         Request::Milestone { root, command, reply } => {
                             let _ = reply.send(crate::server::milestone_service::execute(&factory, &root, command, &mut cadence::process::System).await);
                         }
@@ -806,10 +811,19 @@ pub(crate) mod resident {
                         }
                     }
                 }
-                // Dropping the factory releases its sessions and writer handles.
-                // Accepted requests drain; canceled reply receivers cannot panic.
+                // Every accepted request has finished; now close and join all writers.
+                factory.shutdown().await
             });
-            Self { requests }
+            Self { requests, worker: std::sync::Arc::new(tokio::sync::Mutex::new(Some(worker))) }
+        }
+
+        pub async fn shutdown(&self) -> Result<()> {
+            let mut worker = self.worker.lock().await;
+            if let Some(handle) = worker.take() {
+                let _ = self.requests.send(Request::Shutdown).await;
+                handle.await.map_err(|_| Error::Closed)??;
+            }
+            Ok(())
         }
 
         pub async fn plan(

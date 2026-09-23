@@ -59,8 +59,28 @@ pub struct Drain<'a> {
 }
 
 impl Drain<'_> {
-    pub fn step(&self, _incoming: Option<&str>) -> DrainAction {
-        DrainAction::Wait
+    pub fn step(&self, incoming: Option<&str>) -> DrainAction {
+        if incoming.is_some() {
+            return if self.admission_closed { DrainAction::Refuse } else { DrainAction::Admit };
+        }
+        let pending = self.admissions.iter()
+            .filter(|admission| admission.sequence > self.completed_prefix)
+            .min_by_key(|admission| admission.sequence);
+        if self.open_write.is_none() && pending.is_none() {
+            return if self.admission_closed { DrainAction::Join } else { DrainAction::Wait };
+        }
+        if self.admission_closed && self.elapsed >= SERVER_DRAIN_BOUND {
+            return DrainAction::DrainLimit(DrainLimit {
+                open_write: self.open_write.map(str::to_owned)
+                    .or_else(|| pending.map(|admission| admission.id.clone())),
+                bound: SERVER_DRAIN_BOUND,
+            });
+        }
+        if self.open_write.is_some() {
+            DrainAction::Wait
+        } else {
+            DrainAction::Next(pending.expect("pending admission").id.clone())
+        }
     }
 }
 
@@ -324,7 +344,8 @@ type BeforeReply = Box<dyn FnMut(&str) -> Result<()> + Send>;
 
 #[derive(Clone)]
 pub struct Store {
-    requests: mpsc::Sender<Request>,
+    requests: mpsc::Sender<Option<Request>>,
+    worker: Arc<tokio::sync::Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 impl Store {
@@ -352,9 +373,9 @@ impl Store {
         policy: P,
         #[cfg(test)] mut before_reply: Option<BeforeReply>,
     ) -> Result<Self> {
-        let (requests, mut receiver) = mpsc::channel::<Request>(32);
+        let (requests, mut receiver) = mpsc::channel::<Option<Request>>(32);
         let (ready, completion) = oneshot::channel();
-        std::thread::Builder::new()
+        let worker = std::thread::Builder::new()
             .name("cadence-store".into())
             .spawn(move || {
                 let mut writer = match Writer::open(storage, policy) {
@@ -368,6 +389,10 @@ impl Store {
                     }
                 };
                 while let Some(request) = receiver.blocking_recv() {
+                    let Some(request) = request else {
+                        receiver.close();
+                        continue;
+                    };
                     if let Some(reply) = request.shared {
                         let result = writer.refresh().map(|()| writer.view.clone());
                         let _ = reply.send(result);
@@ -384,15 +409,30 @@ impl Store {
                     );
                 }
             })?;
-        completion.await.map_err(|_| Error::Closed)??;
-        Ok(Self { requests })
+        let store = Self { requests, worker: Arc::new(tokio::sync::Mutex::new(Some(worker))) };
+        if let Err(error) = completion.await.unwrap_or(Err(Error::Closed)) {
+            store.shutdown().await?;
+            return Err(error);
+        }
+        Ok(store)
+    }
+
+    /// The serve coordinator supplies the single timeout around all joins.
+    pub async fn shutdown(&self) -> Result<()> {
+        let mut worker = self.worker.lock().await;
+        if let Some(handle) = worker.take() {
+            let _ = self.requests.send(None).await;
+            tokio::task::spawn_blocking(move || handle.join())
+                .await.map_err(|_| Error::Closed)?.map_err(|_| Error::Closed)?;
+        }
+        Ok(())
     }
 
     pub async fn shared_view(&self) -> Result<Arc<View>> {
         let (reply, completion) = oneshot::channel();
         let (unused, _) = oneshot::channel();
-        self.requests.send(Request { operation: Operation::ReadVerified, reply: unused,
-            shared: Some(reply), #[cfg(test)] id: String::new() }).await.map_err(|_| Error::Closed)?;
+        self.requests.send(Some(Request { operation: Operation::ReadVerified, reply: unused,
+            shared: Some(reply), #[cfg(test)] id: String::new() })).await.map_err(|_| Error::Closed)?;
         completion.await.map_err(|_| Error::Closed)?
     }
 
@@ -417,13 +457,13 @@ impl Store {
     async fn enqueue(&self, operation: Operation, #[cfg(test)] id: String) -> Result<View> {
         let (reply, completion) = oneshot::channel();
         self.requests
-            .send(Request {
+            .send(Some(Request {
                 shared: None,
                 operation,
                 reply,
                 #[cfg(test)]
                 id,
-            })
+            }))
             .await
             .map_err(|_| Error::Closed)?;
         completion.await.map_err(|_| Error::Closed)?

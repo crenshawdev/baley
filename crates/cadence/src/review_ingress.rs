@@ -583,19 +583,187 @@ impl<R: AsyncRead + Unpin> BoundedInput<R> {
     }
 }
 
+type ToolAnswer = Result<rmcp::model::CallToolResponse, rmcp::ErrorData>;
+type ToolReceiver = tokio::sync::oneshot::Receiver<ToolAnswer>;
+
+/// The protocol handler waits for a reply; it does not own admitted work.
+#[derive(Clone)]
+pub struct AdmittedReply(Arc<tokio::sync::Mutex<Option<ToolReceiver>>>);
+
+impl AdmittedReply {
+    pub async fn receive(&self) -> ToolAnswer {
+        let receiver = self.0.lock().await.take().ok_or_else(||
+            rmcp::ErrorData::internal_error("admitted reply already taken", None))?;
+        receiver.await.map_err(|_| rmcp::ErrorData::internal_error("admitted worker stopped", None))?
+    }
+}
+
+struct AdmittedCall {
+    admission: cadence::store::writer::Admission,
+    request: rmcp::model::CallToolRequestParams,
+    reply: tokio::sync::oneshot::Sender<ToolAnswer>,
+    capacity: tokio::sync::OwnedSemaphorePermit,
+}
+
+#[derive(Default)]
+struct AdmissionState {
+    cutoff: Option<std::time::Instant>,
+    sequence: u64,
+    completed_prefix: u64,
+    open: Option<cadence::store::writer::Admission>,
+    pending: std::collections::VecDeque<AdmittedCall>,
+}
+
+impl AdmissionState {
+    fn step(&self, now: std::time::Instant, incoming: Option<&str>) -> cadence::store::writer::DrainAction {
+        let admissions: Vec<_> = self.open.iter().cloned()
+            .chain(self.pending.iter().map(|call| call.admission.clone())).collect();
+        cadence::store::writer::Drain {
+            admission_closed: self.cutoff.is_some(),
+            admissions: &admissions,
+            completed_prefix: self.completed_prefix,
+            open_write: self.open.as_ref().map(|admission| admission.id.as_str()),
+            elapsed: self.cutoff.map_or(std::time::Duration::ZERO, |cutoff| now.duration_since(cutoff)),
+        }.step(incoming)
+    }
+}
+
+struct AdmissionInner {
+    state: std::sync::Mutex<AdmissionState>,
+    changed: tokio::sync::Notify,
+    capacity: Arc<tokio::sync::Semaphore>,
+    closed: tokio::sync::watch::Sender<Option<std::time::Instant>>,
+}
+
+type AdmissionWorker = tokio::task::JoinHandle<Result<(), cadence::store::writer::DrainLimit>>;
+
+#[derive(Clone)]
+pub struct AdmissionQueue {
+    inner: Arc<AdmissionInner>,
+    worker: Arc<tokio::sync::Mutex<Option<AdmissionWorker>>>,
+}
+
+impl AdmissionQueue {
+    pub fn new(handler: crate::server::PublicServer) -> Self {
+        let (closed, _) = tokio::sync::watch::channel(None);
+        let inner = Arc::new(AdmissionInner {
+            state: std::sync::Mutex::new(AdmissionState::default()),
+            changed: tokio::sync::Notify::new(),
+            capacity: Arc::new(tokio::sync::Semaphore::new(32)),
+            closed,
+        });
+        let worker_inner = inner.clone();
+        let worker = tokio::spawn(async move {
+            use cadence::store::writer::DrainAction;
+            loop {
+                let changed = worker_inner.changed.notified();
+                let call = {
+                    let mut state = worker_inner.state.lock().expect("admission state");
+                    match state.step(std::time::Instant::now(), None) {
+                        DrainAction::Next(id) => {
+                            let at = state.pending.iter().position(|call| call.admission.id == id)
+                                .expect("selected admitted call");
+                            let call = state.pending.remove(at).expect("pending call");
+                            state.open = Some(call.admission.clone());
+                            Some(call)
+                        }
+                        DrainAction::Join => return Ok(()),
+                        DrainAction::DrainLimit(limit) => return Err(limit),
+                        DrainAction::Wait => None,
+                        DrainAction::Admit | DrainAction::Refuse => unreachable!("no incoming request"),
+                    }
+                };
+                if let Some(call) = call {
+                    drop(call.capacity);
+                    let answer = handler.call(call.request.name.as_ref(),
+                        call.request.arguments.map(serde_json::Value::Object)).await;
+                    let _ = call.reply.send(answer);
+                    let mut state = worker_inner.state.lock().expect("admission state");
+                    state.completed_prefix = call.admission.sequence;
+                    state.open = None;
+                } else {
+                    changed.await;
+                }
+            }
+        });
+        Self { inner, worker: Arc::new(tokio::sync::Mutex::new(Some(worker))) }
+    }
+
+    fn admit(&self, id: &str, request: rmcp::model::CallToolRequestParams,
+        capacity: tokio::sync::OwnedSemaphorePermit) -> Option<AdmittedReply> {
+        let (reply, receiver) = tokio::sync::oneshot::channel();
+        let mut state = self.inner.state.lock().expect("admission state");
+        if state.step(std::time::Instant::now(), Some(id)) == cadence::store::writer::DrainAction::Refuse {
+            return None;
+        }
+        state.sequence += 1;
+        let admission = cadence::store::writer::Admission {
+            sequence: state.sequence, id: format!("{}:{id}", state.sequence),
+        };
+        state.pending.push_back(AdmittedCall { admission, request, reply, capacity });
+        self.inner.changed.notify_one();
+        Some(AdmittedReply(Arc::new(tokio::sync::Mutex::new(Some(receiver)))))
+    }
+
+    pub fn close(&self) {
+        let mut state = self.inner.state.lock().expect("admission state");
+        let cutoff = *state.cutoff.get_or_insert_with(std::time::Instant::now);
+        self.inner.capacity.close();
+        self.inner.closed.send_replace(Some(cutoff));
+        self.inner.changed.notify_one();
+    }
+
+    pub async fn closed(&self) -> std::time::Instant {
+        let mut closed = self.inner.closed.subscribe();
+        let cutoff = *closed.wait_for(Option::is_some).await.expect("admission sender retained");
+        cutoff.expect("closed admission")
+    }
+
+    pub async fn drain(&self, handler: &crate::server::PublicServer) -> Result<(), ShutdownError> {
+        use cadence::store::writer::{DrainAction, DrainLimit, SERVER_DRAIN_BOUND};
+        let cutoff = self.closed().await;
+        let deadline = tokio::time::Instant::from_std(cutoff + SERVER_DRAIN_BOUND);
+        let finish = async {
+            if let Some(worker) = self.worker.lock().await.take() {
+                worker.await.map_err(|_| ShutdownError::Worker)?.map_err(ShutdownError::Limit)?;
+            }
+            handler.shutdown().await.map_err(|_| ShutdownError::Worker)
+        };
+        match tokio::time::timeout_at(deadline, finish).await {
+            Ok(result) => result,
+            Err(_) => {
+                let state = self.inner.state.lock().expect("admission state");
+                let limit = match state.step(std::time::Instant::now(), None) {
+                    DrainAction::DrainLimit(limit) => limit,
+                    // Handlers finished, but a resident/writer join did not.
+                    _ => DrainLimit { open_write: None, bound: SERVER_DRAIN_BOUND },
+                };
+                Err(ShutdownError::Limit(limit))
+            }
+        }
+    }
+}
+
+pub enum ShutdownError {
+    Limit(cadence::store::writer::DrainLimit),
+    Worker,
+}
+
 pub struct InputTransport<R, W> {
     read: BoundedInput<R>,
     write: Arc<tokio::sync::Mutex<W>>,
     failed: Arc<AtomicBool>,
+    admission: AdmissionQueue,
 }
 impl<R: AsyncRead + Unpin, W> InputTransport<R, W> {
-    pub fn new(read: R, write: W) -> (Self, Arc<AtomicBool>) {
+    pub fn new(read: R, write: W, admission: AdmissionQueue) -> (Self, Arc<AtomicBool>) {
         let failed = Arc::new(AtomicBool::new(false));
         (
             Self {
                 read: BoundedInput::new(read, Limits::default()),
                 write: Arc::new(tokio::sync::Mutex::new(write)),
                 failed: failed.clone(),
+                admission,
             },
             failed,
         )
@@ -650,14 +818,20 @@ where
         }
     }
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
-        let received = match self.read.next_frame().await {
+        // Reserve before decoding: cancellation while waiting for capacity must
+        // not drop a complete frame that has already left BoundedInput.
+        let capacity = self.admission.inner.capacity.clone().acquire_owned().await.ok()?;
+        let frame = tokio::select! {
+            biased;
+            _ = self.admission.closed() => return None,
+            frame = self.read.next_frame() => frame,
+        };
+        let received = match frame {
             Ok(Some(frame)) => serde_json::from_slice(&frame)
                 .map(Some)
                 .map_err(io::Error::other),
-            // Closing stdin ends the session, so anything still running dies
-            // with it and its answer is never written. Exiting silently makes
-            // that indistinguishable from a server that had nothing to say.
             Ok(None) => {
+                self.admission.close();
                 if let Some(notice) = eof_notice(IN_FLIGHT.load(Ordering::Acquire)) {
                     eprintln!("{notice}");
                 }
@@ -666,16 +840,26 @@ where
             Err(error) => Err(error),
         };
         match received {
-            Ok(message) => message,
+            Ok(mut message) => {
+                if let Some(rmcp::model::JsonRpcMessage::Request(envelope)) = &mut message
+                    && let rmcp::model::ClientRequest::CallToolRequest(request) = &mut envelope.request
+                {
+                    let reply = self.admission.admit(&envelope.id.to_string(), request.params.clone(), capacity)?;
+                    request.extensions.insert(reply);
+                }
+                message
+            }
             Err(error) => {
                 self.read.closed = true;
                 self.failed.store(true, Ordering::Release);
+                self.admission.close();
                 eprintln!("cadence: input refused: {error}");
                 None
             }
         }
     }
     async fn close(&mut self) -> io::Result<()> {
+        self.admission.close();
         self.write.lock().await.shutdown().await
     }
 }

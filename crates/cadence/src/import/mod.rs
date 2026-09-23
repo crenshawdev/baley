@@ -997,6 +997,8 @@ pub struct SessionFactory<I: ConfigIo + Clone = FileIo> {
     io: I,
     evaluate: Evaluate,
     sessions: tokio::sync::Mutex<BTreeMap<PathBuf, Arc<Session<I>>>>,
+    // Keep writers even when first-touch initialization fails after opening one.
+    writers: tokio::sync::Mutex<Vec<Store>>,
     #[cfg(test)]
     probe: Option<TestProbe>,
 }
@@ -1138,6 +1140,7 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
                 }
                 let storage = cadence::store::filesystem::Filesystem::new(root)?;
                 let store = Store::open(storage, AuditOnlyPolicy).await?;
+                self.writers.lock().await.push(store.clone());
                 store.request(Operation::GuardAudit(audit)).await
             }
         }
@@ -1149,6 +1152,7 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
             io,
             evaluate,
             sessions: tokio::sync::Mutex::new(BTreeMap::new()),
+            writers: tokio::sync::Mutex::new(Vec::new()),
             #[cfg(test)]
             probe: None,
         }
@@ -1157,6 +1161,16 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
     pub fn with_probe(mut self, probe: TestProbe) -> Self {
         self.probe = Some(probe);
         self
+    }
+
+    pub async fn shutdown(&self) -> Result<()> {
+        let mut result = Ok(());
+        for store in self.writers.lock().await.drain(..) {
+            if let Err(error) = store.shutdown().await {
+                result = Err(error);
+            }
+        }
+        result
     }
 
     pub async fn first_touch(&self, root: &Path) -> Result<Arc<Session<I>>> {
@@ -1311,6 +1325,7 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
             None
         };
         let store = Store::open(storage, policy).await?;
+        self.writers.lock().await.push(store.clone());
         let view = if let Some((mut transaction, (declared, root_binding, source_generation))) = transaction {
             let current = store.request(Operation::ReadVerified).await?;
             if current.snapshot.data["import"]["complete"] == true {
