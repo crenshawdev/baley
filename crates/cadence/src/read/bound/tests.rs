@@ -64,3 +64,18 @@ fn a_slice_body_is_cut_where_its_escaped_length_would_cross() {
     assert_eq!(fit_text(5, "éééé"), 4);
     assert_eq!(fit_text(10, "abc"), 3);
 }
+
+#[test]
+fn a_spent_budget_resumes_at_the_file_it_stopped_on() {
+    assert_eq!(resume_at(2, Stop::Budget, 5), Some(2));
+}
+
+#[test]
+fn a_file_that_failed_is_passed_by_the_cursor() {
+    assert_eq!(resume_at(2, Stop::Failed, 5), Some(3));
+}
+
+#[test]
+fn a_failed_last_file_leaves_no_cursor() {
+    assert_eq!(resume_at(4, Stop::Failed, 5), None);
+}

@@ -1,5 +1,5 @@
 use super::{
-    bound, location::Resumes, model::CallSearchRequest, outline::{self, Grammar},
+    bound::{self, Stop}, location::Resumes, model::CallSearchRequest, outline::{self, Grammar},
     search::{self, FileHits, AGGREGATE_PARSE_BUDGET}, slice::ANSWER_BOUND, source, ReadDomain,
 };
 use serde_json::{json, Value};
@@ -74,13 +74,15 @@ impl ReadDomain {
         let mut calls = Vec::new();
         let mut not_searched = 0;
         let mut skipped = source::Skipped::default();
-        let mut stopped = None;
+        let mut stopped = false;
+        let mut resume_file = None;
         let mut outline_spent = false;
         let mut frontier = None;
         for (index, candidate) in candidates.iter().enumerate().skip(start) {
             if now() >= AGGREGATE_PARSE_BUDGET {
                 not_searched += candidates.len() - index;
-                stopped = Some(index);
+                stopped = true;
+                resume_file = bound::resume_at(index, Stop::Budget, candidates.len());
                 break;
             }
             let Some(grammar) = call_grammar(candidate) else { not_searched += 1; continue; };
@@ -92,12 +94,15 @@ impl ReadDomain {
             if !content.contains(&request.name) { continue; }
             if now() >= AGGREGATE_PARSE_BUDGET {
                 not_searched += candidates.len() - index;
-                stopped = Some(index);
+                stopped = true;
+                resume_file = bound::resume_at(index, Stop::Budget, candidates.len());
                 break;
             }
             let Some(lines) = sites(&content, grammar, &request.name, &mut now) else {
+                let stop = if now() >= AGGREGATE_PARSE_BUDGET { Stop::Budget } else { Stop::Failed };
                 not_searched += candidates.len() - index;
-                stopped = Some(index);
+                stopped = true;
+                resume_file = bound::resume_at(index, stop, candidates.len());
                 break;
             };
             let ordinal = resume.as_ref().filter(|(file, _)| file == candidate).map_or(0, |(_, ordinal)| *ordinal);
@@ -126,7 +131,7 @@ impl ReadDomain {
         }).collect();
         let page = bound::page(&wire, bound::room(&envelope), limit);
         let next = page.next.map(|index| (calls[index].candidate, calls[index].ordinal))
-            .or_else(|| stopped.map(|index| (index, 0))).or(frontier);
+            .or_else(|| resume_file.map(|index| (index, 0))).or(frontier);
         let cursor = next.map(|(index, ordinal)| self.registry.cursor(resumes, candidates[index].clone(), ordinal));
         let mut emitted = Vec::new();
         for &index in &page.served {
@@ -136,7 +141,7 @@ impl ReadDomain {
             emitted.push(wire[index].take());
         }
         let mut notes = Vec::new();
-        if stopped.is_some() { notes.push(STOPPED_NOTE); }
+        if stopped { notes.push(STOPPED_NOTE); }
         if outline_spent { notes.push(OUTLINE_NOTE); }
         if cursor.is_some() { notes.push(BOUNDED_NOTE); }
         if !page.passed.is_empty() { notes.push(OVERSIZED_NOTE); }

@@ -1,5 +1,5 @@
 use super::{
-    bound, location::Resumes, model::{SymbolSearchRequest, Unit}, outline,
+    bound::{self, Stop}, location::Resumes, model::{SymbolSearchRequest, Unit}, outline,
     search::AGGREGATE_PARSE_BUDGET, slice::ANSWER_BOUND, source, ReadDomain,
 };
 use serde_json::{json, Value};
@@ -72,9 +72,11 @@ impl ReadDomain {
         let mut unreached = Vec::new();
         let mut skipped = source::Skipped::default();
         let mut frontier = None;
+        let mut resume_file = None;
         for (index, candidate) in candidates.iter().enumerate().skip(start) {
             if now() >= AGGREGATE_PARSE_BUDGET {
                 unreached.extend(index..candidates.len());
+                resume_file = bound::resume_at(index, Stop::Budget, candidates.len());
                 break;
             }
             if outline::grammar_for_path(candidate).is_none() { continue; }
@@ -87,7 +89,14 @@ impl ReadDomain {
             let remaining = AGGREGATE_PARSE_BUDGET.saturating_sub(now());
             let result = scan(&[(path.clone(), content)], &request.name, case_insensitive,
                 (0, ordinal), limit + 1 - symbols.len(), remaining, &mut now);
-            if !result.unreached.is_empty() { unreached.push(index); }
+            if !result.unreached.is_empty() {
+                // A file that failed on its own is named and passed; only a
+                // spent budget stops the scan and is retried on the next page.
+                if now() < AGGREGATE_PARSE_BUDGET { unreached.push(index); continue; }
+                unreached.extend(index..candidates.len());
+                resume_file = bound::resume_at(index, Stop::Budget, candidates.len());
+                break;
+            }
             for (_, ordinal, unit) in result.rows {
                 symbols.push(Symbol { candidate: index, ordinal, path: path.clone(), revision: revision.clone(), unit });
             }
@@ -111,7 +120,7 @@ impl ReadDomain {
         })).collect();
         let page = bound::page(&wire, bound::room(&envelope), limit);
         let next = page.next.map(|index| (symbols[index].candidate, symbols[index].ordinal))
-            .or_else(|| unreached.first().map(|&index| (index, 0)))
+            .or_else(|| resume_file.map(|index| (index, 0)))
             .or(frontier);
         let cursor = next.map(|(index, ordinal)| self.registry.cursor(resumes, candidates[index].clone(), ordinal));
         let mut emitted = Vec::new();

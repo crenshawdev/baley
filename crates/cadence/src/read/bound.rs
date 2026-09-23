@@ -86,5 +86,24 @@ pub(super) fn fit_text(room: usize, text: &str) -> usize {
     text.len()
 }
 
+/// Why a scan stopped before its last candidate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Stop {
+    /// The aggregate parse budget was spent before this candidate finished.
+    Budget,
+    /// This candidate failed on its own: its parse failed or was abandoned.
+    Failed,
+}
+
+/// The candidate a scan stopped at `index` of `candidates` resumes at. A spent
+/// budget retries that candidate on the next page; a candidate that failed on
+/// its own is passed, so a file that fails every time cannot hold the cursor.
+pub(super) fn resume_at(index: usize, stop: Stop, candidates: usize) -> Option<usize> {
+    match stop {
+        Stop::Budget => Some(index),
+        Stop::Failed => (index + 1 < candidates).then_some(index + 1),
+    }
+}
+
 #[cfg(test)]
 mod tests;
