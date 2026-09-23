@@ -208,31 +208,6 @@ pub fn acknowledge_admission(
     })
 }
 
-pub async fn admit_pending(
-    store: &Store,
-    view: &View,
-    mut transaction: Transaction,
-    input: PendingAdmission,
-    clock: &mut impl Clock,
-) -> Result<AdmissionReply> {
-    let replay_key = input.admission.replay_key.clone();
-    let contribution = contribute_admission(view, &mut transaction, input, clock)?;
-    let committed = if contribution.replayed {
-        persistence::read(store).await
-    } else {
-        persistence::commit(store, view, transaction).await
-    };
-    match committed {
-        Ok(view) => acknowledge_admission(&view, contribution),
-        Err(Error::Conflict(_)) => Ok(AdmissionReply::Refused {
-            code: "revision-conflict".into(),
-            replay_key,
-            dispatch: None,
-        }),
-        Err(error) => Err(error),
-    }
-}
-
 pub async fn read_admission(store: &Store, fire: &str) -> Result<Admission> {
     persistence::get(
         &persistence::records(&persistence::read(store).await?.snapshot.data)?,
