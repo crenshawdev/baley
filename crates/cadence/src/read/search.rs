@@ -8,7 +8,7 @@
 //! test and strict UTF-8 hold for search because they are the read path's own
 //! code.
 
-use super::{ReadDomain, location::{Capability, Resumes}, model::{Scope, SearchRequest, Unit}, outline, source};
+use super::{ReadDomain, bound, location::{Capability, Resumes}, model::{Scope, SearchRequest, Unit}, outline, source};
 use globset::{GlobBuilder, GlobMatcher};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{Searcher, SearcherBuilder, sinks::UTF8};
@@ -21,9 +21,6 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 const ANSWER_BOUND: usize = super::slice::ANSWER_BOUND;
-/// Ceiling on one hit's body. Under the answer bound by enough that a hit's
-/// other fields and the envelope fit beside it.
-const HIT_BODY_BOUND: usize = 60_000;
 
 /// How many lines either side of a matched line a window carries.
 ///
@@ -100,15 +97,6 @@ pub(super) fn files(root: &Path, project: &Path, glob: Option<&GlobMatcher>) -> 
     paths.sort(); paths
 }
 
-/// `body` cut to at most `limit` bytes on a character boundary, and whether
-/// it was cut.
-fn bounded_body(body: &str, limit: usize) -> (String, bool) {
-    if body.len() <= limit { return (body.to_owned(), false); }
-    let mut end = limit;
-    while end > 0 && !body.is_char_boundary(end) { end -= 1; }
-    (body[..end].to_owned(), true)
-}
-
 pub(super) fn matcher(pattern: &str, case_insensitive: bool) -> Result<RegexMatcher, Value> {
     RegexMatcherBuilder::new().case_insensitive(case_insensitive).build(pattern)
         .map_err(|error| refusal("pattern", "invalid-pattern", error.to_string()))
@@ -142,9 +130,7 @@ pub(super) struct FileHits {
     pub(super) lines: Vec<usize>,
 }
 
-/// One contiguous run of one file that the answer serves, and the unit of
-/// deduplication: however many matches fall inside it, its body is served
-/// once.
+/// One contiguous span shared by the readable targets of its matching lines.
 struct Block {
     file: usize,
     first_line: usize,
@@ -154,12 +140,6 @@ struct Block {
     unit: Option<Unit>,
     /// The matched lines that fall inside it.
     lines: Vec<usize>,
-}
-
-impl Block {
-    fn contains(&self, site: &Site) -> bool {
-        self.file == site.file && self.first_line <= site.line && site.line <= self.last_line
-    }
 }
 
 /// One matched line, and the block that answers for it.
@@ -297,12 +277,27 @@ pub(super) struct Row {
     pub(super) file_index: usize,
 }
 
-pub(super) fn rows(_files: &[FileHits], _answer: &Answer, _project: &Path) -> Vec<Row> {
-    Vec::new()
+pub(super) fn rows(files: &[FileHits], answer: &Answer, project: &Path) -> Vec<Row> {
+    let lines: Vec<_> = files.iter().map(|file| outline::Lines::new(&file.content)).collect();
+    answer.sites.iter().map(|site| {
+        let block = &answer.blocks[site.block];
+        let file = &files[block.file];
+        let target = block_unit(block, file);
+        Row {
+            file: file.path.strip_prefix(project).unwrap_or(&file.path).to_string_lossy().into_owned(),
+            line: site.line,
+            text: bound::line_text(lines[block.file].text(site.line)),
+            name: target.name.clone(),
+            kind: target.kind,
+            target,
+            file_index: block.file,
+        }
+    }).collect()
 }
 
 impl ReadDomain {
     pub(super) fn search(&mut self, request: SearchRequest) -> Value {
+        let limit = match bound::limit(request.limit) { Ok(limit) => limit, Err(answer) => return answer };
         let case_insensitive = request.case_insensitive.unwrap_or(false);
         let matcher = match matcher(&request.pattern, case_insensitive) { Ok(matcher) => matcher, Err(answer) => return answer };
         let mut searcher = searcher();
@@ -325,7 +320,7 @@ impl ReadDomain {
         // can resolve out of the walk's order. Paging compares sites by path.
         files.sort_by(|left, right| left.path.cmp(&right.path));
         let answer = plan_answer(&files, AGGREGATE_PARSE_BUDGET, &mut outline::monotonic());
-        self.render(resumes, &files, &answer, resume, &skipped)
+        self.render(resumes, &files, &answer, resume, &skipped, limit)
     }
 
     /// The files a scope names, in path order. Named scopes come from the
@@ -356,72 +351,73 @@ impl ReadDomain {
         }
     }
 
-    /// Render blocks in site order from the cursor, bounded by
-    /// [`ANSWER_BOUND`], deduplicated by coverage, and issue a cursor for the
-    /// first site the answer did not reach.
-    fn render(&mut self, resumes: Resumes, files: &[FileHits], answer: &Answer, resume: Option<(PathBuf, usize)>, skipped: &source::Skipped) -> Value {
-        // Paging starts at the first site at or after the cursor. Sites
-        // survive a re-partition, so the site the caller was told to resume
-        // at is still there whatever the parse budget did on this call.
+    /// Admit rows together with their file references and possible skip notes.
+    fn render(&mut self, resumes: Resumes, files: &[FileHits], answer: &Answer, resume: Option<(PathBuf, usize)>, skipped: &source::Skipped, limit: usize) -> Value {
         let start = match &resume {
             None => 0,
             Some((path, line)) => answer.sites.iter()
                 .position(|site| (files[site.file].path.as_path(), site.line) >= (path.as_path(), *line))
                 .unwrap_or(answer.sites.len()),
         };
-        // The envelope's cost with every field at its largest, measured once,
-        // so hits are admitted against exact bytes and the answer can never
-        // come out over the bound.
-        let placeholder = format!("cur-{}-{}", "0".repeat(16), u64::MAX);
-        let envelope = json!({"status":"ok","kind":"search","bound":ANSWER_BOUND,"incomplete":true,"cursor":placeholder,
-            "hits":[],"notes":[STOPPED_NOTE, BOUNDED_NOTE, EXHAUSTED_NOTE],
-            "matches":answer.sites.len(),"files":files.len(),"blocks":answer.blocks.len(),"served":answer.blocks.len()});
-        let budget = ANSWER_BOUND.saturating_sub(serde_json::to_vec(&envelope).map_or(0, |bytes| bytes.len()))
-            .saturating_sub(serde_json::to_vec(&skipped.notes).map_or(0, |bytes| bytes.len()));
-        let mut used = 0usize;
-        let mut hits: Vec<Value> = Vec::new();
-        let mut emitted: Vec<usize> = Vec::new();
-        let mut references: Vec<Option<String>> = files.iter().map(|_| None).collect();
-        for site in &answer.sites[start..] {
-            // Deduplication is by coverage, not by block identity: a unit
-            // already in this answer answers for every match inside it.
-            if emitted.iter().any(|&index| answer.blocks[index].contains(site)) { continue; }
-            let block = &answer.blocks[site.block];
-            let file = &files[block.file];
-            let unit = block_unit(block, file);
-            let body = file.content.get(unit.first_byte..unit.last_byte).unwrap_or("");
-            let relative = file.path.strip_prefix(&self.project).unwrap_or(&file.path).to_string_lossy().into_owned();
-            let mut hit = json!({"file":relative,"name":unit.name,"kind":unit.kind,"range":unit.range(),"match_lines":block.lines,
-                "body":"","body_truncated":false,"location":format!("loc-{}-{}", "0".repeat(16), u64::MAX),"file_reference":format!("file-{}-{}", "0".repeat(16), u64::MAX)});
-            let base = serde_json::to_vec(&hit).map_or(0, |bytes| bytes.len()) + 1;
-            let available = budget.saturating_sub(used + base);
-            // A block is served whole or left for the next page, except the
-            // first block of a page, which is served for whatever fits so the
-            // answer is never empty and the cursor always advances.
-            let bounded = body.len().min(HIT_BODY_BOUND);
-            if !emitted.is_empty() && bounded > available { break; }
-            let (body, body_truncated) = bounded_body(body, bounded.min(available));
-            used += base + body.len();
-            hit["body"] = json!(body);
-            hit["body_truncated"] = json!(body_truncated);
-            hit["location"] = json!(self.registry.unit(file.path.clone(), file.revision.clone(), unit.clone(), unit.first_byte));
-            let reference = references[block.file].get_or_insert_with(|| self.registry.file(file.path.clone(), file.revision.clone())).clone();
-            hit["file_reference"] = json!(reference);
-            hits.push(hit);
-            emitted.push(site.block);
+        let rows = rows(files, answer, &self.project);
+        let mut wire: Vec<_> = rows[start..].iter().map(|row| {
+            let mut value = serde_json::to_value(row).unwrap();
+            value["location"] = json!(bound::longest_token("loc"));
+            value
+        }).collect();
+        let mut envelope = source::with_skipped(json!({"status":"ok","kind":"search","bound":ANSWER_BOUND,"limit":limit,
+            "incomplete":false,"cursor":bound::longest_token("cur"),"rows":[],"files":[],
+            "notes":[STOPPED_NOTE, BOUNDED_NOTE, EXHAUSTED_NOTE],"matches":rows.len(),"served":limit}), skipped);
+        let mut reserved_files = Vec::new();
+        let mut page = bound::page(&[], bound::room(&envelope), limit);
+        let mut end = 0;
+        // Grow the prefix with its metadata reserved before admitting its rows.
+        // Reserving each possible skip note (and even a skipped file's token)
+        // is conservative and keeps a long run of oversized rows bounded too.
+        for (index, row) in rows[start..].iter().enumerate() {
+            if !reserved_files.contains(&row.file_index) {
+                envelope["files"].as_array_mut().unwrap().push(json!({"file":row.file,"file_reference":bound::longest_token("file")}));
+                reserved_files.push(row.file_index);
+            }
+            envelope["notes"].as_array_mut().unwrap().push(json!(format!("{}:{}: row exceeds the answer bound", row.file, row.line)));
+            let room = bound::room(&envelope);
+            if room == 0 { break; }
+            let candidate = bound::page(&wire[..=index], room, limit);
+            // Added metadata may push a previously admitted row out. Keep the
+            // preceding page in that case and retry this row on the next page.
+            if candidate.next.is_some() || !candidate.served.starts_with(&page.served) { break; }
+            page = candidate;
+            end = index + 1;
+            if page.served.len() == limit { break; }
         }
-        // The first site at or after the cursor that no served block covers.
-        // It never skips, because sites survive a re-partition, and it
-        // strictly advances, because the block at the cursor is always served.
-        let next = answer.sites[start..].iter()
-            .find(|site| !emitted.iter().any(|&index| answer.blocks[index].contains(site)))
-            .map(|site| self.registry.cursor(resumes.clone(), files[site.file].path.clone(), site.line));
-        let mut notes = Vec::new();
-        if answer.stopped { notes.push(STOPPED_NOTE); }
-        if next.is_some() { notes.push(BOUNDED_NOTE); }
-        if resume.is_some() && emitted.is_empty() { notes.push(EXHAUSTED_NOTE); }
-        source::with_skipped(json!({"status":"ok","kind":"search","bound":ANSWER_BOUND,"incomplete":next.is_some(),"cursor":next,"hits":hits,"notes":notes,
-            "matches":answer.sites.len(),"files":files.len(),"blocks":answer.blocks.len(),"served":emitted.len()}), skipped)
+        let next = rows.get(start + end).map(|row| {
+            self.registry.cursor(resumes, files[row.file_index].path.clone(), row.line)
+        });
+        let mut emitted = Vec::new();
+        let mut references = Vec::new();
+        let mut referenced_files = Vec::new();
+        for &index in &page.served {
+            let row = &rows[start + index];
+            let file = &files[row.file_index];
+            let unit = &row.target;
+            wire[index]["location"] = json!(self.registry.unit(file.path.clone(), file.revision.clone(), unit.clone(), unit.first_byte));
+            emitted.push(wire[index].take());
+            if !referenced_files.contains(&row.file_index) {
+                references.push(json!({"file":row.file,"file_reference":self.registry.file(file.path.clone(), file.revision.clone())}));
+                referenced_files.push(row.file_index);
+            }
+        }
+        let mut notes: Vec<String> = Vec::new();
+        if answer.stopped { notes.push(STOPPED_NOTE.into()); }
+        if next.is_some() { notes.push(BOUNDED_NOTE.into()); }
+        if resume.is_some() && start == rows.len() { notes.push(EXHAUSTED_NOTE.into()); }
+        for &index in &page.passed {
+            let row = &rows[start + index];
+            notes.push(format!("{}:{}: row exceeds the answer bound", row.file, row.line));
+        }
+        source::with_skipped(json!({"status":"ok","kind":"search","bound":ANSWER_BOUND,"limit":limit,
+            "incomplete":next.is_some(),"cursor":next,"rows":emitted,"files":references,"notes":notes,
+            "matches":rows.len(),"served":page.served.len()}), skipped)
     }
 }
 
@@ -503,10 +499,4 @@ mod tests {
         assert_eq!(block_unit(&spent.blocks[0], &file).name, WINDOW_NAME);
     }
 
-    #[test]
-    fn a_body_is_cut_on_a_character_boundary() {
-        let (body, cut) = bounded_body("héllo", 2);
-        assert_eq!((body.as_str(), cut), ("h", true));
-        assert_eq!(bounded_body("abc", 3), ("abc".to_owned(), false));
-    }
 }
