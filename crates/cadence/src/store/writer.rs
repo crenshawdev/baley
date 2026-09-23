@@ -24,6 +24,46 @@ pub struct View {
     pub snapshot: Snapshot,
 }
 
+/// One deadline covers ingress, resident work and writer joins (D-211).
+pub const SERVER_DRAIN_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Admission {
+    pub sequence: u64,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrainLimit {
+    pub open_write: Option<String>,
+    pub bound: std::time::Duration,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DrainAction {
+    Admit,
+    Refuse,
+    Next(String),
+    Wait,
+    Join,
+    DrainLimit(DrainLimit),
+}
+
+/// Observations only: this transition neither reads time nor touches storage.
+pub struct Drain<'a> {
+    pub admission_closed: bool,
+    pub admissions: &'a [Admission],
+    pub completed_prefix: u64,
+    pub open_write: Option<&'a str>,
+    pub elapsed: std::time::Duration,
+}
+
+impl Drain<'_> {
+    pub fn step(&self, _incoming: Option<&str>) -> DrainAction {
+        DrainAction::Wait
+    }
+}
+
 /// Owner-serialized precondition; this does not compare-and-swap Markdown files.
 pub const STALE_SNAPSHOT: &str = "conditional snapshot precondition changed";
 

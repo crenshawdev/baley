@@ -12,6 +12,61 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 #[test]
+fn serve_drains_admitted_writes_on_transport_end() {
+    let admissions = [
+        super::writer::Admission { sequence: 1, id: "drain-01".into() },
+        super::writer::Admission { sequence: 2, id: "drain-02".into() },
+    ];
+    for (elapsed, expected) in [
+        (std::time::Duration::from_millis(9_999), super::writer::DrainAction::Wait),
+        (std::time::Duration::from_secs(10), super::writer::DrainAction::DrainLimit(super::writer::DrainLimit {
+            open_write: Some("drain-02".into()), bound: std::time::Duration::from_secs(10),
+        })),
+        (std::time::Duration::from_secs(11), super::writer::DrainAction::DrainLimit(super::writer::DrainLimit {
+            open_write: Some("drain-02".into()), bound: std::time::Duration::from_secs(10),
+        })),
+    ] {
+        let drain = super::writer::Drain {
+            admission_closed: true, admissions: &admissions, completed_prefix: 1,
+            open_write: Some("drain-02"), elapsed,
+        };
+        assert_eq!(drain.step(None), expected);
+    }
+}
+
+#[test]
+fn requests_after_transport_end_are_refused() {
+    let drain = super::writer::Drain {
+        admission_closed: true, admissions: &[], completed_prefix: 0,
+        open_write: None, elapsed: std::time::Duration::ZERO,
+    };
+    assert_eq!(drain.step(Some("late-01")), super::writer::DrainAction::Refuse);
+}
+
+#[test]
+fn next_write_is_earliest_pending_admission() {
+    let admissions = [
+        super::writer::Admission { sequence: 3, id: "drain-03".into() },
+        super::writer::Admission { sequence: 1, id: "drain-01".into() },
+        super::writer::Admission { sequence: 2, id: "drain-02".into() },
+    ];
+    let drain = super::writer::Drain {
+        admission_closed: true, admissions: &admissions, completed_prefix: 1,
+        open_write: None, elapsed: std::time::Duration::ZERO,
+    };
+    assert_eq!(drain.step(None), super::writer::DrainAction::Next("drain-02".into()));
+}
+
+#[test]
+fn nothing_pending_requests_normal_join() {
+    let drain = super::writer::Drain {
+        admission_closed: true, admissions: &[], completed_prefix: 2,
+        open_write: None, elapsed: std::time::Duration::from_secs(11),
+    };
+    assert_eq!(drain.step(None), super::writer::DrainAction::Join);
+}
+
+#[test]
 fn a_write_commits_as_the_generation_after_the_current_one() {
     assert_eq!((next_generation(0), next_generation(41)), (Ok(1), Ok(42)));
 }
