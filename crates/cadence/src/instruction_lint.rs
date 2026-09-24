@@ -363,6 +363,20 @@ promise. State what remains unverified.";
     assert!(text.contains(expected), "plan markdown: missing live-verification block");
 }
 
+#[test]
+fn context_instructions_separate_the_live_part() {
+    let text = cadence::context::instructions::markdown();
+    let expected = "## Owned decisions and live verification
+
+Name the decision the project owns in each truth, while keeping its trigger and
+outcome observable to the named party. List the part that requires a running
+program separately under a Live verification heading in the context scope.
+That part becomes an observation in the evidence map of the phase that first
+makes it runnable; do not add a field to the truth. Passing unit tests do not
+close this live obligation.";
+    assert!(text.contains(expected), "context markdown: missing owned-decision and live-verification section");
+}
+
 fn compiled_read_surfaces() -> Vec<(&'static str, String)> {
     let mut surfaces: Vec<_> = RENDERED_PROJECT_FILES
         .iter()
