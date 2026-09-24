@@ -134,6 +134,7 @@ occurs. Complete preview and fresh approved attached publication enforce:
   a nonblank string value. For silence, write a property such as "stdout is empty
   and the exit status is zero". Blank text never means silence. Property prose
   is retained for verification; no predicate evaluator or strength inference runs.
+- `check-test-file`: the check's test file must contain non-whitespace text. The refusal names its test-file slot; this establishes a locator, not that the file exists or contains an adequate test.
 - `truth-check-limit`: one distinct check id per full current truth id/version
   across the entire resulting phase union. Different ids with identical specs
   are distinct checks; aliases of the same shared definition count once. One
@@ -143,13 +144,13 @@ occurs. Complete preview and fresh approved attached publication enforce:
   Nonblank endpoints need not occur in a truth. `link-value-not-named`: the value
   must be named in every associated current truth under the lexical rule below.
 
-Only command and expected output are content-checked on a check. Test locator,
-setup, call, boundary and fakes retain their typed grammar; blank strings and
-an empty fakes array remain legal, which says what the binary refuses and never
-that a check may skip the one-unit shape above. Cadence gates no test style; the
-shape is instruction, the owner reads the plan. Test existence, task/check
-bindings, red/green
-receipts and subject-stub gates belong to phase 12, adequacy to the verifier.
+Command, expected output and the test file are content-checked on a check. The
+test function, setup, call, boundary and fakes keep their typed grammar; blank
+strings in those fields and an empty fakes array remain legal. This describes
+mechanical admission, not permission to omit the one-unit shape above. Cadence
+does not infer test style or assertion strength. Test existence, task/check
+bindings, red/green receipts and subject-stub gates belong to execution;
+adequacy belongs to the owner and verifier.
 
 Link comparison uses the same snapshot's native approved trigger, observer and
 outcome slots, resolved by full current truth id/version. Trim only the value's
@@ -321,8 +322,8 @@ historical absent-map phase-27 requests preserve the absent fields, even after
 an approved replacement has attached the first map.
 Historical replay is an acknowledgment, never certification under the new
 planning limits. A fresh attached submission validates all current saved and
-proposed contributions, so an old-policy blank command/output, extra check or
-unnamed link blocks that union. Correct every offending contribution together
+proposed contributions, so an old-policy blank command, expected output or test file, an extra check or
+an unnamed link blocks that union. Correct every offending contribution together
 in one explicitly approved replacement batch. Nothing rewrites saved payloads,
 drops history or silently grandfathers invalid current content. Provisional
 mapless authoring remains explicit and does not claim a validated attached map.
@@ -383,6 +384,7 @@ and correct the complete request:
   request field `spec.expected`, invalid tags locate `.kind`, and invalid values locate `.value`.
   Auxiliary check/link shape failures retain `evidence-item-shape` and their
   actual field path, including malformed nested approval/replacement copies.
+- `check-test-file`: supply a nonblank test file at the named item's test-file slot. Whitespace alone is blank; a missing or mistyped file remains an evidence-item-shape failure.
 - `truth-check-limit`: `id` is the full truth id, `slot` is request field `submission.plans`,
   and `details` contains `truth_id`, `truth_version`, and `checks`. Each check
   has `id` and every `origins: [{phase, plan, source, slot}]`; `source` is

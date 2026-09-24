@@ -113,7 +113,8 @@ pub fn content(phase: u32, contributions: &[Contribution]) -> Result<()> {
             if let Item::Check { spec, .. } = item {
                 let expected = match &spec.expected { Expected::Literal(value) | Expected::Property(value) => value };
                 for (value, rule, field) in [(&spec.command, "check-command", "command"),
-                    (expected, "check-expected", "expected.value")]
+                    (expected, "check-expected", "expected.value"),
+                    (&spec.test.file, "check-test-file", "test.file")]
                 {
                     if value.trim().is_empty() {
                         return Err(Diagnostic {
