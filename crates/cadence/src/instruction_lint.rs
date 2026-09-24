@@ -267,6 +267,102 @@ fn the_query_tool_description_says_locate_first() {
     );
 }
 
+#[test]
+fn plan_instructions_derive_tests_from_behavior() {
+    let text = cadence::plan::instructions::markdown();
+    let derivation = "Start from the approved behavior and the changes needed to deliver it. Treat a
+plan step as a container for work; separate its independently testable
+responsibilities instead of testing the whole step. For each responsibility,
+choose input classes, decision edges and failure responses justified by the
+requirement. Take expected values from that requirement; never invent behavior
+to make an answer available. Flag ambiguity for the owner to clarify.";
+    let bounded_cases = "A generated unit test exercises one responsibility and one behavior, using at
+most one simulated external seam; split a unit that touches two. Run the real
+logic that owns the decision with supplied observations and independently
+justified expectations. In the one check's existing fields, connect the
+approved truth, production responsibility, inputs or seam, expected observable
+result and test. Name every other test in the task action with the meaningful
+defect it would catch. Stop when another case would distinguish no new required
+behavior or meaningful failure. Reuse adequate existing tests and relevant
+regressions; do not pursue test counts, a test per function, blanket
+permutations or coverage percentages. Use the managed project's approved
+language and test framework; Cadence being written in Rust does not choose the
+project's language.";
+    let gathering = "Classify an adapter as pure gathering only after separating its owned parsing,
+validation, error interpretation and decisions; test those responsibilities,
+and give the pure gatherer no unit test. Use plain values when they suffice.
+Judge a fake against the responsibility being exercised: it must not provide
+that decision. A domain value can be a supplied observation for a different,
+downstream decision; its type alone does not disqualify it.";
+    for (name, expected) in [
+        ("behavior derivation", derivation),
+        ("bounded cases", bounded_cases),
+        ("gathering and responsibility-relative fakes", gathering),
+    ] {
+        assert!(text.contains(expected), "plan markdown: missing {name} block");
+    }
+}
+
+#[test]
+fn plan_instructions_bound_test_dependencies() {
+    let text = cadence::plan::instructions::markdown();
+    let expected = "A generated test may rely only on the project's language toolchain and test
+libraries, including mocking libraries, from that language's package ecosystem.
+It must need no other language runtime, host-installed program, particular
+hardware or pre-existing machine state, and give the same result wherever the
+project builds. Test code starts no program. Cadence may launch the approved
+test runner; that permission does not let test code launch a program.
+
+A test may create a fresh temporary directory as its one filesystem seam. Keep
+its reads and writes inside that directory and start no program there. Make no
+assertion depend on filesystem permissions, case sensitivity, symlink support
+or crash durability. Preserve the current runner boundaries; propose a needed
+runner change separately rather than adding an unsupported integration.";
+    assert!(
+        text.contains(expected),
+        "plan markdown: missing dependency and temporary-directory block"
+    );
+}
+
+#[test]
+fn plan_instructions_state_the_close_rule() {
+    let planner = "Keep one check per truth. Its test file holds only tests, with one test per
+responsibility; never place it beside production code that the task changes in
+the same file. The check names the test that causes the truth's trigger. Name
+the task's other tests in its action, with the defect each catches, rather than
+adding checks for them. Commit every test of the task before its red run, with
+production code that compiles so red is an assertion failure. The whole check
+test file must have identical bytes at the red commit, green commit and task
+completion commit, and the red and green commands must match, or the task
+cannot close. Freeze that file through the owning task's completion; a later
+task may add tests only after that close.";
+    let executor = "   green run at a later green commit, using the same command; and a passing
+   observed run of every named task command at the completion commit. Each
+   check's file contains only tests. Commit all tests owned by this task before
+   red, while production code still compiles. Keep the whole test file byte for
+   byte identical at red, green and the task's completion commit; changing it
+   prevents task close. Hold it fixed until this task closes. A refusal names
+   each unsatisfied check; nothing is manufactured after the fact.";
+    for (carrier, text, expected) in [
+        ("plan markdown", cadence::plan::instructions::markdown(), planner),
+        ("executor contract", instructions::contract_markdown(), executor),
+    ] {
+        assert!(text.contains(expected), "{carrier}: missing complete close-rule block");
+    }
+}
+
+#[test]
+fn plan_instructions_keep_live_verification_open() {
+    let text = cadence::plan::instructions::markdown();
+    let expected = "When this phase first makes a running-program obligation from the context's
+Live verification list runnable, add it to this map as a pending observation.
+Constituent unit tests cannot establish integration, GUI interaction, real
+persistence, performance or an assembled workflow, and passing them does not
+close that obligation. Do not waive it, rename it a unit test or weaken the
+promise. State what remains unverified.";
+    assert!(text.contains(expected), "plan markdown: missing live-verification block");
+}
+
 fn compiled_read_surfaces() -> Vec<(&'static str, String)> {
     let mut surfaces: Vec<_> = RENDERED_PROJECT_FILES
         .iter()
