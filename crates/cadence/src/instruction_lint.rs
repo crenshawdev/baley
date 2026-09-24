@@ -377,6 +377,37 @@ close this live obligation.";
     assert!(text.contains(expected), "context markdown: missing owned-decision and live-verification section");
 }
 
+#[test]
+fn plan_review_asks_the_test_questions() {
+    let expected = "For each proposed test, ask: does it serve the approved requirement, can its assertion catch the defect it names, and does a fake provide the very decision being tested? Judge the fake relative to the responsibility the test exercises, using plain inputs where they suffice.";
+    for carrier in [
+        "cad-review",
+        "cad-decision-review",
+        "cad-minimalism-review",
+        "cad-plan-review",
+    ] {
+        let text = cadence::review::instructions::frontdoor_markdown(carrier)
+            .unwrap_or_else(|| panic!("{carrier}: missing review front door"));
+        assert!(text.contains(expected), "{carrier}: missing plan-review question block");
+    }
+    let intent = cadence::review::instructions::intent_for(cadence::review::selection::Kind::Plan);
+    assert!(intent.contains(expected), "plan intent: missing plan-review question block");
+    let brief = cadence::review::provider::payload::brief();
+    let expected_brief = "  For its tests, ask whether each serves the approved requirement, whether the
+  assertion can expose the stated defect, and whether a fake supplies the
+  decision the test is meant to exercise. Assess the fake relative to the
+  responsibility that test exercises, not merely the type of value it returns.";
+    assert!(brief.contains(expected_brief), "provider brief: missing plan-review question block");
+}
+
+#[test]
+fn plan_review_keeps_existing_completion_judgments() {
+    let text = cadence::review::instructions::frontdoor_markdown("cad-plan-review")
+        .expect("cad-plan-review front door");
+    let expected = "These questions are advisory to plan submission and add no plan-submit gate. The owner's exact check inspection at execution-plan-complete and the verifier's item verdicts at verification-complete remain required completion judgments.";
+    assert!(text.contains(expected), "cad-plan-review: missing advisory and completion-judgment block");
+}
+
 fn compiled_read_surfaces() -> Vec<(&'static str, String)> {
     let mut surfaces: Vec<_> = RENDERED_PROJECT_FILES
         .iter()
