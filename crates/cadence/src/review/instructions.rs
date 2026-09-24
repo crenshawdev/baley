@@ -110,7 +110,7 @@ applies a finding: no file is changed, deleted, staged or committed.
    read its index, compact entry metadata, lines:<n> and text:<n> parts, following
    next. review-material supplies this identity and metadata, never bytes.
    Additional material uses review-material-append with manifest, acquisition
-   and an issued location or file reference; never send bytes.
+   and the material's `path`; never send bytes.
    Submit the reviewer's unchanged five-field findings array as findings on
    review-return under the issued identity, launch and host_return. Never send
    raw JSON text. The receipt carries only the findings digest and count;

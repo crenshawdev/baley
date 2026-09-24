@@ -295,7 +295,7 @@ pub fn resolve(planning_root: &Path, identity: &DocumentIdentity) -> Result<Repo
         let path = if path.is_absolute() { path } else { project.join(path) };
         let Ok(path) = fs::canonicalize(path) else { continue };
         if !path.starts_with(&project) { continue }
-        let Ok((_, _, content)) = super::source::content(&project, &path) else { continue };
+        let Ok(content) = crate::acquisition::text(&path, crate::acquisition::Class::Source) else { continue };
         read_lines.insert(raw_path.to_owned(), content.lines().count() as u64);
     }
     measure(&read_lines, phase.get(), session_id, first_turn, last_turn, sources)

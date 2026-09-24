@@ -54,8 +54,8 @@ and context identities. Plan read returns prior `plans` as bounded identities
 with classification and revisions, compact inventory and native publication
 metadata, `occurrence`, `native_truths_approved`, `readiness` and the apply
 `contract`. For each process identity, call `document` without a part for its
-index and then with the selected part. Search code through `search` and follow
-only its issued locations through `read`; never open a project file or originate a path.
+index and then with the selected part. Search and read code with the host's own
+tools; never open a process record from its file.
 Read the authoritative phase truths and saved evidence through the same query tool:
 
 ```json
@@ -68,8 +68,8 @@ record supplies the number: never derive it from text, a heading, O1 provenance,
 an item id or this instruction. A missing native truth set requires context
 authoring before publication.
 Read SUMMARY, UAT and reports as well as prior plans through their returned
-process identities, and inspect the existing code and callers through `search`
-and `read`. Legacy files are inputs, never native
+process identities, and inspect the existing code and callers with the host's
+own tools. Legacy files are inputs, never native
 approval. Decimal phase addresses are read-only and cannot alias native phases.
 
 Read-only intake and research may proceed without approved truths. If

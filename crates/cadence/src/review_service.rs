@@ -72,7 +72,6 @@ pub enum Apply {
     MaterialAppend {
         manifest: String,
         acquisition: String,
-        location: Option<String>,
         path: Option<String>,
         label: Option<String>,
         #[serde(default)]
@@ -1063,7 +1062,6 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(
         Command::Apply(Apply::MaterialAppend {
             manifest,
             acquisition,
-            location: _,
             path,
             label,
             bytes,

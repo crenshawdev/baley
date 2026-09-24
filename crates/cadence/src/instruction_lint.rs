@@ -205,8 +205,8 @@ fn rendered_files_obey_named_byte_ceilings() {
 }
 
 #[test]
-fn compiled_contracts_locate_first() {
-    let expected = "Locate first, read second: find source with `search`, `symbol-search` or `call-search`, whose rows carry issued locations and never bodies, then `read` one unit at a time by its issued `location` or by unit name under its issued `file_reference`.";
+fn compiled_contracts_send_source_reads_to_host_tools() {
+    let expected = "Search and read code with the host's file, search and shell tools: locate first, then read only the lines the work needs rather than whole files.";
     let carriers = [
         "skills/cad-context/SKILL.md",
         "skills/cad-plan/SKILL.md",
@@ -231,7 +231,7 @@ fn compiled_contracts_locate_first() {
             .iter()
             .find(|(name, _)| *name == carrier)
             .unwrap_or_else(|| panic!("{carrier}: missing compiled surface"));
-        assert!(text.contains(expected), "{carrier}: missing locate-first sentence");
+        assert!(text.contains(expected), "{carrier}: missing host-tools sentence");
     }
 }
 
@@ -253,8 +253,8 @@ fn no_compiled_surface_carries_a_phase_31_measurement_paragraph() {
 }
 
 #[test]
-fn the_query_tool_description_says_locate_first() {
-    let expected = "Locate source first with search, symbol-search or call-search, then read one unit by its issued location or unit name.";
+fn the_query_tool_description_sends_source_reads_to_host_tools() {
+    let expected = "Read process records through document and document-search; read project source with the host's own tools.";
     let tools = super::server::tools();
     let query = tools
         .iter()
@@ -263,7 +263,7 @@ fn the_query_tool_description_says_locate_first() {
     let description = query.description.as_deref().expect("cadence_query description");
     assert!(
         description.contains(expected),
-        "cadence_query description: missing locate-first sentence"
+        "cadence_query description: missing host-tools sentence"
     );
 }
 

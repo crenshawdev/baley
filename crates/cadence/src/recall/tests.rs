@@ -554,3 +554,32 @@ fn the_backend_is_the_one_the_reloaded_config_names() {
     let values = serde_json::json!({"memory": {"backend": "none"}});
     assert_eq!(resident::backend(&values).unwrap(), "none");
 }
+
+#[test]
+fn review_material_reads_a_project_file_named_relative_to_the_project() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".planning")).unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/lib.rs"), "fn material() {}\n").unwrap();
+    let (path, bytes) = resident::project_source(&dir.path().join(".planning"), "src/lib.rs").unwrap();
+    assert_eq!(path, std::fs::canonicalize(dir.path().join("src/lib.rs")).unwrap().to_string_lossy());
+    assert_eq!(bytes, b"fn material() {}\n");
+}
+
+#[test]
+fn review_material_refuses_a_file_under_the_planning_root() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".planning")).unwrap();
+    std::fs::write(dir.path().join(".planning/STATE.json"), "{}").unwrap();
+    let error = resident::project_source(&dir.path().join(".planning"), ".planning/STATE.json").unwrap_err();
+    assert_eq!(error, ".planning/STATE.json is not a project source file");
+}
+
+#[test]
+fn review_material_refuses_a_file_outside_the_project() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("project/.planning")).unwrap();
+    std::fs::write(dir.path().join("outside.rs"), "fn outside() {}\n").unwrap();
+    let error = resident::project_source(&dir.path().join("project/.planning"), "../outside.rs").unwrap_err();
+    assert_eq!(error, "../outside.rs is not a project source file");
+}

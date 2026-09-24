@@ -1,8 +1,9 @@
 use super::{
     ReadDomain,
     model::{DocumentIdentity, DocumentRequest, DocumentSearchRequest},
-    search,
 };
+use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+use grep_searcher::{Searcher, SearcherBuilder, sinks::UTF8};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -143,8 +144,6 @@ fn dispatch(root: &Path, identity: &DocumentIdentity, id: &str, process: &mut dy
         task["state"] = json!(view.state);
         task["uncertainty"] = cadence::execution::runner::uncertainty(root.parent().unwrap_or(root), &records, &view, process).map_err(fail)?;
         task["checkpoints"] = json!(history::task_checkpoints(&records, &view.task));
-        task["lease_scope"] = json!({"kind":"current-task-lease","phase":view.task.phase,
-            "occurrence":view.task.occurrence,"plan":view.task.plan,"task":view.task.task});
         add(format!("task:{}", view.task.task), task.to_string());
         unfinished.push(view);
     }
@@ -244,7 +243,8 @@ fn attempt_execution(snapshot: &cadence::store::cache::SharedSnapshot,
 fn roadmap(root: &Path, phase: u32) -> Result<Resolved, Value> {
     let text = crate::acquisition::text(&root.join("ROADMAP.md"), crate::acquisition::Class::Source)
         .map_err(|error| match error {
-            crate::acquisition::Error::Crossing(crossing) => super::source::incomplete(crossing),
+            crate::acquisition::Error::Crossing(crossing) => json!({"status":"ok","kind":"acquisition","incomplete":true,
+                "crossing":crossing,"notes":[crossing.to_string()]}),
             _ => refusal("identity", "document-not-found", "roadmap authority is absent"),
         })?;
     let parsed = cadence::derivation::parse_roadmap(&text)
@@ -746,18 +746,35 @@ impl ReadDomain {
 
 /// Ceiling on a document-search answer. Hits carry no bodies, so an answer
 /// holds a few hundred of them and an ordinary phase never reaches it.
-const SEARCH_BOUND: usize = super::slice::ANSWER_BOUND;
+const SEARCH_BOUND: usize = 65_536;
+
+fn matcher(pattern: &str, case_insensitive: bool) -> Result<RegexMatcher, Value> {
+    RegexMatcherBuilder::new().case_insensitive(case_insensitive).build(pattern)
+        .map_err(|error| refusal("pattern", "invalid-pattern", error.to_string()))
+}
+
+/// The 1-based line numbers of `content` that match, ascending, each once.
+/// Without line numbers the sink reports none, and a hit with no line number
+/// is a hit nothing can be resolved from.
+fn matching_lines(searcher: &mut Searcher, matcher: &RegexMatcher, content: &str) -> Vec<usize> {
+    let mut lines = Vec::new();
+    let outcome = searcher.search_slice(matcher, content.as_bytes(), UTF8(|number, _| { lines.push(number as usize); Ok(true) }));
+    // Searching a slice already in memory has no I/O to fail at, but the
+    // sink's signature admits an error; one part's failure is that part's.
+    if outcome.is_err() { lines.clear(); }
+    lines
+}
 
 impl ReadDomain {
     /// Which parts of one phase's process records mention `pattern`: each
     /// hit is an identity and a part for `document`, with the matching line
     /// numbers, and never a body. Hits are in identity-then-part order.
     pub(super) fn document_search(&self, request: DocumentSearchRequest, process: &mut dyn Process) -> Value {
-        let matcher = match search::matcher(&request.pattern, request.case_insensitive.unwrap_or(false)) {
+        let matcher = match matcher(&request.pattern, request.case_insensitive.unwrap_or(false)) {
             Ok(matcher) => matcher,
             Err(answer) => return answer,
         };
-        let mut searcher = search::searcher();
+        let mut searcher = SearcherBuilder::new().line_number(true).build();
         let records = match catalog(&self.planning_root, request.phase.get(), process) {
             Ok(records) => records,
             Err(answer) => return answer,
@@ -765,7 +782,7 @@ impl ReadDomain {
         let mut hits = Vec::new();
         for record in records {
             for part in record.parts {
-                let match_lines = search::matching_lines(&mut searcher, &matcher, &part.body);
+                let match_lines = matching_lines(&mut searcher, &matcher, &part.body);
                 if match_lines.is_empty() { continue; }
                 hits.push(json!({"identity":record.identity,"part":part.selector,"title":part.title,
                     "classification":record.classification,"revision":record.revision,"match_lines":match_lines}));

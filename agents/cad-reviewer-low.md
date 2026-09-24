@@ -1,7 +1,7 @@
 ---
 name: cad-reviewer-low
 description: The `low` rung of `cad-reviewer`; `bin/route.mjs` picks it, not the user.
-tools: Bash, mcp__cadence__cadence_query
+tools: Read, Bash, Grep, Glob, mcp__cadence__cadence_query
 disallowedTools: Write, Edit, MultiEdit
 color: red
 effort: low

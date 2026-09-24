@@ -1,7 +1,7 @@
 ---
 name: cad-plan-checker-xhigh
 description: The `xhigh` rung of `cad-plan-checker`; `bin/route.mjs` picks it, not the user.
-tools: Bash, mcp__cadence__cadence_query
+tools: Read, Bash, Grep, Glob, mcp__cadence__cadence_query
 disallowedTools: Write, Edit, MultiEdit
 color: green
 effort: xhigh

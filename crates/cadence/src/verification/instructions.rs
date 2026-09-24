@@ -1,5 +1,5 @@
 //! Compiled authority shared by dispatch and project-free renderers.
-pub const VERIFIER: &str = "**Verifier.** For each evidence item: inspect it through Cadence's search/read/document surface, run it, or trace it. Return a\nverdict per item - accepted, rejected or not seen - with what you observed.\nA summary is not evidence. An item whose check could not have failed is\nrejected, not accepted. You do not set a truth's status; the binary derives\nit from your verdicts.";
+pub const VERIFIER: &str = "**Verifier.** For each evidence item: inspect it with the host's own tools or through Cadence's document surface, run it, or trace it. Return a\nverdict per item - accepted, rejected or not seen - with what you observed.\nA summary is not evidence. An item whose check could not have failed is\nrejected, not accepted. You do not set a truth's status; the binary derives\nit from your verdicts.";
 
 pub const PROTOCOL: &str = r#"## Native item protocol
 
@@ -15,7 +15,7 @@ An execution-worker-exit report may already exist for this attempt. It records
 the host's observation, never invalidates a late verification-submit, and
 remains visible through verification-read. There is no wall-clock timeout.
 
-Inspect each artifact through Cadence search/read/document and inspect its actual substance; a stub, empty body or
+Inspect each artifact with the host's own tools or Cadence's document surface and inspect its actual substance; a stub, empty body or
 placeholder is rejected. Trace each link's named value through the real caller
 and recipient and its consumption. Inspect actual red and green test material,
 commits, captured results and owner statements; a setup failure is not a

@@ -291,16 +291,6 @@ enum QueryArguments {
         phase: Option<NonZeroU32>,
         part: Option<String>,
     },
-    #[serde(rename = "search")]
-    Search(cadence::read::model::SearchRequest),
-    #[serde(rename = "symbol-search")]
-    SymbolSearch(cadence::read::model::SymbolSearchRequest),
-    #[serde(rename = "call-search")]
-    CallSearch(cadence::read::model::CallSearchRequest),
-    #[serde(rename = "list")]
-    List(cadence::read::model::ListRequest),
-    #[serde(rename = "read")]
-    Read(cadence::read::model::ReadRequest),
     #[serde(rename = "document")]
     Document(cadence::read::model::DocumentRequest),
     #[serde(rename = "document-search")]
@@ -912,7 +902,7 @@ pub(crate) fn tools() -> Vec<Tool> {
         ),
         tool(
             "cadence_query",
-            "Read the bound project's records, configuration, routing, evidence and source without changing state; request shapes come from cadence_query {\"operation\":\"schema\",\"tool\":\"query\",\"for\":\"<operation>\"} and the compiled contracts. Locate source first with search, symbol-search or call-search, then read one unit by its issued location or unit name.",
+            "Read the bound project's records, configuration, routing and evidence without changing state; request shapes come from cadence_query {\"operation\":\"schema\",\"tool\":\"query\",\"for\":\"<operation>\"} and the compiled contracts. Read process records through document and document-search; read project source with the host's own tools.",
             query_schema(),
         ),
         tool(
@@ -1066,17 +1056,12 @@ impl PublicServer {
                     };
                     return structured_result(Ok(QueryOutput::Read(answer)));
                 }
-                if raw.as_ref().and_then(|value| value["operation"].as_str()).is_some_and(|operation| matches!(operation, "search" | "symbol-search" | "call-search" | "list" | "read" | "document" | "document-search")) {
+                if raw.as_ref().and_then(|value| value["operation"].as_str()).is_some_and(|operation| matches!(operation, "document" | "document-search")) {
                     let query = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::Search(request)) => cadence::read::Query::Search(request),
-                        Ok(QueryArguments::SymbolSearch(request)) => cadence::read::Query::SymbolSearch(request),
-                        Ok(QueryArguments::CallSearch(request)) => cadence::read::Query::CallSearch(request),
-                        Ok(QueryArguments::List(request)) => cadence::read::Query::List(request),
-                        Ok(QueryArguments::Read(request)) => cadence::read::Query::Read(request),
                         Ok(QueryArguments::Document(request)) => cadence::read::Query::Document(request),
                         Ok(QueryArguments::DocumentSearch(request)) => cadence::read::Query::DocumentSearch(request),
-                        // D-147: the model never originates a location; it reads only at a location the binary handed back.
-                        Err(error) => return structured_result(Ok(QueryOutput::Read(Refusal::new("read-contract", error.to_string()).rule("issued-location").slot("arguments").value()))),
+                        // D-148: process records are reached by identity, never by path.
+                        Err(error) => return structured_result(Ok(QueryOutput::Read(Refusal::new("read-contract", error.to_string()).rule("record-identity").slot("arguments").value()))),
                         Ok(_) => unreachable!("read operation selected before generic query"),
                     };
                     return structured_result(Ok(QueryOutput::Read(self.server.service.read(&self.root, query).await)));
@@ -1233,7 +1218,7 @@ impl PublicServer {
                     Some(QueryArguments::ContextIntake { .. }) => {
                         unreachable!("context intake is decoded before execution fallback")
                     }
-                    Some(QueryArguments::Search(_) | QueryArguments::SymbolSearch(_) | QueryArguments::CallSearch(_) | QueryArguments::List(_) | QueryArguments::Read(_) | QueryArguments::Document(_) | QueryArguments::DocumentSearch(_)) => unreachable!("read operation routed before generic query"),
+                    Some(QueryArguments::Document(_) | QueryArguments::DocumentSearch(_)) => unreachable!("read operation routed before generic query"),
                     Some(QueryArguments::Schema { .. }) => unreachable!("schema routed before generic query"),
                     Some(QueryArguments::Help { .. }) => unreachable!("help routed before generic query"),
                     Some(QueryArguments::Progress {}) => unreachable!("progress routed before generic query"),
@@ -1505,7 +1490,7 @@ impl PublicServer {
                     ApplyGroup::Review => {
                         if raw.as_ref().is_some_and(|v| v["operation"] == "review-material-append" && v.get("bytes").is_some()) {
                             return structured_result(Ok(ApplyOutput::NativeExecution(
-                                Refusal::new("typed-content", "review-material-append acquires an issued location")
+                                Refusal::new("typed-content", "review-material-append reads the named path")
                                     .rule("typed-content").slot("bytes").value())));
                         }
                         if let Some(refusal) = raw.as_ref().and_then(review_service::typed_return_refusal) {

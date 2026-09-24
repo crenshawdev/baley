@@ -658,12 +658,11 @@ pub(crate) mod resident {
                             reply,
                         } => {
                             if let crate::server::review_service::Command::Apply(crate::server::review_service::Apply::MaterialAppend {
-                                location, path, bytes, ..
+                                path, bytes, ..
                             }) = command.as_mut() {
-                                let acquired = read_domains.get(&root)
-                                    .ok_or_else(|| "location was not issued by this resident".to_string())
-                                    .and_then(|domain| domain.acquire(location.as_deref().unwrap_or(""))
-                                        .map_err(|answer| answer.to_string()));
+                                let acquired = path.as_deref()
+                                    .ok_or_else(|| "review-material-append names no path".to_string())
+                                    .and_then(|relative| project_source(&root, relative));
                                 match acquired {
                                     Ok((issued_path, issued_bytes)) => { *path = Some(issued_path); *bytes = issued_bytes; }
                                     Err(reason) => {
@@ -1205,5 +1204,19 @@ pub(crate) mod resident {
 
     fn resident_closed() -> execution_service::Answer {
         Err(execution_service::Failure::Closed)
+    }
+
+    /// The canonical path and bytes of one project source file named relative to
+    /// the project; a path outside the project or inside the planning root is refused.
+    pub(super) fn project_source(planning_root: &Path, relative: &str) -> std::result::Result<(String, Vec<u8>), String> {
+        let project = planning_root.parent().and_then(|project| std::fs::canonicalize(project).ok())
+            .ok_or_else(|| "planning root has no project parent".to_string())?;
+        let path = std::fs::canonicalize(project.join(relative)).map_err(|error| format!("{relative}: {error}"))?;
+        let records = std::fs::canonicalize(planning_root).unwrap_or_else(|_| planning_root.to_path_buf());
+        if !path.starts_with(&project) || path.starts_with(&records) {
+            return Err(format!("{relative} is not a project source file"));
+        }
+        let text = cadence::acquisition::text(&path, cadence::acquisition::Class::Source).map_err(|error| error.to_string())?;
+        Ok((path.to_string_lossy().into_owned(), text.into_bytes()))
     }
 }

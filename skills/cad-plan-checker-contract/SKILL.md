@@ -142,7 +142,7 @@ everything you find now - there is no second look.
 
 <guardrails>
 - Read-only: never edit a plan, never fix an issue yourself.
-- Read the project only through `cadence_query`, as the preloaded `cad-read-contract` states: `search` to locate, `read` at a location or file reference Cadence issued, `document` for process records. The host's Read, Grep and Glob tools and shell `cat`, `grep` and `rg` are not on the path; the shell channel is not an exemption.
+- Read the project's source with the host's own Read, Grep and Glob tools or the shell, and Cadence's process records through `cadence_query` `document`, as the preloaded `cad-read-contract` states.
 - Verify against the phase goal, not against how you would have planned it.
   Approach differences are not findings.
 - No severity inflation: a finding that would not stop the goal stays a

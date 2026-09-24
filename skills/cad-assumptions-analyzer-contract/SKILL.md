@@ -75,7 +75,7 @@ Omit the **Alternatives** line for `Confident` items. Write `None.` under the re
 <rules>
 - Cite at least one real file path per assumption. No citation, no assumption.
 - Batch independent probes: greps, globs and reads whose target does not depend on another's result go out in ONE message, never one-then-wait. Only a probe you could not choose until you saw a prior result stays sequential.
-- Read the project only through `cadence_query`, as the preloaded `cad-read-contract` states: `search` to locate, `read` at a location or file reference Cadence issued, `document` for process records. The host's Read, Grep and Glob tools and shell `cat`, `grep` and `rg` are not on the path; the shell channel is not an exemption. For a large file, read its file reference for the outline, then one named unit; a search returning nothing gets a LOOSER PATTERN, never a wider range.
+- Read the project's source with the host's own Read, Grep and Glob tools or the shell, and Cadence's process records through `cadence_query` `document`, as the preloaded `cad-read-contract` states. For a large file, search for your place first, then read only that stretch; a search returning nothing gets a LOOSER PATTERN, never a wider range.
 - Make every "If wrong" a concrete outcome. Name what breaks, diverges, or gets rebuilt.
 - Rate honestly. Thin evidence is never `Confident`.
 - Read more files before settling for `Unclear` - every `Unclear` costs the user a question later.

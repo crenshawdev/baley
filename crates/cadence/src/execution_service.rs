@@ -1285,9 +1285,7 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
                 task.task.task, uncertainty["commits"], uncertainty["dirty_source"] == true), Some(admitted.id.clone())).await;
         }
         tasks.push(json!({"id":task.task.task,"verify":task.verify,"checks":task.checks,"state":task.state,
-            "uncertainty":uncertainty,"checkpoints":history::task_checkpoints(&records, &task.task),
-            "lease_scope":{"kind":"current-task-lease","phase":task.task.phase,
-                "occurrence":task.task.occurrence,"plan":task.task.plan,"task":task.task.task}}));
+            "uncertainty":uncertainty,"checkpoints":history::task_checkpoints(&records, &task.task)}));
         executable.push(TaskSpec { id: task.task.task.clone(), verify: task.verify.clone() });
         unfinished.push(task);
     }

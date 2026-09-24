@@ -1,7 +1,7 @@
 ---
 name: cad-verifier-low
 description: The low rung of the native verifier; the binary selects it.
-tools: Bash, mcp__cadence__cadence_query, mcp__cadence__cadence_apply
+tools: Read, Bash, Grep, Glob, mcp__cadence__cadence_query, mcp__cadence__cadence_apply
 color: green
 effort: low
 maxTurns: 200

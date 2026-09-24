@@ -1,7 +1,7 @@
 ---
 name: cad-planner-medium
 description: The `medium` rung of `cad-planner`; `bin/route.mjs` picks it, not the user.
-tools: Write, Edit, Bash, mcp__cadence__cadence_query
+tools: Read, Write, Edit, Bash, Grep, Glob, mcp__cadence__cadence_query
 color: green
 effort: medium
 maxTurns: 200

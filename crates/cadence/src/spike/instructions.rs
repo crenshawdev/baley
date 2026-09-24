@@ -36,7 +36,7 @@ comes from the operation answer, which carries record and projection, and the
 binary-rendered SPIKE.md. Never reconstruct authority from historical Markdown.
 Existing historical spike directories are not imported or overwritten.
 
-Read project code through cadence_query search/read with issued references.
+Read project code with the host's own tools.
 The entire .planning/spikes subtree is protected, including nested files other
 than SPIKE.md. Never use Write, Edit or Bash to change it, stage it or commit it.
 </protocol>

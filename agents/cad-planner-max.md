@@ -1,7 +1,7 @@
 ---
 name: cad-planner-max
 description: The `max` rung of `cad-planner`; `bin/route.mjs` picks it, not the user.
-tools: Write, Edit, Bash, mcp__cadence__cadence_query
+tools: Read, Write, Edit, Bash, Grep, Glob, mcp__cadence__cadence_query
 color: green
 effort: max
 maxTurns: 200

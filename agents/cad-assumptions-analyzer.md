@@ -1,7 +1,7 @@
 ---
 name: cad-assumptions-analyzer
 description: The `xhigh` rung of `cad-assumptions-analyzer` (codebase assumption gathering); `bin/route.mjs` picks it, not the user.
-tools: Bash, mcp__cadence__cadence_query
+tools: Read, Bash, Grep, Glob, mcp__cadence__cadence_query
 disallowedTools: Write, Edit, MultiEdit
 color: cyan
 effort: xhigh

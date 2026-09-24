@@ -70,8 +70,8 @@ Batch independent probes: greps, globs and reads whose target does not
 depend on another's result go out in ONE message, never one-then-wait. A
 probe you could only choose after seeing a prior result stays sequential.
 
-Read the project only through `cadence_query`, as the preloaded `cad-read-contract` states: `search` to locate, `read` at a location or file reference Cadence issued, `document` for process records. The host's Read, Grep and Glob tools and shell `cat`, `grep` and `rg` are not on the path; the shell channel is not an exemption. To orient in a large file, read its file reference for the
-outline of its units, then read the one unit you will change: the comments
+Read the project's source with the host's own Read, Grep and Glob tools or the shell, and Cadence's process records through `cadence_query` `document`, as the preloaded `cad-read-contract` states. To orient in a large file, search for your place first, then
+read the stretch you will change: the comments
 are this codebase's design record and are what stop you re-breaking a fixed
 thing. A search returning nothing gets a LOOSER PATTERN, never a wider range.
 

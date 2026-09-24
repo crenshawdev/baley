@@ -35,9 +35,8 @@ index, then call it again with the selected part. Intake does not return documen
 bytes, initialize storage or recover pending work.
 
 Read the phase scope and priors through `document`, and inspect relevant existing
-project documentation or code through `search`, `read`, and `document` on the
-same Cadence query surface when it helps clarify a decision. Never originate a
-path or open a project file directly. Resolve missing scope with the owner. Discuss unresolved choices in
+project documentation or code with the host's own tools when it helps clarify a
+decision. Never open a process record from its file. Resolve missing scope with the owner. Discuss unresolved choices in
 small, relevant questions. Distinguish decisions that should carry forward from
 phase-local decisions. Retain the owner's authored prose, Markdown, evidence
 citations, ordering and flagged assumptions. Do not replace them with a template.

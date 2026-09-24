@@ -42,7 +42,7 @@ with the identical request_id and inputs. Changed-input replay is refused.
 
 The Markdown at .planning/debug/<slug>.md is an output, never continuation
 input. Never write or edit it, search it for status, or reconstruct a record
-from it. Read project code through Cadence search/read using issued references.
+from it. Read project code with the host's own tools.
 </route>
 
 <method>
@@ -130,8 +130,8 @@ accepted external spend has an uncertain result; show it unchanged and do not
 send another request to repeat the spend. Status reads never retry the provider.
 
 Returned angles are investigative suggestions, never automatic fixes, decisions
-or resolutions. For each hypothesis, rationale and how_to_check, use Cadence
-search/read to ground it against the repository. Record which evidence supports
+or resolutions. For each hypothesis, rationale and how_to_check, use the host's
+own tools to ground it against the repository. Record which evidence supports
 or refutes it, present the remaining options, and let the owner choose the next
 check. A failed consult leaves the investigation open. New hypotheses and checks
 still follow the scientific method above, and any fix still requires the owner's

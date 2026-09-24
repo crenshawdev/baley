@@ -1,59 +1,29 @@
-mod bound;
-mod calls;
-mod symbols;
 pub mod document;
 pub mod instructions;
-pub mod list;
-pub mod location;
 pub mod measurement;
 pub mod model;
-pub mod outline;
-pub mod search;
-pub mod slice;
-pub mod scope;
-pub mod source;
 
 use crate::process::Process;
-use location::Registry;
-use model::{CallSearchRequest, DocumentRequest, DocumentSearchRequest, ListRequest, ReadRequest, SearchRequest, SymbolSearchRequest};
+use model::{DocumentRequest, DocumentSearchRequest};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-pub use location::Capability;
-
 #[derive(Clone, Debug)]
 pub enum Query {
-    Search(SearchRequest),
-    SymbolSearch(SymbolSearchRequest),
-    CallSearch(CallSearchRequest),
-    List(ListRequest),
-    Read(ReadRequest),
     Document(DocumentRequest),
     DocumentSearch(DocumentSearchRequest),
 }
 
 pub struct ReadDomain {
-    pub(super) project: PathBuf,
     pub(super) planning_root: PathBuf,
-    pub(super) registry: Registry,
 }
 
 impl ReadDomain {
     pub fn new(planning_root: &Path) -> Result<Self, String> {
-        let project = planning_root.parent().ok_or_else(|| "planning root has no project parent".to_string())?;
-        Ok(Self {
-            project: std::fs::canonicalize(project).map_err(|error| error.to_string())?,
-            planning_root: planning_root.to_path_buf(),
-            registry: Registry::default(),
-        })
+        Ok(Self { planning_root: planning_root.to_path_buf() })
     }
     pub fn query(&mut self, query: Query, process: &mut dyn Process) -> Value {
         match query {
-            Query::Search(request) => self.search(request),
-            Query::SymbolSearch(request) => self.symbol_search(request),
-            Query::CallSearch(request) => self.call_search(request),
-            Query::List(request) => self.list(request),
-            Query::Read(request) => self.read(request),
             Query::Document(request) => self.document(request, process),
             Query::DocumentSearch(request) => self.document_search(request, process),
         }
