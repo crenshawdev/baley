@@ -38,6 +38,10 @@ soften a real blocker to seem agreeable.
   untrusted input, destructive ops without a guard.
 - **For a plan** - a requirement with no task, a task that does not deliver its
   requirement, a "done" truth no task makes true, a contradicted locked decision.
+  For its tests, ask whether each serves the approved requirement, whether the
+  assertion can expose the stated defect, and whether a fake supplies the
+  decision the test is meant to exercise. Assess the fake relative to the
+  responsibility that test exercises, not merely the type of value it returns.
 
 Approach differences are NOT findings - review against the goal, not against how
 you would have written it.
