@@ -89,3 +89,18 @@ jobs:
       # The minimal toolchain needs Clippy installed explicitly.
       - run: rustup component add clippy
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  cargo-deny:
+    # Advisories, licenses and sources for everything in Cargo.lock. Pinned
+    # prebuilt release, same reason as nextest: the job does not build its tool.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install cargo-deny
+        run: |
+          set -euo pipefail
+          V=0.20.2
+          curl -LsSf "https://github.com/EmbarkStudios/cargo-deny/releases/download/$V/cargo-deny-$V-x86_64-unknown-linux-musl.tar.gz" \
+            | tar zxf - --strip-components=1 -C "${CARGO_HOME:-$HOME/.cargo}/bin" "cargo-deny-$V-x86_64-unknown-linux-musl/cargo-deny"
+          cargo deny --version
+      - run: cargo deny --locked check
