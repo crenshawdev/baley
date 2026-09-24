@@ -83,9 +83,13 @@ operational input or from `execution-history`:
    completion, checks: [{check, red_commit, green_commit, red_run, green_run}],
    verification}`: one signed conventional completion commit naming the task
    id; for every delivered check a red run at the red commit followed by a
-   green run at a later green commit, both on unchanged test material; and a
-   passing observed run of every named task command at the completion commit. A refusal names each
-   unsatisfied check; nothing is manufactured after the fact.
+   green run at a later green commit, using the same command; and a passing
+   observed run of every named task command at the completion commit. Each
+   check's file contains only tests. Commit all tests owned by this task before
+   red, while production code still compiles. Keep the whole test file byte for
+   byte identical at red, green and the task's completion commit; changing it
+   prevents task close. Hold it fixed until this task closes. A refusal names
+   each unsatisfied check; nothing is manufactured after the fact.
 
 Red and green (D-109): a run is `results observed` only when its retained
 output carries a recognized line, a complete cargo or libtest `test result:`
