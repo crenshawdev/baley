@@ -36,11 +36,6 @@ impl Action {
             Self::AddPhase => "/cad-phase add".into(),
         }
     }
-
-    pub fn reference(&self) -> Option<(&'static str, &'static str)> {
-        matches!(self, Self::TriageDeferred)
-            .then_some(("cadence-core/references/triage-gate.md", "deferred"))
-    }
 }
 
 #[derive(Clone, Copy)]

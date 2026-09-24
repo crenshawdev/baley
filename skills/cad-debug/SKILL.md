@@ -217,8 +217,7 @@ one-consequence rule separately refuses another consequence on the parent.
 A newer clear scan does not erase an outstanding fire. Changed material cannot
 reuse an earlier receipt. Only exact accepted settlement reaches reproduction
 verification; preserve any pending findings and refusal until the owner acts.
-Use no trace-count script. Shared triage-gate.md, review-triggers.md and the
-historical re-arm cases remain for the workflows that still consume them.
+Use no trace-count script.
 
 @${CLAUDE_PLUGIN_ROOT}/skills/cad-review-delivery/SKILL.md
 </resolve>

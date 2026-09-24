@@ -194,14 +194,6 @@ fn authored_w1_resumes_the_saved_pause() {
 }
 
 #[test]
-fn the_deferred_queue_answer_names_the_triage_gate_reference() {
-    assert_eq!(
-        authored("W6").reference(),
-        Some(("cadence-core/references/triage-gate.md", "deferred"))
-    );
-}
-
-#[test]
 fn the_lowest_numbered_planned_phase_is_chosen_whatever_the_record_order() {
     let mut case = fixture(
         "order",
