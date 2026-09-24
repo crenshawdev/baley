@@ -404,7 +404,6 @@ Delivery order after phase 11 is 27, 28, 29, 12, 13, then 14 onward; see
 - [ ] **Phase 17: Contract enforcement** - the residual obligations that live today as prose instructions and belong to no single cluster
 - [ ] **Phase 40: Find first, read second** - search answers with locations and a limit, a symbol lookup built from the grammar outlines, and call sites of a name, so a caller reads only the unit it needs
 - [ ] **Phase 39: How a plan becomes tests** - the compiled context, plan and review instructions carry the owner's test-derivation rules, truths name the decision a unit test can prove, and the binary's own test-file rule is stated where the planner reads it
-- [ ] **Phase 18: The acceptance gate** - scenario-bounded workflow episodes, asserted with contract checks rather than an output diff
 - [ ] **Phase 19: The release path** - a tagged release that publishes four checksum-verified archives, and a SessionStart hook that fetches and installs the pinned binary
 - [ ] **Phase 20: Filing port** - human-chosen issue filing on GitHub with fingerprint deduplication and ambiguous-create reconciliation, GH-250/251 repaired
 - [ ] **Phase 21: Deferred review completion** - carry, retention and verified supersession for deferred reviews, and durable re-arm across restart
@@ -413,6 +412,7 @@ Delivery order after phase 11 is 27, 28, 29, 12, 13, then 14 onward; see
 - [ ] **Phase 24: Small roadmap changes** - `cad-phase` add and edit through the structured roadmap boundary
 - [ ] **Phase 25: Structural phase changes** - `cad-phase` insert and remove with historical-row protection, GH-259 repaired, previews and recovery
 - [ ] **Phase 26: Context revision** - truth versions on changed text, and the approved requirement-correction write
+- [ ] **Phase 18: The acceptance gate** - scenario-bounded workflow episodes, asserted with contract checks rather than an output diff
 - [x] **Phase 27: Plan persistence and allocation** - plans stored at distinct identities with replay-safe number allocation
 - [x] **Phase 28: Evidence associations** - the evidence map attached to current phase truths, orphans refused
 - [x] **Phase 29: Check and link limits** - a check needs a command and expected output, one check per truth, links only where the truth names a value
