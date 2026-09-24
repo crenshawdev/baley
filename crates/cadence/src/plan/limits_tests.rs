@@ -79,6 +79,56 @@ fn a_check_expecting_nothing_is_refused() {
 }
 
 #[test]
+fn a_check_with_a_blank_test_file_is_refused() {
+    for blank in ["", "   "] {
+        let artifact = serde_json::from_value(json!({
+            "kind": "artifact", "id": "artifact/refusal", "reason": "The refusal must locate the check.",
+            "spec": {"locators": ["src/plan.rs"], "substance": "The check content decision."},
+            "associations": [{"truth_id": "T6", "truth_version": 1, "reason": "The refusal names its slot."}],
+        })).expect("an artifact item");
+        let mut item = check("check/blank", &[("T6", 1)]);
+        let Item::Check { spec, .. } = &mut item else { panic!("a check") };
+        spec.test.file = blank.into();
+        let result = content(39, &[proposed(3, 1, vec![artifact, item])]);
+        assert!(result.is_err(), "test.file {blank:?} must be refused");
+        let answer = refusal(result.unwrap_err());
+        assert_eq!(answer["rule"], "check-test-file");
+        assert_eq!(answer["slot"], "submission.plans[1].content.evidence_map.items[1].spec.test.file");
+        assert_eq!(answer["phase"], 39);
+        assert_eq!(answer["entry"], 1);
+        assert_eq!(answer["id"], "check/blank");
+        assert_eq!(answer["reason"], "phase 39 item check/blank needs nonblank test.file");
+    }
+}
+
+#[test]
+fn plan_instructions_require_a_test_file() {
+    let rendered = crate::plan::instructions::markdown();
+    for block in [
+        "- `check-test-file`: the check's test file must contain non-whitespace text. The refusal names its test-file slot; this establishes a locator, not that the file exists or contains an adequate test.",
+        "Command, expected output and the test file are content-checked on a check. The\n\
+test function, setup, call, boundary and fakes keep their typed grammar; blank\n\
+strings in those fields and an empty fakes array remain legal. This describes\n\
+mechanical admission, not permission to omit the one-unit shape above. Cadence\n\
+does not infer test style or assertion strength. Test existence, task/check\n\
+bindings, red/green receipts and subject-stub gates belong to execution;\n\
+adequacy belongs to the owner and verifier.",
+        "- `check-test-file`: supply a nonblank test file at the named item's test-file slot. Whitespace alone is blank; a missing or mistyped file remains an evidence-item-shape failure.",
+        "so an old-policy blank command, expected output or test file, an extra check or\n\
+an unnamed link blocks that union.",
+    ] {
+        assert!(rendered.contains(block), "missing instruction block: {block}");
+    }
+    for obsolete in [
+        "Only command and expected output are content-checked on a check.",
+        "Test locator,",
+        "blank command/output",
+    ] {
+        assert!(!rendered.contains(obsolete), "obsolete instruction remains: {obsolete}");
+    }
+}
+
+#[test]
 fn a_link_missing_either_end_or_its_value_is_refused() {
     for field in ["caller", "callee", "value"] {
         let mut item = link("link/A");
