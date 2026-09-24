@@ -408,6 +408,29 @@ fn plan_review_keeps_existing_completion_judgments() {
     assert!(text.contains(expected), "cad-plan-review: missing advisory and completion-judgment block");
 }
 
+#[test]
+fn verifier_contract_states_what_is_not_evidence() {
+    let expected = "Keep the stages of evidence distinct: planned, written, reviewed, executed and
+passed. A test name, declaration, comment or model assertion is not evidence
+that a test executed. A passing run alone does not establish that its assertion
+examines the required behavior. Inspect the actual assertion against its
+requirement and named defect, including whether a fake supplies the decision.
+
+Names, type labels, declared boundaries, source patterns and a passing runner
+do not prove semantic correctness or the absence of indirect dependencies.
+Report an unsupported or inconclusive check with that limitation; never turn
+incomplete analysis into a compliance claim. Record rejected
+when a check ran but does not establish the behavior, and not_seen only when
+the evidence was unavailable, stating what was observed; never invent a new
+status or accept unsupported evidence.";
+    for (carrier, text) in [
+        ("cad-verifier-contract", cadence::verification::instructions::contract_markdown()),
+        ("cad-verify", cadence::verification::instructions::frontdoor_markdown()),
+    ] {
+        assert!(text.contains(expected), "{carrier}: missing evidence-limits block");
+    }
+}
+
 fn compiled_read_surfaces() -> Vec<(&'static str, String)> {
     let mut surfaces: Vec<_> = RENDERED_PROJECT_FILES
         .iter()
