@@ -100,45 +100,56 @@ Three ideas carry the design.
 **Storage is behind a port.** Domain code sees traits that speak Baley's language (append these events, get this view by key, store this payload) and never SQL. SQLite is one adapter behind that port.
 
 ```mermaid
-C4Context
-  title System context: Baley and its neighbours
-  Person(owner, "Owner", "Decides, approves, answers for the work")
-  System(baley, "Baley", "Records the evidence and decides what may happen next")
-  System_Ext(host, "Host agent", "Claude Code or Codex, running the Daneels")
-  System_Ext(git, "Git repository", "Source, commits and the committed project file")
-  System_Ext(providers, "Review providers", "Outside models used for adversarial review")
-  Rel(owner, host, "Directs work through")
-  Rel(owner, baley, "Queries, approves, verifies", "CLI")
-  Rel(host, baley, "Calls tools", "MCP over stdio")
-  Rel(baley, git, "Reads history, runs git")
-  Rel(baley, providers, "Sends review material", "HTTPS")
+flowchart LR
+  owner(["Owner<br/><small>Decides and answers for the work</small>"])
+  host["Host agent<br/><small>Claude Code or Codex, running the Daneels</small>"]
+  baley["Baley<br/><small>Records the evidence, decides what may happen next</small>"]
+  git["Git repository<br/><small>Source, commits, the project file</small>"]
+  prov["Review providers<br/><small>Outside models for adversarial review</small>"]
+  owner -->|directs work| host
+  owner -->|queries, approves: CLI| baley
+  host -->|tool calls: MCP| baley
+  baley -->|reads history, runs git| git
+  baley -->|review material: HTTPS| prov
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  classDef system fill:#1168bd,stroke:#0b4884,color:#fff
+  classDef external fill:#6b6b6b,stroke:#4d4d4d,color:#fff
+  class owner person
+  class baley system
+  class host,git,prov external
 ```
 
-*Figure 1. Baley sits between the owner, the host agent that runs the Daneels, the repository and the outside reviewers.*
+*Figure 1. System context, in the C4 model's sense. Baley sits between the owner, the host agent that runs the Daneels, the repository and the outside reviewers.*
 
 ```mermaid
-C4Container
-  title Containers: Baley on one machine
-  Person(owner, "Owner")
-  System_Ext(host, "Host agent", "Claude Code or Codex")
-  System_Ext(checkout, "Project checkout", "Git working tree with the committed project file")
-  System_Boundary(b, "Baley") {
-    Container(server, "MCP server", "Rust, one per host session", "Serves the Daneels' tools, Hardin decides the next step")
-    Container(guard, "Guard hook", "Rust, one per tool call", "Refuses unsafe git and file actions")
-    Container(cli, "CLI", "Rust", "show, verify, export, backup, doctor, purge")
-    ContainerDb(db, "Ledger database", "SQLite, one per user", "Events, views, payloads, search index")
-  }
-  Rel(host, server, "Tool calls", "MCP over stdio")
-  Rel(host, guard, "Runs before each tool call", "hook")
-  Rel(owner, cli, "Commands")
-  Rel(server, db, "Reads and writes", "storage port")
-  Rel(guard, db, "Reads, records guard decisions", "storage port")
-  Rel(cli, db, "Reads, administers", "storage port")
-  Rel(server, checkout, "Finds the project file, runs git")
-  Rel(guard, checkout, "Finds the project file")
+flowchart TB
+  owner(["Owner"])
+  host["Host agent<br/><small>Claude Code or Codex</small>"]
+  subgraph baley [Baley]
+    direction TB
+    server["MCP server<br/><small>one per host session; Hardin decides the next step</small>"]
+    guard["Guard hook<br/><small>one per tool call; refuses unsafe actions</small>"]
+    cli["CLI<br/><small>show, verify, export, backup, doctor, purge</small>"]
+    db[("Ledger database<br/><small>SQLite, one per user</small>")]
+  end
+  checkout["Project checkout<br/><small>git working tree with the project file</small>"]
+  host -->|tool calls| server
+  host -->|before each tool call| guard
+  owner -->|commands| cli
+  server --> db
+  guard --> db
+  cli --> db
+  server -.->|finds project file, runs git| checkout
+  guard -.->|finds project file| checkout
+  classDef person fill:#08427b,stroke:#052e56,color:#fff
+  classDef container fill:#438dd5,stroke:#2e6295,color:#fff
+  classDef external fill:#6b6b6b,stroke:#4d4d4d,color:#fff
+  class owner person
+  class server,guard,cli,db container
+  class host,checkout external
 ```
 
-*Figure 2. Every process reaches the database through the same storage port. Nothing is written to the checkout.*
+*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. Dotted arrows only read the checkout; nothing is written to it.*
 
 ### Terms
 
