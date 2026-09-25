@@ -35,6 +35,13 @@ jobs:
           rustup default "$CHANNEL"
           rustc --version
 
+      # Restores compiled dependencies so a run rebuilds only this workspace.
+      # Only main saves the cache; pull requests restore from it but never
+      # write, so a branch cannot plant a build artifact main later trusts.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       # --locked on both, because a committed Cargo.lock is the whole of what
       # "builds offline" means here and an unlocked resolve would quietly test
       # a dependency graph no commit records.
@@ -67,6 +74,13 @@ jobs:
           rustup toolchain install "$CHANNEL" --profile minimal
           rustup default "$CHANNEL"
           rustc --version
+
+      # Restores compiled dependencies so a run rebuilds only this workspace.
+      # Only main saves the cache; pull requests restore from it but never
+      # write, so a branch cannot plant a build artifact main later trusts.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The minimal toolchain needs Clippy installed explicitly.
       - run: rustup component add clippy
