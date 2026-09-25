@@ -1,4 +1,4 @@
-//! The tables of Figure 8 in design 0001, minus search (slice 8) and the
+//! The tables of Figure 9 in design 0001, minus search (slice 8) and the
 //! view tables, which are created from each `ViewSpec`.
 
 /// The compatibility epoch this binary writes. A store stamped with a newer
@@ -92,6 +92,7 @@ CREATE TABLE payload_ref (
   hash BLOB NOT NULL REFERENCES payload(hash),
   class TEXT NOT NULL CHECK (class IN ('record', 'output', 'material')),
   expires_at TEXT,
+  released_seq INTEGER,
   PRIMARY KEY (project_id, seq, hash),
   FOREIGN KEY (project_id, seq) REFERENCES event(project_id, seq)
 ) STRICT, WITHOUT ROWID;
@@ -138,7 +139,9 @@ CREATE TABLE trace (
   id INTEGER PRIMARY KEY,
   at TEXT NOT NULL,
   project_id TEXT,
+  payload_hash BLOB CHECK (payload_hash IS NULL OR length(payload_hash) = 32),
   kind TEXT NOT NULL,
   data TEXT NOT NULL
 ) STRICT;
+CREATE INDEX trace_payload ON trace(payload_hash);
 ";

@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::chain::Head;
 use crate::event::{Actor, GitFacts, Hash, ProjectId, RequestId};
-use crate::payload::PayloadRef;
+use crate::payload::{PayloadRef, PayloadStatus};
 use crate::view::{DocKey, KeyValue};
 
 /// A stream name such as `plan/5-2`: the events of one thing that changes
@@ -33,7 +33,7 @@ pub struct Command {
     /// Stamped on every event the command appends.
     pub policy_version: u64,
     /// The supplied time every event of the command is recorded at: UTC,
-    /// RFC 3339. Never read from a live clock inside the store.
+    /// `YYYY-MM-DDTHH:MM:SS[.f{1,9}]Z`. Never read from a live clock inside the store.
     pub recorded_at: String,
     pub actor: Actor,
 }
@@ -142,6 +142,12 @@ pub struct Decision {
 pub enum Answer {
     Inline(Value),
     Stored(PayloadRef),
+    /// A stored answer only in a replayed outcome, after its own reference
+    /// was released. The event and request document still hold the reference.
+    Tombstone {
+        reference: PayloadRef,
+        status: PayloadStatus,
+    },
 }
 
 /// A recorded outcome.

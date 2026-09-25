@@ -10,6 +10,7 @@ use std::fmt;
 use crate::claim::ClaimId;
 use crate::command::{Absence, StreamName};
 use crate::event::{Hash, ProjectId, RequestId};
+use crate::payload::PayloadReference;
 use crate::view::DocKey;
 
 /// A port operation that recorded nothing.
@@ -94,6 +95,12 @@ pub enum Refusal {
     /// new reference would point at a body that is gone, and storing it anew
     /// would bring the purged content back for the old references.
     PayloadTombstoned(Hash),
+    /// The reference is outside the command's project, absent, not `output`,
+    /// or released; or its body is absent or at most 128 KiB.
+    NotReducible(PayloadReference),
+    /// The project has no reference to this hash, or has released all of
+    /// them and every excerpt its own reductions attached.
+    NothingToPurge(Hash),
     /// A cursor not issued for this query, project, generation and view
     /// version, or not a cursor at all.
     InvalidCursor,

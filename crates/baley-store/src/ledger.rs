@@ -220,14 +220,17 @@ pub trait Admin {
     ) -> Result<PayloadRef, StoreError>;
 
     /// Removes the bodies no remaining reference requires, and every copy
-    /// the store manages, records `payload.purged` in every affected
-    /// project, then scrubs the file.
+    /// the store manages, records `payload.purged` in this project's chain,
+    /// then scrubs the file.
     fn purge(
         &self,
         command: &Command,
         hashes: &[Hash],
         reason: &str,
     ) -> Result<PurgeReport, StoreError>;
+
+    /// Repeats the idempotent scrub, including backups in the home.
+    fn scrub(&self) -> Result<ScrubReport, StoreError>;
 
     /// Replays the project's events into a new generation of every view
     /// and makes it live at once.
@@ -255,12 +258,21 @@ pub struct PurgeReport {
     pub purged: Vec<Hash>,
     /// Bodies kept because another project still requires them.
     pub shared: Vec<Hash>,
-    /// The `payload.purged` event recorded in each affected project.
+    /// The `payload.purged` event in the purging project.
     pub recorded: Vec<(ProjectId, u64)>,
-    /// Exports outside the home the purge cannot reach.
+    /// Backups in the home the scrub could not rewrite or skipped; exports are added by T12.
     pub unreachable: Vec<PathBuf>,
-    /// Whether the scrub's last truncating checkpoint left no copy behind.
+    /// Whether the main database scrub completed.
     pub scrubbed: bool,
+}
+
+/// The standalone scrub's result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrubReport {
+    /// Whether the main database scrub completed.
+    pub scrubbed: bool,
+    /// Backups in the home that could not be fully rewritten.
+    pub unreachable: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
