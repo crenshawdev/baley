@@ -2,8 +2,9 @@
 //!
 //! None of these is a domain outcome. A domain outcome, success or a real
 //! refusal, is recorded as `command.completed` and comes back as `Ok`
-//! (design 0001, Commands). These record nothing: the caller re-reads and
-//! retries with the same request id, waits, or stops.
+//! (design 0001, Commands). Apart from `CleanupFailed`, these record
+//! nothing: the caller re-reads and retries with the same request id,
+//! waits, or stops.
 
 use std::fmt;
 
@@ -13,7 +14,9 @@ use crate::event::{Hash, ProjectId, RequestId};
 use crate::payload::PayloadReference;
 use crate::view::DocKey;
 
-/// A port operation that recorded nothing.
+/// Why a port operation did not return its result. Every variant but
+/// `CleanupFailed` means the operation recorded nothing; `CleanupFailed`
+/// comes after a rebuild whose new generation is already live.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
     /// Something the decision depended on changed between the caller's slow
@@ -37,6 +40,18 @@ pub enum StoreError {
     },
     /// The engine failed: I/O, a full disk, a corrupt file.
     Unavailable(String),
+    /// A rebuild made `live_generation` live, and then removing the old
+    /// generation failed with `cause`. The flip stands: reads and commands
+    /// use the new generation, and the next rebuild removes what is left.
+    CleanupFailed {
+        project: ProjectId,
+        live_generation: u64,
+        cause: Box<StoreError>,
+    },
+    /// A rebuild or view verification that never finished, as after a
+    /// crash, left `generation` behind. Views cannot be verified until a
+    /// rebuild removes it. Nothing live was changed.
+    UnfinishedGeneration { project: ProjectId, generation: u64 },
 }
 
 /// The input that moved.
@@ -89,7 +104,10 @@ pub enum Refusal {
     UnknownView(String),
     /// The view declares no index of that name; `find` never scans.
     UndeclaredIndex { view: String, index: String },
-    /// A key or index value does not fit the declared fields.
+    /// A key or index value does not fit the declared fields. At open, also
+    /// a view declared badly, or a view spec or view set changed under a
+    /// version already recorded: `view` then names the view whose spec
+    /// changed, or one that is in only one of the two sets.
     MalformedKey { view: String, reason: String },
     /// No payload with that hash is stored.
     UnknownPayload(Hash),
@@ -135,6 +153,23 @@ impl fmt::Display for StoreError {
                 write!(f, "projector for {view} failed at event {seq}: {message}")
             }
             Self::Unavailable(reason) => write!(f, "store unavailable: {reason}"),
+            Self::CleanupFailed {
+                project,
+                live_generation,
+                cause,
+            } => write!(
+                f,
+                "project {} now reads generation {live_generation}; removing the old generation failed and is left for the next rebuild: {cause}",
+                project.0
+            ),
+            Self::UnfinishedGeneration {
+                project,
+                generation,
+            } => write!(
+                f,
+                "project {} holds generation {generation} of a rebuild or view verification that never finished; rebuild the project first",
+                project.0
+            ),
         }
     }
 }

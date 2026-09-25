@@ -127,6 +127,9 @@ pub(crate) mod scripted {
         last: Mutex<Duration>,
         step: Duration,
         pauses: Mutex<Vec<Duration>>,
+        /// Run in every pause, where the store holds no queue turn, so a
+        /// test can act between two batches it cannot otherwise reach.
+        during_pause: Mutex<Option<Box<dyn FnMut() + Send>>>,
     }
 
     impl Scripted {
@@ -143,7 +146,26 @@ pub(crate) mod scripted {
                 last: Mutex::new(Duration::ZERO),
                 step,
                 pauses: Mutex::new(Vec::new()),
+                during_pause: Mutex::new(None),
             })
+        }
+
+        /// Runs `action` once, in the next pause.
+        pub(crate) fn at_next_pause(&self, action: impl FnOnce() + Send + 'static) {
+            let mut action = Some(action);
+            self.at_every_pause(move || {
+                if let Some(action) = action.take() {
+                    action();
+                }
+            });
+        }
+
+        /// Runs `action` in every pause from now on.
+        pub(crate) fn at_every_pause(&self, action: impl FnMut() + Send + 'static) {
+            *self
+                .during_pause
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(Box::new(action));
         }
 
         /// The next readings, in order.
@@ -181,6 +203,18 @@ pub(crate) mod scripted {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(duration);
+            let slot = || {
+                self.during_pause
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+            };
+            // Taken out while it runs, so an action that pauses this timing
+            // again does not wait on itself.
+            let taken = slot().take();
+            if let Some(mut action) = taken {
+                action();
+                slot().get_or_insert(action);
+            }
         }
     }
 }

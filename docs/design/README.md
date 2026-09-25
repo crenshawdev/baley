@@ -18,14 +18,14 @@ Bug fixes, refactors inside one module and dependency updates do not need one. W
 | Kind | Location | Purpose | Lifecycle |
 |---|---|---|---|
 | Design document | `docs/design/NNNN-slug.md` | The proposed design for one piece of work, before it is built | Draft, In review, Accepted, Rejected, Superseded |
-| Decision record (ADR) | `docs/adr/NNNN-slug.md` | One architectural decision, its context and its consequences | Proposed, Accepted, Superseded |
+| Decision record (ADR) | `docs/adr/NNNN-slug.md` | One architectural decision, its context and its consequences | Proposed; Accepted; Accepted, superseded in part by NNNN; Superseded by NNNN |
 | Architecture overview | `docs/architecture/` | The system as it is built today | Updated with the code that changes it |
 
 Numbers are four digits, assigned in order and never reused. Start a design document from [TEMPLATE.md](TEMPLATE.md) and a decision record from [../adr/TEMPLATE.md](../adr/TEMPLATE.md).
 
 **Design documents** describe what will be built and why. They are written before the code, and their diagrams come before the code too. Once accepted, a design document is the record of the approved design, and it moves with the code: the pull request that builds part of it amends the sections and figures its code makes more exact or shows to have drifted, and lists each amendment in its description. A change of direction, rather than of precision, gets its own design document, and the old one is marked Superseded with a link forward.
 
-**Decision records** follow Michael Nygard's format through the [MADR](https://adr.github.io/madr/) template. Each one holds exactly one decision. An accepted record is never edited; a new record supersedes it. Design documents list the decisions they produce, and each decision links back to its design document.
+**Decision records** follow Michael Nygard's format through the [MADR](https://adr.github.io/madr/) template. Each one holds exactly one decision. An accepted record's body is never edited; a new record supersedes it. The only change allowed is filling the accepted record's "Superseded by" row when a later record supersedes it, in whole or in part, and its status in the [decision record index](../adr/README.md) then reads "Superseded by NNNN" or "Accepted, superseded in part by NNNN". Design documents list the decisions they produce, and each decision links back to its design document.
 
 **The architecture overview** shows only what exists in the code. It is updated in the same pull request as the code that changes it, never ahead of it.
 

@@ -44,8 +44,10 @@ pub trait EventSchema: Send + Sync {
     /// projection and replay both hand projectors a copy of the event with
     /// these in place; the stored event, its hash and its references never
     /// change. The default reads an event only at its own version, and only
-    /// when `reads` holds; a schema with upcasters overrides it. The error
-    /// says why the event cannot be read.
+    /// when `reads` holds; a schema with upcasters overrides it, and must
+    /// still refuse every event `reads` refuses, since replay relies on this
+    /// error to stop at an event the binary cannot read. The error says why
+    /// the event cannot be read.
     fn projection_payload(&self, event: &Event) -> Result<(u32, Value), String> {
         if self.reads(&event.type_name, event.type_version) {
             Ok((event.type_version, event.payload.clone()))
@@ -261,15 +263,19 @@ pub trait Admin {
     /// view at once in one transaction. Commands keep writing the live
     /// generation meanwhile, and the tail catches them up. The old
     /// generation is removed before this returns; a failure there comes
-    /// back as an error that says the new generation is already live.
-    /// Views only rebuild forward: a project whose live views a newer
+    /// back as `StoreError::CleanupFailed`, naming the generation already
+    /// live. Views only rebuild forward: a project whose live views a newer
     /// binary built is refused as read-only.
     fn rebuild(&self, project: &ProjectId) -> Result<RebuildReport, StoreError>;
 
     /// Replays the project's events into a scratch generation that never
     /// becomes live, compares every registered view's stored rows with the
     /// live generation's at one head, and removes the scratch rows,
-    /// including after an error. Changes no live row, event or payload.
+    /// including after an error. Views behind this binary's are first
+    /// rebuilt forward, as a rebuild would; apart from that it changes no
+    /// live row, event or payload. Returns
+    /// `StoreError::UnfinishedGeneration` while a rebuild or verification
+    /// that never finished has left its generation behind.
     fn verify_views(&self, project: &ProjectId) -> Result<ViewsReport, StoreError>;
 
     /// The store's health as of `at`, a supplied UTC time, with each
