@@ -42,7 +42,8 @@ pub struct TraceEntry {
 /// so a read never waits behind this store's own write.
 pub struct SqliteStore {
     writer: Mutex<Connection>,
-    reader: Mutex<Connection>,
+    /// Crate-visible so a test can see whether a stream holds it.
+    pub(crate) reader: Mutex<Connection>,
     queue: WriterQueue,
     options: Options,
 }

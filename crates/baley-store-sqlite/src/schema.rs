@@ -80,6 +80,7 @@ CREATE TABLE payload (
   purge_reason TEXT,
   CHECK ((state = 'present') = (body IS NOT NULL)),
   CHECK ((state = 'reduced') = (excerpt_hash IS NOT NULL)),
+  CHECK (excerpt_hash IS NULL OR excerpt_hash <> hash),
   CHECK ((excerpt_hash IS NULL) = (excerpt_class IS NULL)),
   CHECK ((excerpt_hash IS NULL) = (kept IS NULL)),
   CHECK ((state = 'purged') = (purge_reason IS NOT NULL))

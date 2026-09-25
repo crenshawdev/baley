@@ -90,6 +90,10 @@ pub enum Refusal {
     MalformedKey { view: String, reason: String },
     /// No payload with that hash is stored.
     UnknownPayload(Hash),
+    /// Bytes whose hash was reduced or purged cannot be stored again: the
+    /// new reference would point at a body that is gone, and storing it anew
+    /// would bring the purged content back for the old references.
+    PayloadTombstoned(Hash),
     /// A cursor this store did not issue, or issued for another query.
     InvalidCursor,
     /// The event cannot be sealed: see the reason.

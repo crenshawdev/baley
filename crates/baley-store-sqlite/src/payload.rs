@@ -24,8 +24,9 @@ use crate::store::{SqliteStore, connect, sql};
 const ZSTD: &str = "zstd";
 
 /// Stores `bytes` once under the SHA-256 of the uncompressed bytes and
-/// returns the reference an event carries. A hash already stored is left as
-/// it is, whatever its state: Figure 7 has no way back from a tombstone.
+/// returns the reference an event carries. A present body is not stored
+/// again. A reduced or purged one is refused: Figure 7 has no way back from
+/// a tombstone, and a new reference must not point at a body that is gone.
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "the transaction of task 7 calls it")
@@ -38,24 +39,29 @@ pub(crate) fn put_payload(
     let hash = Hash(Sha256::digest(bytes).into());
     let length = u64::try_from(bytes.len())
         .map_err(|_| StoreError::Unavailable("a payload longer than 2^64 bytes".into()))?;
-    let stored = tx
+    let state = tx
         .query_row(
-            "SELECT 1 FROM payload WHERE hash = ?1",
+            "SELECT state FROM payload WHERE hash = ?1",
             [&hash.0[..]],
-            |_| Ok(()),
+            |row| row.get::<_, String>(0),
         )
         .optional()
-        .map_err(sql)?
-        .is_some();
-    if !stored {
-        let body = zstd::bulk::compress(bytes, zstd::DEFAULT_COMPRESSION_LEVEL)
-            .map_err(|error| StoreError::Unavailable(format!("compressing a payload: {error}")))?;
-        tx.execute(
-            "INSERT INTO payload (hash, bytes, encoding, body, state)
-             VALUES (?1, ?2, ?3, ?4, 'present')",
-            params![&hash.0[..], sql_int(length)?, ZSTD, body],
-        )
         .map_err(sql)?;
+    match state.as_deref() {
+        Some("present") => {}
+        Some(_) => return Err(StoreError::Refused(Refusal::PayloadTombstoned(hash))),
+        None => {
+            let body =
+                zstd::bulk::compress(bytes, zstd::DEFAULT_COMPRESSION_LEVEL).map_err(|error| {
+                    StoreError::Unavailable(format!("compressing a payload: {error}"))
+                })?;
+            tx.execute(
+                "INSERT INTO payload (hash, bytes, encoding, body, state)
+                 VALUES (?1, ?2, ?3, ?4, 'present')",
+                params![&hash.0[..], sql_int(length)?, ZSTD, body],
+            )
+            .map_err(sql)?;
+        }
     }
     Ok(PayloadRef {
         hash,
@@ -308,9 +314,6 @@ fn sql_int(value: u64) -> Result<i64, StoreError> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, mpsc};
-    use std::thread;
-    use std::time::Duration;
 
     use super::*;
     use crate::store::Options;
@@ -593,8 +596,8 @@ mod tests {
         let PayloadBody::Present(mut stream) = store.open(&payload.hash).expect("open") else {
             panic!("the body is gone");
         };
-        let mut streamed = vec![0; 1000];
-        stream.read_exact(&mut streamed).expect("first bytes");
+        // Purged after the open and before any byte is read, so the
+        // snapshot must have been taken by `open` itself.
         raw(home.path())
             .execute(
                 "UPDATE payload SET state = 'purged', body = NULL, purge_reason = 'owner purge'
@@ -602,55 +605,135 @@ mod tests {
                 [&payload.hash.0[..]],
             )
             .expect("purge by hand");
-        stream.read_to_end(&mut streamed).expect("the rest");
+        let mut streamed = Vec::new();
+        stream.read_to_end(&mut streamed).expect("the body");
         assert!(streamed == original, "the streamed body differs");
     }
 
-    // While a stream is open, the store still reads through its own read
-    // connection. Catches a stream that holds that connection's lock for
-    // its life. The read runs on its own thread so a regression fails on
-    // the timeout instead of hanging the suite.
+    // While a stream is open, the store's read connection is free: its lock
+    // can be taken at once. Catches a stream that holds that lock for its
+    // life, blocking every other read on the store.
     #[test]
     fn an_open_stream_leaves_the_read_connection_free() {
         let home = tempfile::tempdir().expect("temp dir");
-        let store = Arc::new(open(home.path()));
+        let store = open(home.path());
         let payload = put(&store, &noise(300_000), RetentionClass::Output);
         let stream = store.open(&payload.hash).expect("open");
-
-        let (answered, answer) = mpsc::channel();
-        let reader = Arc::clone(&store);
-        let hash = payload.hash;
-        thread::spawn(move || {
-            answered.send(reader.status(&hash)).expect("send");
-        });
-        let status = answer.recv_timeout(Duration::from_secs(2));
+        assert!(
+            store.reader.try_lock().is_ok(),
+            "an open stream holds the store's read connection"
+        );
         drop(stream);
-        assert_eq!(status, Ok(Ok(PayloadStatus::Present { bytes: 300_000 })));
     }
 
-    // The schema refuses a tombstone that is half written: reduced without
-    // its ranges, purged without a reason, or present without a body.
-    // Catches a tombstone the read side would have to guess at.
+    /// Runs `sql` against a raw connection with the original's and the
+    /// excerpt's hashes bound, and says whether a CHECK refused it.
+    fn check_refuses(home: &Path, sql: &str, original: &Hash, excerpt: &Hash) -> bool {
+        let result = raw(home).execute(sql, [&original.0[..], &excerpt.0[..]]);
+        matches!(result, Err(error) if error.to_string().contains("CHECK constraint failed"))
+    }
+
+    // A reduced row without its excerpt class and kept ranges is refused.
+    // Catches a reduction the read side would have to guess at.
     #[test]
-    fn the_schema_refuses_a_half_written_tombstone() {
+    fn the_schema_refuses_a_reduction_without_its_ranges() {
         let home = tempfile::tempdir().expect("temp dir");
         let store = open(home.path());
         let original = put(&store, b"original", RetentionClass::Output);
         let excerpt = put(&store, b"excerpt", RetentionClass::Output);
-        let conn = raw(home.path());
-        let refused = |sql: &str| {
-            let result = conn.execute(sql, [&original.hash.0[..], &excerpt.hash.0[..]]);
-            matches!(result, Err(error) if error.to_string().contains("CHECK constraint failed"))
-        };
-        assert!(refused(
+        assert!(check_refuses(
+            home.path(),
             "UPDATE payload SET state = 'reduced', body = NULL, excerpt_hash = ?2,
-               excerpt_class = 'output' WHERE hash = ?1"
+               excerpt_class = 'output' WHERE hash = ?1",
+            &original.hash,
+            &excerpt.hash,
         ));
-        assert!(refused(
-            "UPDATE payload SET state = 'purged', body = NULL WHERE hash = ?1 AND ?2 IS NOT NULL"
+    }
+
+    // A purged row without its reason is refused. Catches a purge that
+    // records no cause.
+    #[test]
+    fn the_schema_refuses_a_purge_without_a_reason() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        let original = put(&store, b"original", RetentionClass::Output);
+        let excerpt = put(&store, b"excerpt", RetentionClass::Output);
+        assert!(check_refuses(
+            home.path(),
+            "UPDATE payload SET state = 'purged', body = NULL WHERE hash = ?1 AND ?2 IS NOT NULL",
+            &original.hash,
+            &excerpt.hash,
         ));
-        assert!(refused(
-            "UPDATE payload SET body = NULL WHERE hash = ?1 AND ?2 IS NOT NULL"
+    }
+
+    // A present row without a body is refused. Catches a body lost while
+    // the row still claims it.
+    #[test]
+    fn the_schema_refuses_a_present_row_without_a_body() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        let original = put(&store, b"original", RetentionClass::Output);
+        let excerpt = put(&store, b"excerpt", RetentionClass::Output);
+        assert!(check_refuses(
+            home.path(),
+            "UPDATE payload SET body = NULL WHERE hash = ?1 AND ?2 IS NOT NULL",
+            &original.hash,
+            &excerpt.hash,
+        ));
+    }
+
+    // A payload cannot be reduced to an excerpt of itself. Catches a
+    // reduction whose excerpt is the body it replaced.
+    #[test]
+    fn the_schema_refuses_an_excerpt_of_itself() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        let original = put(&store, b"original", RetentionClass::Output);
+        assert!(check_refuses(
+            home.path(),
+            "UPDATE payload SET state = 'reduced', body = NULL, excerpt_hash = ?2,
+               excerpt_class = 'output', kept = '[[0, 8]]' WHERE hash = ?1",
+            &original.hash,
+            &original.hash,
+        ));
+    }
+
+    // Bytes whose hash was reduced or purged are refused, and nothing is
+    // stored or referenced for them. Catches a new reference pointing at a
+    // body that is gone, or a purged body brought back.
+    #[test]
+    fn storing_tombstoned_bytes_again_is_refused() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        let purged = put(&store, b"a secret", RetentionClass::Material);
+        let reduced = put(&store, b"long output", RetentionClass::Output);
+        let excerpt = put(&store, b"excerpt", RetentionClass::Output);
+        let conn = raw(home.path());
+        conn.execute(
+            "UPDATE payload SET state = 'purged', body = NULL, purge_reason = 'owner purge'
+             WHERE hash = ?1",
+            [&purged.hash.0[..]],
+        )
+        .expect("purge by hand");
+        conn.execute(
+            "UPDATE payload SET state = 'reduced', body = NULL, excerpt_hash = ?2,
+               excerpt_class = 'output', kept = '[[0, 4]]' WHERE hash = ?1",
+            [&reduced.hash.0[..], &excerpt.hash.0[..]],
+        )
+        .expect("reduce by hand");
+
+        for (bytes, hash) in [
+            (&b"a secret"[..], purged.hash),
+            (&b"long output"[..], reduced.hash),
+        ] {
+            assert_eq!(
+                store.write(|tx| put_payload(tx, bytes, RetentionClass::Record)),
+                Err(StoreError::Refused(Refusal::PayloadTombstoned(hash)))
+            );
+        }
+        assert!(matches!(
+            store.status(&purged.hash),
+            Ok(PayloadStatus::Purged { .. })
         ));
     }
 
