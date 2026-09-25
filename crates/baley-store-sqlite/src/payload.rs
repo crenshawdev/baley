@@ -27,10 +27,6 @@ const ZSTD: &str = "zstd";
 /// returns the reference an event carries. A present body is not stored
 /// again. A reduced or purged one is refused: Figure 7 has no way back from
 /// a tombstone, and a new reference must not point at a body that is gone.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the transaction of task 7 calls it")
-)]
 pub(crate) fn put_payload(
     tx: &rusqlite::Transaction<'_>,
     bytes: &[u8],
@@ -73,10 +69,6 @@ pub(crate) fn put_payload(
 /// Records that event `seq` of `project` uses `payload` under its class.
 /// The event and the payload must already be stored; the foreign keys
 /// refuse otherwise.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the transaction of task 7 calls it")
-)]
 pub(crate) fn put_reference(
     tx: &rusqlite::Transaction<'_>,
     project: &ProjectId,
@@ -89,7 +81,7 @@ pub(crate) fn put_reference(
             project.0,
             sql_int(seq)?,
             &payload.hash.0[..],
-            class_name(payload.class)
+            payload.class.as_str()
         ],
     )
     .map_err(sql)?;
@@ -187,7 +179,7 @@ fn stored(conn: &Connection, hash: &Hash) -> Result<Stored, StoreError> {
                 .ok_or_else(|| corrupt("reduced without a stored excerpt"))?;
             let class = excerpt_class
                 .as_deref()
-                .and_then(parse_class)
+                .and_then(RetentionClass::parse)
                 .ok_or_else(|| corrupt("reduced without an excerpt class"))?;
             PayloadStatus::Reduced {
                 excerpt: PayloadRef {
@@ -289,25 +281,8 @@ fn body_stream<'a, S: ChunkSource + 'a>(source: S) -> io::Result<Box<dyn Read + 
     Ok(Box::new(decoder))
 }
 
-fn class_name(class: RetentionClass) -> &'static str {
-    match class {
-        RetentionClass::Record => "record",
-        RetentionClass::Output => "output",
-        RetentionClass::Material => "material",
-    }
-}
-
-fn parse_class(text: &str) -> Option<RetentionClass> {
-    match text {
-        "record" => Some(RetentionClass::Record),
-        "output" => Some(RetentionClass::Output),
-        "material" => Some(RetentionClass::Material),
-        _ => None,
-    }
-}
-
 /// SQLite integers are signed.
-fn sql_int(value: u64) -> Result<i64, StoreError> {
+pub(crate) fn sql_int(value: u64) -> Result<i64, StoreError> {
     i64::try_from(value)
         .map_err(|_| StoreError::Unavailable(format!("{value} does not fit a SQLite integer")))
 }
