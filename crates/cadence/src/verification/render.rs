@@ -54,9 +54,6 @@ pub fn text(report: &Value) -> String {
             entry["applicability"].as_str().unwrap_or_default(), entry["reason"].as_str().unwrap_or_default(),
             statuses(&entry["truths"])));
     }
-    let present = |document: &str| if report["legacy"][document] == true { "present" } else { "absent" };
-    out.push_str(&format!("Legacy: SUMMARY {}, UAT {} - historical classification only, never native evidence.\n",
-        present("summary_document"), present("uat_document")));
     out
 }
 

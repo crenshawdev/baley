@@ -13,7 +13,6 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path};
 
 pub const SCHEMA: &str = "verification-report-1";
-pub const LEGACY: &str = "historical classification only; never native evidence";
 const NO_ATTEMPT: &str = "no verification attempt";
 const UNAVAILABLE: &str = "current verification inputs unavailable";
 const NOT_CURRENT: &str = "no complete verification on the current basis";
@@ -201,9 +200,7 @@ pub fn report(root: &Path, data: &Value, phase: u32, process: &mut dyn Process) 
             "reason":reason,"verified_at":current.map(|(a, _)| &a.inputs.basis),"observed":observed,"unavailable":unavailable},
         "truths":truths,"counts":counts,"waivers":applicable,"advice":advice,"history":history,
         "humans":super::human::items(data, phase)?,
-        "completion":completion,
-        "legacy":{"summary_document":root.join(format!("phases/{phase}/SUMMARY.md")).is_file(),
-            "uat_document":root.join(format!("phases/{phase}/UAT.md")).is_file(),"authority":LEGACY}}))
+        "completion":completion}))
 }
 
 #[cfg(test)]
