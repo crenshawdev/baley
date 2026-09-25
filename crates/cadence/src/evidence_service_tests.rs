@@ -13,13 +13,7 @@ fn factory() -> SessionFactory {
     SessionFactory::new(None, Arc::new(|_, _| Ok(())))
 }
 fn fixture() -> tempfile::TempDir {
-    let root = tempfile::tempdir().unwrap();
-    std::fs::write(
-        root.path().join("STATE.md"),
-        "Phase: 5 of 5 (Evidence)\nStatus: planned\nNext:  exact imported next\n",
-    )
-    .unwrap();
-    root
+    tempfile::tempdir().unwrap()
 }
 
 #[test]
