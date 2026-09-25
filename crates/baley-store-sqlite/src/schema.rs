@@ -63,19 +63,34 @@ CREATE UNIQUE INDEX event_stream ON event(project_id, stream, stream_version);
 CREATE INDEX event_type ON event(project_id, type, seq);
 CREATE INDEX event_commit ON event(project_id, git_commit);
 
+-- A rowid table, not WITHOUT ROWID: incremental blob I/O, which streams a
+-- body in chunks, addresses rows by rowid. A reduced or purged row keeps its
+-- hash and length and holds its tombstone in place of the body: the excerpt
+-- and the ranges it keeps (`kept`, JSON `[[start, end], ...]`), or the
+-- reason for the purge.
 CREATE TABLE payload (
   hash BLOB PRIMARY KEY CHECK (length(hash) = 32),
-  bytes INTEGER NOT NULL,
+  bytes INTEGER NOT NULL CHECK (bytes >= 0),
   encoding TEXT NOT NULL,
   body BLOB,
-  state TEXT NOT NULL
+  state TEXT NOT NULL CHECK (state IN ('present', 'reduced', 'purged')),
+  excerpt_hash BLOB REFERENCES payload(hash),
+  excerpt_class TEXT CHECK (excerpt_class IN ('record', 'output', 'material')),
+  kept TEXT CHECK (json_valid(kept)),
+  purge_reason TEXT,
+  CHECK ((state = 'present') = (body IS NOT NULL)),
+  CHECK ((state = 'reduced') = (excerpt_hash IS NOT NULL)),
+  CHECK (excerpt_hash IS NULL OR excerpt_hash <> hash),
+  CHECK ((excerpt_hash IS NULL) = (excerpt_class IS NULL)),
+  CHECK ((excerpt_hash IS NULL) = (kept IS NULL)),
+  CHECK ((state = 'purged') = (purge_reason IS NOT NULL))
 ) STRICT;
 
 CREATE TABLE payload_ref (
   project_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
   hash BLOB NOT NULL REFERENCES payload(hash),
-  class TEXT NOT NULL,
+  class TEXT NOT NULL CHECK (class IN ('record', 'output', 'material')),
   expires_at TEXT,
   PRIMARY KEY (project_id, seq, hash),
   FOREIGN KEY (project_id, seq) REFERENCES event(project_id, seq)

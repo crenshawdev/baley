@@ -13,8 +13,14 @@ baley-store = { path = "../baley-store" }
 # `bundled` compiles SQLite from source with FTS5, so no system SQLite is
 # used; `backup` exposes the online backup API `baley backup` is built on.
 # The design's benchmark ran on rusqlite 0.40.1 with SQLite 3.53.2; the lock
-# file holds whatever 0.40 resolves to.
-rusqlite = { version = "0.40", features = ["bundled", "backup"] }
+# file holds whatever 0.40 resolves to. `blob` is SQLite's incremental blob
+# I/O, so a payload body is read in chunks rather than loaded whole.
+rusqlite = { version = "0.40", features = ["bundled", "backup", "blob"] }
+# Payloads are keyed by the SHA-256 of their uncompressed bytes (EVD-R11).
+sha2 = "0.10"
+# Payload bodies are stored zstd-compressed and read back through its
+# stream decoder.
+zstd = "0.13"
 
 [dev-dependencies]
 # Each store test opens its database in a fresh temporary directory it owns.

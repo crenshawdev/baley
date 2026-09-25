@@ -42,7 +42,8 @@ pub struct TraceEntry {
 /// so a read never waits behind this store's own write.
 pub struct SqliteStore {
     writer: Mutex<Connection>,
-    reader: Mutex<Connection>,
+    /// Crate-visible so a test can see whether a stream holds it.
+    pub(crate) reader: Mutex<Connection>,
     queue: WriterQueue,
     options: Options,
 }
@@ -177,7 +178,7 @@ impl SqliteStore {
 
 /// A connection with the design's per-connection settings. None of them
 /// writes to the database file.
-fn connect(path: &Path) -> Result<Connection, StoreError> {
+pub(crate) fn connect(path: &Path) -> Result<Connection, StoreError> {
     let conn = Connection::open(path).map_err(sql)?;
     conn.busy_timeout(Duration::from_millis(5000))
         .map_err(sql)?;
@@ -280,7 +281,7 @@ fn lock(conn: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
     conn.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn sql(error: rusqlite::Error) -> StoreError {
+pub(crate) fn sql(error: rusqlite::Error) -> StoreError {
     match error.sqlite_error_code() {
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => StoreError::Busy,
         _ => StoreError::Unavailable(error.to_string()),
