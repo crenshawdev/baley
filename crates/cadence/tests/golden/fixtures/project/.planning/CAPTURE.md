@@ -1,7 +1,0 @@
-# Capture
-
-## Todos
-
-## Seeds
-
-## Notes
