@@ -9,6 +9,8 @@ use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
+
 use crate::chain::{Anchor, ChainReport, Head};
 use crate::claim::{Claim, ClaimDecision, ClaimId, ClaimOwner, Claimed, Reconciliation};
 use crate::command::{Command, Decision, EventMatch, NewEvent, Recorded, StreamName};
@@ -36,6 +38,24 @@ pub type DecideReconcile<'a> =
 /// fence a project before its next write (EVD-R19).
 pub trait EventSchema: Send + Sync {
     fn reads(&self, type_name: &str, version: u32) -> bool;
+
+    /// The version and payload a projector sees for a stored event: the
+    /// type's current version and the payload upcast to it. Ordinary
+    /// projection and replay both hand projectors a copy of the event with
+    /// these in place; the stored event, its hash and its references never
+    /// change. The default reads an event only at its own version, and only
+    /// when `reads` holds; a schema with upcasters overrides it. The error
+    /// says why the event cannot be read.
+    fn projection_payload(&self, event: &Event) -> Result<(u32, Value), String> {
+        if self.reads(&event.type_name, event.type_version) {
+            Ok((event.type_version, event.payload.clone()))
+        } else {
+            Err(format!(
+                "{} version {} is not readable by this binary",
+                event.type_name, event.type_version
+            ))
+        }
+    }
 }
 
 /// The ledger: commands in, events and chain reports out.
@@ -173,7 +193,10 @@ pub trait Transaction {
     fn open_claims(&mut self) -> Result<Vec<Claim>, StoreError>;
 }
 
-/// View reads outside a transaction. One query runs against one snapshot.
+/// View reads outside a transaction. One query runs against one snapshot,
+/// in which the project's live views are also checked: built by a newer
+/// binary, the read is refused as read-only; built by an older one, they
+/// are rebuilt forward first.
 pub trait Views {
     fn get(
         &self,
@@ -232,12 +255,21 @@ pub trait Admin {
     /// Repeats the idempotent scrub, including backups in the home.
     fn scrub(&self) -> Result<ScrubReport, StoreError>;
 
-    /// Replays the project's events into a new generation of every view
-    /// and makes it live at once.
+    /// Replays the project's events into a new generation of every
+    /// registered view, in short batches that yield the writer queue, then
+    /// applies the remaining tail and makes the generation live for every
+    /// view at once in one transaction. Commands keep writing the live
+    /// generation meanwhile, and the tail catches them up. The old
+    /// generation is removed before this returns; a failure there comes
+    /// back as an error that says the new generation is already live.
+    /// Views only rebuild forward: a project whose live views a newer
+    /// binary built is refused as read-only.
     fn rebuild(&self, project: &ProjectId) -> Result<RebuildReport, StoreError>;
 
-    /// Rebuilds the project's views into a scratch generation and reports
-    /// every document that differs from the live one.
+    /// Replays the project's events into a scratch generation that never
+    /// becomes live, compares every registered view's stored rows with the
+    /// live generation's at one head, and removes the scratch rows,
+    /// including after an error. Changes no live row, event or payload.
     fn verify_views(&self, project: &ProjectId) -> Result<ViewsReport, StoreError>;
 
     /// The store's health as of `at`, a supplied UTC time, with each
@@ -277,15 +309,23 @@ pub struct ScrubReport {
     pub unreachable: Vec<PathBuf>,
 }
 
+/// What a rebuild made live.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RebuildReport {
+    /// The generation now live.
     pub generation: u64,
+    /// Every event replayed into it, the final tail included: the head it
+    /// flipped at, for a chain without gaps.
     pub events: u64,
 }
 
+/// What a view verification found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewsReport {
-    /// (view, key) of every document that differs from its rebuild.
+    /// The project head both generations were compared at.
+    pub checked_seq: u64,
+    /// (view, key) of every document that is missing, extra or unequal in
+    /// the live generation against its replay, sorted by view and key.
     pub differing: Vec<(String, DocKey)>,
 }
 

@@ -25,7 +25,7 @@ const ZSTD: &str = "zstd";
 
 /// Stores `bytes` once under the SHA-256 of the uncompressed bytes and
 /// returns the reference an event carries. A present body is not stored
-/// again. A reduced or purged one is refused: Figure 7 has no way back from
+/// again. A reduced or purged one is refused: Figure 8 has no way back from
 /// a tombstone, and a new reference must not point at a body that is gone.
 pub(crate) fn put_payload(
     tx: &rusqlite::Transaction<'_>,

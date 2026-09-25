@@ -3,18 +3,19 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::num::NonZeroU32;
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use baley_store::{
-    COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, EventSchema, Hash, Head, PAYLOAD_PURGED,
+    COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, Event, EventSchema, Hash, Head, PAYLOAD_PURGED,
     PAYLOAD_PURGED_VERSION, PAYLOAD_REDUCED, PAYLOAD_REDUCED_VERSION, ProjectId, Projector,
     RequestProjector, StoreError, ViewSpec, store_owned,
 };
 use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
 
-use crate::queue::WriterQueue;
+use crate::queue::{FileLock, Monotonic, Timing, Turn, pause_for};
 use crate::schema::{EPOCH, SCHEMA};
 use crate::view::ViewSet;
 
@@ -33,15 +34,27 @@ pub struct Options {
     /// own `command.*` types. A project holding any other is read-only
     /// here, and a decision may append no other (EVD-R19).
     pub schema: Box<dyn EventSchema>,
+    /// The version of the whole registered view set, `request` included.
+    /// Raised whenever a view is added, removed or renamed; version 1 is
+    /// `request` alone. Open pins each version to its sorted view names and
+    /// refuses a changed set under a version already recorded. Every
+    /// generation is stamped with it, so a project whose live set is newer
+    /// is read-only here and one whose set is older rebuilds forward.
+    pub view_set_version: NonZeroU32,
+    /// The clock and pause of rebuilds, cleanups and view verification.
+    pub timing: Arc<dyn Timing>,
 }
 
 impl Default for Options {
-    /// No projectors, and a schema that reads none of the core's types.
+    /// No projectors, view set version 1, a schema that reads none of the
+    /// core's types, and the monotonic clock.
     fn default() -> Self {
         Self {
             trace_cap: 10_000,
             projectors: Vec::new(),
             schema: Box::new(ReadsNothing),
+            view_set_version: NonZeroU32::MIN,
+            timing: Arc::new(Monotonic),
         }
     }
 }
@@ -56,6 +69,7 @@ impl fmt::Debug for Options {
         f.debug_struct("Options")
             .field("trace_cap", &self.trace_cap)
             .field("projectors", &views)
+            .field("view_set_version", &self.view_set_version)
             .finish_non_exhaustive()
     }
 }
@@ -88,7 +102,10 @@ pub struct SqliteStore {
     writer: Mutex<Connection>,
     /// Crate-visible so a test can see whether a stream holds it.
     pub(crate) reader: Mutex<Connection>,
-    queue: WriterQueue,
+    queue: FileLock,
+    /// Held for a whole rebuild or view verification.
+    maintenance_lock: FileLock,
+    timing: Arc<dyn Timing>,
     trace_cap: u64,
     views: ViewSet,
     /// The store's `request` projector first, then the core's.
@@ -109,9 +126,10 @@ impl SqliteStore {
     /// until migration exists, and a missing schema is created under the
     /// writer queue with `at` as its creation time. A store at this
     /// binary's epoch must be in write-ahead-log mode with 8 KiB pages.
-    /// The declared views are checked before anything is touched, and at
-    /// this binary's epoch their missing tables and indexes are created
-    /// through the write path; a read-only store creates none.
+    /// The declared views and the view set version's names are checked
+    /// before anything is touched, and at this binary's epoch their missing
+    /// tables, indexes and catalog rows are created through the write path;
+    /// a read-only store creates none. No project's views are looked at.
     /// The home must already exist; locating it and checking its safety is
     /// slice 2's work.
     pub fn open(home: &Path, at: &str, options: Options) -> Result<Self, StoreError> {
@@ -127,8 +145,9 @@ impl SqliteStore {
             .iter()
             .map(|projector| projector.spec().clone())
             .collect();
-        let views = ViewSet::new(&specs)?;
-        let queue = WriterQueue::open(&home.join("baley.db.writer")).map_err(io)?;
+        let views = ViewSet::new(&specs, options.view_set_version)?;
+        let queue = FileLock::open(&home.join("baley.db.writer")).map_err(io)?;
+        let maintenance_lock = FileLock::open(&home.join("baley.db.maintenance")).map_err(io)?;
         let path = home.join("baley.db");
         let writer = connect(&path)?;
 
@@ -154,6 +173,8 @@ impl SqliteStore {
             writer: Mutex::new(writer),
             reader: Mutex::new(reader),
             queue,
+            maintenance_lock,
+            timing: options.timing,
             trace_cap: options.trace_cap,
             views,
             projectors,
@@ -161,12 +182,11 @@ impl SqliteStore {
             readable: Mutex::new(BTreeMap::new()),
             home: home.to_path_buf(),
         };
-        // Most opens find every view in place, and ask on the read
-        // connection, so they take neither the queue nor a write.
-        if epoch == EPOCH
-            && !store.views.is_empty()
-            && store.snapshot(|conn| store.views.pending(conn))?
-        {
+        // Most opens find every view and the view set in place, and ask on
+        // the read connection, so they take neither the queue nor a write.
+        // No project is looked at: each is brought to this binary's views
+        // on its first use.
+        if epoch == EPOCH && store.snapshot(|conn| store.views.pending(conn))? {
             // An epoch raised by a newer binary since it was read above
             // leaves this store read-only, and read-only creates nothing.
             match store.write(|tx| store.views.create(tx)) {
@@ -194,6 +214,40 @@ impl SqliteStore {
             || (type_name == PAYLOAD_REDUCED && version == PAYLOAD_REDUCED_VERSION)
             || (type_name == PAYLOAD_PURGED && version == PAYLOAD_PURGED_VERSION)
             || (!store_owned(type_name) && self.schema.reads(type_name, version))
+    }
+
+    /// The copy of `event` projectors see: a core type at its current
+    /// version with its payload upcast, a store type exactly as recorded.
+    /// The event itself is left as stored. The error says why it cannot be
+    /// read.
+    pub(crate) fn projection_copy(&self, event: &Event) -> Result<Event, String> {
+        if store_owned(&event.type_name) {
+            return if self.reads(&event.type_name, event.type_version) {
+                Ok(event.clone())
+            } else {
+                Err(format!(
+                    "{} version {} is not readable by this binary",
+                    event.type_name, event.type_version
+                ))
+            };
+        }
+        let (type_version, payload) = self.schema.projection_payload(event)?;
+        Ok(Event {
+            type_version,
+            payload,
+            ..event.clone()
+        })
+    }
+
+    /// The store's clock and pause.
+    pub(crate) fn timing(&self) -> &dyn Timing {
+        self.timing.as_ref()
+    }
+
+    /// Waits for this thread's turn at a rebuild or view verification, in
+    /// this process and then across processes.
+    pub(crate) fn hold_maintenance(&self) -> Result<Turn<'_>, StoreError> {
+        self.maintenance_lock.wait().map_err(io)
     }
 
     /// The per-project readable-through marks.
@@ -269,6 +323,36 @@ impl SqliteStore {
         f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
         let _turn = self.queue.wait().map_err(io)?;
+        self.transaction(f)
+    }
+
+    /// One batch of a rebuild, cleanup or view verification: a write like
+    /// `write`, given the instant its queue turn began, then `after`,
+    /// still holding the queue, then a pause as long as the turn held the
+    /// queue. The hold runs from the queue's acquisition, not the wait for
+    /// it, through commit and release. The pause follows a failed batch
+    /// too, since it held the queue all the same.
+    pub(crate) fn batch<T, U>(
+        &self,
+        f: impl FnOnce(&rusqlite::Transaction<'_>, Duration) -> Result<T, StoreError>,
+        after: impl FnOnce(T) -> Result<U, StoreError>,
+    ) -> Result<U, StoreError> {
+        let turn = self.queue.wait().map_err(io)?;
+        let acquired = self.timing.now();
+        let result = self.transaction(|tx| f(tx, acquired)).and_then(after);
+        drop(turn);
+        let released = self.timing.now();
+        self.timing
+            .pause(pause_for(released.saturating_sub(acquired)));
+        result
+    }
+
+    /// The write connection's `BEGIN IMMEDIATE`, the epoch, `f` and commit,
+    /// for a caller that holds the queue.
+    fn transaction<T>(
+        &self,
+        f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
         let mut conn = lock(&self.writer);
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -344,7 +428,7 @@ fn stored_epoch(conn: &Connection) -> Result<Option<u32>, StoreError> {
 
 /// Creates the file settings and the schema under the writer queue. A
 /// second process that was waiting finds the schema and changes nothing.
-fn create(conn: &Connection, queue: &WriterQueue, at: &str) -> Result<(), StoreError> {
+fn create(conn: &Connection, queue: &FileLock, at: &str) -> Result<(), StoreError> {
     let _turn = queue.wait().map_err(io)?;
     if stored_epoch(conn)?.is_some() {
         return Ok(());
@@ -407,7 +491,7 @@ fn check_file_settings(conn: &Connection) -> Result<(), StoreError> {
 
 /// A panic during a write leaves the connection as the unwinding
 /// transaction left it: rolled back. Nothing to repair.
-fn lock(conn: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
+pub(crate) fn lock(conn: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
     conn.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

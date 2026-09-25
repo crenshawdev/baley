@@ -257,6 +257,14 @@ impl EventSchema for Registry {
         self.current_version(type_name)
             .is_some_and(|current| (1..=current).contains(&version))
     }
+
+    /// The current version and the payload upcast to it, so a projector
+    /// only ever sees the current shape, whichever version was recorded.
+    fn projection_payload(&self, event: &Event) -> Result<(u32, Value), String> {
+        self.read(event)
+            .map(|current| (current.version, current.payload))
+            .map_err(|fence| fence.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -515,6 +523,30 @@ mod tests {
         let registry = registry();
         assert_eq!(registry.current_version("phase.declared"), Some(3));
         assert_eq!(registry.current_version("phase.forgotten"), None);
+    }
+
+    // The store projects a version-1 event as the current version with the
+    // upcast payload, the same answer `read` gives, and leaves the stored
+    // event as it was. Catches a projection that keeps the stored version
+    // beside the new shape, or hands projectors the raw payload.
+    #[test]
+    fn projection_sees_the_current_version_and_shape() {
+        let stored = event(
+            "p",
+            1,
+            "phase.declared",
+            1,
+            json!({"phase": 1, "name": "The Store"}),
+        );
+        let before = stored.clone();
+        assert_eq!(
+            registry().projection_payload(&stored),
+            Ok((
+                3,
+                json!({"phase": 1, "title": "The Store", "slug": "the-store", "goal": null})
+            ))
+        );
+        assert_eq!(stored, before);
     }
 
     // The schema the store fences with reads every version from 1 to the

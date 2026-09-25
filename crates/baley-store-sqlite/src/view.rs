@@ -8,15 +8,23 @@
 //! a SQL index, `v_<view>_<version>__<index>`, on the project, the
 //! generation, its fields in their orders, then the key, so every order is
 //! total. `view_catalog` keeps each version's spec as text, so a spec changed
-//! without a new version is refused instead of read through the old table.
-//! `find` pages through its index with seeks bounded in SQL, never a scan or
-//! a sort.
+//! without a new version is refused instead of read through the old table,
+//! and `view_set_catalog` keeps each view set version's names, so a set
+//! changed without a new version is refused too. `find` pages through its
+//! index with seeks bounded in SQL, never a scan or a sort.
+//!
+//! Every read and every new command first checks the project's live
+//! generation against this binary's views, in the snapshot it reads from:
+//! built by a newer binary, the project is read-only here; built by an
+//! older one or never stamped, it is brought forward first (see
+//! `rebuild.rs`).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU32;
 
 use baley_store::{
-    Change, Cursor, DocKey, Document, FieldKind, IndexQuery, IndexSpec, KeyValue, Order, Page,
-    ProjectId, Refusal, StoreError, ViewSpec, Views, canonical_json,
+    Change, Cursor, DocKey, Document, Event, FieldKind, IndexQuery, IndexSpec, KeyValue, Order,
+    Page, ProjectId, Refusal, StoreError, ViewSpec, Views, canonical_json,
 };
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
@@ -29,8 +37,12 @@ use crate::store::{SqliteStore, sql};
 /// sets no limit of its own on identifiers.
 const MAX_NAME: usize = 48;
 
-/// The declared views, checked once when the store opens.
-pub(crate) struct ViewSet(BTreeMap<String, ViewTable>);
+/// The declared views and the version of their set, checked once when the
+/// store opens.
+pub(crate) struct ViewSet {
+    tables: BTreeMap<String, ViewTable>,
+    version: NonZeroU32,
+}
 
 /// One checked view and the SQL names it becomes.
 pub(crate) struct ViewTable {
@@ -91,7 +103,7 @@ struct Found {
 impl ViewSet {
     /// Checks every spec. Names become SQL identifiers, so anything that is
     /// not a plain lowercase identifier is refused rather than quoted.
-    pub(crate) fn new(specs: &[ViewSpec]) -> Result<Self, StoreError> {
+    pub(crate) fn new(specs: &[ViewSpec], version: NonZeroU32) -> Result<Self, StoreError> {
         let mut views = BTreeMap::new();
         for spec in specs {
             let table = ViewTable::new(spec).map_err(|reason| malformed(&spec.name, reason))?;
@@ -99,20 +111,19 @@ impl ViewSet {
                 return Err(malformed(&spec.name, "the view is declared twice".into()));
             }
         }
-        Ok(Self(views))
+        Ok(Self {
+            tables: views,
+            version,
+        })
     }
 
-    /// Whether no view is declared, so open has nothing to check.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Whether any view still needs its catalog row, table or an index.
-    /// Refuses a version stored with another spec. Reads only, so open can
-    /// ask on the read connection before it takes the writer queue.
+    /// Whether any view still needs its catalog row, table or an index, or
+    /// the set version its names. Refuses a version stored with another
+    /// spec, and a set version stored with other names. Reads only, so open
+    /// can ask on the read connection before it takes the writer queue.
     pub(crate) fn pending(&self, conn: &Connection) -> Result<bool, StoreError> {
-        let mut pending = false;
-        for table in self.0.values() {
+        let mut pending = self.set_pending(conn)?;
+        for table in self.tables.values() {
             pending |= table.pending(conn)?;
         }
         Ok(pending)
@@ -121,7 +132,14 @@ impl ViewSet {
     /// Checks again inside the write transaction, then creates whatever is
     /// still missing.
     pub(crate) fn create(&self, tx: &rusqlite::Transaction<'_>) -> Result<(), StoreError> {
-        for table in self.0.values() {
+        if self.set_pending(tx)? {
+            tx.execute(
+                "INSERT INTO view_set_catalog (version, sorted_view_names) VALUES (?1, ?2)",
+                params![self.version.get(), self.names()],
+            )
+            .map_err(sql)?;
+        }
+        for table in self.tables.values() {
             if !table.pending(tx)? {
                 continue;
             }
@@ -135,15 +153,265 @@ impl ViewSet {
         Ok(())
     }
 
+    /// The registered names, sorted, as `view_set_catalog` stores them.
+    fn names(&self) -> String {
+        self.tables.keys().cloned().collect::<Vec<_>>().join(" ")
+    }
+
+    /// Whether this set version has no names recorded yet. Names recorded
+    /// for it that differ from the registered ones are refused, naming the
+    /// first view in one and not the other: the set changed without a new
+    /// version, and projects stamped with it would be read as current.
+    fn set_pending(&self, conn: &Connection) -> Result<bool, StoreError> {
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT sorted_view_names FROM view_set_catalog WHERE version = ?1",
+                [self.version.get()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql)?;
+        let Some(stored) = stored else {
+            return Ok(true);
+        };
+        let stored: BTreeSet<&str> = stored.split(' ').collect();
+        let registered: BTreeSet<&str> = self.tables.keys().map(String::as_str).collect();
+        match stored.symmetric_difference(&registered).next() {
+            None => Ok(false),
+            Some(view) => Err(malformed(
+                view,
+                format!(
+                    "view set version {} is stored with other views; a changed view set needs a new version",
+                    self.version
+                ),
+            )),
+        }
+    }
+
     /// The declared view of that name.
     pub(crate) fn table(&self, view: &str) -> Result<&ViewTable, StoreError> {
-        self.0
+        self.tables
             .get(view)
             .ok_or_else(|| StoreError::Refused(Refusal::UnknownView(view.to_owned())))
     }
+
+    /// Every declared view, by name.
+    pub(crate) fn tables(&self) -> impl Iterator<Item = &ViewTable> {
+        self.tables.values()
+    }
+
+    /// The view set version this binary declares.
+    pub(crate) fn version(&self) -> NonZeroU32 {
+        self.version
+    }
+
+    /// What the project's live views are to this binary, for a read or a
+    /// new command, which use every view. A newer stamp wins over anything
+    /// behind: rebuilding would take the views backward.
+    pub(crate) fn judge_set(&self, live: &LiveViews) -> Fence {
+        let Some(generation) = live.generation else {
+            return unstamped(live);
+        };
+        let declared = i64::from(self.version.get());
+        if let Some(set) = live
+            .stamps
+            .values()
+            .map(|stamp| stamp.set)
+            .find(|&set| set > declared)
+        {
+            return Fence::Newer(format!(
+                "its live view set version {set} is newer than this binary's {declared}"
+            ));
+        }
+        for table in self.tables.values() {
+            if let Some(newer) = table.newer(live) {
+                return newer;
+            }
+        }
+        let behind = live.stamps.values().any(|stamp| stamp.set != declared)
+            || live
+                .stamps
+                .keys()
+                .any(|view| !self.tables.contains_key(view))
+            || self.tables.values().any(|table| {
+                live.stamps
+                    .get(&table.spec.name)
+                    .map(|stamp| stamp.projector)
+                    != Some(i64::from(table.spec.version))
+            });
+        if behind {
+            Fence::Behind
+        } else {
+            Fence::Current(generation)
+        }
+    }
+
+    /// What the project's live `request` view is to this binary, for the
+    /// request lookup, which reads no other view and ignores the set.
+    pub(crate) fn judge_request(&self, live: &LiveViews) -> Result<Fence, StoreError> {
+        let Some(generation) = live.generation else {
+            return Ok(unstamped(live));
+        };
+        let table = self.table(baley_store::REQUEST_VIEW)?;
+        if let Some(newer) = table.newer(live) {
+            return Ok(newer);
+        }
+        Ok(
+            match live
+                .stamps
+                .get(&table.spec.name)
+                .map(|stamp| stamp.projector)
+            {
+                Some(version) if version == i64::from(table.spec.version) => {
+                    Fence::Current(generation)
+                }
+                _ => Fence::Behind,
+            },
+        )
+    }
+}
+
+/// A project without `project_gen`: an empty chain only needs its stamps,
+/// events need a rebuild. An absent stamp never proves a view current.
+fn unstamped(live: &LiveViews) -> Fence {
+    if live.head == 0 {
+        Fence::Unstamped
+    } else {
+        Fence::Behind
+    }
+}
+
+/// One view's stamp in the live generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Stamp {
+    pub(crate) projector: i64,
+    pub(crate) set: i64,
+}
+
+/// A project's live generation, its head and the stamps of every view row
+/// in that generation, as one snapshot reads them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LiveViews {
+    /// `None` while the project has no `project_gen` row.
+    pub(crate) generation: Option<i64>,
+    pub(crate) head: u64,
+    pub(crate) stamps: BTreeMap<String, Stamp>,
+}
+
+/// What a project's live views are to this binary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Fence {
+    /// Built by this binary's projectors and view set: read this generation.
+    Current(i64),
+    /// Never used, with an empty chain: generation 0 needs its stamps.
+    Unstamped,
+    /// Built by an older binary, missing a view or holding one this binary
+    /// retired: rebuild forward before use.
+    Behind,
+    /// Built by a newer binary: read-only here, for the reason given.
+    Newer(String),
+}
+
+/// The project's live generation and stamps. An unknown project is refused.
+pub(crate) fn live_views(conn: &Connection, project: &ProjectId) -> Result<LiveViews, StoreError> {
+    let (head, generation) = conn
+        .query_row(
+            "SELECT p.head_seq, g.live_gen FROM project p
+               LEFT JOIN project_gen g ON g.project_id = p.project_id
+              WHERE p.project_id = ?1",
+            [&project.0],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?)),
+        )
+        .optional()
+        .map_err(sql)?
+        .ok_or_else(|| StoreError::Refused(Refusal::UnknownProject(project.clone())))?;
+    let head = u64::try_from(head)
+        .map_err(|_| StoreError::Unavailable(format!("a stored head of {head}")))?;
+    let mut stamps = BTreeMap::new();
+    if let Some(generation) = generation {
+        let mut statement = conn
+            .prepare(
+                "SELECT view, projector_version, view_set_version FROM view_gen
+                  WHERE project_id = ?1 AND gen = ?2",
+            )
+            .map_err(sql)?;
+        let rows = statement
+            .query_map(params![project.0, generation], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    Stamp {
+                        projector: row.get(1)?,
+                        set: row.get(2)?,
+                    },
+                ))
+            })
+            .map_err(sql)?;
+        for row in rows {
+            let (view, stamp) = row.map_err(sql)?;
+            stamps.insert(view, stamp);
+        }
+    }
+    Ok(LiveViews {
+        generation,
+        head,
+        stamps,
+    })
 }
 
 impl ViewTable {
+    /// The declared spec.
+    pub(crate) fn spec(&self) -> &ViewSpec {
+        &self.spec
+    }
+
+    /// The refusal a live stamp newer than this view's projector gives.
+    fn newer(&self, live: &LiveViews) -> Option<Fence> {
+        let stored = live.stamps.get(&self.spec.name)?.projector;
+        (stored > i64::from(self.spec.version)).then(|| {
+            Fence::Newer(format!(
+                "its live {} view has projector version {stored}; this binary's is {}",
+                self.spec.name, self.spec.version
+            ))
+        })
+    }
+
+    /// Every stored row of a project's generation, in key order: the key
+    /// columns, then the index columns, `produced_seq`, `projector_version`
+    /// and `doc_json`, all compared by view verification.
+    pub(crate) fn rows_sql(&self) -> String {
+        let keys: Vec<String> = self.key_columns().collect();
+        let mut columns = keys.clone();
+        columns.extend(
+            self.index_columns
+                .iter()
+                .map(|(name, _)| format!("i_{name}")),
+        );
+        columns.extend(["produced_seq", "projector_version", "doc_json"].map(String::from));
+        format!(
+            "SELECT {} FROM {} WHERE project_id = ?1 AND generation = ?2 ORDER BY {}",
+            columns.join(", "),
+            self.table,
+            keys.iter()
+                .map(|column| format!("{column} ASC"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+
+    /// One row of `rows_sql`: its key, and every other column as stored.
+    pub(crate) fn stored_row(&self, row: &Row<'_>) -> rusqlite::Result<(DocKey, Vec<SqlValue>)> {
+        let mut key = Vec::with_capacity(self.spec.key.len());
+        for (at, field) in self.spec.key.iter().enumerate() {
+            key.push(key_value(row, at, field.kind)?);
+        }
+        let rest = self.index_columns.len() + 3;
+        let mut values = Vec::with_capacity(rest);
+        for at in 0..rest {
+            values.push(row.get::<_, SqlValue>(self.spec.key.len() + at)?);
+        }
+        Ok((DocKey(key), values))
+    }
+
     /// Checks one spec; the reason names what is wrong.
     fn new(spec: &ViewSpec) -> Result<Self, String> {
         let unsafe_name = |what: &str, name: &str| {
@@ -500,6 +768,32 @@ impl ViewTable {
     }
 }
 
+/// Every physical view table `view_catalog` records, registered by this
+/// binary or not, in catalog order. Cleanup reaches old versions and views
+/// retired since through these.
+pub(crate) fn catalog_tables(conn: &Connection) -> Result<Vec<String>, StoreError> {
+    let mut statement = conn
+        .prepare("SELECT view, version FROM view_catalog ORDER BY view, version")
+        .map_err(sql)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+        })
+        .map_err(sql)?;
+    let mut tables = Vec::new();
+    for row in rows {
+        let (view, version) = row.map_err(sql)?;
+        // Checked when it was recorded; checked again before it becomes SQL.
+        if !safe_identifier(&view) {
+            return Err(StoreError::Unavailable(format!(
+                "the view catalog names {view:?}, which is not a view name"
+            )));
+        }
+        tables.push(format!("v_{view}_{version}"));
+    }
+    Ok(tables)
+}
+
 /// The spec as `view_catalog` keeps it: one line per part, every field with
 /// its kind and, in an index, its order. Names are plain identifiers, so
 /// the text needs no escaping and one spec has exactly one rendering.
@@ -613,22 +907,6 @@ fn document(row: &Row<'_>, key: DocKey) -> rusqlite::Result<Document> {
     })
 }
 
-/// The project's live generation. A project with no `project_gen` row has
-/// never been rebuilt and reads generation 0.
-fn live_generation(conn: &Connection, project: &ProjectId) -> Result<i64, StoreError> {
-    conn.query_row(
-        "SELECT g.live_gen FROM project p
-           LEFT JOIN project_gen g ON g.project_id = p.project_id
-          WHERE p.project_id = ?1",
-        [&project.0],
-        |row| row.get::<_, Option<i64>>(0),
-    )
-    .optional()
-    .map_err(sql)?
-    .map(|generation| generation.unwrap_or(0))
-    .ok_or_else(|| StoreError::Refused(Refusal::UnknownProject(project.clone())))
-}
-
 /// Puts or deletes one document in `generation`, stamped with the event
 /// that produced it and the view's projector version. A put's body must
 /// hold every key field equal to `key` and every index field, each of its
@@ -726,28 +1004,17 @@ pub(crate) fn write_change(
     Ok(())
 }
 
-/// `write_change` into the project's live generation, for ordinary writes.
-pub(crate) fn write_live(
-    tx: &rusqlite::Transaction<'_>,
-    view: &ViewTable,
-    project: &ProjectId,
-    change: &Change,
-    produced_seq: u64,
-) -> Result<(), StoreError> {
-    let generation = live_generation(tx, project)?;
-    write_change(tx, view, project, generation, change, produced_seq)
-}
-
-/// The document at `key` in the project's live generation. Takes any
-/// connection, so a write transaction reads its own writes.
+/// The document at `key` in `generation`: the live one for reads and
+/// commands, the one being built for replay. Takes any connection, so a
+/// write transaction reads its own writes.
 pub(crate) fn get_document(
     conn: &Connection,
     view: &ViewTable,
     project: &ProjectId,
+    generation: i64,
     key: &DocKey,
 ) -> Result<Option<Document>, StoreError> {
     let key_values = view.key_values(key)?;
-    let generation = live_generation(conn, project)?;
     let mut params = vec![
         SqlValue::Text(project.0.clone()),
         SqlValue::Integer(generation),
@@ -775,6 +1042,91 @@ pub(crate) struct Staged {
     pub(crate) produced_seq: u64,
 }
 
+/// Per view, the documents a run of events changed, held in memory until
+/// each is written once.
+pub(crate) type Staging = BTreeMap<String, BTreeMap<DocKey, Staged>>;
+
+/// Folds one event into `staged` through every projector that handles its
+/// type, the store's own first. `event` is the projection copy
+/// (`SqliteStore::projection_copy`). A document not yet staged is read from
+/// `generation`. Ordinary projection and replay both go through here, so
+/// the same events make the same documents either way.
+pub(crate) fn fold(
+    store: &SqliteStore,
+    conn: &Connection,
+    project: &ProjectId,
+    generation: i64,
+    event: &Event,
+    staged: &mut Staging,
+) -> Result<(), StoreError> {
+    for projector in store.projectors() {
+        if !projector.handles().contains(&event.type_name.as_str()) {
+            continue;
+        }
+        let view = projector.spec().name.clone();
+        let table = store.views().table(&view)?;
+        let mut documents = Vec::new();
+        for key in projector.keys(event) {
+            let body = match staged.get(&view).and_then(|staged| staged.get(&key)) {
+                Some(staged) => staged.body.clone(),
+                None => get_document(conn, table, project, generation, &key)?
+                    .map(|document| document.body),
+            };
+            if let Some(body) = body {
+                documents.push((key, body));
+            }
+        }
+        let changes =
+            projector
+                .apply(event, &documents)
+                .map_err(|error| StoreError::Projector {
+                    view: view.clone(),
+                    seq: event.seq,
+                    message: error.0,
+                })?;
+        let staged = staged.entry(view).or_default();
+        for change in changes {
+            let (key, body) = match change {
+                Change::Put { key, body } => (key, Some(body)),
+                Change::Delete { key } => (key, None),
+            };
+            staged.insert(
+                key,
+                Staged {
+                    body,
+                    produced_seq: event.seq,
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Writes each staged document once into `generation`, stamped with the
+/// last event that changed it.
+pub(crate) fn write_staged(
+    tx: &rusqlite::Transaction<'_>,
+    store: &SqliteStore,
+    project: &ProjectId,
+    generation: i64,
+    staged: &Staging,
+) -> Result<(), StoreError> {
+    for (view, documents) in staged {
+        let table = store.views().table(view)?;
+        for (key, staged) in documents {
+            let change = match &staged.body {
+                Some(body) => Change::Put {
+                    key: key.clone(),
+                    body: body.clone(),
+                },
+                None => Change::Delete { key: key.clone() },
+            };
+            write_change(tx, table, project, generation, &change, staged.produced_seq)?;
+        }
+    }
+    Ok(())
+}
+
 impl Staged {
     /// The document a read sees, or `None` for a deletion.
     pub(crate) fn document(&self, view: &ViewTable, key: &DocKey) -> Option<Document> {
@@ -787,18 +1139,19 @@ impl Staged {
     }
 }
 
-/// A page of at most `min(limit, page_bound)` documents by a declared
-/// index, in its order, with a cursor when more follow. A cursor issued
-/// under another generation or view version is refused. A limit of zero
-/// reads nothing and gives no cursor. Takes any connection, so a write
+/// A page of at most `min(limit, page_bound)` documents of `generation` by
+/// a declared index, in its order, with a cursor when more follow. A cursor
+/// issued under another generation or view version is refused. A limit of
+/// zero reads nothing and gives no cursor. Takes any connection, so a write
 /// transaction reads what it has written.
 pub(crate) fn find_documents(
     conn: &Connection,
     view: &ViewTable,
     project: &ProjectId,
+    generation: i64,
     query: &IndexQuery,
 ) -> Result<Page<Document>, StoreError> {
-    find_with_staged(conn, view, project, query, &BTreeMap::new())
+    find_with_staged(conn, view, project, generation, query, &BTreeMap::new())
 }
 
 /// `find_documents` over the stored documents with the transaction's
@@ -811,6 +1164,7 @@ pub(crate) fn find_with_staged(
     conn: &Connection,
     view: &ViewTable,
     project: &ProjectId,
+    generation: i64,
     query: &IndexQuery,
     staged: &BTreeMap<DocKey, Staged>,
 ) -> Result<Page<Document>, StoreError> {
@@ -818,7 +1172,6 @@ pub(crate) fn find_with_staged(
     let equals = view.equals_values(index, &query.equals)?;
     let fixed = query.equals.len();
     let order = view.order_after(index, fixed);
-    let generation = live_generation(conn, project)?;
     let identity = cursor_identity(project, view, generation, query);
     let after = match &query.page.after {
         Some(cursor) => {
@@ -981,7 +1334,8 @@ fn decode(text: &str, kind: FieldKind) -> Option<(KeyValue, &str)> {
 }
 
 impl Views for SqliteStore {
-    /// The document at `key` in the project's live generation.
+    /// The document at `key` in the project's live generation, read in the
+    /// snapshot that found the generation current; see `read_current`.
     fn get(
         &self,
         project: &ProjectId,
@@ -989,11 +1343,13 @@ impl Views for SqliteStore {
         key: &DocKey,
     ) -> Result<Option<Document>, StoreError> {
         let table = self.views().table(view)?;
-        self.snapshot(|conn| get_document(conn, table, project, key))
+        self.read_current(project, |conn, generation| {
+            get_document(conn, table, project, generation, key)
+        })
     }
 
-    /// A page by a declared index, read in one snapshot; see
-    /// `find_documents`.
+    /// A page by a declared index, read in the snapshot that found the
+    /// generation current; see `find_documents` and `read_current`.
     fn find(
         &self,
         project: &ProjectId,
@@ -1001,7 +1357,9 @@ impl Views for SqliteStore {
         query: &IndexQuery,
     ) -> Result<Page<Document>, StoreError> {
         let table = self.views().table(view)?;
-        self.snapshot(|conn| find_documents(conn, table, project, query))
+        self.read_current(project, |conn, generation| {
+            find_documents(conn, table, project, generation, query)
+        })
     }
 }
 
@@ -1012,6 +1370,7 @@ mod tests {
     use baley_store::{FieldSpec, IndexField, PageRequest, Projector};
 
     use super::*;
+    use crate::queue::scripted::Scripted;
     use crate::store::Options;
 
     const AT: &str = "2026-09-25T18:00:00Z";
@@ -1080,12 +1439,16 @@ mod tests {
         }
     }
 
+    /// Set version 1 is `request` alone, so a set with a view of its own
+    /// declares 2.
     fn open_with(home: &Path, views: Vec<ViewSpec>) -> Result<SqliteStore, StoreError> {
         let options = Options {
             projectors: views
                 .into_iter()
                 .map(|spec| Box::new(Declares(spec)) as Box<dyn Projector>)
                 .collect(),
+            view_set_version: NonZeroU32::new(2).expect("positive"),
+            timing: Scripted::still(),
             ..Options::default()
         };
         SqliteStore::open(home, AT, options)
@@ -1127,22 +1490,44 @@ mod tests {
         }
     }
 
+    /// Writes into the live generation, 0 before the project has one.
     fn apply(store: &SqliteStore, change: &Change, seq: u64) -> Result<(), StoreError> {
-        store.write(|tx| write_live(tx, store.views().table("item")?, &project(), change, seq))
+        store.write(|tx| {
+            let generation = live_views(tx, &project())?.generation.unwrap_or(0);
+            write_change(
+                tx,
+                store.views().table("item")?,
+                &project(),
+                generation,
+                change,
+                seq,
+            )
+        })
     }
 
     fn put(store: &SqliteStore, id: i64, state: &str, rank: i64, owner: &str, seq: u64) {
         apply(store, &item(id, state, rank, owner), seq).expect("put");
     }
 
+    /// Makes generation 1 live, stamped as this binary would stamp it, for
+    /// every registered view, `request` included, so no read rebuilds it.
     fn flip_to_generation_1(store: &SqliteStore) {
         store
             .write(|tx| {
                 tx.execute(
-                    "INSERT INTO project_gen (project_id, live_gen) VALUES ('p1', 1)",
+                    "INSERT INTO project_gen (project_id, live_gen) VALUES ('p1', 1)
+                     ON CONFLICT (project_id) DO UPDATE SET live_gen = 1",
                     [],
                 )
                 .map_err(sql)?;
+                for (view, version) in [("item", 3), ("request", 1)] {
+                    tx.execute(
+                        "INSERT INTO view_gen (project_id, gen, view, projector_version, view_set_version)
+                         VALUES ('p1', 1, ?1, ?2, 2)",
+                        params![view, version],
+                    )
+                    .map_err(sql)?;
+                }
                 Ok(())
             })
             .expect("flip");
