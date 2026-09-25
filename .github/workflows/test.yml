@@ -88,6 +88,17 @@ jobs:
       - run: rustup component add clippy
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # baley-core must not reach the engine (design 0001, EVD-R12). The
+      # forward tree is grepped: `cargo tree -i rusqlite` prints a warning and
+      # exits 0 when nothing depends on it, so it cannot fail this step.
+      - name: baley-core cannot reach rusqlite
+        run: |
+          set -euo pipefail
+          if cargo tree -p baley-core -e normal --prefix none --locked | grep -E '^(rusqlite|libsqlite3-sys) '; then
+            echo "::error::baley-core depends on the SQLite engine"
+            exit 1
+          fi
+
   cargo-deny:
     # Advisories, licenses and sources for everything in Cargo.lock. Pinned
     # prebuilt release, same reason as nextest: the job does not build its tool.

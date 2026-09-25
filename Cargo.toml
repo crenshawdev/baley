@@ -1,9 +1,15 @@
-# Virtual workspace manifest (D-01): the Rust code lives under `crates/` so a
-# second member can be added without moving the first one. Phase 1 has exactly
-# one member (D-11); excerpt is not vendored here.
+# Virtual workspace manifest: the Rust code lives under `crates/`. `cadence`
+# is the running 4.0 binary until the Baley crates replace it (design 0001,
+# slice 9); the four `baley*` crates are the evidence ledger being built.
 [workspace]
 # Stated rather than inferred. A virtual root has no `edition` of its own, so
 # without this it would fall back to the 2015 resolver while the member is on
 # edition 2024 - two different feature-unification rules over one lockfile.
 resolver = "3"
-members = ["crates/cadence"]
+members = [
+    "crates/cadence",
+    "crates/baley-store",
+    "crates/baley-core",
+    "crates/baley-store-sqlite",
+    "crates/baley",
+]
