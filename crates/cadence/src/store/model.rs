@@ -175,7 +175,16 @@ pub struct Snapshot {
 }
 
 pub fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex(&Sha256::digest(bytes))
+}
+
+/// Lowercase hex of a digest. sha2 0.11's output type has no `LowerHex`.
+pub fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
 }
 
 impl Snapshot {
@@ -526,5 +535,10 @@ mod tests {
             );
         }
         assert_ne!(Evidence::Missing, Evidence::Null);
+    }
+
+    #[test]
+    fn digest_is_the_lowercase_hex_sha256() {
+        assert_eq!(digest(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
 }

@@ -480,7 +480,7 @@ fn measure(read_lines: &BTreeMap<String, u64>, phase: u32, session_id: &str, fir
     }
     worker_ids.sort();
     worker_ids.dedup();
-    let source_digest = format!("{:x}", hasher.finalize());
+    let source_digest = crate::store::model::hex(&hasher.finalize());
     let difference = i128::from(token_total) - i128::from(BASELINE);
     let ratio = token_total as f64 / BASELINE as f64;
     let body = format!(concat!(
@@ -591,7 +591,7 @@ pub fn resolve_rollout(session_id: &str) -> Result<RolloutReport, Value> {
     let counts = count_reads(Host::Codex, &records, &BTreeMap::new())?;
     let read_count: u64 = counts.values().map(|tally| tally.calls).sum();
     let unclassified_reads = counts.get("unclassified").map_or(0, |tally| tally.calls);
-    let source_digest = format!("{:x}", Sha256::digest(&bytes));
+    let source_digest = crate::store::model::hex(&Sha256::digest(&bytes));
     let body = format!(concat!(
         "Codex rollout measurement\n",
         "host: codex\n",

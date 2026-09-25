@@ -6,9 +6,9 @@ use sha2::{Digest, Sha256};
 use std::{collections::{BTreeMap, BTreeSet}, path::Path};
 
 pub fn identity(manifest: &Manifest) -> Result<String> {
-    Ok(format!("undo-manifest-{:x}", Sha256::digest(serde_json::to_vec(&(
+    Ok(format!("undo-manifest-{}", crate::store::model::hex(&Sha256::digest(serde_json::to_vec(&(
         manifest.phase, &manifest.root_binding, &manifest.source, &manifest.occurrence,
-        &manifest.hashes, &manifest.provenance))?)))
+        &manifest.hashes, &manifest.provenance))?))))
 }
 
 /// Accepted closes are already chronological; neither task names nor Git dates order them.
@@ -65,7 +65,7 @@ fn legacy(root: &Path, phase: u32) -> Result<(Vec<String>, Value)> {
             .ok_or_else(|| Error::Invalid(format!("{}: malformed manifest entry {line}", path.display())))?;
         hashes.push(hash.to_owned());
     }
-    Ok((hashes, json!({"document":{"kind":"phase-summary","phase":phase},"sha256":format!("{:x}", Sha256::digest(&bytes))})))
+    Ok((hashes, json!({"document":{"kind":"phase-summary","phase":phase},"sha256":crate::store::model::hex(&Sha256::digest(&bytes))})))
 }
 
 pub fn read(root: &Path, data: &Value, binding: &str, phase: u32, process: &mut dyn Process) -> Result<Manifest> {

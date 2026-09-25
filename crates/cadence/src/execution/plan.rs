@@ -478,7 +478,7 @@ fn normalize_lease_path(input: &str) -> Result<String, PlanError> {
 fn fingerprint_bytes<T: Serialize>(value: &T) -> Result<String, PlanError> {
     let bytes = serde_json::to_vec(value)
         .map_err(|error| PlanError::new("fingerprint", error.to_string()))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(crate::store::model::hex(&Sha256::digest(bytes)))
 }
 
 pub fn plan_set_fingerprint(plans: &[ExecutionPlan]) -> Result<String, PlanError> {

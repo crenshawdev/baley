@@ -17,7 +17,7 @@ pub struct RetainedMaterial {
 }
 
 pub fn artifact_content_id(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    crate::store::model::hex(&Sha256::digest(bytes))
 }
 
 /// Store keys are logical addresses interpreted by the durable-storage adapter.
