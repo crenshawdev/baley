@@ -399,22 +399,22 @@ sequenceDiagram
   L->>Q: check compatibility epoch, look up request
   alt request already answered
     L->>Q: ROLLBACK
-    L-->>C: original outcome; a released answer returns its tombstone
+    L-->>C: original outcome, a released answer returns its tombstone
   else new request
     L->>Q: check project event types and versions are readable
     L->>C: decide(transaction)
     C->>L: read inputs through Transaction, return observed slow-work inputs
     C->>L: confirm authority against events, append events, put payloads
     L->>Q: write payload bodies when put_payload is called
-    L->>Q: re-check observed documents and absences; compare supplied git facts seen and now
-    Note over L,Q: Git is not read inside the transaction yet; issue #40 (Build 4)
+    L->>Q: re-check observed documents and absences, compare supplied git facts seen and now
+    Note over L,Q: Git is not read inside the transaction yet, issue #40 (Build 4)
     alt input moved or any Transaction operation failed
       L->>Q: ROLLBACK
       L-->>C: error, nothing recorded
     else current
       L->>Q: refuse a stored payload no event attaches
       L->>Q: insert events with hash chain and references, write projected views
-      L->>Q: command.completed with git facts; answer inline up to 4 KiB unless sensitive, else record payload
+      L->>Q: command.completed with git facts, answer inline up to 4 KiB unless sensitive, else record payload
       L->>Q: advance project head
       L->>Q: COMMIT (synchronous, survives power loss)
       L-->>C: outcome
@@ -520,9 +520,11 @@ A reference stops requiring its body when its project records `payload.reduced` 
 
 **Reduction** applies only to an `output` reference. It stores the first and last 64 KiB as a new `record` payload attached to `payload.reduced`, which names the original hash, excerpt hash and byte ranges kept. An output of 128 KiB or less is kept whole and records no event. The store checks the original body's hash and length before releasing the reference. The original body is tombstoned only when no other reference still requires it whole. Reduction after purge is refused. Verification checks the excerpt in full and the original as a commitment.
 
-**Purge** first releases the purging project's references to each named hash, including the excerpt references attached by that project's own reductions of an original. In one transaction it tombstones every body no unreleased reference requires, removes stored request answer bodies and derived trace rows, records `payload.purged` in the purging project's chain, and marks `scrub_pending`. Trace removal covers every row naming a removed body and the purging project's rows naming a body it released. A trace entry derived from a body must name it. Search rows join this removal in slice 8. Events, request rows and view documents remain; they hold no body text.
+**Purge** first releases the purging project's references to each named hash, including the excerpt references attached by that project's own reductions of an original. In one transaction it tombstones every body no unreleased reference requires, removes stored request answer bodies and derived trace rows, records `payload.purged` in the purging project's chain, and marks `scrub_pending`. Trace removal covers every row naming a removed body and the purging project's rows naming a body it no longer requires. A trace entry derived from a body must name it. Search rows join this removal in slice 8. Events, request rows and view documents remain; they hold no body text.
 
-The standalone, idempotent scrub holds the writer queue through a passive checkpoint, `VACUUM`, up to three truncating checkpoint attempts and the backup rewrite. It judges each truncating checkpoint's result row: only `busy = 0` completes the main database scrub and clears `scrub_pending`. Until then, purged bytes may remain in free pages or the write-ahead log, and `doctor` reports the pending marker. Each scrub rewrites the `.db` backups in the home. A backup receives tombstones without the removal event; its chain still verifies because the chain commits to hashes. A backup skipped or not fully rewritten is listed as unreachable. Exports are listed from T12's export records.
+The `payload.purged` event lists each released reference as a `[source sequence, hash]` pair. Its `released` list and each `payload_ref.released_seq` can therefore be rebuilt from events alone. Trace removal covers a removed body's rows in every project and rows in the purging project only when that project has no other live reference to the hash. A requested original that stays reduced because another reduction requires its excerpt appears in the report's `shared` list.
+
+The standalone, idempotent scrub checks the compatibility epoch before any write, then holds the writer queue through a passive checkpoint, `VACUUM`, up to three truncating checkpoint attempts and the backup rewrite. It judges each truncating checkpoint's result row: only `busy = 0` completes the main database scrub and clears `scrub_pending`. Until then, purged bytes may remain in free pages or the write-ahead log, and `doctor` reports the pending marker. Each scrub rewrites the `.db` backups in the home for every hash that is not present in the live store. A backup receives tombstones without the removal event; its chain still verifies because the chain commits to hashes. A live reduced row becomes a purged backup tombstone with reason `reduced in live store`, since the backup may lack its excerpt. A backup skipped or not fully rewritten is listed as unreachable. A linked `backups` directory is listed and never followed. Exports are listed from T12's export records.
 
 Purge removes a secret from everything Baley manages. A secret that has already reached a review provider, an export or any other system must still be rotated; the purge report says so.
 
@@ -532,7 +534,7 @@ Purge removes a secret from everything Baley manages. A secret that has already 
 stateDiagram-v2
   [*] --> Present : first reference
   Present --> Present : another reference, or a release while another reference still requires the body
-  Present --> Reduced : payload.reduced releases the last requiring reference; the excerpt is stored as a new record payload
+  Present --> Reduced : payload.reduced releases the last requiring reference, the excerpt is stored as a new record payload
   Present --> Purged : payload.purged releases the last requiring reference
   Reduced --> Purged : the excerpt's body is removed
   note right of Reduced
@@ -568,7 +570,7 @@ sequenceDiagram
     L->>Q: append command.completed, advance head, COMMIT
   end
   Note over L,B: Scrub, also runnable on its own: the writer queue is held unbatched
-  L->>Q: wal_checkpoint(PASSIVE)
+  L->>Q: check compatibility epoch, wal_checkpoint(PASSIVE)
   L->>Q: VACUUM
   loop at most 3 attempts, each waiting up to busy_timeout for readers
     L->>Q: wal_checkpoint(TRUNCATE)
@@ -576,7 +578,7 @@ sequenceDiagram
     Note over L: done only when busy is 0
   end
   L->>Q: clear scrub_pending if done
-  L->>B: each backups/*.db: secure_delete on, tombstone purged bodies, delete their trace rows, VACUUM, truncate
+  L->>B: each backups/*.db, secure_delete on, tombstone reduced and purged bodies, delete their trace rows, VACUUM, truncate
   L-->>O: PurgeReport: purged, shared, recorded, unreachable, scrubbed
 ```
 
@@ -649,7 +651,7 @@ erDiagram
     blob hash PK
     text class
     text expires_at
-    integer released_seq
+    integer released_seq "event that released this reference"
   }
   VIEW_DOC {
     text view PK
@@ -672,7 +674,9 @@ erDiagram
 
 Further tables: `schema_meta` (compatibility epoch, created and migrated times, and `scrub_pending`), `project_gen` (per project: the live generation, a generation being built and its applied sequence), `view_gen` (each view's projector version per generation), `view_catalog` (each view version's spec), `claim_lease`, and `trace` (diagnostics, outside the chain, size-capped, with an optional payload hash).
 
-Indexes: `event(project_id, stream, stream_version)` unique; `event(project_id, type, seq)`; `event(project_id, git_commit)` for `why`; `payload_ref(hash)`; each view's declared indexes.
+`PAYLOAD_REF.released_seq` is the sequence of the `payload.reduced` event naming its original `[seq, hash]` reference or of the `payload.purged` event listing that reference in `released`. It is derived from those events, not an independent fact.
+
+Indexes: `event(project_id, stream, stream_version)` unique; `event(project_id, type, seq)`; `event(project_id, git_commit)` for `why`; `payload(excerpt_hash)` for non-null excerpts; `payload(state)` for non-present rows; `payload_ref(hash)`; each view's declared indexes.
 
 Connection settings: `journal_mode=WAL`, `synchronous=FULL`, `foreign_keys=ON`, `secure_delete=ON`, `busy_timeout=5000`, page size 8 KiB. rusqlite's bundled build compiles SQLite from source (3.53.2 with rusqlite 0.40.1) with FTS5 enabled, so no system SQLite is used.
 

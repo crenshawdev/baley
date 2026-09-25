@@ -68,26 +68,31 @@ impl ReducedEvent {
     }
 }
 
-/// The data carried by `payload.purged`; each hash list is sorted.
+/// The data carried by `payload.purged`; hash lists and released pairs are sorted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PurgedEvent {
     /// The hashes named by the command.
     pub requested: Vec<Hash>,
-    /// Hashes of references this project released.
-    pub released: Vec<Hash>,
+    /// Source sequence and hash of each reference this project released.
+    pub released: Vec<(u64, Hash)>,
     /// Hashes whose bodies this purge removed.
     pub removed: Vec<Hash>,
-    /// Released hashes whose bodies remain required.
+    /// Released hashes still required, plus requested originals with shared excerpts.
     pub shared: Vec<Hash>,
     /// The reason kept in each purge tombstone.
     pub reason: String,
 }
 
 impl PurgedEvent {
-    /// Builds the purge event payload without reference objects.
+    /// Builds the purge event payload without payload reference objects.
     pub fn to_value(&self) -> Value {
         let hex = |hashes: &[Hash]| hashes.iter().map(|hash| hash.to_hex()).collect::<Vec<_>>();
-        json!({"requested": hex(&self.requested), "released": hex(&self.released),
+        let released = self
+            .released
+            .iter()
+            .map(|(seq, hash)| json!([seq, hash.to_hex()]))
+            .collect::<Vec<_>>();
+        json!({"requested": hex(&self.requested), "released": released,
             "removed": hex(&self.removed), "shared": hex(&self.shared), "reason": self.reason})
     }
 
@@ -103,7 +108,18 @@ impl PurgedEvent {
         };
         Some(Self {
             requested: hashes("requested")?,
-            released: hashes("released")?,
+            released: value
+                .get("released")?
+                .as_array()?
+                .iter()
+                .map(|item| {
+                    let pair = item.as_array()?;
+                    if pair.len() != 2 {
+                        return None;
+                    }
+                    Some((pair[0].as_u64()?, Hash::from_hex(pair[1].as_str()?)?))
+                })
+                .collect::<Option<Vec<_>>>()?,
             removed: hashes("removed")?,
             shared: hashes("shared")?,
             reason: value.get("reason")?.as_str()?.to_owned(),
