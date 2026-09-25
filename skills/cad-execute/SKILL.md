@@ -110,8 +110,8 @@ Use the plan identity and current version from `execution-history`; the approval
 must echo the exact submission. `tokens` is a positive integer reported by the
 host for the real executor round, `host` is nonblank, and `wire_bytes` is optional.
 The operation refuses `round-open` before the last task closes and also accepts
-a report after plan completion. The binary renders that attributed report beside
-the fixed 3.7 median; a mechanism test's literal is never the live measurement.
+a report after plan completion. The binary renders that attributed report; a
+mechanism test's literal is never the live measurement.
 If the host report is unavailable, retain that absence rather than invent a count.
 
 A malformed wire request reports a bounded supplied field/value; a lifecycle
