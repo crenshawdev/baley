@@ -106,12 +106,10 @@ A human result is {"operation":"verification-human-result","request_id":"...",
 "reply":"<verbatim reply>","outcome":"passed|failed|skipped","owner":"...",
 "at":"...","supersedes":<latest retained result id for the item, or null>},
 "approval":{"approved":true,"owner":"...","at":"...","submission":<exact
-submission>}}. The first native result for a phase retains any existing
-UAT.md verbatim as the imported original, whose numbered items are addressed
-by their numbers; the binary renders UAT.md from the records and refuses a
-hand-edited render. A blank reply is refused, a skipped result resolves
-nothing, first_pass is carried from the earliest known outcome, and only a
-later passed result resolves a failed or imported item.
+submission>}}. The binary renders UAT.md from the records and refuses a
+UAT.md that is not its render. A blank reply is refused, a skipped result
+resolves nothing, first_pass is carried from the earliest known outcome, and
+only a later passed result resolves a failed item.
 Completion is {"operation":"verification-complete","request_id":"...",
 "attempt":"<current attempt>","basis":<exact current basis>,"projections":
 {"roadmap":"<sha256 of ROADMAP.md as read>","requirements":"<sha256 of

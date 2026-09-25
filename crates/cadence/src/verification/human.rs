@@ -3,16 +3,15 @@
 //! A human result is an owner-approved record bound to one phase, occurrence
 //! and item. Replies are immutable: a later result names the record it
 //! supersedes and the first-pass outcome is carried forward, never rewritten.
-//! A caller-owned historical UAT.md is retained verbatim as the imported
-//! original the first time a native result is written for its phase, and the
-//! rendered UAT.md keeps that original above the native results. A blank
+//! The installed UAT.md is the binary's render of these records; a phase
+//! UAT.md that is not that render is refused, never overwritten. A blank
 //! reply is refused, a skipped outcome resolves nothing, and no verifier
 //! patch can create or change a human record.
 use super::{inputs, model::{HumanOutcome, HumanResult}, persistence, projections, verdicts};
 use crate::{execution::receipts::OwnerApproval, store::{Error, Result, model::{digest, DecisionRecord, Decision, Origin, Evidence}}};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, path::{Path, PathBuf}};
+use std::path::{Path, PathBuf};
 
 pub const SCHEMA: &str = "verification-human-1";
 
@@ -33,30 +32,8 @@ pub struct Record {
     pub root_binding: String,
     pub submission: HumanResult,
     pub approval: OwnerApproval<HumanResult>,
-    /// The earliest outcome known for this item: the imported original's
-    /// first pass when one exists, otherwise the first native result.
+    /// The earliest outcome known for this item: the first native result.
     pub first_pass: String,
-    /// The imported original item this result answers, verbatim fields.
-    pub imported: Option<Value>,
-}
-
-/// A caller-owned historical UAT.md retained verbatim, classified only.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Original {
-    pub phase: u32,
-    pub text: String,
-    pub digest: String,
-    pub retained_by: String,
-    pub items: Vec<ImportedItem>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ImportedItem {
-    pub id: String,
-    pub name: String,
-    pub fields: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,39 +56,8 @@ pub fn records(data: &Value) -> Result<Vec<Record>> {
     Ok(data[persistence::NAMESPACE].get("humans").cloned().map(serde_json::from_value).transpose()?.unwrap_or_default())
 }
 
-pub fn originals(data: &Value) -> Result<BTreeMap<String, Original>> {
-    persistence::attempt_values(data)?;
-    Ok(data[persistence::NAMESPACE].get("uat_originals").cloned().map(serde_json::from_value).transpose()?.unwrap_or_default())
-}
-
 pub fn outcome_name(outcome: &HumanOutcome) -> &'static str {
     match outcome { HumanOutcome::Passed => "pass", HumanOutcome::Failed => "fail", HumanOutcome::Skipped => "skipped" }
-}
-
-/// The historical item grammar: `### N. Name` heads an item; `key: value`
-/// lines below it are its fields, first occurrence wins. Fences are not
-/// honored, matching the frozen UAT parser, and nothing is inferred.
-pub fn imported_items(text: &str) -> Vec<ImportedItem> {
-    let mut items: Vec<ImportedItem> = Vec::new();
-    let mut open = false;
-    for line in text.replace("\r\n", "\n").split('\n') {
-        if let Some(head) = line.strip_prefix("### ") {
-            let digits = head.bytes().take_while(u8::is_ascii_digit).count();
-            if digits > 0 && let Some(rest) = head[digits..].strip_prefix(". ") && !rest.trim().is_empty() {
-                items.push(ImportedItem { id: head[..digits].to_owned(), name: rest.trim().to_owned(), fields: BTreeMap::new() });
-                open = true;
-                continue;
-            }
-        }
-        if line.starts_with("## ") { open = false; continue; }
-        if open && let Some(item) = items.last_mut()
-            && let Some((key, value)) = line.split_once(':')
-            && !key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-            let value = value.trim();
-            if !value.is_empty() { item.fields.entry(key.to_owned()).or_insert_with(|| value.to_owned()); }
-        }
-    }
-    items
 }
 
 pub fn payload_digest(request: &Request) -> Result<String> {
@@ -201,30 +147,21 @@ fn assess(data: &Value, claim: &Claim) -> Result<Value> {
         return denied("verification-human", "submission.supersedes", "a result supersedes the latest retained result for its item, or none when there is none",
             json!(submission.supersedes), json!(prior.map(|r| &r.id)));
     }
-    let originals = originals(data)?;
-    let original = match originals.get(&phase.to_string()) {
-        Some(original) => {
-            // Once retained, the installed UAT.md is the binary's own render.
-            let expected = projections::uat(data, phase)?;
-            if claim.observed != expected {
-                return denied("verification-human", "uat", "UAT.md differs from the native render; edit human results through verification-human-result",
-                    json!(claim.observed.as_deref().map(|t| digest(t.as_bytes()))), json!(expected.as_deref().map(|t| digest(t.as_bytes()))));
-            }
-            Some(original.clone())
-        }
-        None => claim.observed.as_ref().map(|text| Original { phase, text: text.clone(), digest: digest(text.as_bytes()),
-            retained_by: request.request_id.clone(), items: imported_items(text) }),
-    };
-    let imported = original.as_ref().and_then(|o| o.items.iter().find(|i| i.id == submission.id).cloned());
+    // The installed UAT.md is the binary's own render, absent before the
+    // phase's first result; any other document is not the binary's to replace.
+    let expected = projections::uat(data, phase)?;
+    if claim.observed != expected {
+        return denied("verification-human", "uat", "UAT.md differs from the native render; edit human results through verification-human-result",
+            json!(claim.observed.as_deref().map(|t| digest(t.as_bytes()))), json!(expected.as_deref().map(|t| digest(t.as_bytes()))));
+    }
     let first_pass = match prior {
         Some(prior) => prior.first_pass.clone(),
-        None => imported.as_ref().and_then(|i| i.fields.get("first_pass").or_else(|| i.fields.get("status")).cloned())
-            .unwrap_or_else(|| outcome_name(&submission.outcome).to_owned()),
+        None => outcome_name(&submission.outcome).to_owned(),
     };
     let record = Record { schema: SCHEMA.into(), id: digest(&serde_json::to_vec(&(&request.request_id, &claim.root_binding, submission))?),
         request_id: request.request_id.clone(), root_binding: claim.root_binding.clone(), submission: submission.clone(),
-        approval: approval.clone(), first_pass, imported: imported.map(|i| json!({"name":i.name,"fields":i.fields})) };
-    Ok(json!({"status":"ok","receipt":{"schema":SCHEMA,"record":record,"original_retained":original.as_ref().map(|o| &o.digest)}}))
+        approval: approval.clone(), first_pass };
+    Ok(json!({"status":"ok","receipt":{"schema":SCHEMA,"record":record}}))
 }
 
 pub fn contribute(data: &Value, binding: &str, claim: &Claim) -> Result<Value> {
@@ -238,17 +175,9 @@ pub fn contribute(data: &Value, binding: &str, claim: &Claim) -> Result<Value> {
         return Err(Error::Invalid("a refused human result is never retained".into()));
     }
     let record: Record = serde_json::from_value(claim.answer["receipt"]["record"].clone())?;
-    let phase = record.submission.phase;
     let mut next = data.clone();
     if next.get(persistence::NAMESPACE).is_none() {
         next[persistence::NAMESPACE] = json!({"schema":"verification-1","attempts":[]});
-    }
-    let mut originals = originals(data)?;
-    if let std::collections::btree_map::Entry::Vacant(slot) = originals.entry(phase.to_string())
-        && let Some(text) = &claim.observed {
-        slot.insert(Original { phase, text: text.clone(), digest: digest(text.as_bytes()),
-            retained_by: claim.request.request_id.clone(), items: imported_items(text) });
-        next[persistence::NAMESPACE]["uat_originals"] = json!(originals);
     }
     let mut history = records(data)?;
     history.push(record);
@@ -284,75 +213,30 @@ pub fn reobserve(claim: &Claim) -> Result<()> {
     Ok(())
 }
 
-/// Every human item of a phase with its resolution: imported originals that
-/// were never passed, and native results whose latest outcome is not a pass,
-/// are unfinished human work. An imported pass is classification only.
+/// Every human item of a phase with its resolution: native results whose
+/// latest outcome is not a pass are unfinished human work.
 pub fn items(data: &Value, phase: u32) -> Result<Vec<Value>> {
-    items_with(data, phase, None)
-}
-
-/// The same rows where, until an original is retained, the caller-owned
-/// document observed on disk supplies the imported items: a historical
-/// failure is unfinished human work before any native result exists.
-pub fn items_with(data: &Value, phase: u32, observed: Option<&str>) -> Result<Vec<Value>> {
     let history = records(data)?;
-    let originals = originals(data)?;
     let mut rows = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    let imported = match originals.get(&phase.to_string()) {
-        Some(original) => original.items.clone(),
-        None => observed.map(imported_items).unwrap_or_default(),
-    };
-    for item in &imported {
-        seen.insert(item.id.clone());
-        rows.push(row(&history, phase, &item.id, Some(item)));
-    }
     for record in history.iter().filter(|r| r.submission.phase == phase) {
-        if seen.insert(record.submission.id.clone()) { rows.push(row(&history, phase, &record.submission.id, None)); }
+        if seen.insert(record.submission.id.clone()) { rows.push(row(&history, phase, &record.submission.id)); }
     }
     Ok(rows)
 }
 
-fn row(history: &[Record], phase: u32, id: &str, imported: Option<&ImportedItem>) -> Value {
+fn row(history: &[Record], phase: u32, id: &str) -> Value {
     let chain: Vec<&Record> = history.iter().filter(|r| r.submission.phase == phase && r.submission.id == id).collect();
     let latest = chain.last();
-    let imported_status = imported.and_then(|i| i.fields.get("status").cloned());
-    let (status, source) = match latest {
-        Some(record) => (outcome_name(&record.submission.outcome).to_owned(), "native"),
-        None => (imported_status.clone().unwrap_or_else(|| "missing".into()), "imported"),
-    };
+    let status = latest.map_or("missing", |record| outcome_name(&record.submission.outcome));
     let resolved = latest.is_some_and(|r| r.submission.outcome == HumanOutcome::Passed);
-    let required = !resolved && !(latest.is_none() && imported_status.as_deref() == Some("pass"));
-    let first_pass = latest.map(|r| r.first_pass.clone())
-        .or_else(|| imported.and_then(|i| i.fields.get("first_pass").or_else(|| i.fields.get("status")).cloned()));
-    json!({"id":id,"name":imported.map(|i| i.name.clone()),"source":source,"status":status,"first_pass":first_pass,
-        "resolved":resolved,"required":required,"imported":imported.map(|i| json!({"name":i.name,"fields":i.fields})),
+    json!({"id":id,"status":status,"first_pass":latest.map(|r| r.first_pass.clone()),
+        "resolved":resolved,"required":!resolved,
         "history":chain.iter().map(|r| json!({"id":r.id,"request_id":r.request_id,"outcome":outcome_name(&r.submission.outcome),
             "reply":r.submission.reply,"owner":r.submission.owner,"at":r.submission.at,"supersedes":r.submission.supersedes})).collect::<Vec<_>>()})
 }
 
 /// Unfinished human work for a phase: every required, unresolved item.
-pub fn unfinished(data: &Value, phase: u32, observed: Option<&str>) -> Result<Vec<Value>> {
-    Ok(items_with(data, phase, observed)?.into_iter().filter(|r| r["required"] == true).collect())
-}
-
-/// The caller-owned UAT.md as it stands, for classification only.
-pub fn observed_document(root: &Path, phase: u32) -> Option<String> {
-    std::fs::read(uat_path(root, phase)).ok().and_then(|bytes| String::from_utf8(bytes).ok())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn imported_items_follow_the_historical_grammar() {
-        let text = "---\nstatus: testing\n---\n\n## Items\n\n### 1. Delivery\nexpected: arrives\nstatus: fail\nfirst_pass: fail\nstatus: pass\n\n### 2. Receipt\nstatus: pass\n\n## Notes\nstatus: nothing here\n\n### Not an item\nstatus: skipped\n\n### 3.Bad\nstatus: fail\n";
-        let items = imported_items(text);
-        assert_eq!(items.iter().map(|i| (i.id.as_str(), i.name.as_str())).collect::<Vec<_>>(), [("1", "Delivery"), ("2", "Receipt")]);
-        assert_eq!(items[0].fields.get("status").map(String::as_str), Some("fail"), "first occurrence wins");
-        assert_eq!(items[0].fields.get("first_pass").map(String::as_str), Some("fail"));
-        assert_eq!(items[1].fields.get("status").map(String::as_str), Some("pass"));
-        assert_eq!(items[1].fields.len(), 1, "a later section closes the item");
-    }
+pub fn unfinished(data: &Value, phase: u32) -> Result<Vec<Value>> {
+    Ok(items(data, phase)?.into_iter().filter(|r| r["required"] == true).collect())
 }

@@ -63,8 +63,6 @@ pub struct Claim {
     pub unavailable: Option<Value>,
     pub roadmap: Option<String>,
     pub requirements: Option<String>,
-    /// The caller-owned UAT.md observed on disk, classification only.
-    pub uat: Option<String>,
     pub unreadable: Option<String>,
     pub answer: Value,
 }
@@ -142,7 +140,7 @@ pub fn prepare(root: &Path, data: &Value, request: Request, process: &mut dyn Pr
     let phase = request.basis.phase;
     let mut claim = Claim { schema: SCHEMA.into(), root: root.into(), root_binding: inputs::root_binding(root)?,
         payload_digest: payload_digest(&request)?, authority_digest: inputs::authority_digest(data)?, request,
-        observed: None, documents: BTreeMap::new(), unavailable: None, roadmap: None, requirements: None, uat: None, unreadable: None, answer: Value::Null };
+        observed: None, documents: BTreeMap::new(), unavailable: None, roadmap: None, requirements: None, unreadable: None, answer: Value::Null };
     let observation = (|| -> Result<()> {
         let observed = inputs::observe(root, data, phase, process)?;
         claim.documents = plan::inventory::read(root, &phase.to_string(), data)?.documents;
@@ -153,10 +151,6 @@ pub fn prepare(root: &Path, data: &Value, request: Request, process: &mut dyn Pr
     match (read_text(&root.join("ROADMAP.md")), read_text(&root.join("REQUIREMENTS.md"))) {
         (Ok(roadmap), Ok(requirements)) => { claim.roadmap = roadmap; claim.requirements = requirements; }
         (Err(reason), _) | (_, Err(reason)) => claim.unreadable = Some(reason),
-    }
-    match read_text(&human::uat_path(root, phase)) {
-        Ok(uat) => claim.uat = uat,
-        Err(reason) => claim.unreadable = Some(reason),
     }
     claim.answer = assess(data, &claim)?;
     Ok(claim)
@@ -261,8 +255,8 @@ fn assess(data: &Value, claim: &Claim) -> Result<Value> {
                     .map(|i| json!({"id":i["id"],"verdict":i["verdict"]})).collect::<Vec<_>>()}));
         }
     }
-    for item in human::unfinished(data, phase, claim.uat.as_deref())? {
-        unfinished.push(json!({"kind":"human","id":item["id"],"status":item["status"],"source":item["source"],"first_pass":item["first_pass"]}));
+    for item in human::unfinished(data, phase)? {
+        unfinished.push(json!({"kind":"human","id":item["id"],"status":item["status"],"first_pass":item["first_pass"]}));
     }
     if let Some(first) = unfinished.first() {
         let slot = if first["kind"] == "truth" { "truths" } else { "humans" };
@@ -301,7 +295,7 @@ fn assess(data: &Value, claim: &Claim) -> Result<Value> {
         label: if waived.is_empty() { "complete".into() } else { "complete-with-waivers".into() },
         truths: truths.as_array().into_iter().flatten().map(|r| json!({"id":r["id"],"version":r["version"],"status":r["status"],
             "derived":r.get("derived").cloned().unwrap_or(r["status"].clone()),"waiver":r["waiver"]["id"]})).collect(),
-        humans: human::items_with(data, phase, claim.uat.as_deref())?.into_iter().map(|i| json!({"id":i["id"],"status":i["status"],"first_pass":i["first_pass"],"source":i["source"]})).collect(),
+        humans: human::items(data, phase)?.into_iter().map(|i| json!({"id":i["id"],"status":i["status"],"first_pass":i["first_pass"]})).collect(),
         projections: json!({"roadmap":{"preimage":digest(roadmap.as_bytes()),"installed":digest(roadmap_bytes.as_bytes()),"line":line},
             "requirements":requirements.as_ref().map(|(bytes, ids)| json!({"preimage":claim.requirements.as_ref().map(|t| digest(t.as_bytes())),
                 "installed":digest(bytes.as_bytes()),"rows":ids}))}) };
