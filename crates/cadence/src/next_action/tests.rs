@@ -1,5 +1,5 @@
 use super::{
-    observations::{Observations, QueueMember, Report},
+    observations::{Observations, QueueMember},
     *,
 };
 use crate::derivation::*;
@@ -29,25 +29,7 @@ fn fixture(name: &'static str, statuses: &[LifecycleStatus], expected: &'static 
             uat: None,
         })
         .collect();
-    let observations = Observations {
-        reports: phases
-            .iter()
-            .map(|phase| {
-                (
-                    phase.id,
-                    phase
-                        .plans
-                        .iter()
-                        .map(|_| Report {
-                            path: format!("phases/{}/reports/plan-1.md", phase.id.address()).into(),
-                            bytes: Observation::Present(b"PLAN COMPLETE\n".to_vec()),
-                        })
-                        .collect(),
-                )
-            })
-            .collect(),
-        ..Observations::default()
-    };
+    let observations = Observations::default();
     Fixture {
         name,
         lifecycle: Lifecycle {
@@ -75,16 +57,6 @@ impl Fixture {
             phase: PhaseId(1.0),
             next: "verify the fix on the device".into(),
         });
-        self
-    }
-    fn outstanding(mut self, id: f64) -> Self {
-        self.observations
-            .reports
-            .iter_mut()
-            .find(|(phase, _)| *phase == PhaseId(id))
-            .unwrap()
-            .1[0]
-            .bytes = Observation::Absent;
         self
     }
     fn queue(mut self) -> Self {
@@ -118,8 +90,8 @@ fn fixtures() -> Vec<Fixture> {
     vec![
         fixture("W1", &[Unplanned], "verify the fix on the device").paused(),
         fixture("W2", &[Planned], "/cad-execute 1"),
-        fixture("W3", &[Executed], "/cad-execute 1").outstanding(1.0),
-        fixture("W4", &[Executed], "/cad-verify 1"),
+        // An Executed phase is verified; no plan report file holds it back.
+        fixture("W3", &[Executed], "/cad-verify 1"),
         fixture("W5", &[Unplanned], "/cad-context 1"),
         fixture("W5-skip", &[Unplanned], "/cad-plan 1").skip(),
         fixture("W6", &[Complete], "Triage the deferred queue").queue(),
@@ -128,8 +100,8 @@ fn fixtures() -> Vec<Fixture> {
         fixture("W8", &[], "/cad-phase add"),
         fixture("W9", &[Complete], "/cad-milestone"),
         fixture("P12", &[Planned], "verify the fix on the device").paused(),
-        fixture("P23", &[Executed, Planned], "/cad-execute 2").outstanding(1.0),
-        fixture("P34", &[Executed, Executed], "/cad-execute 2").outstanding(2.0),
+        fixture("P23", &[Executed, Planned], "/cad-execute 2"),
+        fixture("P34", &[Executed, Executed], "/cad-verify 1"),
         fixture("P45", &[Unplanned, Executed], "/cad-verify 2"),
         fixture("P56", &[Unplanned], "/cad-context 1").queue(),
         fixture("P67", &[], "Triage the deferred queue")
@@ -169,7 +141,6 @@ macro_rules! authored_rows {
 authored_rows! {
     authored_w2 => "W2",
     authored_w3 => "W3",
-    authored_w4 => "W4",
     authored_w5 => "W5",
     authored_w5_skip => "W5-skip",
     authored_w6 => "W6",

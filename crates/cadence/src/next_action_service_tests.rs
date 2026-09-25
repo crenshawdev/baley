@@ -20,7 +20,7 @@ use cadence::evidence::authority::Occurrence;
 use cadence::evidence::gates::{Answer, Disposition, Gate, Purpose, State};
 use cadence::evidence::overrides::{Authorization, Meaning, Override};
 use cadence::evidence::{Fact, Record, Scope, VERSION, material, persistence};
-use cadence::next_action::{Pause, observations::{Observations, Report}};
+use cadence::next_action::{Pause, observations::Observations};
 use cadence::store::{model::Snapshot, writer::View};
 use serde_json::{Value, json};
 
@@ -96,18 +96,11 @@ fn generation(number: u64) -> Generation {
     }
 }
 
-/// What an answer consumed: phase 2's plan report reading `report`, the
-/// roadmap `roadmap`, review records `reviews`, store generation `store` and
-/// config generation `config`.
-fn consumed(report: &[u8], roadmap: &[u8], reviews: Value, store: u64, config: u64) -> Consumed {
+/// What an answer consumed: the roadmap `roadmap`, review records `reviews`,
+/// store generation `store` and config generation `config`.
+fn consumed(roadmap: &[u8], reviews: Value, store: u64, config: u64) -> Consumed {
     Consumed {
-        observed: Observations {
-            reports: vec![(phase(2.0), vec![Report {
-                path: "phases/2/reports/plan-1.md".into(),
-                bytes: Observation::Present(report.to_vec()),
-            }])],
-            ..Observations::default()
-        },
+        observed: Observations::default(),
         capture: captured(roadmap),
         reviews,
         snapshot: Snapshot::new(store, b"", b"", json!({})).unwrap(),
@@ -117,14 +110,13 @@ fn consumed(report: &[u8], roadmap: &[u8], reviews: Value, store: u64, config: u
 
 #[test]
 fn an_answer_is_served_only_while_everything_it_consumed_reads_the_same() {
-    let before = || consumed(b"PLAN COMPLETE", b"# Roadmap", json!({}), 1, 1);
+    let before = || consumed(b"# Roadmap", json!({}), 1, 1);
     assert!(next_action_service::held(&before(), &before()).is_ok());
     for after in [
-        consumed(b"PLAN PARTIAL", b"# Roadmap", json!({}), 1, 1),
-        consumed(b"PLAN COMPLETE", b"# Roadmap, edited", json!({}), 1, 1),
-        consumed(b"PLAN COMPLETE", b"# Roadmap", json!({"deferred":{}}), 1, 1),
-        consumed(b"PLAN COMPLETE", b"# Roadmap", json!({}), 2, 1),
-        consumed(b"PLAN COMPLETE", b"# Roadmap", json!({}), 1, 2),
+        consumed(b"# Roadmap, edited", json!({}), 1, 1),
+        consumed(b"# Roadmap", json!({"deferred":{}}), 1, 1),
+        consumed(b"# Roadmap", json!({}), 2, 1),
+        consumed(b"# Roadmap", json!({}), 1, 2),
     ] {
         assert!(matches!(
             next_action_service::held(&before(), &after),

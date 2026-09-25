@@ -1,34 +1,12 @@
 //! Synchronous routing reads, deliberately outside the lifecycle capture/key.
 use crate::derivation::{
-    ArtifactFiles, ArtifactIo, Cycle, DerivationError, Lifecycle, Observation, PhaseId,
+    ArtifactFiles, ArtifactIo, Cycle, DerivationError, Lifecycle, Observation,
 };
 use serde_json::Value;
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Report {
-    pub path: PathBuf,
-    pub bytes: Observation<Vec<u8>>,
-}
-
-impl Report {
-    pub fn complete(&self) -> bool {
-        match &self.bytes {
-            Observation::Present(bytes) => {
-                String::from_utf8_lossy(bytes)
-                    .split('\n')
-                    .next()
-                    .unwrap_or("")
-                    .trim_matches(space)
-                    == "PLAN COMPLETE"
-            }
-            _ => false,
-        }
-    }
-}
 
 fn space(c: char) -> bool {
     matches!(
@@ -76,17 +54,8 @@ pub fn include_reviews(queue: &mut Queue, members: Vec<QueueMember>, unreadable:
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Observations {
-    pub reports: Vec<(PhaseId, Vec<Report>)>,
     pub queue: Queue,
     pub residue: Vec<String>,
-}
-
-impl Observations {
-    pub fn outstanding(&self, phase: PhaseId) -> bool {
-        self.reports
-            .iter()
-            .any(|(id, reports)| *id == phase && reports.iter().any(|r| !r.complete()))
-    }
 }
 
 fn legal_phase(name: &str) -> bool {
@@ -235,41 +204,10 @@ fn queue(root: &Path) -> Queue {
     queue
 }
 
-/// Where a plan file's report lives in its phase: `PLAN-02.md` reports as
-/// plan 2.
-pub fn report_path(phase: PhaseId, plan: &str) -> PathBuf {
-    let digits = plan
-        .strip_prefix("PLAN-")
-        .and_then(|p| p.strip_suffix(".md"))
-        .unwrap_or("1");
-    let number = PhaseId(digits.parse::<f64>().unwrap_or(f64::INFINITY));
-    PathBuf::from(format!(
-        "phases/{}/reports/plan-{}.md",
-        phase.address(),
-        number.address()
-    ))
-}
-
 pub fn capture(selected: &Path, lifecycle: &Lifecycle) -> Result<Observations, DerivationError> {
     let root = ArtifactFiles
         .resolve_root(selected)
         .map_err(DerivationError::InputFailure)?;
-    let reports = lifecycle
-        .phases
-        .iter()
-        .map(|phase| {
-            let reports = phase
-                .plans
-                .iter()
-                .map(|plan| {
-                    let path = report_path(phase.id, plan);
-                    let bytes = ArtifactFiles.read(&root.join(&path));
-                    Report { path, bytes }
-                })
-                .collect();
-            (phase.id, reports)
-        })
-        .collect();
     let names = match lifecycle.cycle {
         Cycle::Closed => fs::read_dir(root.join("phases"))
             .map(|entries| {
@@ -282,7 +220,6 @@ pub fn capture(selected: &Path, lifecycle: &Lifecycle) -> Result<Observations, D
         Cycle::Live => Vec::new(),
     };
     Ok(Observations {
-        reports,
         queue: queue(&root),
         residue: residue(lifecycle.cycle, names),
     })

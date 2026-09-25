@@ -44,7 +44,6 @@ pub(super) enum Rule {
     Interrupted,
     Pause,
     Planned,
-    Outstanding,
     Executed,
     Unplanned,
     Queue,
@@ -52,10 +51,9 @@ pub(super) enum Rule {
     Closed,
     NullCurrent,
 }
-pub(super) const RULES: [Rule; 9] = [
+pub(super) const RULES: [Rule; 8] = [
     Rule::Pause,
     Rule::Planned,
-    Rule::Outstanding,
     Rule::Executed,
     Rule::Unplanned,
     Rule::Queue,
@@ -79,11 +77,11 @@ impl Rule {
         self, lifecycle: &Lifecycle, observations: &Observations, pause: Option<&Pause>,
         skip_discuss: bool, conflicts: &[crate::derivation::RoadmapConflict], interrupted: Option<&str>,
     ) -> Option<Action> {
-        let lowest = |status, outstanding: bool| {
+        let lowest = |status| {
             lifecycle
                 .phases
                 .iter()
-                .filter(|p| p.status == status && (!outstanding || observations.outstanding(p.id)))
+                .filter(|p| p.status == status)
                 .min_by(|a, b| a.id.number().total_cmp(&b.id.number()))
                 .map(|p| p.id)
         };
@@ -95,9 +93,8 @@ impl Rule {
             Self::Pause => pause
                 .filter(|p| Some(p.phase) == lifecycle.current)
                 .map(|p| Action::Resume(p.next.clone())),
-            Self::Planned => lowest(LifecycleStatus::Planned, false).map(Action::Execute),
-            Self::Outstanding => lowest(LifecycleStatus::Executed, true).map(Action::Execute),
-            Self::Executed => lowest(LifecycleStatus::Executed, false).map(Action::Verify),
+            Self::Planned => lowest(LifecycleStatus::Planned).map(Action::Execute),
+            Self::Executed => lowest(LifecycleStatus::Executed).map(Action::Verify),
             Self::Unplanned => lifecycle
                 .current
                 .filter(|id| {

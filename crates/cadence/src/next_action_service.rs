@@ -337,7 +337,7 @@ pub(super) struct Consumed {
 }
 
 /// An answer is served only when everything it was selected from reads the
-/// same after selection: the reports, queue and residue observed, the
+/// same after selection: the queue and residue observed, the
 /// lifecycle capture, the review records, the store snapshot and the config.
 pub(super) fn held(before: &Consumed, after: &Consumed) -> Result<(), DerivationError> {
     if after.observed != before.observed
