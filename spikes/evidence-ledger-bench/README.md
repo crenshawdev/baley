@@ -49,6 +49,6 @@ Every budget in the design's Performance table, on two databases: the reference 
 
 ## Results
 
-The run of 2026-09-25 is in [`results/2026-09-25-ryzen-9800x3d-t700-btrfs.json`](results/2026-09-25-ryzen-9800x3d-t700-btrfs.json) and summarized, against each budget, in design 0001's Performance section. Every budget held. The run also changed the design twice: a writer queue in front of SQLite's lock, after the busy handler alone starved writers under load, and a final truncating checkpoint after `VACUUM`, which otherwise leaves a full copy of the database in the write-ahead log.
+Five runs on each of two drives, 2026-09-25: `results/2026-09-25-t700/` (Crucial T700) and `results/2026-09-25-p3plus/` (Crucial P3 Plus), each with one file per run and a `summary.json`. They are summarized against each budget in design 0001's Performance section, together with the design changes the runs led to. Measurements follow loading on the same machine, so the page cache is warm.
 
-To compare the busy handler alone, run with `BENCH_GATE=0`.
+`./target/release/evidence-ledger-bench run <home-root> <runs> <results-dir>` reproduces a set. `BENCH_GATE=0` in a writer's environment turns the writer queue off; the harness runs both modes itself.

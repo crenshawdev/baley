@@ -1,0 +1,848 @@
+{
+  "calibration": {
+    "material/large": {
+      "achieved_ratio": 17.664094875509587,
+      "repeat": 0.98,
+      "target_ratio": 17.32
+    },
+    "material/medium": {
+      "achieved_ratio": 2.980263756252842,
+      "repeat": 0.16,
+      "target_ratio": 2.98
+    },
+    "output/large": {
+      "achieved_ratio": 6.287029930928626,
+      "repeat": 0.72,
+      "target_ratio": 6.35
+    },
+    "output/medium": {
+      "achieved_ratio": 6.660839516210997,
+      "repeat": 0.73,
+      "target_ratio": 6.71
+    },
+    "output/small": {
+      "achieved_ratio": 3.216332940714566,
+      "repeat": 0.37,
+      "target_ratio": 3.22
+    },
+    "record/medium": {
+      "achieved_ratio": 3.045636211543824,
+      "repeat": 0.18,
+      "target_ratio": 3.04
+    },
+    "record/small": {
+      "achieved_ratio": 2.7854471268276098,
+      "repeat": 0.25,
+      "target_ratio": 2.78
+    }
+  },
+  "machine": {
+    "cache": "warm: measurements follow loading on the same machine; the page cache is not dropped",
+    "cpu": "AMD Ryzen 7 9800X3D 8-Core Processor",
+    "filesystem": "btrfs /dev/nvme0n1p1[/@data]",
+    "kernel": "7.2.6-zen2-1-zen",
+    "sqlite": "3.53.2",
+    "threads": 16
+  },
+  "runs": 5,
+  "summary": {
+    "five_projects.claim_commit.max_ms": {
+      "max": 15.241349,
+      "median": 11.911553,
+      "min": 10.583736,
+      "runs": 5
+    },
+    "five_projects.claim_commit.p50_ms": {
+      "max": 3.487119,
+      "median": 3.396654,
+      "min": 3.359674,
+      "runs": 5
+    },
+    "five_projects.claim_commit.p99_ms": {
+      "max": 9.039497,
+      "median": 8.434759999999999,
+      "min": 8.170983999999999,
+      "runs": 5
+    },
+    "five_projects.commit_by_events.1 external.max_ms": {
+      "max": 20.201018,
+      "median": 17.819025,
+      "min": 17.146542,
+      "runs": 5
+    },
+    "five_projects.commit_by_events.1 external.p50_ms": {
+      "max": 3.847839,
+      "median": 3.808181,
+      "min": 3.772145,
+      "runs": 5
+    },
+    "five_projects.commit_by_events.1 external.p99_ms": {
+      "max": 10.990959,
+      "median": 9.572533,
+      "min": 8.977165000000001,
+      "runs": 5
+    },
+    "five_projects.commit_by_events.1.max_ms": {
+      "max": 89.353506,
+      "median": 22.163843,
+      "min": 20.145540999999998,
+      "runs": 5
+    },
+    "five_projects.commit_by_events.1.p50_ms": {
+      "max": 3.832189,
+      "median": 3.743007,
+      "min": 3.731247,
+      "runs": 5
+    },
+    "five_projects.commit_by_events.1.p99_ms": {
+      "max": 10.824111,
+      "median": 9.201156000000001,
+      "min": 8.993756000000001,
+      "runs": 5
+    },
+    "five_projects.commit_by_events.2-4.max_ms": {
+      "max": 16.160445999999997,
+      "median": 13.477632999999999,
+      "min": 12.747335,
+      "runs": 5
+    },
+    "five_projects.commit_by_events.2-4.p50_ms": {
+      "max": 4.2515909999999995,
+      "median": 4.18358,
+      "min": 4.160849000000001,
+      "runs": 5
+    },
+    "five_projects.commit_by_events.2-4.p99_ms": {
+      "max": 11.614174,
+      "median": 10.819011,
+      "min": 10.272001,
+      "runs": 5
+    },
+    "five_projects.load_s": {
+      "max": 45.313111806,
+      "median": 42.18732763,
+      "min": 42.023830819,
+      "runs": 5
+    },
+    "five_projects.lock_wait.max_ms": {
+      "max": 0.079522,
+      "median": 0.065204,
+      "min": 0.032401,
+      "runs": 5
+    },
+    "five_projects.lock_wait.p50_ms": {
+      "max": 0.004749,
+      "median": 0.0046890000000000005,
+      "min": 0.003868,
+      "runs": 5
+    },
+    "five_projects.lock_wait.p99_ms": {
+      "max": 0.010750999999999998,
+      "median": 0.01044,
+      "min": 0.010159,
+      "runs": 5
+    },
+    "five_projects.size.db_mb": {
+      "max": 119.660544,
+      "median": 119.660544,
+      "min": 119.660544,
+      "runs": 5
+    },
+    "five_projects.size.payload_body_mb": {
+      "max": 19.693558,
+      "median": 19.693558,
+      "min": 19.693558,
+      "runs": 5
+    },
+    "five_projects.size.payload_raw_mb": {
+      "max": 206.369875,
+      "median": 206.369875,
+      "min": 206.369875,
+      "runs": 5
+    },
+    "five_projects.size.wal_mb": {
+      "max": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "runs": 5
+    },
+    "measurements.after_purge_views_match_rebuild.batches.max_ms": {
+      "max": 28.995123,
+      "median": 12.127938,
+      "min": 10.698808000000001,
+      "runs": 5
+    },
+    "measurements.after_purge_views_match_rebuild.batches.p50_ms": {
+      "max": 5.871439,
+      "median": 5.609927,
+      "min": 5.554291,
+      "runs": 5
+    },
+    "measurements.after_purge_views_match_rebuild.batches.p99_ms": {
+      "max": 27.451850999999998,
+      "median": 11.080696,
+      "min": 10.571515,
+      "runs": 5
+    },
+    "measurements.after_purge_views_match_rebuild.cleanup.max_ms": {
+      "max": 14.98087,
+      "median": 11.120583,
+      "min": 10.638511,
+      "runs": 5
+    },
+    "measurements.after_purge_views_match_rebuild.cleanup.p50_ms": {
+      "max": 3.514261,
+      "median": 3.357821,
+      "min": 3.2973239999999997,
+      "runs": 5
+    },
+    "measurements.after_purge_views_match_rebuild.cleanup.p99_ms": {
+      "max": 13.01425,
+      "median": 10.714047,
+      "min": 10.217076,
+      "runs": 5
+    },
+    "measurements.after_purge_views_match_rebuild.final_transaction_ms": {
+      "max": 18.18569,
+      "median": 12.844932,
+      "min": 12.476215,
+      "runs": 5
+    },
+    "measurements.after_purge_views_match_rebuild.mismatched_rows": {
+      "max": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "runs": 5
+    },
+    "measurements.after_purge_views_match_rebuild.total_s": {
+      "max": 3.46506447,
+      "median": 3.165542211,
+      "min": 3.056960826,
+      "runs": 5
+    },
+    "measurements.commit_10_events.max_ms": {
+      "max": 22.324865,
+      "median": 13.349408,
+      "min": 13.101251,
+      "runs": 5
+    },
+    "measurements.commit_10_events.p50_ms": {
+      "max": 6.45258,
+      "median": 4.754301,
+      "min": 4.587924999999999,
+      "runs": 5
+    },
+    "measurements.commit_10_events.p99_ms": {
+      "max": 17.633803,
+      "median": 12.568003,
+      "min": 10.601938,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_0.commit.max_ms": {
+      "max": 28.797179999999997,
+      "median": 26.372971,
+      "min": 22.468931,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_0.commit.p50_ms": {
+      "max": 4.344698999999999,
+      "median": 4.166727,
+      "min": 3.9872450000000006,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_0.commit.p99_ms": {
+      "max": 17.151307000000003,
+      "median": 16.575423999999998,
+      "min": 15.686784,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_0.committed": {
+      "max": 5298.0,
+      "median": 5226.0,
+      "min": 5141.0,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_0.errors": {
+      "max": 6.0,
+      "median": 4.0,
+      "min": 2.0,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_0.lock_wait.max_ms": {
+      "max": 6361.336378,
+      "median": 4934.62111,
+      "min": 4531.582187999999,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_0.lock_wait.p50_ms": {
+      "max": 0.005109,
+      "median": 0.005069,
+      "min": 0.00502,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_0.lock_wait.p99_ms": {
+      "max": 1429.470759,
+      "median": 1232.5327559999998,
+      "min": 1229.355789,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_1.commit.max_ms": {
+      "max": 23.854616,
+      "median": 18.379482999999997,
+      "min": 16.75894,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_1.commit.p50_ms": {
+      "max": 4.343807,
+      "median": 4.0614859999999995,
+      "min": 4.018174,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_1.commit.p99_ms": {
+      "max": 13.019428,
+      "median": 10.384125,
+      "min": 10.186824,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_1.committed": {
+      "max": 5842.0,
+      "median": 5803.0,
+      "min": 5067.0,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_1.errors": {
+      "max": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_1.lock_wait.max_ms": {
+      "max": 80.254187,
+      "median": 64.129423,
+      "min": 58.406346,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_1.lock_wait.p50_ms": {
+      "max": 40.142227000000005,
+      "median": 35.201721,
+      "min": 35.088909,
+      "runs": 5
+    },
+    "measurements.contention_8_writers_gate_1.lock_wait.p99_ms": {
+      "max": 67.547078,
+      "median": 51.00896,
+      "min": 50.966249,
+      "runs": 5
+    },
+    "measurements.guard_new_process.store_work.max_ms": {
+      "max": 21.378,
+      "median": 17.936,
+      "min": 13.966,
+      "runs": 5
+    },
+    "measurements.guard_new_process.store_work.p50_ms": {
+      "max": 13.564,
+      "median": 10.311,
+      "min": 10.206,
+      "runs": 5
+    },
+    "measurements.guard_new_process.store_work.p99_ms": {
+      "max": 17.022,
+      "median": 11.726,
+      "min": 11.537,
+      "runs": 5
+    },
+    "measurements.guard_new_process.wall_including_process_start.max_ms": {
+      "max": 28.745562999999997,
+      "median": 24.646992,
+      "min": 21.114865,
+      "runs": 5
+    },
+    "measurements.guard_new_process.wall_including_process_start.p50_ms": {
+      "max": 18.715431000000002,
+      "median": 14.382041,
+      "min": 14.228719000000002,
+      "runs": 5
+    },
+    "measurements.guard_new_process.wall_including_process_start.p99_ms": {
+      "max": 23.000266,
+      "median": 17.831064,
+      "min": 17.259984999999997,
+      "runs": 5
+    },
+    "measurements.open_checked.max_ms": {
+      "max": 0.42863,
+      "median": 0.32609400000000005,
+      "min": 0.28397300000000003,
+      "runs": 5
+    },
+    "measurements.open_checked.p50_ms": {
+      "max": 0.122745,
+      "median": 0.121562,
+      "min": 0.11779500000000001,
+      "runs": 5
+    },
+    "measurements.open_checked.p99_ms": {
+      "max": 0.278462,
+      "median": 0.255108,
+      "min": 0.22521999999999998,
+      "runs": 5
+    },
+    "measurements.purge.backup_s": {
+      "max": 1.512586808,
+      "median": 1.4940475069999999,
+      "min": 1.470143972,
+      "runs": 5
+    },
+    "measurements.purge.checkpoint_ms": {
+      "max": 12.92023,
+      "median": 11.296842,
+      "min": 4.817202,
+      "runs": 5
+    },
+    "measurements.purge.final_checkpoint_ms": {
+      "max": 14.015058999999999,
+      "median": 12.526767,
+      "min": 12.382238000000001,
+      "runs": 5
+    },
+    "measurements.purge.total_s": {
+      "max": 1.9129869510000002,
+      "median": 1.900084925,
+      "min": 1.874164447,
+      "runs": 5
+    },
+    "measurements.purge.transaction_ms": {
+      "max": 13.685591,
+      "median": 6.919471,
+      "min": 5.810181999999999,
+      "runs": 5
+    },
+    "measurements.purge.vacuum_s": {
+      "max": 0.38856997,
+      "median": 0.36980794,
+      "min": 0.353265688,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.rebuild.batches.max_ms": {
+      "max": 39.338989,
+      "median": 37.54474,
+      "min": 35.691854,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.rebuild.batches.p50_ms": {
+      "max": 25.529566,
+      "median": 25.439585,
+      "min": 23.806739,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.rebuild.batches.p99_ms": {
+      "max": 39.338989,
+      "median": 37.304891,
+      "min": 35.52443,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.rebuild.cleanup.max_ms": {
+      "max": 40.585291000000005,
+      "median": 36.284509,
+      "min": 33.289971,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.rebuild.cleanup.p50_ms": {
+      "max": 21.465575,
+      "median": 20.723728,
+      "min": 20.669307,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.rebuild.cleanup.p99_ms": {
+      "max": 39.088728,
+      "median": 33.68563,
+      "min": 31.579431,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.rebuild.final_transaction_ms": {
+      "max": 4.8128850000000005,
+      "median": 4.379734,
+      "min": 4.073759,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.rebuild.total_s": {
+      "max": 11.420489563,
+      "median": 10.889125289,
+      "min": 9.879537565,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.verify_views_after.batches.max_ms": {
+      "max": 85.77246299999999,
+      "median": 40.028835,
+      "min": 34.807803,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.verify_views_after.batches.p50_ms": {
+      "max": 25.559412000000002,
+      "median": 24.716255,
+      "min": 23.518117,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.verify_views_after.batches.p99_ms": {
+      "max": 40.87454,
+      "median": 39.668417999999996,
+      "min": 33.72853,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.verify_views_after.cleanup.max_ms": {
+      "max": 77.263372,
+      "median": 49.881468999999996,
+      "min": 33.561551,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.verify_views_after.cleanup.p50_ms": {
+      "max": 20.942042,
+      "median": 20.216003999999998,
+      "min": 18.960365,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.verify_views_after.cleanup.p99_ms": {
+      "max": 47.523959999999995,
+      "median": 42.895276,
+      "min": 31.107908,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.verify_views_after.final_transaction_ms": {
+      "max": 21.862863,
+      "median": 18.156477000000002,
+      "min": 15.498428,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.verify_views_after.mismatched_rows": {
+      "max": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.verify_views_after.total_s": {
+      "max": 14.271397995,
+      "median": 13.749418505,
+      "min": 13.360520123,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.writers_meanwhile.commit.max_ms": {
+      "max": 77.444208,
+      "median": 19.063129,
+      "min": 16.925193,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.writers_meanwhile.commit.p50_ms": {
+      "max": 4.441525,
+      "median": 4.226603,
+      "min": 4.048922,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.writers_meanwhile.commit.p99_ms": {
+      "max": 10.314522,
+      "median": 10.161054,
+      "min": 9.868091000000002,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.writers_meanwhile.committed": {
+      "max": 4330.0,
+      "median": 4189.0,
+      "min": 4011.0,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.writers_meanwhile.errors": {
+      "max": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.writers_meanwhile.lock_wait.max_ms": {
+      "max": 97.646249,
+      "median": 50.389471,
+      "min": 39.290837,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.writers_meanwhile.lock_wait.p50_ms": {
+      "max": 18.26444,
+      "median": 17.160594,
+      "min": 16.4144,
+      "runs": 5
+    },
+    "measurements.rebuild_under_load.writers_meanwhile.lock_wait.p99_ms": {
+      "max": 34.435358,
+      "median": 32.808961999999994,
+      "min": 32.11249,
+      "runs": 5
+    },
+    "measurements.server_start_quick_check.max_ms": {
+      "max": 191.64856,
+      "median": 183.88276100000002,
+      "min": 175.230815,
+      "runs": 5
+    },
+    "measurements.server_start_quick_check.p50_ms": {
+      "max": 182.488624,
+      "median": 178.57000200000002,
+      "min": 170.22250499999998,
+      "runs": 5
+    },
+    "measurements.server_start_quick_check.p99_ms": {
+      "max": 191.64856,
+      "median": 183.88276100000002,
+      "min": 175.230815,
+      "runs": 5
+    },
+    "measurements.size_after.db_mb": {
+      "max": 215.031808,
+      "median": 213.188608,
+      "min": 210.255872,
+      "runs": 5
+    },
+    "measurements.size_after.payload_body_mb": {
+      "max": 36.32463,
+      "median": 36.039251,
+      "min": 35.385376,
+      "runs": 5
+    },
+    "measurements.size_after.payload_raw_mb": {
+      "max": 285.883475,
+      "median": 284.735571,
+      "min": 281.961555,
+      "runs": 5
+    },
+    "measurements.size_after.wal_mb": {
+      "max": 8.635048,
+      "median": 8.618616,
+      "min": 8.544672,
+      "runs": 5
+    },
+    "measurements.verified_backup_under_load.chains_s": {
+      "max": 0.637979244,
+      "median": 0.625888525,
+      "min": 0.602789748,
+      "runs": 5
+    },
+    "measurements.verified_backup_under_load.copy_s": {
+      "max": 0.166601286,
+      "median": 0.157960274,
+      "min": 0.153565104,
+      "runs": 5
+    },
+    "measurements.verified_backup_under_load.integrity_s": {
+      "max": 0.316857631,
+      "median": 0.313800122,
+      "min": 0.302089818,
+      "runs": 5
+    },
+    "measurements.verified_backup_under_load.total_s": {
+      "max": 1.121438161,
+      "median": 1.097877896,
+      "min": 1.05844467,
+      "runs": 5
+    },
+    "measurements.verified_backup_under_load.writers_meanwhile.commit.max_ms": {
+      "max": 34.338318,
+      "median": 18.848404,
+      "min": 15.331842,
+      "runs": 5
+    },
+    "measurements.verified_backup_under_load.writers_meanwhile.commit.p50_ms": {
+      "max": 4.253854,
+      "median": 4.098497,
+      "min": 3.984007000000001,
+      "runs": 5
+    },
+    "measurements.verified_backup_under_load.writers_meanwhile.commit.p99_ms": {
+      "max": 10.472168,
+      "median": 9.882116,
+      "min": 9.587361,
+      "runs": 5
+    },
+    "measurements.verified_backup_under_load.writers_meanwhile.committed": {
+      "max": 1573.0,
+      "median": 1515.0,
+      "min": 1458.0,
+      "runs": 5
+    },
+    "measurements.verified_backup_under_load.writers_meanwhile.errors": {
+      "max": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "runs": 5
+    },
+    "measurements.verified_backup_under_load.writers_meanwhile.lock_wait.max_ms": {
+      "max": 57.954358,
+      "median": 49.366954,
+      "min": 43.559805,
+      "runs": 5
+    },
+    "measurements.verified_backup_under_load.writers_meanwhile.lock_wait.p50_ms": {
+      "max": 15.849716,
+      "median": 15.356083,
+      "min": 14.917097,
+      "runs": 5
+    },
+    "measurements.verified_backup_under_load.writers_meanwhile.lock_wait.p99_ms": {
+      "max": 31.494794,
+      "median": 28.714174,
+      "min": 27.456668,
+      "runs": 5
+    },
+    "measurements.view_read.find_page_of_50.max_ms": {
+      "max": 0.123125,
+      "median": 0.106744,
+      "min": 0.060196,
+      "runs": 5
+    },
+    "measurements.view_read.find_page_of_50.p50_ms": {
+      "max": 0.017013,
+      "median": 0.016953,
+      "min": 0.016893,
+      "runs": 5
+    },
+    "measurements.view_read.find_page_of_50.p99_ms": {
+      "max": 0.033785,
+      "median": 0.028884999999999997,
+      "min": 0.020439,
+      "runs": 5
+    },
+    "measurements.view_read.get_by_key_and_parse.max_ms": {
+      "max": 0.043624,
+      "median": 0.040007,
+      "min": 0.029536999999999997,
+      "runs": 5
+    },
+    "measurements.view_read.get_by_key_and_parse.p50_ms": {
+      "max": 0.0046689999999999995,
+      "median": 0.004638000000000001,
+      "min": 0.004588999999999999,
+      "runs": 5
+    },
+    "measurements.view_read.get_by_key_and_parse.p99_ms": {
+      "max": 0.017634,
+      "median": 0.017062,
+      "min": 0.016691,
+      "runs": 5
+    },
+    "reference_project.claim_commit.max_ms": {
+      "max": 11.702967,
+      "median": 11.137500999999999,
+      "min": 8.265206000000001,
+      "runs": 5
+    },
+    "reference_project.claim_commit.p50_ms": {
+      "max": 3.4138279999999996,
+      "median": 3.3940110000000003,
+      "min": 3.291366,
+      "runs": 5
+    },
+    "reference_project.claim_commit.p99_ms": {
+      "max": 9.576735,
+      "median": 7.795561,
+      "min": 7.646331999999999,
+      "runs": 5
+    },
+    "reference_project.commit_by_events.1 external.max_ms": {
+      "max": 15.563601,
+      "median": 10.070572,
+      "min": 9.250827999999998,
+      "runs": 5
+    },
+    "reference_project.commit_by_events.1 external.p50_ms": {
+      "max": 3.793125,
+      "median": 3.777563,
+      "min": 3.7379990000000003,
+      "runs": 5
+    },
+    "reference_project.commit_by_events.1 external.p99_ms": {
+      "max": 10.321931,
+      "median": 8.594774,
+      "min": 8.498711,
+      "runs": 5
+    },
+    "reference_project.commit_by_events.1.max_ms": {
+      "max": 19.799536,
+      "median": 17.322454,
+      "min": 16.038808000000003,
+      "runs": 5
+    },
+    "reference_project.commit_by_events.1.p50_ms": {
+      "max": 3.737537,
+      "median": 3.724963,
+      "min": 3.6686069999999997,
+      "runs": 5
+    },
+    "reference_project.commit_by_events.1.p99_ms": {
+      "max": 10.654847,
+      "median": 8.814445000000001,
+      "min": 8.554248000000001,
+      "runs": 5
+    },
+    "reference_project.commit_by_events.2-4.max_ms": {
+      "max": 11.118751,
+      "median": 10.061061,
+      "min": 9.724116,
+      "runs": 5
+    },
+    "reference_project.commit_by_events.2-4.p50_ms": {
+      "max": 4.265968,
+      "median": 4.164014,
+      "min": 4.152793999999999,
+      "runs": 5
+    },
+    "reference_project.commit_by_events.2-4.p99_ms": {
+      "max": 11.118751,
+      "median": 10.061061,
+      "min": 9.724116,
+      "runs": 5
+    },
+    "reference_project.load_s": {
+      "max": 8.595883783,
+      "median": 8.377607672,
+      "min": 8.210861459,
+      "runs": 5
+    },
+    "reference_project.lock_wait.max_ms": {
+      "max": 0.053492000000000005,
+      "median": 0.045918,
+      "min": 0.020038,
+      "runs": 5
+    },
+    "reference_project.lock_wait.p50_ms": {
+      "max": 0.004799,
+      "median": 0.0046890000000000005,
+      "min": 0.003567,
+      "runs": 5
+    },
+    "reference_project.lock_wait.p99_ms": {
+      "max": 0.010891,
+      "median": 0.01039,
+      "min": 0.0102,
+      "runs": 5
+    },
+    "reference_project.size.db_mb": {
+      "max": 24.502272,
+      "median": 24.502272,
+      "min": 24.502272,
+      "runs": 5
+    },
+    "reference_project.size.payload_body_mb": {
+      "max": 3.934116,
+      "median": 3.934116,
+      "min": 3.934116,
+      "runs": 5
+    },
+    "reference_project.size.payload_raw_mb": {
+      "max": 41.273975,
+      "median": 41.273975,
+      "min": 41.273975,
+      "runs": 5
+    },
+    "reference_project.size.wal_mb": {
+      "max": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "runs": 5
+    }
+  }
+}

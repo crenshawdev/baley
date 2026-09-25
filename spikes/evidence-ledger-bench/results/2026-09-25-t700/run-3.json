@@ -1,0 +1,622 @@
+{
+  "five_projects": {
+    "claim_commit": {
+      "max_ms": 9.171102000000001,
+      "n": 1100,
+      "p50_ms": 1.779382,
+      "p99_ms": 5.807943000000001
+    },
+    "commands": 8975,
+    "commit_by_events": {
+      "1": {
+        "max_ms": 106.183226,
+        "n": 7555,
+        "p50_ms": 2.098915,
+        "p99_ms": 6.609355
+      },
+      "1 external": {
+        "max_ms": 15.378268,
+        "n": 1100,
+        "p50_ms": 2.1459420000000002,
+        "p99_ms": 6.6253850000000005
+      },
+      "2-4": {
+        "max_ms": 11.021939999999999,
+        "n": 320,
+        "p50_ms": 2.5614269999999997,
+        "p99_ms": 8.750207
+      }
+    },
+    "events": 19370,
+    "load_s": 24.730209116,
+    "lock_wait": {
+      "max_ms": 0.025609000000000003,
+      "n": 8975,
+      "p50_ms": 0.0034070000000000003,
+      "p99_ms": 0.009147
+    },
+    "projects": 5,
+    "size": {
+      "db_mb": 119.660544,
+      "events": 19370,
+      "payload_body_mb": 19.693558,
+      "payload_raw_mb": 206.369875,
+      "payloads": 2205,
+      "tables_mb": {
+        "claim_lease": 0.008192,
+        "event": 42.532864,
+        "event_commit": 0.458752,
+        "event_stream": 0.622592,
+        "event_type": 0.647168,
+        "payload": 21.209088,
+        "payload_ref": 0.188416,
+        "payload_ref_hash": 0.155648,
+        "project": 0.008192,
+        "project_gen": 0.008192,
+        "schema_meta": 0.008192,
+        "search_config": 0.008192,
+        "search_content": 33.9968,
+        "search_data": 11.411456,
+        "search_docsize": 0.131072,
+        "search_idx": 0.049152,
+        "search_ref": 0.032768,
+        "sqlite_autoindex_payload_1": 0.106496,
+        "sqlite_schema": 0.024576,
+        "trace": 0.4096,
+        "view_admission": 0.032768,
+        "view_admission_phase": 0.008192,
+        "view_capture": 0.106496,
+        "view_capture_phase": 0.008192,
+        "view_dispatch": 1.056768,
+        "view_dispatch_phase": 0.032768,
+        "view_evidence_map": 0.073728,
+        "view_evidence_map_phase": 0.008192,
+        "view_guard_policy": 0.049152,
+        "view_guard_policy_phase": 0.008192,
+        "view_milestone": 0.008192,
+        "view_milestone_phase": 0.008192,
+        "view_pause": 0.008192,
+        "view_pause_phase": 0.008192,
+        "view_phase": 1.163264,
+        "view_phase_phase": 0.024576,
+        "view_plan": 0.311296,
+        "view_plan_phase": 0.008192,
+        "view_policy": 0.008192,
+        "view_policy_phase": 0.008192,
+        "view_request": 2.891776,
+        "view_review": 0.090112,
+        "view_review_phase": 0.008192,
+        "view_review_queue": 0.008192,
+        "view_review_queue_phase": 0.008192,
+        "view_risk": 0.024576,
+        "view_risk_phase": 0.008192,
+        "view_run": 1.073152,
+        "view_run_phase": 0.147456,
+        "view_verification": 0.393216,
+        "view_verification_phase": 0.008192
+      },
+      "wal_mb": 0.0
+    },
+    "verify_reference": {
+      "events": 3874,
+      "ms": 43.486522,
+      "payloads_checked": 441
+    }
+  },
+  "measurements": {
+    "after_purge_views_match_rebuild": {
+      "batches": {
+        "max_ms": 33.344839,
+        "n": 234,
+        "p50_ms": 4.101596,
+        "p99_ms": 8.480563
+      },
+      "cleanup": {
+        "max_ms": 12.161204,
+        "n": 258,
+        "p50_ms": 1.930393,
+        "p99_ms": 8.328652
+      },
+      "final_transaction": "catch-up and compare",
+      "final_transaction_ms": 18.433874,
+      "mismatched_rows": 0,
+      "total_s": 3.143806614
+    },
+    "commit_10_events": {
+      "max_ms": 11.631003,
+      "n": 300,
+      "p50_ms": 3.247944,
+      "p99_ms": 9.851298
+    },
+    "contention_8_writers_gate_0": {
+      "commit": {
+        "max_ms": 50.514954,
+        "n": 5835,
+        "p50_ms": 5.7785850000000005,
+        "p99_ms": 11.701256
+      },
+      "committed": 5835,
+      "errors": 0,
+      "events": 23141,
+      "lock_wait": {
+        "max_ms": 2029.866388,
+        "n": 5835,
+        "p50_ms": 3.125329,
+        "p99_ms": 628.8370639999999
+      },
+      "payload_bytes_inserted": 6154188,
+      "per_writer": [
+        {
+          "commands": 660,
+          "errors": 0,
+          "wait_max_ms": 1829.573734,
+          "wait_p99_ms": 628.874574
+        },
+        {
+          "commands": 1075,
+          "errors": 0,
+          "wait_max_ms": 1032.203435,
+          "wait_p99_ms": 428.706979
+        },
+        {
+          "commands": 621,
+          "errors": 0,
+          "wait_max_ms": 2029.866388,
+          "wait_p99_ms": 732.06411
+        },
+        {
+          "commands": 662,
+          "errors": 0,
+          "wait_max_ms": 1632.663777,
+          "wait_p99_ms": 732.0600929999999
+        },
+        {
+          "commands": 700,
+          "errors": 0,
+          "wait_max_ms": 1662.832997,
+          "wait_p99_ms": 628.88328
+        },
+        {
+          "commands": 690,
+          "errors": 0,
+          "wait_max_ms": 1632.5857589999998,
+          "wait_p99_ms": 628.921238
+        },
+        {
+          "commands": 661,
+          "errors": 0,
+          "wait_max_ms": 1729.671753,
+          "wait_p99_ms": 728.9365650000001
+        },
+        {
+          "commands": 766,
+          "errors": 0,
+          "wait_max_ms": 1732.779281,
+          "wait_p99_ms": 528.837741
+        }
+      ]
+    },
+    "contention_8_writers_gate_1": {
+      "commit": {
+        "max_ms": 89.32862499999999,
+        "n": 9237,
+        "p50_ms": 2.47736,
+        "p99_ms": 8.574945
+      },
+      "committed": 9237,
+      "errors": 0,
+      "events": 36746,
+      "lock_wait": {
+        "max_ms": 111.238313,
+        "n": 9237,
+        "p50_ms": 21.566941999999997,
+        "p99_ms": 35.001205
+      },
+      "payload_bytes_inserted": 9813104,
+      "per_writer": [
+        {
+          "commands": 1155,
+          "errors": 0,
+          "wait_max_ms": 111.238313,
+          "wait_p99_ms": 35.043176
+        },
+        {
+          "commands": 1155,
+          "errors": 0,
+          "wait_max_ms": 107.614449,
+          "wait_p99_ms": 36.345015
+        },
+        {
+          "commands": 1154,
+          "errors": 0,
+          "wait_max_ms": 56.484479,
+          "wait_p99_ms": 35.72025
+        },
+        {
+          "commands": 1155,
+          "errors": 0,
+          "wait_max_ms": 110.711394,
+          "wait_p99_ms": 34.867711
+        },
+        {
+          "commands": 1155,
+          "errors": 0,
+          "wait_max_ms": 110.221658,
+          "wait_p99_ms": 32.726273
+        },
+        {
+          "commands": 1154,
+          "errors": 0,
+          "wait_max_ms": 111.044271,
+          "wait_p99_ms": 36.495265
+        },
+        {
+          "commands": 1155,
+          "errors": 0,
+          "wait_max_ms": 109.077969,
+          "wait_p99_ms": 34.340622
+        },
+        {
+          "commands": 1154,
+          "errors": 0,
+          "wait_max_ms": 110.983265,
+          "wait_p99_ms": 35.088341
+        }
+      ]
+    },
+    "guard_new_process": {
+      "store_work": {
+        "max_ms": 9.871,
+        "n": 500,
+        "p50_ms": 5.63,
+        "p99_ms": 6.511
+      },
+      "wall_including_process_start": {
+        "max_ms": 12.61688,
+        "n": 500,
+        "p50_ms": 8.295060999999999,
+        "p99_ms": 9.697964
+      }
+    },
+    "open_checked": {
+      "max_ms": 0.46512000000000003,
+      "n": 1000,
+      "p50_ms": 0.12539,
+      "p99_ms": 0.24202300000000002
+    },
+    "purge": {
+      "backup_s": 1.121076576,
+      "checkpoint_ms": 16.907775,
+      "final_checkpoint_ms": 15.239864,
+      "payloads_purged": 20,
+      "purged_bodies_left": 0,
+      "total_s": 1.726891062,
+      "transaction_ms": 6.064171,
+      "vacuum_s": 0.563376171,
+      "wal_mb_after": 0.0
+    },
+    "rebuild_under_load": {
+      "rebuild": {
+        "batches": {
+          "max_ms": 25.39336,
+          "n": 124,
+          "p50_ms": 16.273582,
+          "p99_ms": 25.326712
+        },
+        "cleanup": {
+          "max_ms": 47.632506,
+          "n": 152,
+          "p50_ms": 13.319951999999999,
+          "p99_ms": 33.661598
+        },
+        "final_transaction": "catch-up and flip the live generation",
+        "final_transaction_ms": 2.704675,
+        "mismatched_rows": null,
+        "total_s": 8.530431513
+      },
+      "verify_views_after": {
+        "batches": {
+          "max_ms": 25.238864,
+          "n": 177,
+          "p50_ms": 15.376707,
+          "p99_ms": 25.036085999999997
+        },
+        "cleanup": {
+          "max_ms": 111.316666,
+          "n": 202,
+          "p50_ms": 13.451975,
+          "p99_ms": 22.434299000000003
+        },
+        "final_transaction": "catch-up and compare",
+        "final_transaction_ms": 16.655563,
+        "mismatched_rows": 0,
+        "total_s": 11.515208646
+      },
+      "writers_meanwhile": {
+        "commit": {
+          "max_ms": 98.204191,
+          "n": 6884,
+          "p50_ms": 2.5301910000000003,
+          "p99_ms": 7.852242
+        },
+        "committed": 6884,
+        "errors": 0,
+        "events": 27410,
+        "lock_wait": {
+          "max_ms": 107.615935,
+          "n": 6884,
+          "p50_ms": 10.122906,
+          "p99_ms": 21.961103
+        },
+        "payload_bytes_inserted": 7338143,
+        "per_writer": [
+          {
+            "commands": 1723,
+            "errors": 0,
+            "wait_max_ms": 105.824619,
+            "wait_p99_ms": 21.852406
+          },
+          {
+            "commands": 1721,
+            "errors": 0,
+            "wait_max_ms": 50.020653,
+            "wait_p99_ms": 21.878344
+          },
+          {
+            "commands": 1720,
+            "errors": 0,
+            "wait_max_ms": 107.615935,
+            "wait_p99_ms": 21.79714
+          },
+          {
+            "commands": 1720,
+            "errors": 0,
+            "wait_max_ms": 105.661968,
+            "wait_p99_ms": 22.187086
+          }
+        ]
+      }
+    },
+    "server_start_quick_check": {
+      "max_ms": 173.67008,
+      "n": 20,
+      "p50_ms": 170.724504,
+      "p99_ms": 173.67008
+    },
+    "size_after": {
+      "db_mb": 253.149184,
+      "events": 121409,
+      "payload_body_mb": 43.606146,
+      "payload_raw_mb": 317.648979,
+      "payloads": 25728,
+      "tables_mb": {
+        "claim_lease": 0.008192,
+        "event": 86.843392,
+        "event_commit": 4.399104,
+        "event_stream": 3.964928,
+        "event_type": 2.809856,
+        "payload": 49.348608,
+        "payload_ref": 1.499136,
+        "payload_ref_hash": 1.253376,
+        "project": 0.008192,
+        "project_gen": 0.008192,
+        "schema_meta": 0.008192,
+        "search_config": 0.008192,
+        "search_content": 38.854656,
+        "search_data": 12.353536,
+        "search_docsize": 1.114112,
+        "search_idx": 0.04096,
+        "search_ref": 0.032768,
+        "sqlite_autoindex_payload_1": 1.040384,
+        "sqlite_schema": 0.024576,
+        "trace": 1.728512,
+        "view_admission": 0.032768,
+        "view_admission_phase": 0.008192,
+        "view_capture": 0.131072,
+        "view_capture_phase": 0.008192,
+        "view_dispatch": 1.589248,
+        "view_dispatch_phase": 0.049152,
+        "view_evidence_map": 0.106496,
+        "view_evidence_map_phase": 0.008192,
+        "view_guard_policy": 0.049152,
+        "view_guard_policy_phase": 0.008192,
+        "view_milestone": 0.008192,
+        "view_milestone_phase": 0.008192,
+        "view_pause": 0.008192,
+        "view_pause_phase": 0.008192,
+        "view_phase": 1.196032,
+        "view_phase_phase": 0.024576,
+        "view_plan": 0.32768,
+        "view_plan_phase": 0.008192,
+        "view_policy": 0.008192,
+        "view_policy_phase": 0.008192,
+        "view_request": 12.57472,
+        "view_review": 0.12288,
+        "view_review_phase": 0.008192,
+        "view_review_queue": 0.008192,
+        "view_review_queue_phase": 0.008192,
+        "view_risk": 0.024576,
+        "view_risk_phase": 0.008192,
+        "view_run": 15.343616,
+        "view_run_phase": 2.179072,
+        "view_verification": 0.4096,
+        "view_verification_phase": 0.024576
+      },
+      "wal_mb": 8.602184
+    },
+    "verified_backup_under_load": {
+      "chains_s": 0.789582454,
+      "copy_s": 0.152368367,
+      "integrity_s": 0.358860646,
+      "total_s": 1.300811467,
+      "writers_meanwhile": {
+        "commit": {
+          "max_ms": 26.679077999999997,
+          "n": 2584,
+          "p50_ms": 2.394741,
+          "p99_ms": 7.265910000000001
+        },
+        "committed": 2584,
+        "errors": 0,
+        "events": 10441,
+        "lock_wait": {
+          "max_ms": 67.095607,
+          "n": 2584,
+          "p50_ms": 8.810936,
+          "p99_ms": 16.826771
+        },
+        "payload_bytes_inserted": 2774582,
+        "per_writer": [
+          {
+            "commands": 648,
+            "errors": 0,
+            "wait_max_ms": 64.738097,
+            "wait_p99_ms": 16.651304
+          },
+          {
+            "commands": 646,
+            "errors": 0,
+            "wait_max_ms": 29.389304000000003,
+            "wait_p99_ms": 16.932602000000003
+          },
+          {
+            "commands": 645,
+            "errors": 0,
+            "wait_max_ms": 49.272721,
+            "wait_p99_ms": 16.917744
+          },
+          {
+            "commands": 645,
+            "errors": 0,
+            "wait_max_ms": 67.095607,
+            "wait_p99_ms": 16.331403
+          }
+        ]
+      }
+    },
+    "view_read": {
+      "doc_bytes": {
+        "max": 4433.0,
+        "p50": 1633.0,
+        "p99": 4432.0
+      },
+      "find_page_of_50": {
+        "max_ms": 0.060085,
+        "n": 2000,
+        "p50_ms": 0.016893,
+        "p99_ms": 0.02096
+      },
+      "get_by_key_and_parse": {
+        "max_ms": 0.030068,
+        "n": 20000,
+        "p50_ms": 0.004719,
+        "p99_ms": 0.017032
+      }
+    }
+  },
+  "reference_project": {
+    "claim_commit": {
+      "max_ms": 4.590095,
+      "n": 220,
+      "p50_ms": 1.678057,
+      "p99_ms": 4.021188
+    },
+    "commands": 1795,
+    "commit_by_events": {
+      "1": {
+        "max_ms": 13.363236,
+        "n": 1511,
+        "p50_ms": 1.896525,
+        "p99_ms": 4.8941360000000005
+      },
+      "1 external": {
+        "max_ms": 6.264045,
+        "n": 220,
+        "p50_ms": 2.021745,
+        "p99_ms": 4.7895259999999995
+      },
+      "2-4": {
+        "max_ms": 7.093891,
+        "n": 64,
+        "p50_ms": 2.522221,
+        "p99_ms": 7.093891
+      }
+    },
+    "events": 3874,
+    "load_s": 4.481165227,
+    "lock_wait": {
+      "max_ms": 0.021251,
+      "n": 1795,
+      "p50_ms": 0.003466,
+      "p99_ms": 0.01038
+    },
+    "projects": 1,
+    "size": {
+      "db_mb": 24.502272,
+      "events": 3874,
+      "payload_body_mb": 3.934116,
+      "payload_raw_mb": 41.273975,
+      "payloads": 441,
+      "tables_mb": {
+        "claim_lease": 0.008192,
+        "event": 8.51968,
+        "event_commit": 0.098304,
+        "event_stream": 0.131072,
+        "event_type": 0.139264,
+        "payload": 4.243456,
+        "payload_ref": 0.04096,
+        "payload_ref_hash": 0.04096,
+        "project": 0.008192,
+        "project_gen": 0.008192,
+        "schema_meta": 0.008192,
+        "search_config": 0.008192,
+        "search_content": 6.807552,
+        "search_data": 2.531328,
+        "search_docsize": 0.032768,
+        "search_idx": 0.024576,
+        "search_ref": 0.008192,
+        "sqlite_autoindex_payload_1": 0.032768,
+        "sqlite_schema": 0.024576,
+        "trace": 0.090112,
+        "view_admission": 0.008192,
+        "view_admission_phase": 0.008192,
+        "view_capture": 0.024576,
+        "view_capture_phase": 0.008192,
+        "view_dispatch": 0.221184,
+        "view_dispatch_phase": 0.008192,
+        "view_evidence_map": 0.024576,
+        "view_evidence_map_phase": 0.008192,
+        "view_guard_policy": 0.016384,
+        "view_guard_policy_phase": 0.008192,
+        "view_milestone": 0.008192,
+        "view_milestone_phase": 0.008192,
+        "view_pause": 0.008192,
+        "view_pause_phase": 0.008192,
+        "view_phase": 0.237568,
+        "view_phase_phase": 0.008192,
+        "view_plan": 0.065536,
+        "view_plan_phase": 0.008192,
+        "view_policy": 0.008192,
+        "view_policy_phase": 0.008192,
+        "view_request": 0.581632,
+        "view_review": 0.024576,
+        "view_review_phase": 0.008192,
+        "view_review_queue": 0.008192,
+        "view_review_queue_phase": 0.008192,
+        "view_risk": 0.008192,
+        "view_risk_phase": 0.008192,
+        "view_run": 0.221184,
+        "view_run_phase": 0.032768,
+        "view_verification": 0.08192,
+        "view_verification_phase": 0.008192
+      },
+      "wal_mb": 0.0
+    },
+    "verify_reference": {
+      "events": 3874,
+      "ms": 43.484909,
+      "payloads_checked": 441
+    }
+  },
+  "run": 3
+}
