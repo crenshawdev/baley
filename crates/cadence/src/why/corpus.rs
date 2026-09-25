@@ -530,7 +530,7 @@ fn describe(label: &str, path: PathBuf) -> Dir {
         milestone: Some("the open milestone".to_owned()), recovered: None, slug: None }
 }
 
-/// The on-disk tier: every phase directory's `## Commits` rows.
+/// The on-disk tier: the `## Plan N` task rows of every phase directory's SUMMARY.md.
 pub fn build_commit_index(planning_root: &Path) -> Tier {
     let mut tier = Tier::default();
     for (label, path) in phase_dirs_in(planning_root) {
