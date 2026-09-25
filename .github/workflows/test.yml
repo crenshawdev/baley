@@ -13,29 +13,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The Node matrix and the typecheck job are gone, not disabled. They ran the
-  # 3.x suite in cadence-core/ against a tree the 4.0 binary renders, and had
-  # been red since 2026-09-13 on a citation a rendered skill stopped carrying
-  # in phase 13. There is no further 3.x work; the 3.x branch is that suite's
-  # home, and cadence-core/ leaves this branch surface by surface as the binary
-  # replaces it. The step that held that tree byte-identical to v3.7.12 went
-  # the same way on 2026-09-19: phase 14 plan 4 was the first plan to delete
-  # replaced JavaScript, and a guard that fails on every removal the rule
-  # allows guards nothing. The frozen reference is the tag, and the tests that
-  # need it read the tag.
   cargo-test:
     # The Rust binary is the product. This is the suite.
     runs-on: ubuntu-latest
     steps:
-      # fetch-depth: 0 is load-bearing, not tidiness. Sixteen tests read the
-      # frozen reference straight out of git - `git show v3.7.12:<path>` in
-      # config/tests.rs and import/tests.rs, and `git archive v3.7.12` for the
-      # .planning extraction fixture. A shallow checkout has no tags, so every
-      # one of them fails with "fatal: not a valid object name: v3.7.12" while
-      # passing locally.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
 
       # Installed by name, not left to rustup's auto-install: rustup 1.28
       # stopped installing the toolchain a rust-toolchain.toml names on first
