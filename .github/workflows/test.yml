@@ -54,7 +54,9 @@ jobs:
           set -euo pipefail
           curl -LsSf https://get.nexte.st/0.9.144/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
           cargo nextest --version
-      - run: cargo build --locked
+      # No separate `cargo build`: the test build adds dev-dependency features,
+      # so it recompiled the crate and some dependencies a second time anyway.
+      # nextest builds everything the tests need, the binary included.
       - run: cargo nextest run --locked --workspace --no-fail-fast
 
   clippy:
