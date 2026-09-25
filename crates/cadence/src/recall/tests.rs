@@ -272,20 +272,7 @@ fn unreadable_permitted_source_states_incomplete_coverage() {
 }
 
 #[test]
-fn an_archive_residue_line_yields_its_label_origin_and_phase_and_no_commit() {
-    let candidates = history::residue(
-        "ARCHIVE.md",
-        "# Archive\n## release/with/slashes\n- `phases/1.10/SUMMARY.md`: residuefalcon is only a snippet\n",
-        None,
-    );
-    assert_eq!(candidates.len(), 1);
-    assert!(
-        matches!(&candidates[0].provenance,Provenance::Residue {path,line:3,label,origin,phase,commit:None} if path == "ARCHIVE.md" && label == "release/with/slashes" && origin == "phases/1.10/SUMMARY.md" && phase == "1.10")
-    );
-}
-
-#[test]
-fn a_git_launch_failure_is_incomplete_coverage_while_archive_residue_still_answers() {
+fn a_git_launch_failure_is_incomplete_coverage() {
     struct Missing;
     impl cadence::process::Process for Missing {
         fn run(
@@ -296,24 +283,12 @@ fn a_git_launch_failure_is_incomplete_coverage_while_archive_residue_still_answe
         }
     }
     let dir = tempfile::tempdir().unwrap();
-    put(
-        dir.path(),
-        "ARCHIVE.md",
-        "# Archive\n## release/with/slashes\n- `phases/1.10/SUMMARY.md`: residuefalcon is only a snippet\n",
-    );
     let history = history::read(dir.path(), &view(vec![]), &[], &mut Missing);
     assert!(
         history
             .incomplete
             .iter()
             .any(|r| r.contains("git executable unavailable"))
-    );
-    assert_eq!(
-        Corpus::new(history.candidates, &BTreeSet::new())
-            .query("residuefalcon", None, "builtin")
-            .unwrap()
-            .total,
-        1
     );
 }
 
@@ -473,20 +448,8 @@ fn a_failed_blob_read_names_its_commit_and_path_and_the_other_hits_stay() {
 
 #[test]
 fn a_declined_item_has_no_history_candidates_while_a_document_with_its_text_answers() {
-    let filed = "- 2026-09-01 github GH-1 abc123: declined orbit\n";
-    let id = crate::import::items::translate(
-        None,
-        Some(&crate::import::Source {
-            path: "FILED.md".into(),
-            bytes: filed.into(),
-        }),
-        None,
-    )
-    .unwrap()
-    .records[0]
-        .id
-        .clone();
-    let captured = item(&id, "declined orbit");
+    let id = "declined-orbit";
+    let captured = item(id, "declined orbit");
     let mut declined = captured.clone();
     declined.revision = 2;
     declined.disposition = Disposition::Declined {
@@ -496,17 +459,16 @@ fn a_declined_item_has_no_history_candidates_while_a_document_with_its_text_answ
         commits: vec!["c1"],
         trees: BTreeMap::from([(
             "c1",
-            vec![("FILED.md", "b1"), ("items.jsonl", "b2"), ("PROJECT.md", "b3")],
+            vec![("items.jsonl", "b2"), ("PROJECT.md", "b3")],
         )]),
         blobs: BTreeMap::from([
-            ("b1", Ok(filed.into())),
             ("b2", Ok(serde_json::to_string(&captured).unwrap() + "\n")),
             ("b3", Ok("declined orbit\n".into())),
         ]),
         ..Answers::default()
     };
     let history = traverse(&view(vec![captured, declined]), &mut git);
-    assert!(history.candidates.iter().all(|c| c.item_id.as_deref() != Some(id.as_str())));
+    assert!(history.candidates.iter().all(|c| c.item_id.as_deref() != Some(id)));
     assert!(history.candidates.iter().any(|c| matches!(
         &c.provenance,
         Provenance::Document { path, .. } if path == "PROJECT.md"

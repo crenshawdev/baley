@@ -5,7 +5,7 @@ use crate::{
         roles,
         write::Update,
     },
-    import::{Session, SessionFactory, SourceEvidence, SourceGuard},
+    import::{Session, SessionFactory},
 };
 use cadence::{
     envelope::Envelope,
@@ -67,133 +67,7 @@ pub struct Facts {
     pub repo: PathBuf,
     pub global_alias: bool,
     pub diagnostics: config::Diagnostics,
-    pub retirement: Retirement,
     pub interview: interview::Prepared,
-}
-
-#[derive(Debug, PartialEq, Serialize, JsonSchema)]
-pub struct RetiredValue {
-    pub value: Value,
-    pub layer: Layer,
-    pub path: PathBuf,
-    pub global_alias: Option<PathBuf>,
-    pub origin: String,
-}
-
-#[derive(Debug, PartialEq, Serialize, JsonSchema)]
-pub struct Retirement {
-    pub message: String,
-    pub originals: Vec<RetiredValue>,
-    pub evidence: String,
-}
-
-pub fn retirement(generation: &Generation, snapshot: Option<&Value>) -> Retirement {
-    let mut originals = Vec::new();
-    for (layer, raw, input) in [
-        (
-            Layer::Global,
-            &generation.effective.raw_global,
-            generation.global.as_ref(),
-        ),
-        (
-            Layer::Repo,
-            &generation.effective.raw_repo,
-            Some(&generation.repo),
-        ),
-    ] {
-        if let (Some(value), Some(input)) = (raw.as_ref().and_then(|raw| raw.get("stakes")), input)
-        {
-            originals.push(RetiredValue {
-                value: value.clone(),
-                layer,
-                path: input.identity.clone(),
-                global_alias: (layer == Layer::Repo && generation.effective.global_intent)
-                    .then(|| generation.repo.identity.clone()),
-                origin: "active".into(),
-            });
-        }
-    }
-    let mut evidence_available = false;
-    let mut evidence_invalid = false;
-    let mut current = snapshot;
-    let mut manifest = None;
-    while let Some(data) = current {
-        manifest = data.get("import").or(manifest);
-        if let Some(evidence) = data.get("source_evidence") {
-            match serde_json::from_value::<Vec<SourceEvidence>>(evidence.clone()) {
-                Ok(sources) => {
-                    evidence_available = true;
-                    let guards: Vec<SourceGuard> = manifest
-                        .and_then(|value| value.get("sources"))
-                        .cloned()
-                        .and_then(|value| serde_json::from_value(value).ok())
-                        .unwrap_or_default();
-                    for source in sources {
-                        if source.generation != source.source.generation() {
-                            evidence_invalid = true;
-                            continue;
-                        }
-                        let stored = guards
-                            .iter()
-                            .find(|guard| guard.path == Path::new(&source.source.path));
-                        let repo = guards.first();
-                        let layer = source.layer.or_else(|| {
-                            stored.map(|guard| {
-                                if repo.is_some_and(|repo| repo.identity == guard.identity) {
-                                    Layer::Repo
-                                } else {
-                                    Layer::Global
-                                }
-                            })
-                        });
-                        let Ok(raw) = serde_json::from_slice::<Value>(&source.source.bytes) else {
-                            evidence_invalid |= layer.is_some();
-                            continue;
-                        };
-                        let Some(value) = raw.get("stakes") else {
-                            continue;
-                        };
-                        let Some(layer) = layer else {
-                            evidence_invalid = true;
-                            continue;
-                        };
-                        let alias = source.global_alias.or_else(|| {
-                            (layer == Layer::Repo)
-                                .then(|| {
-                                    guards
-                                        .iter()
-                                        .find(|guard| {
-                                            repo.is_some_and(|repo| {
-                                                guard.identity == repo.identity
-                                                    && guard.path != repo.path
-                                            })
-                                        })
-                                        .map(|guard| guard.path.clone())
-                                })
-                                .flatten()
-                        });
-                        let original = RetiredValue {
-                            value: value.clone(),
-                            layer,
-                            path: source.source.path.into(),
-                            global_alias: alias,
-                            origin: "preserved".into(),
-                        };
-                        if !originals.contains(&original) {
-                            originals.push(original);
-                        }
-                    }
-                }
-                Err(_) => evidence_invalid = true,
-            }
-        }
-        current = data.get("current");
-    }
-    Retirement {
-        message: "The stakes level is retired. Ordinary role questions use current settings; no equivalent spending profile is inferred.".into(),
-        originals,
-        evidence: if evidence_available && !evidence_invalid { "available" } else { "unavailable" }.into(),
-    }
 }
 
 #[derive(Serialize, JsonSchema)]
@@ -281,31 +155,20 @@ pub fn interview_facts(generation: &Generation, mode: interview::Mode) -> Facts 
         repo: generation.repo.identity.clone(),
         global_alias: effective.global_intent,
         diagnostics: effective.diagnostics.clone(),
-        retirement: retirement(generation, None),
         interview: interview::prepare(generation, mode),
     }
 }
 
 async fn session_facts<I: ConfigIo>(session: &Session<I>, mode: interview::Mode) -> Result<Facts> {
-    let generation = session.config()?;
-    let view = session
-        .request(cadence::store::writer::Operation::Read)
-        .await?;
-    Ok(observed_facts(&generation, Some(&view.snapshot.data), mode))
+    Ok(observed_facts(&session.config()?, mode))
 }
 
-pub fn observed_facts(
-    generation: &Generation,
-    snapshot: Option<&Value>,
-    mode: interview::Mode,
-) -> Facts {
-    let mut facts = if mode == interview::Mode::Roles {
+pub fn observed_facts(generation: &Generation, mode: interview::Mode) -> Facts {
+    if mode == interview::Mode::Roles {
         facts(generation)
     } else {
         interview_facts(generation, mode)
-    };
-    facts.retirement = retirement(generation, snapshot);
-    facts
+    }
 }
 
 pub fn refused(code: &str, reason: impl Into<String>) -> Envelope<Output> {
@@ -334,8 +197,8 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
     };
     if matches!(start(&command), Start::ObserveOnly) {
         return Ok(match factory.observe_config(root) {
-            Ok((generation, snapshot)) => Envelope::Ok(Output::Unchanged {
-                facts: observed_facts(&generation, snapshot.as_ref(), interview::Mode::Roles),
+            Ok(generation) => Envelope::Ok(Output::Unchanged {
+                facts: observed_facts(&generation, interview::Mode::Roles),
             }),
             Err(error) => unavailable(&error),
         });

@@ -1,5 +1,4 @@
 use super::model::{Decision, DecisionRecord, Evidence};
-use serde_json::Value;
 
 pub fn normalize_effort(evidence: Evidence) -> Evidence {
     match evidence {
@@ -8,7 +7,7 @@ pub fn normalize_effort(evidence: Evidence) -> Evidence {
     }
 }
 
-/// The live writer and import use exactly the same record-boundary rule.
+/// The record-boundary rule the live writer applies.
 /// Requested effort and absent receipts are never inferred from observations.
 pub fn normalize(mut record: DecisionRecord) -> DecisionRecord {
     if let Decision::Routing {
@@ -18,19 +17,6 @@ pub fn normalize(mut record: DecisionRecord) -> DecisionRecord {
         *observed_effort = normalize_effort(std::mem::take(observed_effort));
     }
     record
-}
-
-/// Worker facts may enrich an existing historical decision only with an agent
-/// identity. This function cannot manufacture an observation-only log event.
-pub fn historical_observed_effort(agent_id: Option<&str>, value: Option<&Value>) -> Evidence {
-    if agent_id.is_none_or(|id| id.trim().is_empty()) {
-        return Evidence::Missing;
-    }
-    normalize_effort(match value {
-        Some(Value::String(text)) => Evidence::Text(text.clone()),
-        Some(Value::Null) => Evidence::Null,
-        _ => Evidence::Missing,
-    })
 }
 
 #[cfg(test)]
@@ -48,29 +34,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn historical_observed_effort_without_an_agent_identity_is_missing() {
-        assert_eq!(
-            historical_observed_effort(None, Some(&serde_json::json!("host-ultra"))),
-            Evidence::Missing
-        );
-    }
-
-    #[test]
-    fn historical_observed_effort_with_an_agent_keeps_its_text_and_omits_blank_or_absent() {
-        assert_eq!(
-            historical_observed_effort(Some("agent-1"), Some(&serde_json::json!(" \n"))),
-            Evidence::Missing
-        );
-        assert_eq!(
-            historical_observed_effort(Some("agent-1"), Some(&serde_json::json!("host-ultra"))),
-            Evidence::Text("host-ultra".into())
-        );
-        assert_eq!(
-            historical_observed_effort(Some("agent-1"), None),
-            Evidence::Missing
-        );
-    }
     fn routing(observed_effort: Evidence) -> DecisionRecord {
         DecisionRecord {
             version: super::super::model::VERSION,

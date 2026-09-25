@@ -198,14 +198,12 @@ fn validate_claim_transition(participants: &[Participant], snapshot: &Snapshot, 
 }
 
 pub fn preserve_provenance(previous: &Value, proposed: &Value) -> Result<()> {
-    for field in ["import", "source_evidence"] {
-        if let Some(value) = previous.get(field)
-            && proposed.get(field) != Some(value)
-        {
-            return Err(Error::Invalid(format!(
-                "snapshot replacement changed provenance: {field}"
-            )));
-        }
+    if let Some(value) = previous.get("import")
+        && proposed.get("import") != Some(value)
+    {
+        return Err(Error::Invalid(
+            "snapshot replacement changed provenance: import".into(),
+        ));
     }
     if let Some(current) = previous.get("current") {
         preserve_provenance(current, proposed.get("current").unwrap_or(&Value::Null))?;
@@ -2303,23 +2301,21 @@ mod provenance_tests {
     }
 
     fn previous() -> Value {
-        json!({"import":{"complete":true},"source_evidence":[{"source":{"path":"/old/config.json","bytes":[123,125]}}],
-            "archive":{"available":true},"cursor":{"phase":8},"execution":{"old":true}})
+        json!({"import":{"complete":true,"sources":[]},"execution":{"old":true}})
     }
 
     macro_rules! variant {
         ($good:ident, $bad:ident, $name:literal) => {
             #[test]
             fn $good() {
-                let proposed = json!({"import":{"complete":true},"source_evidence":[{"source":{"path":"/old/config.json","bytes":[123,125]}}],
-                    "archive":{"available":true},"cursor":{"phase":8},"execution":{"new":true}});
+                let proposed = json!({"import":{"complete":true,"sources":[]},"execution":{"new":true}});
                 assert_eq!(kind($name).validate_provenance(&previous(), &proposed), Ok(()));
             }
             #[test]
             fn $bad() {
-                let proposed = json!({"import":{"complete":true},"archive":{"available":true},"cursor":{"phase":8}});
+                let proposed = json!({"execution":{"new":true}});
                 assert_eq!(kind($name).validate_provenance(&previous(), &proposed),
-                    Err(Error::Invalid("snapshot replacement changed provenance: source_evidence".into())));
+                    Err(Error::Invalid("snapshot replacement changed provenance: import".into())));
             }
         };
     }
@@ -2364,14 +2360,14 @@ mod provenance_tests {
     );
 
     #[test]
-    fn wrapped_evidence_cannot_be_dropped_by_a_flattened_replacement() {
+    fn a_wrapped_import_manifest_cannot_be_dropped_by_a_flattened_replacement() {
         assert_eq!(
             preserve_provenance(
-                &json!({"import":{"complete":true},"current":{"source_evidence":[{"exact":[1,null]}]}}),
-                &json!({"import":{"complete":true},"source_evidence":[{"exact":[1,null]}]})
+                &json!({"current":{"import":{"exact":[1,null]}}}),
+                &json!({"import":{"exact":[1,null]}})
             ),
             Err(Error::Invalid(
-                "snapshot replacement changed provenance: source_evidence".into()
+                "snapshot replacement changed provenance: import".into()
             ))
         );
     }

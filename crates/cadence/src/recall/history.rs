@@ -8,7 +8,6 @@ use cadence::store::{
 use cadence::process::Process;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     path::Path,
 };
 
@@ -67,56 +66,8 @@ pub fn evidence_key(c: &Candidate) -> String {
             heading,
             ..
         } => format!("document:{path}:{line}:{heading}"),
-        Provenance::Residue {
-            path,
-            line,
-            label,
-            origin,
-            phase,
-            ..
-        } => format!("residue:{path}:{line}:{label}:{origin}:{phase}"),
     };
     format!("{key}:{}", model::digest(c.text.as_bytes()))
-}
-
-pub fn residue(path: &str, text: &str, commit: Option<&str>) -> Vec<Candidate> {
-    let mut label = None;
-    let mut result = Vec::new();
-    for (i, line) in text.trim_start_matches('\u{feff}').lines().enumerate() {
-        let line = line.trim_end_matches('\r');
-        if let Some(name) = line.strip_prefix("## ") {
-            label = Some(name.trim());
-            continue;
-        }
-        let Some(label) = label else {
-            continue;
-        };
-        let Some((origin, text)) = line.strip_prefix("- `").and_then(|s| s.split_once("`: "))
-        else {
-            continue;
-        };
-        let parts: Vec<_> = origin.split('/').collect();
-        let ["phases", phase, file] = parts.as_slice() else {
-            continue;
-        };
-        if !matches!(*file, "SUMMARY.md" | "UAT.md" | "CONTEXT.md") || !documents::eligible(origin)
-        {
-            continue;
-        }
-        result.push(Candidate {
-            text: text.into(),
-            item_id: None,
-            provenance: Provenance::Residue {
-                path: path.into(),
-                line: i + 1,
-                label: label.into(),
-                origin: origin.into(),
-                phase: (*phase).into(),
-                commit: commit.map(str::to_string),
-            },
-        });
-    }
-    result
 }
 
 fn utf8(bytes: Vec<u8>) -> Result<String, String> {
@@ -150,27 +101,10 @@ fn historical(
                 snapshot: view.snapshot.clone(),
             })
         }
-        "FILED.md" => {
-            let source = crate::import::Source {
-                path: path.into(),
-                bytes: bytes.into(),
-            };
-            let imported = crate::import::items::translate(None, Some(&source), None)
-                .map_err(|e| e.to_string())?;
-            current(&View {
-                items: imported.records,
-                decisions: vec![],
-                snapshot: view.snapshot.clone(),
-            })
-        }
         _ => {
             let text =
                 std::str::from_utf8(bytes).map_err(|_| "non-UTF8 historical source".to_string())?;
-            return Ok(if path == "ARCHIVE.md" {
-                residue(path, text, Some(commit))
-            } else {
-                documents::snippets(path, text, Some(commit))
-            });
+            return Ok(documents::snippets(path, text, Some(commit)));
         }
     };
     for candidate in &mut candidates {
@@ -259,38 +193,14 @@ fn admit(
 }
 
 pub fn read(root: &Path, view: &View, live: &[Candidate], process: &mut dyn Process) -> History {
-    let mut out = History::default();
-    let mut seen: BTreeSet<_> = live.iter().map(evidence_key).collect();
-    // ARCHIVE is compatibility input only. It remains available even when git
-    // itself is absent; no reconstructed full document or invented commit.
-    let archive = root.join("ARCHIVE.md");
-    if let Ok(metadata) = fs::symlink_metadata(&archive) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            out.incomplete
-                .push("ARCHIVE.md: linked or non-file residue skipped".into());
-        } else {
-            match cadence::acquisition::text(&archive, cadence::acquisition::Class::Source) {
-                Ok(text) => {
-                    out.identities
-                        .insert(format!("ARCHIVE.md:{}", model::digest(text.as_bytes())));
-                    let excluded = super::declined(view);
-                    admit(residue("ARCHIVE.md", &text, None), &excluded, &mut seen, &mut out);
-                }
-                Err(e) => out.incomplete.push(format!("ARCHIVE.md unavailable: {e}")),
-            }
-        }
-    }
-    let history = match root.canonicalize() {
+    let seen: BTreeSet<_> = live.iter().map(evidence_key).collect();
+    match root.canonicalize() {
         Ok(root) => traverse(&root, view, seen, &mut Git { process, root: &root }),
         Err(e) => History {
             incomplete: vec![format!("history incomplete: {e}")],
             ..History::default()
         },
-    };
-    out.candidates.extend(history.candidates);
-    out.identities.extend(history.identities);
-    out.incomplete.extend(history.incomplete);
-    out
+    }
 }
 
 /// History as git answers it for the canonical planning `root`: newest commit
@@ -350,12 +260,7 @@ fn walk(
                     .and_then(|s| s.strip_prefix('/'))
                     .ok_or("git path outside planning root")?
             };
-            if !documents::eligible(path)
-                && !matches!(
-                    path,
-                    "items.jsonl" | "decisions.jsonl" | "FILED.md" | "ARCHIVE.md"
-                )
-            {
+            if !documents::eligible(path) && !matches!(path, "items.jsonl" | "decisions.jsonl") {
                 continue;
             }
             let meta: Vec<_> = meta.split_whitespace().collect();
@@ -432,7 +337,7 @@ fn blob_length(path: &str, permit: &BlobPermit, acquired: u64) -> Result<(), Str
 mod tests {
     #[test]
     fn oversized_blob_metadata_refuses_content_acquisition() {
-        for path in ["PROJECT.md", "ARCHIVE.md", "FILED.md", "phases/17/CONTEXT.md"] {
+        for path in ["PROJECT.md", "phases/17/CONTEXT.md"] {
             assert_eq!(super::blob_preflight(path, b"16777217\n"),
                 Err(format!("{path}: size 16777217 exceeds acquisition bound 16777216")));
             assert_eq!(super::blob_preflight(path, b"16777216\n"),

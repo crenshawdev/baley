@@ -1,41 +1,5 @@
-pub mod decisions;
-pub mod items;
-
 use cadence::store::model::digest;
 use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Source {
-    pub path: String,
-    pub bytes: Vec<u8>,
-}
-impl Source {
-    pub fn generation(&self) -> String {
-        digest(&self.bytes)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SourceEvidence {
-    pub source: Source,
-    pub generation: String,
-    pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub layer: Option<Layer>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub global_alias: Option<PathBuf>,
-}
-impl SourceEvidence {
-    pub fn original(source: &Source) -> Self {
-        Self {
-            source: source.clone(),
-            generation: source.generation(),
-            label: "non_effective_original_source".into(),
-            layer: None,
-            global_alias: None,
-        }
-    }
-}
 
 use crate::config::{
     self, Diagnostic, Effective, Layer, merge,
@@ -413,67 +377,11 @@ fn prepare_import<I: ConfigIo>(
     {
         guards.push(guard(path.clone(), &repo));
     }
-    let mut evidence = Vec::new();
-    for (path, input) in [
-        (Some(&legacy.repo), Some(&repo)),
-        (legacy.global.as_ref(), global.as_ref()),
-    ] {
-        if let (Some(path), Some(input)) = (path, input) {
-            if path != &legacy.repo {
-                guards.push(guard(path.clone(), input));
-            }
-            if let Some(bytes) = &input.bytes {
-                let mut original = SourceEvidence::original(&Source {
-                    path: path.display().to_string(),
-                    bytes: bytes.clone(),
-                });
-                original.layer = Some(if path == &legacy.repo {
-                    Layer::Repo
-                } else {
-                    Layer::Global
-                });
-                if path == &legacy.repo && global_identity.as_ref() == Some(&repo_identity) {
-                    original.global_alias = legacy.global.clone();
-                }
-                evidence.push(original);
-            }
-        }
+    if let (Some(path), Some(input)) = (legacy.global.as_ref(), global.as_ref())
+        && path != &legacy.repo
+    {
+        guards.push(guard(path.clone(), input));
     }
-    let mut sources = BTreeMap::new();
-    for name in [
-        "CAPTURE.md",
-        "FILED.md",
-        "DECLINED.md",
-        "STATE.md",
-        "trace.jsonl",
-        "trace.1.jsonl",
-        "ARCHIVE.md",
-    ] {
-        let path = root.join(name);
-        let input = observe(io, &path)?;
-        guards.push(guard(path, &input));
-        if let Some(bytes) = input.bytes {
-            sources.insert(
-                name,
-                Source {
-                    path: name.into(),
-                    bytes,
-                },
-            );
-        }
-    }
-    let items = items::translate(
-        sources.get("CAPTURE.md"),
-        sources.get("FILED.md"),
-        sources.get("DECLINED.md"),
-    )?;
-    let decisions = decisions::translate(
-        sources.get("STATE.md"),
-        sources.get("trace.jsonl"),
-        sources.get("trace.1.jsonl"),
-    )?;
-    evidence.extend(items.evidence);
-    evidence.extend(decisions.evidence);
     let mut warnings = vec![format!(
         "Retired settings (D-06): {}. Present values are removed; publishing and merging require explicit authorization.",
         config::RETIRED.join(", ")
@@ -518,8 +426,6 @@ fn prepare_import<I: ConfigIo>(
             diagnostic.layer, diagnostic.key, diagnostic.reason
         ));
     }
-    warnings.extend(items.warnings);
-    warnings.extend(decisions.warnings);
     let mut created: Vec<_> = [ITEMS, DECISIONS, STATE]
         .iter()
         .map(|name| root.join(name))
@@ -544,15 +450,14 @@ fn prepare_import<I: ConfigIo>(
             })
             .map(|input| guard(active.global.clone().unwrap(), input)),
     };
-    let snapshot = json!({"import":manifest,"source_evidence":evidence,
-        "archive":{"path":root.join("ARCHIVE.md"),"maintained":false,"available":sources.contains_key("ARCHIVE.md")}});
+    let snapshot = json!({"import":manifest});
     Ok(ImportInputs {
         manifest,
         generation,
         transaction: Transaction {
             id: format!("import:{source_generation}"),
-            items: items.records,
-            decisions: decisions.records,
+            items: vec![],
+            decisions: vec![],
             snapshot: Some(snapshot),
             external: vec![],
         },
@@ -726,7 +631,7 @@ impl<I: ConfigIo> Session<I> {
     }
     pub async fn request(&self, operation: Operation) -> Result<View> {
         // Queries refuse unavailable controlling config as well. Keep durable
-        // import metadata through later cursor/snapshot changes.
+        // import metadata through later snapshot changes.
         if !matches!(operation, Operation::GuardAudit(..)) {
             self.config()?;
         }
@@ -867,8 +772,8 @@ pub fn conditional(current: &View, operation: Operation) -> Result<Operation> {
 }
 
 /// Whether a derivation may replace `current` with `data`: it was derived from
-/// the current snapshot, and it keeps the import manifest and every provenance
-/// field exactly as they are.
+/// the current snapshot, and it keeps the import manifest and the layer record
+/// exactly as they are.
 pub fn check_derivation(current: &View, expected: &View, data: &Value) -> Result<()> {
     if current.snapshot.generation != expected.snapshot.generation
         || current.snapshot.integrity != expected.snapshot.integrity
@@ -882,12 +787,10 @@ pub fn check_derivation(current: &View, expected: &View, data: &Value) -> Result
             "derivation replacement must preserve import manifest".into(),
         ));
     }
-    for field in ["source_evidence", "archive", "cursor", LAYERS] {
-        if data.get(field) != current.snapshot.data.get(field) {
-            return Err(Error::Invalid(format!(
-                "derivation replacement changed provenance: {field}"
-            )));
-        }
+    if data.get(LAYERS) != current.snapshot.data.get(LAYERS) {
+        return Err(Error::Invalid(format!(
+            "derivation replacement changed provenance: {LAYERS}"
+        )));
     }
     Ok(())
 }
@@ -909,10 +812,7 @@ fn replace_current(previous: &Value, value: Value) -> Result<Value> {
 }
 
 fn contains_provenance(value: &Value) -> bool {
-    ["import", "source_evidence", "archive", "cursor"]
-        .iter()
-        .any(|field| value.get(field).is_some())
-        || value.get("current").is_some_and(contains_provenance)
+    value.get("import").is_some() || value.get("current").is_some_and(contains_provenance)
 }
 
 #[cfg(test)]
@@ -965,26 +865,21 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
 
     /// Observe unanswered interview facts without acquiring storage ownership or
     /// replaying an intent. An uninitialized project can reuse an active global.
-    pub fn observe_config(&self, root: &Path) -> Result<(Generation, Option<Value>)> {
+    pub fn observe_config(&self, root: &Path) -> Result<Generation> {
         let legacy = Paths {
             repo: root.join("config.json"),
             global: self.global.clone(),
         };
         let active = write::active_paths(&legacy)?;
         let mut io = self.io.clone();
-        let snapshot = observe_store(&mut io, &root.join(STATE))?
+        let imported = observe_store(&mut io, &root.join(STATE))?
             .bytes
             .as_deref()
             .map(serde_json::from_slice::<Snapshot>)
-            .transpose()?;
-        if let Some(snapshot) = snapshot
-            .as_ref()
-            .filter(|s| s.data["import"]["complete"] == true)
-        {
-            return Ok((
-                Reload::new(active, io).refresh()?,
-                Some(snapshot.data.clone()),
-            ));
+            .transpose()?
+            .is_some_and(|s| s.data["import"]["complete"] == true);
+        if imported {
+            return Reload::new(active, io).refresh();
         }
         let repo = observe(&mut io, &legacy.repo)?;
         let global = legacy
@@ -1022,15 +917,12 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
             effective.global_intent = alias;
             effective
         };
-        Ok((
-            Generation {
-                number: 0,
-                repo,
-                global: reused.or(global.filter(|_| !alias)),
-                effective,
-            },
-            snapshot.map(|s| s.data),
-        ))
+        Ok(Generation {
+            number: 0,
+            repo,
+            global: reused.or(global.filter(|_| !alias)),
+            effective,
+        })
     }
 
     pub fn guard_config(&self, root: &Path) -> Result<Generation> {

@@ -655,7 +655,6 @@ fn native_reopened_facts_return_all_thirteen_global_values_and_later_classificat
             None,
             false,
         ),
-        None,
         Mode::Roles,
     );
     assert_eq!(
@@ -795,39 +794,22 @@ fn native_later_answers_return_exactly_one_role_diff_with_existing_floor_pin() {
     );
 }
 
-/// Role facts over preserved legacy stakes originals in both layers and a
-/// current repo model for the executor.
-fn preserved_stakes_facts() -> cadence::config_service::Facts {
-    let snapshot = json!({"import":{"sources":[]},"source_evidence":[
-        {"source":{"path":"/legacy/global/config.json","bytes":br#"{"stakes":"high"}"#.as_slice()},"generation":"ab5784f98d095e4860a25db0f7f9ff01b8c972d5861e2d3ecad63cd9eff8e0f4","label":"non_effective_original_source","layer":"global"},
-        {"source":{"path":"/legacy/repo/config.json","bytes":br#"{"stakes":{"unrecognized":["legacy",null]}}"#.as_slice()},"generation":"5fd3278951af4d3398df702908e3f21246a002e61cc56189fae95713dd66e391","label":"non_effective_original_source","layer":"repo"}
-    ]});
+/// Role facts over a current repo model for the executor.
+fn repo_model_facts() -> cadence::config_service::Facts {
     cadence::config_service::observed_facts(
         &generation(
             None,
             Some(json!({"roles":{"cad-executor":{"model":"current"}}})),
             false,
         ),
-        Some(&snapshot),
         Mode::Roles,
     )
 }
 
 #[test]
-fn retirement_lists_the_preserved_stakes_originals_and_reports_evidence_available() {
-    assert_eq!(
-        serde_json::to_value(preserved_stakes_facts().retirement).unwrap(),
-        json!({"message":"The stakes level is retired. Ordinary role questions use current settings; no equivalent spending profile is inferred.","evidence":"available","originals":[
-            {"value":"high","layer":"global","path":"/legacy/global/config.json","global_alias":null,"origin":"preserved"},
-            {"value":{"unrecognized":["legacy",null]},"layer":"repo","path":"/legacy/repo/config.json","global_alias":null,"origin":"preserved"}
-        ]})
-    );
-}
-
-#[test]
 fn interview_subjects_show_current_repo_and_default_values_with_their_sources() {
     assert_eq!(
-        preserved_stakes_facts()
+        repo_model_facts()
             .interview
             .subjects
             .into_iter()
@@ -977,7 +959,6 @@ fn native_reopened_custom_model_has_exact_text_and_repo_source() {
             Some(json!({"roles":{"cad-executor":{"model":"  \"model\" = 雪  "}}})),
             false,
         ),
-        None,
         Mode::Roles,
     );
     assert_eq!(

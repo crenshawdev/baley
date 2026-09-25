@@ -32,14 +32,6 @@ pub enum Provenance {
         heading: String,
         commit: Option<String>,
     },
-    Residue {
-        path: String,
-        line: usize,
-        label: String,
-        origin: String,
-        phase: String,
-        commit: Option<String>,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,7 +113,7 @@ impl Provenance {
     fn source(&self) -> &str {
         match self {
             Self::Record { source, .. } => source,
-            Self::Document { path, .. } | Self::Residue { path, .. } => path,
+            Self::Document { path, .. } => path,
         }
     }
 
@@ -129,7 +121,6 @@ impl Provenance {
         match self {
             Self::Record { phase, .. } => phase.filter(|phase| *phase > 0),
             Self::Document { path, .. } => documents::phase_of(path),
-            Self::Residue { phase, .. } => documents::canonical_phase(phase),
         }
     }
 }

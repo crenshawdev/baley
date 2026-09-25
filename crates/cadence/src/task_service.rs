@@ -101,7 +101,7 @@ async fn open<I: ConfigIo + Clone + Sync>(
             .rule("rooted-record").slot("request.slug").details(json!({"slug":request.slug})).value());
     }
     // The branch and protected-branch policy are the binary's, treeless or not.
-    let (generation, _) = factory.observe_config(&planning)?;
+    let generation = factory.observe_config(&planning)?;
     let policy = super::pause_service::policy(&generation)?;
     let observed = {
         let (project, planning, policy) = (project.to_path_buf(), planning.clone(), policy.clone());
@@ -193,7 +193,7 @@ async fn close<I: ConfigIo + Clone + Sync>(
         let (project, start) = (project.to_path_buf(), episode.start.clone());
         tokio::task::spawn_blocking(move || task::observe_range(&project, &start, &mut cadence::process::System)).await.map_err(|_| Error::Closed)??
     };
-    let (generation, _) = factory.observe_config(&project.join(".planning"))?;
+    let generation = factory.observe_config(&project.join(".planning"))?;
     let gate = crate::config::merge::get(&generation.effective.values, "review.triggers.risk_surface.gate")
         .and_then(Value::as_str).ok_or_else(|| Error::Policy("missing effective risk_surface gate".into()))?.to_owned();
     let mut transient = Value::Null;
