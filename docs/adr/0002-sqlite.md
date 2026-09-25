@@ -32,7 +32,7 @@ The ledger (ADR 0001) needs an engine that gives atomic multi-record transaction
 
 ## Decision
 
-Chosen option: **1, SQLite**, through rusqlite with the `bundled` feature, which compiles SQLite from source (3.53.2 with rusqlite 0.40.1) with FTS5 enabled. The database runs in write-ahead-log mode with `synchronous=FULL`.
+Chosen option: **1, SQLite**, through rusqlite with the `bundled` feature, which compiles SQLite from source (3.53.2 with rusqlite 0.40.1) with FTS5 enabled. The database runs in write-ahead-log mode with `synchronous=FULL` and `secure_delete` on. Acceptance of the design is gated on a benchmark of an adapter prototype against a reproducible workload.
 
 ## Consequences
 

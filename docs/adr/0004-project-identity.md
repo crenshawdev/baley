@@ -28,14 +28,14 @@ With the ledger outside the checkout (ADR 0003), each checkout must be mapped to
 
 ## Decision
 
-Chosen option: **3, a committed project file** at the repository root, holding a random project id (UUID version 4), the project name and the project's policy. `baley init` creates the project and the file; the owner commits it. Baley finds a checkout's project by walking up from the working directory to the first directory with the project file, as git finds a repository. The guard uses the same discovery. Checkouts are recorded with path, root commit and remote URL for diagnosis only. Two checkouts with different remotes claiming one id are refused until one is given a new id. Changes to the file are recorded as `config.changed` events.
+Chosen option: **3, a committed project file** at the repository root, holding a random project id (UUID version 4), the project name and the project's policy. `baley init` creates the project and the file; the owner commits it. Baley finds a checkout's project by walking up from the working directory to the first directory with the project file, as git finds a repository. The guard uses the same discovery. Checkouts are recorded with path, root commit and remote URL for diagnosis only. Two checkouts with different remotes claiming one id are refused until one is given a new id. The project id is an identity, not an authorization. The effective policy (defaults, the owner's user configuration and the project file, merged with today's precedence) is recorded in full as `policy.effective` whenever any layer changes, every command records the policy version it ran under, and each checkout runs under the project file at its own HEAD.
 
 ## Consequences
 
 ### Positive
 
 - Records bind to a logical id; the checkout can live anywhere.
-- Policy is versioned and reviewed with the code, and its history is also in the ledger.
+- Policy is versioned and reviewed with the code, and the full effective policy at every point is in the ledger.
 - The guard's test for a managed project is one file lookup.
 
 ### Negative

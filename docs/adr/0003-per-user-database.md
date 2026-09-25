@@ -31,7 +31,7 @@ The current store lives in each checkout's `.planning/` directory and is gitigno
 
 ## Decision
 
-Chosen option: **5, one database per user**, at `<data dir>/baley/baley.db`: `$XDG_DATA_HOME/baley` or `~/.local/share/baley` on Linux, `~/Library/Application Support/baley` on macOS, `%APPDATA%\baley` on Windows. `BALEY_HOME` overrides it for development builds and tests. The database carries a schema version; a binary that finds a newer schema opens it read-only, and migrations run in one transaction after an automatic backup.
+Chosen option: **5, one database per user**, at `<data dir>/baley/baley.db`: `$XDG_DATA_HOME/baley` or `~/.local/share/baley` on Linux, `~/Library/Application Support/baley` on macOS. Baley ships for Linux and macOS only. `BALEY_HOME` overrides the location for development builds and tests. The database carries a compatibility epoch, checked in every write transaction; a process that finds a newer epoch stops writing, and migrations run in one transaction after an automatic backup. Every open checks ownership, modes and symbolic links on the real database path.
 
 ## Consequences
 
@@ -45,9 +45,9 @@ Chosen option: **5, one database per user**, at `<data dir>/baley/baley.db`: `$X
 ### Negative
 
 - One file holds every project, so corruption would affect all of them. Mitigated by `quick_check` on open, `integrity_check` and verified backups, and per-project hash chains that let one project be exported and verified alone.
-- All binaries on the machine share one schema. Handled by the read-only rule for newer schemas and by `BALEY_HOME` for development builds.
+- All binaries on the machine share one schema. Handled by the epoch check in every write and by `BALEY_HOME` for development builds.
 - A cloud session on another machine has no history. The same is true of every local option; transport is future work.
-- The MCP server and guard hook must be allowed to write outside the repository on both supported hosts. To be confirmed before acceptance.
+- The MCP server and guard hook must be allowed to write outside the repository on both supported hosts, while agents are denied (ADR 0008). Proven by the host matrix before acceptance.
 
 ## Options in detail
 

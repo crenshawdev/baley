@@ -30,7 +30,7 @@ The question is what the unit of record is: current state that is updated in pla
 
 ## Decision
 
-Chosen option: **3, an append-only event ledger with derived views**. Each fact is an immutable, typed, attributed event. Each project's events form a SHA-256 hash chain. Current state is held in views computed from the events by domain code, in the same transaction as the append, and rebuildable from the ledger at any time.
+Chosen option: **3, an append-only event ledger with derived views**. Each fact is an immutable, typed, attributed event. Each project's events form a SHA-256 hash chain whose head is anchored outside the machine (ADR 0007). Current state is held in views computed from the events by domain code, in the same transaction as the append, and rebuildable from the ledger at any time. Decisions that grant authority confirm their facts against the events, not the views.
 
 ## Consequences
 
@@ -38,14 +38,14 @@ Chosen option: **3, an append-only event ledger with derived views**. Each fact 
 
 - One copy of every fact; the reconciliation machinery goes away.
 - Full history by construction, which is what an evidence record needs.
-- Tampering with the database is detectable, and the first changed event is located.
+- Tampering with the database is detectable up to the latest anchor, and the first changed event is located.
 - A view can change shape freely: change the projector, rebuild the view.
 
 ### Negative
 
 - Two representations to reason about: the events and the views.
 - Event payload schemas are permanent. Changes need versioned types and upcasters.
-- The log grows without bound. Payload retention and purge (with the hash kept in the chain) are needed from the start.
+- The log grows without bound. Payload retention per reference and purge (with the hash kept in the chain) are needed from the start, and every fact a view needs must stay inline in its event so purges never break a rebuild.
 
 ### Follow-up
 
