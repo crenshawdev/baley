@@ -152,10 +152,6 @@ fn compiled_instructions_name_only_what_exists() {
 #[test]
 fn schema_defaults_match_their_declared_domain() {
     for (key, spec) in super::config::schema() {
-        // Retired entries are migration evidence, with no live default required.
-        if spec["disposition"] == "dead" {
-            continue;
-        }
         let default = spec.get("default").unwrap_or_else(|| panic!("{key}: missing default"));
         // Import semantics admit explicit null array defaults as unanswered;
         // missing defaults must not be silently substituted with null.

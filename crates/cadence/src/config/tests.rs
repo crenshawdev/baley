@@ -137,107 +137,6 @@ fn capture_threshold_reports_active_identities_without_refusing_append() {
     );
 }
 
-// Independent frozen census expectation: exactly 94 leaves, not object containers.
-const DISPOSITIONS: &[(&str, bool)] = &[
-    ("granularity", false),
-    ("model.escalate_on_failure", false),
-    ("model.overrides.cad-planner", false),
-    ("model.overrides.cad-assumptions-analyzer", false),
-    ("model.overrides.cad-verifier", false),
-    ("model.overrides.cad-reviewer", false),
-    ("model.overrides.cad-executor", false),
-    ("model.overrides.cad-plan-checker", false),
-    ("model.effort.cad-planner", false),
-    ("model.effort.cad-assumptions-analyzer", false),
-    ("model.effort.cad-verifier", false),
-    ("model.effort.cad-reviewer", false),
-    ("model.effort.cad-executor", false),
-    ("model.effort.cad-plan-checker", false),
-    ("roles.cad-planner.model", false),
-    ("roles.cad-assumptions-analyzer.model", false),
-    ("roles.cad-verifier.model", false),
-    ("roles.cad-reviewer.model", false),
-    ("roles.cad-executor.model", false),
-    ("roles.cad-plan-checker.model", false),
-    ("roles.cad-planner.effort", false),
-    ("roles.cad-assumptions-analyzer.effort", false),
-    ("roles.cad-verifier.effort", false),
-    ("roles.cad-reviewer.effort", false),
-    ("roles.cad-executor.effort", false),
-    ("roles.cad-plan-checker.effort", false),
-    ("workflow.research", false),
-    ("workflow.plan_check", false),
-    ("workflow.verifier", false),
-    ("workflow.skip_discuss", false),
-    ("workflow.inline_plan_threshold", false),
-    ("workflow.max_plan_tasks", false),
-    ("workflow.max_plan_bytes", false),
-    ("workflow.max_dispatch_tokens.cad-planner", true),
-    (
-        "workflow.max_dispatch_tokens.cad-assumptions-analyzer",
-        true,
-    ),
-    ("workflow.max_dispatch_tokens.cad-verifier", true),
-    ("workflow.max_dispatch_tokens.cad-reviewer", true),
-    ("workflow.max_dispatch_tokens.cad-executor", true),
-    ("workflow.max_dispatch_tokens.cad-plan-checker", true),
-    ("workflow.test_command", false),
-    ("workflow.lint_command", false),
-    ("parallelization.enabled", true),
-    ("parallelization.max_concurrent_agents", true),
-    ("parallelization.min_plans_for_parallel", true),
-    ("parallelization.use_worktrees", true),
-    ("git.protected_branches", false),
-    ("git.on_protected", false),
-    ("git.integration_branch", false),
-    ("git.auto_branch", false),
-    ("git.base_branch", false),
-    ("git.create_tag", false),
-    ("git.on_land_cleanup", false),
-    ("git.issue_check", false),
-    ("git.forge_provider", false),
-    ("git.forge_repo", false),
-    ("git.forge_host", false),
-    ("git.auto_close", true),
-    ("planning.commit_docs", false),
-    ("planning.max_capture_bullets", false),
-    ("memory.backend", false),
-    ("review.mode", false),
-    ("review.reviewers", false),
-    ("review.key_file", false),
-    ("review.request_timeout_ms", false),
-    ("review.max_prompt_tokens", false),
-    ("review.providers.openai.tiers.flagship", false),
-    ("review.providers.openai.tiers.balanced", false),
-    ("review.providers.openai.tiers.cheap", false),
-    ("review.providers.gemini.tiers.flagship", false),
-    ("review.providers.gemini.tiers.balanced", false),
-    ("review.providers.gemini.tiers.cheap", false),
-    ("review.providers.deepseek.tiers.flagship", false),
-    ("review.providers.deepseek.tiers.balanced", false),
-    ("review.providers.deepseek.tiers.cheap", false),
-    ("review.triggers.plan.gate", false),
-    ("review.triggers.plan.tier", false),
-    ("review.triggers.plan.effort", false),
-    ("review.triggers.diff.gate", false),
-    ("review.triggers.diff.tier", false),
-    ("review.triggers.diff.effort", false),
-    ("review.triggers.risk_surface.gate", false),
-    ("review.triggers.risk_surface.tier", false),
-    ("review.triggers.risk_surface.effort", false),
-    ("review.triggers.risk_surface.surfaces", false),
-    ("review.triggers.risk_surface.waive_routing_floor", false),
-    ("review.triggers.phase_diff.gate", true),
-    ("review.triggers.phase_diff.tier", true),
-    ("review.triggers.phase_diff.effort", true),
-    ("review.consult.enabled", false),
-    ("review.consult.tier", false),
-    ("review.consult.effort", false),
-    ("review.consult.attempt_threshold", false),
-    ("review.decision_review.tier", false),
-    ("review.decision_review.effort", false),
-];
-
 fn config_paths(dir: &std::path::Path) -> reload::Paths {
     reload::Paths {
         global: Some(dir.join("global.json")),
@@ -497,13 +396,7 @@ fn explicit_config_writes_validate_frozen_types_and_forge_grammars() {
 }
 
 #[test]
-fn native_guard_hard_fail_is_separate_from_the_frozen_key_census() {
-    assert_eq!(schema().len(), 95);
-    assert!(
-        !DISPOSITIONS
-            .iter()
-            .any(|(key, _)| *key == "git.guard_hard_fail")
-    );
+fn guard_hard_fail_is_a_strict_bool_defaulting_to_false() {
     let spec = &schema()["git.guard_hard_fail"];
     assert_eq!(spec["default"], false);
     for value in [json!(false), json!(true)] {
@@ -569,11 +462,6 @@ fn batch_preparation_returns_literal_refusals_for_invalid_tail_and_duplicates() 
         ),
         ("stakes", json!("high"), "unknown config key stakes"),
         (
-            "git.auto_close",
-            json!(true),
-            "retired config key git.auto_close",
-        ),
-        (
             "workflow.test_command",
             json!("test"),
             "wrong config layer for workflow.test_command",
@@ -620,83 +508,4 @@ fn batch_preparation_empty_and_identical_stored_values_return_no_changes() {
         .unwrap(),
         (json!({"roles":{"cad-executor":{"model":null}}}), vec![])
     );
-}
-
-/// The config schema of the frozen 3.7.12 release, exactly as tagged.
-const FROZEN_SCHEMA: &[u8] = include_bytes!("../../tests/fixtures/v3.7.12/config.schema.json");
-
-fn frozen() -> Value {
-    serde_json::from_slice(FROZEN_SCHEMA).unwrap()
-}
-
-fn frozen_keys() -> std::collections::BTreeSet<String> {
-    frozen()["keys"].as_object().unwrap().keys().cloned().collect()
-}
-
-#[test]
-fn every_frozen_key_has_exactly_one_disposition_and_the_schema_holds_it() {
-    let keys = frozen_keys();
-    assert_eq!(keys, DISPOSITIONS.iter().map(|(key, _)| key.to_string()).collect());
-    assert_eq!(DISPOSITIONS.len(), 94);
-    assert_eq!(schema().keys().filter(|key| keys.contains(*key)).count(), 94);
-}
-
-#[test]
-fn a_frozen_key_is_dead_in_the_schema_exactly_when_its_disposition_retires_it() {
-    for (key, dead) in DISPOSITIONS {
-        assert_eq!(schema()[*key]["disposition"] == "dead", *dead, "{key}");
-    }
-    assert_eq!(DISPOSITIONS.iter().filter(|(_, dead)| *dead).count(), 14);
-}
-
-#[test]
-fn a_dead_key_carries_no_default() {
-    for (key, _) in DISPOSITIONS.iter().filter(|(_, dead)| *dead) {
-        assert!(schema()[*key].get("default").is_none(), "{key}");
-    }
-}
-
-#[test]
-fn every_retired_key_is_a_dead_frozen_key() {
-    for key in RETIRED {
-        assert!(DISPOSITIONS.contains(&(key, true)), "{key}");
-    }
-}
-
-/// Every frozen key set in one layer: a dead key to `false`, and a live key
-/// to its frozen default.
-fn every_frozen_key() -> Value {
-    let frozen = frozen();
-    let mut all = json!({});
-    for (key, dead) in DISPOSITIONS {
-        super::merge::set(&mut all, key, if *dead { json!(false) } else { frozen["keys"][*key]["default"].clone() });
-    }
-    all
-}
-
-#[test]
-fn a_layer_that_sets_a_dead_key_loses_it_with_one_migration_diagnostic_per_layer() {
-    let result = merge(Some(every_frozen_key()), Some(every_frozen_key()), false);
-    assert_eq!(result.diagnostics.migration.len(), 28);
-    for (key, _) in DISPOSITIONS.iter().filter(|(_, dead)| *dead) {
-        assert!(get(&result.values, key).is_none(), "{key}");
-        for layer in [Layer::Global, Layer::Repo] {
-            assert_eq!(
-                result.diagnostics.migration.iter().filter(|d| d.key == *key && d.layer == layer).count(),
-                1,
-                "{key} {layer:?}"
-            );
-        }
-    }
-}
-
-#[test]
-fn the_frozen_risk_surface_defaults_are_kept_as_literal_nulls() {
-    let result = merge(Some(every_frozen_key()), Some(every_frozen_key()), false);
-    for key in [
-        "review.triggers.risk_surface.surfaces",
-        "review.triggers.risk_surface.waive_routing_floor",
-    ] {
-        assert_eq!(get(&result.repo, key), Some(&Value::Null), "{key}");
-    }
 }

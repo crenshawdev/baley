@@ -89,22 +89,14 @@ fn scoped(raw: &Value, layer: Layer, global_intent: bool, diagnostics: &mut Diag
 }
 
 /// Keep containers (including explicit null) intact for merge semantics. Unknown
-/// branches and retired leaves are evidence only; raw layers retain their values.
+/// branches are evidence only; raw layers retain their values.
 fn project(
     value: &Value,
     prefix: &str,
     layer: Layer,
     diagnostics: &mut Diagnostics,
 ) -> Option<Value> {
-    if let Some(spec) = schema().get(prefix) {
-        if spec["disposition"] == "dead" {
-            diagnostics.migration.push(diagnostic(
-                layer,
-                prefix,
-                "retired; non-effective source evidence only",
-            ));
-            return None;
-        }
+    if schema().contains_key(prefix) {
         return Some(value.clone());
     }
     let start = format!("{prefix}.");
@@ -115,25 +107,6 @@ fn project(
             prefix,
             "unknown; non-effective source evidence only",
         ));
-        return None;
-    }
-    // A wholly retired container cannot suppress inherited/default policy.
-    if !prefix.is_empty()
-        && !schema()
-            .iter()
-            .any(|(k, s)| k.starts_with(&start) && s["disposition"] != "dead")
-    {
-        if let Some(object) = value.as_object() {
-            for (key, child) in object {
-                project(child, &format!("{prefix}.{key}"), layer, diagnostics);
-            }
-        } else {
-            diagnostics.migration.push(diagnostic(
-                layer,
-                prefix,
-                "retired container; non-effective source evidence only",
-            ));
-        }
         return None;
     }
     match value.as_object() {
@@ -178,9 +151,6 @@ pub fn merge(global: Option<Value>, repo: Option<Value>, global_intent: bool) ->
     let mut defaults = json!({});
     let mut sources = BTreeMap::new();
     for (key, spec) in schema() {
-        if spec["disposition"] == "dead" {
-            continue;
-        }
         set(&mut defaults, key, spec["default"].clone());
         if get(&repo_values, key).is_some() {
             sources.insert(key.clone(), Layer::Repo);
@@ -193,9 +163,6 @@ pub fn merge(global: Option<Value>, repo: Option<Value>, global_intent: bool) ->
         let protected =
             cadence::rail::branch::protected_branches(get(&values, "git.protected_branches"));
         set(&mut values, "git.protected_branches", json!(protected));
-        if get(&values, "git.on_protected") == Some(&json!("deny")) {
-            set(&mut values, "git.on_protected", json!("refuse"));
-        }
     }
     Effective {
         raw_global: global,

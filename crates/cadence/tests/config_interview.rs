@@ -911,7 +911,7 @@ fn native_effort_subject_returns_default_and_literal_constraints() {
         (&output.subjects[1].default, &output.subjects[1].constraints),
         (
             &json!("high"),
-            &json!({"type":"enum","values":["low","medium","high","xhigh","max",null],"default":"high","disposition":"keep-resemantic"})
+            &json!({"type":"enum","values":["low","medium","high","xhigh","max",null],"default":"high"})
         )
     );
 }

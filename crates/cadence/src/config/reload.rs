@@ -282,9 +282,6 @@ pub fn validate_effective(effective: &Effective) -> Result<()> {
         return Err(Error::Policy("config unavailable: invalid layer".into()));
     }
     for (key, spec) in schema() {
-        if spec["disposition"] == "dead" {
-            continue;
-        }
         if !merge::get(&effective.values, key).is_some_and(|value| {
             valid_type(spec, value, true) && super::write::valid_grammar(spec, value)
         }) {

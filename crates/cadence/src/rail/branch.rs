@@ -34,7 +34,7 @@ pub fn permission(protected: &[String], on_protected: &str, branch: &str) -> Res
     match on_protected {
         "allow" => Ok(Permission::Pass),
         "ask" => Ok(Permission::Ask),
-        "refuse" | "deny" => Ok(Permission::Deny),
+        "refuse" => Ok(Permission::Deny),
         _ => Err(Error::Policy("invalid protected-branch policy".into())),
     }
 }

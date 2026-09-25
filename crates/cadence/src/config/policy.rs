@@ -66,16 +66,13 @@ pub fn resolve(effective: &Effective) -> Result<Policy> {
         reasons: vec!["Reviewer eligibility uses configured model IDs only; no provider availability or review execution is observed.".into()],
         diagnostics: vec![],
     };
-    for (key, spec) in schema() {
+    for key in schema().keys() {
         let Some(trigger) = key
             .strip_prefix("review.triggers.")
             .and_then(|key| key.strip_suffix(".gate"))
         else {
             continue;
         };
-        if spec["disposition"] == "dead" {
-            continue;
-        }
         let tier = string(&format!("review.triggers.{trigger}.tier"));
         let mut reviewers = vec![];
         for reviewer in list("review.reviewers") {

@@ -11,16 +11,6 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-pub const RETIRED: [&str; 8] = [
-    "parallelization.enabled",
-    "parallelization.max_concurrent_agents",
-    "parallelization.min_plans_for_parallel",
-    "parallelization.use_worktrees",
-    "review.triggers.phase_diff.gate",
-    "review.triggers.phase_diff.tier",
-    "review.triggers.phase_diff.effort",
-    "git.auto_close",
-];
 pub const GLOBAL_ONLY: [&str; 3] = [
     "workflow.test_command",
     "workflow.lint_command",

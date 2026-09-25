@@ -183,9 +183,6 @@ fn translate_config(global: Option<Value>, repo: Option<Value>) -> Result<Effect
         (Layer::Repo, &mut effective.repo),
     ] {
         for (key, spec) in config::schema() {
-            if spec["disposition"] == "dead" {
-                continue;
-            }
             if let Some(value) = merge::get(values, key)
                 && (!reload::valid_type(spec, value, true) || !write::valid_grammar(spec, value))
             {
@@ -382,38 +379,7 @@ fn prepare_import<I: ConfigIo>(
     {
         guards.push(guard(path.clone(), input));
     }
-    let mut warnings = vec![format!(
-        "Retired settings (D-06): {}. Present values are removed; publishing and merging require explicit authorization.",
-        config::RETIRED.join(", ")
-    )];
-    let tokens: Vec<_> = config::schema()
-        .keys()
-        .filter(|key| key.starts_with("workflow.max_dispatch_tokens."))
-        .cloned()
-        .collect();
-    warnings.push(format!(
-        "Retired token-report settings: {}. No terminal-window budget is enforced.",
-        tokens.join(", ")
-    ));
-    for (layer, raw) in [
-        (Layer::Global, &generation.effective.raw_global),
-        (Layer::Repo, &generation.effective.raw_repo),
-    ] {
-        let removed: Vec<_> = config::schema()
-            .iter()
-            .filter(|(_, spec)| spec["disposition"] == "dead")
-            .filter(|(key, _)| raw.as_ref().and_then(|r| merge::get(r, key)).is_some())
-            .map(|(key, _)| key.clone())
-            .collect();
-        warnings.push(format!(
-            "{layer:?} present and removed: {}",
-            if removed.is_empty() {
-                "none".into()
-            } else {
-                removed.join(", ")
-            }
-        ));
-    }
+    let mut warnings = Vec::new();
     for diagnostic in generation
         .effective
         .diagnostics

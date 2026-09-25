@@ -98,9 +98,6 @@ pub fn validate_update(layer: Layer, key: &str, value: &Value) -> Result<()> {
     let spec = schema()
         .get(key)
         .ok_or_else(|| Error::Invalid(format!("unknown config key {key}")))?;
-    if spec["disposition"] == "dead" {
-        return Err(Error::Invalid(format!("retired config key {key}")));
-    }
     if !reload::valid_type(spec, value, false) || !valid_grammar(spec, value) {
         return Err(Error::Invalid(format!("invalid value for {key}")));
     }

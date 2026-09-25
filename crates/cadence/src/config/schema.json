@@ -7,49 +7,41 @@
       "coarse"
     ],
     "default": "standard",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "model.escalate_on_failure": {
     "type": "bool",
-    "default": false,
-    "disposition": "keep-resemantic"
+    "default": false
   },
   "model.overrides.cad-planner": {
     "type": "string_or_null",
     "default": null,
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "model.overrides.cad-assumptions-analyzer": {
     "type": "string_or_null",
     "default": null,
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "model.overrides.cad-verifier": {
     "type": "string_or_null",
     "default": null,
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "model.overrides.cad-reviewer": {
     "type": "string_or_null",
     "default": null,
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "model.overrides.cad-executor": {
     "type": "string_or_null",
     "default": null,
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "model.overrides.cad-plan-checker": {
     "type": "string_or_null",
     "default": null,
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "model.effort.cad-planner": {
     "type": "enum",
@@ -61,8 +53,7 @@
       "max",
       null
     ],
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "model.effort.cad-assumptions-analyzer": {
     "type": "enum",
@@ -74,8 +65,7 @@
       "max",
       null
     ],
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "model.effort.cad-verifier": {
     "type": "enum",
@@ -87,8 +77,7 @@
       "max",
       null
     ],
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "model.effort.cad-reviewer": {
     "type": "enum",
@@ -100,8 +89,7 @@
       "max",
       null
     ],
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "model.effort.cad-executor": {
     "type": "enum",
@@ -113,8 +101,7 @@
       "max",
       null
     ],
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "model.effort.cad-plan-checker": {
     "type": "enum",
@@ -126,38 +113,31 @@
       "max",
       null
     ],
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "roles.cad-planner.model": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "roles.cad-assumptions-analyzer.model": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "roles.cad-verifier.model": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "roles.cad-reviewer.model": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "roles.cad-executor.model": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "roles.cad-plan-checker.model": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "roles.cad-planner.effort": {
     "type": "enum",
@@ -169,8 +149,7 @@
       "max",
       null
     ],
-    "default": "high",
-    "disposition": "keep-resemantic"
+    "default": "high"
   },
   "roles.cad-assumptions-analyzer.effort": {
     "type": "enum",
@@ -182,8 +161,7 @@
       "max",
       null
     ],
-    "default": "high",
-    "disposition": "keep-resemantic"
+    "default": "high"
   },
   "roles.cad-verifier.effort": {
     "type": "enum",
@@ -195,8 +173,7 @@
       "max",
       null
     ],
-    "default": "high",
-    "disposition": "keep-resemantic"
+    "default": "high"
   },
   "roles.cad-reviewer.effort": {
     "type": "enum",
@@ -208,8 +185,7 @@
       "max",
       null
     ],
-    "default": "medium",
-    "disposition": "keep-resemantic"
+    "default": "medium"
   },
   "roles.cad-executor.effort": {
     "type": "enum",
@@ -221,8 +197,7 @@
       "max",
       null
     ],
-    "default": "high",
-    "disposition": "keep-resemantic"
+    "default": "high"
   },
   "roles.cad-plan-checker.effort": {
     "type": "enum",
@@ -234,131 +209,69 @@
       "max",
       null
     ],
-    "default": "low",
-    "disposition": "keep-resemantic"
+    "default": "low"
   },
   "workflow.research": {
     "type": "bool",
-    "default": false,
-    "disposition": "keep-resemantic"
+    "default": false
   },
   "workflow.plan_check": {
     "type": "bool",
-    "default": false,
-    "disposition": "keep-resemantic"
+    "default": false
   },
   "workflow.verifier": {
     "type": "bool",
-    "default": true,
-    "disposition": "keep-resemantic"
+    "default": true
   },
   "workflow.skip_discuss": {
     "type": "bool",
-    "default": false,
-    "disposition": "keep-resemantic"
+    "default": false
   },
   "workflow.inline_plan_threshold": {
     "type": "int",
     "min": 0,
-    "default": 3,
-    "disposition": "keep-resemantic"
+    "default": 3
   },
   "workflow.max_plan_tasks": {
     "type": "int",
     "min": 1,
-    "default": 8,
-    "disposition": "keep-resemantic"
+    "default": 8
   },
   "workflow.max_plan_bytes": {
     "type": "int",
     "min": 1,
-    "default": 675000,
-    "disposition": "keep-resemantic"
-  },
-  "workflow.max_dispatch_tokens.cad-planner": {
-    "type": "int",
-    "min": 1,
-    "disposition": "dead"
-  },
-  "workflow.max_dispatch_tokens.cad-assumptions-analyzer": {
-    "type": "int",
-    "min": 1,
-    "disposition": "dead"
-  },
-  "workflow.max_dispatch_tokens.cad-verifier": {
-    "type": "int",
-    "min": 1,
-    "disposition": "dead"
-  },
-  "workflow.max_dispatch_tokens.cad-reviewer": {
-    "type": "int",
-    "min": 1,
-    "disposition": "dead"
-  },
-  "workflow.max_dispatch_tokens.cad-executor": {
-    "type": "int",
-    "min": 1,
-    "disposition": "dead"
-  },
-  "workflow.max_dispatch_tokens.cad-plan-checker": {
-    "type": "int",
-    "min": 1,
-    "disposition": "dead"
+    "default": 675000
   },
   "workflow.test_command": {
     "type": "string_or_null",
     "default": null,
-    "src": "global",
-    "disposition": "keep-resemantic"
+    "src": "global"
   },
   "workflow.lint_command": {
     "type": "string_or_null",
     "default": null,
-    "src": "global",
-    "disposition": "keep-resemantic"
-  },
-  "parallelization.enabled": {
-    "type": "bool",
-    "disposition": "dead"
-  },
-  "parallelization.max_concurrent_agents": {
-    "type": "int",
-    "min": 1,
-    "disposition": "dead"
-  },
-  "parallelization.min_plans_for_parallel": {
-    "type": "int",
-    "min": 1,
-    "disposition": "dead"
-  },
-  "parallelization.use_worktrees": {
-    "type": "bool",
-    "disposition": "dead"
+    "src": "global"
   },
   "git.protected_branches": {
     "type": "array_string",
     "default": [
       "main",
       "master"
-    ],
-    "disposition": "keep-resemantic"
+    ]
   },
   "git.on_protected": {
     "type": "enum",
     "values": [
       "ask",
       "refuse",
-      "deny",
       "allow"
     ],
     "default": "ask",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "git.guard_hard_fail": {
     "type": "bool",
-    "default": false,
-    "disposition": "native"
+    "default": false
   },
   "git.integration_branch": {
     "type": "enum",
@@ -367,8 +280,7 @@
       "trunk"
     ],
     "default": "milestone",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "git.auto_branch": {
     "type": "enum",
@@ -378,28 +290,23 @@
       "off"
     ],
     "default": "ask",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "git.base_branch": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "git.create_tag": {
     "type": "bool",
-    "default": true,
-    "disposition": "keep-resemantic"
+    "default": true
   },
   "git.on_land_cleanup": {
     "type": "bool",
-    "default": true,
-    "disposition": "keep-resemantic"
+    "default": true
   },
   "git.issue_check": {
     "type": "bool",
-    "default": true,
-    "disposition": "keep-resemantic"
+    "default": true
   },
   "git.forge_provider": {
     "type": "enum",
@@ -409,38 +316,27 @@
       "gitlab",
       null
     ],
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "git.forge_repo": {
     "type": "string_or_null",
     "default": null,
     "repo_only": true,
-    "grammar": "forge_slug",
-    "disposition": "keep-resemantic"
+    "grammar": "forge_slug"
   },
   "git.forge_host": {
     "type": "string_or_null",
     "default": null,
-    "grammar": "forge_host",
-    "disposition": "keep-resemantic"
-  },
-  "git.auto_close": {
-    "type": "bool",
-    "src": "repo",
-    "repo_only": true,
-    "disposition": "dead"
+    "grammar": "forge_host"
   },
   "planning.commit_docs": {
     "type": "bool",
-    "default": true,
-    "disposition": "keep-resemantic"
+    "default": true
   },
   "planning.max_capture_bullets": {
     "type": "int",
     "min": 1,
     "default": 40,
-    "disposition": "keep-resemantic",
     "unit": "active captured identities (items), report only"
   },
   "memory.backend": {
@@ -450,8 +346,7 @@
       "builtin"
     ],
     "default": "builtin",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.mode": {
     "type": "enum",
@@ -461,8 +356,7 @@
       "adjudicated"
     ],
     "default": "adjudicated",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.reviewers": {
     "type": "array_enum",
@@ -475,72 +369,59 @@
     "default": [
       "claude-subagent"
     ],
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.key_file": {
     "type": "string_or_null",
     "default": null,
-    "src": "global",
-    "disposition": "keep-resemantic"
+    "src": "global"
   },
   "review.request_timeout_ms": {
     "type": "int",
     "min": 1,
     "max": 600000,
-    "default": 540000,
-    "disposition": "keep-resemantic"
+    "default": 540000
   },
   "review.max_prompt_tokens": {
     "type": "int",
     "min": 1,
-    "default": 120000,
-    "disposition": "keep-resemantic"
+    "default": 120000
   },
   "review.providers.openai.tiers.flagship": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "review.providers.openai.tiers.balanced": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "review.providers.openai.tiers.cheap": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "review.providers.gemini.tiers.flagship": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "review.providers.gemini.tiers.balanced": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "review.providers.gemini.tiers.cheap": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "review.providers.deepseek.tiers.flagship": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "review.providers.deepseek.tiers.balanced": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "review.providers.deepseek.tiers.cheap": {
     "type": "string_or_null",
-    "default": null,
-    "disposition": "keep-resemantic"
+    "default": null
   },
   "review.triggers.plan.gate": {
     "type": "enum",
@@ -552,8 +433,7 @@
       "adjudicated"
     ],
     "default": "advisory",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.triggers.plan.tier": {
     "type": "enum",
@@ -563,8 +443,7 @@
       "cheap"
     ],
     "default": "cheap",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.triggers.plan.effort": {
     "type": "enum",
@@ -575,8 +454,7 @@
       "high"
     ],
     "default": "low",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.triggers.diff.gate": {
     "type": "enum",
@@ -588,8 +466,7 @@
       "adjudicated"
     ],
     "default": "off",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.triggers.diff.tier": {
     "type": "enum",
@@ -599,8 +476,7 @@
       "cheap"
     ],
     "default": "cheap",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.triggers.diff.effort": {
     "type": "enum",
@@ -611,8 +487,7 @@
       "high"
     ],
     "default": "minimal",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.triggers.risk_surface.gate": {
     "type": "enum",
@@ -624,8 +499,7 @@
       "adjudicated"
     ],
     "default": "blocking",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.triggers.risk_surface.tier": {
     "type": "enum",
@@ -635,8 +509,7 @@
       "cheap"
     ],
     "default": "cheap",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.triggers.risk_surface.effort": {
     "type": "enum",
@@ -647,8 +520,7 @@
       "high"
     ],
     "default": "low",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.triggers.risk_surface.surfaces": {
     "type": "array_enum",
@@ -663,8 +535,7 @@
       "untrusted_input"
     ],
     "default": null,
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.triggers.risk_surface.waive_routing_floor": {
     "type": "array_enum",
@@ -679,46 +550,11 @@
       "untrusted_input"
     ],
     "default": null,
-    "src": "repo",
-    "disposition": "keep-resemantic"
-  },
-  "review.triggers.phase_diff.gate": {
-    "type": "enum",
-    "values": [
-      "off",
-      "advisory",
-      "deferred",
-      "blocking",
-      "adjudicated"
-    ],
-    "src": "repo",
-    "disposition": "dead"
-  },
-  "review.triggers.phase_diff.tier": {
-    "type": "enum",
-    "values": [
-      "flagship",
-      "balanced",
-      "cheap"
-    ],
-    "src": "repo",
-    "disposition": "dead"
-  },
-  "review.triggers.phase_diff.effort": {
-    "type": "enum",
-    "values": [
-      "minimal",
-      "low",
-      "medium",
-      "high"
-    ],
-    "src": "repo",
-    "disposition": "dead"
+    "src": "repo"
   },
   "review.consult.enabled": {
     "type": "bool",
-    "default": false,
-    "disposition": "keep-resemantic"
+    "default": false
   },
   "review.consult.tier": {
     "type": "enum",
@@ -728,8 +564,7 @@
       "cheap"
     ],
     "default": "flagship",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.consult.effort": {
     "type": "enum",
@@ -740,14 +575,12 @@
       "high"
     ],
     "default": "high",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.consult.attempt_threshold": {
     "type": "int",
     "min": 1,
-    "default": 3,
-    "disposition": "keep-resemantic"
+    "default": 3
   },
   "review.decision_review.tier": {
     "type": "enum",
@@ -757,8 +590,7 @@
       "cheap"
     ],
     "default": "flagship",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   },
   "review.decision_review.effort": {
     "type": "enum",
@@ -769,7 +601,6 @@
       "high"
     ],
     "default": "high",
-    "src": "repo",
-    "disposition": "keep-resemantic"
+    "src": "repo"
   }
 }

@@ -104,7 +104,6 @@ pub fn interview_facts(generation: &Generation, mode: interview::Mode) -> Facts 
     Facts {
         keys: config::schema()
             .iter()
-            .filter(|(_, spec)| spec["disposition"] != "dead")
             .map(|(key, spec)| {
                 let stored_global = effective
                     .raw_global
