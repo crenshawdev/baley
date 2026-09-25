@@ -196,8 +196,18 @@ impl SqliteStore {
         hashes: &[Hash],
         reason: &str,
     ) -> Result<PurgeReport, StoreError> {
+        self.purge_with(command, hashes, reason, || self.scrub())
+    }
+
+    pub(crate) fn purge_with(
+        &self,
+        command: &Command,
+        hashes: &[Hash],
+        reason: &str,
+        scrub: impl FnOnce() -> Result<ScrubReport, StoreError>,
+    ) -> Result<PurgeReport, StoreError> {
         let (seq, event) = self.logical_purge(command, hashes, reason)?;
-        Ok(self.finish_purge(command, seq, event, self.scrub()))
+        Ok(self.finish_purge(command, seq, event, scrub()))
     }
 
     fn finish_purge(
@@ -207,9 +217,16 @@ impl SqliteStore {
         event: PurgedEvent,
         scrub: Result<ScrubReport, StoreError>,
     ) -> PurgeReport {
-        let scrub = scrub.unwrap_or(ScrubReport {
-            scrubbed: false,
-            unreachable: Vec::new(),
+        let scrub = scrub.unwrap_or_else(|_| {
+            let backups = self.home.join("backups");
+            ScrubReport {
+                scrubbed: false,
+                unreachable: if fs::symlink_metadata(&backups).is_ok() {
+                    vec![backups]
+                } else {
+                    Vec::new()
+                },
+            }
         });
         PurgeReport {
             purged: event.removed,
@@ -1636,20 +1653,27 @@ mod tests {
         let store = open(home.path(), &["a"]);
         let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
         let command = command("a", "retention.purge", "p1");
-        let (seq, event) = store
-            .logical_purge(&command, &[reference.hash], "owner request")
-            .expect("logical purge");
-        let report = store.finish_purge(
-            &command,
-            seq,
-            event,
-            Err(StoreError::ReadOnly {
-                needed_epoch: EPOCH + 1,
-            }),
-        );
+        let report = store
+            .purge_with(&command, &[reference.hash], "owner request", || {
+                Err(StoreError::ReadOnly {
+                    needed_epoch: EPOCH + 1,
+                })
+            })
+            .expect("purge report");
         assert!(!report.scrubbed);
         assert_eq!(report.purged, vec![reference.hash]);
-        assert_eq!(report.recorded, vec![(ProjectId("a".into()), seq)]);
+        assert!(report.unreachable.is_empty());
+        assert_eq!(report.recorded.len(), 1);
+        let (project, seq) = &report.recorded[0];
+        assert_eq!(project, &ProjectId("a".into()));
+        let recorded_type: String = raw(home.path())
+            .query_row(
+                "SELECT type FROM event WHERE project_id = ?1 AND seq = ?2",
+                params![&project.0, sql_int(*seq).expect("sequence")],
+                |row| row.get(0),
+            )
+            .expect("recorded event");
+        assert_eq!(recorded_type, PAYLOAD_PURGED);
         assert_eq!(
             raw(home.path())
                 .query_row(
@@ -1660,6 +1684,37 @@ mod tests {
                 .expect("marker"),
             1
         );
+    }
+
+    // Catches hiding an untouched backup when the scrub fails.
+    #[test]
+    fn a_scrub_error_lists_the_backups_directory() {
+        let home = tempfile::tempdir().expect("home");
+        let store = open(home.path(), &["a"]);
+        let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
+        let backup = backup(home.path(), "one.db");
+        let report = store
+            .purge_with(
+                &command("a", "retention.purge", "p1"),
+                &[reference.hash],
+                "owner request",
+                || {
+                    Err(StoreError::ReadOnly {
+                        needed_epoch: EPOCH + 1,
+                    })
+                },
+            )
+            .expect("purge report");
+        assert_eq!(report.unreachable, vec![home.path().join("backups")]);
+        let body: Option<Vec<u8>> = Connection::open(backup)
+            .expect("backup")
+            .query_row(
+                "SELECT body FROM payload WHERE hash = ?1",
+                [&reference.hash.0[..]],
+                |row| row.get(0),
+            )
+            .expect("backup body");
+        assert!(body.is_some());
     }
 
     // Catches a scrub clearing its marker after an incomplete checkpoint.

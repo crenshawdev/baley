@@ -256,11 +256,13 @@ pub struct BackupReport {
 pub struct PurgeReport {
     /// Bodies removed.
     pub purged: Vec<Hash>,
-    /// Bodies kept because another project still requires them.
+    /// Hashes released or requested whose body or excerpt is still required
+    /// by another reference, in any project.
     pub shared: Vec<Hash>,
     /// The `payload.purged` event in the purging project.
     pub recorded: Vec<(ProjectId, u64)>,
-    /// Backups in the home the scrub could not rewrite or skipped; exports are added by T12.
+    /// Unrewritten backups, or the home backups directory when its entries
+    /// were not checked; exports are added by T12.
     pub unreachable: Vec<PathBuf>,
     /// Whether the main database scrub completed.
     pub scrubbed: bool,
