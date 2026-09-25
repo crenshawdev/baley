@@ -5,11 +5,12 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use baley_store::{ProjectId, StoreError};
+use baley_store::{ProjectId, StoreError, ViewSpec};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
 
 use crate::queue::WriterQueue;
 use crate::schema::{EPOCH, SCHEMA};
+use crate::view::ViewSet;
 
 /// The page size every store is created with. It cannot change once the
 /// write-ahead log is on.
@@ -20,11 +21,18 @@ const PAGE_SIZE: i64 = 8192;
 pub struct Options {
     /// The most trace rows kept; the oldest go first.
     pub trace_cap: u64,
+    /// The views this binary declares. Their missing tables and indexes are
+    /// created at open. Projectors will carry these specs once they exist;
+    /// until then they are handed in here.
+    pub views: Vec<ViewSpec>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { trace_cap: 10_000 }
+        Self {
+            trace_cap: 10_000,
+            views: Vec::new(),
+        }
     }
 }
 
@@ -46,6 +54,7 @@ pub struct SqliteStore {
     pub(crate) reader: Mutex<Connection>,
     queue: WriterQueue,
     options: Options,
+    views: ViewSet,
 }
 
 impl SqliteStore {
@@ -55,6 +64,9 @@ impl SqliteStore {
     /// until migration exists, and a missing schema is created under the
     /// writer queue with `at` as its creation time. A store at this
     /// binary's epoch must be in write-ahead-log mode with 8 KiB pages.
+    /// The declared views are checked before anything is touched, and at
+    /// this binary's epoch their missing tables and indexes are created
+    /// through the write path; a read-only store creates none.
     /// The home must already exist; locating it and checking its safety is
     /// slice 2's work.
     pub fn open(home: &Path, at: &str, options: Options) -> Result<Self, StoreError> {
@@ -64,6 +76,7 @@ impl SqliteStore {
                 home.display()
             )));
         }
+        let views = ViewSet::new(&options.views)?;
         let queue = WriterQueue::open(&home.join("baley.db.writer")).map_err(io)?;
         let path = home.join("baley.db");
         let writer = connect(&path)?;
@@ -86,12 +99,32 @@ impl SqliteStore {
         if epoch == EPOCH {
             check_file_settings(&writer)?;
         }
-        Ok(Self {
+        let store = Self {
             writer: Mutex::new(writer),
             reader: Mutex::new(reader),
             queue,
             options,
-        })
+            views,
+        };
+        // Most opens find every view in place, and ask on the read
+        // connection, so they take neither the queue nor a write.
+        if epoch == EPOCH
+            && !store.views.is_empty()
+            && store.snapshot(|conn| store.views.pending(conn))?
+        {
+            // An epoch raised by a newer binary since it was read above
+            // leaves this store read-only, and read-only creates nothing.
+            match store.write(|tx| store.views.create(tx)) {
+                Ok(()) | Err(StoreError::ReadOnly { .. }) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(store)
+    }
+
+    /// The views declared at open.
+    pub(crate) fn views(&self) -> &ViewSet {
+        &self.views
     }
 
     /// The compatibility epoch stamped in the store.
@@ -137,6 +170,18 @@ impl SqliteStore {
     ) -> Result<T, StoreError> {
         let conn = lock(&self.reader);
         f(&conn).map_err(sql)
+    }
+
+    /// Runs `f` on the read connection inside one read transaction, so
+    /// every statement in it sees the same snapshot.
+    pub(crate) fn snapshot<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let conn = lock(&self.reader);
+        // Dropped unfinished, which ends the read; there is nothing to keep.
+        let tx = conn.unchecked_transaction().map_err(sql)?;
+        f(&tx)
     }
 
     /// The write path: the writer queue, then the write connection, then
@@ -459,7 +504,15 @@ mod tests {
     #[test]
     fn the_trace_keeps_its_cap_and_drops_the_oldest() {
         let home = tempfile::tempdir().expect("temp dir");
-        let store = SqliteStore::open(home.path(), AT, Options { trace_cap: 3 }).expect("open");
+        let store = SqliteStore::open(
+            home.path(),
+            AT,
+            Options {
+                trace_cap: 3,
+                ..Options::default()
+            },
+        )
+        .expect("open");
         for kind in ["one", "two", "three", "four", "five"] {
             store.record_trace(&trace(kind)).expect("trace");
         }
@@ -606,7 +659,15 @@ mod tests {
     #[test]
     fn the_trace_keeps_its_cap_across_a_gap() {
         let home = tempfile::tempdir().expect("temp dir");
-        let store = SqliteStore::open(home.path(), AT, Options { trace_cap: 3 }).expect("open");
+        let store = SqliteStore::open(
+            home.path(),
+            AT,
+            Options {
+                trace_cap: 3,
+                ..Options::default()
+            },
+        )
+        .expect("open");
         for kind in ["one", "two", "three", "four"] {
             store.record_trace(&trace(kind)).expect("trace");
         }
