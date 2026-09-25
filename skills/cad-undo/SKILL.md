@@ -14,8 +14,8 @@ allowed-tools:
    Show the returned manifest id, source, occurrence and provenance, and every
    full hash in the exact ordered hash manifest, oldest to newest. The binary
    selects accepted native task-close completions, including the docs task.
-   Only absent native execution permits the explicit SUMMARY manifest.
-   An unreadable, malformed, ambiguous or unsupported manifest stops here.
+   A phase with no native execution has no manifest. That, or an unreadable,
+   malformed, ambiguous or unsupported manifest, stops here.
 2. Show the selected mode before asking for confirmation: committed by default,
    or --no-commit when the owner requested staged reversal. Committed mode
    creates one revert commit per hash in reverse manifest order and, after

@@ -132,7 +132,6 @@ pub fn contribute(data: &Value, write: &Write) -> Result<Value> {
                 if record.manifest.source != "execution" || occurrence != record.manifest.occurrence
                     || exact != record.manifest.hashes || provenance != record.manifest.provenance { return Err(fail()); }
             }
-            None if record.manifest.source == "SUMMARY" => {},
             None => return Err(fail()),
         }
     }

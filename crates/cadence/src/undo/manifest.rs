@@ -45,39 +45,15 @@ pub fn native(data: &Value, phase: u32) -> Result<Option<(String, Vec<String>, V
     Ok(Some((current.request.contract.occurrence.clone(), hashes, json!(provenance))))
 }
 
-fn legacy(root: &Path, phase: u32) -> Result<(Vec<String>, Value)> {
-    let path = root.join(format!("phases/{phase}/SUMMARY.md"));
-    let bytes = super::revert::read_regular(&path)?.ok_or_else(|| Error::Invalid(format!("phase {phase} SUMMARY commit manifest is absent")))?;
-    let text = std::str::from_utf8(&bytes).map_err(|e| Error::Invalid(format!("{}: {e}", path.display())))?;
-    let mut inside = false;
-    let mut found = false;
-    let mut hashes = Vec::new();
-    for line in text.lines() {
-        if line.starts_with("## ") {
-            inside = matches!(line.trim(), "## Commits" | "## Commit manifest" | "## Task Commits");
-            if inside && found { return Err(Error::Invalid(format!("{}: ambiguous commit manifest", path.display()))); }
-            found |= inside;
-            continue;
-        }
-        if !inside || line.trim().is_empty() { continue; }
-        let hash = line.trim().strip_prefix("- ").and_then(|s| s.strip_prefix('`'))
-            .and_then(|s| s.split_once('`')).map(|(hash, _)| hash)
-            .ok_or_else(|| Error::Invalid(format!("{}: malformed manifest entry {line}", path.display())))?;
-        hashes.push(hash.to_owned());
-    }
-    Ok((hashes, json!({"document":{"kind":"phase-summary","phase":phase},"sha256":crate::store::model::hex(&Sha256::digest(&bytes))})))
-}
-
 pub fn read(root: &Path, data: &Value, binding: &str, phase: u32, process: &mut dyn Process) -> Result<Manifest> {
-    let native = native(data, phase)?; // A malformed native authority never becomes a legacy fallback.
+    let native = native(data, phase)?;
     if let Some(prior) = records(data)?.values().find(|r| r.manifest.phase == phase) {
         if prior.manifest.root_binding != binding { return Err(Error::Conflict("undo root binding changed".into())); }
         return Ok(prior.manifest.clone());
     }
-    let (source, occurrence, supplied, provenance) = match native {
-        Some((occurrence, hashes, provenance)) => ("execution", occurrence, hashes, provenance),
-        None => { let (hashes, provenance) = legacy(root, phase)?; ("SUMMARY", format!("legacy-phase-{phase}"), hashes, provenance) },
-    };
+    let source = "execution";
+    let (occurrence, supplied, provenance) = native
+        .ok_or_else(|| Error::Invalid(format!("phase {phase} has no native execution to undo")))?;
     if supplied.is_empty() { return Err(Error::Invalid(format!("phase {phase} {source} commit manifest is empty"))); }
     let project = root.parent().ok_or_else(|| Error::Invalid("planning root lacks project".into()))?;
     let mut resolutions: BTreeMap<String, String> = BTreeMap::new();
@@ -111,4 +87,19 @@ pub fn read(root: &Path, data: &Value, binding: &str, phase: u32, process: &mut 
     let mut manifest = Manifest { id: String::new(), phase, root_binding: binding.into(), source: source.into(), occurrence, hashes, provenance };
     manifest.id = identity(&manifest)?;
     Ok(manifest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_phase_without_native_execution_has_no_manifest() {
+        let mut process = crate::process::Recorded::new();
+        assert_eq!(
+            read(Path::new("/project/.planning"), &json!({}), "binding", 3, &mut process),
+            Err(Error::Invalid("phase 3 has no native execution to undo".into()))
+        );
+        assert!(process.launches().is_empty(), "no git before a manifest exists");
+    }
 }
