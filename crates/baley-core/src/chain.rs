@@ -56,8 +56,10 @@ pub struct Head {
 /// What is wrong at the first bad sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BreakKind {
-    /// The event's sequence is not the one after its predecessor.
-    Sequence { expected: u64 },
+    /// The row at this position carries another sequence: the expected one
+    /// was deleted, or rows were reordered or duplicated. `found` is the
+    /// sequence the row carries.
+    Sequence { found: u64 },
     /// The event names a project other than the one the chain started in.
     Project { expected: ProjectId },
     /// The stored `prev_hash` is not the recomputed hash of the predecessor.
@@ -72,9 +74,11 @@ pub enum BreakKind {
     Canonical(CanonicalError),
 }
 
-/// The first bad sequence and why.
+/// The first bad position in the ledger and why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Break {
+    /// The sequence that should have been next: the first position the
+    /// verifier could not accept.
     pub seq: u64,
     pub kind: BreakKind,
 }
@@ -86,7 +90,7 @@ pub enum AnchorVerdict {
     NoAnchor,
     /// The recomputed hash at the anchored sequence is the anchored hash.
     Matches,
-    /// The accepted chain ends before the anchored sequence.
+    /// Every row verified and the chain ends before the anchored sequence.
     Truncated { anchored: u64, head: u64 },
     /// The accepted chain reaches the anchored sequence with another hash:
     /// a rewrite or a rollback.
@@ -95,6 +99,9 @@ pub enum AnchorVerdict {
         anchored: Hash,
         found: Hash,
     },
+    /// A break at or before the anchored sequence stopped the walk, so the
+    /// anchor was never compared. The break is in `first_break`.
+    Unchecked { anchored: u64 },
 }
 
 /// The verifier's answer.
@@ -102,7 +109,7 @@ pub enum AnchorVerdict {
 pub struct ChainReport {
     /// The last accepted event; `None` for an empty chain or a break at 1.
     pub head: Option<Head>,
-    /// The first sequence the verifier refused, if any. Events after it
+    /// The first position the verifier refused, if any. Events after it
     /// are not examined.
     pub first_break: Option<Break>,
     pub anchor: AnchorVerdict,
@@ -134,21 +141,14 @@ pub fn verify_chain<'a>(
     let mut head: Option<Head> = None;
     let mut project: Option<ProjectId> = None;
     let mut first_break = None;
-    let mut anchor_verdict = match anchor {
-        None => AnchorVerdict::NoAnchor,
-        Some(anchor) => AnchorVerdict::Truncated {
-            anchored: anchor.seq,
-            head: 0,
-        },
-    };
+    // Set when the walk accepts the anchored sequence.
+    let mut reached: Option<AnchorVerdict> = None;
 
     for event in events {
         let expected_seq = head.as_ref().map_or(1, |head| head.seq + 1);
         let expected_prev = head.as_ref().map(|head| head.hash);
         let kind = if event.seq != expected_seq {
-            Some(BreakKind::Sequence {
-                expected: expected_seq,
-            })
+            Some(BreakKind::Sequence { found: event.seq })
         } else if project
             .as_ref()
             .is_some_and(|project| *project != event.project_id)
@@ -177,7 +177,7 @@ pub fn verify_chain<'a>(
                     if let Some(anchor) = anchor
                         && anchor.seq == event.seq
                     {
-                        anchor_verdict = if anchor.hash == hash {
+                        reached = Some(if anchor.hash == hash {
                             AnchorVerdict::Matches
                         } else {
                             AnchorVerdict::Rewritten {
@@ -185,7 +185,7 @@ pub fn verify_chain<'a>(
                                 anchored: anchor.hash,
                                 found: hash,
                             }
-                        };
+                        });
                     }
                     None
                 }
@@ -193,7 +193,7 @@ pub fn verify_chain<'a>(
         };
         if let Some(kind) = kind {
             first_break = Some(Break {
-                seq: event.seq,
+                seq: expected_seq,
                 kind,
             });
             break;
@@ -201,9 +201,17 @@ pub fn verify_chain<'a>(
     }
 
     let head_seq = head.as_ref().map_or(0, |head| head.seq);
-    if let AnchorVerdict::Truncated { head: reported, .. } = &mut anchor_verdict {
-        *reported = head_seq;
-    }
+    let anchor_verdict = match (anchor, reached) {
+        (None, _) => AnchorVerdict::NoAnchor,
+        (Some(_), Some(verdict)) => verdict,
+        (Some(anchor), None) if first_break.is_some() => AnchorVerdict::Unchecked {
+            anchored: anchor.seq,
+        },
+        (Some(anchor), None) => AnchorVerdict::Truncated {
+            anchored: anchor.seq,
+            head: head_seq,
+        },
+    };
     let unanchored_from = match anchor {
         None => 1,
         Some(anchor) => anchor.seq + 1,
@@ -310,6 +318,12 @@ mod tests {
     const GENESIS_HASH_NO_GIT: &str =
         "2e8b0f17b8239b2c583c92e06aea027478083cba903cebd46dc70ff7e7afa5d6";
     const SECOND_HASH: &str = "9bdd1d9b39bc7861fa37c48f8328b7f10b2f89d70a55b3072aeef6fd867722da";
+    // The third event of `chain`, and the same event after its payload's
+    // title is edited to "Foundations", both computed outside this crate
+    // the same way as the second.
+    const THIRD_HASH: &str = "3da1e818903e1177bc193c9a6b1028e47aac2093888bcafac2bb279ca28626bc";
+    const EDITED_THIRD_HASH: &str =
+        "09109e32f9c1cb95a2939737362c275c45d70c725db7cd6a9449045a3f4a6bc5";
 
     // An untouched chain verifies with no break, its head at the end, and
     // the whole range unanchored. Catches a verifier that reports a break
@@ -323,7 +337,7 @@ mod tests {
             report.head,
             Some(Head {
                 seq: 3,
-                hash: events[2].hash
+                hash: hex(THIRD_HASH)
             })
         );
         assert_eq!(report.anchor, AnchorVerdict::NoAnchor);
@@ -347,13 +361,13 @@ mod tests {
             panic!("expected a hash break, got {:?}", report.first_break);
         };
         assert_eq!(seq, 3);
-        assert_eq!(found, events[2].hash);
-        assert_eq!(expected, events[2].compute_hash().expect("hash"));
+        assert_eq!(found, hex(THIRD_HASH));
+        assert_eq!(expected, hex(EDITED_THIRD_HASH));
         assert_eq!(
             report.head,
             Some(Head {
                 seq: 2,
-                hash: events[1].hash
+                hash: hex(SECOND_HASH)
             })
         );
         assert_eq!(report.unanchored, Some(1..=2));
@@ -376,15 +390,16 @@ mod tests {
             Some(Break {
                 seq: 2,
                 kind: BreakKind::Hash {
-                    expected: chain(3)[1].hash,
+                    expected: hex(SECOND_HASH),
                     found: forged
                 }
             })
         );
     }
 
-    // A deleted event leaves a gap at its sequence. Catches a verifier that
-    // renumbers as it goes.
+    // A deleted event is reported at its own sequence, the first bad
+    // position, with the sequence of the row found there instead. Catches
+    // a verifier that renumbers as it goes or blames the row after the gap.
     #[test]
     fn a_missing_sequence_is_a_break_at_the_gap() {
         let mut events = chain(3);
@@ -393,8 +408,8 @@ mod tests {
         assert_eq!(
             report.first_break,
             Some(Break {
-                seq: 3,
-                kind: BreakKind::Sequence { expected: 2 }
+                seq: 2,
+                kind: BreakKind::Sequence { found: 3 }
             })
         );
         assert_eq!(report.head.map(|head| head.seq), Some(1));
@@ -441,10 +456,45 @@ mod tests {
             AnchorVerdict::Rewritten {
                 seq: 2,
                 anchored,
-                found: events[1].hash
+                found: hex(SECOND_HASH)
             }
         );
         assert_eq!(report.unanchored, Some(3..=4));
+    }
+
+    // An anchor that matches the stored hash of an event whose contents
+    // were edited is not a match: the recomputed hash is what counts, and
+    // the break at the anchored sequence leaves the anchor unchecked.
+    // Catches a verifier that compares the anchor with the stored hash.
+    #[test]
+    fn an_anchor_matching_only_the_stored_hash_is_not_a_match() {
+        let mut events = chain(3);
+        let anchor = Anchor {
+            seq: 2,
+            hash: hex(SECOND_HASH),
+        };
+        events[1].payload = json!({"phase": 1, "title": "Foundations"});
+        let report = verify_chain(&events, Some(&anchor));
+        assert_eq!(report.first_break.as_ref().map(|at| at.seq), Some(2));
+        assert_eq!(report.anchor, AnchorVerdict::Unchecked { anchored: 2 });
+    }
+
+    // A break before the anchored sequence stops the walk short of the
+    // anchor, and the rows after the break are still there, so the verdict
+    // is unchecked, not truncation. Catches a report that calls a broken
+    // chain truncated.
+    #[test]
+    fn a_break_before_the_anchor_leaves_it_unchecked() {
+        let mut events = chain(4);
+        events[1].payload = json!({"phase": 1, "title": "Foundations"});
+        let anchor = Anchor {
+            seq: 3,
+            hash: hex(THIRD_HASH),
+        };
+        let report = verify_chain(&events, Some(&anchor));
+        assert_eq!(report.first_break.as_ref().map(|at| at.seq), Some(2));
+        assert_eq!(report.anchor, AnchorVerdict::Unchecked { anchored: 3 });
+        assert!(!report.is_intact());
     }
 
     // A matching anchor leaves only the sequences after it unanchored, and

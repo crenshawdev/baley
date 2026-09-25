@@ -72,13 +72,50 @@ impl<'de> Deserialize<'de> for Hash {
     }
 }
 
-/// Who recorded an event: the owner, an agent role such as
-/// `daneel:executor`, or Baley itself.
+/// Why text cannot name an actor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActorError {
+    Empty,
+    /// `owner` and `baley` name the reserved actors, never an agent role.
+    Reserved(String),
+}
+
+impl fmt::Display for ActorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str("an actor is never empty"),
+            Self::Reserved(name) => write!(f, "{name} is a reserved actor, not an agent role"),
+        }
+    }
+}
+
+impl std::error::Error for ActorError {}
+
+/// An agent role such as `daneel:executor`: never empty, never a reserved
+/// actor's name, so an agent can never be recorded as the owner.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AgentRole(String);
+
+impl AgentRole {
+    pub fn new(role: &str) -> Result<Self, ActorError> {
+        match role {
+            "" => Err(ActorError::Empty),
+            "owner" | "baley" => Err(ActorError::Reserved(role.to_owned())),
+            role => Ok(Self(role.to_owned())),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Who recorded an event: the owner, an agent role, or Baley itself.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Actor {
     Owner,
     Baley,
-    Agent(String),
+    Agent(AgentRole),
 }
 
 impl Actor {
@@ -87,16 +124,16 @@ impl Actor {
         match self {
             Self::Owner => "owner",
             Self::Baley => "baley",
-            Self::Agent(role) => role,
+            Self::Agent(role) => role.as_str(),
         }
     }
 
     /// The actor named by its text form.
-    pub fn parse(text: &str) -> Self {
+    pub fn parse(text: &str) -> Result<Self, ActorError> {
         match text {
-            "owner" => Self::Owner,
-            "baley" => Self::Baley,
-            role => Self::Agent(role.to_owned()),
+            "owner" => Ok(Self::Owner),
+            "baley" => Ok(Self::Baley),
+            role => AgentRole::new(role).map(Self::Agent),
         }
     }
 }
@@ -109,7 +146,7 @@ impl Serialize for Actor {
 
 impl<'de> Deserialize<'de> for Actor {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(Self::parse(&String::deserialize(deserializer)?))
+        Self::parse(&String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
     }
 }
 
@@ -165,16 +202,53 @@ pub struct Event {
     pub hash: Hash,
 }
 
+/// Why a draft cannot be placed in a chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SealError {
+    /// Sequences start at 1.
+    ZeroSequence,
+    /// Sequence 1 has no predecessor and every later sequence has one;
+    /// this pair has it the other way round.
+    Link {
+        seq: u64,
+        has_prev: bool,
+    },
+    Canonical(CanonicalError),
+}
+
+impl fmt::Display for SealError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ZeroSequence => f.write_str("sequences start at 1"),
+            Self::Link { seq: 1, .. } => f.write_str("sequence 1 has no predecessor"),
+            Self::Link { seq, .. } => write!(f, "sequence {seq} needs its predecessor's hash"),
+            Self::Canonical(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for SealError {}
+
 impl Event {
     /// Places a draft in a project's chain at `seq` after the event whose
     /// hash is `prev`, computing its hash from the design's formula. `prev`
-    /// is `None` only for sequence 1; the caller owns that agreement.
+    /// is `None` at sequence 1 and present everywhere else, or the draft is
+    /// refused, so a sealed event never carries the wrong formula.
     pub fn seal(
         project_id: ProjectId,
         seq: u64,
         prev: Option<Hash>,
         draft: EventDraft,
-    ) -> Result<Self, CanonicalError> {
+    ) -> Result<Self, SealError> {
+        if seq == 0 {
+            return Err(SealError::ZeroSequence);
+        }
+        if (seq == 1) == prev.is_some() {
+            return Err(SealError::Link {
+                seq,
+                has_prev: prev.is_some(),
+            });
+        }
         let mut event = Self {
             project_id,
             seq,
@@ -191,7 +265,7 @@ impl Event {
             prev_hash: prev,
             hash: Hash([0; 32]),
         };
-        event.hash = event.compute_hash()?;
+        event.hash = event.compute_hash().map_err(SealError::Canonical)?;
         Ok(event)
     }
 
@@ -279,19 +353,91 @@ mod tests {
         assert_eq!(Hash::from_hex(&format!("zz{}", &hex[2..])), None);
     }
 
-    // The three actor forms map to and from their text. Catches an agent
-    // role swallowed as the owner.
+    // Each actor form survives a round trip through the JSON the envelope
+    // carries, landing on the variant it started as. Catches an agent role
+    // read back as the owner or Baley.
     #[test]
-    fn actor_text_forms() {
-        assert_eq!(Actor::parse("owner"), Actor::Owner);
-        assert_eq!(Actor::parse("baley"), Actor::Baley);
+    fn actors_round_trip_through_their_text() {
+        let role = AgentRole::new("daneel:executor").expect("role");
+        for (actor, text) in [
+            (Actor::Owner, "\"owner\""),
+            (Actor::Baley, "\"baley\""),
+            (Actor::Agent(role), "\"daneel:executor\""),
+        ] {
+            assert_eq!(serde_json::to_string(&actor).expect("serialize"), text);
+            assert_eq!(
+                serde_json::from_str::<Actor>(text).expect("deserialize"),
+                actor
+            );
+        }
+    }
+
+    // An agent role cannot take a reserved actor's name, so no agent is
+    // ever recorded as the owner. Catches attribution lost at construction.
+    #[test]
+    fn an_agent_role_cannot_take_a_reserved_name() {
         assert_eq!(
-            Actor::parse("daneel:executor"),
-            Actor::Agent("daneel:executor".into())
+            AgentRole::new("owner"),
+            Err(ActorError::Reserved("owner".into()))
         );
         assert_eq!(
-            Actor::Agent("daneel:executor".into()).as_str(),
-            "daneel:executor"
+            AgentRole::new("baley"),
+            Err(ActorError::Reserved("baley".into()))
+        );
+    }
+
+    // Empty text names no actor, whether built as a role or read from an
+    // envelope. Catches an event recorded with no one behind it.
+    #[test]
+    fn an_empty_actor_is_refused() {
+        assert_eq!(AgentRole::new(""), Err(ActorError::Empty));
+        assert_eq!(Actor::parse(""), Err(ActorError::Empty));
+        assert!(serde_json::from_str::<Actor>("\"\"").is_err());
+    }
+
+    fn draft() -> EventDraft {
+        EventDraft {
+            stream: "phase/1".into(),
+            stream_version: 1,
+            type_name: "phase.declared".into(),
+            type_version: 1,
+            actor: Actor::Owner,
+            recorded_at: "2026-09-25T18:00:00Z".into(),
+            request_id: RequestId("00000000-0000-4000-8000-000000000001".into()),
+            git: None,
+            policy_version: 1,
+            payload: serde_json::json!({}),
+        }
+    }
+
+    // Sequence 1 with a predecessor, or a later sequence without one, is
+    // refused before any hash is computed. Catches a sealed event hashed
+    // with the other formula.
+    #[test]
+    fn seal_refuses_a_sequence_and_predecessor_that_disagree() {
+        let project = || ProjectId("p".into());
+        assert_eq!(
+            Event::seal(project(), 1, Some(Hash([7; 32])), draft()),
+            Err(SealError::Link {
+                seq: 1,
+                has_prev: true
+            })
+        );
+        assert_eq!(
+            Event::seal(project(), 2, None, draft()),
+            Err(SealError::Link {
+                seq: 2,
+                has_prev: false
+            })
+        );
+    }
+
+    // Sequence 0 does not exist. Catches a chain that starts one early.
+    #[test]
+    fn seal_refuses_sequence_zero() {
+        assert_eq!(
+            Event::seal(ProjectId("p".into()), 0, None, draft()),
+            Err(SealError::ZeroSequence)
         );
     }
 }

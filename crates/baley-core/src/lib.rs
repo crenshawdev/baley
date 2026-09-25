@@ -15,5 +15,8 @@ pub use canonical::{CanonicalError, MAX_SAFE_INTEGER, canonical_json};
 pub use chain::{
     Anchor, AnchorVerdict, Break, BreakKind, ChainReport, Head, chain_hash, verify_chain,
 };
-pub use event::{Actor, Event, EventDraft, GitFacts, Hash, ProjectId, RequestId};
+pub use event::{
+    Actor, ActorError, AgentRole, Event, EventDraft, GitFacts, Hash, ProjectId, RequestId,
+    SealError,
+};
 pub use registry::{Current, Fence, FenceReason, Registry, RegistryError, UpcastError, Upcaster};

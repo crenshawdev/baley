@@ -227,15 +227,18 @@ impl Registry {
     }
 
     /// The projects among `events` this binary must not write to, each with
-    /// the first event that fences it. Projects whose every event reads are
-    /// absent.
+    /// its lowest-sequence event that fences it, in whatever order the
+    /// events arrive. Projects whose every event reads are absent.
     pub fn fenced_projects<'a>(
         &self,
         events: impl IntoIterator<Item = &'a Event>,
     ) -> BTreeMap<ProjectId, Fence> {
-        let mut fences = BTreeMap::new();
+        let mut fences: BTreeMap<ProjectId, Fence> = BTreeMap::new();
         for event in events {
-            if fences.contains_key(&event.project_id) {
+            if fences
+                .get(&event.project_id)
+                .is_some_and(|fence| fence.seq <= event.seq)
+            {
                 continue;
             }
             if let Err(fence) = self.read(event) {
@@ -403,8 +406,7 @@ mod tests {
     }
 
     // Over events from two projects, an unknown type in one leaves the
-    // other writable, and the fence names the first offending event.
-    // Catches a fence that stops every project.
+    // other writable. Catches a fence that stops every project.
     #[test]
     fn an_unknown_type_fences_only_its_own_project() {
         let events = [
@@ -415,7 +417,22 @@ mod tests {
             event("beta", 3, "phase.other", 1, json!({})),
         ];
         let fences = registry().fenced_projects(&events);
-        assert_eq!(fences.len(), 1);
+        assert_eq!(
+            fences.keys().collect::<Vec<_>>(),
+            [&ProjectId("beta".into())]
+        );
+    }
+
+    // Fed a project's unreadable events highest sequence first, the fence
+    // still names the lowest. Catches a fence that keeps whichever
+    // offending event arrived first.
+    #[test]
+    fn the_fence_names_the_lowest_offending_sequence() {
+        let events = [
+            event("beta", 3, "phase.other", 1, json!({})),
+            event("beta", 2, "phase.forgotten", 1, json!({})),
+        ];
+        let fences = registry().fenced_projects(&events);
         let fence = &fences[&ProjectId("beta".into())];
         assert_eq!(fence.seq, 2);
         assert_eq!(
@@ -426,40 +443,67 @@ mod tests {
         );
     }
 
-    // Registration refuses a type with a gap in its upcasters, one with an
-    // upcaster at or past its current version, version zero, and a repeat.
+    // A type whose upcasters skip a version is refused at registration.
     // Catches a registry that lets `read` reach a missing upcaster.
     #[test]
-    fn registration_checks_the_upcaster_ladder() {
-        let mut registry = Registry::new();
+    fn registration_refuses_a_gap_in_the_upcasters() {
         assert_eq!(
-            registry.register("a", 3, [(1, v1_to_v2 as Upcaster)]),
+            Registry::new().register("a", 3, [(1, v1_to_v2 as Upcaster)]),
             Err(RegistryError::MissingUpcaster {
                 type_name: "a".into(),
                 from: 2
             })
         );
+    }
+
+    // An upcaster from the current version or beyond has nowhere to go.
+    // Catches a ladder that reads past the current shape.
+    #[test]
+    fn registration_refuses_an_upcaster_at_the_current_version() {
         assert_eq!(
-            registry.register("a", 1, [(1, v1_to_v2 as Upcaster)]),
+            Registry::new().register("a", 1, [(1, v1_to_v2 as Upcaster)]),
             Err(RegistryError::StrayUpcaster {
                 type_name: "a".into(),
                 from: 1
             })
         );
+    }
+
+    // Versions start at 1. Catches a type registered at a version no
+    // event can carry.
+    #[test]
+    fn registration_refuses_version_zero() {
         assert_eq!(
-            registry.register("a", 0, []),
+            Registry::new().register("a", 0, []),
             Err(RegistryError::ZeroVersion {
                 type_name: "a".into()
             })
         );
-        registry.register("a", 1, []).expect("first");
+    }
+
+    // A type registered twice is refused and the first registration
+    // stands. Catches a second registration silently replacing the ladder.
+    #[test]
+    fn registration_refuses_a_repeat() {
+        let mut registry = Registry::new();
+        registry
+            .register("a", 2, [(1, v1_to_v2 as Upcaster)])
+            .expect("first");
         assert_eq!(
             registry.register("a", 1, []),
             Err(RegistryError::Duplicate {
                 type_name: "a".into()
             })
         );
-        assert_eq!(registry.current_version("a"), Some(1));
-        assert_eq!(registry.current_version("b"), None);
+        assert_eq!(registry.current_version("a"), Some(2));
+    }
+
+    // A registered type reports its current version and an unregistered
+    // one reports none. Catches a lookup that defaults to version 1.
+    #[test]
+    fn current_version_is_known_only_for_registered_types() {
+        let registry = registry();
+        assert_eq!(registry.current_version("phase.declared"), Some(3));
+        assert_eq!(registry.current_version("phase.forgotten"), None);
     }
 }

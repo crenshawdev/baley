@@ -59,25 +59,28 @@ fn write_value(value: &Value, out: &mut Vec<u8>, path: &mut String) -> Result<()
         Value::Bool(true) => out.extend_from_slice(b"true"),
         Value::Bool(false) => out.extend_from_slice(b"false"),
         Value::Number(number) => {
-            let integer = number.as_i64().ok_or_else(|| {
-                if number.as_u64().is_some() {
+            // With `arbitrary_precision` the number keeps its source text,
+            // so `-0` reads as the integer 0 and `1.0` or `1e2` do not read
+            // as integers at all.
+            let text = number.to_string();
+            let digits = text.strip_prefix('-').unwrap_or(&text);
+            let integer_token = !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit());
+            let in_range = number
+                .as_i64()
+                .filter(|integer| (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(integer));
+            let Some(integer) = in_range else {
+                return Err(if integer_token {
                     CanonicalError::OutOfRange {
                         path: path.clone(),
-                        number: number.to_string(),
+                        number: text,
                     }
                 } else {
                     CanonicalError::NotAnInteger {
                         path: path.clone(),
-                        number: number.to_string(),
+                        number: text,
                     }
-                }
-            })?;
-            if integer.abs() > MAX_SAFE_INTEGER {
-                return Err(CanonicalError::OutOfRange {
-                    path: path.clone(),
-                    number: number.to_string(),
                 });
-            }
+            };
             out.extend_from_slice(integer.to_string().as_bytes());
         }
         Value::String(string) => write_string(string, out),
@@ -232,8 +235,37 @@ mod tests {
         );
     }
 
-    // An integer past i64 (parsed as u64) is refused as out of range, not
-    // mistaken for a float. Catches a check that only looks at i64.
+    // −(2^53) is refused: the lower bound is as tight as the upper.
+    // Catches a bound placed one off on the negative side.
+    #[test]
+    fn minus_two_to_the_fifty_three_is_refused() {
+        let value = json!([-9007199254740992_i64]);
+        assert_eq!(
+            canonical_json(&value),
+            Err(CanonicalError::OutOfRange {
+                path: "$[0]".into(),
+                number: "-9007199254740992".into()
+            })
+        );
+    }
+
+    // The most negative i64 has no absolute value in i64, so a bound
+    // checked through `abs` panics or wraps on it. It is refused like any
+    // other integer out of range. Catches an overflowing bound check.
+    #[test]
+    fn the_most_negative_i64_is_refused() {
+        let value = json!([i64::MIN]);
+        assert_eq!(
+            canonical_json(&value),
+            Err(CanonicalError::OutOfRange {
+                path: "$[0]".into(),
+                number: "-9223372036854775808".into()
+            })
+        );
+    }
+
+    // Integers past i64 in either direction are refused as out of range,
+    // not mistaken for floats. Catches a check that only looks at i64.
     #[test]
     fn an_integer_past_i64_is_out_of_range() {
         let value: Value = serde_json::from_str("[18446744073709551615]").expect("parse");
@@ -244,10 +276,26 @@ mod tests {
                 number: "18446744073709551615".into()
             })
         );
+        let value: Value = serde_json::from_str("[-9223372036854775809]").expect("parse");
+        assert_eq!(
+            canonical_json(&value),
+            Err(CanonicalError::OutOfRange {
+                path: "$[0]".into(),
+                number: "-9223372036854775809".into()
+            })
+        );
     }
 
-    // A float is refused, even one that is a whole number, because the
-    // ledger has no doubles. Catches a serializer that formats 1.0 as 1.
+    // The integer token `-0` is zero, and RFC 8785 writes zero as `0`.
+    // Catches `-0` refused as a float or written with its sign.
+    #[test]
+    fn minus_zero_is_written_as_zero() {
+        let value: Value = serde_json::from_str("[-0]").expect("parse");
+        assert_eq!(canonical(value), "[0]");
+    }
+
+    // A number with a fraction is refused, even a whole one, because the
+    // ledger has no doubles. Catches a serializer that formats 2.0 as 2.
     #[test]
     fn a_float_is_refused() {
         let value: Value = serde_json::from_str(r#"{"a": [1, 2.0]}"#).expect("parse");
@@ -258,5 +306,32 @@ mod tests {
                 number: "2.0".into()
             })
         );
+    }
+
+    // Minus zero with a fraction is a float like any other. Catches a
+    // `-0` rule that accepts every spelling of zero.
+    #[test]
+    fn minus_zero_with_a_fraction_is_refused() {
+        let value: Value = serde_json::from_str("[-0.0]").expect("parse");
+        assert_eq!(
+            canonical_json(&value),
+            Err(CanonicalError::NotAnInteger {
+                path: "$[0]".into(),
+                number: "-0.0".into()
+            })
+        );
+    }
+
+    // A number with an exponent is refused though its value is whole. The
+    // number's text is serde_json's rendering of it, so only the refusal
+    // and its path are asserted. Catches a check that tests the value
+    // instead of the token.
+    #[test]
+    fn an_exponent_form_is_refused() {
+        let value: Value = serde_json::from_str("[1e2]").expect("parse");
+        assert!(matches!(
+            canonical_json(&value),
+            Err(CanonicalError::NotAnInteger { path, .. }) if path == "$[0]"
+        ));
     }
 }
