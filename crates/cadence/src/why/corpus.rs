@@ -14,7 +14,7 @@
 use super::git::{self, Entry as RawEntry};
 use crate::process::Process;
 use super::{
-    ArchiveRow, Brief, Close, DeclaredJoin, DecisionJoin, DeclaringTask, Entry, Finding, Gap, Join,
+    Brief, Close, DeclaredJoin, DecisionJoin, DeclaringTask, Entry, Finding, Gap, Join,
     Recovered, Resolved, ReviewJoin,
 };
 use regex::Regex;
@@ -28,8 +28,6 @@ fn re(pattern: &str) -> Regex { Regex::new(pattern).expect("static pattern") }
 // The record grammar (why-record.mjs and the planning-files helpers it uses)
 // ---------------------------------------------------------------------------
 
-/// The heading whose table carries the commit-to-plan-task edge.
-pub const COMMITS_HEADING: &str = "## Commits";
 /// The plan section whose cites are plan-scoped rather than task-scoped.
 pub const PLAN_CONTEXT_HEADING: &str = "## Context";
 /// The second decision section, phase-local by construction.
@@ -40,9 +38,9 @@ pub const DEVIATIONS_HEADING: &str = "## Deviations";
 /// The statement the deviation field leads with: the write side never emits
 /// the marker that would join a deviation to the decision it refuted.
 pub const MARKER_GAP: &str = "the `corrected by plan-<k> deviation:` marker \
-`workflows/execute.md` prescribes for a deviation that refutes a decision \
-is absent from the whole record, so no deviation below is joined to a \
-decision - the edge is missing on the WRITE side, not empty here";
+that would join a deviation to the decision it refutes is absent from the \
+whole record, so no deviation below is joined to a decision - the edge is \
+missing on the WRITE side, not empty here";
 
 /// Strip a BOM and fold every line ending to `\n`.
 pub fn normalize(text: &str) -> String {
@@ -141,14 +139,13 @@ pub struct CommitRow {
     pub description: String,
 }
 
-/// Legacy commit tables and the native SUMMARY's per-plan task tables.
+/// The native SUMMARY's per-plan task tables.
 pub fn parse_commit_rows(text: &str) -> Vec<CommitRow> {
     static TABLE_ROW: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*\|"));
     static SEPARATOR_ROW: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*\|[\s|:-]*$"));
     let text = normalize(text);
     let lines: Vec<&str> = text.split('\n').collect();
     let native = re(r"^## Plan [1-9][0-9]*\s*$");
-    let commits = re(COMMITS_HEADING);
     let mut fenced = fence_scanner();
     let mut selected = false;
     let mut header: Option<BTreeMap<&str, usize>> = None;
@@ -156,7 +153,7 @@ pub fn parse_commit_rows(text: &str) -> Vec<CommitRow> {
     for line in &lines {
         if fenced(line) { continue; }
         if line.starts_with("## ") || line.starts_with("# ") {
-            selected = commits.is_match(line) || native.is_match(line);
+            selected = native.is_match(line);
             header = None;
             continue;
         }
@@ -508,26 +505,21 @@ fn entries_in(dir: &Path) -> Vec<String> {
         .map(|entry| entry.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default()
 }
 
-/// The phase directories under `planningRoot`: `phases/<N>` and every
-/// `_archive-*/<N>` that carries a plan file, contained by what each path
-/// resolves to, in label order.
+/// The phase directories under `planningRoot`: every `phases/<N>` that carries
+/// a plan file, contained by what each path resolves to, in label order.
 fn phase_dirs_in(planning_root: &Path) -> Vec<(String, PathBuf)> {
     static PLAN_FILE: LazyLock<Regex> = LazyLock::new(|| re(r"^PLAN(-\d+)?\.md$"));
     let root = planning_root.canonicalize().unwrap_or_else(|_| planning_root.to_path_buf());
     let inside = |dir: &Path| dir.canonicalize().is_ok_and(|real| real == root || real.starts_with(&root));
-    let mut groups = vec!["phases".to_owned()];
-    groups.extend(entries_in(planning_root).into_iter().filter(|entry| entry.starts_with("_archive-")));
     let mut found = Vec::new();
-    for group in groups {
-        let dir = planning_root.join(&group);
-        if !inside(&dir) { continue; }
-        for name in entries_in(&dir) {
-            let path = dir.join(&name);
-            if !inside(&path) { continue; }
-            let plans = entries_in(&path).into_iter().filter(|entry| PLAN_FILE.is_match(entry)).count();
-            if plans == 0 { continue; }
-            found.push((format!("{group}/{name}"), path));
-        }
+    let dir = planning_root.join("phases");
+    if !inside(&dir) { return found; }
+    for name in entries_in(&dir) {
+        let path = dir.join(&name);
+        if !inside(&path) { continue; }
+        let plans = entries_in(&path).into_iter().filter(|entry| PLAN_FILE.is_match(entry)).count();
+        if plans == 0 { continue; }
+        found.push((format!("phases/{name}"), path));
     }
     found.sort_by(|a, b| a.0.cmp(&b.0));
     found
@@ -535,9 +527,8 @@ fn phase_dirs_in(planning_root: &Path) -> Vec<(String, PathBuf)> {
 
 fn describe(label: &str, path: PathBuf) -> Dir {
     let (group, phase) = match label.split_once('/') { Some((group, phase)) => (group, phase), None => (label, "") };
-    let milestone = if group == "phases" { "the open milestone".to_owned() } else { group.strip_prefix("_archive-").unwrap_or(group).to_owned() };
     Dir { label: label.to_owned(), path: Some(path), group: group.to_owned(), phase: Some(phase.to_owned()),
-        milestone: Some(milestone), recovered: None, slug: None }
+        milestone: Some("the open milestone".to_owned()), recovered: None, slug: None }
 }
 
 /// The on-disk tier: every phase directory's `## Commits` rows.
@@ -870,31 +861,6 @@ pub fn close_over(prunes: &[Prune], at: i64) -> Option<Close> {
     found.map(|prune| Close { commit: prune.commit.clone(), label: prune.label.clone(), date: prune.date.clone() })
 }
 
-fn canonical_number(text: &str) -> bool {
-    let canonical_int = |part: &str| part == "0" || (!part.is_empty() && !part.starts_with('0'));
-    match text.split_once('.') {
-        None => canonical_int(text),
-        Some((int, frac)) => canonical_int(int) && !frac.is_empty() && !frac.ends_with('0'),
-    }
-}
-
-/// ARCHIVE.md's residue rows, grouped by the milestone heading above them.
-pub fn archive_sections(planning_root: &Path) -> BTreeMap<String, Vec<ArchiveRow>> {
-    static SECTION: LazyLock<Regex> = LazyLock::new(|| re(r"^## (.*)$"));
-    static ROW: LazyLock<Regex> = LazyLock::new(|| re(r"^- `(phases/(\d+(?:\.\d+)?)/(?:SUMMARY|UAT|CONTEXT)\.md)`: (.*)$"));
-    let mut out: BTreeMap<String, Vec<ArchiveRow>> = BTreeMap::new();
-    let Artifact::Text(text) = read_artifact(&planning_root.join("ARCHIVE.md")) else { return out };
-    let mut label: Option<String> = None;
-    for line in normalize(&text).split('\n') {
-        if let Some(found) = SECTION.captures(line) { label = Some(found[1].trim().to_owned()); continue; }
-        let Some(current) = &label else { continue };
-        let Some(found) = ROW.captures(line) else { continue };
-        if !canonical_number(&found[2]) { continue; }
-        out.entry(current.clone()).or_default().push(ArchiveRow { origin: found[1].to_owned(), text: found[3].to_owned() });
-    }
-    out
-}
-
 /// A conventional commit's scope, corroboration only.
 fn commit_scope(subject: &str) -> Option<String> {
     static SCOPE: LazyLock<Regex> = LazyLock::new(|| re(r"^[a-zA-Z]+\(([^)\n]*)\)!?:"));
@@ -968,16 +934,12 @@ pub fn join_chain(repo: &Path, path: &str, index: &Index, raws: &[RawEntry], pro
         .filter(|entry| matches!(entry.join, Join::Unresolved { .. })).map(|entry| entry.sha.clone()).collect();
     if !open.is_empty() {
         let paths = touched_paths(repo, &open, &mut warnings, process);
-        let archive = archive_sections(&repo.join(".planning"));
         for entry in &mut entries {
             if !matches!(entry.join, Join::Unresolved { .. }) { continue; }
-            let close = close_over(&index.prunes, entry.at);
-            let rows = close.as_ref().and_then(|close| close.label.as_ref()).and_then(|label| archive.get(label)).cloned().unwrap_or_default();
             entry.join = Join::Unresolved { gap: Some(Gap {
-                close,
+                close: close_over(&index.prunes, entry.at),
                 scope: commit_scope(&entry.subject),
                 paths: paths.get(&entry.sha).cloned().unwrap_or_default(),
-                archive: rows,
             }) };
         }
     }
@@ -1012,9 +974,10 @@ mod tests {
 
     #[test]
     fn commit_rows_read_the_header_by_name_and_skip_non_hex_cells() {
-        let text = "# S\n\n## Commits\n\n| task | commit | plan |\n|---|---|---|\n| 2 | abcd1234 | 1 |\n| x | (none) | 1 |\n| 3 | a\\|b | 1 |\n\n## Next\n| plan | task | commit |\n| 1 | 1 | ffff |\n";
+        let text = "# S\n\n## Plan 1\n\n| task | commit | plan |\n|---|---|---|\n| 2 | abcd1234 | 1 |\n| x | (none) | 1 |\n| 3 | a\\|b | 1 |\n\n## Next\n| plan | task | commit |\n| 1 | 1 | ffff |\n";
         assert_eq!(parse_commit_rows(text), vec![CommitRow { plan: "1".into(), task: "2".into(), commit: "abcd1234".into(), description: String::new() }]);
-        assert!(parse_commit_rows("## Commits\n| plan | task |\n| 1 | 2 |\n").is_empty());
+        assert!(parse_commit_rows("## Plan 1\n| plan | task |\n| 1 | 2 |\n").is_empty());
+        assert!(parse_commit_rows("## Commits\n| plan | task | commit |\n| 1 | 2 | abcd1234 |\n").is_empty(), "a 3.x commits table is not read");
     }
 
     #[test]

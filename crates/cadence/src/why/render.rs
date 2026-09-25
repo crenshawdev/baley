@@ -17,8 +17,6 @@ const NOT_JOINED: &str = "not yet joined";
 /// Characters of the full sha the rendered commit line's abbreviation carries.
 const ABBREV_LEN: usize = 8;
 
-/// The rows of ARCHIVE.md residue a gap block lists before counting the rest.
-const GAP_ROWS: usize = 3;
 /// The paths a gap block lists before counting the rest.
 const GAP_PATHS: usize = 10;
 /// The excluded commits listed before counting the rest.
@@ -71,12 +69,6 @@ explicitly NOT a resolved phase, because those numbers reset every milestone (D-
     } else {
         lines.push(format!("git records {} path(s) touched by this commit:", g.paths.len()));
         lines.extend(capped(&g.paths, GAP_PATHS));
-    }
-    if !g.archive.is_empty() {
-        lines.push(format!(".planning/ARCHIVE.md keeps {} residue row(s) under that label, \
-bound to the label and to no commit (D-04):", g.archive.len()));
-        let rows: Vec<String> = g.archive.iter().map(|row| format!("{}: {}", row.origin, row.text)).collect();
-        lines.extend(capped(&rows, GAP_ROWS));
     }
     quoted(GAP, &lines)
 }
@@ -247,7 +239,7 @@ pub fn render_chain(entries: &[Entry], top: Option<u32>, excluded: Option<&[Excl
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::why::{ArchiveRow, Close, DeclaredJoin, DecisionJoin, Gap, ReviewJoin};
+    use crate::why::{Close, DeclaredJoin, DecisionJoin, Gap, ReviewJoin};
 
     fn entry(sha: &str, at: i64, join: Join) -> Entry {
         Entry { sha: sha.into(), date: format!("d{at}"), at, subject: "s".into(), join }
@@ -293,12 +285,11 @@ mod tests {
     }
 
     #[test]
-    fn a_labelled_close_and_archive_residue_render_in_the_gap_block() {
+    fn a_labelled_close_renders_in_the_gap_block() {
         let gap = Gap {
             close: Some(Close { commit: "0123456789ab".into(), label: Some("v1.0".into()), date: String::new() }),
             scope: None,
             paths: (0..12).map(|n| format!("p{n:02}")).collect(),
-            archive: (0..5).map(|n| ArchiveRow { origin: format!("phases/{n}/SUMMARY.md"), text: "kept".into() }).collect(),
         };
         let text = field_phase(&Join::Unresolved { gap: Some(gap) }).unwrap();
         let lines: Vec<&str> = text.split('\n').collect();
@@ -307,17 +298,14 @@ mod tests {
         assert_eq!(lines[3], "  git records 12 path(s) touched by this commit:");
         assert_eq!(lines[4], "    p00");
         assert_eq!(lines[14], "    ... and 2 more");
-        assert_eq!(lines[15], "  .planning/ARCHIVE.md keeps 5 residue row(s) under that label, bound to the label and to no commit (D-04):");
-        assert_eq!(lines[16], "    phases/0/SUMMARY.md: kept");
-        assert_eq!(lines[19], "    ... and 2 more");
-        assert_eq!(lines.len(), 20);
+        assert_eq!(lines.len(), 15);
     }
 
     #[test]
     fn an_ambiguous_phase_line_lists_every_candidate() {
-        let matches = vec![brief("phases/3"), Brief { plan: String::new(), ..brief("_archive-v1/3") }];
+        let matches = vec![brief("phases/3"), Brief { plan: String::new(), ..brief("fedcba98:.planning/phases/3") }];
         assert_eq!(field_phase(&Join::Ambiguous { matches }).unwrap(),
-            "AMBIGUOUS - 2 records name this commit: phases/3 (plan 2, task -); _archive-v1/3 (plan -, task -)");
+            "AMBIGUOUS - 2 records name this commit: phases/3 (plan 2, task -); fedcba98:.planning/phases/3 (plan -, task -)");
     }
 
     #[test]

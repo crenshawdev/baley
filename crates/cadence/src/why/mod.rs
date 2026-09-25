@@ -100,19 +100,12 @@ pub struct Close {
     pub date: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct ArchiveRow {
-    pub origin: String,
-    pub text: String,
-}
-
 /// The named gap under an unresolved commit.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Gap {
     pub close: Option<Close>,
     pub scope: Option<String>,
     pub paths: Vec<String>,
-    pub archive: Vec<ArchiveRow>,
 }
 
 /// The one attach point every record edge hangs off.
