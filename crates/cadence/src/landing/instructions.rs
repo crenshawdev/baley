@@ -82,8 +82,8 @@ allowed-tools:
    deferred records and never files or changes tracker issues.
    For a bound release, land-tag rechecks the named manifest bytes/version and
    normalized version aliases on the pulled base before creating its tag.
-   Report a collision or changed release basis exactly and stop. Never invoke
-   release-bump.mjs or a raw tag command to bypass this refusal.
+   Report a collision or changed release basis exactly and stop. Never use a
+   raw tag command to bypass this refusal.
 8. Tag push remains a separate external step. Show the exact annotated tag object
    from its receipt and obtain its own land-authorize grant through steps 2-4;
    the deferred-member gate still applies. A local tag or merge confirmation is

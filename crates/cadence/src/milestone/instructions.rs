@@ -71,7 +71,7 @@ allowed-tools:
    tag. Version confirmation grants no publish permission. Leave the tag for
    cad-land's separately confirmed merge and ordered land-checkout, land-pull,
    land-tag step, which rechecks the release manifest and version collisions
-   on the pulled base. Never invoke release-bump.mjs or create a tag yourself.
+   on the pulled base. Never create a tag yourself.
 </process>
 "#).expect("compiled skill front matter")
     });

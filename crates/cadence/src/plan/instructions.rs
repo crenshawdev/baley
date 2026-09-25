@@ -87,7 +87,7 @@ no unresolved work, say so and end. Otherwise author the additional work at a ne
 previewed identity. A completed report remains prior history. Overwriting a
 completed plan could leave its report saying complete and hide new work;
 never replace a completed plan to make a gap visible. There is no gap label that
-grants replacement authority and no JavaScript allocation step in this flow.
+grants replacement authority in this flow.
 
 ## Author the plan and evidence map
 
