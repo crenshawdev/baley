@@ -16,13 +16,13 @@ use crate::chain::chain_hash;
 pub struct ProjectId(pub String);
 
 /// The command that recorded an event: the caller's fresh UUID (EVD-R6).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RequestId(pub String);
 
 /// A SHA-256 digest. Written as 64 lower-case hex digits wherever it is
 /// text; the chain formula uses its raw 32 bytes.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Hash(pub [u8; 32]);
 
 impl Hash {

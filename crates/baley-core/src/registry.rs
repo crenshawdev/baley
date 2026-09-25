@@ -11,7 +11,7 @@ use std::fmt;
 
 use serde_json::Value;
 
-use crate::event::{Event, ProjectId};
+use baley_store::{Event, EventSchema, ProjectId};
 
 /// Why an upcaster could not read a stored payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,12 +249,22 @@ impl Registry {
     }
 }
 
+/// The store fences a project holding an event this binary cannot read:
+/// an unknown type, version zero, or a version newer than the registered
+/// one. Older versions read through their upcasters.
+impl EventSchema for Registry {
+    fn reads(&self, type_name: &str, version: u32) -> bool {
+        self.current_version(type_name)
+            .is_some_and(|current| (1..=current).contains(&version))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::event::{Actor, Hash, RequestId};
+    use baley_store::{Actor, Hash, RequestId};
 
     fn event(project: &str, seq: u64, type_name: &str, type_version: u32, payload: Value) -> Event {
         Event {
@@ -505,5 +515,19 @@ mod tests {
         let registry = registry();
         assert_eq!(registry.current_version("phase.declared"), Some(3));
         assert_eq!(registry.current_version("phase.forgotten"), None);
+    }
+
+    // The schema the store fences with reads every version from 1 to the
+    // current one and nothing else, agreeing with `read`. Catches a check
+    // that admits a newer version, version zero or an unknown type, which
+    // would let this binary write to a project it cannot read.
+    #[test]
+    fn the_store_schema_reads_exactly_the_registered_versions() {
+        let registry = registry();
+        assert!(registry.reads("phase.declared", 1));
+        assert!(registry.reads("phase.declared", 3));
+        assert!(!registry.reads("phase.declared", 4));
+        assert!(!registry.reads("phase.declared", 0));
+        assert!(!registry.reads("phase.forgotten", 1));
     }
 }

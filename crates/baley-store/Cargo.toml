@@ -3,12 +3,20 @@ name = "baley-store"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-description = "The storage port of the Baley evidence ledger: the traits an engine adapter implements, and the conformance suite every adapter passes."
+description = "The storage port of the Baley evidence ledger: the event and its hash chain, the traits an engine adapter implements, and the conformance suite every adapter passes."
 repository = "https://github.com/crenshawdev/baley"
 rust-version = "1.98"
 publish = false
 
-# No dependencies yet. This crate must never learn which engine is behind it
-# (design 0001, EVD-R12); CI checks that baley-core cannot reach rusqlite
-# through it.
+# This crate must never learn which engine is behind it (design 0001,
+# EVD-R12); CI checks that baley-core cannot reach rusqlite through it.
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+# No `preserve_order`: canonical order is this crate's job (RFC 8785), so the
+# map behind `Value` may keep keys however it likes. `arbitrary_precision`
+# keeps each number's source text, so `-0` is the integer 0 and `1.0` is not
+# an integer. Stated here because the cadence crate turns it on for every
+# workspace build, and the canonical bytes must not depend on what else is
+# built alongside.
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+sha2 = "0.10"
