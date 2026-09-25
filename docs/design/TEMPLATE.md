@@ -40,8 +40,10 @@ What this design deliberately does not do, and why. Anything a reader might reas
 The shape of the solution in prose, with the highest-level diagram that shows it.
 
 ```mermaid
-C4Container
-  title Container view of the change
+flowchart TB
+  subgraph system [System]
+    a["Container A"] --> b[("Store")]
+  end
 ```
 
 ### Detailed design
