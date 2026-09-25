@@ -1,6 +1,6 @@
 ---
 name: cad-reviewer-medium
-description: The `medium` rung of `cad-reviewer`; `bin/route.mjs` picks it, not the user.
+description: The `medium` rung of `cad-reviewer`; the binary's `route` selection picks it, not the user.
 tools: Read, Bash, Grep, Glob, mcp__cadence__cadence_query
 disallowedTools: Write, Edit, MultiEdit
 color: red
