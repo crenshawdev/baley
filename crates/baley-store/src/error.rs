@@ -94,7 +94,8 @@ pub enum Refusal {
     /// new reference would point at a body that is gone, and storing it anew
     /// would bring the purged content back for the old references.
     PayloadTombstoned(Hash),
-    /// A cursor this store did not issue, or issued for another query.
+    /// A cursor not issued for this query, project, generation and view
+    /// version, or not a cursor at all.
     InvalidCursor,
     /// The event cannot be sealed: see the reason.
     InvalidEvent(String),

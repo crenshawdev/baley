@@ -114,6 +114,16 @@ CREATE TABLE view_gen (
   PRIMARY KEY (project_id, gen, view)
 ) STRICT, WITHOUT ROWID;
 
+-- Each view version's spec as the adapter renders it, so a spec changed
+-- without a new version is refused at open instead of read through the
+-- table the old spec made.
+CREATE TABLE view_catalog (
+  view TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  spec TEXT NOT NULL,
+  PRIMARY KEY (view, version)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE claim_lease (
   project_id TEXT NOT NULL REFERENCES project(project_id),
   kind TEXT NOT NULL,

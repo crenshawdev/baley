@@ -78,8 +78,10 @@ pub struct Document {
     pub body: Value,
 }
 
-/// A position in a result, issued by the store. Only the store that issued
-/// it reads it, and only for the same query.
+/// A position in a result, issued by the store. It is bound to the query,
+/// project, generation and view version that issued it, and refused under
+/// any other. It is not an access control: a caller can read or build one,
+/// and the store checks only that it fits the query it is used with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cursor(pub String);
 

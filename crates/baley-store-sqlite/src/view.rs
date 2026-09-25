@@ -1,13 +1,16 @@
 //! Views in the SQLite adapter (design 0001, The storage port; Views and
 //! projectors; Physical schema; EVD-R9).
 //!
-//! Each declared view is one table, `v_<view>`, with the project, the
-//! generation, one column per key field (`k_<field>`), one per index field
-//! (`i_<field>`, taken from the document body's top-level fields), the
-//! provenance and the document. Each declared index is a SQL index on the
-//! project, the generation, its fields in their orders, then the key, so
-//! every order is total. `find` pages through that index with seeks bounded
-//! in SQL, never a scan or a sort.
+//! Each declared view version is one table, `v_<view>_<version>`, with the
+//! project, the generation, one column per key field (`k_<field>`), one per
+//! index field (`i_<field>`), the provenance and the document. Key and index
+//! columns copy the document body's top-level fields. Each declared index is
+//! a SQL index, `v_<view>_<version>__<index>`, on the project, the
+//! generation, its fields in their orders, then the key, so every order is
+//! total. `view_catalog` keeps each version's spec as text, so a spec changed
+//! without a new version is refused instead of read through the old table.
+//! `find` pages through its index with seeks bounded in SQL, never a scan or
+//! a sort.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,11 +19,13 @@ use baley_store::{
     ProjectId, Refusal, StoreError, ViewSpec, Views,
 };
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{Connection, OptionalExtension, Row, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 
 use crate::store::{SqliteStore, sql};
 
-/// The longest view, index or field name accepted.
+/// The longest view, index or field name accepted. The longest physical
+/// name, an index's, is then 2 + 48 + 1 + 10 + 2 + 48 characters; SQLite
+/// sets no limit of its own on identifiers.
 const MAX_NAME: usize = 48;
 
 /// The declared views, checked once when the store opens.
@@ -29,7 +34,11 @@ pub(crate) struct ViewSet(BTreeMap<String, ViewTable>);
 /// One checked view and the SQL names it becomes.
 pub(crate) struct ViewTable {
     spec: ViewSpec,
+    /// `v_<view>_<version>`. The version is always the last run of digits,
+    /// so no two (view, version) pairs share a table.
     table: String,
+    /// The spec as `view_catalog` stores it.
+    rendered: String,
     /// Each distinct index field once, in first-declared order.
     index_columns: Vec<(String, FieldKind)>,
 }
@@ -92,15 +101,35 @@ impl ViewSet {
         Ok(Self(views))
     }
 
-    /// Whether no view is declared, so open has nothing to create.
+    /// Whether no view is declared, so open has nothing to check.
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// Creates each view's table and indexes where missing.
+    /// Whether any view still needs its catalog row, table or an index.
+    /// Refuses a version stored with another spec. Reads only, so open can
+    /// ask on the read connection before it takes the writer queue.
+    pub(crate) fn pending(&self, conn: &Connection) -> Result<bool, StoreError> {
+        let mut pending = false;
+        for table in self.0.values() {
+            pending |= table.pending(conn)?;
+        }
+        Ok(pending)
+    }
+
+    /// Checks again inside the write transaction, then creates whatever is
+    /// still missing.
     pub(crate) fn create(&self, tx: &rusqlite::Transaction<'_>) -> Result<(), StoreError> {
         for table in self.0.values() {
+            if !table.pending(tx)? {
+                continue;
+            }
             tx.execute_batch(&table.create_sql()).map_err(sql)?;
+            tx.execute(
+                "INSERT OR IGNORE INTO view_catalog (view, version, spec) VALUES (?1, ?2, ?3)",
+                params![table.spec.name, table.spec.version, table.rendered],
+            )
+            .map_err(sql)?;
         }
         Ok(())
     }
@@ -173,9 +202,48 @@ impl ViewTable {
         }
         Ok(Self {
             spec: spec.clone(),
-            table: format!("v_{}", spec.name),
+            table: format!("v_{}_{}", spec.name, spec.version),
+            rendered: render(spec),
             index_columns,
         })
+    }
+
+    /// Whether this version's catalog row, table or an index is missing.
+    /// A catalog row with another spec is refused: the spec changed without
+    /// a new version, and the stored table no longer fits it.
+    fn pending(&self, conn: &Connection) -> Result<bool, StoreError> {
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT spec FROM view_catalog WHERE view = ?1 AND version = ?2",
+                params![self.spec.name, self.spec.version],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql)?;
+        match stored {
+            None => return Ok(true),
+            Some(stored) if stored != self.rendered => {
+                return Err(malformed(
+                    &self.spec.name,
+                    format!(
+                        "version {} is stored with another spec; a changed spec needs a new version",
+                        self.spec.version
+                    ),
+                ));
+            }
+            Some(_) => {}
+        }
+        let mut names = vec![self.table.clone()];
+        names.extend(self.spec.indexes.iter().map(|index| self.index_name(index)));
+        let placeholders = vec!["?"; names.len()].join(", ");
+        let present: i64 = conn
+            .query_row(
+                &format!("SELECT count(*) FROM sqlite_schema WHERE name IN ({placeholders})"),
+                params_from_iter(&names),
+                |row| row.get(0),
+            )
+            .map_err(sql)?;
+        Ok(usize::try_from(present) != Ok(names.len()))
     }
 
     /// The table and its indexes, each created only if missing. Every name
@@ -225,8 +293,8 @@ impl ViewTable {
         sql
     }
 
-    /// `v_<view>__<index>`. Names hold no double underscore, so no two
-    /// (view, index) pairs share one.
+    /// `v_<view>_<version>__<index>`. Names hold no double underscore, so
+    /// the first one ends the table's part and no two indexes share a name.
     fn index_name(&self, index: &IndexSpec) -> String {
         format!("{}__{}", self.table, index.name)
     }
@@ -236,6 +304,12 @@ impl ViewTable {
             .key
             .iter()
             .map(|field| format!("k_{}", field.name))
+    }
+
+    fn key_condition(&self) -> String {
+        self.key_columns()
+            .map(|column| format!(" AND {column} = ?"))
+            .collect()
     }
 
     fn index(&self, name: &str) -> Result<&IndexSpec, StoreError> {
@@ -382,8 +456,31 @@ impl ViewTable {
     }
 }
 
-/// The rule for every declared name: a lowercase ASCII letter, then lowercase letters and
-/// digits in runs joined by single underscores.
+/// The spec as `view_catalog` keeps it: one line per part, every field with
+/// its kind and, in an index, its order. Names are plain identifiers, so
+/// the text needs no escaping and one spec has exactly one rendering.
+fn render(spec: &ViewSpec) -> String {
+    let mut text = format!("view {} version {}\nkey", spec.name, spec.version);
+    for field in &spec.key {
+        text.push_str(&format!(" {} {}", field.name, kind_name(field.kind)));
+    }
+    for index in &spec.indexes {
+        text.push_str(&format!("\nindex {}", index.name));
+        for field in &index.fields {
+            text.push_str(&format!(
+                " {} {} {}",
+                field.name,
+                kind_name(field.kind),
+                direction(field.order)
+            ));
+        }
+    }
+    text.push_str(&format!("\npage_bound {}\n", spec.page_bound));
+    text
+}
+
+/// The rule for every declared name: a lowercase ASCII letter, then
+/// lowercase letters and digits in runs joined by single underscores.
 fn safe_identifier(name: &str) -> bool {
     name.len() <= MAX_NAME
         && name.starts_with(|first: char| first.is_ascii_lowercase())
@@ -423,6 +520,13 @@ fn sql_type(kind: FieldKind) -> &'static str {
     match kind {
         FieldKind::Text => "TEXT",
         FieldKind::Integer => "INTEGER",
+    }
+}
+
+fn kind_name(kind: FieldKind) -> &'static str {
+    match kind {
+        FieldKind::Text => "text",
+        FieldKind::Integer => "integer",
     }
 }
 
@@ -481,10 +585,11 @@ fn live_generation(conn: &Connection, project: &ProjectId) -> Result<i64, StoreE
     .ok_or_else(|| StoreError::Refused(Refusal::UnknownProject(project.clone())))
 }
 
-/// Puts or deletes one document in the project's live generation, stamped
-/// with the event that produced it and the view's projector version. Index
-/// columns come from the body's top-level fields; a body missing one, or
-/// holding the wrong kind, is refused, so every index order stays total.
+/// Puts or deletes one document in `generation`, stamped with the event
+/// that produced it and the view's projector version. A put's body must
+/// hold every key field equal to `key` and every index field, each of its
+/// declared kind; otherwise nothing is written, so the columns always agree
+/// with the body and every index order stays total.
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "the projectors of task 7 are its first caller")
@@ -493,6 +598,7 @@ pub(crate) fn write_change(
     tx: &rusqlite::Transaction<'_>,
     view: &ViewTable,
     project: &ProjectId,
+    generation: i64,
     change: &Change,
     produced_seq: u64,
 ) -> Result<(), StoreError> {
@@ -501,27 +607,36 @@ pub(crate) fn write_change(
         Change::Delete { key } => (key, None),
     };
     let key_values = view.key_values(key)?;
-    let generation = live_generation(tx, project)?;
     let mut params = vec![
         SqlValue::Text(project.0.clone()),
         SqlValue::Integer(generation),
     ];
     params.extend(key_values);
-    let key_condition: String = view
-        .key_columns()
-        .map(|column| format!(" AND {column} = ?"))
-        .collect();
     let Some(body) = body else {
         tx.execute(
             &format!(
-                "DELETE FROM {} WHERE project_id = ? AND generation = ?{key_condition}",
-                view.table
+                "DELETE FROM {} WHERE project_id = ? AND generation = ?{}",
+                view.table,
+                view.key_condition()
             ),
             params_from_iter(params),
         )
         .map_err(sql)?;
         return Ok(());
     };
+    for (field, value) in view.spec.key.iter().zip(&key.0) {
+        let held = body.get(field.name.as_str());
+        let equal = match value {
+            KeyValue::Text(text) => held.and_then(|held| held.as_str()) == Some(text.as_str()),
+            KeyValue::Integer(number) => held.and_then(|held| held.as_i64()) == Some(*number),
+        };
+        if !equal {
+            return Err(malformed(
+                &view.spec.name,
+                format!("the document's {} is missing or not its key", field.name),
+            ));
+        }
+    }
     for (name, kind) in &view.index_columns {
         let field = body.get(name.as_str());
         let value = match kind {
@@ -565,14 +680,126 @@ pub(crate) fn write_change(
     Ok(())
 }
 
-/// The text before a cursor's position: the query it belongs to. Every
-/// item says its own length, and the equality values are counted, so two
-/// different queries never share it.
-fn cursor_identity(project: &ProjectId, view: &str, query: &IndexQuery) -> String {
-    let mut text = String::from("c1.");
-    for part in [&project.0, view, &query.index] {
-        encode(&mut text, &KeyValue::Text(part.to_owned()));
+/// `write_change` into the project's live generation, for ordinary writes.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the projectors of task 7 are its first caller")
+)]
+pub(crate) fn write_live(
+    tx: &rusqlite::Transaction<'_>,
+    view: &ViewTable,
+    project: &ProjectId,
+    change: &Change,
+    produced_seq: u64,
+) -> Result<(), StoreError> {
+    let generation = live_generation(tx, project)?;
+    write_change(tx, view, project, generation, change, produced_seq)
+}
+
+/// The document at `key` in the project's live generation. Takes any
+/// connection, so a write transaction reads its own writes.
+pub(crate) fn get_document(
+    conn: &Connection,
+    view: &ViewTable,
+    project: &ProjectId,
+    key: &DocKey,
+) -> Result<Option<Document>, StoreError> {
+    let key_values = view.key_values(key)?;
+    let generation = live_generation(conn, project)?;
+    let mut params = vec![
+        SqlValue::Text(project.0.clone()),
+        SqlValue::Integer(generation),
+    ];
+    params.extend(key_values);
+    conn.query_row(
+        &format!(
+            "SELECT produced_seq, projector_version, doc_json FROM {}
+              WHERE project_id = ? AND generation = ?{}",
+            view.table,
+            view.key_condition()
+        ),
+        params_from_iter(params),
+        |row| document(row, key.clone()),
+    )
+    .optional()
+    .map_err(sql)
+}
+
+/// A page of at most `min(limit, page_bound)` documents by a declared
+/// index, in its order, with a cursor when more follow. A cursor issued
+/// under another generation or view version is refused. A limit of zero
+/// reads nothing and gives no cursor. Takes any connection, so a write
+/// transaction reads its own writes.
+pub(crate) fn find_documents(
+    conn: &Connection,
+    view: &ViewTable,
+    project: &ProjectId,
+    query: &IndexQuery,
+) -> Result<Page<Document>, StoreError> {
+    let index = view.index(&query.index)?;
+    let equals = view.equals_values(index, &query.equals)?;
+    let order = view.order_after(index, query.equals.len());
+    let generation = live_generation(conn, project)?;
+    let identity = cursor_identity(project, view, generation, query);
+    let after = match &query.page.after {
+        Some(cursor) => {
+            let kinds: Vec<FieldKind> = order.iter().map(|column| column.kind).collect();
+            Some(read_cursor(&identity, cursor, &kinds)?)
+        }
+        None => None,
+    };
+    let size = query.page.limit.min(view.spec.page_bound) as usize;
+    if size == 0 {
+        return Ok(Page {
+            items: Vec::new(),
+            next: None,
+        });
     }
+    // One row past the page says whether another page follows.
+    let wanted = size + 1;
+    let mut rows: Vec<Found> = Vec::with_capacity(wanted);
+    for seek in view.seeks(index, query.equals.len(), after.as_deref()) {
+        let params = seek.params(project, generation, &equals, wanted - rows.len());
+        let mut statement = conn.prepare(&seek.sql).map_err(sql)?;
+        let found = statement
+            .query_map(params_from_iter(params), |row| view.found(row, &order))
+            .map_err(sql)?;
+        for row in found {
+            rows.push(row.map_err(sql)?);
+        }
+        if rows.len() == wanted {
+            break;
+        }
+    }
+    let next = if rows.len() > size {
+        rows.truncate(size);
+        rows.last()
+            .map(|last| issue_cursor(&identity, &last.position))
+    } else {
+        None
+    };
+    Ok(Page {
+        items: rows.into_iter().map(|row| row.document).collect(),
+        next,
+    })
+}
+
+/// The text before a cursor's position: the query it belongs to, and the
+/// view version and generation it was read under. Every item says its own
+/// length, and the equality values are counted, so two different queries
+/// never share it.
+fn cursor_identity(
+    project: &ProjectId,
+    view: &ViewTable,
+    generation: i64,
+    query: &IndexQuery,
+) -> String {
+    let mut text = String::from("c1.");
+    encode(&mut text, &KeyValue::Text(project.0.clone()));
+    encode(&mut text, &KeyValue::Text(view.spec.name.clone()));
+    encode(&mut text, &KeyValue::Integer(i64::from(view.spec.version)));
+    encode(&mut text, &KeyValue::Integer(generation));
+    encode(&mut text, &KeyValue::Text(query.index.clone()));
     // A vector's length always fits in i64 on the platforms Rust supports.
     encode(&mut text, &KeyValue::Integer(query.equals.len() as i64));
     for value in &query.equals {
@@ -646,35 +873,11 @@ impl Views for SqliteStore {
         key: &DocKey,
     ) -> Result<Option<Document>, StoreError> {
         let table = self.views().table(view)?;
-        let key_values = table.key_values(key)?;
-        self.snapshot(|conn| {
-            let generation = live_generation(conn, project)?;
-            let mut params = vec![
-                SqlValue::Text(project.0.clone()),
-                SqlValue::Integer(generation),
-            ];
-            params.extend(key_values);
-            let key_condition: String = table
-                .key_columns()
-                .map(|column| format!(" AND {column} = ?"))
-                .collect();
-            conn.query_row(
-                &format!(
-                    "SELECT produced_seq, projector_version, doc_json FROM {}
-                      WHERE project_id = ? AND generation = ?{key_condition}",
-                    table.table
-                ),
-                params_from_iter(params),
-                |row| document(row, key.clone()),
-            )
-            .optional()
-            .map_err(sql)
-        })
+        self.snapshot(|conn| get_document(conn, table, project, key))
     }
 
-    /// A page of at most `min(limit, page_bound)` documents by a declared
-    /// index, in its order, with a cursor when more follow. A limit of zero
-    /// reads nothing and gives no cursor.
+    /// A page by a declared index, read in one snapshot; see
+    /// `find_documents`.
     fn find(
         &self,
         project: &ProjectId,
@@ -682,55 +885,7 @@ impl Views for SqliteStore {
         query: &IndexQuery,
     ) -> Result<Page<Document>, StoreError> {
         let table = self.views().table(view)?;
-        let index = table.index(&query.index)?;
-        let equals = table.equals_values(index, &query.equals)?;
-        let order = table.order_after(index, query.equals.len());
-        let identity = cursor_identity(project, view, query);
-        let after = match &query.page.after {
-            Some(cursor) => {
-                let kinds: Vec<FieldKind> = order.iter().map(|column| column.kind).collect();
-                Some(read_cursor(&identity, cursor, &kinds)?)
-            }
-            None => None,
-        };
-        let size = query.page.limit.min(table.spec.page_bound) as usize;
-        if size == 0 {
-            return Ok(Page {
-                items: Vec::new(),
-                next: None,
-            });
-        }
-        let seeks = table.seeks(index, query.equals.len(), after.as_deref());
-        self.snapshot(|conn| {
-            let generation = live_generation(conn, project)?;
-            // One row past the page says whether another page follows.
-            let wanted = size + 1;
-            let mut rows: Vec<Found> = Vec::with_capacity(wanted);
-            for seek in &seeks {
-                let params = seek.params(project, generation, &equals, wanted - rows.len());
-                let mut statement = conn.prepare(&seek.sql).map_err(sql)?;
-                let found = statement
-                    .query_map(params_from_iter(params), |row| table.found(row, &order))
-                    .map_err(sql)?;
-                for row in found {
-                    rows.push(row.map_err(sql)?);
-                }
-                if rows.len() == wanted {
-                    break;
-                }
-            }
-            let next = if rows.len() > size {
-                rows.truncate(size);
-                rows.last()
-                    .map(|last| issue_cursor(&identity, &last.position))
-            } else {
-                None
-            };
-            Ok(Page {
-                items: rows.into_iter().map(|row| row.document).collect(),
-                next,
-            })
-        })
+        self.snapshot(|conn| find_documents(conn, table, project, query))
     }
 }
 
@@ -783,13 +938,17 @@ mod tests {
         ProjectId("p1".into())
     }
 
-    /// A store declaring `item`, holding the project `p1`.
-    fn open(home: &Path) -> SqliteStore {
+    fn open_with(home: &Path, views: Vec<ViewSpec>) -> Result<SqliteStore, StoreError> {
         let options = Options {
-            views: vec![item_view()],
+            views,
             ..Options::default()
         };
-        let store = SqliteStore::open(home, AT, options).expect("open");
+        SqliteStore::open(home, AT, options)
+    }
+
+    /// A store declaring `item`, holding the project `p1`.
+    fn open(home: &Path) -> SqliteStore {
+        let store = open_with(home, vec![item_view()]).expect("open");
         store
             .write(|tx| {
                 tx.execute(
@@ -803,6 +962,11 @@ mod tests {
         store
     }
 
+    /// A connection of the test's own, beside the store's.
+    fn raw(home: &Path) -> Connection {
+        Connection::open(home.join("baley.db")).expect("raw connection")
+    }
+
     fn key(id: i64) -> DocKey {
         DocKey(vec![KeyValue::Integer(id)])
     }
@@ -811,16 +975,32 @@ mod tests {
         format!(r#"{{"id": {id}, "state": "{state}", "rank": {rank}, "owner": "{owner}"}}"#)
     }
 
+    fn item(id: i64, state: &str, rank: i64, owner: &str) -> Change {
+        Change::Put {
+            key: key(id),
+            body: item_json(id, state, rank, owner).parse().expect("json"),
+        }
+    }
+
     fn apply(store: &SqliteStore, change: &Change, seq: u64) -> Result<(), StoreError> {
-        store.write(|tx| write_change(tx, store.views().table("item")?, &project(), change, seq))
+        store.write(|tx| write_live(tx, store.views().table("item")?, &project(), change, seq))
     }
 
     fn put(store: &SqliteStore, id: i64, state: &str, rank: i64, owner: &str, seq: u64) {
-        let change = Change::Put {
-            key: key(id),
-            body: item_json(id, state, rank, owner).parse().expect("json"),
-        };
-        apply(store, &change, seq).expect("put");
+        apply(store, &item(id, state, rank, owner), seq).expect("put");
+    }
+
+    fn flip_to_generation_1(store: &SqliteStore) {
+        store
+            .write(|tx| {
+                tx.execute(
+                    "INSERT INTO project_gen (project_id, live_gen) VALUES ('p1', 1)",
+                    [],
+                )
+                .map_err(sql)?;
+                Ok(())
+            })
+            .expect("flip");
     }
 
     /// Seven items with ties on (state, rank), so only the key orders them.
@@ -879,6 +1059,30 @@ mod tests {
         KeyValue::Text(value.into())
     }
 
+    fn view_names(conn: &Connection) -> Vec<String> {
+        let mut statement = conn
+            .prepare(
+                "SELECT name FROM sqlite_schema WHERE name LIKE 'v\\_%' ESCAPE '\\' ORDER BY name",
+            )
+            .expect("prepare");
+        statement
+            .query_map([], |row| row.get(0))
+            .expect("names")
+            .collect::<rusqlite::Result<_>>()
+            .expect("names")
+    }
+
+    fn catalog(conn: &Connection) -> Vec<(String, i64)> {
+        let mut statement = conn
+            .prepare("SELECT view, version FROM view_catalog ORDER BY view, version")
+            .expect("prepare");
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("catalog")
+            .collect::<rusqlite::Result<_>>()
+            .expect("catalog")
+    }
+
     // Pages of two follow state ascending, rank descending, then id, and
     // each cursor picks up exactly where its page ended, across the ties on
     // rank 5 and 7. Catches a cursor keyed on the non-unique index fields,
@@ -891,6 +1095,19 @@ mod tests {
         assert_eq!(
             pages(&store, "by_state_rank", &[], 2),
             [vec![4, 6], vec![2, 7], vec![1, 3], vec![5]]
+        );
+    }
+
+    // Four items owned by ann read in two full pages of two, and the second
+    // says no page follows. Catches a cursor issued whenever a page is
+    // full, which hands the caller an empty last page.
+    #[test]
+    fn a_last_full_page_has_no_next() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = stocked(home.path());
+        assert_eq!(
+            pages(&store, "by_owner", &[text("ann")], 2),
+            [vec![1, 4], vec![5, 7]]
         );
     }
 
@@ -954,48 +1171,93 @@ mod tests {
             .collect()
     }
 
-    // Every statement `find` can run, on each declared index, from the
-    // start and after a cursor, with each length of equality prefix, is
-    // planned by SQLite as one search of that index, with no scan and no
-    // temporary sort. Catches a page read by scanning, or sorted in memory
-    // after reading, and a continuation that filters instead of seeking.
+    // With the fixture analyzed, every statement `find` can run, on each
+    // declared index, with each length of equality prefix, from the start
+    // and after a cursor, plans as exactly one search of that index that
+    // uses the whole equality prefix and, after a cursor, that seek's one
+    // range. The expected plans are written out by hand. Catches a scan, a
+    // temporary sort, a prefix the index does not use, and a continuation
+    // that filters rows instead of seeking past them.
     #[test]
-    fn every_find_statement_searches_its_index_without_a_scan_or_sort() {
+    fn every_find_statement_is_one_search_of_its_index() {
         let home = tempfile::tempdir().expect("temp dir");
         let store = stocked(home.path());
+        store
+            .write(|tx| tx.execute_batch("ANALYZE").map_err(sql))
+            .expect("analyze");
         let table = store.views().table("item").expect("item");
-        let mut checked = 0;
-        for index in &table.spec.indexes {
-            let expected = format!("SEARCH v_item USING INDEX v_item__{} (", index.name);
-            for fixed in 0..=index.fields.len() {
-                let position = some_position(table, index, fixed);
-                for after in [None, Some(position.as_slice())] {
-                    for seek in table.seeks(index, fixed, after) {
-                        let params = seek.params(&project(), 0, &some_equals(index, fixed), 4);
-                        let plan: Vec<String> = store
-                            .snapshot(|conn| {
-                                let mut statement = conn
-                                    .prepare(&format!("EXPLAIN QUERY PLAN {}", seek.sql))
-                                    .map_err(sql)?;
-                                statement
-                                    .query_map(params_from_iter(params), |row| row.get(3))
-                                    .map_err(sql)?
-                                    .collect::<rusqlite::Result<_>>()
-                                    .map_err(sql)
-                            })
-                            .expect("plan");
-                        assert!(
-                            plan.len() == 1 && plan[0].starts_with(&expected),
-                            "{}: {plan:?}",
-                            seek.sql
-                        );
-                        checked += 1;
-                    }
-                }
-            }
+        let search = |index: &str, terms: &str| {
+            format!(
+                "SEARCH v_item_3 USING INDEX v_item_3__{index} (project_id=? AND generation=?{terms})"
+            )
+        };
+        let cases: [(&str, usize, bool, &[&str]); 10] = [
+            ("by_state_rank", 0, false, &[""]),
+            (
+                "by_state_rank",
+                0,
+                true,
+                &[
+                    " AND i_state=? AND i_rank=? AND k_id>?",
+                    " AND i_state=? AND i_rank<?",
+                    " AND i_state>?",
+                ],
+            ),
+            ("by_state_rank", 1, false, &[" AND i_state=?"]),
+            (
+                "by_state_rank",
+                1,
+                true,
+                &[
+                    " AND i_state=? AND i_rank=? AND k_id>?",
+                    " AND i_state=? AND i_rank<?",
+                ],
+            ),
+            ("by_state_rank", 2, false, &[" AND i_state=? AND i_rank=?"]),
+            (
+                "by_state_rank",
+                2,
+                true,
+                &[" AND i_state=? AND i_rank=? AND k_id>?"],
+            ),
+            ("by_owner", 0, false, &[""]),
+            (
+                "by_owner",
+                0,
+                true,
+                &[" AND i_owner=? AND k_id>?", " AND i_owner>?"],
+            ),
+            ("by_owner", 1, false, &[" AND i_owner=?"]),
+            ("by_owner", 1, true, &[" AND i_owner=? AND k_id>?"]),
+        ];
+        for (name, fixed, after, expected) in cases {
+            let index = table.index(name).expect("index");
+            let position = some_position(table, index, fixed);
+            let seeks = table.seeks(index, fixed, after.then_some(position.as_slice()));
+            let plans: Vec<Vec<String>> = seeks
+                .iter()
+                .map(|seek| {
+                    let params = seek.params(&project(), 0, &some_equals(index, fixed), 4);
+                    store
+                        .snapshot(|conn| {
+                            let mut statement = conn
+                                .prepare(&format!("EXPLAIN QUERY PLAN {}", seek.sql))
+                                .map_err(sql)?;
+                            statement
+                                .query_map(params_from_iter(params), |row| row.get(3))
+                                .map_err(sql)?
+                                .collect::<rusqlite::Result<_>>()
+                                .map_err(sql)
+                        })
+                        .expect("plan")
+                })
+                .collect();
+            let expected: Vec<Vec<String>> = expected
+                .iter()
+                .map(|terms| vec![search(name, terms)])
+                .collect();
+            assert_eq!(plans, expected, "{name}, {fixed} fixed, after: {after}");
         }
-        // by_state_rank: 1 + 3, 1 + 2, 1 + 1; by_owner: 1 + 2, 1 + 1.
-        assert_eq!(checked, 14);
     }
 
     // Each statement stops at the limit it is given, inside SQLite: run on
@@ -1117,6 +1379,16 @@ mod tests {
     fn a_cursor_this_query_did_not_issue_is_refused() {
         let home = tempfile::tempdir().expect("temp dir");
         let store = stocked(home.path());
+        store
+            .write(|tx| {
+                tx.execute(
+                    "INSERT INTO project (project_id, name, created_at) VALUES ('p2', 'two', ?1)",
+                    [AT],
+                )
+                .map_err(sql)?;
+                Ok(())
+            })
+            .expect("project");
         let open_items = [text("open")];
         let cursor = store
             .find(
@@ -1129,7 +1401,6 @@ mod tests {
             .expect("a next page");
         let mut altered = cursor.clone();
         altered.0.pop();
-        let other_project = ProjectId("p2".into());
         let refused = Err(StoreError::Refused(Refusal::InvalidCursor));
         for (in_project, other) in [
             (
@@ -1145,7 +1416,7 @@ mod tests {
                 query("by_state_rank", &open_items, 2, Some(altered)),
             ),
             (
-                other_project,
+                ProjectId("p2".into()),
                 query("by_state_rank", &open_items, 2, Some(cursor.clone())),
             ),
         ] {
@@ -1157,22 +1428,68 @@ mod tests {
         }
     }
 
-    // `get` returns the document last put at the key, with the sequence
-    // that put it and the view's projector version. Catches a put that
-    // inserts beside the old row, and provenance not stored or not read.
+    // A cursor issued while generation 0 was live is refused once the
+    // project reads generation 1. Catches a cursor that carries only a
+    // position, which would page the new generation from the old one's
+    // place.
     #[test]
-    fn get_returns_the_last_put_with_its_provenance() {
+    fn a_cursor_from_another_generation_is_refused() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = stocked(home.path());
+        let cursor = store
+            .find(&project(), "item", &query("by_state_rank", &[], 2, None))
+            .expect("find")
+            .next
+            .expect("a next page");
+        flip_to_generation_1(&store);
+        assert_eq!(
+            store.find(
+                &project(),
+                "item",
+                &query("by_state_rank", &[], 2, Some(cursor))
+            ),
+            Err(StoreError::Refused(Refusal::InvalidCursor))
+        );
+    }
+
+    // A second put at the same key replaces the first: `get` returns the
+    // second body and sequence, and the view holds one row. Catches a put
+    // that inserts beside the old row or keeps the old body.
+    #[test]
+    fn a_second_put_replaces_the_first() {
         let home = tempfile::tempdir().expect("temp dir");
         let store = open(home.path());
         put(&store, 1, "open", 5, "ann", 11);
-        put(&store, 1, "done", 8, "ann", 20);
-        let expected = Document {
-            key: key(1),
-            produced_seq: 20,
-            projector_version: 3,
-            body: item_json(1, "done", 8, "ann").parse().expect("json"),
-        };
-        assert_eq!(store.get(&project(), "item", &key(1)), Ok(Some(expected)));
+        put(&store, 1, "done", 8, "bob", 20);
+        let got = store
+            .get(&project(), "item", &key(1))
+            .expect("get")
+            .expect("present");
+        // Compared parsed: the text's key order depends on serde_json's
+        // features, which the workspace build unifies.
+        let second = r#"{"state": "done", "id": 1, "owner": "bob", "rank": 8}"#
+            .parse()
+            .expect("json");
+        assert_eq!((got.produced_seq, got.body), (20, second));
+        let rows: i64 = raw(home.path())
+            .query_row("SELECT count(*) FROM v_item_3", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(rows, 1);
+    }
+
+    // `get` returns the sequence of the event that put the document and
+    // the view's projector version, 3 in the fixture spec. Catches
+    // provenance not stored, or not read back.
+    #[test]
+    fn get_returns_the_documents_provenance() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        put(&store, 9, "open", 1, "ann", 42);
+        let got = store
+            .get(&project(), "item", &key(9))
+            .expect("get")
+            .expect("present");
+        assert_eq!((got.produced_seq, got.projector_version), (42, 3));
     }
 
     // Catches a delete that misses the row, or removes the wrong one.
@@ -1198,16 +1515,7 @@ mod tests {
         let home = tempfile::tempdir().expect("temp dir");
         let store = open(home.path());
         put(&store, 1, "open", 5, "ann", 11);
-        store
-            .write(|tx| {
-                tx.execute(
-                    "INSERT INTO project_gen (project_id, live_gen) VALUES ('p1', 1)",
-                    [],
-                )
-                .map_err(sql)?;
-                Ok(())
-            })
-            .expect("flip");
+        flip_to_generation_1(&store);
         put(&store, 2, "open", 5, "ann", 12);
         assert_eq!(store.get(&project(), "item", &key(1)), Ok(None));
         assert!(matches!(
@@ -1217,13 +1525,39 @@ mod tests {
         let generations: Vec<(i64, i64)> = store
             .read(|conn| {
                 let mut statement =
-                    conn.prepare("SELECT k_id, generation FROM v_item ORDER BY k_id")?;
+                    conn.prepare("SELECT k_id, generation FROM v_item_3 ORDER BY k_id")?;
                 statement
                     .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
                     .collect()
             })
             .expect("rows");
         assert_eq!(generations, [(1, 0), (2, 1)]);
+    }
+
+    // Writes into generation 1 while generation 0 is live, a changed item
+    // and a new one, leave the live reads as they were. Catches a write
+    // that ignores the generation it is given and lands in the live one.
+    #[test]
+    fn a_write_to_another_generation_leaves_live_reads_unchanged() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        put(&store, 1, "open", 5, "ann", 11);
+        store
+            .write(|tx| {
+                let table = store.views().table("item")?;
+                write_change(tx, table, &project(), 1, &item(1, "done", 8, "bob"), 20)?;
+                write_change(tx, table, &project(), 1, &item(2, "open", 5, "ann"), 21)
+            })
+            .expect("write generation 1");
+        let live = store
+            .get(&project(), "item", &key(1))
+            .expect("get")
+            .expect("present");
+        let first = r#"{"state": "open", "id": 1, "owner": "ann", "rank": 5}"#
+            .parse()
+            .expect("json");
+        assert_eq!((live.produced_seq, live.body), (11, first));
+        assert_eq!(store.get(&project(), "item", &key(2)), Ok(None));
     }
 
     // Catches a missing project read as an empty view.
@@ -1264,6 +1598,34 @@ mod tests {
         assert_eq!(store.get(&project(), "item", &key(1)), Ok(None));
     }
 
+    // A body whose id differs from its key, lacks the id, or holds it as
+    // text is refused and writes nothing. Catches a key column that
+    // disagrees with the document it indexes.
+    #[test]
+    fn a_document_whose_key_fields_differ_from_its_key_is_refused() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        for body in [
+            r#"{"id": 2, "state": "open", "rank": 5, "owner": "ann"}"#,
+            r#"{"state": "open", "rank": 5, "owner": "ann"}"#,
+            r#"{"id": "1", "state": "open", "rank": 5, "owner": "ann"}"#,
+        ] {
+            let change = Change::Put {
+                key: key(1),
+                body: body.parse().expect("json"),
+            };
+            assert!(
+                matches!(
+                    apply(&store, &change, 11),
+                    Err(StoreError::Refused(Refusal::MalformedKey { .. }))
+                ),
+                "{body}"
+            );
+        }
+        assert_eq!(store.get(&project(), "item", &key(1)), Ok(None));
+        assert_eq!(store.get(&project(), "item", &key(2)), Ok(None));
+    }
+
     // Names become SQL identifiers unquoted, so only plain lowercase runs
     // joined by single underscores pass, in every place a name appears.
     // Catches SQL text reaching a statement through a name, and two
@@ -1301,27 +1663,144 @@ mod tests {
         }
     }
 
+    // Changing any one declared part of the spec changes its catalog text.
+    // Catches a rendering that leaves out a field, so a spec changed there
+    // without a new version would pass the catalog check.
+    #[test]
+    fn the_catalog_text_changes_with_every_part_of_the_spec() {
+        let base = render(&item_view());
+        let mut variants: Vec<(&str, ViewSpec)> = Vec::new();
+        let mut changed = |what, change: fn(&mut ViewSpec)| {
+            let mut spec = item_view();
+            change(&mut spec);
+            variants.push((what, spec));
+        };
+        changed("view name", |spec| spec.name = "thing".into());
+        changed("version", |spec| spec.version = 4);
+        changed("key name", |spec| spec.key[0].name = "number".into());
+        changed("key kind", |spec| spec.key[0].kind = FieldKind::Text);
+        changed("key added", |spec| {
+            spec.key.push(FieldSpec {
+                name: "part".into(),
+                kind: FieldKind::Integer,
+            })
+        });
+        changed("index name", |spec| spec.indexes[1].name = "by_who".into());
+        changed("index removed", |spec| {
+            spec.indexes.pop();
+        });
+        changed("index field name", |spec| {
+            spec.indexes[1].fields[0].name = "who".into()
+        });
+        changed("index field kind", |spec| {
+            spec.indexes[0].fields[1].kind = FieldKind::Text
+        });
+        changed("index field order", |spec| {
+            spec.indexes[0].fields[1].order = Order::Ascending
+        });
+        changed("index field added", |spec| {
+            spec.indexes[1]
+                .fields
+                .push(index_field("rank", FieldKind::Integer, Order::Ascending))
+        });
+        changed("page bound", |spec| spec.page_bound = 4);
+        for (what, spec) in variants {
+            assert_ne!(render(&spec), base, "{what}");
+        }
+    }
+
+    // Reopening with the same version but another page bound is refused,
+    // and the catalog keeps the one version it had. Catches a changed spec
+    // read through the table the old spec made.
+    #[test]
+    fn a_changed_spec_under_the_same_version_is_refused() {
+        let home = tempfile::tempdir().expect("temp dir");
+        drop(open_with(home.path(), vec![item_view()]).expect("open"));
+        let changed = ViewSpec {
+            page_bound: 4,
+            ..item_view()
+        };
+        assert!(matches!(
+            open_with(home.path(), vec![changed]),
+            Err(StoreError::Refused(Refusal::MalformedKey { view, .. })) if view == "item"
+        ));
+        assert_eq!(catalog(&raw(home.path())), [("item".into(), 3)]);
+    }
+
+    // A new version of a view gets its own table and indexes beside the
+    // old version's, and its own catalog row. Catches a new version that
+    // reuses the table the old spec made.
+    #[test]
+    fn a_new_version_gets_its_own_table() {
+        let home = tempfile::tempdir().expect("temp dir");
+        drop(open_with(home.path(), vec![item_view()]).expect("open"));
+        let next = ViewSpec {
+            version: 4,
+            ..item_view()
+        };
+        drop(open_with(home.path(), vec![next]).expect("open version 4"));
+        let conn = raw(home.path());
+        assert_eq!(
+            view_names(&conn),
+            [
+                "v_item_3",
+                "v_item_3__by_owner",
+                "v_item_3__by_state_rank",
+                "v_item_4",
+                "v_item_4__by_owner",
+                "v_item_4__by_state_rank",
+            ]
+        );
+        assert_eq!(catalog(&conn), [("item".into(), 3), ("item".into(), 4)]);
+    }
+
+    // With every table, index and catalog row in place nothing is pending;
+    // a dropped index or a missing catalog row is. Catches an open that
+    // skips a missing index, and one that always takes the write path.
+    #[test]
+    fn only_a_missing_part_makes_a_view_pending() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        let pending = || store.snapshot(|conn| store.views().pending(conn));
+        assert_eq!(pending(), Ok(false));
+        let conn = raw(home.path());
+        conn.execute_batch("DROP INDEX v_item_3__by_owner")
+            .expect("drop");
+        assert_eq!(pending(), Ok(true));
+        drop(open_with(home.path(), vec![item_view()]).expect("reopen"));
+        assert_eq!(pending(), Ok(false));
+        conn.execute("DELETE FROM view_catalog", [])
+            .expect("delete");
+        assert_eq!(pending(), Ok(true));
+    }
+
+    // While another connection holds the database's write lock, a store
+    // whose views are all in place still opens. Catches an open that
+    // begins a write transaction on every call: it would wait out the busy
+    // timeout and fail with `Busy`.
+    #[test]
+    fn opening_with_views_in_place_takes_no_write_transaction() {
+        let home = tempfile::tempdir().expect("temp dir");
+        drop(open_with(home.path(), vec![item_view()]).expect("open"));
+        let holder = raw(home.path());
+        holder.execute_batch("BEGIN IMMEDIATE").expect("hold");
+        let reopened = open_with(home.path(), vec![item_view()]);
+        holder.execute_batch("ROLLBACK").expect("release");
+        assert!(reopened.is_ok(), "{:?}", reopened.err());
+    }
+
     // A store a newer binary stamped opens read-only and gets no view
-    // tables. Catches view creation that skips the epoch rule.
+    // tables and no catalog rows. Catches view creation that skips the
+    // epoch rule.
     #[test]
     fn a_read_only_store_creates_no_view_table() {
         let home = tempfile::tempdir().expect("temp dir");
         drop(SqliteStore::open(home.path(), AT, Options::default()).expect("open"));
-        let raw = Connection::open(home.path().join("baley.db")).expect("raw");
-        raw.execute("UPDATE schema_meta SET value = 2 WHERE key = 'epoch'", [])
+        let conn = raw(home.path());
+        conn.execute("UPDATE schema_meta SET value = 2 WHERE key = 'epoch'", [])
             .expect("stamp");
-        let options = Options {
-            views: vec![item_view()],
-            ..Options::default()
-        };
-        drop(SqliteStore::open(home.path(), AT, options).expect("open read-only"));
-        let views: i64 = raw
-            .query_row(
-                "SELECT count(*) FROM sqlite_schema WHERE name LIKE 'v\\_%' ESCAPE '\\'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count");
-        assert_eq!(views, 0);
+        drop(open_with(home.path(), vec![item_view()]).expect("open read-only"));
+        assert!(view_names(&conn).is_empty());
+        assert!(catalog(&conn).is_empty());
     }
 }

@@ -106,7 +106,12 @@ impl SqliteStore {
             options,
             views,
         };
-        if epoch == EPOCH && !store.views.is_empty() {
+        // Most opens find every view in place, and ask on the read
+        // connection, so they take neither the queue nor a write.
+        if epoch == EPOCH
+            && !store.views.is_empty()
+            && store.snapshot(|conn| store.views.pending(conn))?
+        {
             // An epoch raised by a newer binary since it was read above
             // leaves this store read-only, and read-only creates nothing.
             match store.write(|tx| store.views.create(tx)) {
