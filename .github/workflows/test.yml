@@ -90,11 +90,15 @@ jobs:
 
       # baley-core must not reach the engine (design 0001, EVD-R12). The
       # forward tree is grepped: `cargo tree -i rusqlite` prints a warning and
-      # exits 0 when nothing depends on it, so it cannot fail this step.
+      # exits 0 when nothing depends on it, so it cannot fail this step. Every
+      # target and feature, so a macOS-only or optional edge cannot hide, and
+      # the tree is captured first so a failed `cargo tree` fails the step
+      # instead of reading as "not found".
       - name: baley-core cannot reach rusqlite
         run: |
           set -euo pipefail
-          if cargo tree -p baley-core -e normal --prefix none --locked | grep -E '^(rusqlite|libsqlite3-sys) '; then
+          TREE="$(cargo tree -p baley-core -e normal --target all --all-features --prefix none --locked)"
+          if grep -E '^(rusqlite|libsqlite3-sys) ' <<<"$TREE"; then
             echo "::error::baley-core depends on the SQLite engine"
             exit 1
           fi

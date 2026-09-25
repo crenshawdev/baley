@@ -12,5 +12,6 @@ publish = false
 baley-store = { path = "../baley-store" }
 # `bundled` compiles SQLite from source with FTS5, so no system SQLite is
 # used; `backup` exposes the online backup API `baley backup` is built on.
-# The design names the versions: rusqlite 0.40.1, SQLite 3.53.2.
+# The design's benchmark ran on rusqlite 0.40.1 with SQLite 3.53.2; the lock
+# file holds whatever 0.40 resolves to.
 rusqlite = { version = "0.40", features = ["bundled", "backup"] }
