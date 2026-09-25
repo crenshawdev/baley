@@ -1,0 +1,25 @@
+name: Bug
+description: Something Baley does wrong, or a doc that says something false
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what happened instead. Paste exact error text.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The smallest steps that show it.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      description: The commit of Baley you built, and the host (Claude Code or Codex) with its version.
+    validations:
+      required: true
