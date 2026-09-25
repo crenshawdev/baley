@@ -8,6 +8,12 @@ repository = "https://github.com/crenshawdev/baley"
 rust-version = "1.98"
 publish = false
 
-# Only the port. Adding an engine crate here fails CI (design 0001, EVD-R12).
+# The port and the three crates the ledger's evidence is made of. Adding an
+# engine crate here fails CI (design 0001, EVD-R12).
 [dependencies]
 baley-store = { path = "../baley-store" }
+serde = { version = "1", features = ["derive"] }
+# No `preserve_order`: canonical order is this crate's job (RFC 8785), so the
+# map behind `Value` may keep keys however it likes.
+serde_json = "1"
+sha2 = "0.10"
