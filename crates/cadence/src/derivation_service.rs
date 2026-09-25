@@ -1,5 +1,5 @@
 //! Blocking artifact adapter and publication through the resident's session.
-use crate::{config::reload::ConfigIo, import::SessionFactory};
+use crate::{config::reload::ConfigIo, session::SessionFactory};
 use cadence::{
     derivation::*,
     store::{Error, writer::STALE_SNAPSHOT},

@@ -1,4 +1,5 @@
-//! Legacy sources are immutable evidence, never replayed writers.
+//! The session layer: first-touch store initialization, the config layers and
+//! guarded snapshot writes.
 
 // This executable owns these tests; shared source includes register none.
 include!("mod.rs");

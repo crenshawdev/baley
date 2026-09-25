@@ -5,7 +5,7 @@ use crate::{
         merge,
         reload::{self, ConfigIo},
     },
-    import::SessionFactory,
+    session::SessionFactory,
 };
 use cadence::{
     envelope::Envelope,

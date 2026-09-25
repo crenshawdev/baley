@@ -158,7 +158,7 @@ fn initialization_takes_its_effective_config_from_the_active_global() {
         )]
         .into(),
     );
-    let result = prepare_import(root, &active, &mut io).unwrap();
+    let result = prepare_initialization(root, &active, &mut io).unwrap();
     assert_eq!(
         result.generation.effective.raw_global,
         Some(json!({"roles":{"cad-executor":{"model":"sonnet"}}}))
@@ -212,7 +212,7 @@ fn initialization_refuses_an_unusable_active_global() {
         .into(),
     );
     assert_eq!(
-        prepare_import(root, &active, &mut io).err(),
+        prepare_initialization(root, &active, &mut io).err(),
         Some(Error::Policy(
             "config unavailable: unusable roles.cad-executor.effort".into()
         ))

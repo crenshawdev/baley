@@ -2,7 +2,7 @@ use super::{
     CadenceServer,
     evidence_service::Command,
 };
-use crate::import::SessionFactory;
+use crate::session::SessionFactory;
 use cadence::store::Error;
 use std::sync::Arc;
 

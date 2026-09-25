@@ -471,7 +471,7 @@ pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
         std::env::var_os("HOME"),
     );
     let factory =
-        crate::import::SessionFactory::new(global.clone(), std::sync::Arc::new(|_, _| Ok(())));
+        crate::session::SessionFactory::new(global.clone(), std::sync::Arc::new(|_, _| Ok(())));
     let mut audit = Audit {
         event_id: audit::event_identity(event.session_id.as_deref(), event.tool_use_id.as_deref()),
         command_digest: digest(event.tool_input.command.as_bytes()), cwd: event.cwd,

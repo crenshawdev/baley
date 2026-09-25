@@ -1,4 +1,4 @@
-use crate::{config::{Layer, merge, reload::ConfigIo, roles}, import::SessionFactory};
+use crate::{config::{Layer, merge, reload::ConfigIo, roles}, session::SessionFactory};
 use super::config_service::{RouteRequest, resolve_role};
 use cadence::{
     envelope::Refusal,

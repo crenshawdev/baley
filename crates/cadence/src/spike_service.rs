@@ -1,4 +1,4 @@
-use crate::{config::reload::ConfigIo, import::SessionFactory};
+use crate::{config::reload::ConfigIo, session::SessionFactory};
 use cadence::{envelope::Refusal, spike::model::{self, Apply}, store::{Error, Result, writer::Operation}};
 use serde_json::Value;
 use std::path::Path;

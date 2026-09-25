@@ -3,7 +3,7 @@ use crate::config::{
     merge,
     reload::{ConfigIo, Generation},
 };
-use crate::import::SessionFactory;
+use crate::session::SessionFactory;
 use cadence::envelope::Envelope;
 use cadence::review::{
     self, admission, consumers, deferred, material, model::*, persistence, selection,

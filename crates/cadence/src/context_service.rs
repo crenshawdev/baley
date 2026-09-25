@@ -10,7 +10,7 @@ pub enum Command {
 }
 
 pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
-    factory: &crate::import::SessionFactory<I>,
+    factory: &crate::session::SessionFactory<I>,
     root: &Path,
     command: Command,
 ) -> Result<Answer> {
@@ -79,7 +79,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                     return Ok(model::refused("submission", "approval.submission_digest",
                         "missing submission needs approval.submission_digest", Some(phase.get()), None, None));
                 };
-                let drafts = cadence::import::drafts(root)?;
+                let drafts = cadence::session::drafts(root)?;
                 let drafts = drafts.lock()
                     .map_err(|_| cadence::store::Error::Invalid("drafts unavailable".into()))?;
                 let held = drafts.contexts.get(&(phase.get(), digest.clone()));
@@ -219,10 +219,10 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let digest = persistence::submission_digest(&submission)?;
             let document = cadence::read::document::context_draft(&submission, &digest)?;
             {
-                let drafts = cadence::import::drafts(root)?;
+                let drafts = cadence::session::drafts(root)?;
                 let mut drafts = drafts.lock()
                     .map_err(|_| cadence::store::Error::Invalid("drafts unavailable".into()))?;
-                drafts.contexts.insert((submission.phase.get(), digest.clone()), cadence::import::ContextDraft {
+                drafts.contexts.insert((submission.phase.get(), digest.clone()), cadence::session::ContextDraft {
                     submission: submission.clone(), document,
                 });
                 drafts.newest_context.insert(submission.phase.get(), digest);

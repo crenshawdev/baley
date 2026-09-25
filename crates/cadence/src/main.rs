@@ -1,8 +1,8 @@
 #[path = "config/binary.rs"]
 pub mod config;
 mod guard;
-#[path = "import/binary.rs"]
-pub mod import;
+#[path = "session/binary.rs"]
+pub mod session;
 #[cfg(test)]
 mod instruction_lint;
 mod instruction_surfaces;

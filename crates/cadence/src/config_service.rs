@@ -5,7 +5,7 @@ use crate::{
         roles,
         write::Update,
     },
-    import::{Session, SessionFactory},
+    session::{Session, SessionFactory},
 };
 use cadence::{
     envelope::Envelope,

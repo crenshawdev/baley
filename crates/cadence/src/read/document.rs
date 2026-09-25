@@ -384,7 +384,7 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity, process: &mut dyn Proce
         }
         DocumentIdentity::Dispatch { id } => dispatch(root, identity, id, process),
         DocumentIdentity::PlanDraft { phase, plan, digest } => {
-            let drafts = crate::import::drafts(root)
+            let drafts = crate::session::drafts(root)
                 .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?;
             let drafts = drafts.lock()
                 .map_err(|_| refusal("identity", "document-unavailable", "drafts unavailable"))?;
@@ -395,7 +395,7 @@ pub fn resolve(root: &Path, identity: &DocumentIdentity, process: &mut dyn Proce
                 .ok_or_else(|| refusal("identity", "document-not-found", "held plan draft is absent"))
         }
         DocumentIdentity::ContextDraft { phase, digest } => {
-            let drafts = crate::import::drafts(root)
+            let drafts = crate::session::drafts(root)
                 .map_err(|error| refusal("identity", "document-unavailable", error.to_string()))?;
             let drafts = drafts.lock()
                 .map_err(|_| refusal("identity", "document-unavailable", "drafts unavailable"))?;

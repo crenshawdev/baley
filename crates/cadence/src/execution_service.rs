@@ -6,7 +6,7 @@ use cadence::process::Process;
 use super::derivation_service::{self, Driver};
 use crate::{
     config::reload::ConfigIo,
-    import::{Session, SessionFactory},
+    session::{Session, SessionFactory},
 };
 use cadence::{
     derivation::{Cycle, LifecycleStatus},

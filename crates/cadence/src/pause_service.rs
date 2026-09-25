@@ -6,7 +6,7 @@ use crate::{
         Layer, merge,
         reload::{ConfigIo, Generation},
     },
-    import::{Session, SessionFactory},
+    session::{Session, SessionFactory},
 };
 use cadence::{
     evidence::{

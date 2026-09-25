@@ -2,7 +2,7 @@
 use super::derivation_service::{self, Driver, store_error};
 use crate::{
     config::{merge, reload::ConfigIo},
-    import::SessionFactory,
+    session::SessionFactory,
 };
 use cadence::{
     derivation::{self, DerivationError},

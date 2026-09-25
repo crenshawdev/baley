@@ -1,7 +1,7 @@
 //! Internal evidence adapter. The resident invokes this directly, never itself.
 use crate::{
     config::reload::{self, ConfigIo},
-    import::SessionFactory,
+    session::SessionFactory,
 };
 use cadence::{
     evidence::{Record, persistence},
@@ -244,7 +244,7 @@ pub fn observe_material(
 #[cfg(test)]
 mod decision_tests {
     use super::*;
-    use crate::import::{evidence_write, replays_evidence};
+    use crate::session::{evidence_write, replays_evidence};
     use cadence::evidence::{
         Fact, Scope, VERSION,
         checker::CheckedMaterial,

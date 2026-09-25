@@ -1,6 +1,6 @@
 //! Root-bound adapter for the shared native runner; it owns no second writer.
 use cadence::process::Process;
-use crate::{config::reload::ConfigIo, import::SessionFactory};
+use crate::{config::reload::ConfigIo, session::SessionFactory};
 use cadence::{execution::{history, runner}, store::{Error, Result}};
 use serde_json::{Value, json};
 use std::path::Path;

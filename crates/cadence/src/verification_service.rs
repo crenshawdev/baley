@@ -7,7 +7,7 @@ use std::path::Path;
 pub enum Command { Query(Query), Apply(Apply) }
 
 pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
-    factory: &crate::import::SessionFactory<I>, root: &Path, command: Command,
+    factory: &crate::session::SessionFactory<I>, root: &Path, command: Command,
     process: &mut (dyn Process + Send),
 ) -> Result<Value> {
     let result = match command {
@@ -109,7 +109,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
 }
 
 async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
-    factory: &crate::import::SessionFactory<I>, root: &Path, query: Query,
+    factory: &crate::session::SessionFactory<I>, root: &Path, query: Query,
     process: &mut (dyn Process + Send),
 ) -> Result<Value> {
     let snapshot = if matches!(query, Query::Read { .. }) && root.join(cadence::store::model::STATE).exists() {
@@ -249,7 +249,7 @@ fn bound_index(answer: &mut Value) {
 }
 
 async fn next_answer<I: crate::config::reload::ConfigIo + Clone + Sync>(
-    factory: &crate::import::SessionFactory<I>, root: &Path, saved: &persistence::Attempt,
+    factory: &crate::session::SessionFactory<I>, root: &Path, saved: &persistence::Attempt,
 ) -> Result<Value> {
     let phase = saved.inputs.basis.phase;
     let route = match &saved.route {

@@ -15,8 +15,9 @@ pub mod evidence;
 pub mod execution;
 pub mod git_process;
 pub mod help;
-/// Legacy sources are immutable evidence, never replayed writers.
-pub mod import;
+/// The session layer: first-touch store initialization, the config layers and
+/// guarded snapshot writes.
+pub mod session;
 pub mod landing;
 pub mod undo;
 pub mod debug;

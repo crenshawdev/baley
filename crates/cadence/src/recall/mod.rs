@@ -211,7 +211,7 @@ pub(crate) mod resident {
             merge,
             reload::{self, ConfigIo, Generation},
         },
-        import::{Session, SessionFactory},
+        session::{Session, SessionFactory},
     };
     use cadence::store::{Error, Result, writer::Operation};
     use std::{

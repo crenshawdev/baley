@@ -17,7 +17,7 @@ pub enum Command {
 }
 
 pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
-    factory: &crate::import::SessionFactory<I>,
+    factory: &crate::session::SessionFactory<I>,
     root: &Path,
     command: Command,
 ) -> Result<Answer> {
@@ -157,7 +157,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 let Some(digest) = approval.as_ref().and_then(|value| value.submission_digest.as_ref()) else {
                     return Ok(model::refused("submission", "missing submission needs approval.submission_digest"));
                 };
-                let drafts = cadence::import::drafts(root)?;
+                let drafts = cadence::session::drafts(root)?;
                 let drafts = drafts.lock()
                     .map_err(|_| cadence::store::Error::Invalid("drafts unavailable".into()))?;
                 let held = drafts.plans.get(&(phase.get(), digest.clone()));
@@ -410,10 +410,10 @@ fn hold(root: &Path, data: &Value, submission: &model::Submission) -> Result<()>
     let digest = persistence::submission_digest(submission)?;
     let documents = submission.plans.iter().map(|entry|
         cadence::read::document::plan_draft(data, &entry.content, &digest)).collect::<Result<Vec<_>>>()?;
-    let drafts = cadence::import::drafts(root)?;
+    let drafts = cadence::session::drafts(root)?;
     let mut drafts = drafts.lock()
         .map_err(|_| cadence::store::Error::Invalid("drafts unavailable".into()))?;
-    drafts.plans.insert((submission.phase.get(), digest.clone()), cadence::import::PlanDraft {
+    drafts.plans.insert((submission.phase.get(), digest.clone()), cadence::session::PlanDraft {
         submission: submission.clone(), documents,
     });
     drafts.newest_plan.insert(submission.phase.get(), digest);

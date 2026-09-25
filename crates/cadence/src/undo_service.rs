@@ -1,5 +1,5 @@
 use cadence::process::Process;
-use crate::{config::reload::ConfigIo, import::SessionFactory};
+use crate::{config::reload::ConfigIo, session::SessionFactory};
 use cadence::{envelope::Refusal, rail::{branch, commit, git}, undo::{manifest, model::{self, Apply, Completed, Conflict, Mode, Pending, Record}, revert},
     store::{Error, Result, writer::{Operation, Store, View}}};
 use serde_json::{Value, json};

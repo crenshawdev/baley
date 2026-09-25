@@ -1,6 +1,6 @@
 //! task-open and task-close. A treeless episode is resident memory for the
 //! run: no first_touch, no store, nothing created under the project.
-use crate::{config::reload::ConfigIo, import::SessionFactory};
+use crate::{config::reload::ConfigIo, session::SessionFactory};
 use cadence::{
     envelope::Refusal,
     pause::branch,

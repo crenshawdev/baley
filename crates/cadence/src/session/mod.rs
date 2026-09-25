@@ -68,7 +68,7 @@ pub struct Relocation {
     pub generation: u64,
 }
 
-struct ImportInputs {
+struct InitInputs {
     manifest: ImportManifest,
     generation: Generation,
     transaction: Transaction,
@@ -239,11 +239,11 @@ fn validate_shared<I: ConfigIo>(io: &mut I, manifest: &ImportManifest) -> Result
     Ok(())
 }
 
-fn prepare_import<I: ConfigIo>(
+fn prepare_initialization<I: ConfigIo>(
     root: &Path,
     active: &Paths,
     io: &mut I,
-) -> Result<ImportInputs> {
+) -> Result<InitInputs> {
     let repo = observe(io, &active.repo)?;
     let shared = match &active.global {
         Some(path) if path != &active.repo => Some(observe(io, path)?),
@@ -291,7 +291,7 @@ fn prepare_import<I: ConfigIo>(
             .map(|input| guard(active.global.clone().unwrap(), input)),
     };
     let snapshot = json!({"import":manifest});
-    Ok(ImportInputs {
+    Ok(InitInputs {
         manifest,
         generation,
         transaction: Transaction {
@@ -306,7 +306,7 @@ fn prepare_import<I: ConfigIo>(
 
 struct SessionPolicy<I: ConfigIo> {
     config: Shared<I>,
-    importing: Arc<Mutex<Option<ImportInputs>>>,
+    importing: Arc<Mutex<Option<InitInputs>>>,
     io: I,
     evaluate: Evaluate,
 }
@@ -374,7 +374,7 @@ pub struct Session<I: ConfigIo = FileIo> {
     manifest: ImportManifest,
     /// Where the layers stand now, after every relocation the store accepted.
     active: Paths,
-    pub drafts: Arc<Mutex<cadence::import::Drafts>>,
+    pub drafts: Arc<Mutex<cadence::session::Drafts>>,
 }
 
 #[derive(Clone)]
@@ -494,7 +494,7 @@ impl<I: ConfigIo> Session<I> {
         self.store.request(Operation::ReadVerified).await
     }
 
-    /// Full snapshot data, retaining import ownership and historical evidence.
+    /// Full snapshot data, retaining the import manifest and the layer record.
     /// The supplied generation is checked again by the writer on its owner thread.
     pub async fn commit_derivation(&self, expected: &View, data: Value) -> Result<View> {
         let current = self.derivation_view().await?;
@@ -796,7 +796,7 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
             .is_some_and(cadence::store::writer::audit::audit_only);
         let importing = Arc::new(Mutex::new(
             if state.is_none() || pending_import || audit_only {
-                Some(prepare_import(&root, &active, &mut io)?)
+                Some(prepare_initialization(&root, &active, &mut io)?)
             } else {
                 None
             },
@@ -934,7 +934,7 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
         // layers stand now beside it.
         let session = Arc::new(Session {
             root: root.clone(),
-            drafts: cadence::import::drafts(&root)?,
+            drafts: cadence::session::drafts(&root)?,
             store,
             config,
             manifest,

@@ -1,7 +1,7 @@
 //! The capture operation (D-144): one typed item appended to the journal with
 //! its kind and its declared phase, the bound reported on every receipt and
 //! never enforced, and not one document byte written.
-use crate::{config::reload::ConfigIo, import::SessionFactory};
+use crate::{config::reload::ConfigIo, session::SessionFactory};
 use cadence::{
     capture::{self, Kind},
     envelope::Refusal,
@@ -82,7 +82,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
     if let Some(phase) = phase {
         let identity = crate::config::reload::identity(root)?;
         let mut io = factory.io();
-        let (observed, _guards) = crate::import::observe_documents(&identity, &mut io)?;
+        let (observed, _guards) = crate::session::observe_documents(&identity, &mut io)?;
         let declared = match observed.declarations.as_ref().and_then(|d| d.as_ref().ok()) {
             Some(parsed) => parsed.phases.iter().any(|row| row.id.address() == phase.to_string()),
             None => false,

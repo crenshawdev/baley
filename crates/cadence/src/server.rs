@@ -140,7 +140,7 @@ impl CadenceServer {
     }
 
     pub fn with_factory<I: crate::config::reload::ConfigIo + Clone + Sync>(
-        factory: crate::import::SessionFactory<I>,
+        factory: crate::session::SessionFactory<I>,
     ) -> Self {
         Self {
             service: recall::Resident::spawn(factory),
@@ -228,7 +228,7 @@ impl CadenceServer {
             .filter(|path| !path.as_os_str().is_empty());
         // These internal operations only own planning storage. Forge and
         // dispatch policy are evaluated by their later operation surfaces.
-        Self::with_factory(crate::import::SessionFactory::new(
+        Self::with_factory(crate::session::SessionFactory::new(
             global,
             std::sync::Arc::new(crate::config::planning_policy),
         ))
@@ -1633,7 +1633,7 @@ mod wire_tests {
             .block_on(async {
                 // No global config: the server must not read HOME or the
                 // environment to find one.
-                let factory = crate::import::SessionFactory::new(
+                let factory = crate::session::SessionFactory::new(
                     None,
                     std::sync::Arc::new(crate::config::planning_policy),
                 );
