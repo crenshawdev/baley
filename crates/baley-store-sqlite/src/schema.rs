@@ -10,7 +10,8 @@ pub const EPOCH: u32 = 1;
 pub(crate) const SCHEMA: &str = "
 CREATE TABLE schema_meta (
   key TEXT PRIMARY KEY,
-  value ANY NOT NULL
+  value ANY NOT NULL,
+  CHECK (key <> 'epoch' OR typeof(value) = 'integer')
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE project (
@@ -18,7 +19,7 @@ CREATE TABLE project (
   name TEXT NOT NULL,
   created_at TEXT NOT NULL,
   head_seq INTEGER NOT NULL DEFAULT 0,
-  head_hash BLOB
+  head_hash BLOB CHECK (head_hash IS NULL OR length(head_hash) = 32)
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE checkout (
@@ -33,7 +34,7 @@ CREATE TABLE checkout (
 CREATE TABLE anchor (
   project_id TEXT NOT NULL REFERENCES project(project_id),
   seq INTEGER NOT NULL,
-  head_hash BLOB NOT NULL,
+  head_hash BLOB NOT NULL CHECK (length(head_hash) = 32),
   tag TEXT NOT NULL,
   pushed_at TEXT NOT NULL,
   PRIMARY KEY (project_id, seq)
@@ -54,8 +55,8 @@ CREATE TABLE event (
   git_checkout TEXT,
   policy_version INTEGER NOT NULL,
   payload_json TEXT NOT NULL,
-  prev_hash BLOB,
-  hash BLOB NOT NULL,
+  prev_hash BLOB CHECK (prev_hash IS NULL OR length(prev_hash) = 32),
+  hash BLOB NOT NULL CHECK (length(hash) = 32),
   PRIMARY KEY (project_id, seq)
 ) STRICT, WITHOUT ROWID;
 CREATE UNIQUE INDEX event_stream ON event(project_id, stream, stream_version);
@@ -63,7 +64,7 @@ CREATE INDEX event_type ON event(project_id, type, seq);
 CREATE INDEX event_commit ON event(project_id, git_commit);
 
 CREATE TABLE payload (
-  hash BLOB PRIMARY KEY,
+  hash BLOB PRIMARY KEY CHECK (length(hash) = 32),
   bytes INTEGER NOT NULL,
   encoding TEXT NOT NULL,
   body BLOB,
@@ -85,8 +86,17 @@ CREATE TABLE project_gen (
   project_id TEXT PRIMARY KEY REFERENCES project(project_id),
   live_gen INTEGER NOT NULL,
   building_gen INTEGER,
-  building_projector_version INTEGER,
   building_applied_seq INTEGER
+) STRICT, WITHOUT ROWID;
+
+-- The projector version of each view in each generation, so an empty view
+-- still says which version built it; flipped with `live_gen`.
+CREATE TABLE view_gen (
+  project_id TEXT NOT NULL REFERENCES project(project_id),
+  gen INTEGER NOT NULL,
+  view TEXT NOT NULL,
+  projector_version INTEGER NOT NULL,
+  PRIMARY KEY (project_id, gen, view)
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE claim_lease (
