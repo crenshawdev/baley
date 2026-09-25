@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | In review |
+| Status | Accepted |
 | Author | John Crenshaw |
 | Reviewers | Codex, adversarial review, 2026-09-25 (25 findings, all addressed in this revision) |
 | Design issue | #4 |
