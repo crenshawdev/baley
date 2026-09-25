@@ -9,7 +9,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const BASELINE: u64 = 183_000;
 const SHELL_READ_PROGRAMS: &[&str] = &[
     "cat", "head", "tail", "less", "more", "nl", "wc", "grep", "rg", "find", "ls", "tree",
 ];
@@ -481,8 +480,6 @@ fn measure(read_lines: &BTreeMap<String, u64>, phase: u32, session_id: &str, fir
     worker_ids.sort();
     worker_ids.dedup();
     let source_digest = crate::store::model::hex(&hasher.finalize());
-    let difference = i128::from(token_total) - i128::from(BASELINE);
-    let ratio = token_total as f64 / BASELINE as f64;
     let body = format!(concat!(
         "Claude planner round measurement\n",
         "phase: {phase}\n",
@@ -501,18 +498,13 @@ fn measure(read_lines: &BTreeMap<String, u64>, phase: u32, session_id: &str, fir
         "cache_read_input_tokens: {cache_read_input_tokens}\n",
         "output_tokens: {output_tokens}\n",
         "token_total: {token_total}\n",
-        "baseline_planner_median: 183000\n",
-        "difference_from_baseline: {difference}\n",
-        "ratio_to_baseline: {token_total}/183000 = {ratio:.6}\n",
-        "baseline_provenance: owner-approved Cadence 3.7 planner median\n",
-        "comparison_note: like-for-like savings require the historical aggregation procedure\n",
     ), phase=phase, session_id=session_id, first_turn=first_turn, last_turn=last_turn,
         worker_ids=worker_ids.join(","), source_digest=source_digest, read_count=read_count,
         whole_file_reads=whole_file_reads, unclassified_reads=unclassified_reads,
         reads=report_lines(&counts),
         input_tokens=usage.input, cache_creation_input_tokens=usage.cache_creation,
         cache_read_input_tokens=usage.cache_read, output_tokens=usage.output,
-        token_total=token_total, difference=difference, ratio=ratio);
+        token_total=token_total);
     Ok(Report { revision: source_digest, body, worker_ids, read_count, whole_file_reads, unclassified_reads, token_total })
 }
 
