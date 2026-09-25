@@ -83,6 +83,5 @@ pub fn record(request_id: &str, kind: Kind, text: &str, phase: Option<u32>) -> I
         phase,
         disposition: Disposition::Captured,
         completed: false,
-        filing_uncertain: false,
     }
 }

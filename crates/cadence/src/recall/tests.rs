@@ -1,5 +1,5 @@
 use super::*;
-use cadence::store::model::{ItemRecord, Origin, Snapshot, VERSION};
+use cadence::store::model::{Disposition, ItemRecord, Origin, Snapshot, VERSION};
 
 fn item(id: &str, text: &str) -> ItemRecord {
     ItemRecord {
@@ -15,7 +15,6 @@ fn item(id: &str, text: &str) -> ItemRecord {
         phase: None,
         disposition: Disposition::Captured,
         completed: false,
-        filing_uncertain: false,
     }
 }
 fn view(items: Vec<ItemRecord>) -> View {
@@ -62,7 +61,7 @@ fn frozen_token_relationships_and_raw_stopword_order() {
 #[test]
 fn equal_scores_keep_candidate_order() {
     let candidates = (1..=7).map(|i| prose("quasar seam", i)).collect();
-    let answer = Corpus::new(candidates, &BTreeSet::new()).query("quasar", None, "builtin").unwrap();
+    let answer = Corpus::new(candidates).query("quasar", None, "builtin").unwrap();
     for (i, hit) in answer.results.iter().enumerate() {
         assert_eq!(hit.provenance, prose("", i + 1).provenance);
     }
@@ -71,7 +70,7 @@ fn equal_scores_keep_candidate_order() {
 #[test]
 fn a_repeated_query_term_does_not_change_the_answer() {
     let candidates = (1..=7).map(|i| prose("quasar seam", i)).collect();
-    let corpus = Corpus::new(candidates, &BTreeSet::new());
+    let corpus = Corpus::new(candidates);
     let answer = corpus.query("quasar", None, "builtin").unwrap();
     assert_eq!(
         answer,
@@ -83,7 +82,7 @@ fn a_repeated_query_term_does_not_change_the_answer() {
 #[test]
 fn the_default_limit_is_5_while_total_counts_every_match() {
     let candidates = (1..=7).map(|i| prose("quasar seam", i)).collect();
-    let answer = Corpus::new(candidates, &BTreeSet::new()).query("quasar", None, "builtin").unwrap();
+    let answer = Corpus::new(candidates).query("quasar", None, "builtin").unwrap();
     assert_eq!(answer.total, 7);
     assert_eq!(answer.results.len(), 5);
 }
@@ -92,7 +91,7 @@ fn the_default_limit_is_5_while_total_counts_every_match() {
 fn an_explicit_limit_caps_the_results() {
     let candidates = (1..=7).map(|i| prose("quasar seam", i)).collect();
     assert_eq!(
-        Corpus::new(candidates, &BTreeSet::new())
+        Corpus::new(candidates)
             .query("seams", Some(2), "builtin")
             .unwrap()
             .results
@@ -103,7 +102,7 @@ fn an_explicit_limit_caps_the_results() {
 
 #[test]
 fn a_non_positive_limit_is_refused() {
-    let corpus = Corpus::new(vec![prose("quasar", 1)], &BTreeSet::new());
+    let corpus = Corpus::new(vec![prose("quasar", 1)]);
     for limit in [0, -1] {
         assert!(corpus.query("quasar", Some(limit), "builtin").is_err());
     }
@@ -111,19 +110,19 @@ fn a_non_positive_limit_is_refused() {
 
 #[test]
 fn a_blank_query_is_refused() {
-    let corpus = Corpus::new(vec![prose("quasar", 1)], &BTreeSet::new());
+    let corpus = Corpus::new(vec![prose("quasar", 1)]);
     assert!(corpus.query(" ", None, "builtin").is_err());
 }
 
 #[test]
 fn an_unknown_backend_is_refused() {
-    let corpus = Corpus::new(vec![prose("quasar", 1)], &BTreeSet::new());
+    let corpus = Corpus::new(vec![prose("quasar", 1)]);
     assert!(corpus.query("quasar", None, "other").is_err());
 }
 
 #[test]
 fn backend_none_answers_empty_and_names_itself() {
-    let corpus = Corpus::new(vec![prose("quasar", 1)], &BTreeSet::new());
+    let corpus = Corpus::new(vec![prose("quasar", 1)]);
     let disabled = corpus.query("quasar", None, "none").unwrap();
     assert_eq!(disabled.backend, "none");
     assert_eq!((disabled.total, disabled.results.len()), (0, 0));
@@ -131,40 +130,15 @@ fn backend_none_answers_empty_and_names_itself() {
 
 #[test]
 fn no_match_or_an_empty_corpus_answers_total_0() {
-    let corpus = Corpus::new(vec![prose("quasar", 1)], &BTreeSet::new());
+    let corpus = Corpus::new(vec![prose("quasar", 1)]);
     assert_eq!(corpus.query("absent", None, "builtin").unwrap().total, 0);
     assert_eq!(
-        Corpus::new(vec![], &BTreeSet::new())
+        Corpus::new(vec![])
             .query("quasar", None, "builtin")
             .unwrap()
             .total,
         0
     );
-}
-
-#[test]
-fn declined_current_and_historical_candidates_never_affect_ranking_or_totals() {
-    let old = item("declined", "quasar quasar");
-    let historical = records(view(vec![old.clone()]).recall_items());
-    let mut dead = old.clone();
-    dead.revision = 2;
-    dead.disposition = Disposition::Declined {
-        reason: "quasar secret reason".into(),
-    };
-    let live = view(vec![old, dead, item("kept", "quasar")]);
-    let mut candidates = current(&live);
-    candidates.extend(historical);
-    let actual = Corpus::new(candidates, &declined(&live))
-        .query("quasar", None, "builtin")
-        .unwrap();
-    let expected = Corpus::new(
-        records(view(vec![item("kept", "quasar")]).recall_items()),
-        &BTreeSet::new(),
-    )
-    .query("quasar", None, "builtin")
-    .unwrap();
-    assert_eq!(actual, expected);
-    assert_eq!(actual.total, 1);
 }
 
 use std::{collections::BTreeMap, fs, path::Path};
@@ -196,7 +170,7 @@ fn a_phase_context_offers_its_other_sections_and_not_its_local_decisions() {
         "## Decisions\n- D-02 localquasar\n### Nested\nlocalquasar\n## Other\notherquasar\n## Durable decisions\n",
         None,
     );
-    let corpus = Corpus::new(snippets, &BTreeSet::new());
+    let corpus = Corpus::new(snippets);
     assert_eq!(corpus.query("otherquasar", None, "builtin").unwrap().total, 1);
     assert_eq!(
         corpus.query("localquasar", None, "builtin").unwrap().total,
@@ -208,7 +182,7 @@ fn a_phase_context_offers_its_other_sections_and_not_its_local_decisions() {
 fn a_legacy_context_offers_its_decisions() {
     let legacy = documents::snippets("CONTEXT.md", "## Decisions\n- D-01 legacyquasar\n", None);
     assert_eq!(
-        Corpus::new(legacy, &BTreeSet::new())
+        Corpus::new(legacy)
             .query("legacyquasar", None, "builtin")
             .unwrap()
             .total,
@@ -297,7 +271,7 @@ fn one_query_answers_a_record_hit_and_a_document_hit_together() {
     let store = view(vec![item("orbit-item", "orbit from the store")]);
     let mut candidates = current(&store);
     candidates.extend(documents::snippets("PROJECT.md", "orbit from a document\n", None));
-    let answer = Corpus::new(candidates, &declined(&store))
+    let answer = Corpus::new(candidates)
         .query("orbit", None, "builtin")
         .unwrap();
     assert!(answer.results.iter().any(|hit| matches!(
@@ -446,35 +420,6 @@ fn a_failed_blob_read_names_its_commit_and_path_and_the_other_hits_stay() {
     assert!(history.candidates.iter().any(|c| c.text == "roadmap orbit"));
 }
 
-#[test]
-fn a_declined_item_has_no_history_candidates_while_a_document_with_its_text_answers() {
-    let id = "declined-orbit";
-    let captured = item(id, "declined orbit");
-    let mut declined = captured.clone();
-    declined.revision = 2;
-    declined.disposition = Disposition::Declined {
-        reason: "not wanted".into(),
-    };
-    let mut git = Answers {
-        commits: vec!["c1"],
-        trees: BTreeMap::from([(
-            "c1",
-            vec![("items.jsonl", "b2"), ("PROJECT.md", "b3")],
-        )]),
-        blobs: BTreeMap::from([
-            ("b2", Ok(serde_json::to_string(&captured).unwrap() + "\n")),
-            ("b3", Ok("declined orbit\n".into())),
-        ]),
-        ..Answers::default()
-    };
-    let history = traverse(&view(vec![captured, declined]), &mut git);
-    assert!(history.candidates.iter().all(|c| c.item_id.as_deref() != Some(id)));
-    assert!(history.candidates.iter().any(|c| matches!(
-        &c.provenance,
-        Provenance::Document { path, .. } if path == "PROJECT.md"
-    )));
-}
-
 /// The cache key over a store at `generation`, a config at `config`, one
 /// document with digest `document`, and history that reached `commit`.
 fn inputs(generation: u64, config: u64, document: &str, commit: &str) -> resident::Inputs {
@@ -497,7 +442,7 @@ fn inputs(generation: u64, config: u64, document: &str, commit: &str) -> residen
 fn a_warm_corpus_is_rebuilt_when_the_store_documents_config_or_history_change() {
     let warm = resident::Cached {
         inputs: inputs(1, 1, "d1", "c1"),
-        corpus: Corpus::new(vec![], &BTreeSet::new()),
+        corpus: Corpus::new(vec![]),
         phase: None,
     };
     assert!(warm.answers(&inputs(1, 1, "d1", "c1"), None));

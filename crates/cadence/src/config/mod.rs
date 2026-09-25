@@ -66,11 +66,10 @@ pub struct CaptureReport {
 
 /// A report cannot veto a capture. Revisions and continuation lines are not units.
 pub fn capture_report(records: &[cadence::store::model::ItemRecord], bound: u64) -> CaptureReport {
-    use cadence::store::model::Disposition;
     let latest: BTreeMap<_, _> = records.iter().map(|r| (&r.id, r)).collect();
     let active = latest
         .values()
-        .filter(|r| !r.completed && matches!(r.disposition, Disposition::Captured))
+        .filter(|r| !r.completed)
         .count();
     CaptureReport {
         active,

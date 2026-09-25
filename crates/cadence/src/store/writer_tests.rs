@@ -102,7 +102,6 @@ fn item(id: &str) -> ItemRecord {
         phase: None,
         disposition: Disposition::Captured,
         completed: false,
-        filing_uncertain: false,
     }
 }
 

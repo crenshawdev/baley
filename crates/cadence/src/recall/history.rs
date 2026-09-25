@@ -177,16 +177,10 @@ impl ReadGit for Git<'_> {
     }
 }
 
-/// Keeps each candidate once, and none that a declined item owns.
-fn admit(
-    candidates: Vec<Candidate>,
-    excluded: &BTreeSet<String>,
-    seen: &mut BTreeSet<String>,
-    out: &mut History,
-) {
+/// Keeps each candidate once.
+fn admit(candidates: Vec<Candidate>, seen: &mut BTreeSet<String>, out: &mut History) {
     for c in candidates {
-        if c.item_id.as_ref().is_none_or(|id| !excluded.contains(id)) && seen.insert(evidence_key(&c))
-        {
+        if seen.insert(evidence_key(&c)) {
             out.candidates.push(c);
         }
     }
@@ -204,8 +198,7 @@ pub fn read(root: &Path, view: &View, live: &[Candidate], process: &mut dyn Proc
 }
 
 /// History as git answers it for the canonical planning `root`: newest commit
-/// first, each path's blob read once, nothing a declined item owns and nothing
-/// already in `seen`. Every answer git could not give is named as incomplete
+/// first, each path's blob read once and nothing already in `seen`. Every answer git could not give is named as incomplete
 /// coverage instead of failing the read.
 pub fn traverse(
     root: &Path,
@@ -214,8 +207,7 @@ pub fn traverse(
     git: &mut dyn ReadGit,
 ) -> History {
     let mut out = History::default();
-    let excluded = super::declined(view);
-    if let Err(e) = walk(root, view, &excluded, &mut seen, git, &mut out) {
+    if let Err(e) = walk(root, view, &mut seen, git, &mut out) {
         out.incomplete.push(format!("history incomplete: {e}"));
     }
     out
@@ -224,7 +216,6 @@ pub fn traverse(
 fn walk(
     root: &Path,
     view: &View,
-    excluded: &BTreeSet<String>,
     seen: &mut BTreeSet<String>,
     git: &mut dyn ReadGit,
     out: &mut History,
@@ -298,7 +289,7 @@ fn walk(
             }
             blobs.entry(blob.into()).or_insert_with(|| bytes.clone());
             match historical(path, &bytes, commit, view) {
-                Ok(candidates) => admit(candidates, excluded, seen, out),
+                Ok(candidates) => admit(candidates, seen, out),
                 Err(e) => out
                     .incomplete
                     .push(format!("{commit}:{path}: unavailable source: {e}")),

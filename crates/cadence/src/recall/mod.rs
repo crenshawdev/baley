@@ -7,7 +7,7 @@ mod tests;
 
 use cadence::store::{
     items::RecallItems,
-    model::{Decision, Disposition, Evidence},
+    model::{Decision, Evidence},
     writer::View,
 };
 use serde::{Deserialize, Serialize};
@@ -39,16 +39,6 @@ pub struct Candidate {
     pub text: String,
     pub provenance: Provenance,
     pub item_id: Option<String>,
-}
-
-/// Only identity metadata is inspected outside the eligible projection. Raw
-/// event text, decline reasons and quarantined origin bytes never enter ranking.
-pub fn declined(view: &View) -> BTreeSet<String> {
-    view.items
-        .iter()
-        .filter(|r| matches!(r.disposition, Disposition::Declined { .. }))
-        .map(|r| r.id.clone())
-        .collect()
 }
 
 pub fn records(items: RecallItems<'_>) -> Vec<Candidate> {
@@ -144,16 +134,12 @@ pub fn live(view: &View, root: &std::path::Path) -> (Corpus, Vec<String>) {
     let mut candidates = current(view);
     candidates.extend(documents.candidates);
     (
-        Corpus::new(candidates, &declined(view)),
+        Corpus::new(candidates),
         documents.incomplete,
     )
 }
 impl Corpus {
-    pub fn new(candidates: Vec<Candidate>, excluded: &BTreeSet<String>) -> Self {
-        let candidates: Vec<_> = candidates
-            .into_iter()
-            .filter(|c| c.item_id.as_ref().is_none_or(|id| !excluded.contains(id)))
-            .collect();
+    pub fn new(candidates: Vec<Candidate>) -> Self {
         let index = rank::Index::new(candidates.iter().map(|c| c.text.as_str()));
         Self { candidates, index }
     }
@@ -485,7 +471,7 @@ pub(crate) mod resident {
         let config = session.config()?;
         let backend = backend(&config.effective.values)?;
         // Validate arguments and backend before any expensive corpus read.
-        let empty = Corpus::new(vec![], &BTreeSet::new());
+        let empty = Corpus::new(vec![]);
         let disabled = empty.query_phase(query, limit, backend, phase).map_err(Error::Invalid)?;
         if backend == "none" {
             *cache = None;
@@ -509,7 +495,7 @@ pub(crate) mod resident {
         if cache.as_ref().is_none_or(|cached| !cached.answers(&inputs, phase)) {
             *cache = Some(Cached {
                 inputs,
-                corpus: Corpus::new(candidates, &declined(&latest)),
+                corpus: Corpus::new(candidates),
                 phase,
             });
         }

@@ -37,8 +37,6 @@ pub struct Origin {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Disposition {
     Captured,
-    Filed { pointer: String },
-    Declined { reason: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,7 +53,6 @@ pub struct ItemRecord {
     pub phase: Option<u32>,
     pub disposition: Disposition,
     pub completed: bool,
-    pub filing_uncertain: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -441,7 +438,6 @@ mod tests {
             phase: None,
             disposition: Disposition::Captured,
             completed: false,
-            filing_uncertain: false,
         }
     }
 

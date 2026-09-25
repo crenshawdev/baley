@@ -112,24 +112,17 @@ fn capture_threshold_reports_active_identities_without_refusing_append() {
             phase: None,
             completed: false,
             disposition: Disposition::Captured,
-            filing_uncertain: false,
         });
     }
     let mut revision = records[0].clone();
     revision.revision = 2;
     records.push(revision);
     records[1].completed = true;
-    records[2].disposition = Disposition::Filed {
-        pointer: "GH-1".into(),
-    };
-    records[3].disposition = Disposition::Declined {
-        reason: "no".into(),
-    };
     let report = capture_report(&records, 1);
     assert_eq!(
         report,
         CaptureReport {
-            active: 2,
+            active: 4,
             bound: 1,
             exceeded: true,
             unit: "items"
