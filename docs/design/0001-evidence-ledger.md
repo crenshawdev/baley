@@ -456,11 +456,11 @@ A projector is registered for the event types it cares about. For each appended 
 
 **Authority.** Views are fast, derived data. A decision that grants authority (admission, completion, landing, release) confirms its deciding facts against the events themselves inside its transaction, through `Transaction::event_exists`, so an edited view cannot grant authority.
 
-**Rebuild.** A view is rebuilt per project into a shadow table, in batches of short transactions, each replaying a bounded range of events. When the shadow reaches the project head, one short transaction applies the remaining events and swaps the shadow in. A crash discards the shadow. Progress is tracked per view per project. Writers are never blocked for longer than one batch.
+**Rebuild.** Every view row carries a generation, and each project has one live generation that readers and projectors use. A rebuild writes the next generation beside the live one, replaying the project's events in batches of at most 200 events or 15 ms, each through the writer queue, pausing after each batch as long as it held the queue. When it reaches the head, one short transaction applies the remaining events and makes the new generation live, which switches every view at once. The old generation is then deleted in the same small, yielding batches. A crash leaves an unfinished generation that is never live and is deleted on the next rebuild. Progress is tracked per project.
 
 **Versions.** A view whose stored projector version is older than the running binary's is rebuilt forward before it is used. A binary never rebuilds a view whose stored version is newer than its own; it treats that project as read-only.
 
-**Verification of views.** `baley verify --views` rebuilds every view of a project into scratch tables and compares them with the live ones, reporting any document that differs.
+**Verification of views.** `baley verify --views` rebuilds a project's views into a scratch generation, compares it with the live generation at the head, reports any document that differs, and deletes the scratch generation.
 
 Views planned for the first build, by the question they answer. Query contracts (keys, indexes, ordering, page bounds) are in [Appendix B](#appendix-b-reads-mapped-to-views).
 
@@ -504,7 +504,7 @@ A body is deleted only when no remaining reference still requires it. A purge in
 
 **Reduction** does not alter a payload. It stores the kept excerpt (the first and last 64 KiB) as a new payload with its own hash, records `payload.reduced` naming the original hash, the excerpt hash and the byte ranges kept, and tombstones the original body. Verification checks the excerpt in full and the original as a commitment.
 
-**Purge** removes, in one transaction, the body and every derived copy Baley manages: search entries, view fields that quoted it, saved request answers and trace rows. The database runs with `secure_delete` on, and a purge ends with a checkpoint and `VACUUM` so free pages and the write-ahead log keep no copy. Backups in Baley's home receive the same purge; exports outside it cannot be reached and are listed in the purge report. A purge records `payload.purged` naming the hashes, the policy or reason and the actor, in every affected project's chain.
+**Purge** removes, in one transaction, the body and every derived copy Baley manages: search entries, view fields that quoted it, saved request answers and trace rows. The database runs with `secure_delete` on, and a purge ends with a checkpoint, `VACUUM`, and a final `wal_checkpoint(TRUNCATE)`: in write-ahead-log mode `VACUUM` writes every page through the log, so only the last truncating checkpoint leaves no copy behind. Backups in Baley's home receive the same purge; exports outside it cannot be reached and are listed in the purge report. A purge records `payload.purged` naming the hashes, the policy or reason and the actor, in every affected project's chain.
 
 Purge removes a secret from everything Baley manages. A secret that has already reached a review provider, an export or any other system must still be rotated; the purge report says so.
 
@@ -593,6 +593,7 @@ erDiagram
   VIEW_DOC {
     text view PK
     text project_id PK
+    integer generation PK
     text doc_key PK
     integer produced_seq
     integer projector_version
@@ -608,7 +609,7 @@ erDiagram
 
 *Figure 8. Tables of the SQLite adapter. `VIEW_DOC` stands for one table per view, each with its declared key and index columns. `SEARCH_ENTRY` is an FTS5 virtual table. The `request` view is one of the views.*
 
-Further tables: `schema_meta` (compatibility epoch, created and migrated times), `view_meta` (per view per project: projector version, applied sequence, shadow state), and `trace` (diagnostics, outside the chain, size-capped).
+Further tables: `schema_meta` (compatibility epoch, created and migrated times), `project_gen` (per project: the live generation, a generation being built, its projector version and applied sequence), and `trace` (diagnostics, outside the chain, size-capped).
 
 Indexes: `event(project_id, stream, stream_version)` unique; `event(project_id, type, seq)`; `event(project_id, git_commit)` for `why`; `payload_ref(hash)`; each view's declared indexes.
 
@@ -675,7 +676,7 @@ Each process opens its own connection. SQLite's write-ahead log lets any number 
 - **Guard hook.** Starts per tool call, opens a connection without an integrity scan, reads the views it needs and, for a decision worth recording, appends one `guard` event. It holds no write transaction while it evaluates.
 - **CLI.** Opens connections on demand.
 
-Write transactions start with `BEGIN IMMEDIATE`, so a writer takes the lock before reading and two writers never deadlock on an upgrade. A writer that finds the lock held waits up to 5 seconds, then fails with a clear "store busy" error. Because every slow step happens before `transact`, a write transaction holds the lock for milliseconds.
+**Writer queue.** Before `BEGIN IMMEDIATE`, every write, maintenance included, takes a blocking exclusive lock on `<home>/baley.db.writer`. The kernel parks waiting writers and wakes them when the lock is released, instead of SQLite's sleep-and-retry busy handler, which starved writers for seconds under load (see [Performance](#performance)). The lock is not strictly first-in, first-out, so maintenance (rebuilds, generation cleanup, purge scrubbing) runs in short batches and pauses after each batch for as long as it held the queue. Write transactions then start with `BEGIN IMMEDIATE`, so a writer takes the database lock before reading and two writers never deadlock on an upgrade. `busy_timeout` stays at 5 seconds as a backstop, after which a writer fails with a clear "store busy" error. Because every slow step happens before `transact`, a write transaction holds the lock for milliseconds. Projectors fold all of a transaction's events into their documents in memory and write each changed document once.
 
 **Compatibility epoch.** Every write transaction reads the compatibility epoch from `schema_meta` before anything else. A process whose epoch is older than the stored one stops writing, answers read-only, and tells the caller which binary is needed. Migrations raise the epoch in the same transaction that changes the schema, so an older process that is already running is fenced at its next write.
 
@@ -811,21 +812,34 @@ See [Threat model](#threat-model) for who is defended against.
 
 ### Performance
 
-Budgets on the reference workload:
+Budgets on the reference workload, and what the benchmark measured: p99 unless stated, median of five runs, worst run in brackets, on a fast drive (Crucial T700) and a slower one (Crucial P3 Plus, QLC).
 
-| Operation | Budget (p99) |
-|---|---|
-| Open a connection with the ownership and epoch checks (guard, CLI) | 10 ms |
-| Server start with `quick_check` on the reference workload | 2 s |
-| Commit a command of up to 10 events, excluding the command's own work | 10 ms |
-| Get one view document by key | 2 ms |
-| Guard hook, store work only | 25 ms |
-| Longest wait for the write lock with 8 sessions writing continuously | 250 ms |
-| Rebuild every view of the reference project, without blocking writers longer than one batch | 30 s total, 50 ms per batch |
+| Operation | Budget | Fast drive | Slower drive |
+|---|---|---|---|
+| Open a connection with the ownership, link, filesystem and epoch checks (guard, CLI) | 10 ms | 0.24 ms (0.27) | 0.26 ms (0.28) |
+| Server start with `quick_check` (five projects) | 2 s | 174 ms (183) | 184 ms (192) |
+| Commit a command, excluding the command's own work | 20 ms | 8.7 ms (14.0) | 11.0 ms (11.6) |
+| Commit a command of 10 events | 20 ms | 9.0 ms (13.0) | 12.6 ms (17.6) |
+| Get one view document by key and parse it | 2 ms | 0.02 ms | 0.02 ms |
+| Guard hook, store work only, in a new process | 25 ms | 6.5 ms (15.5) | 11.7 ms (17.0) |
+| Wait for the write lock with 8 sessions writing continuously | 250 ms | 34 ms (52); longest 78 ms | 51 ms (68); longest 64 ms |
+| Rebuild every view of the reference project while writers run | 30 s | 8.5 s (9.0) | 10.9 s (11.4) |
+| Longest rebuild batch | 100 ms | 43 ms (99) | 38 ms (39) |
+| Rebuild's final flip | 50 ms | 2.8 ms (4.1) | 4.4 ms (4.8) |
 
-Size budget: the reference workload stores in at most 50 MB, counting the database, its write-ahead log after a checkpoint, and every payload body under default retention, with retired prompt text included. Memory: no operation loads more than its answer; the server's resident memory does not grow with the store.
+Size budget: the reference workload stores in at most 50 MB, counting the database, its write-ahead log after a checkpoint, and every payload body under default retention, with retired prompt text included. **Measured: 24.5 MB**, against 175 MB for the same history in the JSON store. Memory: no operation loads more than its answer; the server's resident memory does not grow with the store. The prototype has no long-running server, so this is verified during the build.
 
-**Acceptance gate.** These are targets until measured. Before this design is accepted, a prototype of the SQLite adapter runs a reproducible workload generator shaped like the Cadence 4.0 build (40 phases, the recorded event mix, payload sizes from the old store) across several projects, and measures: cold guard starts, 8 concurrent writers, a full rebuild, backup, purge and checkpoints. The results, the generator and the machine are recorded in this document. A budget the prototype misses is revised with the reason, or the design changes.
+The commit budget was 10 ms before the benchmark. Commit time is mostly the flush that makes a commit durable, and it spikes occasionally on both drives; 20 ms keeps the same meaning (a commit a person never notices) with the flush measured. The rebuild-batch budget moved from 50 to 100 ms for the same reason.
+
+**How it was measured.** A prototype of the SQLite adapter in [`spikes/evidence-ledger-bench`](../../spikes/evidence-ledger-bench/README.md) replays a numbers-only profile of the Cadence 4.0 build (1,551 commands, 1,615 events, 618 attachments), with synthetic content calibrated to the zstd ratio measured on each class of real content. It pays every cost the design puts in a transaction: the request check, the decision's re-reads, the authority check against events, the cheap git facts, the hash chain as specified, payloads and references, projectors, the search index, claim and record transactions for external effects, and `command.completed`. Writers run as separate processes; rebuild and backup run while writers write. Each drive ran five independent runs, with the page cache warm. Raw results are in `spikes/evidence-ledger-bench/results/`. Across all runs on both drives: no errors with the writer queue, and a rebuild or a purge never changed a view.
+
+**What the benchmark changed in this design.**
+
+- **Writer queue.** With SQLite's busy handler alone, 8 writers waited 629 ms at p99 and up to 4.9 s on the fast drive, and some writers failed on the slower one; commands per writer ranged from 743 to 2,014. With the queue, every writer committed 1,176 or 1,177 commands and none failed. See [Processes and concurrency](#processes-and-concurrency-evd-r8-evd-r19).
+- **Maintenance yields.** The queue's file lock is not first-in, first-out, so a rebuild taking batch after batch made one writer wait 761 ms. Maintenance now pauses after each batch for as long as it held the queue.
+- **One write per document per transaction.** Projectors fold all of a transaction's events into their documents in memory and write each document once. Before, a 10-event command rewrote the same documents ten times.
+- **Generations for rebuilds.** Swapping rebuilt rows into the live tables took up to 60 ms per view. Views now carry a generation, and a rebuild flips one number (see [Views and projectors](#views-and-projectors-evd-r9-evd-r10-evd-r27)).
+- **Purge.** Search rows derived from a payload are found through an index, not a scan (the purge transaction went from 220 ms to 9 ms), and a purge ends with a truncating checkpoint after `VACUUM`.
 
 SQLite's limits sit far beyond these numbers: 281 TB per database and about 1 GB per stored value.
 
@@ -948,8 +962,7 @@ The conformance suite lives in `baley-store` and runs against every adapter.
 
 ## Open questions
 
-1. **Benchmark.** Build the adapter prototype and the workload generator, run them, and record the results against [Performance](#performance). Must be answered before acceptance.
-2. **Host matrix.** Run every row of [Host neutrality](#host-neutrality-evd-r24) on both hosts. Must be answered before acceptance.
+1. **Host matrix.** Run every row of [Host neutrality](#host-neutrality-evd-r24) on both hosts. Must be answered before acceptance.
 
 ## Appendix A: Mapping from the current store
 

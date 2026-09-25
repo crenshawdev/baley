@@ -1,0 +1,21 @@
+[package]
+name = "evidence-ledger-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Measures design 0001's performance and size budgets with a prototype SQLite adapter"
+
+# Standalone on purpose: this is measurement code for a design gate, not part of
+# the shipped workspace.
+[workspace]
+
+[dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }
+zstd = "0.13"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+[profile.release]
+debug = 1
