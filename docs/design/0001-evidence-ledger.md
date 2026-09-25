@@ -488,7 +488,7 @@ A body is deleted only when no remaining reference still requires it. A purge in
 
 **Reduction** does not alter a payload. It stores the kept excerpt (the first and last 64 KiB) as a new payload with its own hash, records `payload.reduced` naming the original hash, the excerpt hash and the byte ranges kept, and tombstones the original body. Verification checks the excerpt in full and the original as a commitment.
 
-**Purge** removes, in one transaction, the body and every derived copy Baley manages: search entries, view fields that quoted it, saved request answers and trace rows. The database runs with `secure_delete` on, and a purge ends with a checkpoint and `VACUUM` so free pages and the write-ahead log keep no copy. Backups in Baley's home receive the same purge; exports outside it cannot be reached and are listed in the purge report. A purge records `payload.purged` naming the hashes, the policy or reason and the actor, in every affected project's chain.
+**Purge** removes, in one transaction, the body and every derived copy Baley manages: search entries, view fields that quoted it, saved request answers and trace rows. The database runs with `secure_delete` on, and a purge ends with a checkpoint, `VACUUM`, and a final `wal_checkpoint(TRUNCATE)`: in write-ahead-log mode `VACUUM` writes every page through the log, so only the last truncating checkpoint leaves no copy behind. Backups in Baley's home receive the same purge; exports outside it cannot be reached and are listed in the purge report. A purge records `payload.purged` naming the hashes, the policy or reason and the actor, in every affected project's chain.
 
 Purge removes a secret from everything Baley manages. A secret that has already reached a review provider, an export or any other system must still be rotated; the purge report says so.
 
@@ -659,7 +659,7 @@ Each process opens its own connection. SQLite's write-ahead log lets any number 
 - **Guard hook.** Starts per tool call, opens a connection without an integrity scan, reads the views it needs and, for a decision worth recording, appends one `guard` event. It holds no write transaction while it evaluates.
 - **CLI.** Opens connections on demand.
 
-Write transactions start with `BEGIN IMMEDIATE`, so a writer takes the lock before reading and two writers never deadlock on an upgrade. A writer that finds the lock held waits up to 5 seconds, then fails with a clear "store busy" error. Because every slow step happens before `transact`, a write transaction holds the lock for milliseconds.
+**Writer queue.** Before `BEGIN IMMEDIATE`, every writer takes a blocking exclusive lock on `<home>/baley.db.writer`. The kernel parks waiting writers and wakes one each time the lock is released, so writers take turns instead of polling; SQLite's own busy handler sleeps and retries, and under sustained load it starved writers for seconds (see [Performance](#performance)). Write transactions then start with `BEGIN IMMEDIATE`, so a writer takes the database lock before reading and two writers never deadlock on an upgrade. `busy_timeout` stays at 5 seconds as a backstop, after which a writer fails with a clear "store busy" error. Because every slow step happens before `transact`, a write transaction holds the lock for milliseconds.
 
 **Compatibility epoch.** Every write transaction reads the compatibility epoch from `schema_meta` before anything else. A process whose epoch is older than the stored one stops writing, answers read-only, and tells the caller which binary is needed. Migrations raise the epoch in the same transaction that changes the schema, so an older process that is already running is fenced at its next write.
 
@@ -795,21 +795,23 @@ See [Threat model](#threat-model) for who is defended against.
 
 ### Performance
 
-Budgets on the reference workload:
+Budgets on the reference workload, and what the benchmark measured (p99 unless stated):
 
-| Operation | Budget (p99) |
-|---|---|
-| Open a connection with the ownership and epoch checks (guard, CLI) | 10 ms |
-| Server start with `quick_check` on the reference workload | 2 s |
-| Commit a command of up to 10 events, excluding the command's own work | 10 ms |
-| Get one view document by key | 2 ms |
-| Guard hook, store work only | 25 ms |
-| Longest wait for the write lock with 8 sessions writing continuously | 250 ms |
-| Rebuild every view of the reference project, without blocking writers longer than one batch | 30 s total, 50 ms per batch |
+| Operation | Budget | Measured |
+|---|---|---|
+| Open a connection with the ownership, link, filesystem and epoch checks (guard, CLI) | 10 ms | 0.27 ms |
+| Server start with `quick_check` (five projects, 105 MB) | 2 s | 150 ms |
+| Commit a command of up to 10 events, excluding the command's own work | 10 ms | 6.9 ms (reference load), 5.5 ms (8 writers) |
+| Get one view document by key | 2 ms | under 0.01 ms |
+| Guard hook, store work only, in a new process | 25 ms | 6.6 ms (9.2 ms including process start) |
+| Longest wait for the write lock with 8 sessions writing continuously | 250 ms | 23.6 ms p99, 34 ms max, no errors |
+| Rebuild every view of the reference project, without blocking writers longer than one batch | 30 s total, 50 ms per batch | 0.14 s total, 4.1 ms largest batch |
 
-Size budget: the reference workload stores in at most 50 MB, counting the database, its write-ahead log after a checkpoint, and every payload body under default retention, with retired prompt text included. Memory: no operation loads more than its answer; the server's resident memory does not grow with the store.
+Size budget: the reference workload stores in at most 50 MB, counting the database, its write-ahead log after a checkpoint, and every payload body under default retention, with retired prompt text included. **Measured: 21.5 MB**, against 175 MB for the same history in the JSON store: 5.3 MB of event JSON, 4.2 MB of compressed payload bodies (41.3 MB before compression), and the rest indexes, views and the search index. Memory: no operation loads more than its answer; the server's resident memory does not grow with the store. The prototype has no long-running server, so this is verified during the build, not by the benchmark.
 
-**Acceptance gate.** These are targets until measured. Before this design is accepted, a prototype of the SQLite adapter runs a reproducible workload generator shaped like the Cadence 4.0 build (40 phases, the recorded event mix, payload sizes from the old store) across several projects, and measures: cold guard starts, 8 concurrent writers, a full rebuild, backup, purge and checkpoints. The results, the generator and the machine are recorded in this document. A budget the prototype misses is revised with the reason, or the design changes.
+**How it was measured.** A prototype of the SQLite adapter in [`spikes/evidence-ledger-bench`](../../spikes/evidence-ledger-bench/README.md) replays a numbers-only profile of the Cadence 4.0 build (1,551 commands, 1,615 events, 618 attachments with their sizes, retention classes and identities) as synthetic content tuned to each class's measured compression ratio, for the reference project alone and for five projects. It records the hash chain, payloads and references, projector-written views, the request view and the search index, with the connection settings above, and adds one guarded git command per three task commands, since the old store kept none. Results are in [`results/2026-09-25-ryzen-9800x3d-t700-btrfs.json`](../../spikes/evidence-ledger-bench/results/2026-09-25-ryzen-9800x3d-t700-btrfs.json): AMD Ryzen 7 9800X3D, Crucial T700 NVMe, btrfs, Linux 7.2, SQLite 3.53.2. A slower disk raises commit and lock-wait times roughly in proportion to its `fsync` time; the budgets leave room for a disk several times slower.
+
+**What the benchmark changed.** With SQLite's busy handler alone, 8 continuous writers starved each other: p99 wait 429 ms, one writer waiting 5 s and failing, commands per writer ranging from 204 to 729. Hence the writer queue in [Processes and concurrency](#processes-and-concurrency-evd-r8-evd-r19), which brought the same run to a 21 ms p99 wait and 540 or 541 commands per writer. It also showed that `VACUUM` in write-ahead-log mode leaves a full copy of the database in the log (117 MB after the purge run), hence the final truncating checkpoint in the purge sequence.
 
 SQLite's limits sit far beyond these numbers: 281 TB per database and about 1 GB per stored value.
 
@@ -932,8 +934,7 @@ The conformance suite lives in `baley-store` and runs against every adapter.
 
 ## Open questions
 
-1. **Benchmark.** Build the adapter prototype and the workload generator, run them, and record the results against [Performance](#performance). Must be answered before acceptance.
-2. **Host matrix.** Run every row of [Host neutrality](#host-neutrality-evd-r24) on both hosts. Must be answered before acceptance.
+1. **Host matrix.** Run every row of [Host neutrality](#host-neutrality-evd-r24) on both hosts. Must be answered before acceptance.
 
 ## Appendix A: Mapping from the current store
 
