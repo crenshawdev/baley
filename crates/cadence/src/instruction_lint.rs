@@ -72,11 +72,14 @@ fn compiled_instructions_name_only_what_exists() {
     let schema = super::config::schema();
     let operations: BTreeSet<_> = super::server::query_operation_names()
         .chain(super::server::apply_operation_names()).collect();
-    // Hand-authored skills, traced against skills/ independently of this assertion.
+    // Shipped skills only: the rendered files plus the hand-authored ones,
+    // traced against skills/ independently of this assertion. The help
+    // catalog is not proof that a skill exists. `cad-phase` has no skill; the
+    // task instructions still send oversized work to `/cad-phase add` until
+    // the owner decides that wording, and this names it rather than hiding it.
     let mut skills: BTreeSet<_> = [
-        "cad-review-delivery", "cad-reviewer-contract",
+        "cad-review-delivery", "cad-reviewer-contract", "cad-phase",
     ].into_iter().collect();
-    skills.extend(cadence::help::table::COMMANDS.iter().map(|command| command.name));
     skills.extend(RENDERED_PROJECT_FILES.iter().map(|file| {
         file.path.strip_prefix("skills/").unwrap().strip_suffix("/SKILL.md").unwrap()
     }));
