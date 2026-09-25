@@ -787,7 +787,7 @@ Every rule below keeps its current behaviour (EVD-R28). Each gets an equivalence
 
 See [Threat model](#threat-model) for who is defended against.
 
-- **Agent isolation (EVD-R24).** Agents run as the owner's user, so file modes cannot keep them out. The barrier is the host's sandbox: Baley's setup adds a rule to each host's configuration that denies agents read and write access to Baley's home (Codex's `workspace-write` sandbox already confines agent writes to the workspace; Claude Code's sandbox denies named paths). The host matrix proves on both hosts that agents are blocked while Baley's server and hook still write. As a second, best-effort layer, the guard refuses file-tool writes into the home and shell commands that name it.
+- **Agent isolation (EVD-R24).** Agents run as the owner's user, so file modes cannot keep them out. The barrier is the host's sandbox: Baley's setup adds a rule to each host's configuration that denies agents access to Baley's home. Claude Code's sandbox denies named paths for reading and writing. Codex's `workspace-write` sandbox confines agent writes to the workspace but grants full disk read under every policy, so on Codex an agent can read the ledger and cannot change it; nothing sensitive is kept outside payloads, and payloads can be purged. The host matrix showed on both hosts that agents are blocked from writing while Baley's server and hook still write. As a second, best-effort layer, the guard refuses file-tool writes into the home and shell commands that name it.
 - **Detection.** Anchors on the forge make a rewrite, truncation or rollback detectable up to the latest anchor, even by an agent that can run `sqlite3` and sign with the owner's key.
 - **Secrets.** Test output and review material can carry secrets. They are always payloads, so they can always be purged, with the limits stated in [Payloads, retention and purge](#payloads-retention-and-purge-evd-r11-evd-r14). The existing fence that screens outbound review payloads stays.
 - **Network.** The store makes no network calls. Anchors are pushed with git to the project's own remote.
@@ -851,13 +851,15 @@ SQLite's limits sit far beyond these numbers: 281 TB per database and about 1 GB
 
 ### Host neutrality (EVD-R24)
 
-| Concern | Claude Code | Codex | Evidence required before acceptance |
+| Concern | Claude Code | Codex | Evidence |
 |---|---|---|---|
-| Project discovery from the working directory | Hook and MCP server start in the project | Same | Discovery works from subdirectories on both |
-| Hook contract (tool names, event names, answer format) | `PreToolUse`, `Bash`, `Write`, `Edit` | Codex's own hook events and tool names | A guard adapter per host; both refuse the same unsafe actions |
-| Re-delivered tool calls | Retries after timeout | Retries after timeout | The retry returns the original answer on both |
-| Access to Baley's home | Server and hook write; agents denied by sandbox rule | Server and hook write; agents confined by `workspace-write` | Shown on both, with an agent attempt refused |
-| Store unreachable | Guard applies today's rules for a missing or failed audit store | Same | The same outcome shown on both |
+| Project discovery from the working directory | Hook and MCP server start in the session's directory, which may be a subdirectory | Same | Shown: both hosts start the MCP server with the session's directory as its working directory, and today's server binds that directory as the project. The hook already walks up. The server walks up too (slice 2). |
+| Hook contract (tool names, event names, answer format) | `PreToolUse`, `Bash`, `Write`, `Edit`; answers `allow`, `deny`, `ask` | The same `PreToolUse` event and stdin fields, `Bash` for shell; answers `deny` and exit code 2 only: `ask` is rejected as unsupported and the command runs | Shown: the hook's input needs no adapter. The guard's answer does: on Codex every `ask` becomes `deny` with the same reason, so a push that would ask for permission on Claude Code is refused on Codex. Proven at slice 3. |
+| Re-delivered tool calls | Retries after timeout | Retries after timeout | Shown for the hook: the same session and `tool_use_id` get the confirmed answer. Proven for MCP calls at slice 1, where the `request` view lands. |
+| Access to Baley's home | Server and hook write; agents denied read and write by the sandbox rule | Server and hook write; agents denied write by `workspace-write`, reads allowed | Shown on both. Claude Code: a denied read looks like a missing file, a denied write exits 0 and nothing lands. Codex: the write is refused with "Read-only file system"; every Codex sandbox policy grants full disk read, so on Codex agents can read the ledger. |
+| Store unreachable | Guard applies today's rules for a missing or failed audit store | Same | Shown: the guard answers pass-on-failure with its reason, and a denial still stands. |
+
+**How it was measured.** The probes in [`spikes/host-matrix`](../../spikes/host-matrix/README.md) run one throwaway non-interactive session per host from a subdirectory of this repository, with a hook and a stand-in MCP server that record where they ran and whether they could write a stand-in home outside the checkout, and an agent that is asked to read and write that home. Run on 2026-09-25 with Codex CLI 0.156.1 and Claude Code 2.1.282 on Linux. The matrix is run again before each release.
 
 ### Compatibility and migration
 
@@ -882,7 +884,7 @@ Slices:
 
 1. **Foundation.** The workspace split, the port, the SQLite adapter, the conformance suite, payloads and references, the hash chain, anchors, `verify`, `doctor`, `backup`. Nothing uses it yet.
 2. **Identity, location and policy.** The home directory and its checks, `baley init`, the project file, discovery for the server and the guard, `policy.effective`, host sandbox rules.
-3. **Standalone families.** Captures; guard; task, debug and spike.
+3. **Standalone families.** Captures; guard, with the Codex answer adapter (`ask` becomes `deny`); task, debug and spike.
 4. **The lifecycle slice.** Roadmap, requirements, context, plans, evidence maps, admission, execution, dispatch, runs, native evidence and verification move together, built as a series of pull requests on one branch and merged when the whole slice works.
 5. **Review and risk.**
 6. **Milestones, landing, undo and pause.**
@@ -934,7 +936,7 @@ Slices:
 | EVD-R19 | Opening a database stamped with a newer epoch yields read-only; a second connection at the old epoch is fenced at its next write; a migration test upgrades a fixture of the previous schema and verifies a backup was taken first; a newer view is never rebuilt backward. |
 | EVD-R20 | Relies on SQLite's documented durability with `synchronous=FULL`. Power loss is not reproducible in a portable test and is not re-tested. |
 | EVD-R21 | The benchmark harness measures every budget on the reference workload. Timings are measured, not asserted in tests, because timing is not portable. |
-| EVD-R24 | The host matrix, run by hand on both hosts before acceptance, and again before each release. |
+| EVD-R24 | The host matrix, run by hand on both hosts before acceptance (done 2026-09-25, `spikes/host-matrix`), and again before each release. |
 | EVD-R25 | `show` and `export` render every record family from views. |
 | EVD-R26 | While a claim is active, commands outside its scope proceed and commands inside it wait; a retry during the effect never repeats it. After the owner is killed and the lease expires, a command in scope triggers reconciliation; an anchor claim reconciles automatically from the remote; a revert claim waits for the owner. A cleanly failed anchor push completes the claim and blocks nothing. |
 | EVD-R27 | An edited view document that says "approved" or "complete" does not grant admission or completion, because the event is missing. |
@@ -962,7 +964,7 @@ The conformance suite lives in `baley-store` and runs against every adapter.
 
 ## Open questions
 
-1. **Host matrix.** Run every row of [Host neutrality](#host-neutrality-evd-r24) on both hosts. Must be answered before acceptance.
+None. The benchmark and the host matrix, the two acceptance gates, are answered above.
 
 ## Appendix A: Mapping from the current store
 
