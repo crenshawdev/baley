@@ -12,7 +12,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Dependabot reads 0.10 -> 0.11 as a minor update, but for a 0.x crate it breaks.
+    # Only patches are grouped; minor and major bumps arrive one per pull request.
     groups:
       cargo:
         patterns:
           - "*"
+        update-types:
+          - "patch"
