@@ -4,6 +4,7 @@
 //! creates its schema, and puts every write behind the writer queue and the
 //! compatibility epoch.
 
+mod payload;
 mod queue;
 mod schema;
 mod store;
