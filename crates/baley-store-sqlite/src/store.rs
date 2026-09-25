@@ -8,7 +8,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use baley_store::{
-    COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, EventSchema, Head, ProjectId, Projector,
+    COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, EventSchema, Hash, Head, PAYLOAD_PURGED,
+    PAYLOAD_PURGED_VERSION, PAYLOAD_REDUCED, PAYLOAD_REDUCED_VERSION, ProjectId, Projector,
     RequestProjector, StoreError, ViewSpec, store_owned,
 };
 use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
@@ -74,6 +75,9 @@ pub struct TraceEntry {
     /// UTC, RFC 3339, supplied by the caller.
     pub at: String,
     pub project: Option<ProjectId>,
+    /// A trace entry derived from a payload body must name that payload.
+    /// An entry without one is never removed by a purge.
+    pub payload: Option<Hash>,
     pub kind: String,
     pub data: String,
 }
@@ -95,6 +99,7 @@ pub struct SqliteStore {
     /// recorded since. The hash tells a chain rewritten under the mark, as
     /// by a restore, from the one that was checked.
     readable: Mutex<BTreeMap<ProjectId, Head>>,
+    pub(crate) home: std::path::PathBuf,
 }
 
 impl SqliteStore {
@@ -154,6 +159,7 @@ impl SqliteStore {
             projectors,
             schema: options.schema,
             readable: Mutex::new(BTreeMap::new()),
+            home: home.to_path_buf(),
         };
         // Most opens find every view in place, and ask on the read
         // connection, so they take neither the queue nor a write.
@@ -185,6 +191,8 @@ impl SqliteStore {
     /// store's own, or the core's.
     pub(crate) fn reads(&self, type_name: &str, version: u32) -> bool {
         (type_name == COMMAND_COMPLETED && version == COMMAND_COMPLETED_VERSION)
+            || (type_name == PAYLOAD_REDUCED && version == PAYLOAD_REDUCED_VERSION)
+            || (type_name == PAYLOAD_PURGED && version == PAYLOAD_PURGED_VERSION)
             || (!store_owned(type_name) && self.schema.reads(type_name, version))
     }
 
@@ -210,10 +218,11 @@ impl SqliteStore {
         let cap = i64::try_from(self.trace_cap).unwrap_or(i64::MAX);
         self.write(|tx| {
             tx.execute(
-                "INSERT INTO trace (at, project_id, kind, data) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO trace (at, project_id, payload_hash, kind, data) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     entry.at,
                     entry.project.as_ref().map(|project| &project.0),
+                    entry.payload.as_ref().map(|hash| &hash.0[..]),
                     entry.kind,
                     entry.data
                 ],
@@ -284,6 +293,16 @@ impl SqliteStore {
         let value = f(&tx)?;
         tx.commit().map_err(sql)?;
         Ok(value)
+    }
+
+    /// Holds the writer queue and write connection for maintenance outside a transaction.
+    pub(crate) fn maintenance<T>(
+        &self,
+        f: impl FnOnce(&mut Connection) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let _turn = self.queue.wait().map_err(io)?;
+        let mut conn = lock(&self.writer);
+        f(&mut conn)
     }
 }
 
@@ -428,6 +447,7 @@ mod tests {
         TraceEntry {
             at: AT.into(),
             project: None,
+            payload: None,
             kind: kind.into(),
             data: "{}".into(),
         }

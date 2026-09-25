@@ -14,16 +14,17 @@ use std::collections::BTreeMap;
 use baley_store::{
     Absence, Answer, COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, Change, Claim, Command, Decide,
     Decision, DocKey, Document, Event, EventDraft, EventMatch, GitFact, GitFacts, Hash, Head,
-    INLINE_ANSWER_LIMIT, IndexQuery, NewEvent, Observed, Outcome, Page, PageRequest, PayloadRef,
-    ProjectId, REQUEST_VIEW, Recorded, Refusal, RetentionClass, StaleInput, StoreError, StreamName,
-    Transaction, canonical_json, command_stream, completed_payload, recorded_outcome, request_key,
+    INLINE_ANSWER_LIMIT, IndexQuery, NewEvent, Observed, Outcome, PAYLOAD_PURGED, PAYLOAD_REDUCED,
+    Page, PageRequest, PayloadRef, PayloadStatus, ProjectId, PurgedEvent, REQUEST_VIEW, Recorded,
+    ReducedEvent, Refusal, RetentionClass, StaleInput, StoreError, StreamName, Transaction,
+    UtcInstant, canonical_json, command_stream, completed_payload, recorded_outcome, request_key,
     store_owned,
 };
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{OptionalExtension, params, params_from_iter};
 use serde_json::Value;
 
-use crate::payload::{put_payload, put_reference, sql_int};
+use crate::payload::{put_payload, put_reference, sql_int, stored};
 use crate::store::{SqliteStore, sql};
 use crate::view::{Staged, find_documents, find_with_staged, get_document, write_live};
 
@@ -38,12 +39,47 @@ impl SqliteStore {
         command: &Command,
         decide: &mut Decide<'_>,
     ) -> Result<Recorded, StoreError> {
+        match self.command_path(
+            command,
+            |_tx, outcome, _| Ok(outcome),
+            |work| {
+                let decision = decide(work)?;
+                let outcome = work.outcome(&decision)?;
+                Ok((
+                    outcome.clone(),
+                    outcome,
+                    decision.git,
+                    Some(decision.observed),
+                ))
+            },
+        )? {
+            CommandResult::Replayed(outcome) => Ok(Recorded::Replayed { outcome }),
+            CommandResult::New(outcome, head) => Ok(Recorded::New { outcome, head }),
+        }
+    }
+
+    /// Runs the shared request, fence, event and head path for domain and
+    /// store-owned commands. The replay callback sees the recorded event sequence.
+    pub(crate) fn command_path<T>(
+        &self,
+        command: &Command,
+        replay: impl FnOnce(&rusqlite::Transaction<'_>, Outcome, u64) -> Result<T, StoreError>,
+        new: impl FnOnce(
+            &mut Work<'_, '_>,
+        )
+            -> Result<(T, Outcome, Option<GitFacts>, Option<Observed>), StoreError>,
+    ) -> Result<CommandResult<T>, StoreError> {
+        UtcInstant::parse(&command.recorded_at).map_err(|_| {
+            StoreError::Refused(Refusal::InvalidEvent(
+                "recorded_at is not a UTC instant".into(),
+            ))
+        })?;
         let recorded = self.write(|tx| {
             let project = &command.project;
             let head = stored_head(tx, project)?;
             let requests = self.views().table(REQUEST_VIEW)?;
             if let Some(document) = get_document(tx, requests, project, &request_key(command))? {
-                let (digest, outcome) = recorded_outcome(&document.body).ok_or_else(|| {
+                let (digest, mut outcome) = recorded_outcome(&document.body).ok_or_else(|| {
                     StoreError::Unavailable("a request document that holds no outcome".into())
                 })?;
                 if digest != command.digest {
@@ -51,26 +87,37 @@ impl SqliteStore {
                         request_id: command.request_id.clone(),
                     }));
                 }
-                return Ok(Recorded::Replayed { outcome });
+                if let Answer::Stored(reference) = &outcome.answer {
+                    let status =
+                        reference_status(tx, project, document.produced_seq, &reference.hash)?;
+                    if !matches!(status, PayloadStatus::Present { .. }) {
+                        outcome.answer = Answer::Tombstone {
+                            reference: reference.clone(),
+                            status,
+                        };
+                    }
+                }
+                return replay(tx, outcome, document.produced_seq).map(CommandResult::Replayed);
             }
             // A replay above only reads; a project this binary cannot read
             // still answers it. A new write is fenced here.
             self.check_readable(tx, project, head.as_ref())?;
             let mut work = Work::new(self, tx, command, head);
-            let decision = decide(&mut work)?;
+            let (result, outcome, git, observed) = new(&mut work)?;
             // An operation that failed fails the command, even when the
             // decision went on past the error.
             if let Some(error) = work.failed.take() {
                 return Err(error);
             }
             work.check_payloads_attached()?;
-            recheck(self, tx, project, &decision.observed)?;
-            let outcome = work.outcome(&decision)?;
-            work.complete(&outcome, decision.git.clone())?;
+            if let Some(observed) = observed {
+                recheck(self, tx, project, &observed)?;
+            }
+            work.complete(&outcome, git)?;
             let head = work.write()?;
-            Ok(Recorded::New { outcome, head })
+            Ok(CommandResult::New(result, head))
         })?;
-        if let Recorded::New { head, .. } = &recorded {
+        if let CommandResult::New(_, head) = &recorded {
             // Committed: every event through the new head was checked
             // readable or was written here by this binary.
             self.readable()
@@ -120,6 +167,62 @@ impl SqliteStore {
         }
         self.readable().insert(project.clone(), head.clone());
         Ok(())
+    }
+}
+
+/// Whether a command was answered from its request or wrote a new head.
+pub(crate) enum CommandResult<T> {
+    Replayed(T),
+    New(T, Head),
+}
+
+/// The state of one answer's own reference, including its releasing event.
+pub(crate) fn reference_status(
+    tx: &rusqlite::Transaction<'_>,
+    project: &ProjectId,
+    seq: u64,
+    hash: &Hash,
+) -> Result<PayloadStatus, StoreError> {
+    let released = tx
+        .query_row(
+            "SELECT released_seq FROM payload_ref WHERE project_id = ?1 AND seq = ?2 AND hash = ?3",
+            params![project.0, sql_int(seq)?, &hash.0[..]],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .optional()
+        .map_err(sql)?
+        .ok_or_else(|| {
+            StoreError::Unavailable(format!("payload {hash}: answer reference is missing"))
+        })?;
+    let Some(released) = released else {
+        return Ok(stored(tx, hash)?.status);
+    };
+    let event: (String, String) = tx
+        .query_row(
+            "SELECT type, payload_json FROM event WHERE project_id = ?1 AND seq = ?2",
+            params![project.0, released],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(sql)?;
+    let value: Value = serde_json::from_str(&event.1)
+        .map_err(|error| StoreError::Unavailable(format!("a release event: {error}")))?;
+    match event.0.as_str() {
+        PAYLOAD_PURGED => Ok(PayloadStatus::Purged {
+            reason: PurgedEvent::from_value(&value)
+                .ok_or_else(|| StoreError::Unavailable("a malformed purge event".into()))?
+                .reason,
+        }),
+        PAYLOAD_REDUCED => {
+            let reduced = ReducedEvent::from_value(&value)
+                .ok_or_else(|| StoreError::Unavailable("a malformed reduction event".into()))?;
+            Ok(PayloadStatus::Reduced {
+                excerpt: reduced.excerpt,
+                kept: reduced.kept.to_vec(),
+            })
+        }
+        _ => Err(StoreError::Unavailable(
+            "a reference released by another event".into(),
+        )),
     }
 }
 
@@ -333,9 +436,9 @@ fn references_in(value: &Value, found: &mut Vec<PayloadRef>) -> Result<(), Store
 }
 
 /// One command's decision at work inside the write transaction.
-struct Work<'s, 't> {
+pub(crate) struct Work<'s, 't> {
     store: &'s SqliteStore,
-    tx: &'s rusqlite::Transaction<'t>,
+    pub(crate) tx: &'s rusqlite::Transaction<'t>,
     command: &'s Command,
     /// The head after the events appended so far.
     head: Option<Head>,
@@ -472,7 +575,7 @@ impl<'s, 't> Work<'s, 't> {
 
     /// Places an event after the head, runs the projectors over it, and
     /// holds both until the command writes.
-    fn push(&mut self, event: NewEvent) -> Result<u64, StoreError> {
+    pub(crate) fn push(&mut self, event: NewEvent) -> Result<u64, StoreError> {
         if !self.store.reads(&event.type_name, event.type_version) {
             return Err(StoreError::Refused(Refusal::UnreadableType {
                 type_name: event.type_name,
@@ -574,7 +677,9 @@ impl<'s, 't> Work<'s, 't> {
     /// depended on.
     fn complete(&mut self, outcome: &Outcome, git: Option<GitFacts>) -> Result<(), StoreError> {
         let attachments = match &outcome.answer {
-            Answer::Stored(reference) => vec![reference.clone()],
+            Answer::Stored(reference) | Answer::Tombstone { reference, .. } => {
+                vec![reference.clone()]
+            }
             Answer::Inline(_) => Vec::new(),
         };
         self.push(NewEvent {
@@ -710,10 +815,19 @@ impl Work<'_, '_> {
         self.push(event)
     }
 
-    fn put(&mut self, bytes: &[u8], class: RetentionClass) -> Result<PayloadRef, StoreError> {
+    pub(crate) fn put(
+        &mut self,
+        bytes: &[u8],
+        class: RetentionClass,
+    ) -> Result<PayloadRef, StoreError> {
         let reference = put_payload(self.tx, bytes, class)?;
         self.put.push(reference.hash);
         Ok(reference)
+    }
+
+    /// The sequence the next store-owned event will take.
+    pub(crate) fn next_seq(&self) -> u64 {
+        self.head.as_ref().map_or(1, |head| head.seq + 1)
     }
 }
 

@@ -132,14 +132,14 @@ impl Payloads for SqliteStore {
 }
 
 /// A stored payload row as the read side needs it.
-struct Stored {
-    rowid: i64,
-    encoding: String,
-    status: PayloadStatus,
+pub(crate) struct Stored {
+    pub(crate) rowid: i64,
+    pub(crate) encoding: String,
+    pub(crate) status: PayloadStatus,
 }
 
 /// The payload row for `hash`, with its tombstone read into a status.
-fn stored(conn: &Connection, hash: &Hash) -> Result<Stored, StoreError> {
+pub(crate) fn stored(conn: &Connection, hash: &Hash) -> Result<Stored, StoreError> {
     let row = conn
         .query_row(
             "SELECT p.rowid, p.encoding, p.state, p.bytes, p.purge_reason,
@@ -257,6 +257,45 @@ impl ChunkSource for BlobSource {
             .map_err(io::Error::other)?;
         blob.read_at(buf, offset).map_err(io::Error::other)
     }
+}
+
+struct BorrowedBlobSource<'a> {
+    conn: &'a Connection,
+    rowid: i64,
+}
+
+impl ChunkSource for BorrowedBlobSource<'_> {
+    fn read_at(&mut self, buf: &mut [u8], offset: usize) -> io::Result<usize> {
+        let blob = self
+            .conn
+            .blob_open("main", "payload", "body", self.rowid, true)
+            .map_err(io::Error::other)?;
+        blob.read_at(buf, offset).map_err(io::Error::other)
+    }
+}
+
+/// Streams a present body from the write transaction's own snapshot.
+pub(crate) fn stream_in<'a>(
+    conn: &'a Connection,
+    hash: &Hash,
+) -> Result<(u64, Box<dyn Read + 'a>), StoreError> {
+    let row = stored(conn, hash)?;
+    let PayloadStatus::Present { bytes } = row.status else {
+        return Err(StoreError::Unavailable(format!(
+            "payload {hash}: body is not present"
+        )));
+    };
+    if row.encoding != ZSTD {
+        return Err(StoreError::Unavailable(format!(
+            "payload {hash}: unknown encoding"
+        )));
+    }
+    let stream = body_stream(BorrowedBlobSource {
+        conn,
+        rowid: row.rowid,
+    })
+    .map_err(|error| StoreError::Unavailable(error.to_string()))?;
+    Ok((bytes, stream))
 }
 
 /// A source read in order, one chunk per call.

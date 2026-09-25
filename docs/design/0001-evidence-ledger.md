@@ -89,7 +89,7 @@ Identifiers are stable. Requirements changed by the review keep their number; ne
 | EVD-R11 | Payloads are stored once, compressed, addressed by SHA-256 of their bytes. Events reference them by hash. | Context: frozen copies |
 | EVD-R12 | Domain code has no dependency on the storage engine, enforced by the crate graph. Every adapter passes one conformance suite. | Goal 4 |
 | EVD-R13 | Recorded text can be searched with relevance ranking, scoped by project and phase, with semantics defined independently of the engine. | Replaces custom recall index |
-| EVD-R14 | Payload bodies can be removed by retention policy or by command without breaking EVD-R3 or EVD-R10. Retention applies per reference. Each removal is an event in every affected project's chain, and removes every derived copy Baley manages. | Goal 5 |
+| EVD-R14 | Payload bodies can be removed by retention policy or by command without breaking EVD-R3 or EVD-R10. Retention applies per reference. Each removal is an event in the chain of the project that makes it, and removes every derived copy Baley manages. | Goal 5 |
 | EVD-R15 | A project's ledger can be exported as a standalone database that verifies on its own. The whole store can be backed up while in use. | Goal 5 |
 | EVD-R16 | There is one database per user, outside any checkout, in the platform data directory on Linux and macOS. `BALEY_HOME` overrides the location. | Goal 5 |
 | EVD-R17 | A checkout maps to its project through a committed project file holding the project id. No record holds a filesystem identity. | Goal 5 |
@@ -222,28 +222,35 @@ The port is shaped around Baley's access patterns: by id, by phase, by (phase, p
 classDiagram
   class Ledger {
     <<trait>>
-    +transact(project, command, decide) Outcome
-    +stream(project, stream, from_version, page) Events
-    +history(project, range, filter, page) Events
-    +verify(project) ChainReport
+    +transact(command, decide) Recorded
+    +stream(project, stream, from_version, page) Page
+    +history(project, range, filter, page) Page
+    +claim(command, decide) Claimed
+    +renew_lease(project, claim, owner, at)
+    +complete(command, decide) Recorded
+    +reconcile(command, claim, decide) Recorded
+    +open_claims(project) Claims
+    +head(project) Head
+    +verify(project, anchor) VerifyReport
   }
   class Transaction {
     <<trait>>
     +get(view, key) Document
-    +find(view, index, range, page) Documents
-    +event_exists(project, type, match) bool
+    +find(view, index_query) Documents
+    +event_exists(matching) bool
     +expect(stream, version)
-    +append(stream, event) Seq
-    +put_payload(bytes, class) Hash
+    +append(event) Seq
+    +put_payload(bytes, class) PayloadRef
+    +open_claims() Claims
   }
   class Views {
     <<trait>>
-    +get(view, key) Document
-    +find(view, index, range, page) Page
+    +get(project, view, key) Document
+    +find(project, view, index_query) Page
   }
   class Payloads {
     <<trait>>
-    +open(hash) PayloadStream
+    +open(hash) PayloadBody
     +status(hash) Present or Reduced or Purged
   }
   class Search {
@@ -252,16 +259,19 @@ classDiagram
   }
   class Admin {
     <<trait>>
-    +backup(target)
+    +create_project(project, name)
+    +backup(dir, anchors) BackupReport
     +export(project, target)
-    +purge(project, selector) PurgeReport
-    +rebuild(view, project)
-    +anchor(project) Anchor
-    +doctor() Health
+    +reduce(command, reference) PayloadRef
+    +purge(command, hashes, reason) PurgeReport
+    +scrub() ScrubReport
+    +rebuild(project) RebuildReport
+    +verify_views(project) ViewsReport
+    +doctor(at, anchors) Health
   }
   class Projector {
     <<trait, implemented in baley-core>>
-    +view() ViewSpec
+    +spec() ViewSpec
     +apply(event, documents) Changes
   }
   Ledger ..> Transaction : decide runs inside
@@ -271,12 +281,12 @@ classDiagram
 
 *Figure 4. The storage port. The decision runs inside the transaction with read access; projectors live in the core and are handed to the adapter, so the adapter never contains business rules.*
 
-- **`transact`** runs one command's decision. The caller does its slow work first (tests, model calls, git work) and passes the results in. The adapter opens the write transaction, checks the request (see [Commands](#commands)), and calls `decide` with a `Transaction`. `decide` re-reads every input it depends on from views inside the transaction, re-checks the command's cheap git facts, confirms authority against events where required, and appends events. The adapter then runs every projector registered for those event types, writes the view changes and search entries, and commits. If any step fails, nothing is recorded (EVD-R5). Because SQLite admits one writer at a time, nothing can change between `decide`'s reads and the commit (EVD-R7).
+- **`transact`** runs one command's decision. The caller does its slow work first (tests, model calls, git work) and passes the results in. The adapter opens the write transaction, checks the request, then fences a new request if the project holds an event type or version this binary cannot read. A replay is answered before that fence. `decide` reads through `Transaction` and returns the inputs its caller observed. The adapter re-checks documents and absences against the store and compares the caller-supplied git facts seen and now. Reading git inside the transaction is issue #40, for Build 4. A decision confirms authority against events where required and appends events. Any `Transaction` operation's error fails the command, and a stored payload must be attached to an event. The adapter runs the projectors, writes each changed document once, and commits. If any step fails, nothing is recorded (EVD-R5).
 - **`expect`** additionally names the stream that serializes a contested decision, so two commands that would both pass their own checks are ordered by one version counter. Each contested decision names its stream in [Serializing streams](#serializing-streams).
 - **Views** are declared by the core as a `ViewSpec`: a name, a version, a key shape, indexed fields, the ordering of each index and a page-size bound. `find` reads by a declared index, never by scan, and returns a page with a cursor. One query runs against one read snapshot.
-- **Payloads** are read through a stream handle, never loaded with the view that references them. A purged or reduced payload returns its status and the tombstone, not an error.
+- **Payloads** are read through a stream on its own connection and snapshot. A stream opened before a purge keeps reading its snapshot. A purged or reduced payload returns its status and tombstone. Bytes whose hash was reduced or purged cannot be stored again (`PayloadTombstoned`).
 - **Search** is a capability with defined semantics: terms and quoted phrases, scoped by project and optionally phase, results in descending relevance with stable tie-breaking by sequence. The SQLite adapter implements it with FTS5 and BM25; nothing in the core depends on FTS5 syntax.
-- **Admin** covers everything an owner does to the store as a whole.
+- **Admin** covers everything an owner does to the store as a whole. `scrub` is the standalone, idempotent end of a purge.
 
 #### Events
 
@@ -297,6 +307,8 @@ Every event has an envelope and a payload.
 | `prev_hash`, `hash` | The hash chain. |
 
 Payloads are JSON so that the ledger stays readable with standard tools and queryable through SQLite's JSON functions. For hashing, the envelope (without `hash`) and the payload are serialized with the JSON Canonicalization Scheme (RFC 8785), so the same event always hashes the same way on any platform.
+
+Payload numbers are integers within ±(2^53 − 1); floats are refused, because RFC 8785 writes numbers as IEEE doubles. Events and view documents never carry payload body text: a decision puts body content in a payload and records its reference, and an inline fact is never an excerpt of a body. `command.*` and `payload.*` events are recorded only by the store; a decision that appends one is refused.
 
 Event types are named `<family>.<fact>` in the past tense, and each has a payload schema version. A payload schema change adds a new version; old events are never rewritten and are read through an upcaster that converts old versions to the current shape (EVD-R19). An event type or version a binary does not know makes that project read-only for that binary.
 
@@ -329,7 +341,7 @@ A command is one request from a caller, carrying a request id.
 
 **Request ids (EVD-R6).** The caller generates a fresh UUID for each command. Baley scopes it to the project and the command kind, so two sessions, two hosts or two command kinds can never collide or receive each other's answers. The request digest is the SHA-256 of the canonical form of the command kind and every field that carries authority (the approved content, the phase and plan, the target dispatch, the policy version). Guard decisions keep today's identity built from the host session and tool-call id.
 
-**Outcomes.** Every command that reaches a domain outcome, success or a real refusal, records a `command.completed` event carrying the request digest and the answer, including commands that record no other event. The `request` view is built from those events and is rebuildable like any other. Infrastructure failures (store busy, disk full) and stale-input refusals are not outcomes: nothing is recorded, and the caller re-reads and tries again with the same request id.
+**Outcomes.** Every command that reaches a domain outcome, success or a real refusal, records a `command.completed` event carrying the command kind, request id, digest, outcome kind, the git facts it depended on and the answer. An answer is inline when its canonical JSON is at most 4 KiB and is not sensitive; otherwise it is a `record` payload reference. This includes commands that record no other event. The `request` view is built from those events and is rebuildable like any other. A replay whose answer its own project released by purge or reduction returns its tombstone even when another project still requires the body. The event and request document keep the reference. Infrastructure failures (store busy, disk full) and stale-input refusals are not outcomes: nothing is recorded, and the caller re-reads and tries again with the same request id.
 
 **Database-only commands** run in one transaction: check the request first, then decide, append, project and commit, as in Figure 6.
 
@@ -387,19 +399,23 @@ sequenceDiagram
   L->>Q: check compatibility epoch, look up request
   alt request already answered
     L->>Q: ROLLBACK
-    L-->>C: original outcome, nothing recorded
+    L-->>C: original outcome, a released answer returns its tombstone
   else new request
+    L->>Q: check project event types and versions are readable
     L->>C: decide(transaction)
-    C->>Q: re-read inputs from views, re-check cheap git facts
-    C->>Q: confirm authority against events
-    alt inputs moved
+    C->>L: read inputs through Transaction, return observed slow-work inputs
+    C->>L: confirm authority against events, append events, put payloads
+    L->>Q: write payload bodies when put_payload is called
+    L->>Q: re-check observed documents and absences, compare supplied git facts seen and now
+    Note over L,Q: Git is not read inside the transaction yet, issue #40 (Build 4)
+    alt input moved or any Transaction operation failed
       L->>Q: ROLLBACK
-      L-->>C: refused: stale, retry
+      L-->>C: error, nothing recorded
     else current
-      C->>L: append events, put payloads
-      L->>Q: insert payloads and references, events with hash chain
-      L->>Q: run projectors, write views and search entries
-      L->>Q: record command.completed, advance project head
+      L->>Q: refuse a stored payload no event attaches
+      L->>Q: insert events with hash chain and references, write projected views
+      L->>Q: command.completed with git facts, answer inline up to 4 KiB unless sensitive, else record payload
+      L->>Q: advance project head
       L->>Q: COMMIT (synchronous, survives power loss)
       L-->>C: outcome
     end
@@ -408,7 +424,7 @@ sequenceDiagram
   S-->>D: tool result
 ```
 
-*Figure 6. A database-only command. The request is checked before anything else, and the decision is made inside the transaction from inputs read there.*
+*Figure 6. A database-only command. The request is checked before the readability fence. The caller supplies observed git facts; the adapter checks them and stores the outcome in the same transaction.*
 
 #### Serializing streams
 
@@ -424,7 +440,7 @@ sequenceDiagram
 
 #### Git facts and checkouts (EVD-R4, EVD-R7)
 
-Git state changes without any stream moving, so every event that depends on git records the facts it saw: HEAD commit, tree, and the checkout it came from. The cheap facts (HEAD and whether the index matches what the command observed) are re-checked inside the write transaction; anything that moved refuses the command. Slow git work stays before the transaction, as today, so the race window is no wider than it is now. Execution permission records the checkout it was granted to; another worktree of the same project must be admitted on its own.
+Git state changes without any stream moving, so every event that depends on git records the facts it saw: HEAD commit, tree, and the checkout it came from. The cheap facts (HEAD and whether the index matches what the command observed) are supplied as seen and now values and compared inside the write transaction; anything that moved refuses the command. Reading git inside that transaction is issue #40, for Build 4. Slow git work stays before the transaction. Execution permission records the checkout it was granted to; another worktree of the same project must be admitted on its own.
 
 The existing source checks are kept and run at these points:
 
@@ -500,11 +516,15 @@ Content is stored as a payload when it is larger than 4 KiB, or when it is of a 
 
 These are the defaults. A project can change any of them in `baley.toml`, and `baley purge` removes a body at once regardless of class.
 
-A body is deleted only when no remaining reference still requires it. A purge in one project removes only that project's references and is recorded in that project's chain; a body shared with another project survives until that project's references also expire.
+A reference stops requiring its body when its project records `payload.reduced` for it or `payload.purged` releasing it. A body is tombstoned when no unreleased reference remains in any project. A purge releases only the purging project's references and is recorded in that project's chain. Bodies are stored and read by hash, so a body another project still requires stays readable. A project may attach identical bytes again later as a new reference while another project still keeps the body.
 
-**Reduction** does not alter a payload. It stores the kept excerpt (the first and last 64 KiB) as a new payload with its own hash, records `payload.reduced` naming the original hash, the excerpt hash and the byte ranges kept, and tombstones the original body. Verification checks the excerpt in full and the original as a commitment.
+**Reduction** applies only to an `output` reference. It stores the first and last 64 KiB as a new `record` payload attached to `payload.reduced`, which names the original hash, excerpt hash and byte ranges kept. An output of 128 KiB or less is kept whole and records no event. The store checks the original body's hash and length before releasing the reference. The original body is tombstoned only when no other reference still requires it whole. Reduction after purge is refused. Verification checks the excerpt in full and the original as a commitment.
 
-**Purge** removes, in one transaction, the body and every derived copy Baley manages: search entries, view fields that quoted it, saved request answers and trace rows. The database runs with `secure_delete` on, and a purge ends with a checkpoint, `VACUUM`, and a final `wal_checkpoint(TRUNCATE)`: in write-ahead-log mode `VACUUM` writes every page through the log, so only the last truncating checkpoint leaves no copy behind. Backups in Baley's home receive the same purge; exports outside it cannot be reached and are listed in the purge report. A purge records `payload.purged` naming the hashes, the policy or reason and the actor, in every affected project's chain.
+**Purge** first releases the purging project's references to each named hash, including the excerpt references attached by that project's own reductions of an original. In one transaction it tombstones every body no unreleased reference requires, removes stored request answer bodies and derived trace rows, records `payload.purged` in the purging project's chain, and marks `scrub_pending`. Trace removal covers every row naming a removed body and the purging project's rows naming a body it no longer requires. A trace entry derived from a body must name it. Search rows join this removal in slice 8. Events, request rows and view documents remain; they hold no body text.
+
+The `payload.purged` event lists each released reference as a `[source sequence, hash]` pair. Its `released` list and each `payload_ref.released_seq` can therefore be rebuilt from events alone. Trace removal covers a removed body's rows in every project and rows in the purging project only when that project has no other live reference to the hash. The report's `shared` list holds hashes released or requested whose body or excerpt is still required by another reference, in any project. This includes a requested original that stays reduced because another reduction requires its excerpt.
+
+The standalone, idempotent scrub checks the compatibility epoch before any write, then holds the writer queue through a passive checkpoint, `VACUUM`, up to three truncating checkpoint attempts and the backup rewrite. It judges each truncating checkpoint's result row: only `busy = 0` completes the main database scrub and clears `scrub_pending`. Until then, purged bytes may remain in free pages or the write-ahead log, and `doctor` reports the pending marker. Each scrub rewrites the `.db` backups in the home for every hash that is not present in the live store. A backup receives tombstones without the removal event; its chain still verifies because the chain commits to hashes. A live reduced row becomes a purged backup tombstone with reason `reduced in live store`, since the backup may lack its excerpt. A backup skipped or not fully rewritten is listed as unreachable. If the scrub errors before the backup rewrite, the existing `backups` directory is listed as unreachable. A linked `backups` directory is listed and never followed. Exports are listed from T12's export records.
 
 Purge removes a secret from everything Baley manages. A secret that has already reached a review provider, an export or any other system must still be rotated; the purge report says so.
 
@@ -512,19 +532,57 @@ Purge removes a secret from everything Baley manages. A secret that has already 
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Stored : first reference
-  Stored --> Stored : another reference to the same hash
-  Stored --> Reduced : output retention ends, excerpt stored as a new payload
-  Stored --> Purged : no reference still requires it, or owner purges
-  Reduced --> Purged : owner purges
-  Purged --> [*]
+  [*] --> Present : first reference
+  Present --> Present : another reference, or a release while another reference still requires the body
+  Present --> Reduced : payload.reduced releases the last requiring reference, the excerpt is stored as a new record payload
+  Present --> Purged : payload.purged releases the last requiring reference
+  Reduced --> Purged : the excerpt's body is removed
+  note right of Reduced
+    Bytes with a reduced or purged hash
+    cannot be stored again.
+  end note
   note right of Purged
-    Hash, length and references remain.
-    The chain still verifies.
+    A lasting state: hash, length and
+    references remain; the chain still verifies.
   end note
 ```
 
-*Figure 7. Payload lifecycle.*
+*Figure 7. Payload lifecycle. A body changes state only when its last requiring reference is released; there is no way back from a tombstone.*
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor O as Owner or retention policy
+  participant L as Store adapter
+  participant Q as SQLite (baley.db)
+  participant B as Backups in the home
+  O->>L: purge(command, hashes, reason)
+  L->>Q: writer queue, BEGIN IMMEDIATE, epoch, look up request
+  alt same request answered before
+    L->>Q: ROLLBACK
+    Note over L: report rebuilt from the recorded payload.purged
+  else new request
+    L->>Q: readability fence
+    L->>Q: release this project's references to each hash and its own reductions' excerpts
+    L->>Q: tombstone every body no unreleased reference requires
+    L->>Q: delete derived trace rows (search rows from slice 8)
+    L->>Q: append payload.purged, set scrub_pending
+    L->>Q: append command.completed, advance head, COMMIT
+  end
+  Note over L,B: Scrub, also runnable on its own: the writer queue is held unbatched
+  L->>Q: check compatibility epoch, wal_checkpoint(PASSIVE)
+  L->>Q: VACUUM
+  loop at most 3 attempts, each waiting up to busy_timeout for readers
+    L->>Q: wal_checkpoint(TRUNCATE)
+    Q-->>L: busy, log, checkpointed
+    Note over L: done only when busy is 0
+  end
+  L->>Q: clear scrub_pending if done
+  L->>B: each backups/*.db, secure_delete on, tombstone reduced and purged bodies, delete their trace rows, VACUUM, truncate
+  L-->>O: PurgeReport: purged, shared, recorded, unreachable, scrubbed
+```
+
+*Figure 8. A purge: the logical removal in one transaction, then the scrub. The scrub is idempotent and runs on its own too; a pending scrub is marked until it completes.*
 
 #### Physical schema (SQLite adapter)
 
@@ -582,6 +640,10 @@ erDiagram
     text encoding
     blob body
     text state
+    blob excerpt_hash
+    text excerpt_class
+    text kept
+    text purge_reason
   }
   PAYLOAD_REF {
     text project_id PK
@@ -589,6 +651,7 @@ erDiagram
     blob hash PK
     text class
     text expires_at
+    integer released_seq "event that released this reference"
   }
   VIEW_DOC {
     text view PK
@@ -607,11 +670,13 @@ erDiagram
   }
 ```
 
-*Figure 8. Tables of the SQLite adapter. `VIEW_DOC` stands for one table per view, each with its declared key and index columns. `SEARCH_ENTRY` is an FTS5 virtual table. The `request` view is one of the views.*
+*Figure 9. Tables of the SQLite adapter. `VIEW_DOC` stands for one table per view version, `v_<view>_<version>`, with its declared key and index columns. `SEARCH_ENTRY` is an FTS5 virtual table. The `request` view is one of the views.*
 
-Further tables: `schema_meta` (compatibility epoch, created and migrated times), `project_gen` (per project: the live generation, a generation being built, its projector version and applied sequence), and `trace` (diagnostics, outside the chain, size-capped).
+Further tables: `schema_meta` (compatibility epoch, created and migrated times, and `scrub_pending`), `project_gen` (per project: the live generation, a generation being built and its applied sequence), `view_gen` (each view's projector version per generation), `view_catalog` (each view version's spec), `claim_lease`, and `trace` (diagnostics, outside the chain, size-capped, with an optional payload hash).
 
-Indexes: `event(project_id, stream, stream_version)` unique; `event(project_id, type, seq)`; `event(project_id, git_commit)` for `why`; `payload_ref(hash)`; each view's declared indexes.
+`PAYLOAD_REF.released_seq` is the sequence of the `payload.reduced` event naming its original `[seq, hash]` reference or of the `payload.purged` event listing that reference in `released`. It is derived from those events, not an independent fact.
+
+Indexes: `event(project_id, stream, stream_version)` unique; `event(project_id, type, seq)`; `event(project_id, git_commit)` for `why`; `payload(excerpt_hash)` for non-null excerpts; `payload(state)` for non-present rows; `payload_ref(hash)`; each view's declared indexes.
 
 Connection settings: `journal_mode=WAL`, `synchronous=FULL`, `foreign_keys=ON`, `secure_delete=ON`, `busy_timeout=5000`, page size 8 KiB. rusqlite's bundled build compiles SQLite from source (3.53.2 with rusqlite 0.40.1) with FTS5 enabled, so no system SQLite is used.
 
@@ -676,9 +741,9 @@ Each process opens its own connection. SQLite's write-ahead log lets any number 
 - **Guard hook.** Starts per tool call, opens a connection without an integrity scan, reads the views it needs and, for a decision worth recording, appends one `guard` event. It holds no write transaction while it evaluates.
 - **CLI.** Opens connections on demand.
 
-**Writer queue.** Before `BEGIN IMMEDIATE`, every write, maintenance included, takes a blocking exclusive lock on `<home>/baley.db.writer`. The kernel parks waiting writers and wakes them when the lock is released, instead of SQLite's sleep-and-retry busy handler, which starved writers for seconds under load (see [Performance](#performance)). The lock is not strictly first-in, first-out, so maintenance (rebuilds, generation cleanup, purge scrubbing) runs in short batches and pauses after each batch for as long as it held the queue. Write transactions then start with `BEGIN IMMEDIATE`, so a writer takes the database lock before reading and two writers never deadlock on an upgrade. `busy_timeout` stays at 5 seconds as a backstop, after which a writer fails with a clear "store busy" error. Because every slow step happens before `transact`, a write transaction holds the lock for milliseconds. Projectors fold all of a transaction's events into their documents in memory and write each changed document once.
+**Writer queue.** Before `BEGIN IMMEDIATE`, every write, maintenance included, takes a blocking exclusive lock on `<home>/baley.db.writer`. The kernel parks waiting writers and wakes them when the lock is released, instead of SQLite's sleep-and-retry busy handler, which starved writers for seconds under load (see [Performance](#performance)). The lock is not strictly first-in, first-out, so rebuilds and generation cleanup run in short batches and pause after each batch for as long as they held the queue. The purge scrub is the one exception: it holds the queue unbatched through a passive checkpoint, `VACUUM` (one whole-database rebuild), the truncating checkpoint attempts and backup rewrite. It is an owner operation, so the pause is the owner's. Write transactions start with `BEGIN IMMEDIATE`, so a writer takes the database lock before reading and two writers never deadlock on an upgrade. `busy_timeout` stays at 5 seconds as a backstop, after which a writer fails with a clear "store busy" error. Projectors fold all of a transaction's events into their documents in memory and write each changed document once.
 
-**Compatibility epoch.** Every write transaction reads the compatibility epoch from `schema_meta` before anything else. A process whose epoch is older than the stored one stops writing, answers read-only, and tells the caller which binary is needed. Migrations raise the epoch in the same transaction that changes the schema, so an older process that is already running is fenced at its next write.
+**Compatibility epoch.** Every write transaction reads the compatibility epoch from `schema_meta` before anything else. A process whose epoch is older than the stored one stops writing, answers read-only, and tells the caller which binary is needed. Migrations raise the epoch in the same transaction that changes the schema, so an older process that is already running is fenced at its next write. Until the first release, the schema stays at epoch 1 and is edited in place: ledgers written before a release are disposable.
 
 **Checkpoints.** SQLite folds the write-ahead log into the database automatically every 1,000 pages. A reader that never finishes would stop that and let the log grow without bound; Baley's reads are short-lived by construction, and the server runs a passive checkpoint when idle. `baley doctor` reports the log size.
 
@@ -705,7 +770,7 @@ stateDiagram-v2
   Refused --> [*]
 ```
 
-*Figure 9. Opening the store. A binary never writes to an epoch it does not understand, a failed migration leaves the database as it was, and interrupted claims are reconciled before work in their scope continues.*
+*Figure 10. Opening the store. A binary never writes to an epoch it does not understand, a failed migration leaves the database as it was, and interrupted claims are reconciled before work in their scope continues.*
 
 The MCP server runs SQLite's `quick_check` when it starts. The guard and the CLI do not, so a guard call never scans the database. The full `integrity_check`, chain and view verification run in `baley doctor` and before every backup.
 
@@ -746,11 +811,11 @@ sequenceDiagram
   end
 ```
 
-*Figure 10. One column per actor. Nobody but Baley writes to the ledger; each step's fact is recorded before Hardin allows the next one, a refusal names the proof that is missing, and a verified phase pushes an anchor.*
+*Figure 11. One column per actor. Nobody but Baley writes to the ledger; each step's fact is recorded before Hardin allows the next one, a refusal names the proof that is missing, and a verified phase pushes an anchor.*
 
 #### A retried tool call
 
-A host may deliver the same tool call twice after a timeout. The second delivery carries the same request id, finds the stored outcome at step 6 of Figure 6, and returns it. For a command with an external effect, the retry finds the claim and waits for, or returns, its result. Nothing is recorded twice and no effect runs twice.
+A host may deliver the same tool call twice after a timeout. The second delivery carries the same request id, finds the stored outcome in Figure 6, and returns it. If its project released a stored answer by purge or reduction, the retry receives the tombstone even when another project still requires the body. The event and request document keep the reference. For a command with an external effect, the retry finds the claim and waits for, or returns, its result. Nothing is recorded twice and no effect runs twice.
 
 #### Two sessions writing at once
 
@@ -809,6 +874,8 @@ See [Threat model](#threat-model) for who is defended against.
 | Unsafe home or a network filesystem | Checks on open | Refused with the reason and the fix | Fix modes or ownership, or set `BALEY_HOME` to a local path |
 | Anchor push fails cleanly (remote unreachable or refused) | `command.completed` with the failure | Nothing blocks; `doctor` warns once the unanchored range is over a day old | Retried at the next anchor point |
 | Write-ahead log grows | Log size in doctor | Warning in doctor | Idle checkpoint; find the long reader |
+| Purge scrub held back by an open reader, or interrupted | The truncating checkpoint's row reports busy; `scrub_pending` remains | Scrub incomplete; `doctor` shows it pending | Close the reader and run the scrub |
+| A backup in the home cannot be rewritten | The backup rewrite fails or skips it | Listed as unreachable | Fix or delete that backup file |
 
 ### Performance
 
@@ -927,7 +994,7 @@ Slices:
 | EVD-R8 | Several connections to one database in a temporary directory interleave reads and writes. |
 | EVD-R9 | Each view's query contract (key, index, ordering, paging, bound) is tested against a fixture. |
 | EVD-R10 | Each projector has unit tests: event and documents in, changes out. A conformance test rebuilds every view, including through a simulated crash mid-rebuild, and compares it with the live one; the same after a policy purge and after a targeted purge. |
-| EVD-R11, R14 | Identical content is stored once; the body decompresses to the original bytes and matches its hash; reduction stores an excerpt with its own hash; a shared body survives one project's purge; a purge removes search entries, view fields, request answers and trace rows. |
+| EVD-R11, R14 | Identical content is stored once; the body decompresses to the original bytes and matches its hash; reduction stores an excerpt with its own hash; a shared body survives one project's purge; a purge removes stored request answer bodies and derived trace rows while leaving view documents and the request row unchanged. Search entries are covered from slice 8. |
 | EVD-R12 | The crate graph is the test: `baley-core` has no path to rusqlite, checked by `cargo tree` in CI. |
 | EVD-R13 | Search returns hits in relevance order with stable ties, scoped by project and phase, over a fixture corpus. |
 | EVD-R15 | An exported project verifies alone. |

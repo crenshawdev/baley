@@ -6,6 +6,7 @@
 
 mod payload;
 mod queue;
+mod retention;
 mod schema;
 mod store;
 mod transact;

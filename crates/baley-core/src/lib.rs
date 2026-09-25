@@ -5,5 +5,7 @@
 //! chain live in the port, because both sides of it speak them.
 
 pub mod registry;
+pub mod retention;
 
 pub use registry::{Current, Fence, FenceReason, Registry, RegistryError, UpcastError, Upcaster};
+pub use retention::{Closure, MATERIAL_SECONDS, Retention, RetentionError, eligibility};

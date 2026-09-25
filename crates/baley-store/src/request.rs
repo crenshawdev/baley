@@ -30,7 +30,7 @@ pub fn command_stream(kind: &CommandKind) -> StreamName {
 
 /// Whether the store, not a decision, records events of this type.
 pub fn store_owned(type_name: &str) -> bool {
-    type_name.starts_with("command.")
+    type_name.starts_with("command.") || type_name.starts_with("payload.")
 }
 
 /// The `request` document key of a command.
@@ -48,7 +48,9 @@ pub fn request_key(command: &Command) -> DocKey {
 pub fn completed_payload(command: &Command, outcome: &Outcome) -> Value {
     let answer = match &outcome.answer {
         Answer::Inline(value) => json!({ "inline": value }),
-        Answer::Stored(reference) => json!({ "stored": reference.to_value() }),
+        Answer::Stored(reference) | Answer::Tombstone { reference, .. } => {
+            json!({ "stored": reference.to_value() })
+        }
     };
     json!({
         "kind": command.kind.0,

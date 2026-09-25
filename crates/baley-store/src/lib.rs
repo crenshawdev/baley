@@ -17,6 +17,8 @@ pub mod event;
 pub mod ledger;
 pub mod payload;
 pub mod request;
+pub mod retention;
+pub mod time;
 pub mod view;
 
 pub use canonical::{CanonicalError, MAX_SAFE_INTEGER, canonical_json};
@@ -36,8 +38,8 @@ pub use event::{
 };
 pub use ledger::{
     Admin, BackupReport, Decide, DecideClaim, DecideReconcile, EventSchema, Health, HistoryFilter,
-    Ledger, PayloadFault, ProjectHealth, PurgeReport, RebuildReport, Transaction, VerifyReport,
-    Views, ViewsReport,
+    Ledger, PayloadFault, ProjectHealth, PurgeReport, RebuildReport, ScrubReport, Transaction,
+    VerifyReport, Views, ViewsReport,
 };
 pub use payload::{
     PayloadBody, PayloadRef, PayloadReference, PayloadStatus, Payloads, RetentionClass,
@@ -47,6 +49,11 @@ pub use request::{
     RequestProjector, command_stream, completed_payload, recorded_outcome, request_key,
     request_spec, store_owned,
 };
+pub use retention::{
+    EXCERPT_EDGE, PAYLOAD_PURGED, PAYLOAD_PURGED_VERSION, PAYLOAD_REDUCED, PAYLOAD_REDUCED_VERSION,
+    PurgedEvent, RETENTION_STREAM, ReducedEvent, kept_ranges,
+};
+pub use time::{TimeError, UtcInstant};
 pub use view::{
     Change, Cursor, DocKey, Document, FieldKind, FieldSpec, IndexField, IndexQuery, IndexSpec,
     KeyValue, Order, Page, PageRequest, Projector, ProjectorError, ViewSpec,
