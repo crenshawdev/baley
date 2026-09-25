@@ -74,8 +74,7 @@ fn compiled_instructions_name_only_what_exists() {
         .chain(super::server::apply_operation_names()).collect();
     // Hand-authored skills, traced against skills/ independently of this assertion.
     let mut skills: BTreeSet<_> = [
-        "cad-assumptions-analyzer-contract", "cad-plan-checker-contract",
-        "cad-planner-contract", "cad-review-delivery", "cad-reviewer-contract",
+        "cad-review-delivery", "cad-reviewer-contract",
     ].into_iter().collect();
     skills.extend(cadence::help::table::COMMANDS.iter().map(|command| command.name));
     skills.extend(RENDERED_PROJECT_FILES.iter().map(|file| {
