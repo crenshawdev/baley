@@ -36,7 +36,7 @@ Issues are welcome: bugs, questions, and reports of anything in the docs that is
 
 ## Lineage
 
-Baley grew out of [Cadence](https://github.com/crenshawdev/cadence). History before the `baley-start` tag is Cadence's. Its methodology descends from [GSD](https://github.com/open-gsd/gsd-core); both copyright notices are in [LICENSE](LICENSE).
+Baley grew out of [Cadence](https://github.com/crenshawdev/cadence). History before the `baley-start` tag is Cadence's.
 
 ## License
 
