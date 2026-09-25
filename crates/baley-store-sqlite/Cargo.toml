@@ -1,0 +1,17 @@
+[package]
+name = "baley-store-sqlite"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "The SQLite adapter of the Baley storage port."
+repository = "https://github.com/crenshawdev/baley"
+rust-version = "1.98"
+publish = false
+
+[dependencies]
+baley-store = { path = "../baley-store" }
+# `bundled` compiles SQLite from source with FTS5, so no system SQLite is
+# used; `backup` exposes the online backup API `baley backup` is built on.
+# The design's benchmark ran on rusqlite 0.40.1 with SQLite 3.53.2; the lock
+# file holds whatever 0.40 resolves to.
+rusqlite = { version = "0.40", features = ["bundled", "backup"] }
