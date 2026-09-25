@@ -8,7 +8,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use baley_store::{
-    COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, EventSchema, ProjectId, Projector,
+    COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, EventSchema, Head, ProjectId, Projector,
     RequestProjector, StoreError, ViewSpec, store_owned,
 };
 use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
@@ -90,10 +90,11 @@ pub struct SqliteStore {
     /// The store's `request` projector first, then the core's.
     projectors: Vec<Box<dyn Projector>>,
     schema: Box<dyn EventSchema>,
-    /// Per project, the sequence through which every stored event's type
-    /// and version was found readable, so a write checks only the events
-    /// recorded since.
-    readable: Mutex<BTreeMap<ProjectId, u64>>,
+    /// Per project, the head through which every stored event's type and
+    /// version was found readable, so a write checks only the events
+    /// recorded since. The hash tells a chain rewritten under the mark, as
+    /// by a restore, from the one that was checked.
+    readable: Mutex<BTreeMap<ProjectId, Head>>,
 }
 
 impl SqliteStore {
@@ -188,7 +189,7 @@ impl SqliteStore {
     }
 
     /// The per-project readable-through marks.
-    pub(crate) fn readable(&self) -> MutexGuard<'_, BTreeMap<ProjectId, u64>> {
+    pub(crate) fn readable(&self) -> MutexGuard<'_, BTreeMap<ProjectId, Head>> {
         self.readable.lock().unwrap_or_else(PoisonError::into_inner)
     }
 

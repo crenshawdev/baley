@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use baley_store::{
     Absence, Answer, COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, Change, Claim, Command, Decide,
-    Decision, DocKey, Document, Event, EventDraft, EventMatch, GitFact, Hash, Head,
+    Decision, DocKey, Document, Event, EventDraft, EventMatch, GitFact, GitFacts, Hash, Head,
     INLINE_ANSWER_LIMIT, IndexQuery, NewEvent, Observed, Outcome, Page, PageRequest, PayloadRef,
     ProjectId, REQUEST_VIEW, Recorded, Refusal, RetentionClass, StaleInput, StoreError, StreamName,
     Transaction, canonical_json, command_stream, completed_payload, recorded_outcome, request_key,
@@ -29,10 +29,10 @@ use crate::view::{Staged, find_documents, find_with_staged, get_document, write_
 
 impl SqliteStore {
     /// Runs one database-only command: the writer queue, `BEGIN IMMEDIATE`
-    /// and the epoch (the write path), then the project, its readability
-    /// and the request, then `decide`, the re-check of what it observed,
-    /// the answer, `command.completed`, the writes and the head, and commit.
-    /// Anything that fails records nothing.
+    /// and the epoch (the write path), then the project, the request and
+    /// the project's readability, then `decide`, the re-check of what it
+    /// observed, the answer, `command.completed`, the writes and the head,
+    /// and commit. Anything that fails records nothing.
     pub fn transact(
         &self,
         command: &Command,
@@ -41,7 +41,6 @@ impl SqliteStore {
         let recorded = self.write(|tx| {
             let project = &command.project;
             let head = stored_head(tx, project)?;
-            self.check_readable(tx, project, head.as_ref().map_or(0, |head| head.seq))?;
             let requests = self.views().table(REQUEST_VIEW)?;
             if let Some(document) = get_document(tx, requests, project, &request_key(command))? {
                 let (digest, outcome) = recorded_outcome(&document.body).ok_or_else(|| {
@@ -54,39 +53,50 @@ impl SqliteStore {
                 }
                 return Ok(Recorded::Replayed { outcome });
             }
+            // A replay above only reads; a project this binary cannot read
+            // still answers it. A new write is fenced here.
+            self.check_readable(tx, project, head.as_ref())?;
             let mut work = Work::new(self, tx, command, head);
             let decision = decide(&mut work)?;
-            // A projector that failed fails the command, even when the
+            // An operation that failed fails the command, even when the
             // decision went on past the error.
             if let Some(error) = work.failed.take() {
                 return Err(error);
             }
+            work.check_payloads_attached()?;
             recheck(self, tx, project, &decision.observed)?;
             let outcome = work.outcome(&decision)?;
-            work.complete(&outcome)?;
+            work.complete(&outcome, decision.git.clone())?;
             let head = work.write()?;
             Ok(Recorded::New { outcome, head })
         })?;
         if let Recorded::New { head, .. } = &recorded {
             // Committed: every event through the new head was checked
             // readable or was written here by this binary.
-            self.readable().insert(command.project.clone(), head.seq);
+            self.readable()
+                .insert(command.project.clone(), head.clone());
         }
         Ok(recorded)
     }
 
     /// Refuses a project holding an event this binary cannot read. Checks
-    /// only the events recorded since the last check, unless the chain is
-    /// now shorter than the mark, as after a restore.
+    /// only the events recorded since the last check, unless the chain no
+    /// longer holds the checked head, as after a restore.
     fn check_readable(
         &self,
         tx: &rusqlite::Transaction<'_>,
         project: &ProjectId,
-        head_seq: u64,
+        head: Option<&Head>,
     ) -> Result<(), StoreError> {
-        let mark = self.readable().get(project).copied().unwrap_or(0);
-        let from = if mark > head_seq { 0 } else { mark };
-        if from == head_seq {
+        let Some(head) = head else {
+            return Ok(());
+        };
+        let mark = self.readable().get(project).cloned();
+        let from = match mark {
+            Some(mark) if stored_hash(tx, project, mark.seq)? == Some(mark.hash) => mark.seq,
+            _ => 0,
+        };
+        if from == head.seq {
             return Ok(());
         }
         let mut statement = tx
@@ -108,9 +118,32 @@ impl SqliteStore {
                 }));
             }
         }
-        self.readable().insert(project.clone(), head_seq);
+        self.readable().insert(project.clone(), head.clone());
         Ok(())
     }
+}
+
+/// The hash of the project's event at `seq`, `None` when there is none.
+fn stored_hash(
+    tx: &rusqlite::Transaction<'_>,
+    project: &ProjectId,
+    seq: u64,
+) -> Result<Option<Hash>, StoreError> {
+    let bytes = tx
+        .query_row(
+            "SELECT hash FROM event WHERE project_id = ?1 AND seq = ?2",
+            params![project.0, sql_int(seq)?],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(sql)?;
+    bytes
+        .map(|bytes| {
+            bytes.try_into().map(Hash).map_err(|_| {
+                StoreError::Unavailable("a stored event hash that is not 32 bytes".into())
+            })
+        })
+        .transpose()
 }
 
 /// The project's stored head, `None` for an empty chain.
@@ -214,7 +247,7 @@ fn recheck(
 
 /// Whether a stored event of the project matches. SQL narrows by type,
 /// stream and the fields it can compare exactly (strings and integers under
-/// plain names); every candidate is then compared in full.
+/// names a JSON path can quote); every candidate is then compared in full.
 fn stored_event_exists(
     tx: &rusqlite::Transaction<'_>,
     project: &ProjectId,
@@ -231,7 +264,8 @@ fn stored_event_exists(
         bound.push(SqlValue::Text(stream.0.clone()));
     }
     for (name, value) in &matching.fields {
-        if name.contains(['"', '\\']) {
+        // SQLite ends a path at a NUL.
+        if name.contains(['"', '\\', '\0']) {
             continue;
         }
         let value = match value {
@@ -266,19 +300,36 @@ fn fields_match(payload: &Value, matching: &EventMatch) -> bool {
         .all(|(name, value)| payload.get(name) == Some(value))
 }
 
-/// Every reference object anywhere in `value`.
-fn references_in(value: &Value, found: &mut Vec<PayloadRef>) {
+/// Every reference object anywhere in `value`. Refuses an object with a
+/// reference's three fields that is not exactly one, which would otherwise
+/// pass as plain JSON and leave its body unreferenced.
+fn references_in(value: &Value, found: &mut Vec<PayloadRef>) -> Result<(), StoreError> {
     if let Some(reference) = PayloadRef::from_value(value) {
         found.push(reference);
-        return;
+        return Ok(());
     }
     match value {
-        Value::Array(items) => items.iter().for_each(|item| references_in(item, found)),
-        Value::Object(fields) => fields
-            .values()
-            .for_each(|field| references_in(field, found)),
+        Value::Array(items) => {
+            for item in items {
+                references_in(item, found)?;
+            }
+        }
+        Value::Object(fields) => {
+            if ["payload", "bytes", "class"]
+                .iter()
+                .all(|name| fields.contains_key(*name))
+            {
+                return Err(StoreError::Refused(Refusal::InvalidEvent(
+                    "an object with a payload reference's fields is not a reference".into(),
+                )));
+            }
+            for field in fields.values() {
+                references_in(field, found)?;
+            }
+        }
         _ => {}
     }
+    Ok(())
 }
 
 /// One command's decision at work inside the write transaction.
@@ -293,7 +344,10 @@ struct Work<'s, 't> {
     streams: BTreeMap<StreamName, u64>,
     /// Per view, the documents the appended events changed.
     staged: BTreeMap<String, BTreeMap<DocKey, Staged>>,
-    /// The first projector failure, which fails the command.
+    /// Every payload the decision stored, each of which an event must
+    /// attach.
+    put: Vec<Hash>,
+    /// The first error any operation returned, which fails the command.
     failed: Option<StoreError>,
 }
 
@@ -312,8 +366,33 @@ impl<'s, 't> Work<'s, 't> {
             events: Vec::new(),
             streams: BTreeMap::new(),
             staged: BTreeMap::new(),
+            put: Vec::new(),
             failed: None,
         }
+    }
+
+    /// Passes an operation's result through, keeping its error to fail the
+    /// command should the decision go on past it.
+    fn noted<T>(&mut self, result: Result<T, StoreError>) -> Result<T, StoreError> {
+        if let Err(error) = &result {
+            self.failed.get_or_insert(error.clone());
+        }
+        result
+    }
+
+    /// Refuses a payload the decision stored that no event attaches.
+    fn check_payloads_attached(&self) -> Result<(), StoreError> {
+        for hash in &self.put {
+            let attached = self.events.iter().any(|(_, attachments)| {
+                attachments
+                    .iter()
+                    .any(|attachment| attachment.hash == *hash)
+            });
+            if !attached {
+                return Err(StoreError::Refused(Refusal::UnattachedPayload(*hash)));
+            }
+        }
+        Ok(())
     }
 
     fn project_id(&self) -> &ProjectId {
@@ -341,7 +420,7 @@ impl<'s, 't> Work<'s, 't> {
     fn check_attachments(&self, event: &NewEvent) -> Result<(), StoreError> {
         let invalid = |reason: &str| StoreError::Refused(Refusal::InvalidEvent(reason.into()));
         let mut carried = Vec::new();
-        references_in(&event.payload, &mut carried);
+        references_in(&event.payload, &mut carried)?;
         for (at, attachment) in event.attachments.iter().enumerate() {
             if event.attachments[..at]
                 .iter()
@@ -418,10 +497,7 @@ impl<'s, 't> Work<'s, 't> {
         };
         let sealed = Event::seal(self.project_id().clone(), seq, prev, draft)
             .map_err(|error| StoreError::Refused(Refusal::InvalidEvent(error.to_string())))?;
-        if let Err(error) = self.apply_projectors(&sealed) {
-            self.failed.get_or_insert(error.clone());
-            return Err(error);
-        }
+        self.apply_projectors(&sealed)?;
         self.streams.insert(event.stream, stream_version);
         self.head = Some(Head {
             seq,
@@ -494,8 +570,9 @@ impl<'s, 't> Work<'s, 't> {
         })
     }
 
-    /// Appends `command.completed` for the outcome.
-    fn complete(&mut self, outcome: &Outcome) -> Result<(), StoreError> {
+    /// Appends `command.completed` for the outcome, with the git facts it
+    /// depended on.
+    fn complete(&mut self, outcome: &Outcome, git: Option<GitFacts>) -> Result<(), StoreError> {
         let attachments = match &outcome.answer {
             Answer::Stored(reference) => vec![reference.clone()],
             Answer::Inline(_) => Vec::new(),
@@ -504,7 +581,7 @@ impl<'s, 't> Work<'s, 't> {
             stream: command_stream(&self.command.kind),
             type_name: COMMAND_COMPLETED.into(),
             type_version: COMMAND_COMPLETED_VERSION,
-            git: None,
+            git,
             payload: completed_payload(self.command, outcome),
             attachments,
         })?;
@@ -582,8 +659,9 @@ fn insert_event(tx: &rusqlite::Transaction<'_>, event: &Event) -> Result<(), Sto
     Ok(())
 }
 
-impl Transaction for Work<'_, '_> {
-    fn get(&mut self, view: &str, key: &DocKey) -> Result<Option<Document>, StoreError> {
+/// What a decision's operations do, before their errors are noted.
+impl Work<'_, '_> {
+    fn get_staged(&self, view: &str, key: &DocKey) -> Result<Option<Document>, StoreError> {
         let table = self.store.views().table(view)?;
         if let Some(staged) = self.staged.get(view).and_then(|staged| staged.get(key)) {
             return Ok(staged.document(table, key));
@@ -591,14 +669,14 @@ impl Transaction for Work<'_, '_> {
         get_document(self.tx, table, self.project_id(), key)
     }
 
-    fn find(&mut self, view: &str, query: &IndexQuery) -> Result<Page<Document>, StoreError> {
+    fn find_staged(&self, view: &str, query: &IndexQuery) -> Result<Page<Document>, StoreError> {
         let table = self.store.views().table(view)?;
         let empty = BTreeMap::new();
         let staged = self.staged.get(view).unwrap_or(&empty);
         find_with_staged(self.tx, table, self.project_id(), query, staged)
     }
 
-    fn event_exists(&mut self, matching: &EventMatch) -> Result<bool, StoreError> {
+    fn exists(&self, matching: &EventMatch) -> Result<bool, StoreError> {
         let appended = self.events.iter().any(|(event, _)| {
             event.type_name == matching.type_name
                 && matching
@@ -610,7 +688,7 @@ impl Transaction for Work<'_, '_> {
         Ok(appended || stored_event_exists(self.tx, self.project_id(), matching)?)
     }
 
-    fn expect(&mut self, stream: &StreamName, version: u64) -> Result<(), StoreError> {
+    fn expect_version(&self, stream: &StreamName, version: u64) -> Result<(), StoreError> {
         let actual = self.stream_version(stream)?;
         if actual != version {
             return Err(StoreError::Stale(StaleInput::StreamVersion {
@@ -622,7 +700,7 @@ impl Transaction for Work<'_, '_> {
         Ok(())
     }
 
-    fn append(&mut self, event: NewEvent) -> Result<u64, StoreError> {
+    fn append_domain(&mut self, event: NewEvent) -> Result<u64, StoreError> {
         if store_owned(&event.type_name) {
             return Err(StoreError::Refused(Refusal::InvalidEvent(format!(
                 "{} is recorded by the store, not by a decision",
@@ -632,19 +710,56 @@ impl Transaction for Work<'_, '_> {
         self.push(event)
     }
 
+    fn put(&mut self, bytes: &[u8], class: RetentionClass) -> Result<PayloadRef, StoreError> {
+        let reference = put_payload(self.tx, bytes, class)?;
+        self.put.push(reference.hash);
+        Ok(reference)
+    }
+}
+
+/// Every operation's error is noted, so a decision that goes on past one
+/// still fails the command.
+impl Transaction for Work<'_, '_> {
+    fn get(&mut self, view: &str, key: &DocKey) -> Result<Option<Document>, StoreError> {
+        let result = self.get_staged(view, key);
+        self.noted(result)
+    }
+
+    fn find(&mut self, view: &str, query: &IndexQuery) -> Result<Page<Document>, StoreError> {
+        let result = self.find_staged(view, query);
+        self.noted(result)
+    }
+
+    fn event_exists(&mut self, matching: &EventMatch) -> Result<bool, StoreError> {
+        let result = self.exists(matching);
+        self.noted(result)
+    }
+
+    fn expect(&mut self, stream: &StreamName, version: u64) -> Result<(), StoreError> {
+        let result = self.expect_version(stream, version);
+        self.noted(result)
+    }
+
+    fn append(&mut self, event: NewEvent) -> Result<u64, StoreError> {
+        let result = self.append_domain(event);
+        self.noted(result)
+    }
+
     fn put_payload(
         &mut self,
         bytes: &[u8],
         class: RetentionClass,
     ) -> Result<PayloadRef, StoreError> {
-        put_payload(self.tx, bytes, class)
+        let result = self.put(bytes, class);
+        self.noted(result)
     }
 
     /// Claims arrive with Build 1's tenth task; until then no claim can
     /// exist, and saying so is an error rather than an empty list a
     /// decision would trust.
     fn open_claims(&mut self) -> Result<Vec<Claim>, StoreError> {
-        Err(StoreError::Unavailable("claims are not built yet".into()))
+        let result = Err(StoreError::Unavailable("claims are not built yet".into()));
+        self.noted(result)
     }
 }
 
@@ -804,6 +919,7 @@ mod tests {
             answer,
             sensitive: false,
             observed: Observed::default(),
+            git: None,
         }
     }
 
@@ -1300,5 +1416,208 @@ mod tests {
             )
             .expect("head");
         assert_eq!(stored, (head.seq as i64, head.hash.0.to_vec()));
+    }
+
+    // The decision ignores a failed `expect` and records anyway; the
+    // command still fails with that error and nothing is recorded.
+    // Catches an operation's error a decision can swallow into a commit.
+    #[test]
+    fn an_error_the_decision_goes_past_still_fails_the_command() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        record(&store, "r1", &[(1, "open")]);
+        let events = count(home.path(), "event");
+        let stream = StreamName("item/1".into());
+        let result = store.transact(&command("item.add", "r2", 1), &mut |tx| {
+            let _ignored = tx.expect(&stream, 0);
+            tx.append(item(2, "open"))?;
+            Ok(done(json!("ok")))
+        });
+        assert_eq!(
+            result,
+            Err(StoreError::Stale(StaleInput::StreamVersion {
+                stream: stream.clone(),
+                expected: 0,
+                actual: 1,
+            }))
+        );
+        assert_eq!(count(home.path(), "event"), events);
+    }
+
+    /// Plants, as the project's head, an event of a type this binary
+    /// cannot read, the way a newer binary would have recorded it.
+    fn plant_unreadable(home: &Path, seq: i64) {
+        let conn = raw(home);
+        let hash = vec![9u8; 32];
+        conn.execute(
+            "INSERT INTO event (project_id, seq, stream, stream_version, type, type_version,
+               actor, recorded_at, request_id, policy_version, payload_json, hash)
+             VALUES (?1, ?2, 'future', 1, 'item.future', 1, 'owner', ?3, 'planted', 1, '{}', ?4)",
+            params![PROJECT, seq, AT, hash],
+        )
+        .expect("planted event");
+        conn.execute(
+            "UPDATE project SET head_seq = ?1, head_hash = ?2 WHERE project_id = ?3",
+            params![seq, hash, PROJECT],
+        )
+        .expect("planted head");
+    }
+
+    // A project now holds an event this binary cannot read, and a retry of
+    // a request it completed before still gets its outcome. Catches the
+    // read-only fence applied to a replay, which only reads.
+    #[test]
+    fn a_replay_is_answered_on_a_project_this_binary_cannot_write() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        let Recorded::New { outcome, .. } = record(&store, "r1", &[(1, "open")]) else {
+            panic!("recorded");
+        };
+        plant_unreadable(home.path(), 3);
+        let replay = store.transact(&command("item.add", "r1", 1), &mut |_| {
+            Ok(done(json!("ran again")))
+        });
+        assert_eq!(replay, Ok(Recorded::Replayed { outcome }));
+    }
+
+    // The chain is rewritten under the checked head, as by a restore, to
+    // one of the same length whose last event this binary cannot read; the
+    // next write is refused. Catches a mark trusted by its sequence alone.
+    #[test]
+    fn a_chain_rewritten_under_the_checked_head_is_checked_again() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        record(&store, "r1", &[(1, "open")]);
+        let conn = raw(home.path());
+        let hash = vec![9u8; 32];
+        conn.execute(
+            "UPDATE event SET type = 'item.future', hash = ?1 WHERE project_id = ?2 AND seq = 2",
+            params![hash, PROJECT],
+        )
+        .expect("rewritten event");
+        conn.execute(
+            "UPDATE project SET head_hash = ?1 WHERE project_id = ?2",
+            params![hash, PROJECT],
+        )
+        .expect("rewritten head");
+        let result = store.transact(&command("item.add", "r2", 1), &mut |tx| {
+            tx.append(item(2, "open"))?;
+            Ok(done(json!("ok")))
+        });
+        assert_eq!(
+            result,
+            Err(StoreError::Refused(Refusal::ProjectReadOnly {
+                project: project(),
+                reason: "item.future version 1 is not readable by this binary".into(),
+            }))
+        );
+    }
+
+    // The decision stores a payload and records an event that does not
+    // attach it; the command is refused and the body is not kept. Catches
+    // a body left outside the chain, where no purge reaches it.
+    #[test]
+    fn a_payload_no_event_attaches_is_refused() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        let loose = Cell::new(None);
+        let result = store.transact(&command("item.add", "r1", 1), &mut |tx| {
+            loose.set(Some(tx.put_payload(b"loose", RetentionClass::Output)?.hash));
+            tx.append(item(1, "open"))?;
+            Ok(done(json!("ok")))
+        });
+        let hash = loose.get().expect("the payload was stored");
+        assert_eq!(
+            result,
+            Err(StoreError::Refused(Refusal::UnattachedPayload(hash)))
+        );
+        assert_eq!(count(home.path(), "payload"), 0);
+    }
+
+    // An event carries a reference's three fields plus a fourth and lists
+    // no attachment; the event is refused. Catches a near-reference passed
+    // as plain JSON, so its body gets no reference row.
+    #[test]
+    fn an_object_with_a_references_fields_that_is_not_one_is_refused() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        let mut reference = PayloadRef {
+            hash: Hash([7; 32]),
+            bytes: 5,
+            class: RetentionClass::Output,
+        }
+        .to_value();
+        reference["note"] = json!("x");
+        let mut event = item(1, "open");
+        event.payload["output"] = reference;
+        let result = store.transact(&command("item.add", "r1", 1), &mut |tx| {
+            tx.append(event.clone())?;
+            Ok(done(json!("ok")))
+        });
+        assert_eq!(
+            result,
+            Err(StoreError::Refused(Refusal::InvalidEvent(
+                "an object with a payload reference's fields is not a reference".into()
+            )))
+        );
+    }
+
+    // A stored event has a field whose name holds a NUL, and a match on
+    // that field finds it. Catches a NUL name passed into a JSON path,
+    // which SQLite ends at the NUL and rejects.
+    #[test]
+    fn event_exists_matches_a_field_name_holding_a_nul() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        let mut event = item(1, "open");
+        event.payload["a\u{0}b"] = json!("x");
+        store
+            .transact(&command("item.add", "r1", 1), &mut |tx| {
+                tx.append(event.clone())?;
+                Ok(done(json!("ok")))
+            })
+            .expect("record");
+        let matching = EventMatch {
+            type_name: RECORDED.into(),
+            stream: None,
+            fields: BTreeMap::from([("a\u{0}b".into(), json!("x"))]),
+        };
+        let found = std::cell::RefCell::new(None);
+        store
+            .transact(&command("item.add", "r2", 1), &mut |tx| {
+                *found.borrow_mut() = Some(tx.event_exists(&matching));
+                Ok(done(json!("ok")))
+            })
+            .expect("transact");
+        assert_eq!(found.into_inner(), Some(Ok(true)));
+    }
+
+    // A decision whose outcome depended on git names those facts, and
+    // `command.completed` records them. Catches a completion that drops
+    // the git facts a refusal on git state rests on.
+    #[test]
+    fn command_completed_records_the_decisions_git_facts() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        store
+            .transact(&command("item.add", "r1", 1), &mut |_| {
+                Ok(Decision {
+                    git: Some(GitFacts {
+                        commit: "c1".into(),
+                        tree: "t1".into(),
+                        checkout: "/work".into(),
+                    }),
+                    ..done(json!("ok"))
+                })
+            })
+            .expect("transact");
+        let git: (String, String, String) = raw(home.path())
+            .query_row(
+                "SELECT git_commit, git_tree, git_checkout FROM event WHERE type = ?1",
+                [COMMAND_COMPLETED],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("command.completed");
+        assert_eq!(git, ("c1".into(), "t1".into(), "/work".into()));
     }
 }
