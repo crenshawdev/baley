@@ -1,11 +1,16 @@
 //! Opening the store and the write path every write goes through (design
 //! 0001, Opening the store; Processes and concurrency; EVD-R8, R19, R20).
 
+use std::collections::BTreeMap;
+use std::fmt;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use baley_store::{ProjectId, StoreError, ViewSpec};
+use baley_store::{
+    COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, EventSchema, Head, ProjectId, Projector,
+    RequestProjector, StoreError, ViewSpec, store_owned,
+};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
 
 use crate::queue::WriterQueue;
@@ -17,22 +22,49 @@ use crate::view::ViewSet;
 const PAGE_SIZE: i64 = 8192;
 
 /// How the store is opened.
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
     /// The most trace rows kept; the oldest go first.
     pub trace_cap: u64,
-    /// The views this binary declares. Their missing tables and indexes are
-    /// created at open. Projectors will carry these specs once they exist;
-    /// until then they are handed in here.
-    pub views: Vec<ViewSpec>,
+    /// The core's projectors. Their views' missing tables and indexes are
+    /// created at open. The store adds its own `request` projector.
+    pub projectors: Vec<Box<dyn Projector>>,
+    /// The event types and versions this binary reads, beyond the store's
+    /// own `command.*` types. A project holding any other is read-only
+    /// here, and a decision may append no other (EVD-R19).
+    pub schema: Box<dyn EventSchema>,
 }
 
 impl Default for Options {
+    /// No projectors, and a schema that reads none of the core's types.
     fn default() -> Self {
         Self {
             trace_cap: 10_000,
-            views: Vec::new(),
+            projectors: Vec::new(),
+            schema: Box::new(ReadsNothing),
         }
+    }
+}
+
+impl fmt::Debug for Options {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let views: Vec<&str> = self
+            .projectors
+            .iter()
+            .map(|projector| projector.spec().name.as_str())
+            .collect();
+        f.debug_struct("Options")
+            .field("trace_cap", &self.trace_cap)
+            .field("projectors", &views)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The schema of a store opened without the core's registry.
+struct ReadsNothing;
+
+impl EventSchema for ReadsNothing {
+    fn reads(&self, _type_name: &str, _version: u32) -> bool {
+        false
     }
 }
 
@@ -53,8 +85,16 @@ pub struct SqliteStore {
     /// Crate-visible so a test can see whether a stream holds it.
     pub(crate) reader: Mutex<Connection>,
     queue: WriterQueue,
-    options: Options,
+    trace_cap: u64,
     views: ViewSet,
+    /// The store's `request` projector first, then the core's.
+    projectors: Vec<Box<dyn Projector>>,
+    schema: Box<dyn EventSchema>,
+    /// Per project, the head through which every stored event's type and
+    /// version was found readable, so a write checks only the events
+    /// recorded since. The hash tells a chain rewritten under the mark, as
+    /// by a restore, from the one that was checked.
+    readable: Mutex<BTreeMap<ProjectId, Head>>,
 }
 
 impl SqliteStore {
@@ -76,7 +116,13 @@ impl SqliteStore {
                 home.display()
             )));
         }
-        let views = ViewSet::new(&options.views)?;
+        let mut projectors: Vec<Box<dyn Projector>> = vec![Box::new(RequestProjector::new())];
+        projectors.extend(options.projectors);
+        let specs: Vec<ViewSpec> = projectors
+            .iter()
+            .map(|projector| projector.spec().clone())
+            .collect();
+        let views = ViewSet::new(&specs)?;
         let queue = WriterQueue::open(&home.join("baley.db.writer")).map_err(io)?;
         let path = home.join("baley.db");
         let writer = connect(&path)?;
@@ -103,8 +149,11 @@ impl SqliteStore {
             writer: Mutex::new(writer),
             reader: Mutex::new(reader),
             queue,
-            options,
+            trace_cap: options.trace_cap,
             views,
+            projectors,
+            schema: options.schema,
+            readable: Mutex::new(BTreeMap::new()),
         };
         // Most opens find every view in place, and ask on the read
         // connection, so they take neither the queue nor a write.
@@ -127,6 +176,23 @@ impl SqliteStore {
         &self.views
     }
 
+    /// The projectors, the store's own first.
+    pub(crate) fn projectors(&self) -> &[Box<dyn Projector>] {
+        &self.projectors
+    }
+
+    /// Whether this binary reads events of this type and version: the
+    /// store's own, or the core's.
+    pub(crate) fn reads(&self, type_name: &str, version: u32) -> bool {
+        (type_name == COMMAND_COMPLETED && version == COMMAND_COMPLETED_VERSION)
+            || (!store_owned(type_name) && self.schema.reads(type_name, version))
+    }
+
+    /// The per-project readable-through marks.
+    pub(crate) fn readable(&self) -> MutexGuard<'_, BTreeMap<ProjectId, Head>> {
+        self.readable.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// The compatibility epoch stamped in the store.
     pub fn epoch(&self) -> Result<u32, StoreError> {
         self.read(|conn| {
@@ -141,7 +207,7 @@ impl SqliteStore {
     /// Records a diagnostic and keeps only the newest `trace_cap` rows.
     pub fn record_trace(&self, entry: &TraceEntry) -> Result<(), StoreError> {
         // SQLite integers are signed; a cap past i64 keeps everything.
-        let cap = i64::try_from(self.options.trace_cap).unwrap_or(i64::MAX);
+        let cap = i64::try_from(self.trace_cap).unwrap_or(i64::MAX);
         self.write(|tx| {
             tx.execute(
                 "INSERT INTO trace (at, project_id, kind, data) VALUES (?1, ?2, ?3, ?4)",

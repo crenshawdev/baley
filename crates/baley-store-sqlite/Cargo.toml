@@ -16,6 +16,9 @@ baley-store = { path = "../baley-store" }
 # file holds whatever 0.40 resolves to. `blob` is SQLite's incremental blob
 # I/O, so a payload body is read in chunks rather than loaded whole.
 rusqlite = { version = "0.40", features = ["bundled", "backup", "blob"] }
+# Event payloads and view documents are JSON. The port crate turns on
+# `arbitrary_precision`, which this crate inherits through it.
+serde_json = "1"
 # Payloads are keyed by the SHA-256 of their uncompressed bytes (EVD-R11).
 sha2 = "0.10"
 # Payload bodies are stored zstd-compressed and read back through its

@@ -129,6 +129,10 @@ pub struct Decision {
     /// Sensitive answers are stored as a payload at any size.
     pub sensitive: bool,
     pub observed: Observed,
+    /// The git facts the outcome depended on, which `command.completed`
+    /// records (EVD-R4). A refusal on git state may record no other event.
+    /// `None` when the outcome depended on none.
+    pub git: Option<GitFacts>,
 }
 
 /// An answer as `command.completed` holds it: inline when small and not

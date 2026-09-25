@@ -78,7 +78,7 @@ pub enum Claimed {
 pub enum Resolution {
     /// The real state was read. The claim's request completes with this
     /// decision, which may record result events.
-    Resolved(Decision),
+    Resolved(Box<Decision>),
     /// The real state is ambiguous, as with a half-applied revert. The claim
     /// stays open and waits for the owner.
     AwaitingOwner,

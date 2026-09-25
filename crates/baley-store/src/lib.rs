@@ -16,6 +16,7 @@ pub mod error;
 pub mod event;
 pub mod ledger;
 pub mod payload;
+pub mod request;
 pub mod view;
 
 pub use canonical::{CanonicalError, MAX_SAFE_INTEGER, canonical_json};
@@ -40,6 +41,11 @@ pub use ledger::{
 };
 pub use payload::{
     PayloadBody, PayloadRef, PayloadReference, PayloadStatus, Payloads, RetentionClass,
+};
+pub use request::{
+    COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, INLINE_ANSWER_LIMIT, REQUEST_VIEW,
+    RequestProjector, command_stream, completed_payload, recorded_outcome, request_key,
+    request_spec, store_owned,
 };
 pub use view::{
     Change, Cursor, DocKey, Document, FieldKind, FieldSpec, IndexField, IndexQuery, IndexSpec,

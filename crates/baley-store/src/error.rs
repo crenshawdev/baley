@@ -102,6 +102,10 @@ pub enum Refusal {
     /// A decision appended an event type or version this binary cannot
     /// read, so it would fence its own project.
     UnreadableType { type_name: String, version: u32 },
+    /// A decision stored a payload that no event of its command attaches.
+    /// The body would sit outside the chain, where no reference names it
+    /// and no purge reaches it.
+    UnattachedPayload(Hash),
     /// No claim with that id was ever taken in the project.
     UnknownClaim(ClaimId),
 }

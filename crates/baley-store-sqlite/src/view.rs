@@ -16,10 +16,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use baley_store::{
     Change, Cursor, DocKey, Document, FieldKind, IndexQuery, IndexSpec, KeyValue, Order, Page,
-    ProjectId, Refusal, StoreError, ViewSpec, Views,
+    ProjectId, Refusal, StoreError, ViewSpec, Views, canonical_json,
 };
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
+use serde_json::Value;
 
 use crate::store::{SqliteStore, sql};
 
@@ -441,6 +442,49 @@ impl ViewTable {
             .collect()
     }
 
+    /// A staged document's position in a page's order, or `None` when it
+    /// does not match the query's equality values. A body without a
+    /// declared index field is refused, as its write would be.
+    fn staged_position(
+        &self,
+        index: &IndexSpec,
+        equals: &[KeyValue],
+        order: &[OrderColumn],
+        document: &Document,
+    ) -> Result<Option<Vec<KeyValue>>, StoreError> {
+        let field = |name: &str, kind: FieldKind| {
+            let held = document.body.get(name);
+            let value = match kind {
+                FieldKind::Text => held
+                    .and_then(|value| value.as_str())
+                    .map(|text| KeyValue::Text(text.to_owned())),
+                FieldKind::Integer => held.and_then(|value| value.as_i64()).map(KeyValue::Integer),
+            };
+            value.ok_or_else(|| {
+                malformed(
+                    &self.spec.name,
+                    format!("the document's {name} is missing or not {kind:?}"),
+                )
+            })
+        };
+        for (spec, wanted) in index.fields.iter().zip(equals) {
+            if field(&spec.name, spec.kind)? != *wanted {
+                return Ok(None);
+            }
+        }
+        let mut position = Vec::with_capacity(order.len());
+        let mut key = document.key.0.iter();
+        for column in order {
+            match column.column.strip_prefix("i_") {
+                Some(name) => position.push(field(name, column.kind)?),
+                None => position.push(key.next().cloned().ok_or_else(|| {
+                    malformed(&self.spec.name, "the key is shorter than declared".into())
+                })?),
+            }
+        }
+        Ok(Some(position))
+    }
+
     /// Reads one row of a seek: the provenance, the document, then the
     /// order columns, whose last values are the key.
     fn found(&self, row: &Row<'_>, order: &[OrderColumn]) -> rusqlite::Result<Found> {
@@ -590,10 +634,6 @@ fn live_generation(conn: &Connection, project: &ProjectId) -> Result<i64, StoreE
 /// hold every key field equal to `key` and every index field, each of its
 /// declared kind; otherwise nothing is written, so the columns always agree
 /// with the body and every index order stays total.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the projectors of task 7 are its first caller")
-)]
 pub(crate) fn write_change(
     tx: &rusqlite::Transaction<'_>,
     view: &ViewTable,
@@ -658,7 +698,13 @@ pub(crate) fn write_change(
         .map_err(|_| StoreError::Unavailable(format!("sequence {produced_seq} is past i64")))?;
     params.push(SqlValue::Integer(produced_seq));
     params.push(SqlValue::Integer(i64::from(view.spec.version)));
-    params.push(SqlValue::Text(body.to_string()));
+    // Canonical text, so the stored bytes do not depend on how serde_json
+    // was built.
+    let text = canonical_json(body)
+        .map_err(|error| malformed(&view.spec.name, format!("the document: {error}")))?;
+    params.push(SqlValue::Text(String::from_utf8(text).map_err(|_| {
+        StoreError::Unavailable("canonical JSON that is not UTF-8".into())
+    })?));
     let mut columns = vec!["project_id".to_owned(), "generation".to_owned()];
     columns.extend(view.key_columns());
     columns.extend(
@@ -681,10 +727,6 @@ pub(crate) fn write_change(
 }
 
 /// `write_change` into the project's live generation, for ordinary writes.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the projectors of task 7 are its first caller")
-)]
 pub(crate) fn write_live(
     tx: &rusqlite::Transaction<'_>,
     view: &ViewTable,
@@ -725,20 +767,57 @@ pub(crate) fn get_document(
     .map_err(sql)
 }
 
+/// A document the write transaction has changed and not yet written: its
+/// body, or `None` once deleted, and the event that last changed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Staged {
+    pub(crate) body: Option<Value>,
+    pub(crate) produced_seq: u64,
+}
+
+impl Staged {
+    /// The document a read sees, or `None` for a deletion.
+    pub(crate) fn document(&self, view: &ViewTable, key: &DocKey) -> Option<Document> {
+        self.body.as_ref().map(|body| Document {
+            key: key.clone(),
+            produced_seq: self.produced_seq,
+            projector_version: view.spec.version,
+            body: body.clone(),
+        })
+    }
+}
+
 /// A page of at most `min(limit, page_bound)` documents by a declared
 /// index, in its order, with a cursor when more follow. A cursor issued
 /// under another generation or view version is refused. A limit of zero
 /// reads nothing and gives no cursor. Takes any connection, so a write
-/// transaction reads its own writes.
+/// transaction reads what it has written.
 pub(crate) fn find_documents(
     conn: &Connection,
     view: &ViewTable,
     project: &ProjectId,
     query: &IndexQuery,
 ) -> Result<Page<Document>, StoreError> {
+    find_with_staged(conn, view, project, query, &BTreeMap::new())
+}
+
+/// `find_documents` over the stored documents with the transaction's
+/// `staged` changes to this view laid on top, so a decision's `find` sees
+/// what its own events changed before any of it is written. Each staged key
+/// hides its stored row; each staged body that matches the query takes its
+/// place in the index order. The stored rows are read `staged.len()` past
+/// the page, which covers every row a staged key can hide.
+pub(crate) fn find_with_staged(
+    conn: &Connection,
+    view: &ViewTable,
+    project: &ProjectId,
+    query: &IndexQuery,
+    staged: &BTreeMap<DocKey, Staged>,
+) -> Result<Page<Document>, StoreError> {
     let index = view.index(&query.index)?;
     let equals = view.equals_values(index, &query.equals)?;
-    let order = view.order_after(index, query.equals.len());
+    let fixed = query.equals.len();
+    let order = view.order_after(index, fixed);
     let generation = live_generation(conn, project)?;
     let identity = cursor_identity(project, view, generation, query);
     let after = match &query.page.after {
@@ -757,9 +836,10 @@ pub(crate) fn find_documents(
     }
     // One row past the page says whether another page follows.
     let wanted = size + 1;
-    let mut rows: Vec<Found> = Vec::with_capacity(wanted);
-    for seek in view.seeks(index, query.equals.len(), after.as_deref()) {
-        let params = seek.params(project, generation, &equals, wanted - rows.len());
+    let stored_wanted = wanted + staged.len();
+    let mut rows: Vec<Found> = Vec::with_capacity(stored_wanted);
+    for seek in view.seeks(index, fixed, after.as_deref()) {
+        let params = seek.params(project, generation, &equals, stored_wanted - rows.len());
         let mut statement = conn.prepare(&seek.sql).map_err(sql)?;
         let found = statement
             .query_map(params_from_iter(params), |row| view.found(row, &order))
@@ -767,9 +847,29 @@ pub(crate) fn find_documents(
         for row in found {
             rows.push(row.map_err(sql)?);
         }
-        if rows.len() == wanted {
+        if rows.len() == stored_wanted {
             break;
         }
+    }
+    if !staged.is_empty() {
+        rows.retain(|row| !staged.contains_key(&row.document.key));
+        for (key, change) in staged {
+            let Some(document) = change.document(view, key) else {
+                continue;
+            };
+            let Some(position) = view.staged_position(index, &query.equals, &order, &document)?
+            else {
+                continue;
+            };
+            if after
+                .as_deref()
+                .is_some_and(|after| compare(&position, after, &order).is_le())
+            {
+                continue;
+            }
+            rows.push(Found { document, position });
+        }
+        rows.sort_by(|left, right| compare(&left.position, &right.position, &order));
     }
     let next = if rows.len() > size {
         rows.truncate(size);
@@ -782,6 +882,22 @@ pub(crate) fn find_documents(
         items: rows.into_iter().map(|row| row.document).collect(),
         next,
     })
+}
+
+/// Two positions in a page's order: column by column, each in its own
+/// direction. Text compares by UTF-8 bytes, as SQLite's binary collation
+/// does.
+fn compare(left: &[KeyValue], right: &[KeyValue], order: &[OrderColumn]) -> std::cmp::Ordering {
+    for ((left, right), column) in left.iter().zip(right).zip(order) {
+        let ordering = match column.order {
+            Order::Ascending => left.cmp(right),
+            Order::Descending => right.cmp(left),
+        };
+        if ordering.is_ne() {
+            return ordering;
+        }
+    }
+    std::cmp::Ordering::Equal
 }
 
 /// The text before a cursor's position: the query it belongs to, and the
@@ -893,7 +1009,7 @@ impl Views for SqliteStore {
 mod tests {
     use std::path::Path;
 
-    use baley_store::{FieldSpec, IndexField, PageRequest};
+    use baley_store::{FieldSpec, IndexField, PageRequest, Projector};
 
     use super::*;
     use crate::store::Options;
@@ -938,9 +1054,38 @@ mod tests {
         ProjectId("p1".into())
     }
 
+    /// A projector that declares a view and handles no event, so these
+    /// tests write documents directly.
+    struct Declares(ViewSpec);
+
+    impl Projector for Declares {
+        fn spec(&self) -> &ViewSpec {
+            &self.0
+        }
+
+        fn handles(&self) -> &[&str] {
+            &[]
+        }
+
+        fn keys(&self, _event: &baley_store::Event) -> Vec<DocKey> {
+            Vec::new()
+        }
+
+        fn apply(
+            &self,
+            _event: &baley_store::Event,
+            _documents: &[(DocKey, Value)],
+        ) -> Result<Vec<Change>, baley_store::ProjectorError> {
+            Ok(Vec::new())
+        }
+    }
+
     fn open_with(home: &Path, views: Vec<ViewSpec>) -> Result<SqliteStore, StoreError> {
         let options = Options {
-            views,
+            projectors: views
+                .into_iter()
+                .map(|spec| Box::new(Declares(spec)) as Box<dyn Projector>)
+                .collect(),
             ..Options::default()
         };
         SqliteStore::open(home, AT, options)
@@ -1059,10 +1204,13 @@ mod tests {
         KeyValue::Text(value.into())
     }
 
+    /// The declared views' tables and indexes. Every store also holds its
+    /// own `request` view, which these tests leave out.
     fn view_names(conn: &Connection) -> Vec<String> {
         let mut statement = conn
             .prepare(
-                "SELECT name FROM sqlite_schema WHERE name LIKE 'v\\_%' ESCAPE '\\' ORDER BY name",
+                "SELECT name FROM sqlite_schema WHERE name LIKE 'v\\_%' ESCAPE '\\'
+                   AND name NOT LIKE 'v\\_request\\_%' ESCAPE '\\' ORDER BY name",
             )
             .expect("prepare");
         statement
@@ -1074,7 +1222,10 @@ mod tests {
 
     fn catalog(conn: &Connection) -> Vec<(String, i64)> {
         let mut statement = conn
-            .prepare("SELECT view, version FROM view_catalog ORDER BY view, version")
+            .prepare(
+                "SELECT view, version FROM view_catalog WHERE view <> 'request'
+                  ORDER BY view, version",
+            )
             .expect("prepare");
         statement
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
