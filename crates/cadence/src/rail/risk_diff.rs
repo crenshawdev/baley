@@ -490,8 +490,6 @@ pub fn scan_declared(
     {
         Some("document body")
     } else if [
-        "cadence-core/bin/lib/risk-diff.mjs",
-        "cadence-core/bin/lib/surface-scan.mjs",
         "crates/cadence/src/rail/risk_diff.rs",
         "crates/cadence/src/rail/surfaces.rs",
     ]
