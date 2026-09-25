@@ -15,3 +15,7 @@ baley-store = { path = "../baley-store" }
 # The design's benchmark ran on rusqlite 0.40.1 with SQLite 3.53.2; the lock
 # file holds whatever 0.40 resolves to.
 rusqlite = { version = "0.40", features = ["bundled", "backup"] }
+
+[dev-dependencies]
+# Each store test opens its database in a fresh temporary directory it owns.
+tempfile = "3"
