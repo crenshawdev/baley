@@ -1,13 +1,12 @@
-//! The record corpus `why` joins commits to, in the shape of the frozen
-//! cadence-core/bin/lib/why-record.mjs (the table and section grammar) and
-//! why-corpus.mjs (the index tiers and the join).
+//! The record corpus `why` joins commits to: the table and section grammar,
+//! the index tiers and the join.
 //!
-//! The index is built once per query and has four ordered tiers: the live and
-//! archived phase directories on disk, the off-roadmap `tasks/<slug>/`
-//! records, and the phases a milestone close pruned, recovered from git
-//! history at the prune commit's parent. A commit resolves against the first
-//! tier that names it at all, so an archived phase both tiers could claim
-//! resolves to the copy a reader can open. Every read fails open into
+//! The index is built once per query and has three ordered tiers: the phase
+//! directories on disk, the off-roadmap `tasks/<slug>/` records, and the
+//! phases a milestone close pruned, recovered from git history at the prune
+//! commit's parent. A commit resolves against the first tier that names it at
+//! all, so a phase both tiers could claim resolves to the copy a reader can
+//! open. Every read fails open into
 //! `warnings`: git already said what the commits are, and a summary nobody can
 //! read makes the join thinner, not the chain wrong.
 
@@ -25,7 +24,7 @@ use std::sync::LazyLock;
 fn re(pattern: &str) -> Regex { Regex::new(pattern).expect("static pattern") }
 
 // ---------------------------------------------------------------------------
-// The record grammar (why-record.mjs and the planning-files helpers it uses)
+// The record grammar
 // ---------------------------------------------------------------------------
 
 /// The plan section whose cites are plan-scoped rather than task-scoped.
@@ -341,7 +340,7 @@ fn task_declared_files(text: &str) -> Vec<DeclaredFiles> {
 }
 
 /// A declared file names a path outright, or is a directory prefix of it:
-/// the record grammar of why-record.mjs, not the lease rule in
+/// the record grammar, not the lease rule in
 /// execution::lease, which is the one coverage definition the lease pins.
 pub fn declares(declaration: &str, path: &str) -> bool {
     if !declaration.ends_with('/') { return declaration == path; }
@@ -406,7 +405,7 @@ pub fn parse_adjudication(name: &str, text: &str) -> Adjudication {
 }
 
 // ---------------------------------------------------------------------------
-// The index tiers (why-corpus.mjs)
+// The index tiers
 // ---------------------------------------------------------------------------
 
 /// One directory of the record: a phase directory on disk, an off-roadmap

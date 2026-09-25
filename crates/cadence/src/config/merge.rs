@@ -31,7 +31,7 @@ fn remove(value: &mut Value, key: &str) {
     }
 }
 
-/// Frozen config-merge.mjs:75-85: absence inherits; null, arrays and scalars replace.
+/// Absence inherits; null, arrays and scalars replace.
 pub fn deep_merge(base: &Value, over: &Value) -> Value {
     match (base.as_object(), over.as_object()) {
         (Some(base), Some(over)) => {

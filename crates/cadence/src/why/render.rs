@@ -1,8 +1,7 @@
-//! The chain text, byte-identical to cadence-core/bin/lib/why-render.mjs.
-//! Every field the record does not carry says so in fixed words rather than
-//! dropping the line, every list is capped by counting with the remainder
-//! stated, and the ordering is commit date then sha so the same repository
-//! renders the same bytes.
+//! The chain text. Every field the record does not carry says so in fixed
+//! words rather than dropping the line, every list is capped by counting with
+//! the remainder stated, and the ordering is commit date then sha so the same
+//! repository renders the same bytes.
 
 use super::corpus::MARKER_GAP;
 use super::git::Excluded;

@@ -1,5 +1,4 @@
-//! The git invocations behind `why`, as cadence-core/bin/lib/why-query.mjs
-//! and why.mjs make them: argv arrays, never a shell string; a fixed
+//! The git invocations behind `why`: argv arrays, never a shell string; a fixed
 //! `--format` and an explicit `-M` so a reader's `log.follow` or
 //! `diff.renames` cannot change the answer; and a classification that carries
 //! no git bytes onward, because a `fatal:` line reaching an answer is how a

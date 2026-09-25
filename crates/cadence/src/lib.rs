@@ -38,5 +38,5 @@ pub mod read;
 pub mod store;
 pub mod suggest;
 pub mod verification;
-/// Why a file line is as it is: the git chain joined to the record, byte-identical to the frozen renderer.
+/// Why a file line is as it is: the git chain joined to the record.
 pub mod why;

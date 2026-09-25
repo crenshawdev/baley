@@ -1,9 +1,7 @@
 //! "Why is this code like this", answered from the record: the git chain for
 //! one path or line, joined to the phase, task, decision, deviation and review
 //! record on disk and, for a phase a close pruned, to the same record read out
-//! of git history (D-139). The rendered `text` is byte-identical to the frozen
-//! 3.x renderer, cadence-core/bin/lib/why-render.mjs, which is the oracle the
-//! owner checks against.
+//! of git history (D-139).
 
 pub mod corpus;
 pub mod git;
