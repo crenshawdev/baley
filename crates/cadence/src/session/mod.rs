@@ -135,7 +135,8 @@ pub fn observe_documents<I: ConfigIo>(
 }
 
 fn observe<I: ConfigIo>(io: &mut I, path: &Path) -> Result<Input> {
-    io.read(&reload::identity(path)?)
+    let identity = io.identity(path)?;
+    io.read(&identity)
 }
 
 // The same pure interpreter is used by store open and pre-open session input.
