@@ -114,16 +114,13 @@ impl Payloads for SqliteStore {
                 found.encoding
             )));
         }
-        let chunks = BodyChunks {
+        let source = BlobSource {
             conn,
             rowid: found.rowid,
-            offset: 0,
         };
-        // The decoder pulls the compressed body through its own buffer, one
-        // chunk per read.
-        let decoder = zstd::stream::read::Decoder::new(chunks)
-            .map_err(|error| StoreError::Unavailable(error.to_string()))?;
-        Ok(PayloadBody::Present(Box::new(decoder)))
+        let stream =
+            body_stream(source).map_err(|error| StoreError::Unavailable(error.to_string()))?;
+        Ok(PayloadBody::Present(stream))
     }
 
     fn status(&self, hash: &Hash) -> Result<PayloadStatus, StoreError> {
@@ -238,26 +235,52 @@ fn kept(conn: &Connection, hash: &Hash) -> Result<Vec<Range<u64>>, StoreError> {
         .collect()
 }
 
-/// The compressed body, read in chunks through incremental blob I/O on the
-/// stream's own connection. Each read opens the blob afresh because a blob
-/// handle borrows its connection, which this struct owns; the held read
-/// transaction keeps the rowid and the bytes fixed between reads.
-struct BodyChunks {
-    conn: Connection,
-    rowid: i64,
-    offset: usize,
+/// Where a stream's compressed bytes come from: the bytes at an offset,
+/// as many as fit in `buf`, and 0 at the end. The seam between the stream
+/// and SQLite's blob I/O.
+trait ChunkSource {
+    fn read_at(&mut self, buf: &mut [u8], offset: usize) -> io::Result<usize>;
 }
 
-impl Read for BodyChunks {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+/// The compressed body through incremental blob I/O on the stream's own
+/// connection. Each read opens the blob afresh because a blob handle
+/// borrows its connection, which this struct owns; the held read
+/// transaction keeps the rowid and the bytes fixed between reads.
+struct BlobSource {
+    conn: Connection,
+    rowid: i64,
+}
+
+impl ChunkSource for BlobSource {
+    fn read_at(&mut self, buf: &mut [u8], offset: usize) -> io::Result<usize> {
         let blob = self
             .conn
             .blob_open("main", "payload", "body", self.rowid, true)
             .map_err(io::Error::other)?;
-        let read = blob.read_at(buf, self.offset).map_err(io::Error::other)?;
+        blob.read_at(buf, offset).map_err(io::Error::other)
+    }
+}
+
+/// A source read in order, one chunk per call.
+struct Chunks<S> {
+    source: S,
+    offset: usize,
+}
+
+impl<S: ChunkSource> Read for Chunks<S> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.source.read_at(buf, self.offset)?;
         self.offset += read;
         Ok(read)
     }
+}
+
+/// The uncompressed body as a stream: the zstd decoder pulls the compressed
+/// bytes through its own buffer, one chunk at a time, and never holds the
+/// whole body.
+fn body_stream<'a, S: ChunkSource + 'a>(source: S) -> io::Result<Box<dyn Read + 'a>> {
+    let decoder = zstd::stream::read::Decoder::new(Chunks { source, offset: 0 })?;
+    Ok(Box::new(decoder))
 }
 
 fn class_name(class: RetentionClass) -> &'static str {
@@ -629,5 +652,45 @@ mod tests {
         assert!(refused(
             "UPDATE payload SET body = NULL WHERE hash = ?1 AND ?2 IS NOT NULL"
         ));
+    }
+
+    /// Compressed bytes held in memory, with a record of how far the
+    /// stream has asked into them.
+    struct RecordingSource {
+        bytes: Vec<u8>,
+        furthest: std::rc::Rc<std::cell::Cell<usize>>,
+    }
+
+    impl ChunkSource for RecordingSource {
+        fn read_at(&mut self, buf: &mut [u8], offset: usize) -> io::Result<usize> {
+            let available = self.bytes.get(offset..).unwrap_or_default();
+            let read = available.len().min(buf.len());
+            buf[..read].copy_from_slice(&available[..read]);
+            self.furthest.set(self.furthest.get().max(offset + read));
+            Ok(read)
+        }
+    }
+
+    // Reading the first bytes of a 2 MB body fetches only the start of its
+    // compressed form. Catches a stream that fetches or decompresses the
+    // whole body before handing back the first byte.
+    #[test]
+    fn reading_the_start_of_a_body_fetches_only_the_start() {
+        let compressed = zstd::bulk::compress(&noise(2_000_000), zstd::DEFAULT_COMPRESSION_LEVEL)
+            .expect("compress");
+        let furthest = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut stream = body_stream(RecordingSource {
+            bytes: compressed.clone(),
+            furthest: std::rc::Rc::clone(&furthest),
+        })
+        .expect("stream");
+        let mut first = [0u8; 16];
+        stream.read_exact(&mut first).expect("read the start");
+        assert!(
+            furthest.get() <= compressed.len() / 4,
+            "fetched {} of {} compressed bytes to read 16",
+            furthest.get(),
+            compressed.len()
+        );
     }
 }
