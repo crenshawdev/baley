@@ -28,7 +28,7 @@ Agents run as the owner's user, as Baley does. File modes keep other users out o
 
 ## Decision
 
-Chosen option: **2, host sandboxes**, on top of option 1. Baley's setup adds a rule to each host's configuration that denies agents access to Baley's home: Codex's `workspace-write` sandbox already confines agent writes to the workspace, and Claude Code's sandbox denies named paths. A host matrix, run on both hosts before acceptance and before each release, shows an agent's attempt refused while Baley's server and hook still write. The guard also refuses file-tool writes into the home and shell commands that name it, as a best-effort second layer, and forge anchors (ADR 0007) detect anything that gets through.
+Chosen option: **2, host sandboxes**, on top of option 1. Baley's setup adds a rule to each host's configuration that denies agents access to Baley's home: Codex's `workspace-write` sandbox already confines agent writes to the workspace, and Claude Code's sandbox denies named paths for reading and writing. A host matrix, run on both hosts before acceptance and before each release, shows an agent's attempt refused while Baley's server and hook still write. The first run (2026-09-25, `spikes/host-matrix`) showed both hosts run the hook and the MCP server outside the agent sandbox, Claude Code denies reads and writes, and Codex denies writes only: every Codex sandbox policy grants full disk read, so on Codex the sandbox protects the ledger's integrity, not its confidentiality. The guard also refuses file-tool writes into the home and shell commands that name it, as a best-effort second layer, and forge anchors (ADR 0007) detect anything that gets through.
 
 ## Consequences
 
