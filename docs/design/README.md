@@ -38,7 +38,7 @@ Diagrams are [Mermaid](https://mermaid.js.org/), fenced as ` ```mermaid ` inside
 | What is the system and what surrounds it | C4 system context (`C4Context`) |
 | What runs, and what talks to what | C4 container (`C4Container`) |
 | What is inside one container | C4 component (`C4Component`) |
-| Who does what, in what order, across actors | Swim lane: `flowchart` with one `subgraph` per actor |
+| Who does what, in what order, across actors | Swim lane: `sequenceDiagram` with one participant column per actor, `alt` for branches |
 | How one request moves between parts | UML sequence (`sequenceDiagram`) |
 | What states a record passes through | UML state machine (`stateDiagram-v2`) |
 | How types relate | UML class (`classDiagram`) |
@@ -76,4 +76,6 @@ They are technical records for an engineer who has never met the authors. They c
 
 ## Index
 
-No design documents yet.
+| Number | Title | Status |
+|---|---|---|
+| [0001](0001-evidence-ledger.md) | The evidence ledger | Draft |
