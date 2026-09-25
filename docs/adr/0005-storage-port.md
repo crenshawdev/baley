@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0001: The evidence ledger](../design/0001-evidence-ledger.md) |
 | Supersedes | |
-| Superseded by | |
+| Superseded by | [0010](0010-projector-traits-in-the-port.md) (in part: where projectors live) |
 
 ## Context and problem
 

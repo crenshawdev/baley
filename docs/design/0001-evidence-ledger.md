@@ -299,7 +299,7 @@ classDiagram
   Admin ..> ViewsReport : verify_views returns
 ```
 
-*Figure 4. The storage port. The decision runs inside the transaction with read access; projectors and the event schema live in the core and are handed to the adapter when the store opens, so the adapter never contains business rules. The store's own `request` projector lives in `baley-store` beside the `command.completed` event it reads. `Search` arrives with slice 8.*
+*Figure 4. The storage port. The decision runs inside the transaction with read access; projectors and the event schema live in the core and are handed to the adapter when the store opens, so the adapter never contains business rules. The `Projector` and `EventSchema` traits are defined in `baley-store`, and the store's own `request` projector lives there beside the `command.completed` event it reads (ADR 0010). `Search` arrives with slice 8.*
 
 - **`transact`** runs one command's decision. The caller does its slow work first (tests, model calls, git work) and passes the results in. The adapter takes the writer queue, opens the write transaction and checks that the project's live `request` view was built at this binary's projector version. It checks the request, then fences a new request if any of the project's live views or its view set was built by a newer binary, or if the project holds an event type or version this binary cannot read (see [Views and projectors](#views-and-projectors-evd-r9-evd-r10-evd-r27)). A replay is answered before those fences. `decide` reads through `Transaction` and returns the inputs its caller observed. The adapter re-checks documents and absences against the store and compares the caller-supplied git facts seen and now. Reading git inside the transaction is issue #40, for Build 4. A decision confirms authority against events where required and appends events. Any `Transaction` operation's error fails the command, and a stored payload must be attached to an event. The adapter runs the projectors, writes each changed document once, and commits. If any step fails, nothing is recorded (EVD-R5).
 - **`expect`** additionally names the stream that serializes a contested decision, so two commands that would both pass their own checks are ordered by one version counter. Each contested decision names its stream in [Serializing streams](#serializing-streams).
@@ -1146,10 +1146,12 @@ The conformance suite lives in `baley-store` and runs against every adapter.
 - [ADR 0002: Use SQLite as the storage engine](../adr/0002-sqlite.md)
 - [ADR 0003: Keep one ledger database per user, outside any checkout](../adr/0003-per-user-database.md)
 - [ADR 0004: Identify projects by a committed project file](../adr/0004-project-identity.md)
-- [ADR 0005: Put storage behind a port with engine adapters](../adr/0005-storage-port.md)
+- [ADR 0005: Put storage behind a port with engine adapters](../adr/0005-storage-port.md), superseded in part by ADR 0010
 - [ADR 0006: Keep every operational record in the ledger](../adr/0006-no-markdown-records.md)
 - [ADR 0007: Anchor chain heads on the forge](../adr/0007-forge-anchors.md)
 - [ADR 0008: Use host sandboxes to keep agents out of the ledger](../adr/0008-host-sandbox-isolation.md)
+- [ADR 0009: Serve instructions from the binary; files on disk are stubs](../adr/0009-served-instructions.md)
+- [ADR 0010: Define the projector and event schema traits in the port](../adr/0010-projector-traits-in-the-port.md), superseding ADR 0005 in part
 
 ## Future work
 
