@@ -16,3 +16,4 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0006](0006-no-markdown-records.md) | Keep every operational record in the ledger | Accepted |
 | [0007](0007-forge-anchors.md) | Anchor chain heads on the forge | Accepted |
 | [0008](0008-host-sandbox-isolation.md) | Use host sandboxes to keep agents out of the ledger | Accepted |
+| [0009](0009-served-instructions.md) | Serve instructions from the binary; files on disk are stubs | Accepted |
