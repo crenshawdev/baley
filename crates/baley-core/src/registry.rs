@@ -11,7 +11,7 @@ use std::fmt;
 
 use serde_json::Value;
 
-use crate::event::{Event, ProjectId};
+use baley_store::{Event, ProjectId};
 
 /// Why an upcaster could not read a stored payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,7 +254,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::event::{Actor, Hash, RequestId};
+    use baley_store::{Actor, Hash, RequestId};
 
     fn event(project: &str, seq: u64, type_name: &str, type_version: u32, payload: Value) -> Event {
         Event {
