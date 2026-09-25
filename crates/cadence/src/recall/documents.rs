@@ -35,7 +35,6 @@ fn relative_parts(path: &str) -> Vec<&str> {
 }
 fn unarchive<'a>(parts: &'a [&'a str]) -> &'a [&'a str] {
     match parts {
-        [first, rest @ ..] if first.starts_with("_archive-") => rest,
         ["archive" | "archives", _, rest @ ..] => rest,
         _ => parts,
     }

@@ -176,7 +176,7 @@ fn put(root: &Path, path: &str, text: &str) {
 }
 
 #[test]
-fn authored_sources_archives_and_receipts_are_eligible() {
+fn authored_sources_and_receipts_are_eligible() {
     for path in [
         "PROJECT.md",
         "ROADMAP.md",
@@ -184,7 +184,6 @@ fn authored_sources_archives_and_receipts_are_eligible() {
         "phases/1/UAT.md",
         "phases/1/CONTEXT.md",
         "tasks/receipt/RECORD.md",
-        "_archive-v1/2/CONTEXT.md",
     ] {
         assert!(documents::eligible(path), "{path}");
     }
@@ -227,6 +226,7 @@ fn ledgers_config_evidence_reports_credentials_and_traces_are_not_eligible() {
         "phases/1/reports/SUMMARY.md",
         "credentials.md",
         "trace.jsonl",
+        "_archive-v1/2/CONTEXT.md",
     ] {
         assert!(!documents::eligible(path), "{path}");
     }
