@@ -45,13 +45,6 @@ pub(crate) enum IntentKind {
         request: Box<cadence::verification::persistence::Request>,
         root_binding: String,
     },
-    /// The owner's explicit adoption of one ticked phase (D-137): the one
-    /// write outside the import that may touch the adoption namespace.
-    AdoptionDeclareV1 {
-        record: Box<cadence::adoption::Record>,
-        request_id: String,
-        root_binding: String,
-    },
     NativeTaskV1 {
         request: Box<cadence::execution::history::Request>,
         root_binding: String,
@@ -790,9 +783,8 @@ impl Intent {
             }
         }
         // A completion declared at import is written by the transaction that
-        // completes the import, a completion declared at adoption by its own
-        // intent, and by nothing else: the binary computed both from the
-        // documents, and no other write may add, drop or edit one.
+        // completes the import and by nothing else: the binary computed it
+        // from the documents, and no other write may add, drop or edit one.
         let before = self.participants.last().and_then(|p| p.expected.bytes.as_deref())
             .map(parse_previous).transpose()?;
         if !matches!(self.kind, IntentKind::DebugV1 { .. } | IntentKind::DebugReviewV1 { .. })
@@ -810,7 +802,6 @@ impl Intent {
         let completes_import = before.as_ref().is_none_or(|p| p.data.get("import").is_none())
             && snapshot.data.get("import").is_some();
         if !completes_import
-            && !matches!(self.kind, IntentKind::AdoptionDeclareV1 { .. })
             && before.as_ref().and_then(|p| p.data.get(cadence::adoption::NAMESPACE))
                 != snapshot.data.get(cadence::adoption::NAMESPACE) {
             return Err(Error::Invalid("declared completions are written only by the import".into()));
@@ -1053,23 +1044,6 @@ impl Intent {
                     || snapshot.operations != previous.operations
                     || snapshot.generation != previous.generation.checked_add(1).ok_or_else(|| Error::Invalid("generation exhausted".into()))? {
                     return Err(Error::Invalid("verification intent differs from immutable transition".into()));
-                }
-            }
-            IntentKind::AdoptionDeclareV1 { record, request_id, root_binding } => {
-                if names.len() != 3 { return Err(Error::Invalid("adoption declaration cannot change external participants".into())); }
-                let state = self.participants.last().expect("state participant");
-                if state.expected.directory_identity != root_binding || record.root_binding != root_binding {
-                    return Err(Error::Invalid("adoption declaration root binding changed".into()));
-                }
-                let previous = previous_snapshot(&self.participants, "adoption declaration")?;
-                let expected = cadence::adoption::declare(&previous.data, &record, &request_id)?;
-                let old_items = self.participants.iter().find(|p| p.target == ITEMS).unwrap().expected.bytes.as_deref();
-                let old_decisions = self.participants.iter().find(|p| p.target == DECISIONS).unwrap().expected.bytes.as_deref();
-                if snapshot.data != expected || old_items != Some(items) || old_decisions != Some(decisions)
-                    || snapshot.operations != previous.operations
-                    || record.import_generation != snapshot.generation
-                    || snapshot.generation != previous.generation.checked_add(1).ok_or_else(|| Error::Invalid("generation exhausted".into()))? {
-                    return Err(Error::Invalid("adoption declaration intent differs from immutable transition".into()));
                 }
             }
             IntentKind::NativePlanV1 { request, root_binding } => {

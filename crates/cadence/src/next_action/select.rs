@@ -24,7 +24,7 @@ pub enum Action {
 impl Action {
     pub fn instruction(&self) -> String {
         match self {
-            Self::Resolve { phase, source } => format!("Resolve {source}: declare phase {} with adoption-declare or untick it", phase.address()),
+            Self::Resolve { phase, source } => format!("Resolve {source}: set the tick on phase {} to match its derived status", phase.address()),
             Self::Resume(next) => next.clone(),
             Self::Interrupted(id) => format!("Continue dispatch {id} with execution-authorize or retire it"),
             Self::Execute(id) => format!("/cad-execute {}", id.address()),

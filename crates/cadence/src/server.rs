@@ -95,8 +95,6 @@ pub mod context_service;
 pub mod plan_service;
 #[path = "verification_service.rs"]
 pub mod verification_service;
-#[path = "adoption_service.rs"]
-pub mod adoption_service;
 #[path = "capture_service.rs"]
 pub mod capture_service;
 #[path = "read_service.rs"]
@@ -387,7 +385,6 @@ enum ApplyArguments {
     Executor(ExecutorPatch),
     Rail(cadence::rail::risk::Apply),
     Receipt(cadence::rail::receipts::Apply),
-    Adoption(adoption_service::Apply),
     Capture(capture_service::Apply),
     Milestone(cadence::milestone::model::Apply),
     Landing(cadence::landing::model::Apply),
@@ -410,7 +407,6 @@ enum ApplyGroup {
     Executor,
     Rail,
     Receipt,
-    Adoption,
     Capture,
     Milestone,
     Landing,
@@ -421,7 +417,7 @@ enum ApplyGroup {
 }
 
 /// One group per [`ApplyArguments`] variant, in variant order.
-const APPLY_GROUPS: [ApplyGroup; 23] = [
+const APPLY_GROUPS: [ApplyGroup; 22] = [
     ApplyGroup::Verification,
     ApplyGroup::Execution,
     ApplyGroup::Execution,
@@ -437,7 +433,6 @@ const APPLY_GROUPS: [ApplyGroup; 23] = [
     ApplyGroup::Executor,
     ApplyGroup::Rail,
     ApplyGroup::Receipt,
-    ApplyGroup::Adoption,
     ApplyGroup::Capture,
     ApplyGroup::Milestone,
     ApplyGroup::Landing,
@@ -1540,14 +1535,6 @@ impl PublicServer {
                         ),
                         Err(error) => receipt_result(Ok(rail_service::refused("invalid-arguments", &refused(error)))),
                     },
-                    ApplyGroup::Adoption => {
-                        let raw = raw.expect("an operation name came from the arguments");
-                        let answer = match serde_json::from_value::<adoption_service::Apply>(raw.clone()) {
-                            Ok(apply) => self.server.service.adoption(&self.root, apply).await,
-                            Err(error) => Ok(adoption_service::malformed(&raw, error)),
-                        };
-                        structured_result(answer.map(ApplyOutput::NativeExecution))
-                    }
                     ApplyGroup::Capture => {
                         let raw = raw.expect("an operation name came from the arguments");
                         let answer = match serde_json::from_value::<capture_service::Apply>(raw.clone()) {
