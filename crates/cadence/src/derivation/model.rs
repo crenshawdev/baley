@@ -36,25 +36,6 @@ pub struct UatCounts {
     pub blocked: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UatItem {
-    pub status: Option<String>,
-    pub reason: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ParsedUat {
-    pub items: Vec<UatItem>,
-    pub counts: UatCounts,
-}
-
-/// A row the legacy table decided carries no marker; a row the acceptance
-/// overlay decided says so, because a native completion reaches Complete
-/// with counts the legacy SUMMARY/UAT rule can never produce.
-fn legacy(accepted: &bool) -> bool {
-    !*accepted
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PhaseRecord {
     pub id: PhaseId,
@@ -62,8 +43,6 @@ pub struct PhaseRecord {
     pub plans: Vec<String>,
     pub status: LifecycleStatus,
     pub uat: Option<UatCounts>,
-    #[serde(default, skip_serializing_if = "legacy")]
-    pub accepted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -132,8 +111,6 @@ pub struct PhaseObservation {
     pub relative_path: PathBuf,
     /// Listing outcome with only admitted basenames, in lexical order.
     pub plans: Observation<Vec<String>>,
-    pub summary: Observation<()>,
-    pub uat: Observation<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

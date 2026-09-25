@@ -9,7 +9,7 @@ pub use capture::{ArtifactFiles, ArtifactIo, capture_inputs};
 pub use consistency::{check_consistency, roadmap_conflicts};
 pub use memo::{DOMAIN, ENCODING_VERSION, SEMANTICS_VERSION, encode_inputs, input_key, input_key_with};
 pub use model::*;
-pub use parse::{parse_roadmap, parse_uat};
+pub use parse::parse_roadmap;
 pub use query::{PreparedLifecycle, RecheckedLifecycle, prepare_query, prepare_progress, query, recheck_query};
 
 fn validate_observation_failures(capture: &CapturedInputs) -> Result<(), DerivationError> {
@@ -23,8 +23,6 @@ fn validate_observation_failures(capture: &CapturedInputs) -> Result<(), Derivat
     check(&capture.roadmap)?;
     for phase in &capture.phases {
         check(&phase.plans)?;
-        check(&phase.summary)?;
-        check(&phase.uat)?;
     }
     Ok(())
 }
@@ -130,15 +128,15 @@ pub fn observe_acceptance(root: &std::path::Path) -> Result<AcceptanceOverlay, D
     }
 }
 
-/// Pure lifecycle truth table over the exact bytes and probes in one capture,
-/// with no native acceptance authority: the legacy SUMMARY/UAT table.
+/// The lifecycle of one capture with no native acceptance authority: every
+/// phase is Planned when it has plan files and Unplanned otherwise.
 pub fn derive(capture: &CapturedInputs) -> Result<Lifecycle, DerivationError> {
     derive_with(capture, &AcceptanceOverlay::default())
 }
 
-/// The truth table with native acceptance overlaid: a phase with approved
-/// truths takes Planned, Executed and Complete from the overlay, and its
-/// counts are its met and waived truths; every other phase is legacy.
+/// The lifecycle with native acceptance overlaid: a phase in the overlay takes
+/// Planned, Executed and Complete from it, and its counts are its met and
+/// waived truths; every other phase is Planned or Unplanned by its plan files.
 pub fn derive_with(capture: &CapturedInputs, overlay: &AcceptanceOverlay) -> Result<Lifecycle, DerivationError> {
     let parsed = validate_inputs(capture)?;
     let mut phases = Vec::with_capacity(parsed.phases.len());
@@ -158,56 +156,18 @@ pub fn derive_with(capture: &CapturedInputs, overlay: &AcceptanceOverlay) -> Res
             Observation::Present(names) => names.clone(),
             _ => Vec::new(),
         };
-        let uat = match &observation.uat {
-            Observation::Present(bytes) if !bytes.is_empty() => {
-                Some(parse_uat(&String::from_utf8_lossy(bytes)))
-            }
-            _ => None,
+        let native = overlay.phases.get(&declaration.id.address());
+        let (status, uat) = match native {
+            Some(native) if native.completion.is_some() => (
+                LifecycleStatus::Complete,
+                Some(UatCounts { pass: native.met, skipped: native.waived, ..UatCounts::default() }),
+            ),
+            Some(native) if native.executed => (LifecycleStatus::Executed, None),
+            Some(native) if native.published => (LifecycleStatus::Planned, None),
+            _ if !plans.is_empty() => (LifecycleStatus::Planned, None),
+            _ => (LifecycleStatus::Unplanned, None),
         };
-        let mut status = if plans.is_empty() {
-            LifecycleStatus::Unplanned
-        } else {
-            LifecycleStatus::Planned
-        };
-        if let Some(native) = overlay.phases.get(&declaration.id.address()) {
-            let (status, uat) = if native.completion.is_some() {
-                (LifecycleStatus::Complete, Some(UatCounts { pass: native.met, skipped: native.waived, ..UatCounts::default() }))
-            } else if native.executed {
-                (LifecycleStatus::Executed, None)
-            } else if native.published || !plans.is_empty() {
-                (LifecycleStatus::Planned, None)
-            } else {
-                (LifecycleStatus::Unplanned, None)
-            };
-            phases.push(PhaseRecord { id: declaration.id, name: declaration.name.clone(), plans, status, uat, accepted: true });
-            continue;
-        }
-        if matches!(observation.summary, Observation::Present(())) {
-            let complete = uat.as_ref().is_some_and(|uat| {
-                !uat.items.is_empty()
-                    && uat.items.iter().all(|item| {
-                        item.status.as_deref() == Some("pass")
-                            || (item.status.as_deref() == Some("skipped")
-                                && item
-                                    .reason
-                                    .as_ref()
-                                    .is_some_and(|reason| !reason.is_empty()))
-                    })
-            });
-            status = if complete {
-                LifecycleStatus::Complete
-            } else {
-                LifecycleStatus::Executed
-            };
-        }
-        phases.push(PhaseRecord {
-            id: declaration.id,
-            name: declaration.name.clone(),
-            plans,
-            status,
-            uat: uat.map(|u| u.counts),
-            accepted: false,
-        });
+        phases.push(PhaseRecord { id: declaration.id, name: declaration.name.clone(), plans, status, uat });
     }
     Ok(Lifecycle {
         cycle: parsed.cycle,
@@ -228,13 +188,11 @@ mod overlay_tests {
     use super::*;
 
     fn native_capture() -> CapturedInputs {
-        let text = "## Phases\n- [x] **Phase 13: Native**\n- [ ] **Phase 14: Legacy**\n";
+        let text = "## Phases\n- [x] **Phase 13: Native**\n- [ ] **Phase 14: Other**\n";
         let parsed = parse_roadmap(text).unwrap();
         let phases = parsed.phases.iter().map(|p| PhaseObservation {
             relative_path: p.relative_path.clone(),
             plans: Observation::Present(vec!["PLAN-1.md".into()]),
-            summary: Observation::Present(()),
-            uat: Observation::Present(b"### 1. Check\nstatus: fail\n".to_vec()),
         }).collect();
         CapturedInputs { root: "/planning".into(), root_probe: Observation::Present(()),
             roadmap: Observation::Present(text.as_bytes().into()), declarations: Some(Ok(parsed)), phases }
@@ -246,17 +204,14 @@ mod overlay_tests {
     }
 
     #[test]
-    fn a_native_phase_takes_its_status_from_the_overlay_not_summary_or_uat() {
+    fn a_native_phase_takes_its_status_from_the_overlay() {
         let capture = native_capture();
-        // Legacy reading: SUMMARY present, UAT failing, so Executed for both.
-        let legacy = derive(&capture).unwrap();
-        assert_eq!(legacy.phases.iter().map(|p| p.status).collect::<Vec<_>>(), [LifecycleStatus::Executed, LifecycleStatus::Executed]);
         let mut overlay = AcceptanceOverlay::default();
         overlay.phases.insert("13".into(), native(Some("c1"), true));
         let answer = derive_with(&capture, &overlay).unwrap();
         assert_eq!(answer.phases[0].status, LifecycleStatus::Complete);
         assert_eq!(answer.phases[0].uat, Some(UatCounts { pass: 1, skipped: 1, ..UatCounts::default() }));
-        assert_eq!(answer.phases[1].status, LifecycleStatus::Executed, "the legacy phase keeps its table");
+        assert_eq!(answer.phases[1].status, LifecycleStatus::Planned, "a phase without native authority is planned by its plan files");
         assert_eq!(answer.current.map(|p| p.address()), Some("14".to_owned()));
         overlay.phases.insert("13".into(), native(None, true));
         assert_eq!(derive_with(&capture, &overlay).unwrap().phases[0].status, LifecycleStatus::Executed);
@@ -271,14 +226,14 @@ mod overlay_tests {
     }
 
     #[test]
-    fn the_memo_key_changes_with_the_overlay_and_keeps_the_legacy_key_without_one() {
+    fn the_memo_key_changes_with_the_overlay_and_keeps_the_plain_key_without_one() {
         let capture = native_capture();
-        let legacy = input_key(&capture).unwrap();
-        assert_eq!(input_key_with(&capture, &AcceptanceOverlay::default()).unwrap(), legacy);
+        let plain = input_key(&capture).unwrap();
+        assert_eq!(input_key_with(&capture, &AcceptanceOverlay::default()).unwrap(), plain);
         let mut overlay = AcceptanceOverlay::default();
         overlay.phases.insert("13".into(), native(None, false));
         let planned = input_key_with(&capture, &overlay).unwrap();
-        assert_ne!(planned, legacy);
+        assert_ne!(planned, plain);
         overlay.phases.insert("13".into(), native(Some("c1"), true));
         let complete = input_key_with(&capture, &overlay).unwrap();
         assert_ne!(complete, planned);

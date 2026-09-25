@@ -3557,8 +3557,6 @@ mod selection_tests {
             .map(|(phase, names)| PhaseObservation {
                 relative_path: phase.relative_path.clone(),
                 plans: Observation::Present(names.iter().map(|name| name.to_string()).collect()),
-                summary: Observation::Absent,
-                uat: Observation::Absent,
             })
             .collect();
         derive(&CapturedInputs {

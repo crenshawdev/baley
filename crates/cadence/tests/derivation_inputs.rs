@@ -7,7 +7,7 @@ fn roadmap(entries: &str) -> Vec<u8> {
 }
 
 /// Every unconfigured operation is genuine absence. Reads assert the exact
-/// allowlist, so a PLAN/SUMMARY body or excluded input read fails the fixture.
+/// allowlist, so a read of anything but ROADMAP.md fails the fixture.
 #[derive(Clone, Default)]
 struct MemoryIo {
     reads: BTreeMap<PathBuf, Observation<Vec<u8>>>,
@@ -53,18 +53,11 @@ impl ArtifactIo for MemoryIo {
         self.record("list", path);
         self.lists.get(path).cloned().unwrap_or(Observation::Absent)
     }
-    fn probe_summary(&mut self, path: &Path) -> Observation<()> {
-        self.record("summary", path);
-        self.probes
-            .get(path)
-            .cloned()
-            .unwrap_or(Observation::Absent)
-    }
     fn read(&mut self, path: &Path) -> Observation<Vec<u8>> {
         assert!(
             matches!(
                 path.file_name().unwrap().to_str(),
-                Some("ROADMAP.md" | "UAT.md")
+                Some("ROADMAP.md")
             ),
             "excluded read: {}",
             path.display()
@@ -121,9 +114,6 @@ impl ArtifactIo for ChangingIo {
     fn list_phase(&mut self, path: &Path) -> Observation<Vec<String>> {
         self.active().list_phase(path)
     }
-    fn probe_summary(&mut self, path: &Path) -> Observation<()> {
-        self.active().probe_summary(path)
-    }
     fn read(&mut self, path: &Path) -> Observation<Vec<u8>> {
         self.active().read(path)
     }
@@ -159,64 +149,10 @@ fn run_query(io: &mut impl ArtifactIo) -> Result<Lifecycle, DerivationError> {
     query(Path::new("/planning"), io).map(|candidate| candidate.answer().clone())
 }
 
-fn change_cases() -> Vec<(&'static str, MemoryIo, MemoryIo)> {
-    let mut pending = MemoryIo::one();
-    pending.probes.insert(
-        "/planning/phases/1/SUMMARY.md".into(),
-        Observation::Present(()),
-    );
-    pending.reads.insert(
-        "/planning/phases/1/UAT.md".into(),
-        Observation::Present(b"### 1. Item\nstatus: pending".to_vec()),
-    );
-    let mut pass = pending.clone();
-    pass.reads.insert(
-        "/planning/phases/1/UAT.md".into(),
-        Observation::Present(b"### 1. Item\nstatus: pass".to_vec()),
-    );
-    let mut complete = pass.clone();
-    complete.reads.insert(
-        "/planning/ROADMAP.md".into(),
-        Observation::Present(roadmap("- [x] **Phase 1: One**")),
-    );
-    let mut disappeared = complete.clone();
-    disappeared
-        .probes
-        .remove(Path::new("/planning/phases/1/SUMMARY.md"));
-    let mut absent = pass.clone();
-    absent
-        .probes
-        .remove(Path::new("/planning/phases/1/SUMMARY.md"));
-    vec![
-        ("UAT byte change", pending, pass.clone()),
-        ("SUMMARY appearance", absent, pass),
-        ("SUMMARY disappearance", complete, disappeared),
-    ]
-}
-
-#[test]
-fn ac7_changes_refuse_candidate_and_preserve_prior_memo() {
-    for (label, before, after) in change_cases() {
-        let mut io = ChangingIo::new(before, after);
-        let result = run_query(&mut io);
-        assert_eq!(
-            result.as_ref().unwrap_err().code(),
-            "inputs-changed",
-            "{label}"
-        );
-        assert_eq!(io.captures, 2);
-        assert_eq!(
-            publication_guard(result, &DerivationError::InputsChanged),
-            Ok(()),
-            "{label}"
-        );
-    }
-}
-
 fn denied(operation: &str, path: &str) -> MemoryIo {
     let mut io = MemoryIo::one();
     match operation {
-        "root" | "summary" => {
+        "root" => {
             io.probes
                 .insert(path.into(), Observation::Failed(denial(path)));
         }
@@ -232,12 +168,10 @@ fn denied(operation: &str, path: &str) -> MemoryIo {
     io
 }
 
-const DENIALS: [(&str, &str); 5] = [
+const DENIALS: [(&str, &str); 3] = [
     ("root", "/planning"),
     ("read", "/planning/ROADMAP.md"),
     ("list", "/planning/phases/1"),
-    ("summary", "/planning/phases/1/SUMMARY.md"),
-    ("read", "/planning/phases/1/UAT.md"),
 ];
 
 #[test]
@@ -269,7 +203,6 @@ fn ac7_other_named_changes_refuse_but_excluded_names_do_not() {
         "roadmap absent",
         "roadmap invalid",
         "plan appearance",
-        "UAT absent to empty",
     ] {
         let before = MemoryIo::one();
         let mut after = before.clone();
@@ -286,16 +219,10 @@ fn ac7_other_named_changes_refuse_but_excluded_names_do_not() {
                     Observation::Present(b"invalid".to_vec()),
                 );
             }
-            "plan appearance" => {
+            _ => {
                 after.lists.insert(
                     "/planning/phases/1".into(),
                     Observation::Present(vec!["PLAN.md".into()]),
-                );
-            }
-            _ => {
-                after.reads.insert(
-                    "/planning/phases/1/UAT.md".into(),
-                    Observation::Present(vec![]),
                 );
             }
         }
@@ -382,8 +309,6 @@ fn capture_resolves_probes_reads_lists_and_probes_in_that_order() {
             ("root".into(), "/planning".into()),
             ("read".into(), "/planning/ROADMAP.md".into()),
             ("list".into(), "/planning/phases/1.1".into()),
-            ("summary".into(), "/planning/phases/1.1/SUMMARY.md".into()),
-            ("read".into(), "/planning/phases/1.1/UAT.md".into()),
         ]
     );
 }
@@ -406,13 +331,11 @@ fn capture_denials_preserve_path_category_and_absence() {
         ("root", "/planning"),
         ("read", "/planning/ROADMAP.md"),
         ("list", "/planning/phases/1"),
-        ("summary", "/planning/phases/1/SUMMARY.md"),
-        ("read", "/planning/phases/1/UAT.md"),
     ] {
         let mut io = MemoryIo::one();
         let error = denial(path);
         match operation {
-            "root" | "summary" => {
+            "root" => {
                 io.probes
                     .insert(path.into(), Observation::Failed(error.clone()));
             }
@@ -436,8 +359,6 @@ fn capture_denials_preserve_path_category_and_absence() {
     }
     let ordinary = capture_inputs(Path::new("/planning"), &mut MemoryIo::one()).unwrap();
     assert_eq!(ordinary.phases[0].plans, Observation::Absent);
-    assert_eq!(ordinary.phases[0].summary, Observation::Absent);
-    assert_eq!(ordinary.phases[0].uat, Observation::Absent);
 }
 
 #[test]

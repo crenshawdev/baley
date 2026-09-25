@@ -9,7 +9,6 @@ pub trait ArtifactIo {
     fn resolve_root(&mut self, selected: &Path) -> Result<PathBuf, InputFailure>;
     fn probe_root(&mut self, root: &Path) -> Observation<()>;
     fn list_phase(&mut self, path: &Path) -> Observation<Vec<String>>;
-    fn probe_summary(&mut self, path: &Path) -> Observation<()>;
     fn read(&mut self, path: &Path) -> Observation<Vec<u8>>;
     /// The native acceptance overlay from the store files beside the
     /// artifacts. Asked here with the rest, so a substitute answers it
@@ -90,10 +89,6 @@ impl ArtifactIo for ArtifactFiles {
         )
     }
 
-    fn probe_summary(&mut self, path: &Path) -> Observation<()> {
-        observation(path, fs::metadata(path).map(|_| ()))
-    }
-
     fn read(&mut self, path: &Path) -> Observation<Vec<u8>> {
         observation(
             path,
@@ -163,8 +158,6 @@ pub fn capture_inputs(
             phases.push(PhaseObservation {
                 relative_path: phase.relative_path.clone(),
                 plans,
-                summary: io.probe_summary(&path.join("SUMMARY.md")),
-                uat: io.read(&path.join("UAT.md")),
             });
         }
     }

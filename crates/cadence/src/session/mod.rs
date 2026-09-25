@@ -97,13 +97,6 @@ impl<I: ConfigIo> ArtifactIo for GuardedDocuments<'_, I> {
     fn list_phase(&mut self, path: &Path) -> Observation<Vec<String>> {
         self.files.list_phase(path)
     }
-    fn probe_summary(&mut self, path: &Path) -> Observation<()> {
-        match self.read(path) {
-            Observation::Present(_) => Observation::Present(()),
-            Observation::Absent => Observation::Absent,
-            Observation::Failed(failure) => Observation::Failed(failure),
-        }
-    }
     fn read(&mut self, path: &Path) -> Observation<Vec<u8>> {
         match observe(self.io, path) {
             Ok(input) => {

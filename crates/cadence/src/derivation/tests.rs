@@ -11,8 +11,6 @@ fn captured(text: &str) -> CapturedInputs {
             phases.push(PhaseObservation {
                 relative_path: phase.relative_path.clone(),
                 plans: Observation::Absent,
-                summary: Observation::Absent,
-                uat: Observation::Absent,
             });
         }
     }
@@ -25,101 +23,14 @@ fn captured(text: &str) -> CapturedInputs {
     }
 }
 
-struct TruthRow {
-    label: &'static str,
-    plans: bool,
-    summary: bool,
-    uat: Option<&'static str>,
-    /// Pass, fail, pending, skipped and blocked items, counted by hand from
-    /// `uat`; `None` where there is no UAT text to count.
-    counts: Option<[usize; 5]>,
-    expected: LifecycleStatus,
-}
-
-fn truth_rows() -> Vec<TruthRow> {
-    use LifecycleStatus::*;
-    [
-        ("no artifacts", false, false, None, None, Unplanned),
-        ("PLAN only", true, false, None, None, Planned),
-        ("SUMMARY only", false, true, None, None, Executed),
-        ("PLAN and SUMMARY", true, true, None, None, Executed),
-        ("pass without PLAN", false, true, Some("### 1. Check\nstatus: pass"), Some([1, 0, 0, 0, 0]), Complete),
-        ("pass with PLAN", true, true, Some("### 1. Check\nstatus: pass"), Some([1, 0, 0, 0, 0]), Complete),
-        ("UAT without SUMMARY", false, false, Some("### 1. Check\nstatus: pass"), Some([1, 0, 0, 0, 0]), Unplanned),
-        ("PLAN UAT without SUMMARY", true, false, Some("### 1. Check\nstatus: pass"), Some([1, 0, 0, 0, 0]), Planned),
-        ("empty UAT", false, true, Some(""), None, Executed),
-        ("malformed UAT", false, true, Some("not a checklist"), Some([0, 0, 0, 0, 0]), Executed),
-        ("frontmatter complete", false, true, Some("---\nstatus: complete\n---"), Some([0, 0, 0, 0, 0]), Executed),
-        ("manual numbered prose", false, true, Some("### Manual notes\n1. Check\nstatus: pass"), Some([0, 0, 0, 0, 0]), Executed),
-        ("unknown status", false, true, Some("### 1. Check\nstatus: constructor"), Some([0, 0, 0, 0, 0]), Executed),
-        ("missing status", false, true, Some("### 1. Check"), Some([0, 0, 0, 0, 0]), Executed),
-        ("fail", false, true, Some("### 1. Check\nstatus: fail"), Some([0, 1, 0, 0, 0]), Executed),
-        ("pending", false, true, Some("### 1. Check\nstatus: pending"), Some([0, 0, 1, 0, 0]), Executed),
-        ("blocked", false, true, Some("### 1. Check\nstatus: blocked"), Some([0, 0, 0, 0, 1]), Executed),
-        ("skip reason", false, true, Some("### 1. Check\nstatus: skipped\nreason: deferred"), Some([0, 0, 0, 1, 0]), Complete),
-        ("skip no reason", false, true, Some("### 1. Check\nstatus: skipped"), Some([0, 0, 0, 1, 0]), Executed),
-        ("skip empty reason", false, true, Some("### 1. Check\nstatus: skipped\nreason:"), Some([0, 0, 0, 1, 0]), Executed),
-        ("skip space reason", false, true, Some("### 1. Check\nstatus: skipped\nreason:   "), Some([0, 0, 0, 1, 0]), Complete),
-        ("pass and reasoned skip", false, true, Some("### 1. Check\nstatus: pass\n### 2. Skip\nstatus: skipped\nreason: later"), Some([1, 0, 0, 1, 0]), Complete),
-    ]
-    .into_iter()
-    .map(|(label, plans, summary, uat, counts, expected)| TruthRow {
-        label,
-        plans,
-        summary,
-        uat,
-        counts,
-        expected,
-    })
-    .collect()
-}
-
 #[test]
-fn ac1_production_truth_table() {
-    for row in truth_rows() {
-        let mut capture = captured("## Phases\n- [ ] **Phase 1: One**");
-        let phase = &mut capture.phases[0];
-        if row.plans {
-            phase.plans = Observation::Present(vec!["PLAN.md".into()]);
-        }
-        if row.summary {
-            phase.summary = Observation::Present(());
-        }
-        phase.uat = row.uat.map_or(Observation::Absent, |s| {
-            Observation::Present(s.as_bytes().into())
-        });
-        let answer = derive(&capture).unwrap();
-        let phase = &answer.phases[0];
-        assert_eq!(phase.plans.len(), usize::from(row.plans), "{}", row.label);
-        let counts = row.counts.map(|[pass, fail, pending, skipped, blocked]| UatCounts {
-            pass,
-            fail,
-            pending,
-            skipped,
-            blocked,
-        });
-        assert_eq!(phase.uat, counts, "{}", row.label);
-        assert_eq!(phase.status, row.expected, "{}", row.label);
-    }
-}
-
-#[test]
-fn ac1_removing_final_skip_reason_prevents_completion() {
+fn without_native_authority_plan_files_alone_decide_planned() {
     let mut capture = captured("## Phases\n- [ ] **Phase 1: One**");
-    capture.phases[0].summary = Observation::Present(());
-    capture.phases[0].uat = Observation::Present(
-        b"### 1. Pass\nstatus: pass\n### 2. Skip\nstatus: skipped\nreason: later".to_vec(),
-    );
-    assert_eq!(
-        derive(&capture).unwrap().phases[0].status,
-        LifecycleStatus::Complete
-    );
-    capture.phases[0].uat =
-        Observation::Present(b"### 1. Pass\nstatus: pass\n### 2. Skip\nstatus: skipped".to_vec());
-    assert_eq!(
-        derive(&capture).unwrap().phases[0].status,
-        LifecycleStatus::Executed
-    );
+    let phase = &derive(&capture).unwrap().phases[0];
+    assert_eq!((phase.status, &phase.uat), (LifecycleStatus::Unplanned, &None));
+    capture.phases[0].plans = Observation::Present(vec!["PLAN-1.md".into()]);
+    let phase = &derive(&capture).unwrap().phases[0];
+    assert_eq!((phase.status, &phase.uat), (LifecycleStatus::Planned, &None));
 }
 
 #[test]
@@ -137,20 +48,24 @@ fn ac1_failures_cannot_derive_success() {
     capture.declarations = Some(parse_roadmap(""));
     assert_eq!(derive(&capture).unwrap_err().code(), "invalid-roadmap");
     let error = InputFailure {
-        path: "/planning/phases/1/UAT.md".into(),
+        path: "/planning/phases/1".into(),
         category: InputFailureCategory::PermissionDenied,
         diagnostic: None,
     };
-    capture.phases[0].uat = Observation::Failed(error.clone());
+    capture.phases[0].plans = Observation::Failed(error.clone());
     assert_eq!(
         derive(&capture).unwrap_err(),
         DerivationError::InputFailure(error)
     );
 }
 
-fn complete(phase: &mut PhaseObservation) {
-    phase.summary = Observation::Present(());
-    phase.uat = Observation::Present(b"### 1. Check\nstatus: pass".to_vec());
+/// An overlay in which the phase at `address` holds an applicable native
+/// completion with one met truth.
+fn complete(address: &str) -> AcceptanceOverlay {
+    let mut overlay = AcceptanceOverlay::default();
+    overlay.phases.insert(address.into(), AcceptancePhase { published: true, executed: true,
+        completion: Some("c".into()), label: Some("complete".into()), met: 1, waived: 0, disagreement: None });
+    overlay
 }
 
 #[test]
@@ -166,9 +81,8 @@ fn ac2_current_follows_list_order_not_number() {
         let entries = order
             .map(|n| format!("- [ ] **Phase {n}: P{n}**"))
             .join("\n");
-        let mut capture = captured(&format!("## Phases\n{entries}"));
-        complete(&mut capture.phases[0]);
-        let answer = derive(&capture).unwrap();
+        let capture = captured(&format!("## Phases\n{entries}"));
+        let answer = derive_with(&capture, &complete(&order[0].to_string())).unwrap();
         assert_eq!(answer.current, Some(PhaseId(f64::from(order[1]))));
         assert_eq!(answer.total, 3);
         assert_eq!(
@@ -179,7 +93,6 @@ fn ac2_current_follows_list_order_not_number() {
                 .collect::<Vec<_>>(),
             order.map(f64::from)
         );
-        capture.phases[0].uat = Observation::Present(b"### 1. Check\nstatus: pending".to_vec());
         assert_eq!(derive(&capture).unwrap().current, Some(PhaseId(f64::from(order[0]))));
     }
 }
@@ -189,9 +102,8 @@ fn ac2_numeric_ties_share_evidence_and_preserve_names_and_order() {
     let mut capture = captured(
         "## Phases\n- [ ] **Phase 2: Two**\n- [ ] **Phase 1.10: First tie**\n- [ ] **Phase 01: One**\n- [ ] **Phase 1.1: Second tie**",
     );
-    complete(&mut capture.phases[0]);
     capture.phases[1].plans = Observation::Present(vec!["PLAN-2.md".into()]);
-    let answer = derive(&capture).unwrap();
+    let answer = derive_with(&capture, &complete("2")).unwrap();
     assert_eq!(capture.phases.len(), 3);
     assert_eq!(answer.total, 4);
     assert_eq!(answer.current, Some(PhaseId(1.1)));
@@ -215,9 +127,8 @@ fn ac2_closed_null_zero_differs_from_live_null_all_complete() {
         (closed.cycle, closed.current, closed.total),
         (Cycle::Closed, None, 0)
     );
-    let mut capture = captured("## Phases\n- [ ] **Phase 1: One**");
-    complete(&mut capture.phases[0]);
-    let live = derive(&capture).unwrap();
+    let capture = captured("## Phases\n- [ ] **Phase 1: One**");
+    let live = derive_with(&capture, &complete("1")).unwrap();
     assert_eq!(
         (live.cycle, live.current, live.total),
         (Cycle::Live, None, 1)
@@ -367,75 +278,6 @@ fn an_address_is_the_number_as_javascript_formats_it_and_names_its_directory() {
     }
 }
 
-#[test]
-fn line_endings_and_a_bom_decide_where_item_headings_are_recognized() {
-    assert_eq!(parse_uat("pre\r### 1. Item\nstatus: pass").counts.pass, 1);
-    assert_eq!(
-        parse_uat("pre\u{2028}### 1. Item\nstatus: pass")
-            .counts
-            .pass,
-        1
-    );
-    assert_eq!(parse_uat("\u{feff}### 1. BOM\nstatus: pass").items.len(), 0);
-    assert_eq!(parse_uat("### 1. CRLF\r\nstatus: pass\r\n").counts.pass, 1);
-    assert_eq!(parse_uat("### 1. Lone CR\rstatus: pass").items.len(), 0);
-}
-
-#[test]
-fn text_without_numbered_level_three_headings_yields_no_items() {
-    for text in [
-        "",
-        "---\nstatus: complete\n---",
-        "### Manual notes\n1. check logs\nstatus: pass",
-        " ### 1. Indented\nstatus: pass",
-    ] {
-        let parsed = parse_uat(text);
-        assert!(parsed.items.is_empty());
-        assert_eq!(parsed.counts, UatCounts::default());
-    }
-}
-
-#[test]
-fn the_last_status_and_reason_in_an_item_win_and_counts_tally_known_statuses() {
-    let parsed = parse_uat(
-        "### 1. First\nstatus: fail\nstatus: pass\nstatus:\n status: blocked\nnot-key: ignored\nreason: old\nreason: final  \n### 2. Unknown\nstatus: constructor\n### 3. Skip\nstatus: skipped\nreason:   \n### 4. Pending\nstatus: pending\n### 5. Blocked\nstatus: blocked",
-    );
-    assert_eq!(parsed.items.len(), 5);
-    assert_eq!(parsed.items[0].status.as_deref(), Some("pass"));
-    assert_eq!(parsed.items[0].reason.as_deref(), Some("final"));
-    assert_eq!(parsed.items[1].status.as_deref(), Some("constructor"));
-    assert_eq!(parsed.items[2].reason.as_deref(), Some(" "));
-    assert_eq!(
-        parsed.counts,
-        UatCounts {
-            pass: 1,
-            fail: 0,
-            pending: 1,
-            skipped: 1,
-            blocked: 1
-        }
-    );
-}
-
-#[test]
-fn fences_do_not_hide_item_headings_or_fields() {
-    let parsed = parse_uat(
-        "### 1. Item\nstatus: pending\n````\n## Fenced section\nstatus: pass\n```\n```` info\nreason: inside\n````\n## End\nstatus: fail\n```\n### 2. Fenced heading still splits\nstatus: blocked\n```",
-    );
-    assert_eq!(parsed.items.len(), 2);
-    assert_eq!(parsed.items[0].status.as_deref(), Some("pass"));
-    assert_eq!(parsed.items[0].reason.as_deref(), Some("inside"));
-    assert_eq!(parsed.items[1].status.as_deref(), Some("blocked"));
-}
-
-#[test]
-fn uat_status_matching_is_case_sensitive() {
-    assert_eq!(
-        parse_uat("### 1. Item\nstatus: PASS").counts,
-        UatCounts::default()
-    );
-}
-
 fn round_trip<T>(value: &T)
 where
     T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
@@ -494,7 +336,6 @@ fn contract_round_trips_order_plans_counters_and_null_cycles() {
                 skipped: 4,
                 blocked: 5,
             }),
-            accepted: false,
         });
     }
     live.total = live.phases.len();
@@ -525,14 +366,12 @@ fn conflict_only<T>(
 #[test]
 fn ac6_conflicts_both_checkbox_directions() {
     for checked in [true, false] {
-        let mut capture = captured(&format!(
+        let capture = captured(&format!(
             "## Phases\n- [{}] **Phase 3: Three**",
             if checked { "x" } else { " " }
         ));
-        if !checked {
-            complete(&mut capture.phases[0]);
-        }
-        let answer = derive(&capture).unwrap();
+        let overlay = if checked { AcceptanceOverlay::default() } else { complete("3") };
+        let answer = derive_with(&capture, &overlay).unwrap();
         let result = check_consistency(validate_inputs(&capture).unwrap(), &answer);
         let declared = checked.to_string();
         let derived = (!checked).to_string();
@@ -599,8 +438,6 @@ fn a_malformed_derivation_namespace_is_refused_rather_than_overwritten() {
 fn key_fixture() -> CapturedInputs {
     let mut c = captured("## Phases\n- [ ] **Phase 1: One**\n- [ ] **Phase 2: Two**\n");
     c.phases[0].plans = Observation::Present(vec!["PLAN-1.md".into(), "PLAN.md".into()]);
-    c.phases[0].uat =
-        Observation::Present(b"### 1. Check\nstatus: skipped\nreason: later".to_vec());
     c
 }
 
@@ -667,15 +504,7 @@ fn key_rows() -> Vec<(&'static str, CapturedInputs, CapturedInputs)> {
         c,
         c.phases[0].plans = Observation::Present(vec!["PLAN-2.md".into(), "PLAN.md".into()])
     );
-    row!("summary", c, c.phases[0].summary = Observation::Present(()));
-    row!("uat outcome", c, c.phases[0].uat = Observation::Absent);
-    row!(
-        "uat reason",
-        c,
-        c.phases[0].uat =
-            Observation::Present(b"### 1. Check\nstatus: skipped\nreason: never".to_vec())
-    );
-    for target in ["root", "roadmap", "listing", "summary", "uat"] {
+    for target in ["root", "roadmap", "listing"] {
         let variants = (0..7)
             .map(|n| {
                 let mut c = base.clone();
@@ -699,9 +528,7 @@ fn key_rows() -> Vec<(&'static str, CapturedInputs, CapturedInputs)> {
                 match target {
                     "root" => c.root_probe = variant(n),
                     "roadmap" => c.roadmap = variant(n),
-                    "listing" => c.phases[0].plans = variant(n),
-                    "summary" => c.phases[0].summary = variant(n),
-                    _ => c.phases[0].uat = variant(n),
+                    _ => c.phases[0].plans = variant(n),
                 }
                 c
             })
@@ -765,10 +592,10 @@ fn a_failed_root_probe_refuses_derivation() {
 }
 
 #[test]
-fn the_v1_encoding_of_a_minimal_capture_is_the_fixed_bytes_and_key() {
+fn the_v2_encoding_of_a_minimal_capture_is_the_fixed_bytes_and_key() {
     let mut c = captured("## Phases\n");
     c.root = "/p".into();
-    let expected = "0000000000000011636164656e63652e6c6966656379636c650000000000000001000000000000000200000000000000022f700101000000000000000a2323205068617365730a0000000000000000";
+    let expected = "0000000000000011636164656e63652e6c6966656379636c650000000000000002000000000000000300000000000000022f700101000000000000000a2323205068617365730a0000000000000000";
     let bytes = encode_inputs(&c).unwrap();
     assert_eq!(
         bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(),
@@ -776,7 +603,7 @@ fn the_v1_encoding_of_a_minimal_capture_is_the_fixed_bytes_and_key() {
     );
     assert_eq!(
         input_key(&c).unwrap(),
-        "21216b54184a118ca4bdbe093bd3a0f4f87c2662c19c0e4d3276e6a7d2b69180"
+        "4e3217beae0d07c20320d71147cb29fa341a2079830bb58c94eee8652bd340b5"
     );
 }
 
@@ -803,10 +630,14 @@ fn declaration_order_changes_the_key() {
     assert_ne!(input_key(&a), input_key(&b));
 }
 
+/// The memo of the key fixture with phase 1 natively complete, so the first
+/// row carries counts and the second none.
 fn memo_fixture() -> (String, Lifecycle, serde_json::Value) {
     let c = key_fixture();
-    let answer = derive(&c).unwrap();
-    let key = input_key(&c).unwrap();
+    let mut overlay = complete("1");
+    overlay.phases.get_mut("1").unwrap().waived = 1;
+    let answer = derive_with(&c, &overlay).unwrap();
+    let key = input_key_with(&c, &overlay).unwrap();
     let raw = serde_json::to_value(LifecycleMemo::fresh(key.clone(), answer.clone())).unwrap();
     (key, answer, raw)
 }

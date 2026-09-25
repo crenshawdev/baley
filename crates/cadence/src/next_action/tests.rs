@@ -27,7 +27,6 @@ fn fixture(name: &'static str, statuses: &[LifecycleStatus], expected: &'static 
             },
             status: *status,
             uat: None,
-            accepted: false,
         })
         .collect();
     let observations = Observations {

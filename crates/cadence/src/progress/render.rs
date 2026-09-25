@@ -27,9 +27,7 @@ pub fn answer(
             Some(label) => label,
             None => status(phase.status),
         };
-        writeln!(text, "phase {}: {} - {word}{}{}{}", phase.id.address(), phase.name,
-            phase.uat.as_ref().filter(|_| native.is_none()).map_or(String::new(), |uat| format!(" - UAT {} pass, {} fail{}", uat.pass, uat.fail,
-                if uat.skipped == 0 { String::new() } else { format!(", {} skipped", uat.skipped) })),
+        writeln!(text, "phase {}: {} - {word}{}{}", phase.id.address(), phase.name,
             native.filter(|p| p.completion.is_some())
                 .map_or(String::new(), |p| format!(" - met {}, waived {}", p.met, p.waived)),
             if phase.plans.is_empty() || phase.status != LifecycleStatus::Planned { String::new() } else { format!(" - plans {}", phase.plans.len()) }).unwrap();
