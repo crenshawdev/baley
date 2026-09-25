@@ -28,7 +28,7 @@ In the current code, domain services read and write raw JSON values of the whole
 
 ## Decision
 
-Chosen option: **3, ports and adapters**, enforced by crate boundaries. `baley-core` holds events, views, projectors and domain rules. `baley-store` holds the port traits (ledger, transaction, views, payloads, search, admin) and the conformance suite. `baley-store-sqlite` implements the port. The core crate does not depend on rusqlite, so domain code cannot reach SQL. Projectors, the code that turns events into view changes, live in the core and are handed to the adapter, so no business rule lives in an adapter.
+Chosen option: **3, ports and adapters**, enforced by crate boundaries. `baley-core` holds views, projectors and domain rules. `baley-store` holds the event, its canonical form and the hash chain, which both sides of the port speak, the port traits (ledger, transaction, views, payloads, search, admin) and the conformance suite. `baley-store-sqlite` implements the port. The core crate does not depend on rusqlite, so domain code cannot reach SQL. Projectors, the code that turns events into view changes, live in the core and are handed to the adapter, so no business rule lives in an adapter.
 
 ## Consequences
 

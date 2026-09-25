@@ -198,8 +198,8 @@ flowchart TB
 flowchart TB
   subgraph workspace [Cargo workspace]
     server["baley<br/>binary: MCP server, guard hook, CLI"]
-    core["baley-core<br/>events, views, projectors, domain rules, Hardin"]
-    port["baley-store<br/>storage port traits, conformance suite"]
+    core["baley-core<br/>views, projectors, domain rules, Hardin"]
+    port["baley-store<br/>events and hash chain, storage port traits, conformance suite"]
     sqlite["baley-store-sqlite<br/>SQLite adapter"]
   end
   rusqlite[("rusqlite, bundled SQLite")]

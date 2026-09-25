@@ -7,6 +7,7 @@
 
 use std::fmt;
 
+use crate::claim::ClaimId;
 use crate::command::{Absence, StreamName};
 use crate::event::{Hash, ProjectId, RequestId};
 use crate::view::DocKey;
@@ -50,8 +51,16 @@ pub enum StaleInput {
     },
     /// Something the caller saw absent now exists.
     Absence(Absence),
-    /// The checkout's HEAD moved.
-    Head { seen: String, now: String },
+    /// A git fact of a checkout moved.
+    Git {
+        checkout: String,
+        fact: GitFact,
+        seen: String,
+        now: String,
+    },
+    /// The claim being completed or reconciled is no longer open: another
+    /// process completed or reconciled it. Its outcome is in the request.
+    Claim(ClaimId),
     /// `expect` named a stream version the stream has moved past.
     StreamVersion {
         stream: StreamName,
@@ -85,6 +94,11 @@ pub enum Refusal {
     InvalidCursor,
     /// The event cannot be sealed: see the reason.
     InvalidEvent(String),
+    /// A decision appended an event type or version this binary cannot
+    /// read, so it would fence its own project.
+    UnreadableType { type_name: String, version: u32 },
+    /// No claim with that id was ever taken in the project.
+    UnknownClaim(ClaimId),
 }
 
 impl fmt::Display for StoreError {
@@ -108,3 +122,10 @@ impl fmt::Display for StoreError {
 }
 
 impl std::error::Error for StoreError {}
+
+/// Which git fact moved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitFact {
+    Head,
+    Index,
+}

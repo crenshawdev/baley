@@ -10,10 +10,11 @@ use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 use crate::chain::{Anchor, ChainReport, Head};
+use crate::claim::{Claim, ClaimDecision, ClaimId, ClaimOwner, Claimed, Reconciliation};
 use crate::command::{Command, Decision, EventMatch, NewEvent, Recorded, StreamName};
 use crate::error::StoreError;
 use crate::event::{Event, Hash, ProjectId};
-use crate::payload::{PayloadRef, RetentionClass};
+use crate::payload::{PayloadRef, PayloadReference, RetentionClass};
 use crate::view::{DocKey, Document, IndexQuery, Page, PageRequest};
 
 /// A command's decision: runs once inside the write transaction, reads its
@@ -21,13 +22,68 @@ use crate::view::{DocKey, Document, IndexQuery, Page, PageRequest};
 /// the caller's slow work observed.
 pub type Decide<'a> = dyn FnMut(&mut dyn Transaction) -> Result<Decision, StoreError> + 'a;
 
+/// The decision that takes a claim, or refuses on the merits.
+pub type DecideClaim<'a> =
+    dyn FnMut(&mut dyn Transaction) -> Result<ClaimDecision, StoreError> + 'a;
+
+/// The decision that reconciles an interrupted claim from the real state
+/// the caller read.
+pub type DecideReconcile<'a> =
+    dyn FnMut(&mut dyn Transaction, &Claim) -> Result<Reconciliation, StoreError> + 'a;
+
+/// Which event types and versions this binary can read. Implemented by the
+/// core's registry and handed to the store when it opens, so the store can
+/// fence a project before its next write (EVD-R19).
+pub trait EventSchema: Send + Sync {
+    fn reads(&self, type_name: &str, version: u32) -> bool;
+}
+
 /// The ledger: commands in, events and chain reports out.
 pub trait Ledger {
-    /// Runs one command: takes the writer queue, opens the transaction,
-    /// checks the epoch and the request, calls `decide`, re-checks what it
-    /// observed, runs the projectors, records `command.completed` and
-    /// commits, or records nothing (EVD-R5, R6, R7).
+    /// Runs one database-only command: takes the writer queue, opens the
+    /// transaction, checks the epoch, the project's readability and the
+    /// request, calls `decide`, re-checks what it observed, runs the
+    /// projectors, records `command.completed` and commits, or records
+    /// nothing (EVD-R5, R6, R7). Commands with an external effect use
+    /// `claim`, `complete` and `reconcile` instead.
     fn transact(&self, command: &Command, decide: &mut Decide<'_>) -> Result<Recorded, StoreError>;
+
+    /// The claim step of a command with an external effect (EVD-R26):
+    /// checks the request, then records `command.claimed` and takes the
+    /// lease, or records the decision's refusal. A retry of an open claim
+    /// gets it back and records nothing.
+    fn claim(&self, command: &Command, decide: &mut DecideClaim<'_>)
+    -> Result<Claimed, StoreError>;
+
+    /// Renews an open claim's lease at `at`, a supplied UTC time. Records
+    /// no event.
+    fn renew_lease(
+        &self,
+        project: &ProjectId,
+        claim: &ClaimId,
+        owner: &ClaimOwner,
+        at: &str,
+    ) -> Result<(), StoreError>;
+
+    /// The record step: re-checks that the claim `command` took is still
+    /// open, runs `decide`, records its events and `command.completed` for
+    /// the claim's request, and closes the claim. A cleanly failed effect is
+    /// an outcome recorded here like any other.
+    fn complete(&self, command: &Command, decide: &mut Decide<'_>) -> Result<Recorded, StoreError>;
+
+    /// Reconciles an interrupted claim under the reconciling `command`:
+    /// records `command.reconciled` with the finding and, when the real
+    /// state was read, completes the claim's request with it.
+    fn reconcile(
+        &self,
+        command: &Command,
+        claim: &ClaimId,
+        decide: &mut DecideReconcile<'_>,
+    ) -> Result<Recorded, StoreError>;
+
+    /// The project's open claims, active and interrupted, with their
+    /// leases, for reconciliation at start.
+    fn open_claims(&self, project: &ProjectId) -> Result<Vec<Claim>, StoreError>;
 
     /// A stream's events from `from_version` on, in stream order.
     fn stream(
@@ -111,6 +167,10 @@ pub trait Transaction {
         bytes: &[u8],
         class: RetentionClass,
     ) -> Result<PayloadRef, StoreError>;
+
+    /// The command's project's open claims with their leases, so the
+    /// decision can refuse a command inside an active claim's scope.
+    fn open_claims(&mut self) -> Result<Vec<Claim>, StoreError>;
 }
 
 /// View reads outside a transaction. One query runs against one snapshot.
@@ -137,16 +197,27 @@ pub trait Admin {
     fn create_project(&self, project: &ProjectId, name: &str) -> Result<(), StoreError>;
 
     /// Copies the store into `dir` after the integrity check, chain
-    /// verification and view verification all pass.
-    fn backup(&self, dir: &Path) -> Result<BackupReport, StoreError>;
+    /// verification against `anchors` (fetched from the forge by the
+    /// caller, one per project) and view verification all pass.
+    fn backup(
+        &self,
+        dir: &Path,
+        anchors: &BTreeMap<ProjectId, Anchor>,
+    ) -> Result<BackupReport, StoreError>;
 
     /// Writes a standalone store holding one project's events, views,
     /// payloads and anchors, which verifies on its own (EVD-R15).
     fn export(&self, project: &ProjectId, target: &Path) -> Result<(), StoreError>;
 
-    /// Keeps the first and last 64 KiB of a body as a new payload, records
-    /// `payload.reduced` and tombstones the original.
-    fn reduce(&self, command: &Command, hash: &Hash) -> Result<PayloadRef, StoreError>;
+    /// Reduces one reference whose retention has ended: keeps the first and
+    /// last 64 KiB of its body as a new payload and records
+    /// `payload.reduced`. The original body is tombstoned only when no
+    /// other reference still requires it whole.
+    fn reduce(
+        &self,
+        command: &Command,
+        reference: &PayloadReference,
+    ) -> Result<PayloadRef, StoreError>;
 
     /// Removes the bodies no remaining reference requires, and every copy
     /// the store manages, records `payload.purged` in every affected
@@ -166,8 +237,10 @@ pub trait Admin {
     /// every document that differs from the live one.
     fn verify_views(&self, project: &ProjectId) -> Result<ViewsReport, StoreError>;
 
-    /// The store's health as of `at`, a supplied UTC time.
-    fn doctor(&self, at: &str) -> Result<Health, StoreError>;
+    /// The store's health as of `at`, a supplied UTC time, with each
+    /// project's chain verified against its anchor in `anchors`.
+    fn doctor(&self, at: &str, anchors: &BTreeMap<ProjectId, Anchor>)
+    -> Result<Health, StoreError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

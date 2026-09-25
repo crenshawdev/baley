@@ -9,6 +9,7 @@
 
 pub mod canonical;
 pub mod chain;
+pub mod claim;
 pub mod command;
 pub mod conformance;
 pub mod error;
@@ -21,21 +22,25 @@ pub use canonical::{CanonicalError, MAX_SAFE_INTEGER, canonical_json};
 pub use chain::{
     Anchor, AnchorVerdict, Break, BreakKind, ChainReport, Head, chain_hash, verify_chain,
 };
+pub use claim::{Claim, ClaimDecision, ClaimId, ClaimOwner, Claimed, Reconciliation, Resolution};
 pub use command::{
-    Absence, Answer, Command, CommandKind, Decision, EventMatch, HeadObservation, NewEvent,
+    Absence, Answer, Command, CommandKind, Decision, EventMatch, GitObservation, NewEvent,
     Observed, ObservedDocument, Outcome, OutcomeKind, Recorded, StreamName,
 };
 pub use conformance::{Corruption, StoreFactory};
-pub use error::{Refusal, StaleInput, StoreError};
+pub use error::{GitFact, Refusal, StaleInput, StoreError};
 pub use event::{
     Actor, ActorError, AgentRole, Event, EventDraft, GitFacts, Hash, ProjectId, RequestId,
     SealError,
 };
 pub use ledger::{
-    Admin, BackupReport, Decide, Health, HistoryFilter, Ledger, PayloadFault, ProjectHealth,
-    PurgeReport, RebuildReport, Transaction, VerifyReport, Views, ViewsReport,
+    Admin, BackupReport, Decide, DecideClaim, DecideReconcile, EventSchema, Health, HistoryFilter,
+    Ledger, PayloadFault, ProjectHealth, PurgeReport, RebuildReport, Transaction, VerifyReport,
+    Views, ViewsReport,
 };
-pub use payload::{PayloadBody, PayloadRef, PayloadStatus, Payloads, RetentionClass};
+pub use payload::{
+    PayloadBody, PayloadRef, PayloadReference, PayloadStatus, Payloads, RetentionClass,
+};
 pub use view::{
     Change, Cursor, DocKey, Document, FieldKind, FieldSpec, IndexField, IndexQuery, IndexSpec,
     KeyValue, Order, Page, PageRequest, Projector, ProjectorError, ViewSpec,

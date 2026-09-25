@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::chain::Head;
 use crate::event::{Actor, GitFacts, Hash, ProjectId, RequestId};
 use crate::payload::PayloadRef;
-use crate::view::DocKey;
+use crate::view::{DocKey, KeyValue};
 
 /// A stream name such as `plan/5-2`: the events of one thing that changes
 /// over time, with its own version counter.
@@ -67,7 +67,15 @@ pub struct EventMatch {
 /// Something the caller relied on not existing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Absence {
+    /// No recorded event matches.
     Event(EventMatch),
+    /// No document of `view` has these values for a leading prefix of the
+    /// declared index's fields, such as "no active dispatch for phase 3".
+    Documents {
+        view: String,
+        index: String,
+        equals: Vec<KeyValue>,
+    },
 }
 
 /// A view document as the caller saw it during its slow work, before the
@@ -80,12 +88,18 @@ pub struct ObservedDocument {
     pub produced_seq: Option<u64>,
 }
 
-/// The HEAD the caller's slow work saw, and the HEAD the decision re-read
-/// inside the transaction.
+/// The cheap git facts of one checkout (EVD-R4, R7): what the caller's slow
+/// work saw, and what the decision re-read through the core's git seam
+/// inside the transaction. The store never runs git; it compares.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HeadObservation {
-    pub seen: String,
-    pub now: String,
+pub struct GitObservation {
+    pub checkout: String,
+    pub head_seen: String,
+    pub head_now: String,
+    /// A fingerprint of the checkout's index, so staged changes under an
+    /// unchanged HEAD are caught.
+    pub index_seen: String,
+    pub index_now: String,
 }
 
 /// Every input the caller's slow work depended on. The store re-checks
@@ -95,7 +109,7 @@ pub struct HeadObservation {
 pub struct Observed {
     pub documents: Vec<ObservedDocument>,
     pub absences: Vec<Absence>,
-    pub head: Option<HeadObservation>,
+    pub git: Vec<GitObservation>,
 }
 
 /// Whether the command did what it was asked or refused on the merits.

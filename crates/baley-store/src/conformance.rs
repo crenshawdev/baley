@@ -5,9 +5,9 @@
 
 use crate::error::StoreError;
 use crate::event::{Event, Hash, ProjectId};
-use crate::ledger::{Admin, Ledger, Views};
+use crate::ledger::{Admin, EventSchema, Ledger, Views};
 use crate::payload::Payloads;
-use crate::view::Projector;
+use crate::view::{DocKey, Projector};
 
 /// Opens stores for the suite and damages them the way an attacker or an
 /// accident would. Every operation stays inside the store's own temporary
@@ -18,8 +18,12 @@ pub trait StoreFactory {
     type Snapshot;
 
     /// A fresh, empty store in a new temporary directory it owns, with
-    /// these projectors registered.
-    fn create(&self, projectors: Vec<Box<dyn Projector>>) -> Result<Self::Store, StoreError>;
+    /// these projectors and this event schema registered.
+    fn create(
+        &self,
+        projectors: Vec<Box<dyn Projector>>,
+        schema: Box<dyn EventSchema>,
+    ) -> Result<Self::Store, StoreError>;
 
     /// A second, independent connection to the same store.
     fn reopen(&self, store: &Self::Store) -> Result<Self::Store, StoreError>;
@@ -36,10 +40,20 @@ pub trait StoreFactory {
 
     /// Puts an older copy back in place: the rollback an anchor catches.
     fn restore(&self, store: &Self::Store, snapshot: &Self::Snapshot) -> Result<(), StoreError>;
+
+    /// Starts a rebuild of the project's views and stops it after
+    /// `batches` replay batches as a crash would, leaving the unfinished
+    /// generation behind.
+    fn crash_rebuild(
+        &self,
+        store: &Self::Store,
+        project: &ProjectId,
+        batches: u32,
+    ) -> Result<(), StoreError>;
 }
 
 /// The damage the suite asks for, each a row operation on the stored events
-/// or bodies.
+/// bodies or view documents.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Corruption {
     /// Replaces a stored event's payload, leaving its hashes as they were.
@@ -69,4 +83,11 @@ pub enum Corruption {
     },
     /// Flips bytes in a stored body, leaving its events untouched.
     CorruptBody(Hash),
+    /// Replaces a live view document's body, leaving the events untouched,
+    /// so a rebuild that copies live rows is caught.
+    AlterDocument {
+        view: String,
+        key: DocKey,
+        body: serde_json::Value,
+    },
 }

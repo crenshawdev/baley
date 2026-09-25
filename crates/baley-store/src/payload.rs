@@ -5,7 +5,7 @@ use std::io::Read;
 use std::ops::Range;
 
 use crate::error::StoreError;
-use crate::event::Hash;
+use crate::event::{Hash, ProjectId};
 
 /// How long a reference keeps its body, by default (the project file may
 /// change any of them).
@@ -27,6 +27,15 @@ pub struct PayloadRef {
     pub hash: Hash,
     pub bytes: u64,
     pub class: RetentionClass,
+}
+
+/// One reference's identity: the event that made it and the body it
+/// names. Retention decisions apply to references, never to a hash alone.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PayloadReference {
+    pub project: ProjectId,
+    pub seq: u64,
+    pub hash: Hash,
 }
 
 /// A payload's state. Reduced and purged payloads answer with this, not
