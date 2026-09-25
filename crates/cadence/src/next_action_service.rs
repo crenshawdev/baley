@@ -236,20 +236,6 @@ pub(super) fn skip_discuss(values: &serde_json::Value) -> Result<bool, Derivatio
         })
 }
 
-/// The undo mirror uses the selector with prospective lifecycle and retained
-/// pause/interruption authority. Queue rules follow Planned in this selector.
-pub fn undo_next(root: &Path, lifecycle: &derivation::Lifecycle, view: &View, config: &serde_json::Value) -> Result<String, DerivationError> {
-    let observed = observations::capture(root, lifecycle)?;
-    let paused = pause(view)?;
-    let skip = skip_discuss(config)?;
-    let interruption = match lifecycle.current.and_then(|p| p.address().parse::<u32>().ok()) {
-        Some(phase) => cadence::execution::history::interrupted_dispatch(&view.snapshot.data, phase, view.snapshot.generation).map_err(store_error)?,
-        None => None,
-    };
-    Ok(next_action::select_with_interruptions(lifecycle, &observed, paused.as_ref(), skip, &[],
-        interruption.as_ref().map(|i| i.id.as_str())).map_or_else(String::new, |a| a.instruction()))
-}
-
 pub async fn query<I: ConfigIo + Clone + Sync>(
     factory: &SessionFactory<I>,
     root: &Path,

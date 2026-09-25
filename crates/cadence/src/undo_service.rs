@@ -37,19 +37,12 @@ async fn persist(store: &Store, view: &mut View, write: model::Write) -> Result<
     Ok(())
 }
 
-fn projections(root: &Path, view: &View, phase: u32, config: &Value) -> Result<BTreeMap<String, model::Document>> {
+fn projections(root: &Path, phase: u32) -> Result<BTreeMap<String, model::Document>> {
     let project = root.parent().ok_or_else(|| Error::Invalid("planning root lacks project".into()))?;
     let roadmap = revert::read_regular(&root.join("ROADMAP.md"))?.ok_or_else(|| Error::Invalid("ROADMAP.md is absent".into()))?;
     let roadmap = revert::roadmap(&roadmap, phase)?;
-    let lifecycle = super::derivation_service::undo_lifecycle(root, &view.snapshot.data, phase, roadmap.clone())?;
-    let next = super::next_action_service::undo_next(root, &lifecycle, view, config).map_err(|e| Error::Invalid(e.to_string()))?;
-    let current = lifecycle.phases.iter().find(|p| Some(p.id) == lifecycle.current)
-        .ok_or_else(|| Error::Invalid("undo did not derive a current phase".into()))?;
-    let status = serde_json::to_value(current.status)?.as_str().unwrap_or("planned").to_owned();
-    let state = format!("# State\n\nPhase: {} of {} ({})\nStatus: {status}\nNext: {next}\n\nDerived from the retained phase record after undo.\n", current.id.address(), lifecycle.total, current.name);
     let mut out = BTreeMap::from([
         (".planning/ROADMAP.md".into(), revert::document(project, ".planning/ROADMAP.md", roadmap)?),
-        (".planning/STATE.md".into(), revert::document(project, ".planning/STATE.md", state.into_bytes())?),
     ]);
     if let Some(bytes) = revert::read_regular(&root.join("REQUIREMENTS.md"))? {
         let text = std::str::from_utf8(&bytes).map_err(|e| Error::Invalid(e.to_string()))?;
@@ -111,7 +104,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, 
         Record { id, request, manifest: selected, completed: vec![], pending: None, conflict: None, state: "running".into() }
     };
     // All projection reads are preflight, before the first revert can change a file.
-    let documents = if record.request.mode == Mode::Committed { projections(root, &view, phase, &config.effective.values)? } else { BTreeMap::new() };
+    let documents = if record.request.mode == Mode::Committed { projections(root, phase)? } else { BTreeMap::new() };
     if !records.contains_key(&record.id) { persist(store, &mut view, revert::write(record.clone(), &protected, on_protected)).await?; }
     if let Some(pending) = &record.pending {
         return Ok(Refusal::new("undo-reconciliation-required", "a retained revert invocation has no result; preserve its actual Git state")

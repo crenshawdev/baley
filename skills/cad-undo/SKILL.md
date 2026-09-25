@@ -21,7 +21,7 @@ allowed-tools:
    creates one revert commit per hash in reverse manifest order and, after
    complete success, marks the execution undone and repairs its phase mirrors.
    --no-commit stages the exact reverse reverts, creates no commit, marks
-   nothing undone and leaves phase documents and the cursor unchanged.
+   nothing undone and leaves phase documents unchanged.
    Obtain the owner's explicit confirmation of this exact manifest and mode.
    A decline stops without an undo request.
 3. Read the request schema through cadence_query
@@ -43,6 +43,6 @@ allowed-tools:
    and show the binary's derived lifecycle and next action. Native history and
    evidence remain retained. Staged or conflicted undo performs no lifecycle
    reset. All commit selection, reversal and mirror repair belong to the binary:
-   do no shell Git, scope-message fallback, raw phase-done --undo or cursor set.
+   do no shell Git or scope-message fallback.
    Local cleanup, tracker writes and publishing are separate operations.
 </process>

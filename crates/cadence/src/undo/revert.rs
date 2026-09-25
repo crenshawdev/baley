@@ -85,7 +85,7 @@ pub fn validate(root: &Path, write: &Write, replay: bool, process: &mut dyn Proc
         commit::validate(project, seal, replay, process)?;
     }
     for (path, document) in &write.documents {
-        if !matches!(path.as_str(), ".planning/ROADMAP.md" | ".planning/REQUIREMENTS.md" | ".planning/STATE.md") {
+        if !matches!(path.as_str(), ".planning/ROADMAP.md" | ".planning/REQUIREMENTS.md") {
             return Err(Error::Invalid(format!("undo cannot repair unrelated document {path}")));
         }
         let actual = read_regular(&project.join(path))?;
