@@ -482,6 +482,8 @@ Content is stored as a payload when it is larger than 4 KiB, or when it is of a 
 | `output` | test and command output | Kept until the milestone that produced it closes, then reduced |
 | `material` | review material, prompts sent to models | Kept for 90 days after its review closes |
 
+These are the defaults. A project can change any of them in `baley.toml`, and `baley purge` removes a body at once regardless of class.
+
 A body is deleted only when no remaining reference still requires it. A purge in one project removes only that project's references and is recorded in that project's chain; a body shared with another project survives until that project's references also expire.
 
 **Reduction** does not alter a payload. It stores the kept excerpt (the first and last 64 KiB) as a new payload with its own hash, records `payload.reduced` naming the original hash, the excerpt hash and the byte ranges kept, and tombstones the original body. Verification checks the excerpt in full and the original as a commitment.
@@ -932,7 +934,6 @@ The conformance suite lives in `baley-store` and runs against every adapter.
 
 1. **Benchmark.** Build the adapter prototype and the workload generator, run them, and record the results against [Performance](#performance). Must be answered before acceptance.
 2. **Host matrix.** Run every row of [Host neutrality](#host-neutrality-evd-r24) on both hosts. Must be answered before acceptance.
-3. **Default retention.** Confirm the defaults for the `output` and `material` classes.
 
 ## Appendix A: Mapping from the current store
 
