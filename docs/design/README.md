@@ -54,18 +54,21 @@ Build issues, pull requests and tests cite the identifiers they satisfy, so any 
 
 ## Review and approval
 
-1. The author opens a pull request with the design document at status Draft and the design issue linked.
-2. The document moves to In review. A reviewer independent of the author writes an adversarial review. When the author is an AI model, the reviewer is a model from a different family. The review says what is wrong, missing or unproven, and against which requirement, and is posted on the pull request.
-3. The author answers every finding on the pull request, either with a change to the document or with a reason.
-4. The owner approves the pull request. The author's last commit sets the status to Accepted and the owner merges. A rejected design is merged at status Rejected with the reason, so the reasoning is kept.
+1. The author opens a pull request with the design document at status Draft and the design issue linked. Every diagram is checked in both light and dark themes first.
+2. A reviewer independent of the author writes an adversarial review: what is wrong, missing or unproven, and against which requirement or section. When the author is an AI model, the reviewer is a model from a different family. The review goes to the owner.
+3. The author verifies every finding against the document and the code, and brings the owner each one that holds, in plain terms, with the options for fixing it. The owner rules on each.
+4. The author revises the document to match the rulings and moves it to In review. The revision's pull request lists every finding and the change made for it. Requirement identifiers stay stable: a changed requirement keeps its number and new ones are appended.
+5. The document is accepted when its open questions are empty, including any acceptance gates it names, such as a benchmark or a check on each supported host. The owner approves, the author's last commit sets the status to Accepted, and the owner merges. A rejected design is merged at status Rejected with the reason, so the reasoning is kept.
 
-Decision records produced by the design are merged in the same pull request.
+Status, not merging, marks acceptance. A document merged before it is accepted keeps its status, and later revisions arrive as further pull requests.
+
+Decision records produced by the design are merged with it, at status Proposed, and move to Accepted with the design.
 
 ## Tracking
 
 Work is tracked on GitHub.
 
-- **Milestones** are named for their theme, never a version number. Versions are assigned when a release ships.
+- **Milestones** take their names from Asimov's Robot and Foundation stories, and each one's description states its theme in plain words. Never a version number: versions are assigned when a release ships. Working branches take names from the same stories.
 - **Each milestone opens with a design issue** labelled `design`. Its pull request carries the design document.
 - **Build issues** are opened from the accepted design, one per slice of work, each citing the requirements it delivers. None starts until the design is merged.
 - **Pull requests** link their issue and cite requirement identifiers. Commits follow [Conventional Commits](https://www.conventionalcommits.org/) and are signed.
@@ -78,4 +81,4 @@ They are technical records for an engineer who has never met the authors. They c
 
 | Number | Title | Status |
 |---|---|---|
-| [0001](0001-evidence-ledger.md) | The evidence ledger | Draft |
+| [0001](0001-evidence-ledger.md) | The evidence ledger | In review |
