@@ -101,7 +101,7 @@ Identifiers are stable. Requirements changed by the review keep their number; ne
 | EVD-R23 | The store refuses to open on a network filesystem, judged at the real database path, and says why. | SQLite write-ahead log constraint |
 | EVD-R24 | The design works with Claude Code and Codex as host, proven by the host matrix. Each host's sandbox denies agents access to Baley's home while Baley's server and hook can still write it. | Host neutrality; threat model |
 | EVD-R25 | An owner can see the state and history of any record without reading files: through the CLI, through the MCP document query, and through an explicit export. | Replaces Markdown copies |
-| EVD-R26 | A command with an effect outside the database claims its request and records its intent before acting, and records the result after. Retries and duplicates never repeat the effect. A claim with no result is reconciled before the project continues. | External effects cannot be rolled back |
+| EVD-R26 | A command with an effect outside the database claims its request and records its intent before acting, and records the result after. Retries and duplicates never repeat the effect. An active claim blocks only its own scope; an interrupted claim (lease expired) is reconciled before work in its scope continues. | External effects cannot be rolled back |
 | EVD-R27 | A decision that grants authority (admission, completion, landing, release) confirms its deciding facts against events inside its transaction, so an edited view cannot grant authority. | Views are derived data |
 | EVD-R28 | Every rule listed in [Rules preserved](#rules-preserved) behaves as it does today, proven by an equivalence test. | Non-goal: redesigning domain rules |
 
@@ -339,21 +339,37 @@ A command is one request from a caller, carrying a request id.
 2. **Act.** The external work runs outside any transaction.
 3. **Record.** One more transaction re-checks the claim is still current, records the result events and `command.completed`.
 
-On start and before any command for the project, Baley looks for claims with no completion. It refuses to continue until each is reconciled against the real state (for example the git state after an interrupted revert) and a `command.reconciled` event records what was found, as undo does today.
+**Active and interrupted claims.** A claim records its owner (process, host session and start time) and a scope. The owner holds a lease on the claim and renews it every 10 seconds while it works; the lease expires 60 seconds after the last renewal. Leases are liveness, not evidence: they live in a `claim_lease` table outside the chain, and renewing one records no event.
+
+- A claim whose lease is current is **active**. It blocks only commands in its own scope; everything else proceeds.
+- A claim whose lease has expired is **interrupted**: its owner died or lost its connection. Only an interrupted claim is reconciled.
+
+| Claim | Scope it blocks while active or interrupted |
+|---|---|
+| Verification run or test | Another run of the same check |
+| Undo's revert | Commands on that phase, and any command that writes git in that checkout |
+| Landing step, release | The other steps of that milestone |
+| Anchor push | Another anchor push for the project |
+| Provider review call | Another delivery of the same review |
+
+**Reconciliation.** When Baley finds an interrupted claim, at start or when a command in its scope arrives, it reconciles automatically wherever the real state can be read: an interrupted anchor push checks the remote for its tag, an interrupted test run is recorded as interrupted, an interrupted provider call is recorded as undelivered and may be retried under a new request. It stops for the owner only where the real state is ambiguous, as with a revert that may be half applied, which is today's undo rule. Either way, `command.reconciled` records what was found.
+
+**Failures are outcomes.** An effect that fails cleanly (the remote refused the push, the provider returned an error) is a domain outcome: the record step commits `command.completed` with that result, and the claim is finished, not interrupted. A failed anchor push therefore never blocks work; the unanchored range grows, the next anchor point retries, and `doctor` warns once the unanchored range is more than a day old.
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Claimed : claim transaction commits
-  Claimed --> Acting : external work starts
-  Acting --> Completed : record transaction commits
-  Acting --> Interrupted : crash or lost connection
-  Interrupted --> Reconciling : next start or next command
-  Reconciling --> Completed : actual state recorded
-  Claimed --> Completed : retry finds the claim and the result
+  [*] --> Active : claim transaction commits, lease taken
+  Active --> Active : lease renewed every 10 s
+  Active --> Completed : result recorded, success or clean failure
+  Active --> Interrupted : lease expires, owner gone
+  Interrupted --> Reconciling : start, or a command in its scope
+  Reconciling --> Completed : real state read and recorded
+  Reconciling --> AwaitingOwner : real state ambiguous
+  AwaitingOwner --> Completed : owner reconciles
   Completed --> [*]
 ```
 
-*Figure 5. A command with an external effect. A claim is never re-executed; an interrupted one is reconciled against reality before the project continues.*
+*Figure 5. A command with an external effect. An active claim blocks only its scope; only an interrupted claim is reconciled, automatically where the real state can be read. A claim is never re-executed.*
 
 ```mermaid
 sequenceDiagram
@@ -683,12 +699,12 @@ stateDiagram-v2
   Checking --> Ready
   Checking --> ReadOnly : quick_check failed
   Opening --> Ready : epoch current, guard or CLI
-  Ready --> Reconciling : unfinished claims found
+  Ready --> Reconciling : interrupted claims found
   Reconciling --> Ready
   Refused --> [*]
 ```
 
-*Figure 9. Opening the store. A binary never writes to an epoch it does not understand, a failed migration leaves the database as it was, and unfinished claims are reconciled before work continues.*
+*Figure 9. Opening the store. A binary never writes to an epoch it does not understand, a failed migration leaves the database as it was, and interrupted claims are reconciled before work in their scope continues.*
 
 The MCP server runs SQLite's `quick_check` when it starts. The guard and the CLI do not, so a guard call never scans the database. The full `integrity_check`, chain and view verification run in `baley doctor` and before every backup.
 
@@ -780,7 +796,7 @@ See [Threat model](#threat-model) for who is defended against.
 | Failure | Detection | What the user sees | Recovery |
 |---|---|---|---|
 | Process killed in a database-only command | SQLite rolls back the uncommitted transaction | The command did not happen | Retry with the same request id |
-| Process killed after a claim, during or after the external effect | Claim without completion, found at start or next command | The project refuses new work until reconciled, naming the claim | Reconcile against the real state; `command.reconciled` records it |
+| Process killed after a claim, during or after the external effect | The claim's lease expires | Commands in the claim's scope wait for reconciliation, naming the claim; other work continues | Reconcile against the real state; `command.reconciled` records it |
 | Power loss after acknowledgement | None needed | Nothing is lost (`synchronous=FULL`) | None |
 | Store busy longer than 5 s | `SQLITE_BUSY` after the timeout | "store busy" | Retry; `doctor` shows long-running holders |
 | Disk full | `SQLITE_FULL` | The command is refused, nothing recorded | Free space; retry |
@@ -790,7 +806,7 @@ See [Threat model](#threat-model) for who is defended against.
 | Older process after an upgrade | Epoch check in its next write | Read-only, naming the needed binary | Restart with the new binary |
 | Migration fails | Transaction error | Refused; database unchanged; backup kept | Report the bug; the old binary still works |
 | Unsafe home or a network filesystem | Checks on open | Refused with the reason and the fix | Fix modes or ownership, or set `BALEY_HOME` to a local path |
-| Anchor push fails | Claim without completion | Warning; the unanchored range grows | Retried at the next anchor point |
+| Anchor push fails cleanly (remote unreachable or refused) | `command.completed` with the failure | Nothing blocks; `doctor` warns once the unanchored range is over a day old | Retried at the next anchor point |
 | Write-ahead log grows | Log size in doctor | Warning in doctor | Idle checkpoint; find the long reader |
 
 ### Performance
@@ -815,7 +831,7 @@ SQLite's limits sit far beyond these numbers: 281 TB per database and about 1 GB
 
 ### Observability
 
-- `baley doctor` reports the compatibility epoch, `integrity_check`, chain verification against the latest anchor per project, view verification, write-ahead log size, database size by record family and retention class, view versions and lag, unfinished claims, and backups present.
+- `baley doctor` reports the compatibility epoch, `integrity_check`, chain verification against the latest anchor per project, view verification, write-ahead log size, database size by record family and retention class, view versions and lag, active and interrupted claims, the age of the unanchored range, and backups present.
 - The `trace` table records diagnostics (timings, retries, busy waits) outside the chain, with its own size cap and rotation.
 - Every refusal carries a stable code and the facts that caused it, as refusals do today.
 
@@ -906,7 +922,7 @@ Slices:
 | EVD-R21 | The benchmark harness measures every budget on the reference workload. Timings are measured, not asserted in tests, because timing is not portable. |
 | EVD-R24 | The host matrix, run by hand on both hosts before acceptance, and again before each release. |
 | EVD-R25 | `show` and `export` render every record family from views. |
-| EVD-R26 | A command is interrupted after its claim; the next command for the project refuses until reconciliation; a retry during the effect never repeats it. |
+| EVD-R26 | While a claim is active, commands outside its scope proceed and commands inside it wait; a retry during the effect never repeats it. After the owner is killed and the lease expires, a command in scope triggers reconciliation; an anchor claim reconciles automatically from the remote; a revert claim waits for the owner. A cleanly failed anchor push completes the claim and blocks nothing. |
 | EVD-R27 | An edited view document that says "approved" or "complete" does not grant admission or completion, because the event is missing. |
 | EVD-R28 | One equivalence test per row of [Rules preserved](#rules-preserved). |
 
