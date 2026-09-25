@@ -166,6 +166,47 @@ fn initialization_takes_its_effective_config_from_the_active_global() {
 }
 
 #[test]
+fn an_existing_native_repo_config_is_the_repo_layer_and_not_created() {
+    let root = Path::new("/fixture/project/.planning");
+    let active = Paths { repo: root.join("config.v4.json"), global: None };
+    let mut io = SuppliedConfig(
+        [(active.repo.clone(), br#"{"roles":{"cad-executor":{"model":"sonnet"}}}"#.to_vec())].into(),
+    );
+    let result = prepare_initialization(root, &active, &mut io).unwrap();
+    assert_eq!(
+        result.generation.effective.raw_repo,
+        Some(json!({"roles":{"cad-executor":{"model":"sonnet"}}}))
+    );
+    assert!(!result.manifest.created.contains(&active.repo), "{:?}", result.manifest.created);
+}
+
+fn existing_repo(bytes: &[u8]) -> Generation {
+    Generation {
+        number: 0,
+        global: None,
+        repo: Input { identity: "/p/.planning/config.v4.json".into(), bytes: Some(bytes.to_vec()), stamp: None },
+        effective: crate::config::merge::merge(None, Some(serde_json::from_slice(bytes).unwrap()), false),
+    }
+}
+
+#[test]
+fn initialization_installs_an_existing_repo_config_byte_for_byte() {
+    let bytes = b"{\"roles\": {}}\n";
+    assert_eq!(initial_repo_config(&existing_repo(bytes), Some(bytes)), Ok(bytes.to_vec()));
+}
+
+#[test]
+fn initialization_refuses_a_repo_config_changed_since_it_was_observed() {
+    let generation = existing_repo(b"{\"roles\": {}}\n");
+    for installed in [Some(b"{}".as_slice()), None] {
+        assert_eq!(
+            initial_repo_config(&generation, installed),
+            Err(Error::Conflict("repo config changed during initialization".into()))
+        );
+    }
+}
+
+#[test]
 fn register_missing_global_parent_creates_infrastructure_without_config_pins() {
     let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path().join("project/.planning");

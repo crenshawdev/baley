@@ -243,7 +243,8 @@ fn prepare_initialization<I: ConfigIo>(
         _ => None,
     };
     let reused = shared.as_ref().filter(|input| input.bytes.is_some());
-    let effective = merge::merge(reused.map(parse_input).transpose()?.flatten(), None, false);
+    // An existing native repo config is the repo layer; initialization keeps it.
+    let effective = merge::merge(reused.map(parse_input).transpose()?.flatten(), parse_input(&repo)?, false);
     reload::validate_effective(&effective)?;
     let generation = Generation {
         number: 0,
@@ -269,7 +270,9 @@ fn prepare_initialization<I: ConfigIo>(
         .iter()
         .map(|name| root.join(name))
         .collect();
-    created.push(active.repo.clone());
+    if generation.repo.bytes.is_none() {
+        created.push(active.repo.clone());
+    }
     let source_generation = digest(&serde_json::to_vec(&guards)?);
     let manifest = ImportManifest {
         format: 1,
@@ -295,6 +298,18 @@ fn prepare_initialization<I: ConfigIo>(
             external: vec![],
         },
     })
+}
+
+/// The repo config bytes the initialization transaction installs, given what
+/// the participant holds now: an existing native config is kept byte for
+/// byte, an absent one becomes the empty layer, and anything else changed
+/// since initialization observed it.
+fn initial_repo_config(generation: &Generation, installed: Option<&[u8]>) -> Result<Vec<u8>> {
+    match (&generation.repo.bytes, installed) {
+        (Some(observed), Some(installed)) if observed.as_slice() == installed => Ok(observed.clone()),
+        (None, None) => Ok(serde_json::to_vec_pretty(&generation.effective.repo)?),
+        _ => Err(Error::Conflict("repo config changed during initialization".into())),
+    }
 }
 
 struct SessionPolicy<I: ConfigIo> {
@@ -795,8 +810,8 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
             },
         ));
         if pending.is_none() && state.is_none() {
-            for (path, store) in [(root.join(ITEMS), true), (root.join(DECISIONS), true), (active.repo.clone(), false)] {
-                let input = if store { observe_store(&mut io, &path)? } else { observe(&mut io, &path)? };
+            for path in [root.join(ITEMS), root.join(DECISIONS)] {
+                let input = observe_store(&mut io, &path)?;
                 if input.bytes.is_some() {
                     return Err(Error::Conflict(format!(
                         "unrelated partial output: {}",
@@ -841,13 +856,11 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
         {
             let mut transaction = inputs.transaction.clone();
             let expected = storage.read("repo-config")?;
-            if expected.bytes.is_some() {
-                return Err(Error::Conflict("unrelated config output: repo-config".into()));
-            }
+            let bytes = initial_repo_config(&inputs.generation, expected.bytes.as_deref())?;
             transaction.external.push(ExternalChange {
                 target: "repo-config".into(),
                 expected,
-                bytes: serde_json::to_vec_pretty(&inputs.generation.effective.repo)?,
+                bytes,
             });
             Some(transaction)
         } else {
