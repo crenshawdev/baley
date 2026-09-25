@@ -49,9 +49,8 @@ pub struct ParsedUat {
 }
 
 /// A row the legacy table decided carries no marker; a row the acceptance
-/// overlay decided says so, because a completion declared at import or at
-/// adoption and a native completion all reach Complete with counts the
-/// legacy SUMMARY/UAT rule can never produce.
+/// overlay decided says so, because a native completion reaches Complete
+/// with counts the legacy SUMMARY/UAT rule can never produce.
 fn legacy(accepted: &bool) -> bool {
     !*accepted
 }

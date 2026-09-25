@@ -782,9 +782,6 @@ impl Intent {
                 return Err(Error::Invalid("verification authority cannot be imported or seeded".into()));
             }
         }
-        // A completion declared at import is written by the transaction that
-        // completes the import and by nothing else: the binary computed it
-        // from the documents, and no other write may add, drop or edit one.
         let before = self.participants.last().and_then(|p| p.expected.bytes.as_deref())
             .map(parse_previous).transpose()?;
         if !matches!(self.kind, IntentKind::DebugV1 { .. } | IntentKind::DebugReviewV1 { .. })
@@ -798,13 +795,6 @@ impl Intent {
         if !matches!(self.kind, IntentKind::TaskV1 { .. })
             && before.as_ref().and_then(|p| p.data.get(crate::task::model::NAMESPACE)) != snapshot.data.get(crate::task::model::NAMESPACE) {
             return Err(Error::Invalid("task namespace requires its owning intent".into()));
-        }
-        let completes_import = before.as_ref().is_none_or(|p| p.data.get("import").is_none())
-            && snapshot.data.get("import").is_some();
-        if !completes_import
-            && before.as_ref().and_then(|p| p.data.get(cadence::adoption::NAMESPACE))
-                != snapshot.data.get(cadence::adoption::NAMESPACE) {
-            return Err(Error::Invalid("declared completions are written only by the import".into()));
         }
         if let IntentKind::ExecutionPatch {phase,..}|IntentKind::ExecutionPatchV1 {phase,..}=&self.kind {
             cadence::plan::persistence::require_legacy_execution(&snapshot.data,*phase)?;

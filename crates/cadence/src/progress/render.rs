@@ -24,15 +24,13 @@ pub fn answer(
         let native = overlay.phases.get(&phase.id.address());
         let label = native.and_then(|p| p.label.as_deref());
         let word = match label.filter(|_| phase.status == LifecycleStatus::Complete) {
-            Some("declared-at-import") => "complete (declared at import, unverified)",
-            Some("declared-at-adoption") => "complete (declared at adoption, unverified)",
             Some(label) => label,
             None => status(phase.status),
         };
         writeln!(text, "phase {}: {} - {word}{}{}{}", phase.id.address(), phase.name,
-            phase.uat.as_ref().filter(|_| native.is_none() || word.contains("declared")).map_or(String::new(), |uat| format!(" - UAT {} pass, {} fail{}", uat.pass, uat.fail,
+            phase.uat.as_ref().filter(|_| native.is_none()).map_or(String::new(), |uat| format!(" - UAT {} pass, {} fail{}", uat.pass, uat.fail,
                 if uat.skipped == 0 { String::new() } else { format!(", {} skipped", uat.skipped) })),
-            native.filter(|p| p.completion.is_some() && !word.contains("declared"))
+            native.filter(|p| p.completion.is_some())
                 .map_or(String::new(), |p| format!(" - met {}, waived {}", p.met, p.waived)),
             if phase.plans.is_empty() || phase.status != LifecycleStatus::Planned { String::new() } else { format!(" - plans {}", phase.plans.len()) }).unwrap();
         let mut row = serde_json::to_value(phase).expect("phase record");
