@@ -396,9 +396,7 @@ pub fn role_input(generation: &Generation, request: &RouteRequest) -> Result<rol
             .ok_or_else(|| Error::Policy("role effort default unavailable".into()))?
             .into(),
         role_effort: stored(effort_key),
-        legacy_effort: stored(format!("model.effort.{}", request.role)),
         role_model: stored(format!("roles.{}.model", request.role)),
-        legacy_model: stored(format!("model.overrides.{}", request.role)),
         escalate_on_failure: merge::get(&effective.values, "model.escalate_on_failure")
             .and_then(Value::as_bool)
             .ok_or_else(|| Error::Policy("retry policy unavailable".into()))?,

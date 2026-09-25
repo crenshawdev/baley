@@ -3370,7 +3370,7 @@ mod routing_prompt_tests {
         let route = json!({"choice":{"role":"cad-executor","agent":"cad-executor-xhigh","rung":"xhigh","starting_rung":"xhigh","model":"opus",
             "effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"xhigh"},
             "model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"opus"},
-            "attempt":1,"escalated":false,"pinned":false,"reasons":["fixture selection"],"warnings":[]},
+            "attempt":1,"escalated":false,"reasons":["fixture selection"],"warnings":[]},
             "inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":null,"stamp":null},"global":null,"global_alias":false}});
         let supplied: ActiveDispatch = serde_json::from_value(json!({"schema":1,"id":"dispatch-fixture","expected_execution_version":1,
             "phase":8,"plan":1,"plan_fingerprint":"plan","plan_set_fingerprint":"plans","requirements":["AC10"],"tasks":[{"id":"T1","verify":["verify"]}],
@@ -3798,7 +3798,7 @@ mod reissue_tests {
             "route":{"choice":{"role":"cad-executor","agent":agent,"rung":"xhigh","starting_rung":"xhigh","model":"opus",
                 "effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"xhigh"},
                 "model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"opus"},
-                "attempt":1,"escalated":false,"pinned":false,"reasons":[],"warnings":[]},
+                "attempt":1,"escalated":false,"reasons":[],"warnings":[]},
                 "inputs":{"repo":{"identity":"/project/.planning/config.json","content":"0".repeat(64),"stamp":null},
                 "global":null,"global_alias":false}},
             "base_sha":"b".repeat(40),"prompt":prompt,

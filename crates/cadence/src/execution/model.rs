@@ -321,8 +321,6 @@ pub struct RoleSelection {
     pub key: String,
     pub layer: String,
     pub stored: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ignored_legacy: Option<RoleStored>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -338,7 +336,6 @@ pub struct RoleResolution {
     pub model_source: RoleSelection,
     pub attempt: u32,
     pub escalated: bool,
-    pub pinned: bool,
     pub reasons: Vec<String>,
     pub warnings: Vec<String>,
 }

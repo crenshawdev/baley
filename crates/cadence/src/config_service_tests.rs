@@ -139,8 +139,6 @@ mod routing_inputs_tests {
             assert_eq!(input.default_effort, effort);
             assert_eq!(input.role_effort, None);
             assert_eq!(input.role_model, None);
-            assert_eq!(input.legacy_effort, None);
-            assert_eq!(input.legacy_model, None);
             assert_eq!(input.attempt, 1);
             assert!(!input.escalate_on_failure);
         }
@@ -151,13 +149,9 @@ mod routing_inputs_tests {
         let mut generation = generation();
         generation.effective.global =
             json!({"roles":{"cad-executor":{"model":null,"effort":null}}});
-        generation.effective.repo =
-            json!({"model":{"overrides":{"cad-executor":"opus"},"effort":{"cad-executor":"max"}}});
         generation.effective.sources = [
             ("roles.cad-executor.model".into(), Layer::Global),
             ("roles.cad-executor.effort".into(), Layer::Global),
-            ("model.overrides.cad-executor".into(), Layer::Repo),
-            ("model.effort.cad-executor".into(), Layer::Repo),
         ]
         .into();
         let request = RouteRequest {
@@ -181,22 +175,6 @@ mod routing_inputs_tests {
                 key: "roles.cad-executor.effort".into(),
                 layer: "global".into(),
                 value: Value::Null
-            })
-        );
-        assert_eq!(
-            input.legacy_model,
-            Some(roles::Stored {
-                key: "model.overrides.cad-executor".into(),
-                layer: "repo".into(),
-                value: json!("opus")
-            })
-        );
-        assert_eq!(
-            input.legacy_effort,
-            Some(roles::Stored {
-                key: "model.effort.cad-executor".into(),
-                layer: "repo".into(),
-                value: json!("max")
             })
         );
     }

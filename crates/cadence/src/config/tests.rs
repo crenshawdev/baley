@@ -14,8 +14,8 @@ fn deep_merge_inherits_absent_keys_and_replaces_with_null_arrays_and_scalars() {
 
 #[test]
 fn merge_keeps_both_raw_layers_records_each_winning_layer_and_fills_defaults() {
-    let global = json!({"roles":{"cad-executor":{"model":"one","effort":"high"}},
-        "model":{"effort":{"cad-executor":"max"}}, "git":{"protected_branches":["main","stable"]}});
+    let global = json!({"roles":{"cad-executor":{"model":"one","effort":"high"},"cad-planner":{"effort":"max"}},
+        "git":{"protected_branches":["main","stable"]}});
     let repo = json!({"roles":{"cad-executor":{"model":null}},"git":{"protected_branches":[]}});
     let merged = merge(Some(global.clone()), Some(repo.clone()), false);
     assert_eq!(merged.raw_global, Some(global));
@@ -29,7 +29,7 @@ fn merge_keeps_both_raw_layers_records_each_winning_layer_and_fills_defaults() {
         Some(&json!("high"))
     );
     assert_eq!(
-        get(&merged.values, "model.effort.cad-executor"),
+        get(&merged.values, "roles.cad-planner.effort"),
         Some(&json!("max"))
     );
     assert_eq!(
@@ -37,7 +37,7 @@ fn merge_keeps_both_raw_layers_records_each_winning_layer_and_fills_defaults() {
         Some(&json!([]))
     );
     assert_eq!(merged.sources["roles.cad-executor.model"], Layer::Repo);
-    assert_eq!(merged.sources["model.effort.cad-executor"], Layer::Global);
+    assert_eq!(merged.sources["roles.cad-planner.effort"], Layer::Global);
     assert!(get(&merged.repo, "workflow.verifier").is_none());
     assert_eq!(get(&merged.values, "workflow.verifier"), Some(&json!(true)));
 }

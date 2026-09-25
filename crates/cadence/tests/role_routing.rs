@@ -11,9 +11,7 @@ fn input(role: &str, default_effort: &str) -> Input {
         attempt: 1,
         default_effort: default_effort.into(),
         role_effort: None,
-        legacy_effort: None,
         role_model: None,
-        legacy_model: None,
         escalate_on_failure: false,
     }
 }
@@ -42,13 +40,8 @@ fn default_role_inputs_return_the_six_literal_starting_choices() {
     ] {
         let answer = resolve(&input(role, default_effort)).unwrap();
         assert_eq!(
-            (
-                answer.agent.as_str(),
-                answer.rung.as_str(),
-                answer.model,
-                answer.pinned
-            ),
-            (agent, default_effort, None, false)
+            (answer.agent.as_str(), answer.rung.as_str(), answer.model),
+            (agent, default_effort, None)
         );
         assert_eq!(
             (
@@ -64,87 +57,6 @@ fn default_role_inputs_return_the_six_literal_starting_choices() {
             ),
             ("absent", "session")
         );
-    }
-}
-
-#[test]
-fn each_null_independently_defeats_the_older_pin_in_either_layer() {
-    for (role, default_effort) in [
-        ("cad-planner", "high"),
-        ("cad-assumptions-analyzer", "high"),
-        ("cad-verifier", "high"),
-        ("cad-reviewer", "medium"),
-        ("cad-executor", "high"),
-        ("cad-plan-checker", "low"),
-    ] {
-        for (primary, legacy) in [("repo", "global"), ("global", "repo")] {
-            for (reset_effort, reset_model) in
-                [(false, false), (true, false), (false, true), (true, true)]
-            {
-                let mut request = input(role, default_effort);
-                request.legacy_effort =
-                    Some(stored(format!("model.effort.{role}"), legacy, json!("max")));
-                request.legacy_model = Some(stored(
-                    format!("model.overrides.{role}"),
-                    legacy,
-                    json!("opus"),
-                ));
-                request.role_effort = reset_effort
-                    .then(|| stored(format!("roles.{role}.effort"), primary, Value::Null));
-                request.role_model = reset_model
-                    .then(|| stored(format!("roles.{role}.model"), primary, Value::Null));
-                let answer = resolve(&request).unwrap();
-                assert_eq!(
-                    answer.rung,
-                    if reset_effort { default_effort } else { "max" }
-                );
-                assert_eq!(
-                    answer.model.as_deref(),
-                    if reset_model { None } else { Some("opus") }
-                );
-                assert_eq!(answer.pinned, !reset_model);
-                assert_eq!(
-                    answer.effort_source.kind,
-                    if reset_effort { "reset" } else { "legacy" }
-                );
-                assert_eq!(
-                    answer.model_source.kind,
-                    if reset_model { "reset" } else { "legacy" }
-                );
-                assert_eq!(
-                    answer.effort_source.layer,
-                    if reset_effort { primary } else { legacy }
-                );
-                assert_eq!(
-                    answer.model_source.layer,
-                    if reset_model { primary } else { legacy }
-                );
-                assert_eq!(
-                    answer
-                        .effort_source
-                        .ignored_legacy
-                        .as_ref()
-                        .map(|value| value.value.clone()),
-                    if reset_effort {
-                        Some(json!("max"))
-                    } else {
-                        None
-                    }
-                );
-                assert_eq!(
-                    answer
-                        .model_source
-                        .ignored_legacy
-                        .as_ref()
-                        .map(|value| value.value.clone()),
-                    if reset_model {
-                        Some(json!("opus"))
-                    } else {
-                        None
-                    }
-                );
-            }
-        }
     }
 }
 
@@ -225,20 +137,10 @@ fn explicit_values_keep_their_source_and_all_thirty_agent_names_are_literal() {
                     layer,
                     json!("sonnet"),
                 ));
-                request.legacy_model = Some(stored(
-                    format!("model.overrides.{role}"),
-                    "repo",
-                    json!("opus"),
-                ));
                 let answer = resolve(&request).unwrap();
                 assert_eq!(
-                    (
-                        answer.agent.as_str(),
-                        answer.rung.as_str(),
-                        answer.model.as_deref(),
-                        answer.pinned
-                    ),
-                    (agent, rung, Some("sonnet"), false)
+                    (answer.agent.as_str(), answer.rung.as_str(), answer.model.as_deref()),
+                    (agent, rung, Some("sonnet"))
                 );
                 assert_eq!(
                     (
@@ -297,21 +199,15 @@ fn retries_advance_once_from_the_starting_rung_and_hold_at_max() {
 }
 
 #[test]
-fn unsupported_custom_model_is_reported_verbatim_without_reviving_opus() {
+fn unsupported_custom_model_is_reported_verbatim_and_omitted() {
     let mut request = input("cad-executor", "high");
     request.role_model = Some(stored(
         "roles.cad-executor.model".into(),
         "repo",
         json!(" custom \"x\" = λ "),
     ));
-    request.legacy_model = Some(stored(
-        "model.overrides.cad-executor".into(),
-        "global",
-        json!("opus"),
-    ));
     let answer = resolve(&request).unwrap();
     assert_eq!(answer.model, None);
-    assert!(!answer.pinned);
     assert_eq!(answer.model_source.kind, "unsupported");
     assert_eq!(
         answer.model_source.stored,
@@ -320,34 +216,9 @@ fn unsupported_custom_model_is_reported_verbatim_without_reviving_opus() {
     assert_eq!(
         answer.warnings,
         [
-            "roles.cad-executor.model=\" custom \\\"x\\\" = λ \" is unsupported; supported host aliases are opus/sonnet/haiku/fable; omit model without legacy fallback"
+            "roles.cad-executor.model=\" custom \\\"x\\\" = λ \" is unsupported; supported host aliases are opus/sonnet/haiku/fable; omit model"
         ]
     );
-}
-
-/// Resolves the executor with `model` saved as its legacy global model
-/// override, and answers the chosen model and whether it is pinned.
-fn legacy_model(model: &str) -> (Option<String>, bool) {
-    let mut request = input("cad-executor", "high");
-    request.legacy_model = Some(stored(
-        "model.overrides.cad-executor".into(),
-        "global",
-        json!(model),
-    ));
-    let answer = resolve(&request).unwrap();
-    (answer.model, answer.pinned)
-}
-
-#[test]
-fn each_supported_legacy_model_pins() {
-    for model in ["opus", "sonnet", "haiku", "fable"] {
-        assert_eq!(legacy_model(model), (Some(model.into()), true));
-    }
-}
-
-#[test]
-fn an_unsupported_legacy_model_does_not_pin() {
-    assert_eq!(legacy_model("custom"), (None, false));
 }
 
 #[test]
@@ -377,7 +248,7 @@ fn resolve_refuses_an_unknown_routing_role() {
 }
 
 #[test]
-fn global_resets_return_the_literal_reason_trail_with_ignored_repo_pins() {
+fn global_resets_return_the_literal_reason_trail() {
     let mut request = input("cad-executor", "high");
     request.role_effort = Some(stored(
         "roles.cad-executor.effort".into(),
@@ -389,24 +260,12 @@ fn global_resets_return_the_literal_reason_trail_with_ignored_repo_pins() {
         "global",
         Value::Null,
     ));
-    request.legacy_effort = Some(stored(
-        "model.effort.cad-executor".into(),
-        "repo",
-        json!("max"),
-    ));
-    request.legacy_model = Some(stored(
-        "model.overrides.cad-executor".into(),
-        "repo",
-        json!("opus"),
-    ));
     let answer = resolve(&request).unwrap();
     assert_eq!(
         answer.reasons,
         [
             "roles.cad-executor.effort: reset from global; starting rung high",
             "roles.cad-executor.model: reset from global; omit model; inherit session",
-            "model.effort.cad-executor from repo is ignored by roles.cad-executor.effort",
-            "model.overrides.cad-executor from repo is ignored by roles.cad-executor.model",
         ]
     );
 }
@@ -1240,7 +1099,7 @@ fn route_value(
 ) -> cadence::config_service::Route {
     cadence::config_service::Route {
         choice: serde_json::from_value(json!({"role":"cad-executor","agent":"cad-executor-xhigh","rung":"xhigh","starting_rung":"high","model":"sonnet",
-            "effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"global","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":3,"escalated":true,"pinned":false,"reasons":["saved choice"],"warnings":[]})).unwrap(),
+            "effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"global","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":3,"escalated":true,"reasons":["saved choice"],"warnings":[]})).unwrap(),
         generation: 17, config_diagnostics: Default::default(),
         policy: policy::Policy { mode: "adjudicated".into(),
             triggers: [

@@ -67,52 +67,24 @@ pub struct Input {
     pub attempt: u32,
     pub default_effort: String,
     pub role_effort: Option<Stored>,
-    pub legacy_effort: Option<Stored>,
     pub role_model: Option<Stored>,
-    pub legacy_model: Option<Stored>,
     pub escalate_on_failure: bool,
 }
 
-fn selection(
-    role: &str,
-    leaf: &str,
-    primary: &Option<Stored>,
-    legacy: &Option<Stored>,
-) -> Selection {
-    if let Some(stored) = primary {
-        Selection {
-            kind: if stored.value.is_null() {
-                "reset"
-            } else {
-                "role"
-            }
-            .into(),
+fn selection(role: &str, leaf: &str, stored: &Option<Stored>) -> Selection {
+    match stored {
+        Some(stored) => Selection {
+            kind: if stored.value.is_null() { "reset" } else { "role" }.into(),
             key: stored.key.clone(),
             layer: stored.layer.clone(),
             stored: Some(stored.value.clone()),
-            ignored_legacy: legacy.clone(),
-        }
-    } else if let Some(stored) = legacy.as_ref().filter(|stored| !stored.value.is_null()) {
-        Selection {
-            kind: "legacy".into(),
-            key: stored.key.clone(),
-            layer: stored.layer.clone(),
-            stored: Some(stored.value.clone()),
-            ignored_legacy: None,
-        }
-    } else {
-        Selection {
+        },
+        None => Selection {
             kind: "absent".into(),
             key: format!("roles.{role}.{leaf}"),
-            layer: if leaf == "model" {
-                "session"
-            } else {
-                "defaults"
-            }
-            .into(),
+            layer: if leaf == "model" { "session" } else { "defaults" }.into(),
             stored: None,
-            ignored_legacy: None,
-        }
+        },
     }
 }
 
@@ -131,13 +103,8 @@ pub fn resolve(input: &Input) -> Result<Resolution> {
                 .into(),
         ));
     }
-    let effort_source = selection(
-        &input.role,
-        "effort",
-        &input.role_effort,
-        &input.legacy_effort,
-    );
-    let mut model_source = selection(&input.role, "model", &input.role_model, &input.legacy_model);
+    let effort_source = selection(&input.role, "effort", &input.role_effort);
+    let mut model_source = selection(&input.role, "model", &input.role_model);
     let starting_rung = effort_source
         .stored
         .as_ref()
@@ -157,13 +124,12 @@ pub fn resolve(input: &Input) -> Result<Resolution> {
     let model = match requested_model {
         Some(model) if HOST_MODELS.contains(&model) => Some(model.to_owned()),
         Some(model) => {
-            warnings.push(format!("{}={} is unsupported; supported host aliases are opus/sonnet/haiku/fable; omit model without legacy fallback", model_source.key, serde_json::to_string(model)?));
+            warnings.push(format!("{}={} is unsupported; supported host aliases are opus/sonnet/haiku/fable; omit model", model_source.key, serde_json::to_string(model)?));
             model_source.kind = "unsupported".into();
             None
         }
         None => None,
     };
-    let pinned = model.is_some() && model_source.kind == "legacy";
     let mut reasons = vec![
         format!(
             "{}: {} from {}; starting rung {}",
@@ -177,14 +143,6 @@ pub fn resolve(input: &Input) -> Result<Resolution> {
             model.as_deref().unwrap_or("omit model; inherit session")
         ),
     ];
-    for source in [&effort_source, &model_source] {
-        if let Some(ignored) = &source.ignored_legacy {
-            reasons.push(format!(
-                "{} from {} is ignored by {}",
-                ignored.key, ignored.layer, source.key
-            ));
-        }
-    }
     if input.attempt > 1 {
         reasons.push(if rung != start {
             format!(
@@ -207,7 +165,6 @@ pub fn resolve(input: &Input) -> Result<Resolution> {
         model_source,
         attempt: input.attempt,
         escalated: rung != start,
-        pinned,
         reasons,
         warnings,
     })
