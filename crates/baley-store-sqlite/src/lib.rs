@@ -8,6 +8,7 @@ mod payload;
 mod queue;
 mod schema;
 mod store;
+mod view;
 
 pub use schema::EPOCH;
 pub use store::{Options, SqliteStore, TraceEntry};
