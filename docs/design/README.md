@@ -78,4 +78,4 @@ They are technical records for an engineer who has never met the authors. They c
 
 | Number | Title | Status |
 |---|---|---|
-| [0001](0001-evidence-ledger.md) | The evidence ledger | Draft |
+| [0001](0001-evidence-ledger.md) | The evidence ledger | In review |
