@@ -6,4 +6,11 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 
 ## Index
 
-No records yet.
+| Number | Decision | Status |
+|---|---|---|
+| [0001](0001-event-ledger.md) | Record evidence as an append-only, hash-chained event ledger | Proposed |
+| [0002](0002-sqlite.md) | Use SQLite as the storage engine | Proposed |
+| [0003](0003-per-user-database.md) | Keep one ledger database per user, outside any checkout | Proposed |
+| [0004](0004-project-identity.md) | Identify projects by a committed project file | Proposed |
+| [0005](0005-storage-port.md) | Put storage behind a port with engine adapters | Proposed |
+| [0006](0006-no-markdown-records.md) | Keep every operational record in the ledger | Proposed |

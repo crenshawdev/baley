@@ -35,16 +35,16 @@ Diagrams are [Mermaid](https://mermaid.js.org/), fenced as ` ```mermaid ` inside
 
 | Question the diagram answers | Diagram |
 |---|---|
-| What is the system and what surrounds it | C4 system context (`C4Context`) |
-| What runs, and what talks to what | C4 container (`C4Container`) |
-| What is inside one container | C4 component (`C4Component`) |
-| Who does what, in what order, across actors | Swim lane: `flowchart` with one `subgraph` per actor |
+| What is the system and what surrounds it | C4 system context, drawn as a `flowchart` |
+| What runs, and what talks to what | C4 container view, drawn as a `flowchart` with the system as a `subgraph` |
+| What is inside one container | C4 component view, drawn as a `flowchart` |
+| Who does what, in what order, across actors | Swim lane: `sequenceDiagram` with one participant column per actor, `alt` for branches |
 | How one request moves between parts | UML sequence (`sequenceDiagram`) |
 | What states a record passes through | UML state machine (`stateDiagram-v2`) |
 | How types relate | UML class (`classDiagram`) |
 | What the stored data looks like | Entity relationship (`erDiagram`) |
 
-Every diagram has a title and a one-sentence caption saying what it shows. Draw the level the reader needs: a design document for the store starts with the container view and goes down only where the design is decided.
+C4 views follow the C4 model's levels and colours but are drawn as flowcharts: Mermaid's own C4 syntax is experimental and lays edge labels over each other. Every diagram has a title or caption saying what it shows, and is checked in both light and dark themes before review. Draw the level the reader needs: a design document for the store starts with the container view and goes down only where the design is decided.
 
 ## Requirements and traceability
 
@@ -76,4 +76,6 @@ They are technical records for an engineer who has never met the authors. They c
 
 ## Index
 
-No design documents yet.
+| Number | Title | Status |
+|---|---|---|
+| [0001](0001-evidence-ledger.md) | The evidence ledger | Draft |
