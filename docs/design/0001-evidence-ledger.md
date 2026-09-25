@@ -614,7 +614,7 @@ Development builds and tests set `BALEY_HOME` so they never touch the owner's re
 
 #### Project identity and policy (EVD-R17)
 
-A project is initialized once with `baley init`. That creates the project in the ledger with a new random project id (UUID version 4) and writes the project file at the repository root, which the owner commits. The file holds the project id, the project name, and the project's policy: reviewers, routing and protected branches, the settings that today live in the repository config.
+A project is initialized once with `baley init`. That creates the project in the ledger with a new random project id (UUID version 4) and writes the project file, `baley.toml`, at the repository root, which the owner commits. TOML allows comments, which a hand-edited policy file needs. The file holds the project id, the project name, and the project's policy: reviewers, routing and protected branches, the settings that today live in the repository config.
 
 Baley finds a checkout's project the way git finds a repository: it walks up from the working directory to the first directory holding the project file, stopping at the repository root. The guard uses the same discovery. A directory with no project file is not managed and the guard stays silent. Every checkout Baley sees is recorded with `checkout.seen` (path, root commit, remote URL) for diagnosis only. If two checkouts whose remotes differ claim the same project id (a fork cloned beside its upstream), Baley refuses to record for the second and tells the owner to give it its own id with `baley init --new-id`.
 
@@ -932,8 +932,7 @@ The conformance suite lives in `baley-store` and runs against every adapter.
 
 1. **Benchmark.** Build the adapter prototype and the workload generator, run them, and record the results against [Performance](#performance). Must be answered before acceptance.
 2. **Host matrix.** Run every row of [Host neutrality](#host-neutrality-evd-r24) on both hosts. Must be answered before acceptance.
-3. **Project file name and format.** Proposed: `baley.toml` at the repository root. TOML allows comments, which a hand-edited policy file needs, and matches the Rust ecosystem's own files. The alternative is JSON, which the current config uses.
-4. **Default retention.** Confirm the defaults for the `output` and `material` classes.
+3. **Default retention.** Confirm the defaults for the `output` and `material` classes.
 
 ## Appendix A: Mapping from the current store
 

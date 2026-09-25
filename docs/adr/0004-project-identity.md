@@ -28,7 +28,7 @@ With the ledger outside the checkout (ADR 0003), each checkout must be mapped to
 
 ## Decision
 
-Chosen option: **3, a committed project file** at the repository root, holding a random project id (UUID version 4), the project name and the project's policy. `baley init` creates the project and the file; the owner commits it. Baley finds a checkout's project by walking up from the working directory to the first directory with the project file, as git finds a repository. The guard uses the same discovery. Checkouts are recorded with path, root commit and remote URL for diagnosis only. Two checkouts with different remotes claiming one id are refused until one is given a new id. The project id is an identity, not an authorization. The effective policy (defaults, the owner's user configuration and the project file, merged with today's precedence) is recorded in full as `policy.effective` whenever any layer changes, every command records the policy version it ran under, and each checkout runs under the project file at its own HEAD.
+Chosen option: **3, a committed project file**, `baley.toml` at the repository root, holding a random project id (UUID version 4), the project name and the project's policy. `baley init` creates the project and the file; the owner commits it. Baley finds a checkout's project by walking up from the working directory to the first directory with the project file, as git finds a repository. The guard uses the same discovery. Checkouts are recorded with path, root commit and remote URL for diagnosis only. Two checkouts with different remotes claiming one id are refused until one is given a new id. The project id is an identity, not an authorization. The effective policy (defaults, the owner's user configuration and the project file, merged with today's precedence) is recorded in full as `policy.effective` whenever any layer changes, every command records the policy version it ran under, and each checkout runs under the project file at its own HEAD.
 
 ## Consequences
 
@@ -42,10 +42,6 @@ Chosen option: **3, a committed project file** at the repository root, holding a
 
 - One file in the working tree, which the owner commits.
 - Forks copy the id. Detected through differing remotes and resolved by giving the fork a new id.
-
-### Follow-up
-
-- File name and format (open question in the design document; `baley.toml` proposed).
 
 ## Options in detail
 
