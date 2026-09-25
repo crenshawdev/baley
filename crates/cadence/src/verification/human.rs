@@ -94,6 +94,13 @@ pub fn prepare(root: &Path, data: &Value, request: Request) -> Result<Claim> {
     Ok(claim)
 }
 
+/// Whether the observed phase UAT.md is the binary's own: its current render,
+/// or no file at all before the phase's first result. Any other document is
+/// caller-owned and not the binary's to replace.
+pub fn owned_uat(observed: Option<&str>, render: Option<&str>) -> bool {
+    observed == render
+}
+
 fn blank(text: &str) -> bool { text.trim().is_empty() || text.len() > 16384 }
 
 /// The latest native record for one item of one phase.
@@ -147,10 +154,8 @@ fn assess(data: &Value, claim: &Claim) -> Result<Value> {
         return denied("verification-human", "submission.supersedes", "a result supersedes the latest retained result for its item, or none when there is none",
             json!(submission.supersedes), json!(prior.map(|r| &r.id)));
     }
-    // The installed UAT.md is the binary's own render, absent before the
-    // phase's first result; any other document is not the binary's to replace.
     let expected = projections::uat(data, phase)?;
-    if claim.observed != expected {
+    if !owned_uat(claim.observed.as_deref(), expected.as_deref()) {
         return denied("verification-human", "uat", "UAT.md differs from the native render; edit human results through verification-human-result",
             json!(claim.observed.as_deref().map(|t| digest(t.as_bytes()))), json!(expected.as_deref().map(|t| digest(t.as_bytes()))));
     }
@@ -239,4 +244,31 @@ fn row(history: &[Record], phase: u32, id: &str) -> Value {
 /// Unfinished human work for a phase: every required, unresolved item.
 pub fn unfinished(data: &Value, phase: u32) -> Result<Vec<Value>> {
     Ok(items(data, phase)?.into_iter().filter(|r| r["required"] == true).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::owned_uat;
+
+    const RENDER: &str = "## Native human results\n\n### 1. delivery\nstatus: pass\n";
+
+    #[test]
+    fn no_uat_before_the_first_result_is_owned() {
+        assert!(owned_uat(None, None));
+    }
+
+    #[test]
+    fn a_caller_owned_uat_before_the_first_result_is_refused() {
+        assert!(!owned_uat(Some("# UAT\n\n### 1. Delivery\nstatus: fail\n"), None));
+    }
+
+    #[test]
+    fn the_exact_native_render_is_owned() {
+        assert!(owned_uat(Some(RENDER), Some(RENDER)));
+    }
+
+    #[test]
+    fn a_changed_render_is_refused() {
+        assert!(!owned_uat(Some(&RENDER.replace("pass", "fail")), Some(RENDER)));
+    }
 }
