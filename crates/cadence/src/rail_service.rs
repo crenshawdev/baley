@@ -43,7 +43,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
     let root = reload::identity(selected)?;
     let session = match factory.first_touch(&root).await {
         Ok(session) => session,
-        Err(error) if factory.guard_config(&root).is_err() => {
+        Err(error) if factory.observe_config(&root).is_err() => {
             return Ok(refused("config-unavailable", &error.to_string()));
         }
         Err(error) => return Err(error),
@@ -266,7 +266,7 @@ pub async fn receipt<I: ConfigIo + Clone + Sync>(
     let root = reload::identity(selected)?;
     let session = match factory.first_touch(&root).await {
         Ok(session) => session,
-        Err(error) if factory.guard_config(&root).is_err() => {
+        Err(error) if factory.observe_config(&root).is_err() => {
             return Ok(refused("config-unavailable", &error.to_string()));
         }
         Err(error) => return Err(error),

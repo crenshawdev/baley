@@ -2,7 +2,7 @@ use cadence::store::model::digest;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
-    self, Diagnostic, Effective, Layer, merge,
+    self, Layer, merge,
     reload::{self, ConfigIo, FileIo, Generation, Input, Paths, Reload, Shared},
     write,
 };
@@ -141,84 +141,6 @@ pub fn observe_documents<I: ConfigIo>(
     Ok((capture, documents.guards))
 }
 
-fn remove_path(value: &mut Value, key: &str) {
-    let (head, tail) = key.split_once('.').unwrap_or((key, ""));
-    if let Some(object) = value.as_object_mut() {
-        if tail.is_empty() {
-            object.remove(head);
-        } else if let Some(child) = object.get_mut(head) {
-            remove_path(child, tail);
-        }
-    }
-}
-
-fn translate_config(global: Option<Value>, repo: Option<Value>) -> Result<Effective> {
-    let original_global = global.clone();
-    let original_repo = repo.clone();
-    let mut normalized = Vec::new();
-    let mut normalize = |mut value: Option<Value>, layer| {
-        if let Some(raw) = value.as_mut()
-            && merge::get(raw, "git.on_protected") == Some(&json!("deny"))
-        {
-            merge::set(raw, "git.on_protected", json!("refuse"));
-            normalized.push(Diagnostic {
-                layer,
-                key: "git.on_protected".into(),
-                reason: "legacy deny normalized to refuse; original retained non-effectively"
-                    .into(),
-            });
-        }
-        value
-    };
-    let mut effective = merge::merge(
-        normalize(global, Layer::Global),
-        normalize(repo, Layer::Repo),
-        false,
-    );
-    if !effective.diagnostics.invalid_layer.is_empty() {
-        return Err(Error::Policy("invalid legacy config layer".into()));
-    }
-    for (layer, values) in [
-        (Layer::Global, &mut effective.global),
-        (Layer::Repo, &mut effective.repo),
-    ] {
-        for (key, spec) in config::schema() {
-            if let Some(value) = merge::get(values, key)
-                && (!reload::valid_type(spec, value, true) || !write::valid_grammar(spec, value))
-            {
-                // Conservatively retain refusal semantics on policy-bearing
-                // families; malformed preferences can be preserved as evidence.
-                if key.starts_with("git.")
-                    || key.starts_with("workflow.")
-                    || key.starts_with("review.")
-                {
-                    return Err(Error::Policy(format!(
-                        "invalid legacy permission: {key} in {layer:?}"
-                    )));
-                }
-                remove_path(values, key);
-                normalized.push(Diagnostic {
-                    layer,
-                    key: key.clone(),
-                    reason: "invalid preference excluded; original retained non-effectively".into(),
-                });
-            }
-        }
-    }
-    let clean = merge::merge(
-        Some(effective.global.clone()),
-        Some(effective.repo.clone()),
-        false,
-    );
-    effective.values = clean.values;
-    effective.sources = clean.sources;
-    effective.raw_global = original_global;
-    effective.raw_repo = original_repo;
-    effective.diagnostics.migration.extend(normalized);
-    reload::validate_effective(&effective)?;
-    Ok(effective)
-}
-
 fn observe<I: ConfigIo>(io: &mut I, path: &Path) -> Result<Input> {
     io.read(&reload::identity(path)?)
 }
@@ -297,18 +219,6 @@ fn relocate_global_layer<I: ConfigIo>(
     Ok(next)
 }
 
-fn validate_sources<I: ConfigIo>(io: &mut I, expected: &[SourceGuard]) -> Result<()> {
-    for source in expected {
-        let current = observe(io, &source.path)?;
-        if guard(source.path.clone(), &current) != *source {
-            return Err(Error::Conflict(format!(
-                "legacy source changed during import: {}",
-                source.path.display()
-            )));
-        }
-    }
-    Ok(())
-}
 fn parse_input(input: &Input) -> Result<Option<Value>> {
     input
         .bytes
@@ -331,54 +241,24 @@ fn validate_shared<I: ConfigIo>(io: &mut I, manifest: &ImportManifest) -> Result
 
 fn prepare_import<I: ConfigIo>(
     root: &Path,
-    legacy: &Paths,
     active: &Paths,
     io: &mut I,
-    owns_global: bool,
 ) -> Result<ImportInputs> {
-    let repo_identity = reload::identity(&legacy.repo)?;
-    let global_identity = legacy.global.as_deref().map(reload::identity).transpose()?;
-    let global = match &global_identity {
-        Some(id) if id != &repo_identity => Some(io.read(id)?),
-        _ => None,
-    };
-    let repo = io.read(&repo_identity)?;
+    let repo = observe(io, &active.repo)?;
     let shared = match &active.global {
-        Some(path) if path != &active.repo && !owns_global => Some(observe(io, path)?),
+        Some(path) if path != &active.repo => Some(observe(io, path)?),
         _ => None,
     };
     let reused = shared.as_ref().filter(|input| input.bytes.is_some());
-    let effective = if let Some(input) = reused {
-        let current = parse_input(input)?;
-        reload::validate_effective(&merge::merge(current.clone(), None, false))?;
-        let translated = translate_config(None, parse_input(&repo)?)?;
-        let effective = merge::merge(current, Some(translated.repo), false);
-        reload::validate_effective(&effective)?;
-        effective
-    } else {
-        translate_config(
-            global.as_ref().map(parse_input).transpose()?.flatten(),
-            parse_input(&repo)?,
-        )?
-    };
+    let effective = merge::merge(reused.map(parse_input).transpose()?.flatten(), None, false);
+    reload::validate_effective(&effective)?;
     let generation = Generation {
         number: 0,
-        global: reused.cloned().or_else(|| global.clone()),
-        repo: repo.clone(),
+        global: reused.cloned(),
+        repo,
         effective,
     };
-    let mut guards = vec![guard(legacy.repo.clone(), &repo)];
-    if global.is_none()
-        && let Some(path) = &legacy.global
-        && path != &legacy.repo
-    {
-        guards.push(guard(path.clone(), &repo));
-    }
-    if let (Some(path), Some(input)) = (legacy.global.as_ref(), global.as_ref())
-        && path != &legacy.repo
-    {
-        guards.push(guard(path.clone(), input));
-    }
+    let guards: Vec<SourceGuard> = Vec::new();
     let mut warnings = Vec::new();
     for diagnostic in generation
         .effective
@@ -397,9 +277,6 @@ fn prepare_import<I: ConfigIo>(
         .map(|name| root.join(name))
         .collect();
     created.push(active.repo.clone());
-    if reused.is_none() && global.as_ref().is_some_and(|g| g.bytes.is_some()) {
-        created.push(active.global.clone().expect("global source address"));
-    }
     let source_generation = digest(&serde_json::to_vec(&guards)?);
     let manifest = ImportManifest {
         format: 1,
@@ -411,9 +288,6 @@ fn prepare_import<I: ConfigIo>(
         warnings,
         shared_global: shared
             .as_ref()
-            .filter(|_| {
-                reused.is_some() || global.as_ref().is_none_or(|input| input.bytes.is_none())
-            })
             .map(|input| guard(active.global.clone().unwrap(), input)),
     };
     let snapshot = json!({"import":manifest});
@@ -466,7 +340,6 @@ impl<I: ConfigIo> SessionPolicy<I> {
             .lock()
             .map_err(|_| Error::Policy("import guard unavailable".into()))?;
         let generation = if let Some(inputs) = pending.as_ref() {
-            validate_sources(&mut self.io, &inputs.manifest.sources)?;
             validate_shared(&mut self.io, &inputs.manifest)?;
             if context.operation == "recovery"
                 && (context.snapshot.data["import"]["source_generation"]
@@ -823,92 +696,14 @@ impl SessionFactory<FileIo> {
 }
 impl<I: ConfigIo + Clone> SessionFactory<I> {
     pub fn active_config_paths(&self, root: &Path) -> Result<Paths> {
-        write::active_paths(&Paths {
-            repo: root.join("config.json"),
-            global: self.global.clone(),
-        })
+        write::active_paths(&write::paths(root, self.global.clone()))
     }
 
-    /// Observe unanswered interview facts without acquiring storage ownership or
-    /// replaying an intent. An uninitialized project can reuse an active global.
+    /// The effective config of a planning root, read without acquiring storage
+    /// ownership or replaying an intent. An uninitialized project can reuse an
+    /// active global.
     pub fn observe_config(&self, root: &Path) -> Result<Generation> {
-        let legacy = Paths {
-            repo: root.join("config.json"),
-            global: self.global.clone(),
-        };
-        let active = write::active_paths(&legacy)?;
-        let mut io = self.io.clone();
-        let imported = observe_store(&mut io, &root.join(STATE))?
-            .bytes
-            .as_deref()
-            .map(serde_json::from_slice::<Snapshot>)
-            .transpose()?
-            .is_some_and(|s| s.data["import"]["complete"] == true);
-        if imported {
-            return Reload::new(active, io).refresh();
-        }
-        let repo = observe(&mut io, &legacy.repo)?;
-        let global = legacy
-            .global
-            .as_ref()
-            .map(|path| observe(&mut io, path))
-            .transpose()?;
-        let alias = global
-            .as_ref()
-            .is_some_and(|input| input.identity == repo.identity);
-        let shared = active
-            .global
-            .as_ref()
-            .filter(|path| *path != &active.repo)
-            .map(|path| observe(&mut io, path))
-            .transpose()?;
-        let reused = shared.filter(|input| input.bytes.is_some());
-        let effective = if let Some(input) = &reused {
-            let current = parse_input(input)?;
-            reload::validate_effective(&merge::merge(current.clone(), None, false))?;
-            let translated = translate_config(None, parse_input(&repo)?)?;
-            let effective = merge::merge(current, Some(translated.repo), false);
-            reload::validate_effective(&effective)?;
-            effective
-        } else {
-            let mut effective = translate_config(
-                global
-                    .as_ref()
-                    .filter(|_| !alias)
-                    .map(parse_input)
-                    .transpose()?
-                    .flatten(),
-                parse_input(&repo)?,
-            )?;
-            effective.global_intent = alias;
-            effective
-        };
-        Ok(Generation {
-            number: 0,
-            repo,
-            global: reused.or(global.filter(|_| !alias)),
-            effective,
-        })
-    }
-
-    pub fn guard_config(&self, root: &Path) -> Result<Generation> {
-        let legacy = Paths {
-            repo: root.join("config.json"),
-            global: self.global.clone(),
-        };
-        let mut io = self.io.clone();
-        let state = observe_store(&mut io, &root.join(STATE))?.bytes;
-        let imported = state
-            .as_deref()
-            .map(serde_json::from_slice::<Snapshot>)
-            .transpose()?
-            .is_some_and(|s| s.data["import"]["complete"] == true);
-        let paths = if imported {
-            write::active_paths(&legacy)?
-        } else {
-            legacy
-        };
-        Reload::new(paths, io).refresh()
+        Reload::new(self.active_config_paths(root)?, self.io.clone()).refresh()
     }
 
     pub async fn guard_audit(
@@ -921,7 +716,7 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
             Err(error) => {
                 // Healthy policy must use normal import ownership, including its
                 // source-change refusals. Only unavailable policy admits fallback.
-                if self.guard_config(root).is_ok() {
+                if self.observe_config(root).is_ok() {
                     return Err(error);
                 }
                 let storage = cadence::store::filesystem::Filesystem::new(root)?;
@@ -965,24 +760,11 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
         if let Some(session) = sessions.get(&root) {
             return Ok(session.clone());
         }
-        let legacy = Paths {
-            repo: root.join("config.json"),
-            global: self.global.clone(),
-        };
-        let active = write::active_paths(&legacy)?;
-        if let Some(global) = &legacy.global
-            && reload::identity(global)? != reload::identity(&legacy.repo)?
-            && active.global.as_ref() == Some(&active.repo)
-        {
-            return Err(Error::Conflict(
-                "distinct legacy layers map to one versioned destination".into(),
-            ));
-        }
+        let active = self.active_config_paths(&root)?;
         let mut io = self.io.clone();
         let pending = observe_store(&mut io, &root.join(INTENT))?.bytes;
         let state = observe_store(&mut io, &root.join(STATE))?.bytes;
         let mut pending_audit = false;
-        let mut owns_global = false;
         let pending_import = if let Some(bytes) = &pending {
             let intent: Value = serde_json::from_slice(bytes)?;
             pending_audit = intent["kind"]["operation"] == "guard-audit";
@@ -992,11 +774,6 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
                 .ok_or_else(|| Error::Conflict("pending intent lacks snapshot".into()))?;
             let bytes = cadence::store::transaction::intent_bytes(&participant["bytes"])?;
             let snapshot: Snapshot = serde_json::from_slice(&bytes)?;
-            owns_global = active.global.as_ref().is_some_and(|global| {
-                snapshot.data["import"]["created"]
-                    .as_array()
-                    .is_some_and(|created| created.contains(&json!(global)))
-            });
             let previous = cadence::store::transaction::intent_bytes_option(&participant["expected"]["bytes"])?;
             // A prune requires an already imported store. Its digest-encoded
             // preimage omits bytes; that omission is not an import transition.
@@ -1019,13 +796,7 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
             .is_some_and(cadence::store::writer::audit::audit_only);
         let importing = Arc::new(Mutex::new(
             if state.is_none() || pending_import || audit_only {
-                Some(prepare_import(
-                    &root,
-                    &legacy,
-                    &active,
-                    &mut io,
-                    owns_global,
-                )?)
+                Some(prepare_import(&root, &active, &mut io)?)
             } else {
                 None
             },
@@ -1065,7 +836,6 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
                     .map_err(|_| Error::Policy("import guard unavailable".into()))?
                     .as_ref()
             {
-                validate_sources(&mut source_io, &inputs.manifest.sources)?;
                 validate_shared(&mut source_io, &inputs.manifest)?;
             }
             Ok(())
@@ -1077,30 +847,15 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
                 .as_ref()
         {
             let mut transaction = inputs.transaction.clone();
-            let mut add = |target: &str, value: &Value| -> Result<()> {
-                let expected = storage.read(target)?;
-                if expected.bytes.is_some() {
-                    return Err(Error::Conflict(format!(
-                        "unrelated config output: {target}"
-                    )));
-                }
-                transaction.external.push(ExternalChange {
-                    target: target.into(),
-                    expected,
-                    bytes: serde_json::to_vec_pretty(value)?,
-                });
-                Ok(())
-            };
-            add("repo-config", &inputs.generation.effective.repo)?;
-            if inputs
-                .generation
-                .global
-                .as_ref()
-                .is_some_and(|g| g.bytes.is_some())
-                && inputs.manifest.shared_global.is_none()
-            {
-                add("global-config", &inputs.generation.effective.global)?;
+            let expected = storage.read("repo-config")?;
+            if expected.bytes.is_some() {
+                return Err(Error::Conflict("unrelated config output: repo-config".into()));
             }
+            transaction.external.push(ExternalChange {
+                target: "repo-config".into(),
+                expected,
+                bytes: serde_json::to_vec_pretty(&inputs.generation.effective.repo)?,
+            });
             Some(transaction)
         } else {
             None

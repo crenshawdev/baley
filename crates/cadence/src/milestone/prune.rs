@@ -128,7 +128,7 @@ pub fn freeze(root: &Path, data: &Value, binding: &str, request: PruneRequest, p
     }
     let git = commit::freeze(project,&changes,&phases.into_iter().collect::<Vec<_>>(), process)?;
     let mut guards = BTreeMap::new();
-    for path in [root.join("config.json"),root.join("config.v4.json")].into_iter().chain(
+    for path in [root.join("config.v4.json")].into_iter().chain(
         std::env::var_os("CADENCE_GLOBAL_CONFIG").filter(|s| !s.is_empty()).map(std::path::PathBuf::from)) {
         let bytes = match fs::read(&path) { Ok(bytes)=>Some(bytes),Err(e) if e.kind()==std::io::ErrorKind::NotFound=>None,Err(e)=>return Err(e.into()) };
         guards.insert(path.to_string_lossy().into_owned(),bytes);

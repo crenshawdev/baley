@@ -6,7 +6,7 @@ use cadence::{
     config::{
         Layer, merge,
         reload::{Generation, Input, Paths},
-        write::{Plan, Update, plan, transaction, unavailable, versioned},
+        write::{Plan, Update, paths, plan, transaction, unavailable},
     },
     store::{Error, Observed},
 };
@@ -61,8 +61,8 @@ fn pretty(value: Value) -> Option<Vec<u8>> {
 }
 
 #[test]
-fn config_is_written_beside_each_resolved_legacy_file_as_config_v4_json() {
-    let paths = versioned(Path::new("/project/.planning/config.json"), Some(Path::new("/home/u/.cadence/config.json")));
+fn config_is_the_planning_roots_config_v4_json_and_the_global_setting_as_given() {
+    let paths = paths(Path::new("/project/.planning"), Some(PathBuf::from("/home/u/.cadence/config.v4.json")));
     assert_eq!(
         (paths.repo, paths.global),
         (PathBuf::from("/project/.planning/config.v4.json"), Some(PathBuf::from("/home/u/.cadence/config.v4.json")))
@@ -70,14 +70,8 @@ fn config_is_written_beside_each_resolved_legacy_file_as_config_v4_json() {
 }
 
 #[test]
-fn a_global_path_that_is_the_repo_file_shares_the_repo_destination() {
-    let repo = Path::new("/project/.planning/config.json");
-    assert_eq!(versioned(repo, Some(repo)).global, Some(PathBuf::from("/project/.planning/config.v4.json")));
-}
-
-#[test]
-fn without_a_global_path_there_is_no_global_destination() {
-    assert_eq!(versioned(Path::new("/project/.planning/config.json"), None).global, None);
+fn without_a_global_setting_there_is_no_global_layer() {
+    assert_eq!(paths(Path::new("/project/.planning"), None).global, None);
 }
 
 #[test]

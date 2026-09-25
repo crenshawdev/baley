@@ -14,29 +14,22 @@ use cadence::store::{
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-/// Resolve the legacy identities before assigning versioned siblings. An alias
-/// remains one repo-provenance layer and retains its global address separately.
-pub fn active_paths(legacy: &Paths) -> Result<Paths> {
-    let repo = reload::identity(&legacy.repo)?;
-    let global = legacy.global.as_deref().map(reload::identity).transpose()?;
-    Ok(versioned(&repo, global.as_deref()))
+/// The config files of a planning root: `config.v4.json` in the root for the
+/// repo layer, and the global setting as given for the global layer.
+pub fn paths(planning: &Path, global: Option<PathBuf>) -> Paths {
+    Paths {
+        repo: planning.join("config.v4.json"),
+        global,
+    }
 }
 
-/// The files config is written to, beside legacy files already resolved:
-/// `config.v4.json` next to the repo file, and next to the global file unless
-/// the global path is the repo file itself, when both layers share the repo's.
-pub fn versioned(repo: &Path, global: Option<&Path>) -> Paths {
-    let destination = repo.with_file_name("config.v4.json");
-    Paths {
-        repo: destination.clone(),
-        global: global.map(|path| {
-            if path == repo {
-                destination.clone()
-            } else {
-                path.with_file_name("config.v4.json")
-            }
-        }),
-    }
+/// The same files by their resolved identities. A global path that resolves
+/// to the repo file is one repo-provenance layer.
+pub fn active_paths(paths: &Paths) -> Result<Paths> {
+    Ok(Paths {
+        repo: reload::identity(&paths.repo)?,
+        global: paths.global.as_deref().map(reload::identity).transpose()?,
+    })
 }
 
 pub fn register(root: &Path, active: &Paths) -> Result<Filesystem> {

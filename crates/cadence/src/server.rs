@@ -223,7 +223,7 @@ impl CadenceServer {
             .map(std::path::PathBuf::from)
             .or_else(|| {
                 std::env::var_os("HOME")
-                    .map(|home| std::path::PathBuf::from(home).join(".claude/cadence/config.json"))
+                    .map(|home| std::path::PathBuf::from(home).join(".claude/cadence/config.v4.json"))
             })
             .filter(|path| !path.as_os_str().is_empty());
         // These internal operations only own planning storage. Forge and

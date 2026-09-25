@@ -145,28 +145,20 @@ impl ConfigIo for SuppliedConfig {
 }
 
 #[test]
-fn prepare_import_uses_active_roles_over_the_legacy_global() {
+fn initialization_takes_its_effective_config_from_the_active_global() {
     let root = Path::new("/fixture/project/.planning");
-    let legacy = Paths {
-        repo: root.join("config.json"),
-        global: Some("/fixture/global/config.json".into()),
-    };
     let active = Paths {
         repo: root.join("config.v4.json"),
         global: Some("/fixture/global/config.v4.json".into()),
     };
-    let original = br#"{"roles":{"cad-executor":{"model":"opus"}},"stakes":{"old":3}}"#;
     let mut io = SuppliedConfig(
-        [
-            (legacy.global.clone().unwrap(), original.to_vec()),
-            (
-                active.global.clone().unwrap(),
-                br#"{"roles":{"cad-executor":{"model":"sonnet"}}}"#.to_vec(),
-            ),
-        ]
+        [(
+            active.global.clone().unwrap(),
+            br#"{"roles":{"cad-executor":{"model":"sonnet"}}}"#.to_vec(),
+        )]
         .into(),
     );
-    let result = prepare_import(root, &legacy, &active, &mut io, false).unwrap();
+    let result = prepare_import(root, &active, &mut io).unwrap();
     assert_eq!(
         result.generation.effective.raw_global,
         Some(json!({"roles":{"cad-executor":{"model":"sonnet"}}}))
@@ -206,12 +198,8 @@ fn register_refuses_symlink_ancestors() {
 }
 
 #[test]
-fn prepare_import_refuses_unusable_active_global_without_legacy_normalization() {
+fn initialization_refuses_an_unusable_active_global() {
     let root = Path::new("/fixture/project/.planning");
-    let legacy = Paths {
-        repo: root.join("config.json"),
-        global: Some("/fixture/global/config.json".into()),
-    };
     let active = Paths {
         repo: root.join("config.v4.json"),
         global: Some("/fixture/global/config.v4.json".into()),
@@ -224,7 +212,7 @@ fn prepare_import_refuses_unusable_active_global_without_legacy_normalization() 
         .into(),
     );
     assert_eq!(
-        prepare_import(root, &legacy, &active, &mut io, false).err(),
+        prepare_import(root, &active, &mut io).err(),
         Some(Error::Policy(
             "config unavailable: unusable roles.cad-executor.effort".into()
         ))

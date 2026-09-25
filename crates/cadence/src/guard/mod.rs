@@ -173,12 +173,12 @@ fn input(bytes: &[u8]) -> Input {
     Input::WriteEdit(event)
 }
 
-/// The global legacy config path: the setting when present, else the default
-/// under HOME. An empty setting turns the global layer off.
+/// The global config path: the setting when present, else the default under
+/// HOME. An empty setting turns the global layer off.
 fn global_setting(setting: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
     setting
         .map(PathBuf::from)
-        .or_else(|| home.map(|home| PathBuf::from(home).join(".claude/cadence/config.json")))
+        .or_else(|| home.map(|home| PathBuf::from(home).join(".claude/cadence/config.v4.json")))
         .filter(|path| !path.as_os_str().is_empty())
 }
 
@@ -325,16 +325,12 @@ fn config_destinations(
     global: Option<&Path>,
     fs: &dyn Lookup,
 ) -> Result<Vec<PathBuf>, String> {
-    let repo = resolve_target(cwd, ".planning/config.json", fs)?;
-    let mut legacy = vec![repo];
+    let mut destinations = vec![resolve_target(cwd, ".planning/config.v4.json", fs)?];
     if let Some(global) = global {
         let absolute = fs.absolute(global).map_err(|error| error.to_string())?;
-        legacy.push(resolve_existing_prefix(&absolute, fs)?);
+        destinations.push(resolve_existing_prefix(&absolute, fs)?);
     }
-    legacy
-        .into_iter()
-        .map(|path| resolve_existing_prefix(&path.with_file_name("config.v4.json"), fs))
-        .collect()
+    Ok(destinations)
 }
 
 fn same_destination(target: &Path, destination: &Path, fs: &dyn Lookup) -> Result<bool, String> {

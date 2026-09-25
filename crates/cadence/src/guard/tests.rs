@@ -157,7 +157,7 @@ fn configured() -> Tree {
 }
 
 fn global() -> Option<&'static Path> {
-    Some(Path::new("/g/config.json"))
+    Some(Path::new("/g/config.v4.json"))
 }
 
 #[test]
@@ -365,8 +365,8 @@ fn a_lookup_that_fails_other_than_missing_denies() {
 #[test]
 fn the_global_setting_wins_over_home() {
     assert_eq!(
-        global_setting(Some("/g/config.json".into()), Some("/home/u".into())),
-        Some("/g/config.json".into())
+        global_setting(Some("/g/config.v4.json".into()), Some("/home/u".into())),
+        Some("/g/config.v4.json".into())
     );
 }
 
@@ -374,7 +374,7 @@ fn the_global_setting_wins_over_home() {
 fn without_a_global_setting_home_names_the_default() {
     assert_eq!(
         global_setting(None, Some("/home/u".into())),
-        Some("/home/u/.claude/cadence/config.json".into())
+        Some("/home/u/.claude/cadence/config.v4.json".into())
     );
     assert_eq!(global_setting(None, None), None);
 }
@@ -385,7 +385,7 @@ fn an_empty_global_setting_turns_the_global_layer_off() {
 }
 
 #[test]
-fn the_destinations_are_the_v4_siblings_of_the_repo_and_global_settings() {
+fn the_destinations_are_the_repo_config_and_the_global_setting() {
     let fs = tree().dir("/p").dir("/p/.planning").dir("/g");
     assert_eq!(
         config_destinations("/p", global(), &fs),
@@ -399,26 +399,23 @@ fn a_relative_global_setting_is_taken_from_the_process_directory() {
     let mut fs = tree().dir("/p").dir("/w").dir("/w/x").dir("/w/g");
     fs.process_dir = "/w/x".into();
     assert_eq!(
-        config_destinations("/p", Some(Path::new("../g/config.json")), &fs).unwrap()[1],
+        config_destinations("/p", Some(Path::new("../g/config.v4.json")), &fs).unwrap()[1],
         Path::new("/w/g/config.v4.json")
     );
 }
 
 #[test]
-fn a_linked_legacy_setting_moves_its_destination_with_it() {
+fn a_linked_global_setting_is_its_target() {
     let fs = tree()
         .dir("/p")
         .dir("/p/.planning")
         .dir("/g")
-        .dir("/u")
-        .file("/u/config.json")
         .dir("/v")
-        .file("/v/config.json")
-        .link("/p/.planning/config.json", "/u/config.json")
-        .link("/g/config.json", "/v/config.json");
+        .file("/v/active")
+        .link("/g/config.v4.json", "/v/active");
     assert_eq!(
         config_destinations("/p", global(), &fs),
-        Ok(vec!["/u/config.v4.json".into(), "/v/config.v4.json".into()])
+        Ok(vec!["/p/.planning/config.v4.json".into(), "/v/active".into()])
     );
 }
 

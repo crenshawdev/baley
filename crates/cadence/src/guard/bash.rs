@@ -164,20 +164,12 @@ fn read_policy(
 ) -> (PolicyEvidence, Vec<audit::Unavailable>) {
     use crate::config::{
         merge,
-        reload::{self, ConfigIo, FileIo, Paths},
+        reload::{self, ConfigIo, FileIo},
     };
     let previous = prior.and_then(audit::denial_policy);
     let imported = prior.is_some_and(|v| v.snapshot.data["import"]["complete"] == true)
         || planning.join("config.v4.json").exists();
-    let legacy = Paths {
-        repo: planning.join("config.json"),
-        global,
-    };
-    let paths = if imported {
-        crate::config::write::active_paths(&legacy).unwrap_or(legacy)
-    } else {
-        legacy
-    };
+    let paths = crate::config::write::paths(planning, global);
     let mut failures = Vec::new();
     let mut provenance = std::collections::BTreeMap::new();
     let mut layer = |label: &str, path: &Path, required: bool| -> Option<serde_json::Value> {
