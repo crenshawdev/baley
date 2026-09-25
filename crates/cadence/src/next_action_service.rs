@@ -5,7 +5,7 @@ use crate::{
     import::SessionFactory,
 };
 use cadence::{
-    derivation::{self, CompatibilityCursor, DerivationError},
+    derivation::{self, DerivationError},
     evidence::{Fact, authority, overrides::Meaning, persistence},
     next_action::{self, Action, Pause, observations},
     store::{Error, writer::View},
@@ -221,19 +221,7 @@ pub(super) fn pause(view: &View) -> Result<Option<Pause>, DerivationError> {
             Ok(None)
         };
     }
-    // Retirement ends the assertion, not the valid sentence's provenance.
-    let original = view
-        .snapshot
-        .data
-        .get("cursor")
-        .unwrap_or(&serde_json::Value::Null);
-    Ok(match derivation::normalize_imported_cursor(original)? {
-        CompatibilityCursor::Held(p) => p
-            .phase
-            .zip(p.next)
-            .map(|(phase, next)| Pause { phase, next }),
-        _ => None,
-    })
+    Ok(None)
 }
 
 /// Whether the effective config skips discussion for an unplanned phase. A

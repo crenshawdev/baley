@@ -61,28 +61,18 @@ fn publication_error(error: Error) -> DerivationError {
     }
 }
 /// Whether a checked query writes its memo. The store must still be the one
-/// the answer was checked against, `checked`: the same generation, integrity
-/// and intake. Then it writes only when the stored memo missed or an intake
-/// is still waiting to be adopted; otherwise it answers from the store.
+/// the answer was checked against, `checked`: the same generation and
+/// integrity. Then it writes only when the stored memo missed; otherwise it
+/// answers from the store.
 pub fn publish(
     checked: &cadence::store::model::Snapshot,
     latest: &cadence::store::model::Snapshot,
-    intake: &IntakeObservation,
     disposition: MemoDisposition,
-    pending: bool,
 ) -> Result<bool, DerivationError> {
     if latest.generation != checked.generation || latest.integrity != checked.integrity {
         return Err(DerivationError::InputsChanged);
     }
-    recheck_intake(intake, &IntakeObservation::from_data(&latest.data))?;
-    Ok(disposition == MemoDisposition::Miss || pending)
-}
-
-struct Intake(IntakeObservation);
-impl IntakeIo for Intake {
-    fn observe_intake(&mut self) -> Result<IntakeObservation, DerivationError> {
-        Ok(self.0.clone())
-    }
+    Ok(disposition == MemoDisposition::Miss)
 }
 
 pub async fn query<I: ConfigIo + Clone + Sync>(
@@ -161,31 +151,19 @@ async fn checked<I: ConfigIo + Clone + Sync>(
         return Err(DerivationError::InputsChanged);
     }
     let key = prepared.input_key()?;
-    // Validate the namespace before intake interprets its retirement sibling.
     let raw = memo_from_data(&view.snapshot.data, &key)?;
-    let selected = select_intake(&view.snapshot.data)?;
-    let pending = selected.pending(&view.snapshot.data)?;
-    let prepared = prepared.with_intake(&selected)?;
     #[cfg(test)]
     let disposition = (driver.compare)(raw, &key, prepared.answer())?;
     #[cfg(not(test))]
     let disposition = check_memo(raw, &key, prepared.answer())?;
     let memo = LifecycleMemo::fresh(key, prepared.answer().clone());
-    let rechecked = tokio::task::spawn_blocking(move || {
-        recheck_query_with_intake(&prepared, io.as_mut(), &mut Intake(selected.observation))
-    })
+    let rechecked = tokio::task::spawn_blocking(move || recheck_query(&prepared, io.as_mut()))
     .await
     .map_err(|_| store_error(Error::Closed))??;
     let latest = session.derivation_view().await.map_err(store_error)?;
-    let writes = publish(
-        &view.snapshot,
-        &latest.snapshot,
-        rechecked.intake().expect("selected intake").observation(),
-        disposition,
-        pending,
-    )?;
+    let writes = publish(&view.snapshot, &latest.snapshot, disposition)?;
     let published = if writes {
-        let data = rechecked.adopt_memo(&view.snapshot.data, &memo)?;
+        let data = rechecked.with_memo(&view.snapshot.data, &memo)?;
         #[cfg(test)]
         {
             let event = driver.event.clone();
@@ -225,46 +203,31 @@ mod publish_tests {
         Snapshot::new(generation, b"", b"", data).unwrap()
     }
 
-    fn paused() -> serde_json::Value {
-        json!({"cursor": {"status": "paused"}})
+    fn data() -> serde_json::Value {
+        json!({"context": {"phases": {}}})
     }
 
     #[test]
-    fn a_memo_miss_or_a_pending_intake_is_published() {
-        let checked = snapshot(3, paused());
-        let intake = IntakeObservation::from_data(&checked.data);
-        for (disposition, pending) in [(MemoDisposition::Miss, false), (MemoDisposition::Hit, true), (MemoDisposition::Miss, true)] {
-            assert_eq!(publish(&checked, &checked.clone(), &intake, disposition, pending), Ok(true), "{disposition:?} {pending}");
-        }
+    fn a_memo_miss_is_published() {
+        let checked = snapshot(3, data());
+        assert_eq!(publish(&checked, &checked.clone(), MemoDisposition::Miss), Ok(true));
     }
 
     #[test]
-    fn a_memo_hit_with_nothing_pending_answers_without_writing() {
-        let checked = snapshot(3, paused());
-        let intake = IntakeObservation::from_data(&checked.data);
-        assert_eq!(publish(&checked, &checked.clone(), &intake, MemoDisposition::Hit, false), Ok(false));
+    fn a_memo_hit_answers_without_writing() {
+        let checked = snapshot(3, data());
+        assert_eq!(publish(&checked, &checked.clone(), MemoDisposition::Hit), Ok(false));
     }
 
     #[test]
     fn a_store_that_moved_on_since_the_check_refuses_as_inputs_changed() {
-        let checked = snapshot(3, paused());
-        let intake = IntakeObservation::from_data(&checked.data);
-        for latest in [snapshot(4, paused()), snapshot(3, json!({"cursor": {"status": "paused"}, "other": 1}))] {
+        let checked = snapshot(3, data());
+        for latest in [snapshot(4, data()), snapshot(3, json!({"context": {"phases": {}}, "other": 1}))] {
             assert_eq!(
-                publish(&checked, &latest, &intake, MemoDisposition::Miss, false),
+                publish(&checked, &latest, MemoDisposition::Miss),
                 Err(DerivationError::InputsChanged)
             );
         }
-    }
-
-    #[test]
-    fn an_intake_that_differs_from_the_one_checked_refuses_as_inputs_changed() {
-        let checked = snapshot(3, paused());
-        let other = IntakeObservation::from_data(&json!({"cursor": {"status": "planned"}}));
-        assert_eq!(
-            publish(&checked, &checked.clone(), &other, MemoDisposition::Hit, false),
-            Err(DerivationError::InputsChanged)
-        );
     }
 
     #[test]

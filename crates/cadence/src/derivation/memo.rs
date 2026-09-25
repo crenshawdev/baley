@@ -363,3 +363,22 @@ impl LifecycleMemo {
         }
     }
 }
+
+impl RecheckedLifecycle {
+    /// The snapshot with this answer's memo installed under
+    /// `derivation.memo`. Only the freshly checked typed memo is accepted.
+    pub fn with_memo(&self, data: &Value, memo: &LifecycleMemo) -> Result<Value, DerivationError> {
+        let invalid = |detail: String| DerivationError::Store { kind: "invalid".into(), detail };
+        let raw = serde_json::to_value(memo).map_err(|e| invalid(e.to_string()))?;
+        let key = input_key_with(self.capture(), self.overlay())?;
+        if check_memo(Some(&raw), &key, self.answer())? != MemoDisposition::Hit {
+            return Err(DerivationError::InputsChanged);
+        }
+        memo_from_data(data, &key)?;
+        let mut object = data.as_object().cloned().unwrap_or_default();
+        let mut namespace = object.get("derivation").and_then(Value::as_object).cloned().unwrap_or_default();
+        namespace.insert("memo".into(), raw);
+        object.insert("derivation".into(), Value::Object(namespace));
+        Ok(Value::Object(object))
+    }
+}

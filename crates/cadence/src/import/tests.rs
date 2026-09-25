@@ -32,7 +32,6 @@ impl Policy for Allow {
 /// kept as fixtures, so no test asks git for them.
 const FROZEN_DECLINED: &[u8] = include_bytes!("../../tests/fixtures/v3.7.12/DECLINED.md");
 const FROZEN_FILED: &[u8] = include_bytes!("../../tests/fixtures/v3.7.12/FILED.md");
-const FROZEN_STATE: &[u8] = include_bytes!("../../tests/fixtures/v3.7.12/STATE.md");
 
 fn capture_source() -> Source {
     source(
@@ -223,25 +222,6 @@ fn a_capture_file_that_is_not_utf8_yields_no_records_and_keeps_its_bytes() {
     let result = items::translate(Some(&invalid), None, None).unwrap();
     assert!(result.records.is_empty());
     assert_eq!(result.evidence[0].source, invalid);
-}
-
-#[test]
-fn frozen_cursor_is_read_without_deriving_phase_status() {
-    let state = Source {
-        path: "STATE.md".into(),
-        bytes: FROZEN_STATE.to_vec(),
-    };
-    let translated = decisions::translate(Some(&state), None, None).unwrap();
-    assert_eq!(translated.cursor["phase"], json!(1.0));
-    assert_eq!(translated.cursor["total"], json!(0));
-    assert_eq!(translated.cursor["name"], json!("no active cycle"));
-    assert_eq!(translated.cursor["status"], json!("ready to plan"));
-    assert_eq!(translated.cursor["next"], json!("/cad-phase add"));
-    assert_eq!(
-        translated.cursor["original_fields"]["phase"],
-        json!("1 of 0 (no active cycle)")
-    );
-    assert_eq!(translated.evidence[0].source, state);
 }
 
 /// The current trace log with every family, a rotated copy of its first

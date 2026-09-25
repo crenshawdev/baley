@@ -161,21 +161,10 @@ fn paused() -> Fact {
     granted("pause", Meaning::PausedNext { sentence: SENTENCE.into() })
 }
 
-/// A legacy cursor imported as paused at phase 3 of 4.
-fn legacy_cursor() -> Value {
-    json!({"available": true, "phase": 3, "total": 4, "name": "Three", "status": "paused",
-        "next": "/cad-plan 3 --exact", "updated": "2026-09-06",
-        "original_fields": {"phase": "3 of 4 (Three)", "status": "paused",
-            "next": "/cad-plan 3 --exact", "updated": "2026-09-06"}})
-}
-
 /// A store view holding `records`, oldest first, in its history and its
-/// current evidence, with `cursor` as its imported legacy cursor.
-fn store(records: &[Record], cursor: Option<Value>) -> View {
-    let mut data = records.iter().fold(json!({}), |data, record| persistence::project(&data, record).unwrap());
-    if let Some(cursor) = cursor {
-        data["cursor"] = cursor;
-    }
+/// current evidence.
+fn store(records: &[Record]) -> View {
+    let data = records.iter().fold(json!({}), |data, record| persistence::project(&data, record).unwrap());
     View {
         items: vec![],
         decisions: records
@@ -190,34 +179,18 @@ fn store(records: &[Record], cursor: Option<Value>) -> View {
 #[test]
 fn an_active_pause_offers_its_exact_sentence_for_its_phase() {
     assert_eq!(
-        next_action_service::pause(&store(&[record("run", paused())], None)).unwrap(),
+        next_action_service::pause(&store(&[record("run", paused())])).unwrap(),
         Some(Pause { phase: phase(5.0), next: SENTENCE.into() })
     );
 }
 
 #[test]
-fn a_held_legacy_cursor_is_the_pause_when_no_native_pause_is_recorded() {
-    assert_eq!(
-        next_action_service::pause(&store(&[], Some(legacy_cursor()))).unwrap(),
-        Some(Pause { phase: phase(3.0), next: "/cad-plan 3 --exact".into() })
-    );
-}
-
-#[test]
-fn a_native_pause_is_offered_in_place_of_the_legacy_cursor() {
-    assert_eq!(
-        next_action_service::pause(&store(&[record("run", paused())], Some(legacy_cursor()))).unwrap(),
-        Some(Pause { phase: phase(5.0), next: SENTENCE.into() })
-    );
-}
-
-#[test]
-fn an_ended_native_pause_offers_neither_it_nor_the_legacy_cursor() {
+fn an_ended_native_pause_offers_no_pause() {
     for ended in [
         Occurrence::Fulfilled { completion: "resumed".into() },
         Occurrence::Superseded { by: "later".into() },
     ] {
-        let view = store(&[record("run", paused()), record("run", Fact::Occurrence(ended))], Some(legacy_cursor()));
+        let view = store(&[record("run", paused()), record("run", Fact::Occurrence(ended))]);
         assert_eq!(next_action_service::pause(&view).unwrap(), None);
     }
 }
@@ -237,7 +210,6 @@ fn another_occurrences_progress_gate_and_approval_offer_no_pause() {
             record("other", Fact::Gate(progress(State::Unanswered))),
             record("other", Fact::Gate(progress(State::Answered(approve)))),
         ],
-        None,
     );
     assert_eq!(next_action_service::pause(&view).unwrap(), None);
 }

@@ -1237,10 +1237,10 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
     let original = tokio::task::spawn_blocking(move || git::observe(&git_root, &mut cadence::process::System))
         .await
         .map_err(|_| Error::Closed)??;
-    let (checked, mut view) = derivation_service::checked_query(factory, &planning, driver)
+    let (_, mut view) = derivation_service::checked_query(factory, &planning, driver)
         .await
         .map_err(|e| Error::Conflict(format!("pause lifecycle: {e}")))?;
-    let mut captured = pause::capture(input, checked.intake(), original)?;
+    let mut captured = pause::capture(input, original)?;
     let session = factory.first_touch(&planning).await?;
     let config = session.config()?;
     if let Some((record, invocation)) =

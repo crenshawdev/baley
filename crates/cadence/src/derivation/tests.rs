@@ -511,305 +511,6 @@ fn contract_round_trips_order_plans_counters_and_null_cycles() {
     );
 }
 
-fn imported_cursor(status: &str, phase: u64, total: u64) -> serde_json::Value {
-    serde_json::json!({"available": true, "phase": phase, "total": total, "name": "Three",
-        "status": status, "next": "  /cad-plan 3 --exact\t ", "updated": "2026-09-06",
-        "original_fields": {"phase": format!("{phase} of {total} (Three)"), "status": status,
-            "next": "  /cad-plan 3 --exact\t ", "updated": "2026-09-06", "extra": [null, "retained"]},
-        "extra": {"keep": true}})
-}
-
-fn legacy_state(status: &str) -> String {
-    format!(
-        "# State\nPhase: 3 of 4 (Three)\nStatus: {status}\nNext:  /cad-plan 3 --exact\t \nUpdated: 2026-09-06\n"
-    )
-}
-
-const STATUS_WORDS: [(&str, LifecycleStatus); 7] = [
-    ("unplanned", LifecycleStatus::Unplanned),
-    ("ready to plan", LifecycleStatus::Unplanned),
-    ("context gathered", LifecycleStatus::Unplanned),
-    ("planned", LifecycleStatus::Planned),
-    ("executed", LifecycleStatus::Executed),
-    ("complete", LifecycleStatus::Complete),
-    ("phase complete", LifecycleStatus::Complete),
-];
-
-#[test]
-fn status_words_and_aliases_normalize_on_the_cursor_and_state_paths() {
-    for (word, expected) in STATUS_WORDS {
-        let normalized = normalize_imported_cursor(&imported_cursor(word, 3, 4)).unwrap();
-        assert!(
-            matches!(&normalized, CompatibilityCursor::Assertion { status, .. } if *status == expected)
-        );
-        let normalized = normalize_legacy_state(legacy_state(word).as_bytes()).unwrap();
-        assert!(
-            matches!(&normalized, CompatibilityCursor::Assertion { status, .. } if *status == expected)
-        );
-    }
-}
-
-#[test]
-fn normalization_keeps_the_original_cursor_fields_bytes_and_trimmed_next() {
-    for (word, _) in STATUS_WORDS {
-        let raw = imported_cursor(word, 3, 4);
-        let before = raw.clone();
-        let normalized = normalize_imported_cursor(&raw).unwrap();
-        let p = normalized.provenance();
-        assert_eq!(p.original_cursor, before);
-        assert_eq!(p.original_fields.as_ref(), raw.get("original_fields"));
-        assert_eq!(p.next.as_deref(), raw["next"].as_str());
-        assert_eq!(raw, before);
-        let state = legacy_state(word);
-        let normalized = normalize_legacy_state(state.as_bytes()).unwrap();
-        assert_eq!(
-            normalized.provenance().source_bytes.as_deref(),
-            Some(state.as_bytes())
-        );
-        assert_eq!(
-            normalized.provenance().next.as_deref(),
-            Some("/cad-plan 3 --exact")
-        );
-    }
-}
-
-#[test]
-fn paused_normalizes_to_held_on_both_paths() {
-    for normalized in [
-        normalize_imported_cursor(&imported_cursor("paused", 3, 4)),
-        normalize_legacy_state(legacy_state("paused").as_bytes()),
-    ] {
-        assert!(matches!(normalized.unwrap(), CompatibilityCursor::Held(_)));
-    }
-}
-
-#[test]
-fn an_unknown_or_case_changed_status_is_refused_naming_its_source() {
-    for word in ["surprised", "Planned", "UNPLANNED"] {
-        for (source, result) in [
-            (
-                "data.cursor",
-                normalize_imported_cursor(&imported_cursor(word, 3, 4)),
-            ),
-            (
-                "STATE.md",
-                normalize_legacy_state(legacy_state(word).as_bytes()),
-            ),
-        ] {
-            let error = result.unwrap_err();
-            assert_eq!(error.code(), "invalid-status");
-            assert_eq!(
-                error,
-                DerivationError::InvalidStatus {
-                    source: source.into(),
-                    original_status: word.into()
-                }
-            );
-        }
-    }
-}
-
-#[test]
-fn ac5_normalize_blank_name_and_next_are_line_bounded_native_constraints() {
-    for (old, new) in [
-        ("(Three)", "(   )"),
-        ("Next:  /cad-plan 3 --exact\t ", "Next:"),
-        ("Next:  /cad-plan 3 --exact\t ", "Next: \t "),
-    ] {
-        let state = legacy_state("unplanned").replace(old, new);
-        let result = normalize_legacy_state(state.as_bytes()).unwrap();
-        assert!(
-            matches!(result, CompatibilityCursor::Unavailable(_)),
-            "{state}"
-        );
-        assert_eq!(
-            result.provenance().source_bytes.as_deref(),
-            Some(state.as_bytes())
-        );
-    }
-    for (key, value) in [
-        ("name", "   "),
-        ("next", ""),
-        ("next", " \t "),
-        ("next", "\nUpdated: 2026-09-06"),
-    ] {
-        let mut raw = imported_cursor("unplanned", 3, 4);
-        raw.as_object_mut().unwrap().remove("original_fields");
-        raw[key] = value.into();
-        let result = normalize_imported_cursor(&raw).unwrap();
-        assert!(
-            matches!(result, CompatibilityCursor::Unavailable(_)),
-            "{key}={value:?}"
-        );
-        assert_eq!(result.provenance().original_cursor, raw);
-    }
-}
-
-#[test]
-fn ac5_normalize_malformed_and_inconsistent_inputs_stay_unavailable() {
-    for key in ["phase", "total", "name", "status", "next", "updated"] {
-        for replacement in [
-            None,
-            Some(serde_json::Value::Null),
-            Some(serde_json::json!([])),
-        ] {
-            let mut raw = imported_cursor("unplanned", 3, 4);
-            if let Some(value) = replacement {
-                raw[key] = value;
-            } else {
-                raw.as_object_mut().unwrap().remove(key);
-            }
-            let result = normalize_imported_cursor(&raw).unwrap();
-            assert!(
-                matches!(result, CompatibilityCursor::Unavailable(_)),
-                "{key}"
-            );
-            assert_eq!(result.provenance().original_cursor, raw);
-        }
-    }
-    for (key, value) in [
-        ("phase", "+3 of 4 (Three)"),
-        ("phase", "3e0 of 4 (Three)"),
-        ("phase", "3 of 4 (   )"),
-        ("phase", "3 of 4 (Other)"),
-        ("phase", "2 of 4 (Three)"),
-        ("phase", "3 of 5 (Three)"),
-        ("status", "planned"),
-        ("status", ""),
-        ("next", "other"),
-        ("next", ""),
-        ("updated", "2026-09-07"),
-    ] {
-        let mut raw = imported_cursor("unplanned", 3, 4);
-        raw["original_fields"][key] = value.into();
-        assert!(
-            matches!(
-                normalize_imported_cursor(&raw).unwrap(),
-                CompatibilityCursor::Unavailable(_)
-            ),
-            "{key}={value}"
-        );
-    }
-    for date in ["2026-9-06", "20260906", "yesterday", "2026-09-06 extra"] {
-        let state = legacy_state("unplanned").replace("2026-09-06", date);
-        assert!(matches!(
-            normalize_legacy_state(state.as_bytes()).unwrap(),
-            CompatibilityCursor::Unavailable(_)
-        ));
-        let mut raw = imported_cursor("unplanned", 3, 4);
-        raw["updated"] = date.into();
-        raw["original_fields"]["updated"] = date.into();
-        assert!(matches!(
-            normalize_imported_cursor(&raw).unwrap(),
-            CompatibilityCursor::Unavailable(_)
-        ));
-    }
-    for prefix in ["Phase:", "Status:", "Next:", "Updated:"] {
-        let state = legacy_state("unplanned")
-            .lines()
-            .filter(|s| !s.starts_with(prefix))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            matches!(
-                normalize_legacy_state(state.as_bytes()).unwrap(),
-                CompatibilityCursor::Unavailable(_)
-            ),
-            "{prefix}"
-        );
-    }
-    for raw in [
-        serde_json::Value::Null,
-        serde_json::json!({"available": true}),
-        serde_json::json!({"available": false}),
-    ] {
-        assert!(matches!(
-            normalize_imported_cursor(&raw).unwrap(),
-            CompatibilityCursor::Unavailable(_)
-        ));
-    }
-}
-
-fn agreement(
-    capture: &CapturedInputs,
-    word: &str,
-    phase: u64,
-    total: u64,
-) -> Result<(), DerivationError> {
-    let cursor = normalize_imported_cursor(&imported_cursor(word, phase, total))?;
-    check_consistency(validate_inputs(capture)?, &derive(capture)?, &cursor)
-}
-
-fn agreement_failures(
-    check: impl Fn(&CapturedInputs, &str, u64, u64) -> Result<(), DerivationError>,
-) -> Vec<String> {
-    let live = captured("## Phases\n- [ ] **Phase 3: Three**");
-    let closed = captured("## Phases\nNo active phases.");
-    let mut done = captured("## Phases\n- [x] **Phase 3: Three**");
-    complete(&mut done.phases[0]);
-    let mut failed = Vec::new();
-    for word in [
-        "unplanned",
-        "ready to plan",
-        "context gathered",
-        "planned",
-        "executed",
-        "complete",
-        "phase complete",
-        "paused",
-    ] {
-        for (label, capture, phase, total, expected) in [
-            (
-                "live",
-                &live,
-                3,
-                4,
-                matches!(
-                    word,
-                    "unplanned" | "ready to plan" | "context gathered" | "paused"
-                ),
-            ),
-            ("wrong phase", &live, 2, 4, word == "paused"),
-            (
-                "all complete",
-                &done,
-                99,
-                4,
-                matches!(word, "complete" | "phase complete" | "paused"),
-            ),
-            (
-                "closed",
-                &closed,
-                99,
-                0,
-                matches!(
-                    word,
-                    "unplanned"
-                        | "ready to plan"
-                        | "context gathered"
-                        | "complete"
-                        | "phase complete"
-                        | "paused"
-                ),
-            ),
-            ("closed nonzero", &closed, 99, 4, false),
-        ] {
-            let result = check(capture, word, phase, total);
-            if result.is_ok() != expected {
-                failed.push(format!("{label}: {word}"));
-            } else if let Err(error) = result {
-                assert_eq!(error.code(), "state-conflict");
-            }
-        }
-    }
-    failed
-}
-
-#[test]
-fn ac5_agreement_canonical_alias_closed_all_complete_and_hold_table() {
-    assert_eq!(agreement_failures(agreement), Vec::<String>::new());
-}
-
 fn conflict_only<T>(
     result: &Result<T, DerivationError>,
     source: &str,
@@ -832,8 +533,7 @@ fn ac6_conflicts_both_checkbox_directions() {
             complete(&mut capture.phases[0]);
         }
         let answer = derive(&capture).unwrap();
-        let cursor = normalize_imported_cursor(&serde_json::Value::Null).unwrap();
-        let result = check_consistency(validate_inputs(&capture).unwrap(), &answer, &cursor);
+        let result = check_consistency(validate_inputs(&capture).unwrap(), &answer);
         let declared = checked.to_string();
         let derived = (!checked).to_string();
         assert!(conflict_only(
@@ -855,170 +555,44 @@ fn ac6_conflicts_both_checkbox_directions() {
     }
 }
 
-struct FixedIntake(IntakeObservation);
-impl IntakeIo for FixedIntake {
-    fn observe_intake(&mut self) -> Result<IntakeObservation, DerivationError> {
-        Ok(self.0.clone())
-    }
-}
-
-fn validated_for(data: &serde_json::Value) -> RecheckedLifecycle {
+/// A checked answer over one unticked phase 3, and the memo it would publish.
+fn checked_with_memo() -> (RecheckedLifecycle, LifecycleMemo) {
     let temp = tempfile::tempdir().unwrap();
-    std::fs::write(
-        temp.path().join("ROADMAP.md"),
-        "## Phases\n- [ ] **Phase 3: Three**",
-    )
-    .unwrap();
-    let selected = select_intake(data).unwrap();
-    query_with_intake(
-        temp.path(),
-        &mut ArtifactFiles,
-        &selected.cursor,
-        &selected.observation,
-        &mut FixedIntake(selected.observation.clone()),
-    )
-    .unwrap()
-}
-
-/// A paused imported cursor beside unrelated data and a derivation extension.
-fn unadopted() -> serde_json::Value {
-    serde_json::json!({"cursor":imported_cursor("paused", 3, 4), "unrelated":[1,null], "derivation":{"extension":true}})
-}
-
-fn adopted() -> serde_json::Value {
-    let original = unadopted();
-    adopt(&original, serde_json::json!({"fixture":"opaque memo"}), validated_for(&original).intake().unwrap()).unwrap()
+    std::fs::write(temp.path().join("ROADMAP.md"), "## Phases\n- [ ] **Phase 3: Three**").unwrap();
+    let checked = query(temp.path(), &mut ArtifactFiles).unwrap();
+    let key = input_key_with(checked.capture(), checked.overlay()).unwrap();
+    let memo = LifecycleMemo::fresh(key, checked.answer().clone());
+    (checked, memo)
 }
 
 #[test]
-fn adopt_keeps_unrelated_data_and_the_namespace_and_installs_the_memo_and_a_retired_intake() {
-    let original = unadopted();
-    let memo = serde_json::json!({"fixture":"opaque memo"});
-    let adopted = adopt(&original, memo.clone(), validated_for(&original).intake().unwrap()).unwrap();
-    assert_eq!(adopted["cursor"], original["cursor"]);
-    assert_eq!(adopted["unrelated"], original["unrelated"]);
-    assert_eq!(adopted["derivation"]["extension"], true);
-    assert_eq!(adopted["derivation"]["memo"], memo);
-    assert_eq!(adopted["derivation"]["intake"]["retired"], true);
+fn installing_the_memo_keeps_unrelated_data_and_the_namespace() {
+    let (checked, memo) = checked_with_memo();
+    let original = serde_json::json!({"unrelated":[1,null], "derivation":{"extension":true}});
+    let installed = checked.with_memo(&original, &memo).unwrap();
+    assert_eq!(installed["unrelated"], original["unrelated"]);
+    assert_eq!(installed["derivation"]["extension"], true);
+    assert_eq!(installed["derivation"]["memo"], serde_json::to_value(&memo).unwrap());
 }
 
 #[test]
-fn an_adopted_cursor_selects_as_unavailable_and_readoption_keeps_the_intake_record() {
-    let adopted = adopted();
-    assert!(matches!(
-        select_intake(&adopted).unwrap().cursor,
-        CompatibilityCursor::Unavailable(_)
-    ));
-    let again = adopt(
-        &adopted,
-        serde_json::json!("second memo"),
-        validated_for(&adopted).intake().unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        again["derivation"]["intake"],
-        adopted["derivation"]["intake"]
-    );
+fn installing_the_memo_into_empty_data_creates_only_the_derivation_namespace() {
+    let (checked, memo) = checked_with_memo();
+    let installed = checked.with_memo(&serde_json::Value::Null, &memo).unwrap();
+    assert_eq!(installed.as_object().unwrap().keys().collect::<Vec<_>>(), ["derivation"]);
+    assert_eq!(installed["derivation"].as_object().unwrap().keys().collect::<Vec<_>>(), ["memo"]);
 }
 
 #[test]
-fn a_changed_cursor_rearms_as_held_and_the_old_validation_is_refused() {
-    let accepted = validated_for(&unadopted());
-    let mut changed = adopted();
-    changed["cursor"]["extra"] = false.into();
-    assert!(matches!(
-        select_intake(&changed).unwrap().cursor,
-        CompatibilityCursor::Held(_)
-    ));
-    assert_eq!(
-        adopt(&changed, serde_json::json!({"fixture":"opaque memo"}), accepted.intake().unwrap())
-            .unwrap_err()
-            .code(),
-        "inputs-changed"
-    );
-}
-
-#[test]
-fn adopting_into_empty_data_creates_only_the_derivation_namespace() {
-    let fresh = serde_json::Value::Null;
-    let adopted = adopt(&fresh, serde_json::json!({"fixture":"opaque memo"}), validated_for(&fresh).intake().unwrap()).unwrap();
-    assert!(adopted.is_object());
-    assert!(adopted.get("cursor").is_none());
-    assert!(adopted["derivation"].get("memo").is_some());
-}
-
-#[test]
-fn ac5_adopt_malformed_retirement_cannot_suppress_comparison_or_discard_data() {
-    let original = serde_json::json!({"cursor":imported_cursor("unplanned", 3, 4)});
-    // The intake adopt accepts: what select_intake chose, as the query would
-    // hand it over after its own consistency check.
-    let selected = select_intake(&original).unwrap();
-    let accepted = ValidatedIntake {
-        cursor: selected.cursor,
-        observation: selected.observation,
-    };
-    let valid = adopt(&original, serde_json::json!("opaque fixture"), &accepted)
-    .unwrap();
-    let mut malformed = Vec::new();
-    for (field, value) in [
-        ("version", serde_json::json!(2)),
-        ("source", serde_json::json!("elsewhere")),
-        ("retired", serde_json::json!(false)),
-        ("normalized", serde_json::Value::Null),
-        ("original_cursor", serde_json::json!({})),
-    ] {
-        let mut data = valid.clone();
-        data["derivation"]["intake"][field] = value;
-        malformed.push(data);
-    }
-    for field in [
-        "version",
-        "source",
-        "original_cursor",
-        "normalized",
-        "retired",
-    ] {
-        let mut data = valid.clone();
-        data["derivation"]["intake"]
-            .as_object_mut()
-            .unwrap()
-            .remove(field);
-        malformed.push(data);
-    }
-    let mut only_retirement = valid.clone();
-    only_retirement["derivation"]
-        .as_object_mut()
-        .unwrap()
-        .remove("memo");
-    malformed.push(only_retirement);
-    for value in [
-        serde_json::Value::Null,
-        serde_json::json!(true),
-        serde_json::json!([]),
-    ] {
-        let mut data = valid.clone();
-        data["derivation"]["intake"] = value;
-        malformed.push(data);
-    }
-    malformed.extend([
+fn a_malformed_derivation_namespace_is_refused_rather_than_overwritten() {
+    let (checked, memo) = checked_with_memo();
+    for data in [
         serde_json::json!(42),
         serde_json::json!([]),
-        serde_json::json!("data"),
         serde_json::json!({"derivation":null}),
         serde_json::json!({"derivation":[]}),
-    ]);
-    for data in malformed {
-        assert_eq!(
-            select_intake(&data).unwrap_err().code(),
-            "invalid-intake",
-            "{data}"
-        );
-        assert_eq!(
-            adopt(&data, serde_json::Value::Null, &accepted)
-                .unwrap_err()
-                .code(),
-            "invalid-intake"
-        );
+    ] {
+        assert_eq!(checked.with_memo(&data, &memo).unwrap_err().code(), "derivation-conflict", "{data}");
     }
 }
 
@@ -1466,87 +1040,6 @@ fn a_root_is_normalized_from_its_text_dropping_dot_and_popping_dot_dot() {
 fn the_first_disagreeing_entry_is_refused_even_when_two_entries_share_an_address() {
     let capture = captured("## Phases\n- [ ] **Phase 3.0: First**\n- [x] **Phase 3: Second**");
     let answer = derive(&capture).unwrap();
-    let cursor = normalize_imported_cursor(&serde_json::Value::Null).unwrap();
-    let result = check_consistency(validate_inputs(&capture).unwrap(), &answer, &cursor);
+    let result = check_consistency(validate_inputs(&capture).unwrap(), &answer);
     assert!(conflict_only(&result, "ROADMAP.md:3 entry 1", "complete", "true", "false"), "{result:?}");
-}
-
-#[test]
-fn a_disagreeing_cursor_names_its_source_the_field_and_both_values() {
-    let live = captured("## Phases\n- [ ] **Phase 3: Three**");
-    let closed = captured("## Phases\nNo active phases.");
-    for (capture, word, phase, total, field, declared, derived) in [
-        (&live, "planned", 3, 4, "status", "planned", "unplanned"),
-        (&live, "unplanned", 2, 4, "phase", "2", "3"),
-        (&closed, "complete", 99, 4, "total", "4", "0"),
-    ] {
-        let result = agreement(capture, word, phase, total);
-        assert!(conflict_only(&result, "data.cursor", field, declared, derived), "{field}: {result:?}");
-    }
-}
-
-#[test]
-fn an_intake_observed_again_must_equal_the_one_the_answer_was_made_with() {
-    let observed = IntakeObservation::from_data(&unadopted());
-    assert_eq!(recheck_intake(&observed, &observed.clone()), Ok(()));
-    let changed = IntakeObservation::from_data(&serde_json::json!({"cursor": imported_cursor("planned", 3, 4)}));
-    assert_eq!(recheck_intake(&observed, &changed), Err(DerivationError::InputsChanged));
-}
-
-/// A planning root holding one unticked phase 3, for the intake queries.
-fn one_phase_root() -> tempfile::TempDir {
-    let temp = tempfile::tempdir().unwrap();
-    std::fs::write(temp.path().join("ROADMAP.md"), "## Phases\n- [ ] **Phase 3: Three**").unwrap();
-    temp
-}
-
-#[test]
-fn a_cursor_other_than_the_one_observed_cannot_be_prepared_with_that_intake() {
-    let temp = one_phase_root();
-    let selected = select_intake(&unadopted()).unwrap();
-    let other = IntakeObservation::from_data(&serde_json::json!({"cursor": imported_cursor("unplanned", 3, 4)}));
-    assert_eq!(
-        prepare_query_with_intake(temp.path(), &mut ArtifactFiles, &selected.cursor, &other).map(|_| ()),
-        Err(DerivationError::InputsChanged)
-    );
-}
-
-#[test]
-fn an_answer_made_with_intake_is_not_rechecked_without_observing_the_intake_again() {
-    let temp = one_phase_root();
-    let selected = select_intake(&unadopted()).unwrap();
-    let prepared =
-        prepare_query_with_intake(temp.path(), &mut ArtifactFiles, &selected.cursor, &selected.observation).unwrap();
-    assert_eq!(recheck_query(&prepared, &mut ArtifactFiles).map(|_| ()), Err(DerivationError::InputsChanged));
-}
-
-#[test]
-fn an_intake_that_changed_before_the_recheck_refuses_the_query() {
-    let temp = one_phase_root();
-    let selected = select_intake(&unadopted()).unwrap();
-    let changed = IntakeObservation::from_data(&serde_json::json!({"cursor": imported_cursor("unplanned", 3, 4)}));
-    assert_eq!(
-        query_with_intake(temp.path(), &mut ArtifactFiles, &selected.cursor, &selected.observation, &mut FixedIntake(changed))
-            .map(|_| ()),
-        Err(DerivationError::InputsChanged)
-    );
-}
-
-#[test]
-fn a_retired_cursor_no_longer_holds_back_a_lifecycle_that_moved_past_it() {
-    let mut capture = captured("## Phases\n- [x] **Phase 3: Three**\n- [ ] **Phase 4: Four**");
-    complete(&mut capture.phases[0]);
-    let answer = derive(&capture).unwrap();
-    assert_eq!(answer.current.map(PhaseId::address), Some("4".to_string()));
-    let retired = select_intake(&adopted()).unwrap().cursor;
-    assert!(matches!(retired, CompatibilityCursor::Unavailable(_)));
-    assert_eq!(check_consistency(validate_inputs(&capture).unwrap(), &answer, &retired), Ok(()));
-    let unretired = normalize_imported_cursor(&imported_cursor("unplanned", 3, 4)).unwrap();
-    assert!(conflict_only(
-        &check_consistency(validate_inputs(&capture).unwrap(), &answer, &unretired),
-        "data.cursor",
-        "phase",
-        "3",
-        "4"
-    ));
 }

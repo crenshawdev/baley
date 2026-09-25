@@ -5,7 +5,6 @@ pub mod risk;
 pub mod risk_diff;
 
 use crate::{
-    derivation::{CursorProvenance, ValidatedIntake},
     evidence::Scope,
     store::{Error, Result},
 };
@@ -56,11 +55,10 @@ pub struct Capture {
 
 /// Settles a pause request against `observed`, the Git observation taken
 /// before anything else ran.
-pub fn capture(input: Input, retained: Option<&ValidatedIntake>, observed: git::Observation) -> Result<Capture> {
+pub fn capture(input: Input, observed: git::Observation) -> Result<Capture> {
     let phase = input
         .phase
-        .or_else(|| retained_phase(retained?.cursor().provenance()))
-        .ok_or_else(|| Error::Invalid("missing pause phase and name/total provenance".into()))?;
+        .ok_or_else(|| Error::Invalid("missing pause phase".into()))?;
     for value in [&phase.identity, &phase.name, &phase.provenance] {
         if value.trim().is_empty() {
             return Err(Error::Invalid("missing pause phase provenance".into()));
@@ -101,24 +99,6 @@ pub fn capture(input: Input, retained: Option<&ValidatedIntake>, observed: git::
         observed,
         risk: None,
         wip: None,
-    })
-}
-
-/// The phase a pause takes when its input names none: the retained imported
-/// cursor's, when that cursor was usable when it was imported.
-fn retained_phase(prior: &CursorProvenance) -> Option<Phase> {
-    let normalized = crate::derivation::normalize_imported_cursor(&prior.original_cursor).ok()?;
-    if matches!(
-        normalized,
-        crate::derivation::CompatibilityCursor::Unavailable(_)
-    ) {
-        return None;
-    }
-    Some(Phase {
-        identity: prior.phase?.address(),
-        name: prior.name.clone()?,
-        total: prior.total?,
-        provenance: serde_json::to_string(prior).ok()?,
     })
 }
 

@@ -171,10 +171,6 @@ pub enum DerivationError {
         kind: String,
         detail: String,
     },
-    InvalidIntake {
-        source: String,
-        detail: String,
-    },
     StateConflict {
         source: String,
         field: String,
@@ -185,10 +181,6 @@ pub enum DerivationError {
         /// what the derivation made of it, and the log needs both.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         entry: Option<Box<ConflictEntry>>,
-    },
-    InvalidStatus {
-        source: String,
-        original_status: String,
     },
     MissingPlanningRoot {
         path: PathBuf,
@@ -208,9 +200,7 @@ impl DerivationError {
         match self {
             Self::DerivationConflict { .. } => "derivation-conflict",
             Self::Store { .. } => "store-error",
-            Self::InvalidIntake { .. } => "invalid-intake",
             Self::StateConflict { .. } => "state-conflict",
-            Self::InvalidStatus { .. } => "invalid-status",
             Self::MissingPlanningRoot { .. } => "missing-planning-root",
             Self::MissingRoadmap { .. } => "missing-roadmap",
             Self::InvalidRoadmap { .. } => "invalid-roadmap",
@@ -226,96 +216,6 @@ impl std::fmt::Display for DerivationError {
     }
 }
 impl std::error::Error for DerivationError {}
-
-/// Untouched compatibility evidence, including fields from unavailable input.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CursorProvenance {
-    pub source: String,
-    pub original_cursor: serde_json::Value,
-    pub source_bytes: Option<Vec<u8>>,
-    pub phase: Option<PhaseId>,
-    pub total: Option<u64>,
-    pub name: Option<String>,
-    pub original_status: Option<String>,
-    pub next: Option<String>,
-    pub updated: Option<String>,
-    pub original_fields: Option<serde_json::Value>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum CompatibilityCursor {
-    Unavailable(CursorProvenance),
-    Assertion {
-        status: LifecycleStatus,
-        provenance: CursorProvenance,
-    },
-    Held(CursorProvenance),
-}
-
-impl CompatibilityCursor {
-    pub fn provenance(&self) -> &CursorProvenance {
-        match self {
-            Self::Unavailable(p) | Self::Held(p) | Self::Assertion { provenance: p, .. } => p,
-        }
-    }
-}
-
-/// Exact compatibility observations, outside CapturedInputs and the lifecycle key.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IntakeObservation {
-    pub cursor: Option<serde_json::Value>,
-    pub retirement: Option<serde_json::Value>,
-}
-
-impl IntakeObservation {
-    pub fn from_data(data: &serde_json::Value) -> Self {
-        Self {
-            cursor: data.get("cursor").cloned(),
-            retirement: data
-                .get("derivation")
-                .and_then(|d| {
-                    if d.is_object() {
-                        d.get("intake")
-                    } else {
-                        Some(d)
-                    }
-                })
-                .cloned(),
-        }
-    }
-}
-
-/// Produced only after consistency validation and final reobservation.
-#[derive(Clone, Debug)]
-pub struct ValidatedIntake {
-    pub(crate) cursor: CompatibilityCursor,
-    pub(crate) observation: IntakeObservation,
-}
-
-impl ValidatedIntake {
-    pub fn cursor(&self) -> &CompatibilityCursor {
-        &self.cursor
-    }
-    pub fn observation(&self) -> &IntakeObservation {
-        &self.observation
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct IntakeRecord {
-    pub version: u32,
-    pub source: String,
-    pub original_cursor: serde_json::Value,
-    pub normalized: CompatibilityCursor,
-    pub retired: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct SelectedIntake {
-    pub cursor: CompatibilityCursor,
-    pub observation: IntakeObservation,
-}
 
 /// One native phase's acceptance authority, observed from the store snapshot
 /// alone (D-131): whether its plans are published and admitted, whether the
@@ -339,10 +239,6 @@ pub struct AcceptancePhase {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcceptanceOverlay {
     pub phases: std::collections::BTreeMap<String, AcceptancePhase>,
-    /// Phases holding a native approved context: native authority the
-    /// imported compatibility cursor yields to.
-    #[serde(default)]
-    pub contexted: std::collections::BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

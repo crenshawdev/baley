@@ -544,7 +544,7 @@ fn prepare_import<I: ConfigIo>(
             })
             .map(|input| guard(active.global.clone().unwrap(), input)),
     };
-    let snapshot = json!({"import":manifest,"cursor":decisions.cursor,"source_evidence":evidence,
+    let snapshot = json!({"import":manifest,"source_evidence":evidence,
         "archive":{"path":root.join("ARCHIVE.md"),"maintained":false,"available":sources.contains_key("ARCHIVE.md")}});
     Ok(ImportInputs {
         manifest,

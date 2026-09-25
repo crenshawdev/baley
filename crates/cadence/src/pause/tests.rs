@@ -1,5 +1,4 @@
 use super::*;
-use crate::derivation::{IntakeObservation, normalize_imported_cursor};
 
 /// Capture judges values only: the project path has to be absolute, and the
 /// Git observation is whatever the caller already took.
@@ -47,15 +46,6 @@ fn change(path: &str, original: Option<&str>) -> git::Change {
     }
 }
 
-fn retained(available: bool) -> ValidatedIntake {
-    let raw = serde_json::json!({"available": available, "phase": 3, "total": 4, "name": "Three",
-        "status": "planned", "next": "/cad-execute 3", "updated": "2026-09-06"});
-    ValidatedIntake {
-        cursor: normalize_imported_cursor(&raw).unwrap(),
-        observation: IntakeObservation { cursor: Some(raw), retirement: None },
-    }
-}
-
 #[test]
 fn capture_refuses_a_missing_blank_or_multiline_note() {
     for note in [
@@ -67,7 +57,7 @@ fn capture_refuses_a_missing_blank_or_multiline_note() {
     ] {
         let mut request = input(Path::new(PROJECT));
         request.sentence = note.map(str::to_owned);
-        assert!(capture(request, None, observed(vec![])).is_err(), "{note:?}");
+        assert!(capture(request, observed(vec![])).is_err(), "{note:?}");
     }
 }
 
@@ -76,7 +66,7 @@ fn capture_refuses_a_missing_phase() {
     let mut request = input(Path::new(PROJECT));
     request.phase = None;
     assert!(
-        capture(request, None, observed(vec![]))
+        capture(request, observed(vec![]))
             .unwrap_err()
             .to_string()
             .contains("missing pause phase")
@@ -88,21 +78,21 @@ fn capture_refuses_an_unsafe_authorized_path() {
     for path in ["../outside", "/absolute", ".git/index", ""] {
         let mut request = input(Path::new(PROJECT));
         request.authorized.insert(path.into());
-        assert!(capture(request, None, observed(vec![])).is_err(), "{path}");
+        assert!(capture(request, observed(vec![])).is_err(), "{path}");
     }
 }
 
 #[test]
 fn capture_keeps_the_note_exactly_as_given() {
-    let captured = capture(input(Path::new(PROJECT)), None, observed(vec![])).unwrap();
+    let captured = capture(input(Path::new(PROJECT)), observed(vec![])).unwrap();
     assert_eq!(captured.sentence, NOTE);
 }
 
 #[test]
 fn a_capture_whose_observation_has_no_changes_is_originally_clean() {
-    let clean = capture(input(Path::new(PROJECT)), None, observed(vec![])).unwrap();
+    let clean = capture(input(Path::new(PROJECT)), observed(vec![])).unwrap();
     assert!(clean.originally_clean());
-    let dirty = capture(input(Path::new(PROJECT)), None, observed(vec![change("a", None)])).unwrap();
+    let dirty = capture(input(Path::new(PROJECT)), observed(vec![change("a", None)])).unwrap();
     assert!(!dirty.originally_clean());
 }
 
@@ -111,37 +101,6 @@ fn unrelated_lists_every_changed_path_and_rename_source_outside_the_authorized_s
     let mut request = input(Path::new(PROJECT));
     request.authorized = ["a", "new"].map(PathBuf::from).into();
     let changes = vec![change("a", None), change("new", Some("old")), change("c", None)];
-    let captured = capture(request, None, observed(changes)).unwrap();
+    let captured = capture(request, observed(changes)).unwrap();
     assert_eq!(captured.unrelated(), ["c", "old"].map(PathBuf::from).into());
-}
-
-// The roadmap is never consulted: a phase it no longer lists still comes back
-// from the cursor retained at import.
-#[test]
-fn without_a_phase_capture_takes_the_retained_cursors_phase() {
-    let mut request = input(Path::new(PROJECT));
-    request.phase = None;
-    request.scope.phase = String::new();
-    let intake = retained(true);
-    let captured = capture(request, Some(&intake), observed(vec![])).unwrap();
-    assert_eq!(
-        (captured.phase.identity.as_str(), captured.phase.name.as_str(), captured.phase.total),
-        ("3", "Three", 4)
-    );
-    assert_eq!(captured.scope.phase, "3");
-    let provenance: CursorProvenance = serde_json::from_str(&captured.phase.provenance).unwrap();
-    assert_eq!(&provenance, intake.cursor().provenance());
-}
-
-#[test]
-fn an_unusable_retained_cursor_supplies_no_phase() {
-    let mut request = input(Path::new(PROJECT));
-    request.phase = None;
-    request.scope.phase = String::new();
-    assert!(
-        capture(request, Some(&retained(false)), observed(vec![]))
-            .unwrap_err()
-            .to_string()
-            .contains("missing pause phase")
-    );
 }

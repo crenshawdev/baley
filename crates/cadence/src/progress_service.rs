@@ -78,25 +78,13 @@ fn records(view: &View, phase: &str) -> Value {
 pub async fn query<I: ConfigIo + Clone + Sync>(
     factory: &SessionFactory<I>, root: &Path, driver: &Driver,
 ) -> Result<Value, DerivationError> {
-    // Age the work at query entry. A cursor/memo repair performed by this
+    // Age the work at query entry. A memo repair performed by this
     // progress read is not another generation of elapsed worker activity.
     let observed_generation = factory.first_touch(root).await.map_err(store_error)?
         .derivation_view().await.map_err(store_error)?.snapshot.generation;
     let (checked, view) = derivation_service::checked_progress(factory, root, driver).await?;
-    let mut lifecycle = checked.answer().clone();
+    let lifecycle = checked.answer().clone();
     let overlay = checked.overlay().clone();
-    for phase in &mut lifecycle.phases {
-        if overlay.phases.get(&phase.id.address()).and_then(|p| p.label.as_deref())
-            .is_some_and(|label| label.starts_with("declared-at-")) {
-            let path = Path::new("phases").join(phase.id.address());
-            phase.uat = checked.capture().phases.iter().find(|p| p.relative_path == path)
-                .and_then(|p| match &p.uat {
-                    derivation::Observation::Present(bytes) if !bytes.is_empty() =>
-                        Some(derivation::parse_uat(&String::from_utf8_lossy(bytes)).counts),
-                    _ => None,
-                });
-        }
-    }
     let declarations = checked.capture().declarations.as_ref()
         .ok_or(DerivationError::InputsChanged)?.as_ref().map_err(Clone::clone)?;
     let issues = derivation::roadmap_conflicts(declarations, &lifecycle);

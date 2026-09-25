@@ -2839,14 +2839,6 @@ async fn derivation_refusal<I: ConfigIo>(
             format!("{code}: {detail}"),
             Located::rule(code, "roadmap"),
         ),
-        cadence::derivation::DerivationError::InvalidIntake { source, detail } => (
-            format!("{code}: {detail}"),
-            Located::rule(code, "intake").id(source),
-        ),
-        cadence::derivation::DerivationError::InvalidStatus { source, original_status } => (
-            format!("{code}: {source} carries the unusable status {original_status}"),
-            Located::rule(code, "status").id(source),
-        ),
         cadence::derivation::DerivationError::DerivationConflict { requested_hash, stored_hash, fields } => (
             format!("{code}: the memo for {requested_hash} (stored {}) disagrees at {}",
                 stored_hash.as_deref().unwrap_or("none"), fields.join(", ")),
@@ -2890,12 +2882,6 @@ async fn checked_execution<I: ConfigIo + Clone + Sync>(
     driver: &Driver,
 ) -> Result<(cadence::derivation::RecheckedLifecycle, View), cadence::derivation::DerivationError> {
     use cadence::derivation::*;
-    struct Intake(IntakeObservation);
-    impl IntakeIo for Intake {
-        fn observe_intake(&mut self) -> Result<IntakeObservation, DerivationError> {
-            Ok(self.0.clone())
-        }
-    }
     let root = root.to_path_buf();
     let driver = driver.clone();
     let view = session
@@ -2914,13 +2900,11 @@ async fn checked_execution<I: ConfigIo + Clone + Sync>(
         }
         let key = prepared.input_key()?;
         let raw = memo_from_data(&data, &key)?;
-        let selected = select_intake(&data)?;
-        let prepared = prepared.with_intake(&selected)?;
         #[cfg(test)]
         (driver.compare)(raw, &key, prepared.answer())?;
         #[cfg(not(test))]
         check_memo(raw, &key, prepared.answer())?;
-        recheck_query_with_intake(&prepared, io.as_mut(), &mut Intake(selected.observation))
+        recheck_query(&prepared, io.as_mut())
     })
     .await
     .map_err(|_| derivation_service::store_error(Error::Closed))??;

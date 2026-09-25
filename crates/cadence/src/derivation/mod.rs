@@ -1,23 +1,16 @@
 //! Captured artifact evidence and synchronous lifecycle derivation.
 mod capture;
-mod compatibility;
 mod consistency;
-mod intake;
 mod memo;
 mod model;
 mod parse;
 mod query;
 pub use capture::{ArtifactFiles, ArtifactIo, capture_inputs};
-pub use compatibility::{normalize_imported_cursor, normalize_legacy_state};
-pub use consistency::{check_consistency, recheck_intake, roadmap_conflicts};
-pub use intake::{adopt, select_intake};
+pub use consistency::{check_consistency, roadmap_conflicts};
 pub use memo::{DOMAIN, ENCODING_VERSION, SEMANTICS_VERSION, encode_inputs, input_key, input_key_with};
 pub use model::*;
 pub use parse::{parse_roadmap, parse_uat};
-pub use query::{
-    IntakeIo, PreparedLifecycle, RecheckedLifecycle, prepare_query, prepare_query_with_intake, prepare_progress,
-    query, query_with_intake, recheck_query, recheck_query_with_intake,
-};
+pub use query::{PreparedLifecycle, RecheckedLifecycle, prepare_query, prepare_progress, query, recheck_query};
 
 fn validate_observation_failures(capture: &CapturedInputs) -> Result<(), DerivationError> {
     fn check<T>(observation: &Observation<T>) -> Result<(), DerivationError> {
@@ -73,7 +66,6 @@ pub fn acceptance_overlay(data: &serde_json::Value) -> Result<AcceptanceOverlay,
     let mut overlay = AcceptanceOverlay::default();
     let mut keys: std::collections::BTreeSet<String> = data.get("context").and_then(|c| c.get("phases"))
         .and_then(|p| p.as_object()).map(|p| p.keys().cloned().collect()).unwrap_or_default();
-    overlay.contexted = keys.clone();
     keys.extend(crate::undo::model::records(data).map_err(store_failure)?.values()
         .filter(|r| r.state == "committed").map(|r| r.manifest.phase.to_string()));
     for key in &keys {
@@ -276,40 +268,6 @@ mod overlay_tests {
         capture.phases[0].plans = Observation::Present(vec![]);
         overlay.phases.insert("13".into(), unpublished);
         assert_eq!(derive_with(&capture, &overlay).unwrap().phases[0].status, LifecycleStatus::Unplanned);
-    }
-
-    #[test]
-    fn an_imported_cursor_yields_to_a_native_context_on_the_current_phase() {
-        // Two phases, 13 ticked and 14 open; the tree gives 14 one plan, so the
-        // current phase derives Planned while the imported cursor still asserts
-        // unplanned: the shape a natively contexted and planned phase leaves.
-        let mut capture = native_capture();
-        capture.phases[1].summary = Observation::Absent;
-        capture.phases[1].uat = Observation::Absent;
-        let mut overlay = acceptance_overlay(&serde_json::Value::Null).unwrap();
-        overlay.phases.insert("13".into(), native(Some("c"), false));
-        let answer = derive_with(&capture, &overlay).unwrap();
-        assert_eq!(answer.current, Some(capture.declarations.as_ref().unwrap().as_ref().unwrap().phases[1].id));
-        assert_eq!(answer.phases[1].status, LifecycleStatus::Planned);
-        let raw = serde_json::json!({"available": true, "phase": 14, "total": 2, "name": "Legacy",
-            "status": "unplanned", "next": "n", "updated": "2026-09-11",
-            "original_fields": {"phase": "14 of 2 (Legacy)", "status": "unplanned", "next": "n", "updated": "2026-09-11"}});
-        let cursor = normalize_imported_cursor(&raw).unwrap();
-        assert!(matches!(cursor, CompatibilityCursor::Assertion { .. }));
-        let parsed = capture.declarations.as_ref().unwrap().as_ref().unwrap();
-        assert!(matches!(check_consistency(parsed, &answer, &cursor), Err(DerivationError::StateConflict { .. })),
-            "without native authority the stale assertion conflicts");
-        // A native context on the current phase: the assertion is checked no further.
-        let mut data = serde_json::json!({"context": {"phases": {"14": {}}}});
-        let contexted = acceptance_overlay(&data).unwrap();
-        assert_eq!(contexted.contexted.iter().collect::<Vec<_>>(), ["14"]);
-        let yielded = query::yielded(&cursor, &contexted, &answer);
-        assert!(matches!(&yielded, CompatibilityCursor::Unavailable(p) if p.original_cursor == raw));
-        assert_eq!(check_consistency(parsed, &answer, &yielded), Ok(()));
-        // A context on another phase is not authority over the current one.
-        data = serde_json::json!({"context": {"phases": {"13": {}}}});
-        let elsewhere = acceptance_overlay(&data).unwrap();
-        assert!(matches!(query::yielded(&cursor, &elsewhere, &answer), CompatibilityCursor::Assertion { .. }));
     }
 
     #[test]

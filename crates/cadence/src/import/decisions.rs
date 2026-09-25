@@ -9,7 +9,6 @@ use std::collections::BTreeMap;
 
 pub struct ImportedDecisions {
     pub records: Vec<DecisionRecord>,
-    pub cursor: Value,
     pub evidence: Vec<SourceEvidence>,
     pub warnings: Vec<String>,
 }
@@ -21,37 +20,6 @@ fn field(row: &Value, key: &str) -> Evidence {
         Some(Value::String(s)) => Evidence::Text(s.clone()),
         Some(value) => Evidence::Text(value.to_string()),
     }
-}
-
-fn cursor(source: Option<&Source>) -> Value {
-    let Some(source) = source else {
-        return json!({"available":false});
-    };
-    let Ok(text) = std::str::from_utf8(&source.bytes) else {
-        return json!({"available":false});
-    };
-    let read = |prefix: &str| {
-        text.lines()
-            .find_map(|line| line.strip_prefix(prefix))
-            .map(str::trim)
-    };
-    let raw = json!({"phase":read("Phase:"),"status":read("Status:"),"next":read("Next:"),"updated":read("Updated:")});
-    let parse = || -> Option<Value> {
-        let phase = read("Phase:")?;
-        let (phase, tail) = phase.split_once(" of ")?;
-        let (total, name) = tail.split_once(" (")?;
-        let name = name.strip_suffix(')')?;
-        let phase_number = phase.parse::<f64>().ok()?;
-        let total = total.parse::<u64>().ok()?;
-        if !phase_number.is_finite() || phase_number < 0.0 {
-            return None;
-        }
-        Some(
-            json!({"available":true,"phase":phase_number,"total":total,"name":name,
-            "status":read("Status:")?,"next":read("Next:")?,"updated":read("Updated:")?,"original_fields":raw}),
-        )
-    };
-    parse().unwrap_or_else(|| json!({"available":false,"original_fields":raw}))
 }
 
 fn decision(row: &Value) -> Option<Decision> {
@@ -142,7 +110,6 @@ pub fn translate(
 ) -> Result<ImportedDecisions> {
     let mut result = ImportedDecisions {
         records: vec![],
-        cursor: cursor(state),
         evidence: vec![],
         warnings: vec![],
     };
