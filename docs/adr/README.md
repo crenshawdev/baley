@@ -8,11 +8,11 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 
 | Number | Decision | Status |
 |---|---|---|
-| [0001](0001-event-ledger.md) | Record evidence as an append-only, hash-chained event ledger | Proposed |
-| [0002](0002-sqlite.md) | Use SQLite as the storage engine | Proposed |
-| [0003](0003-per-user-database.md) | Keep one ledger database per user, outside any checkout | Proposed |
-| [0004](0004-project-identity.md) | Identify projects by a committed project file | Proposed |
-| [0005](0005-storage-port.md) | Put storage behind a port with engine adapters | Proposed |
-| [0006](0006-no-markdown-records.md) | Keep every operational record in the ledger | Proposed |
-| [0007](0007-forge-anchors.md) | Anchor chain heads on the forge | Proposed |
-| [0008](0008-host-sandbox-isolation.md) | Use host sandboxes to keep agents out of the ledger | Proposed |
+| [0001](0001-event-ledger.md) | Record evidence as an append-only, hash-chained event ledger | Accepted |
+| [0002](0002-sqlite.md) | Use SQLite as the storage engine | Accepted |
+| [0003](0003-per-user-database.md) | Keep one ledger database per user, outside any checkout | Accepted |
+| [0004](0004-project-identity.md) | Identify projects by a committed project file | Accepted |
+| [0005](0005-storage-port.md) | Put storage behind a port with engine adapters | Accepted |
+| [0006](0006-no-markdown-records.md) | Keep every operational record in the ledger | Accepted |
+| [0007](0007-forge-anchors.md) | Anchor chain heads on the forge | Accepted |
+| [0008](0008-host-sandbox-isolation.md) | Use host sandboxes to keep agents out of the ledger | Accepted |
