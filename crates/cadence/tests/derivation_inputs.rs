@@ -222,7 +222,7 @@ fn ac7_other_named_changes_refuse_but_excluded_names_do_not() {
             _ => {
                 after.lists.insert(
                     "/planning/phases/1".into(),
-                    Observation::Present(vec!["PLAN.md".into()]),
+                    Observation::Present(vec!["PLAN-1.md".into()]),
                 );
             }
         }
@@ -399,6 +399,6 @@ fn a_phase_listing_admits_only_plan_names_and_sorts_them() {
     let captured = capture_inputs(Path::new("/planning"), &mut io).unwrap();
     assert_eq!(
         captured.phases[0].plans,
-        Observation::Present(vec!["PLAN-10.md".into(), "PLAN-2.md".into(), "PLAN.md".into()])
+        Observation::Present(vec!["PLAN-10.md".into(), "PLAN-2.md".into()])
     );
 }

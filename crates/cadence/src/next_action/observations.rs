@@ -235,8 +235,8 @@ fn queue(root: &Path) -> Queue {
     queue
 }
 
-/// Where a plan file's report lives in its phase: `PLAN.md` reports as plan
-/// 1, and `PLAN-02.md` as plan 2.
+/// Where a plan file's report lives in its phase: `PLAN-02.md` reports as
+/// plan 2.
 pub fn report_path(phase: PhaseId, plan: &str) -> PathBuf {
     let digits = plan
         .strip_prefix("PLAN-")

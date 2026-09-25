@@ -37,7 +37,7 @@ fn report(bytes: Observation<Vec<u8>>) -> Report {
 #[test]
 fn each_plan_file_name_maps_to_its_report_path() {
     for (plan, path) in [
-        ("PLAN.md", "phases/1/reports/plan-1.md"),
+        ("PLAN-1.md", "phases/1/reports/plan-1.md"),
         ("PLAN-02.md", "phases/1/reports/plan-2.md"),
         ("PLAN-3.md", "phases/1/reports/plan-3.md"),
     ] {
@@ -51,7 +51,7 @@ fn capture_reads_a_missing_report_as_absent_and_an_unreadable_one_as_failed() {
     let root = temp.path();
     let phase = root.join("phases/1");
     fs::create_dir_all(phase.join("reports")).unwrap();
-    for plan in ["PLAN.md", "PLAN-02.md", "PLAN-3.md"] {
+    for plan in ["PLAN-1.md", "PLAN-02.md", "PLAN-3.md"] {
         fs::write(phase.join(plan), "").unwrap();
     }
     let life = lifecycle(root, false);

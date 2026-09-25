@@ -84,8 +84,8 @@ set.
 
 For `--gaps`, read the unresolved UAT items and prior plans/reports. If there is
 no unresolved work, say so and end. Otherwise author the additional work at a new
-previewed identity. A completed report remains prior history. The old gap flow's
-overwrite of PLAN.md could leave reports saying complete and hide new work;
+previewed identity. A completed report remains prior history. Overwriting a
+completed plan could leave its report saying complete and hide new work;
 never replace a completed plan to make a gap visible. There is no gap label that
 grants replacement authority and no JavaScript allocation step in this flow.
 
@@ -349,7 +349,8 @@ approval, general planning permission, gap labels and review prose are insuffici
 Stale old bytes or revision lose; read the winner, prepare a new request and obtain
 fresh approval. The binary retains prior publications/approvals and does not
 replace an identity admitted to execution, even after its active dispatch ends.
-Legacy aliases remain read-only even when the canonical filename is absent.
+A hand-written plan file stays read-only even when no native publication holds
+its number.
 
 Explicitly resubmit and revalidate the map with every replacement. Changed typed
 content is a new publication even when the map's bytes are identical.

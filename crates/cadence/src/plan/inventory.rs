@@ -49,12 +49,7 @@ impl std::fmt::Display for PhaseAddress {
 }
 
 fn number(name: &str) -> Option<u32> {
-    if name == "PLAN.md" {
-        return Some(1);
-    }
-    ["PLAN-", "SUMMARY-", "UAT-", "plan-"]
-        .iter()
-        .find_map(|prefix| name.strip_prefix(prefix))?
+    name.strip_prefix("PLAN-")?
         .split('.')
         .next()?
         .parse::<u32>()
@@ -68,7 +63,6 @@ pub fn read(root: &Path, phase: &str, data: &Value) -> Result<Inventory> {
     }
     let mut occupied = BTreeSet::new();
     let mut documents = BTreeMap::new();
-    let mut aliases = BTreeMap::new();
     let mut provenance: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
     for suffix in ["", "/reports"] {
         let dir = root.join(format!("phases/{phase}{suffix}"));
@@ -89,23 +83,15 @@ pub fn read(root: &Path, phase: &str, data: &Value) -> Result<Inventory> {
             };
             occupied.insert(n);
             provenance.entry(n).or_default().insert(path.clone());
-            if name.starts_with("PLAN-") && name != format!("PLAN-{n}.md") {
+            if name != format!("PLAN-{n}.md") {
                 return Err(Error::Conflict(format!(
                     "ambiguous plan alias {path} for phase {phase} plan {n}; explicit resolution required"
-                )));
-            }
-            if suffix.is_empty()
-                && name.starts_with("PLAN")
-                && aliases.insert(n, name.clone()).is_some()
-            {
-                return Err(Error::Conflict(format!(
-                    "ambiguous plan aliases at {path} for phase {phase} plan {n}; explicit resolution required"
                 )));
             }
             // Symlinks are occupied, but their outside contents are not inputs.
             if entry.file_type()?.is_file() {
                 let text = std::fs::read_to_string(entry.path())?;
-                if name.starts_with("PLAN") && text.starts_with("---\n") {
+                if text.starts_with("---\n") {
                     for line in text.lines().skip(1).take_while(|line| *line != "---") {
                         if let Some((field, value)) = line.split_once(':') {
                             let value = value.trim().trim_matches(['\'', '"']);
@@ -181,4 +167,21 @@ pub fn with_records(input: Inventory, phase: &str, data: &Value) -> Result<Inven
         documents,
         provenance,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_canonical_plan_files_occupy_plan_numbers() {
+        let temp = tempfile::tempdir().unwrap();
+        let phase = temp.path().join("phases/1");
+        std::fs::create_dir_all(phase.join("reports")).unwrap();
+        for name in ["PLAN.md", "SUMMARY-2.md", "UAT-3.md", "reports/plan-4.md", "PLAN-5.md"] {
+            std::fs::write(phase.join(name), "text\n").unwrap();
+        }
+        let inventory = read(temp.path(), "1", &Value::Null).unwrap();
+        assert_eq!((inventory.occupied, inventory.high_water), (vec![5], 5));
+    }
 }

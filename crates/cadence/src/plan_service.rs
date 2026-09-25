@@ -62,11 +62,7 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let map_history = native.map(|n| cadence::plan::map_history::view(data, n.get()))
                 .transpose()?.unwrap_or_default();
             let plans = inventory.occupied.iter().filter_map(|number| {
-                let canonical = format!("phases/{phase}/PLAN-{number}.md");
-                let bare = format!("phases/{phase}/PLAN.md");
-                let document = inventory.documents.get(&canonical).or_else(|| {
-                    if *number == 1 { inventory.documents.get(&bare) } else { None }
-                })?;
+                let document = inventory.documents.get(&format!("phases/{phase}/PLAN-{number}.md"))?;
                 let publication = saved.as_ref().and_then(|o| o.publications.get(number));
                 let identity = native.map_or(Value::Null, |phase| {
                     json!({"kind":"phase-plan","phase":phase,"plan":number})

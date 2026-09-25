@@ -2104,13 +2104,9 @@ fn plan_number(name: &str) -> Option<u32> {
 }
 
 fn admitted_plan_name(name: &str) -> bool {
-    name == "PLAN.md"
-        || name
-            .strip_prefix("PLAN-")
-            .and_then(|number| number.strip_suffix(".md"))
-            .is_some_and(|number| {
-                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
-            })
+    name.strip_prefix("PLAN-")
+        .and_then(|number| number.strip_suffix(".md"))
+        .is_some_and(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 async fn reobserve<I: ConfigIo>(
@@ -3577,7 +3573,7 @@ mod selection_tests {
 
     #[test]
     fn the_current_planned_phase_executes() {
-        let record = executable_phase(&lifecycle(TWO, &[&["PLAN.md"], &[]]), 3).unwrap();
+        let record = executable_phase(&lifecycle(TWO, &[&["PLAN-1.md"], &[]]), 3).unwrap();
         assert_eq!((record.id.address(), record.status), ("3".to_string(), LifecycleStatus::Planned));
     }
 
@@ -3592,7 +3588,7 @@ mod selection_tests {
     #[test]
     fn a_phase_the_lifecycle_does_not_hold_is_unknown() {
         assert_eq!(
-            refusal(executable_phase(&lifecycle(TWO, &[&["PLAN.md"], &[]]), 9)),
+            refusal(executable_phase(&lifecycle(TWO, &[&["PLAN-1.md"], &[]]), 9)),
             ("unknown-phase", "the lifecycle does not contain the requested phase".to_string())
         );
     }
@@ -3600,7 +3596,7 @@ mod selection_tests {
     #[test]
     fn a_phase_after_the_current_one_is_not_current() {
         assert_eq!(
-            refusal(executable_phase(&lifecycle(TWO, &[&["PLAN.md"], &["PLAN.md"]]), 4)),
+            refusal(executable_phase(&lifecycle(TWO, &[&["PLAN-1.md"], &["PLAN-1.md"]]), 4)),
             ("phase-not-current", "the requested phase is not the derived current phase".to_string())
         );
     }

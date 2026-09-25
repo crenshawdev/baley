@@ -215,13 +215,7 @@ fn validate_structure(answer: &Lifecycle) -> Result<(), String> {
     }
     for (i, phase) in phases.iter().enumerate() {
         if phase.plans.windows(2).any(|p| p[0] >= p[1])
-            || phase.plans.iter().any(|name| {
-                name != "PLAN.md"
-                    && !name
-                        .strip_prefix("PLAN-")
-                        .and_then(|n| n.strip_suffix(".md"))
-                        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-            })
+            || phase.plans.iter().any(|name| !super::capture::admitted(name))
         {
             return Err(format!("phases[{i}].plans"));
         }

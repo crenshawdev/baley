@@ -110,14 +110,11 @@ impl ArtifactIo for ArtifactFiles {
     }
 }
 
-/// Whether a phase directory entry is a plan: `PLAN.md`, or `PLAN-` and ASCII
-/// digits and `.md`.
+/// Whether a phase directory entry is a plan: `PLAN-`, ASCII digits and `.md`.
 pub(crate) fn admitted(name: &str) -> bool {
-    name == "PLAN.md"
-        || name
-            .strip_prefix("PLAN-")
-            .and_then(|n| n.strip_suffix(".md"))
-            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    name.strip_prefix("PLAN-")
+        .and_then(|n| n.strip_suffix(".md"))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 pub fn capture_inputs(

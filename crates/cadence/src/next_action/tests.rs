@@ -23,7 +23,7 @@ fn fixture(name: &'static str, statuses: &[LifecycleStatus], expected: &'static 
             plans: if *status == LifecycleStatus::Unplanned {
                 vec![]
             } else {
-                vec!["PLAN.md".into()]
+                vec!["PLAN-1.md".into()]
             },
             status: *status,
             uat: None,

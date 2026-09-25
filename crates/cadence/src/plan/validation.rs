@@ -57,7 +57,7 @@ fn replacement_inner(
             return Err(Error::Conflict(format!("admitted-plan: {identity} was admitted to execution; publish additional work at a new approved gap identity")));
         }
         let Some(old) = saved.as_ref().and_then(|o| o.publications.get(&number)) else {
-            return Err(Error::Conflict(format!("legacy-read-only: {identity} has no eligible native publication; legacy inputs and consumed aliases require a new gap identity")));
+            return Err(Error::Conflict(format!("legacy-read-only: {identity} has no eligible native publication; legacy inputs and consumed numbers require a new gap identity")));
         };
         let bytes = super::render::document(&old.content)?;
         let path = format!("phases/{phase}/PLAN-{number}.md");

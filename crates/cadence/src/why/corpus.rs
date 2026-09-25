@@ -508,7 +508,7 @@ fn entries_in(dir: &Path) -> Vec<String> {
 /// The phase directories under `planningRoot`: every `phases/<N>` that carries
 /// a plan file, contained by what each path resolves to, in label order.
 fn phase_dirs_in(planning_root: &Path) -> Vec<(String, PathBuf)> {
-    static PLAN_FILE: LazyLock<Regex> = LazyLock::new(|| re(r"^PLAN(-\d+)?\.md$"));
+    static PLAN_FILE: LazyLock<Regex> = LazyLock::new(|| re(r"^PLAN-\d+\.md$"));
     let root = planning_root.canonicalize().unwrap_or_else(|_| planning_root.to_path_buf());
     let inside = |dir: &Path| dir.canonicalize().is_ok_and(|real| real == root || real.starts_with(&root));
     let mut found = Vec::new();
@@ -760,14 +760,12 @@ pub fn read_phase_records(dir: Option<&Dir>, plan_cell: &str, repo: &Path, proce
     let mut records = PhaseRecords { context: String::new(), summary: String::new(), plan: String::new(), plan_file: None, warnings: Vec::new() };
     let Some(dir) = dir else { return records };
     let key = plan_cell.trim();
-    let spellings: Vec<String> = if !key.is_empty() && key != "1" {
-        vec![format!("PLAN-{key}.md")]
-    } else {
-        vec![format!("PLAN-{}.md", if key.is_empty() { "1" } else { key }), "PLAN.md".into()]
-    };
+    let canonical = format!("PLAN-{}.md", if key.is_empty() { "1" } else { key });
+    // A task's own plan is PLAN.md beside its RECORD.md.
     let names: Vec<String> = match &dir.slug {
-        Some(_) => std::iter::once("RECORD.md".to_owned()).chain(spellings).collect(),
-        None => spellings,
+        Some(_) if key.is_empty() || key == "1" => vec!["RECORD.md".into(), canonical, "PLAN.md".into()],
+        Some(_) => vec!["RECORD.md".into(), canonical],
+        None => vec![canonical],
     };
     for name in names {
         let text = pull(dir, repo, &name, &mut records.warnings, process);

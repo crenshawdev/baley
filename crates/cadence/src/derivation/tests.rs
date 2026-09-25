@@ -320,7 +320,7 @@ fn contract_round_trips_order_plans_counters_and_null_cycles() {
         cycle: Cycle::Live,
         ..closed.clone()
     };
-    for (i, plans) in [vec![], vec!["PLAN.md"], vec!["PLAN-10.md", "PLAN-2.md"]]
+    for (i, plans) in [vec![], vec!["PLAN-1.md"], vec!["PLAN-10.md", "PLAN-2.md"]]
         .into_iter()
         .enumerate()
     {
@@ -437,7 +437,7 @@ fn a_malformed_derivation_namespace_is_refused_rather_than_overwritten() {
 
 fn key_fixture() -> CapturedInputs {
     let mut c = captured("## Phases\n- [ ] **Phase 1: One**\n- [ ] **Phase 2: Two**\n");
-    c.phases[0].plans = Observation::Present(vec!["PLAN-1.md".into(), "PLAN.md".into()]);
+    c.phases[0].plans = Observation::Present(vec!["PLAN-1.md".into(), "PLAN-2.md".into()]);
     c
 }
 
@@ -497,12 +497,12 @@ fn key_rows() -> Vec<(&'static str, CapturedInputs, CapturedInputs)> {
     row!(
         "plan count",
         c,
-        c.phases[0].plans = Observation::Present(vec!["PLAN.md".into()])
+        c.phases[0].plans = Observation::Present(vec!["PLAN-1.md".into()])
     );
     row!(
         "plan name",
         c,
-        c.phases[0].plans = Observation::Present(vec!["PLAN-2.md".into(), "PLAN.md".into()])
+        c.phases[0].plans = Observation::Present(vec!["PLAN-1.md".into(), "PLAN-3.md".into()])
     );
     for target in ["root", "roadmap", "listing"] {
         let variants = (0..7)
@@ -654,7 +654,7 @@ fn memo_corruptions() -> Vec<(String, serde_json::Value)> {
         (
             "/phases/0/plans",
             "phases[0].plans",
-            json!(["PLAN.md", "PLAN-1.md"]),
+            json!(["PLAN-2.md", "PLAN-1.md"]),
         ),
         ("/phases/0/status", "phases[0].status", json!("executed")),
         ("/phases/0/uat", "phases[0].uat", json!(null)),
@@ -845,11 +845,11 @@ fn not_found_is_absent_and_no_other_error_is_ever_taken_for_absence() {
 }
 
 #[test]
-fn only_plan_md_and_plan_dash_ascii_digits_md_are_plans() {
-    for name in ["PLAN.md", "PLAN-1.md", "PLAN-02.md", "PLAN-123.md"] {
+fn only_plan_dash_ascii_digits_md_are_plans() {
+    for name in ["PLAN-1.md", "PLAN-02.md", "PLAN-123.md"] {
         assert!(capture::admitted(name), "{name}");
     }
-    for name in ["plan.md", "PLAN-.md", "PLAN-1a.md", "PLAN-١.md", "PLAN-1.md.bak", "PLAN-1.MD", "PLAN-1", "SUMMARY.md"] {
+    for name in ["PLAN.md", "plan.md", "PLAN-.md", "PLAN-1a.md", "PLAN-١.md", "PLAN-1.md.bak", "PLAN-1.MD", "PLAN-1", "SUMMARY.md"] {
         assert!(!capture::admitted(name), "{name}");
     }
 }
