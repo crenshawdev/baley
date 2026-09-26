@@ -10,6 +10,8 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
                 domain = component "Domain areas" "The rules of each process area: planning, execution, verification, review, risk, landing and the rest."
                 composer = component "Work order composer" "Builds every dispatch: role, model and effort from policy, instructions from the binary, inputs from the record."
                 policy = component "Policy" "Reads the global and project settings, resolves the values in effect and records which applied."
+                keyStore = component "Key store" "Holds provider API keys encrypted in the ledger; the master key sits in the OS secret store."
+                catalog = component "Model catalog" "The models each host and provider offers, seeded from the binary and refreshed by detection."
                 ports = component "Ports and adapters" "Storage, git and test runner, forge and host adapters. The core sees only these ports."
             }
             ledger = container "Ledger" "One append-only, hash-chained record per user, outside any checkout." "SQLite" "Database"
@@ -20,6 +22,7 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         repo = softwareSystem "Repository" "The project's git checkout." "External"
         forge = softwareSystem "Forge" "GitHub: chain anchors, pull requests, issues." "External"
         reviewers = softwareSystem "Outside reviewers" "Model providers such as OpenAI, Gemini and DeepSeek." "External"
+        secretStore = softwareSystem "OS secret store" "macOS Keychain or the Linux Secret Service." "External"
 
         owner -> host "Works in"
         owner -> hostInterface "Uses the command line"
@@ -31,6 +34,15 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         domain -> composer "Requests work orders"
         composer -> policy "Resolves role, model and effort"
         policy -> settings "Reads"
+        policy -> catalog "Checks model names"
+        policy -> ports "Records the effective policy and each route"
+        hostInterface -> policy "Settings, key and model commands"
+        hostInterface -> keyStore "Injects a key into one command"
+        keyStore -> secretStore "Master key"
+        keyStore -> ports "Encrypted keys"
+        catalog -> keyStore "Key for detection"
+        catalog -> reviewers "Lists models"
+        catalog -> ports "Records detections"
         domain -> ports "Records and acts through"
         ports -> ledger "Appends events, reads views"
         ports -> repo "Reads git facts, runs tests and git"
@@ -50,6 +62,11 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
 
         component binary "components" {
             include *
+            autolayout lr
+        }
+
+        component binary "configuration" {
+            include hostInterface composer policy keyStore catalog ports settings ledger secretStore reviewers owner
             autolayout lr
         }
 
