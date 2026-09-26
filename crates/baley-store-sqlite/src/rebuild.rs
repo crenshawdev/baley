@@ -17,7 +17,6 @@
 //! live stamps decide whether this binary may use its views.
 
 use std::cmp::Ordering;
-use std::sync::MutexGuard;
 use std::time::Duration;
 
 use baley_store::{
@@ -29,7 +28,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::payload::sql_int;
 use crate::queue::{BATCH_EVENTS, BATCH_ROWS, BATCH_TIME, Turn};
-use crate::store::{SqliteStore, lock, sql};
+use crate::store::{SqliteStore, connect, sql};
 use crate::transact::stored_head;
 use crate::view::{Fence, Staging, ViewTable, catalog_tables, fold, live_views, write_staged};
 
@@ -142,16 +141,11 @@ impl SqliteStore {
 
     /// Rebuilds the project's views into a new generation and makes it
     /// live; see `Admin::rebuild`. When removing the old generation fails
-    /// after the flip, the error says the new generation is live.
+    /// after the flip, `CleanupFailed` names the generation now live. A
+    /// marker naming the live generation is refused as
+    /// `LiveGenerationProtected` before any row is removed.
     pub fn rebuild(&self, project: &ProjectId) -> Result<RebuildReport, StoreError> {
-        let finished = self.start_rebuild(project)?.finish()?;
-        finished.cleanup.map_err(|error| {
-            StoreError::Unavailable(format!(
-                "project {} now reads generation {}; removing the old generation failed and is left for the next rebuild: {error}",
-                project.0, finished.report.generation
-            ))
-        })?;
-        Ok(finished.report)
+        self.start_rebuild(project)?.finish()?.into_report(project)
     }
 
     /// A rebuild of the project's views that the caller steps through:
@@ -165,30 +159,39 @@ impl SqliteStore {
 
     /// Replays the project's events into a scratch generation and compares
     /// it with the live one at one head; see `Admin::verify_views`. Views
-    /// behind this binary's are rebuilt first; the scratch rows are removed
-    /// whatever happens after they were started.
+    /// behind this binary's are rebuilt first. Removing the scratch rows is
+    /// tried whatever the comparison returned; when that fails,
+    /// `UnfinishedGeneration` names the scratch generation left behind. A
+    /// marker naming the live generation is refused as
+    /// `LiveGenerationProtected`, as a rebuild refuses it.
     pub fn verify_views(&self, project: &ProjectId) -> Result<ViewsReport, StoreError> {
         let _hold = self.hold_maintenance()?;
         self.bring_current_held(project)?;
         let mut scratch = self.start(project, None, Purpose::Verify)?;
         let report = scratch.compare();
-        let cleanup = self.remove_generation(project, scratch.generation, true);
-        let report = report?;
-        cleanup?;
-        Ok(report)
+        match self.remove_generation(project, scratch.generation, true) {
+            Ok(()) => report,
+            // Its marker stays for the next rebuild, and the caller has to
+            // know, even when the comparison failed too.
+            Err(_) => Err(StoreError::UnfinishedGeneration {
+                project: project.clone(),
+                generation: stored_generation(scratch.generation)?,
+            }),
+        }
     }
 
     /// Sets up a new generation under the maintenance lock the caller holds
     /// or hands over. A rebuild first removes an unfinished generation left
     /// by a crash and every generation that is neither live nor being
-    /// built; a verification refuses while one is unfinished.
+    /// built; a verification refuses while one is unfinished, and like a
+    /// rebuild refuses a marker naming the live generation.
     fn start<'s>(
         &'s self,
         project: &ProjectId,
         hold: Option<Turn<'s>>,
         purpose: Purpose,
     ) -> Result<Rebuild<'s>, StoreError> {
-        let orphan = self.batch(
+        let (orphan, live) = self.batch(
             |tx, _| {
                 let live = live_views(tx, project)?;
                 match self.views().judge_set(&live) {
@@ -202,19 +205,29 @@ impl SqliteStore {
                         )));
                     }
                 }
-                let head = stored_head(tx, project)?;
-                self.check_readable(tx, project, head.as_ref())?;
-                marker(tx, project).map(|marker| marker.map(|(generation, _)| generation))
+                // No scan of the chain here, which would hold the queue for
+                // the whole history: replay refuses an unreadable event
+                // before applying it, and it writes only the new generation.
+                let orphan = marker(tx, project)?.map(|(generation, _)| generation);
+                Ok((orphan, generations(tx, project)?.0))
             },
             Ok,
         )?;
         match (orphan, purpose) {
             (Some(orphan), Purpose::Rebuild) => self.remove_generation(project, orphan, true)?,
+            // A damaged marker naming the live generation, which no
+            // rebuild removes, is refused as a rebuild refuses it.
+            (Some(orphan), Purpose::Verify) if orphan == live => {
+                return Err(StoreError::LiveGenerationProtected {
+                    project: project.clone(),
+                    generation: stored_generation(orphan)?,
+                });
+            }
             (Some(orphan), Purpose::Verify) => {
-                return Err(StoreError::Unavailable(format!(
-                    "project {} holds generation {orphan} of a rebuild or verification that never finished; rebuild the project first",
-                    project.0
-                )));
+                return Err(StoreError::UnfinishedGeneration {
+                    project: project.clone(),
+                    generation: stored_generation(orphan)?,
+                });
             }
             (None, _) => {}
         }
@@ -302,10 +315,11 @@ impl SqliteStore {
     }
 
     /// One batch of removing a generation: at most `BATCH_ROWS` document
-    /// rows across every catalog table, stopping at the next table once the
-    /// batch has removed a row and held the queue `BATCH_TIME`. `true` once
-    /// no row is left and the stamps, and with `marker` the marker, are
-    /// gone too.
+    /// rows across every catalog table, one at a time, and once one is
+    /// removed, none after the batch has held the queue `BATCH_TIME`.
+    /// `true` once no row is left and the stamps, and with `marker` the
+    /// marker, are gone too. Refuses the live generation before touching a
+    /// row.
     fn remove_rows(
         &self,
         tx: &rusqlite::Transaction<'_>,
@@ -314,16 +328,30 @@ impl SqliteStore {
         acquired: Duration,
         marker: bool,
     ) -> Result<bool, StoreError> {
-        let mut left = BATCH_ROWS;
-        for table in catalog_tables(tx)? {
-            if left == 0 || (left < BATCH_ROWS && self.elapsed(acquired) >= BATCH_TIME) {
-                return Ok(false);
-            }
-            left -= delete_rows(tx, &table, project, generation, left)?;
+        // The schema lets a damaged marker name the live generation, and
+        // then this would delete every live row.
+        if generations(tx, project)?.0 == generation {
+            return Err(StoreError::LiveGenerationProtected {
+                project: project.clone(),
+                generation: stored_generation(generation)?,
+            });
         }
-        // A table that filled the batch may hold more.
-        if left == 0 {
-            return Ok(false);
+        let mut removed = 0;
+        for table in catalog_tables(tx)? {
+            let mut delete = tx.prepare(&delete_one(tx, &table)?).map_err(sql)?;
+            loop {
+                if removed == BATCH_ROWS || (removed > 0 && self.elapsed(acquired) >= BATCH_TIME) {
+                    return Ok(false);
+                }
+                if delete
+                    .execute(params![project.0, generation])
+                    .map_err(sql)?
+                    == 0
+                {
+                    break;
+                }
+                removed += 1;
+            }
         }
         tx.execute(
             "DELETE FROM view_gen WHERE project_id = ?1 AND gen = ?2",
@@ -445,6 +473,21 @@ pub(crate) struct Finished {
     pub(crate) cleanup: Result<(), StoreError>,
 }
 
+impl Finished {
+    /// The report, or, when the cleanup after the flip failed, the error
+    /// that names the generation now live.
+    pub(crate) fn into_report(self, project: &ProjectId) -> Result<RebuildReport, StoreError> {
+        match self.cleanup {
+            Ok(()) => Ok(self.report),
+            Err(cause) => Err(StoreError::CleanupFailed {
+                project: project.clone(),
+                live_generation: self.report.generation,
+                cause: Box::new(cause),
+            }),
+        }
+    }
+}
+
 /// A rebuild or verification in progress, holding the maintenance lock or
 /// running under a caller that holds it.
 pub(crate) struct Rebuild<'s> {
@@ -509,9 +552,7 @@ impl Rebuild<'_> {
             }
         }
         let report = RebuildReport {
-            generation: u64::try_from(generation).map_err(|_| {
-                StoreError::Unavailable(format!("a stored generation of {generation}"))
-            })?,
+            generation: stored_generation(generation)?,
             events: self.events,
         };
         let cleanup = store.sweep(&project);
@@ -521,20 +562,26 @@ impl Rebuild<'_> {
     /// Replays until the scratch generation reaches the head, and in the
     /// turn that gets there pins a read snapshot before the queue is
     /// released, so scratch and live are compared at that one head however
-    /// many commands follow. Every registered view's rows are compared, key
-    /// by key: missing, extra or unequal in any stored column, the document
-    /// text as its bytes, so a live document that is not canonical differs.
+    /// many commands follow. The snapshot is on a connection of its own, so
+    /// the store's other reads go on while it is compared. Every registered
+    /// view's rows are compared, key by key: missing, extra or unequal in
+    /// any stored column, the document text as its bytes, so a live
+    /// document that is not canonical differs.
     fn compare(&mut self) -> Result<ViewsReport, StoreError> {
         while !self.apply_one_batch()?.caught_up {}
         let (store, project, generation) = (self.store, self.project.clone(), self.generation);
+        // Opened before the turn, so the turn only begins the snapshot.
+        let mut unpinned = Some(Pinned::connect(store)?);
         let pinned = loop {
             let (batch, pinned) = store.batch(
                 |tx, acquired| store.replay(tx, &project, generation, acquired),
                 |batch| {
-                    let pinned = if batch.caught_up {
-                        Some(Pinned::begin(store, &project)?)
-                    } else {
-                        None
+                    let pinned = match unpinned.take() {
+                        Some(conn) if batch.caught_up => Some(Pinned::begin(conn, &project)?),
+                        conn => {
+                            unpinned = conn;
+                            None
+                        }
                     };
                     Ok((batch, pinned))
                 },
@@ -557,18 +604,25 @@ impl Rebuild<'_> {
     }
 }
 
-/// A read transaction on the store's read connection, begun while the
-/// writer queue was held, with the head and live generation it saw. Ended
-/// when dropped.
-struct Pinned<'s> {
-    conn: MutexGuard<'s, Connection>,
+/// A read transaction on a connection of its own, begun while the writer
+/// queue was held, with the head and live generation it saw. The store's
+/// read connection stays free for other reads while the generations are
+/// compared. Ended when dropped.
+struct Pinned {
+    conn: Connection,
     head: u64,
     live: i64,
 }
 
-impl<'s> Pinned<'s> {
-    fn begin(store: &'s SqliteStore, project: &ProjectId) -> Result<Self, StoreError> {
-        let conn = lock(&store.reader);
+impl Pinned {
+    /// A connection for the snapshot, which can only read.
+    fn connect(store: &SqliteStore) -> Result<Connection, StoreError> {
+        let conn = connect(&store.home.join("baley.db"))?;
+        conn.execute_batch("PRAGMA query_only = ON").map_err(sql)?;
+        Ok(conn)
+    }
+
+    fn begin(conn: Connection, project: &ProjectId) -> Result<Self, StoreError> {
         conn.execute_batch("BEGIN DEFERRED").map_err(sql)?;
         let mut pinned = Self {
             conn,
@@ -593,7 +647,7 @@ impl<'s> Pinned<'s> {
     }
 }
 
-impl Drop for Pinned<'_> {
+impl Drop for Pinned {
     fn drop(&mut self) {
         // A read transaction has nothing to keep; ending it cannot lose data.
         let _ = self.conn.execute_batch("ROLLBACK");
@@ -718,6 +772,12 @@ fn stored_event(project: &ProjectId, row: &rusqlite::Row<'_>) -> rusqlite::Resul
     })
 }
 
+/// A stored generation number as the port reports it.
+fn stored_generation(generation: i64) -> Result<u64, StoreError> {
+    u64::try_from(generation)
+        .map_err(|_| StoreError::Unavailable(format!("a stored generation of {generation}")))
+}
+
 fn missing(project: &ProjectId, seq: u64) -> StoreError {
     StoreError::Unavailable(format!(
         "event {seq} of project {} is missing from its chain",
@@ -828,15 +888,10 @@ fn next_generation(conn: &Connection, project: &ProjectId) -> Result<i64, StoreE
         .ok_or_else(|| StoreError::Unavailable("no generation number is left".into()))
 }
 
-/// Deletes at most `limit` of the project's rows of `generation` from one
-/// view table, by primary key, and says how many went.
-fn delete_rows(
-    tx: &rusqlite::Transaction<'_>,
-    table: &str,
-    project: &ProjectId,
-    generation: i64,
-    limit: usize,
-) -> Result<usize, StoreError> {
+/// The statement that deletes one of a project's rows of a generation
+/// from one view table, by primary key, so tables of views this binary no
+/// longer registers are cleaned without their spec.
+fn delete_one(tx: &rusqlite::Transaction<'_>, table: &str) -> Result<String, StoreError> {
     let mut statement = tx
         .prepare("SELECT name FROM pragma_table_info(?1) WHERE pk > 0 ORDER BY pk")
         .map_err(sql)?;
@@ -851,16 +906,10 @@ fn delete_rows(
         )));
     }
     let key = key.join(", ");
-    let limit =
-        i64::try_from(limit).map_err(|_| StoreError::Unavailable("a batch too large".into()))?;
-    tx.execute(
-        &format!(
-            "DELETE FROM {table} WHERE ({key}) IN
-               (SELECT {key} FROM {table} WHERE project_id = ?1 AND generation = ?2 LIMIT ?3)"
-        ),
-        params![project.0, generation, limit],
-    )
-    .map_err(sql)
+    Ok(format!(
+        "DELETE FROM {table} WHERE ({key}) IN
+           (SELECT {key} FROM {table} WHERE project_id = ?1 AND generation = ?2 LIMIT 1)"
+    ))
 }
 
 #[cfg(test)]
@@ -868,7 +917,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::num::NonZeroU32;
     use std::path::Path;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use baley_store::{
         Change, Command, CommandKind, Decision, DocKey, EventSchema, FieldKind, FieldSpec,
@@ -881,13 +930,15 @@ mod tests {
 
     use super::*;
     use crate::queue::scripted::Scripted;
+    use crate::schema::EPOCH;
     use crate::store::Options;
 
     const AT: &str = "2026-09-25T18:00:00Z";
     const PROJECT: &str = "7f0c2a4e-8d1b-4c3a-9e5f-2b6d8a1c4e70";
     const ITEM: &str = "fixture.item";
     const QUIET: &str = "fixture.quiet";
-    /// The item a second store's failing projector cannot apply.
+    /// The item of the last command, which a second store's failing
+    /// projector cannot apply.
     const TAIL: i64 = 99;
 
     /// Reads `fixture.item` at versions 1 and 2 and `fixture.quiet` at 1.
@@ -1294,6 +1345,26 @@ mod tests {
         found
     }
 
+    /// The project's document rows of one generation, in every catalog
+    /// table.
+    fn generation_rows(home: &Path, generation: i64) -> i64 {
+        let conn = raw(home);
+        catalog_tables(&conn)
+            .expect("catalog")
+            .iter()
+            .map(|table| {
+                conn.query_row(
+                    &format!(
+                        "SELECT count(*) FROM {table} WHERE project_id = ?1 AND generation = ?2"
+                    ),
+                    params![PROJECT, generation],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("count")
+            })
+            .sum()
+    }
+
     fn rows(home: &Path, table: &str) -> i64 {
         scalar(
             home,
@@ -1358,12 +1429,43 @@ mod tests {
         assert_eq!(report.events, 7);
     }
 
-    // A second store over the same home, whose `tally` projector refuses
-    // the tail event after `item` has taken it, fails the final turn:
-    // `live_gen` and both views still read the old generation. Catches a
-    // flip that switches views one at a time or before the tail is applied.
+    // Once the session has caught up, a second store over the same home
+    // commits a command in the pause right after the final turn, when the
+    // queue is free. Both views show it in the new live generation.
+    // Catches a tail and flip committed separately: the command would land
+    // in the old generation between them and be flipped away.
     #[test]
-    fn the_flip_switches_both_views_in_one_transaction() {
+    fn the_tail_and_the_flip_commit_in_one_transaction() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let timing = Scripted::still();
+        let store = created(home.path(), Arc::clone(&timing));
+        fixture(&store);
+        let writer = open_with(home.path(), Scripted::still());
+        let mut session = store.start_rebuild(&project()).expect("start");
+        while !session.apply_one_batch().expect("batch").caught_up {}
+        timing.at_next_pause(move || {
+            record(&writer, "after", &[(TAIL, "open")]).expect("a command in the pause");
+        });
+        let report = session.finish().expect("finish").report;
+        assert_eq!(live_gen(home.path()), Some(report.generation as i64));
+        assert_eq!(
+            (
+                doc(&store, "item", &id(TAIL)),
+                doc(&store, "tally", &id(TAIL))
+            ),
+            (
+                Some((json!({"id": TAIL, "state": "open"}), 6)),
+                Some((json!({"id": TAIL, "seen": 1}), 6))
+            )
+        );
+    }
+
+    // A second store over the same home, whose `tally` projector refuses
+    // the tail event, fails the final turn: `live_gen` and both views
+    // still read the old generation. Catches a flip committed before the
+    // tail is applied, by a batch that reached the head it read.
+    #[test]
+    fn a_failed_final_tail_leaves_the_old_generation_live() {
         let home = tempfile::tempdir().expect("temp dir");
         let writer = created(home.path(), Scripted::still());
         fixture(&writer);
@@ -1395,6 +1497,65 @@ mod tests {
         );
     }
 
+    // A newer binary raises the epoch in the pause right after the flip,
+    // so removing the old generation fails. The rebuild's error names the
+    // generation now live and the cause, and that generation stays live.
+    // Catches a failed cleanup reported as an engine failure that recorded
+    // nothing, or one that undoes the flip.
+    #[test]
+    fn a_cleanup_failure_after_the_flip_names_the_live_generation() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let timing = Scripted::still();
+        let store = created(home.path(), Arc::clone(&timing));
+        fixture(&store);
+        let mut session = store.start_rebuild(&project()).expect("start");
+        while !session.apply_one_batch().expect("batch").caught_up {}
+        let path = home.path().to_path_buf();
+        timing.at_next_pause(move || {
+            raw(&path)
+                .execute(
+                    "UPDATE schema_meta SET value = ?1 WHERE key = 'epoch'",
+                    [EPOCH + 1],
+                )
+                .expect("raise the epoch");
+        });
+        let finished = session.finish().expect("finish");
+        assert_eq!(
+            finished.into_report(&project()),
+            Err(StoreError::CleanupFailed {
+                project: project(),
+                live_generation: 1,
+                cause: Box::new(StoreError::ReadOnly {
+                    needed_epoch: EPOCH + 1
+                }),
+            })
+        );
+        assert_eq!(live_gen(home.path()), Some(1));
+    }
+
+    // A cleanup turn whose clock reads the batch bound after its first row
+    // removes that one row and stops, leaving the other five fixture
+    // documents for the next turn. Catches a cleanup turn that reads the
+    // clock only between tables, and so holds the queue past the bound.
+    #[test]
+    fn a_cleanup_turn_stops_at_the_time_bound() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let timing = Scripted::still();
+        let store = created(home.path(), Arc::clone(&timing));
+        fixture(&store);
+        let mut session = store.start_rebuild(&project()).expect("start");
+        session.apply_one_batch().expect("batch");
+        drop(session);
+        timing.script(&[Duration::ZERO, BATCH_TIME]);
+        let done = store
+            .batch(
+                |tx, acquired| store.remove_rows(tx, &project(), 1, acquired, true),
+                Ok,
+            )
+            .expect("one turn");
+        assert_eq!((done, generation_rows(home.path(), 1)), (false, 5));
+    }
+
     // A session dropped after one committed batch, as a crash would leave
     // it, changes nothing live; the next rebuild removes its rows, stamps
     // and marker, and only the new live generation is left. Catches an
@@ -1420,6 +1581,35 @@ mod tests {
             stored_generations(home.path()),
             BTreeSet::from([report.generation as i64])
         );
+    }
+
+    // A building marker that names the live generation, written straight
+    // into the file, makes a rebuild refuse with the generation it would
+    // have removed, and every live row and stamp is still there. Catches
+    // orphan cleanup that deletes the live generation.
+    #[test]
+    fn a_marker_naming_the_live_generation_is_refused() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = created(home.path(), Scripted::still());
+        fixture(&store);
+        let stamped = stamps(home.path(), 0);
+        raw(home.path())
+            .execute(
+                "UPDATE project_gen SET building_gen = 0, building_applied_seq = 0
+                  WHERE project_id = ?1",
+                [PROJECT],
+            )
+            .expect("mark the live generation");
+        assert_eq!(
+            store.rebuild(&project()),
+            Err(StoreError::LiveGenerationProtected {
+                project: project(),
+                generation: 0,
+            })
+        );
+        assert_eq!(live_gen(home.path()), Some(0));
+        assert_eq!(generation_rows(home.path(), 0), 6);
+        assert_eq!(stamps(home.path(), 0), stamped);
     }
 
     // The pause after a batch is the time from acquiring the queue to
@@ -1665,6 +1855,37 @@ mod tests {
         );
     }
 
+    // A building marker that names the live generation, written straight
+    // into the file, makes verification refuse with that generation as a
+    // rebuild does, and every live row, stamp and the marker are still
+    // there. Catches a verification that reports it as an unfinished
+    // generation a rebuild would remove, when a rebuild refuses it too.
+    #[test]
+    fn verification_refuses_a_marker_naming_the_live_generation() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = created(home.path(), Scripted::still());
+        fixture(&store);
+        let stamped = stamps(home.path(), 0);
+        raw(home.path())
+            .execute(
+                "UPDATE project_gen SET building_gen = 0, building_applied_seq = 0
+                  WHERE project_id = ?1",
+                [PROJECT],
+            )
+            .expect("mark the live generation");
+        assert_eq!(
+            store.verify_views(&project()),
+            Err(StoreError::LiveGenerationProtected {
+                project: project(),
+                generation: 0,
+            })
+        );
+        assert_eq!(live_gen(home.path()), Some(0));
+        assert_eq!(building_gen(home.path()), Some(0));
+        assert_eq!(generation_rows(home.path(), 0), 6);
+        assert_eq!(stamps(home.path(), 0), stamped);
+    }
+
     // A second store over the same home, whose `tally` projector refuses
     // item 2, fails verification with the projector's error and leaves no
     // scratch row, stamp or marker. Catches an ordinary error that leaves
@@ -1687,6 +1908,146 @@ mod tests {
         ));
         assert_eq!(building_gen(home.path()), None);
         assert_eq!(stored_generations(home.path()), BTreeSet::from([0]));
+    }
+
+    // A newer binary raises the epoch in the pause after the scratch
+    // generation is marked, so the replay fails and so does removing the
+    // scratch rows. Verification returns `UnfinishedGeneration` naming the
+    // scratch generation, whose marker stays for the next rebuild. Catches
+    // a failed cleanup hidden behind the comparison's own error.
+    #[test]
+    fn a_failed_scratch_cleanup_is_reported_as_unfinished() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let timing = Scripted::still();
+        let store = created(home.path(), Arc::clone(&timing));
+        fixture(&store);
+        let path = home.path().to_path_buf();
+        timing.at_every_pause(move || {
+            if building_gen(&path).is_some() {
+                raw(&path)
+                    .execute(
+                        "UPDATE schema_meta SET value = ?1 WHERE key = 'epoch'",
+                        [EPOCH + 1],
+                    )
+                    .expect("raise the epoch");
+            }
+        });
+        assert_eq!(
+            store.verify_views(&project()),
+            Err(StoreError::UnfinishedGeneration {
+                project: project(),
+                generation: 1,
+            })
+        );
+        assert_eq!(building_gen(home.path()), Some(1));
+    }
+
+    // At every pause of a verification, the one after the turn that pins
+    // the comparison snapshot included, the store's read connection is
+    // free for other reads. Catches a comparison that holds the store's
+    // read connection, which would stall its every view read until the
+    // comparison ends.
+    #[test]
+    fn verification_leaves_the_read_connection_free() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let timing = Scripted::still();
+        let store = Arc::new(created(home.path(), Arc::clone(&timing)));
+        fixture(&store);
+        let held = Arc::new(Mutex::new(Vec::new()));
+        let (seen, weak) = (Arc::clone(&held), Arc::downgrade(&store));
+        timing.at_every_pause(move || {
+            if let Some(store) = weak.upgrade() {
+                let busy = store.reader.try_lock().is_err();
+                seen.lock().expect("seen").push(busy);
+            }
+        });
+        store.verify_views(&project()).expect("verify");
+        let held = held.lock().expect("held").clone();
+        assert!(!held.is_empty());
+        assert_eq!(held, vec![false; timing.pauses().len()]);
+    }
+
+    // A second store over the same home commits a command the instant the
+    // turn that pins the comparison snapshot releases the writer queue.
+    // The report names the head before it, and scratch and live compare
+    // equal there. Catches a snapshot pinned after the queue is released,
+    // which would see the command in live but not in scratch.
+    #[test]
+    fn the_verification_snapshot_is_pinned_before_the_queue_is_released() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = created(home.path(), Scripted::still());
+        fixture(&store);
+        let writer = open_with(home.path(), Scripted::still());
+        let mut scratch = store
+            .start(&project(), None, Purpose::Verify)
+            .expect("start");
+        // `compare` releases the queue first after its catch-up turn, which
+        // applies the whole fixture chain, then after the turn that pins the
+        // snapshot.
+        let mut releases = 0;
+        store.at_queue_release(move || {
+            releases += 1;
+            if releases == 2 {
+                record(&writer, "after", &[(TAIL, "open")]).expect("a command at the release");
+            }
+        });
+        assert_eq!(
+            scratch.compare(),
+            Ok(ViewsReport {
+                checked_seq: 5,
+                differing: Vec::new(),
+            })
+        );
+        assert_eq!(events(home.path()), 7);
+    }
+
+    // A session dropped after one batch leaves its generation behind;
+    // verification refuses with `UnfinishedGeneration` naming it and
+    // leaves it for a rebuild. Catches a verification run beside a build
+    // that never finished, or a refusal a caller can tell only by its
+    // text.
+    #[test]
+    fn verify_views_refuses_while_a_generation_is_unfinished() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = created(home.path(), Scripted::still());
+        fixture(&store);
+        let mut session = store.start_rebuild(&project()).expect("start");
+        session.apply_one_batch().expect("batch");
+        drop(session);
+        assert_eq!(
+            store.verify_views(&project()),
+            Err(StoreError::UnfinishedGeneration {
+                project: project(),
+                generation: 1,
+            })
+        );
+        assert_eq!(building_gen(home.path()), Some(1));
+    }
+
+    // A second store over the same home that reads none of the fixture's
+    // event types refuses to rebuild the project as read-only, and the
+    // live generation and its documents are as they were. Catches a
+    // replay that skips or applies an event this binary cannot read, with
+    // no scan of the chain ahead of it.
+    #[test]
+    fn a_rebuild_refuses_an_unreadable_event_and_leaves_live_untouched() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = created(home.path(), Scripted::still());
+        fixture(&store);
+        let blind = SqliteStore::open(
+            home.path(),
+            AT,
+            Options {
+                projectors: vec![item(2), tally(None)],
+                view_set_version: set(2),
+                timing: Scripted::still(),
+                ..Options::default()
+            },
+        )
+        .expect("a store that reads no fixture event");
+        assert!(is_read_only(&blind.rebuild(&project())));
+        assert_eq!(live_gen(home.path()), Some(0));
+        assert_eq!(read_back(&store), expected());
     }
 
     // A store with `item` at version 2 stays open while a newer binary

@@ -24,12 +24,16 @@ pub(crate) struct FileLock {
     /// both hold it at once, and either could end the other's turn. This
     /// lock makes them take turns inside the process first.
     local: Mutex<()>,
+    /// Run each time a turn has been released, so a test can act at that
+    /// instant through another store.
+    #[cfg(test)]
+    on_release: Mutex<Option<Box<dyn FnMut() + Send>>>,
 }
 
 /// Holds the lock until dropped.
 pub(crate) struct Turn<'a> {
-    file: &'a File,
-    _local: MutexGuard<'a, ()>,
+    lock: &'a FileLock,
+    local: Option<MutexGuard<'a, ()>>,
 }
 
 impl FileLock {
@@ -42,6 +46,8 @@ impl FileLock {
         Ok(Self {
             file,
             local: Mutex::new(()),
+            #[cfg(test)]
+            on_release: Mutex::new(None),
         })
     }
 
@@ -52,17 +58,46 @@ impl FileLock {
         let local = self.local.lock().unwrap_or_else(PoisonError::into_inner);
         self.file.lock()?;
         Ok(Turn {
-            file: &self.file,
-            _local: local,
+            lock: self,
+            local: Some(local),
         })
+    }
+
+    /// Runs `action` each time a turn of this lock has been released, in
+    /// the releasing thread, before it goes on.
+    #[cfg(test)]
+    pub(crate) fn at_release(&self, action: impl FnMut() + Send + 'static) {
+        *self
+            .on_release
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Box::new(action));
+    }
+
+    #[cfg(test)]
+    fn released(&self) {
+        let slot = || {
+            self.on_release
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+        };
+        // Taken out while it runs, so an action that takes and releases
+        // this lock again does not wait on itself.
+        let taken = slot().take();
+        if let Some(mut action) = taken {
+            action();
+            slot().get_or_insert(action);
+        }
     }
 }
 
 impl Drop for Turn<'_> {
     fn drop(&mut self) {
-        // Released before the in-process lock, which drops after this. A
-        // failed unlock leaves nothing to do: closing the file releases it.
-        let _ = self.file.unlock();
+        // Released before the in-process lock. A failed unlock leaves
+        // nothing to do: closing the file releases it.
+        let _ = self.lock.file.unlock();
+        drop(self.local.take());
+        #[cfg(test)]
+        self.lock.released();
     }
 }
 
@@ -127,6 +162,9 @@ pub(crate) mod scripted {
         last: Mutex<Duration>,
         step: Duration,
         pauses: Mutex<Vec<Duration>>,
+        /// Run in every pause, where the store holds no queue turn, so a
+        /// test can act between two batches it cannot otherwise reach.
+        during_pause: Mutex<Option<Box<dyn FnMut() + Send>>>,
     }
 
     impl Scripted {
@@ -143,7 +181,26 @@ pub(crate) mod scripted {
                 last: Mutex::new(Duration::ZERO),
                 step,
                 pauses: Mutex::new(Vec::new()),
+                during_pause: Mutex::new(None),
             })
+        }
+
+        /// Runs `action` once, in the next pause.
+        pub(crate) fn at_next_pause(&self, action: impl FnOnce() + Send + 'static) {
+            let mut action = Some(action);
+            self.at_every_pause(move || {
+                if let Some(action) = action.take() {
+                    action();
+                }
+            });
+        }
+
+        /// Runs `action` in every pause from now on.
+        pub(crate) fn at_every_pause(&self, action: impl FnMut() + Send + 'static) {
+            *self
+                .during_pause
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(Box::new(action));
         }
 
         /// The next readings, in order.
@@ -181,6 +238,18 @@ pub(crate) mod scripted {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(duration);
+            let slot = || {
+                self.during_pause
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+            };
+            // Taken out while it runs, so an action that pauses this timing
+            // again does not wait on itself.
+            let taken = slot().take();
+            if let Some(mut action) = taken {
+                action();
+                slot().get_or_insert(action);
+            }
         }
     }
 }

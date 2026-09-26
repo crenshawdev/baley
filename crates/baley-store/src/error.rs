@@ -2,8 +2,9 @@
 //!
 //! None of these is a domain outcome. A domain outcome, success or a real
 //! refusal, is recorded as `command.completed` and comes back as `Ok`
-//! (design 0001, Commands). These record nothing: the caller re-reads and
-//! retries with the same request id, waits, or stops.
+//! (design 0001, Commands). A failed command records nothing: the caller
+//! re-reads and retries with the same request id, waits, or stops.
+//! `StoreError` says which errors can follow a change that did commit.
 
 use std::fmt;
 
@@ -13,7 +14,11 @@ use crate::event::{Hash, ProjectId, RequestId};
 use crate::payload::PayloadReference;
 use crate::view::DocKey;
 
-/// A port operation that recorded nothing.
+/// Why a port operation did not return its result. A failed command
+/// records nothing. An operation that first brought a project's views
+/// forward to this binary's (a read, a command, `verify_views`) may have
+/// committed that forward rebuild before a later error. `CleanupFailed`
+/// follows a rebuild whose generation is already live.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
     /// Something the decision depended on changed between the caller's slow
@@ -37,6 +42,27 @@ pub enum StoreError {
     },
     /// The engine failed: I/O, a full disk, a corrupt file.
     Unavailable(String),
+    /// A rebuild made `live_generation` live, and then removing the old
+    /// generation failed with `cause`. The flip stands: reads and commands
+    /// use the new generation, and the next rebuild removes what is left.
+    CleanupFailed {
+        project: ProjectId,
+        live_generation: u64,
+        cause: Box<StoreError>,
+    },
+    /// A rebuild or view verification that never finished, as after a
+    /// crash, left `generation` behind with its marker, or a verification
+    /// could not remove its own scratch `generation`. Views cannot be
+    /// verified until a rebuild removes it. It is not the live generation:
+    /// a marker naming that one is `LiveGenerationProtected`.
+    UnfinishedGeneration { project: ProjectId, generation: u64 },
+    /// The project's building marker names `generation`, which is its live
+    /// generation, as when the marker is damaged. A rebuild refuses rather
+    /// than remove it, and a view verification refuses rather than report
+    /// it unfinished. Nothing was removed, and the live views stand; the
+    /// project's rebuilds and view verifications refuse the same way until
+    /// the marker is repaired.
+    LiveGenerationProtected { project: ProjectId, generation: u64 },
 }
 
 /// The input that moved.
@@ -89,7 +115,10 @@ pub enum Refusal {
     UnknownView(String),
     /// The view declares no index of that name; `find` never scans.
     UndeclaredIndex { view: String, index: String },
-    /// A key or index value does not fit the declared fields.
+    /// A key or index value does not fit the declared fields. At open, also
+    /// a view declared badly, or a view spec or view set changed under a
+    /// version already recorded: `view` then names the view whose spec
+    /// changed, or one that is in only one of the two sets.
     MalformedKey { view: String, reason: String },
     /// No payload with that hash is stored.
     UnknownPayload(Hash),
@@ -135,6 +164,31 @@ impl fmt::Display for StoreError {
                 write!(f, "projector for {view} failed at event {seq}: {message}")
             }
             Self::Unavailable(reason) => write!(f, "store unavailable: {reason}"),
+            Self::CleanupFailed {
+                project,
+                live_generation,
+                cause,
+            } => write!(
+                f,
+                "project {} now reads generation {live_generation}; removing the old generation failed and is left for the next rebuild: {cause}",
+                project.0
+            ),
+            Self::UnfinishedGeneration {
+                project,
+                generation,
+            } => write!(
+                f,
+                "project {} holds generation {generation} of a rebuild or view verification that never finished; rebuild the project first",
+                project.0
+            ),
+            Self::LiveGenerationProtected {
+                project,
+                generation,
+            } => write!(
+                f,
+                "project {}'s building marker names generation {generation}, which is live; nothing was removed",
+                project.0
+            ),
         }
     }
 }

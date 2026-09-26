@@ -120,9 +120,10 @@ pub enum Change {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectorError(pub String);
 
-/// Domain code that keeps one view current. Pure: an event and the current
-/// documents in, changes out. Implemented in `baley-core`, handed to the
-/// adapter when the store opens, so the adapter holds no business rules.
+/// Keeps one view current. Pure: an event and the current documents in,
+/// changes out. Domain projectors are implemented in `baley-core` and
+/// handed to the adapter when the store opens, so the adapter holds no
+/// business rules; the store's own `request` projector is in this crate.
 pub trait Projector: Send + Sync {
     fn spec(&self) -> &ViewSpec;
 
