@@ -1,76 +1,99 @@
 # Design process
 
-Every significant change to Baley is designed on paper, reviewed and approved before it is built. This page says what gets written, where it lives, how it is reviewed and how it is tracked.
+Baley is designed on paper before it is built. This page says what gets written, where it lives, how it is kept current, how it is reviewed and how it is tracked.
 
-## What counts as significant
+## What needs a design change
 
-A change needs a design document when it does any of these:
+A change is designed before it is built when it does any of these:
 
 - adds or replaces a component, a storage format or a wire contract;
 - changes how two components talk to each other;
 - changes a workflow a user or a host sees;
 - is hard to reverse once shipped.
 
-Bug fixes, refactors inside one module and dependency updates do not need one. When in doubt, write a short one.
+Bug fixes, refactors inside one module and dependency updates do not.
 
 ## The documents
 
-| Kind | Location | Purpose | Lifecycle |
-|---|---|---|---|
-| Design document | `docs/design/NNNN-slug.md` | The proposed design for one piece of work, before it is built | Draft, In review, Accepted, Rejected, Superseded |
-| Decision record (ADR) | `docs/adr/NNNN-slug.md` | One architectural decision, its context and its consequences | Proposed; Accepted; Accepted, superseded in part by NNNN; Superseded by NNNN |
-| Architecture overview | `docs/architecture/` | The system as it is built today | Updated with the code that changes it |
+| Kind | Location | Purpose |
+|---|---|---|
+| Product requirements (PRD) | [`prd/`](prd/) | What Baley is for and what its owner can do, as numbered user stories |
+| System design | [`0002-system-design.md`](0002-system-design.md) | The architecture every area follows: who is responsible for what, the patterns, the parts and the decisions that cut across areas |
+| Area design documents | `NNNN-slug.md` | The full design of one process area, in the form of [TEMPLATE.md](TEMPLATE.md). The set: 0003 configuration and routing, 0004 starting a project and changing scope, 0005 context, plans and acceptance, 0006 execution, 0007 verification, 0008 review, 0009 risk, 0010 guard, 0011 milestones, landing, undo and pause, 0012 host interface, 0013 next action and progress, 0014 support families |
+| Decision records (ADRs) | [`../adr/`](../adr/) | One architectural decision each: its context, the options and why one was chosen |
+| C4 model | [`c4/workspace.dsl`](c4/workspace.dsl) | The one model of Baley's structure; every structure diagram is exported from it |
+| Architecture overview | `../architecture/` | The system as it is built today, updated with the code that changes it |
 
-Numbers are four digits, assigned in order and never reused. Start a design document from [TEMPLATE.md](TEMPLATE.md) and a decision record from [../adr/TEMPLATE.md](../adr/TEMPLATE.md).
+Numbers are four digits, assigned in order and never reused.
 
-**Design documents** describe what will be built and why. They are written before the code, and their diagrams come before the code too. Once accepted, a design document is the record of the approved design, and it moves with the code: the pull request that builds part of it amends the sections and figures its code makes more exact or shows to have drifted, and lists each amendment in its description. A change of direction, rather than of precision, gets its own design document, and the old one is marked Superseded with a link forward.
+## Living documents
 
-**Decision records** follow Michael Nygard's format through the [MADR](https://adr.github.io/madr/) template. Each one holds exactly one decision. An accepted record's body is never edited; a new record supersedes it. The only change allowed is filling the accepted record's "Superseded by" row when a later record supersedes it, in whole or in part, and its status in the [decision record index](../adr/README.md) then reads "Superseded by NNNN" or "Accepted, superseded in part by NNNN". Design documents list the decisions they produce, and each decision links back to its design document.
+Design documents state the current design and nothing else. When the design changes, the document is edited in place, in every section the change touches. A document carries no amendment lists, no "previously" and no superseded copies; git holds the history.
 
-**The architecture overview** shows only what exists in the code. It is updated in the same pull request as the code that changes it, never ahead of it.
+The pull request that builds part of a design edits the document to match what was built, including its Build status section, and its description says what changed.
 
-## Diagrams
+A document describes the design. It never tracks work: no task lists, no next steps, no schedule. Deciding what happens next is Baley's job.
 
-Diagrams are [Mermaid](https://mermaid.js.org/), fenced as ` ```mermaid ` inside the Markdown file, so they render on GitHub and in common editors with nothing to install and diff as text in review. No image exports, no separate diagram files.
+Decision records are the one kind of history kept on purpose. An accepted record's body is never edited; a new record supersedes it, and the old record's status then reads "Superseded by NNNN" or "Accepted, superseded in part by NNNN". Records follow Michael Nygard's format through the [MADR](https://adr.github.io/madr/) template. Design documents list the decisions they produce, and each decision links back to its design document.
 
-| Question the diagram answers | Diagram |
-|---|---|
-| What is the system and what surrounds it | C4 system context, drawn as a `flowchart` |
-| What runs, and what talks to what | C4 container view, drawn as a `flowchart` with the system as a `subgraph` |
-| What is inside one container | C4 component view, drawn as a `flowchart` |
-| Who does what, in what order, across actors | Swim lane: `sequenceDiagram` with one participant column per actor, `alt` for branches |
-| How one request moves between parts | UML sequence (`sequenceDiagram`) |
-| What states a record passes through | UML state machine (`stateDiagram-v2`) |
-| How types relate | UML class (`classDiagram`) |
-| What the stored data looks like | Entity relationship (`erDiagram`) |
+## The form of an area document
 
-C4 views follow the C4 model's levels and colours but are drawn as flowcharts: Mermaid's own C4 syntax is experimental and lays edge labels over each other. Every diagram has a title or caption saying what it shows, and is checked in both light and dark themes before review. Draw the level the reader needs: a design document for the store starts with the container view and goes down only where the design is decided.
+Every area document has the same twelve sections, in order, from [TEMPLATE.md](TEMPLATE.md): purpose and scope, terms, requirements, roles and actors, commands and operations, records, states, workflows, settings, instructions served, build status and open questions. A section that does not apply keeps its heading and says "Not applicable" with the reason, so every document has the same shape.
+
+A document is detailed enough that an engineer who has never seen the project can understand the whole area from it alone.
 
 ## Requirements and traceability
 
-Each design document states its requirements with stable identifiers: the document's short prefix and a number, such as `STORE-R1`. Identifiers are never renumbered; a dropped requirement stays in the table marked Withdrawn.
+Each design document states its requirements with stable identifiers: the document's short prefix and a number, such as `EVD-R1` or `SYS-R3`. Identifiers are never renumbered or reused. A requirement's status is `Active` (the design now), `Backlog` (decided, for a later release; the design says what it is, the release says when) or `Withdrawn` (dropped; the row and id stay). Quality requirements (speed, memory, security, reliability) have their own identifiers and a pass/fail check.
 
-Build issues, pull requests and tests cite the identifiers they satisfy, so any line of code can be traced back to the requirement and the decision behind it.
+Build issues, pull requests, tests and the instructions Baley serves cite the identifiers they satisfy, so any rule in the code traces back to its requirement.
+
+A reference to something not written yet is written `[TARGET]`, so it is visible and searchable (`grep -rn "\[TARGET\]" docs/`). A document is finished when no unresolved `[TARGET]` remains.
+
+## Diagrams
+
+Diagrams are [Mermaid](https://mermaid.js.org/) inside the Markdown, so they render on GitHub and in common editors with nothing installed, and diff as text.
+
+Structure diagrams (system context, containers, components) come from the C4 model in [`c4/workspace.dsl`](c4/workspace.dsl), written in [Structurizr](https://docs.structurizr.com/) DSL. The model is defined once and every view is generated from it, so the diagrams cannot disagree. A document marks where a view goes:
+
+```
+<!-- c4:context -->
+<!-- /c4:context -->
+```
+
+and `docs/design/c4/run.sh export <documents>` replaces the text between the markers with the current Mermaid for that view. Never edit inside the markers by hand; change the model and export again. `run.sh validate` checks the model. Both need only Java; `run.sh` downloads `structurizr.war` once.
+
+Other diagrams are written by hand in Mermaid:
+
+| Question the diagram answers | Diagram |
+|---|---|
+| Who does what, in what order, across actors | Swim lane: `sequenceDiagram`, one participant per actor, `alt` for branches |
+| How one request moves between parts | `sequenceDiagram` |
+| What states a record passes through | `stateDiagram-v2` |
+| How types relate | `classDiagram` |
+| What the stored data looks like | `erDiagram` |
+
+Every diagram has a caption saying what it shows, and leaves its background unset so it reads in light and dark themes.
 
 ## Review and approval
 
-1. The author opens a pull request with the design document at status Draft and the design issue linked. Every diagram is checked in both light and dark themes first.
+1. The author opens a pull request with the document and links its design issue.
 2. A reviewer independent of the author writes an adversarial review: what is wrong, missing or unproven, and against which requirement or section. When the author is an AI model, the reviewer is a model from a different family. The review goes to the owner.
-3. The author verifies every finding against the document and the code, and brings the owner each one that holds, in plain terms, with the options for fixing it. The owner rules on each.
-4. The author revises the document to match the rulings and moves it to In review. The revision's pull request lists every finding and the change made for it. Requirement identifiers stay stable: a changed requirement keeps its number and new ones are appended.
-5. The document is accepted when its open questions are empty, including any acceptance gates it names, such as a benchmark or a check on each supported host. The owner approves, the author's last commit sets the status to Accepted, and the owner merges. A rejected design is merged at status Rejected with the reason, so the reasoning is kept.
+3. The author checks every finding against the document and the code, and brings the owner each one that holds, in plain terms, with the options for fixing it. The owner rules on each.
+4. The author edits the document to match the rulings. The pull request lists every finding and the change made for it.
+5. The document is accepted when its open questions hold only what is genuinely deferred to another document, and any acceptance gate it names (a benchmark, a check on each supported host) has passed. The owner approves and merges.
 
-Status, not merging, marks acceptance. A document merged before it is accepted keeps its status, and later revisions arrive as further pull requests.
+## Tooling
 
-Decision records produced by the design are merged with it, at status Proposed, and move to Accepted with the design.
+The documents are written with the `baley-design` plugin for Claude Code: `prd`, `design-doc` (area documents), `nfr`, `api`, `adr` and `c4`. The plugin keeps every project's documents in the same shape.
 
 ## Tracking
 
 Work is tracked on GitHub.
 
 - **Milestones** take their names from Asimov's Robot and Foundation stories, and each one's description states its theme in plain words. Never a version number: versions are assigned when a release ships. Working branches take names from the same stories.
-- **Each milestone opens with a design issue** labelled `design`. Its pull request carries the design document.
-- **Build issues** are opened from the accepted design, one per slice of work, each citing the requirements it delivers. None starts until the design is merged.
+- **Design issues** are labelled `design`. Their pull requests carry the design documents.
+- **Build issues** are opened from an accepted design, one per slice of work, each citing the requirements it delivers.
 - **Pull requests** link their issue and cite requirement identifiers. Commits follow [Conventional Commits](https://www.conventionalcommits.org/) and are signed.
 
 ## What these documents are not
@@ -79,6 +102,20 @@ They are technical records for an engineer who has never met the authors. They c
 
 ## Index
 
-| Number | Title | Status |
-|---|---|---|
-| [0001](0001-evidence-ledger.md) | The evidence ledger | Accepted |
+| Document | Status |
+|---|---|
+| [Product requirements](prd/baley.md) | Accepted |
+| [0001: The evidence ledger](0001-evidence-ledger.md) | Accepted |
+| [0002: System design](0002-system-design.md) | Accepted |
+| [0003: Configuration and routing](0003-configuration-and-routing.md) | Accepted |
+| [0004: Starting a project and changing scope](0004-starting-a-project-and-changing-scope.md) | Accepted |
+| [0005: Context, plans and acceptance](0005-context-plans-and-acceptance.md) | Accepted |
+| [0006: Execution](0006-execution.md) | Accepted |
+| [0007: Verification](0007-verification.md) | Accepted |
+| [0008: Review](0008-review.md) | Accepted |
+| [0009: Risk](0009-risk.md) | Accepted |
+| [0010: Guard](0010-guard.md) | Accepted |
+| [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md) | Accepted |
+| [0012: Host interface](0012-host-interface.md) | Accepted |
+| [0013: Next action and progress](0013-next-action-and-progress.md) | Accepted |
+| [0014: Support families](0014-support-families.md) | Accepted |

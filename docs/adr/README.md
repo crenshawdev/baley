@@ -18,3 +18,12 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0008](0008-host-sandbox-isolation.md) | Use host sandboxes to keep agents out of the ledger | Accepted |
 | [0009](0009-served-instructions.md) | Serve instructions from the binary; files on disk are stubs | Accepted |
 | [0010](0010-projector-traits-in-the-port.md) | Define the projector and event schema traits in the port | Accepted |
+| [0011](0011-one-shared-server.md) | Run one shared Baley server per user over stdio and HTTP | Accepted |
+| [0012](0012-optimistic-concurrency.md) | Use optimistic concurrency in the shared server | Accepted |
+| [0013](0013-host-session-calls-outside-models.md) | Let the host session call outside models, never Baley | Accepted |
+| [0014](0014-baley-runs-tests.md) | Have Baley run tests and checks itself and judge by exit code | Accepted |
+| [0015](0015-settings-in-toml.md) | Keep settings in TOML: one global file, one project file, host sections | Accepted |
+| [0016](0016-key-store.md) | Store provider API keys encrypted in the ledger with the master key in the OS secret store | Accepted |
+| [0017](0017-stories-and-sprints.md) | Codify Scrum: a requirement is a story that carries its truths, a phase is a sprint | Accepted |
+| [0018](0018-lease-enforced-at-close.md) | Enforce the lease at task close on both hosts, with the guard as an early stop where it sees writes | Accepted |
+| [0019](0019-reviews-adjudicated-and-ruled.md) | Run every configured reviewer, adjudicate in the host session, and let the owner rule on each finding | Accepted |
