@@ -160,7 +160,7 @@ No worker is dispatched by this area; it supplies the route others dispatch with
 
 ## 5. Commands and operations
 
-All operations of this area are command-line commands run by the owner. Nothing in this area is exposed over MCP: a work order carries the route it needs (CFG-R17), and the model is never told about the settings files (CFG-R11). Every command names the working directory it runs in, and every command that needs a project resolves it as CFG-R4 says.
+All operations of this area are command-line commands run by the owner. Nothing in this area is exposed over MCP: a work order carries the route it needs (CFG-R17), and the model is never told about the settings files (CFG-R11). The one exception is the settings interview, which a project start runs through the host's question mechanism when settings are missing ([0004](0004-starting-a-project-and-changing-scope.md), PRJ-R9); the answers are still written by Baley. Every command names the working directory it runs in, and every command that needs a project resolves it as CFG-R4 says.
 
 ### baley config show
 
@@ -192,6 +192,7 @@ All operations of this area are command-line commands run by the owner. Nothing 
 - **Inputs:** `--global` or `--project` (default: global when the global file has no `[roles]` table, otherwise project), optional `--host <name>`.
 - **Outputs:** twelve ordered questions, model then effort for each of the six roles, each showing the value in force and the layer it comes from; then `escalate_on_failure`; the answers are written as one `config set`.
 - **Refusals:** as `config set`; a declined interview writes nothing.
+- **Also run by:** `project start` when the global file or the project's settings are missing ([0004](0004-starting-a-project-and-changing-scope.md), PRJ-R9); the same questions, put to the owner through the host when the start runs from a session.
 
 ### baley key set
 
@@ -507,7 +508,7 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `review.triggers.risk_surface.waive_routing_floor` | same list | absent | project | 0009 [TARGET] | Surfaces whose floor the owner waives |
 | `review.consult.enabled`, `.tier`, `.effort`, `.attempt_threshold` | bool; tier; effort; integer min 1 | `false`; `flagship`; `high`; 3 | both | 0008 [TARGET] | The consult call after repeated failures |
 
-Settings removed from the schema because nothing reads them (CFG-R7): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Plan size limits are designed in [0005](0005-plans-and-acceptance.md) [TARGET], not as free numbers here.
+Settings removed from the schema because nothing reads them (CFG-R7): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Plan size limits are designed in [0005](0005-context-plans-and-acceptance.md) [TARGET], not as free numbers here.
 
 ## 10. Instructions served
 

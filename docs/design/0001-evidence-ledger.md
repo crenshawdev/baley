@@ -336,8 +336,8 @@ Streams used by the record families:
 
 | Stream | Examples of events |
 |---|---|
-| `project` | `project.initialized`, `policy.effective`, `checkout.seen` |
-| `roadmap` | `phase.declared`, `phase.renamed`, `phase.reordered`, `requirement.declared` |
+| `project` | `project.initialized`, `project.described`, `scope.approved`, `forge.checked`, `policy.effective`, `checkout.seen` |
+| `roadmap` | `phase.declared`, `phase.reordered`, `phase.withdrawn`, `requirement.declared`, `requirement.corrected`, `requirement.reassigned`, `requirement.dropped` ([0004](0004-starting-a-project-and-changing-scope.md)) |
 | `phase/<n>` | `context.approved`, `dispatch.issued` (serializes one active dispatch per phase), `phase.completed`, `completion.invalidated`, `phase.undone` |
 | `plan/<n>-<k>` | `plan.submitted`, `plan.approved`, `plan.superseded` |
 | `admission/<n>` | `execution.admitted`, `execution.extended` |
@@ -826,8 +826,8 @@ Agents may not edit the project file; the guard refuses writes to it.
 
 | Today | Replacement |
 |---|---|
-| `ROADMAP.md` phase list, read by every status query | `roadmap` stream and view. New commands declare, rename and reorder phases, which also gives the missing "add a phase" operation. |
-| `REQUIREMENTS.md` traceability rows | `requirement.declared` events and the `roadmap` view. Completion and undo record events instead of editing rows. |
+| `ROADMAP.md` phase list, read by every status query | `roadmap` stream and view. The commands of [0004](0004-starting-a-project-and-changing-scope.md) declare, edit, reorder and withdraw phases. |
+| `REQUIREMENTS.md` traceability rows | `requirement.declared`, `requirement.corrected`, `requirement.reassigned` and `requirement.dropped` events ([0004](0004-starting-a-project-and-changing-scope.md)) and the `roadmap` view. Completion and undo record events instead of editing rows. |
 | `PROJECT.md` milestone version | The `milestone` view. |
 | `phases/<n>/CONTEXT.md` | `context.approved` event; text is a `record` payload. |
 | `phases/<n>/PLAN-k.md`, parsed by execution | `plan.approved` event carrying the approval binding; execution reads the typed plan from the `plan` view, never parses Markdown. |
