@@ -336,13 +336,13 @@ The one contract between Baley and every worker, including the outside reviews t
 
 ## 11. Decisions
 
-Decision records this design produces. Each is still to be written.
+Decision records this design produces.
 
-- One shared Baley server per user, over stdio and HTTP (SYS-R1 to SYS-R4): [TARGET]
-- Optimistic concurrency in the shared server (SYS-R6): [TARGET]
-- Outside models are called by the host session, not Baley (SYS-R9 to SYS-R12): [TARGET]
-- Baley runs tests itself and judges by exit code (SYS-R8): [TARGET]
-- Settings in TOML, global and project, with host sections (SYS-R13): [TARGET]
+- One shared Baley server per user, over stdio and HTTP (SYS-R1 to SYS-R4): [ADR 0011](../adr/0011-one-shared-server.md)
+- Optimistic concurrency in the shared server (SYS-R6): [ADR 0012](../adr/0012-optimistic-concurrency.md)
+- Outside models are called by the host session, not Baley (SYS-R9 to SYS-R12): [ADR 0013](../adr/0013-host-session-calls-outside-models.md)
+- Baley runs tests itself and judges by exit code (SYS-R8): [ADR 0014](../adr/0014-baley-runs-tests.md)
+- Settings in TOML, global and project, with host sections (SYS-R13): [ADR 0015](../adr/0015-settings-in-toml.md)
 
 ## 12. Open questions
 

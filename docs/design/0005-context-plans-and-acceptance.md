@@ -6,7 +6,7 @@
 | Design issue | none; build issue [#25](https://github.com/crenshawdev/baley/issues/25) |
 | Requirement prefix | PLN |
 | Applies | [0002: System design](0002-system-design.md) |
-| Related | ADRs: [0006](../adr/0006-no-markdown-records.md), [0009](../adr/0009-served-instructions.md), acceptance as stories and sprints [TARGET] · C4 view: components ([0002](0002-system-design.md) Figure 4) |
+| Related | ADRs: [0006](../adr/0006-no-markdown-records.md), [0009](../adr/0009-served-instructions.md), [0017](../adr/0017-stories-and-sprints.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
 
 The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
 

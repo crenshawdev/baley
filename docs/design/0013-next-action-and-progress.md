@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted |
 | Design issue | none; build issue [#28](https://github.com/crenshawdev/baley/issues/28) |
 | Requirement prefix | NXT |
 | Applies | [0002: System design](0002-system-design.md) |

@@ -6,7 +6,7 @@
 | Design issue | [#48](https://github.com/crenshawdev/baley/issues/48); build issue [#26](https://github.com/crenshawdev/baley/issues/26) |
 | Requirement prefix | REV |
 | Applies | [0002: System design](0002-system-design.md) |
-| Related | ADRs: [0007](../adr/0007-forge-anchors.md), [0009](../adr/0009-served-instructions.md), outside models called by the host session [TARGET] · C4 view: components ([0002](0002-system-design.md) Figure 4) |
+| Related | ADRs: [0007](../adr/0007-forge-anchors.md), [0009](../adr/0009-served-instructions.md), [0013](../adr/0013-host-session-calls-outside-models.md), [0019](../adr/0019-reviews-adjudicated-and-ruled.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
 
 The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
 
