@@ -431,16 +431,16 @@ sequenceDiagram
   alt secret store unreachable
     S->>S: fall back to the 0600 master-key file, tell the owner the residual risk
   end
-  S->>L: secret row (encrypted); key.set event
+  S->>L: secret row (encrypted), key.set event
   C->>K: detect(openai)
   K->>V: GET list endpoint with the key
   alt request fails
     K->>L: models.detection_failed
-    C-->>O: key stored; detection failed, previous list kept
+    C-->>O: key stored, detection failed, previous list kept
   else
     K->>K: tag ids from the hint table, place unknown ids by best fit
     K->>L: models.detected, new catalog version
-    C-->>O: key stored; models found, tiers, catalog version
+    C-->>O: key stored, models found, tiers, catalog version
   end
 ```
 

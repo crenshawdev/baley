@@ -318,7 +318,7 @@ sequenceDiagram
         C-->>H: findings
         H->>B: plan.checked
         alt blocker, first round
-          B-->>H: one revision; planner relaunched, re-check once
+          B-->>H: one revision, planner relaunched, re-check once
         end
       end
       B-->>H: preview, findings, size and capacity, digest

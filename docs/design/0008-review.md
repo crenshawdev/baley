@@ -248,7 +248,7 @@ sequenceDiagram
     B-->>H: no review
   else
     B->>L: review.admitted (material by hash)
-    B-->>H: work orders: host reviewer; provider prompt and request
+    B-->>H: work orders: host reviewer, provider prompt and request
     par host reviewer
       H->>R: launch
       R-->>H: findings

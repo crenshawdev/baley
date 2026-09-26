@@ -217,7 +217,7 @@ sequenceDiagram
       B->>L: verdict.claimed
       B->>B: derive each truth's status
       B-->>H: statuses, rejected and not-seen items
-      H->>O: statuses; observations to see; rejections
+      H->>O: statuses, observations to see, rejections
       O->>H: observation records, overrules with evidence, waivers
       H->>B: the owner's records
       B->>L: observation.recorded, item.overruled, truth.waived
