@@ -65,7 +65,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | PRJ-R12 | A phase with no execution recorded (declared, context approved, or plans approved) may be withdrawn directly. The owner decides, for each active requirement it served, the phase it moves to or that it is dropped, and approves the previewed roadmap and requirement changes. | Scope can shrink, and every promise it carried is accounted for. | PRJ-R4, PRJ-R13 | Active |
 | PRJ-R13 | A phase whose execution has started is withdrawn only after its execution is undone (`phase.undone`, [0011](0011-milestones-landing-undo-pause.md) [TARGET]). Until then `phase withdraw` is refused with `execution-present`, naming the phase and the undo it needs. A complete phase is never withdrawn; the request is refused with `phase-complete`. | Removing a phase from the roadmap must not leave its code in the repository unaccounted for, and finished work stays finished. | SYS-P4 | Active |
 | PRJ-R14 | A story's truths may be revised after they were approved, including after a sprint that committed the story has started execution. A truth whose text changes gets the next version; an unchanged truth keeps its version; earlier versions are kept. The operation is [0005](0005-context-plans-and-acceptance.md)'s `story truths submit`. | The owner's understanding changes, and the record must follow it without losing history. | EVD-R2 | Active |
-| PRJ-R15 | After a revision, a plan bound to an older truth version is no longer approved for execution; the sprint is re-planned before more work runs, and committed code stays. A completion based on older truths stops applying. | Work is measured against the truths in force. | PRJ-R14, PLN-R4, [0007](0007-verification.md) [TARGET] | Active |
+| PRJ-R15 | After a revision, a plan bound to an older truth version is no longer approved for execution; the sprint is re-planned before more work runs, and committed code stays. A completion based on older truths stops applying. | Work is measured against the truths in force. | PRJ-R14, PLN-R4, [0007](0007-verification.md) | Active |
 | PRJ-R16 | A revision is refused with `dispatch-active` while a worker is dispatched on a phase that committed the story. | A running worker must finish or be stopped under the truths it was given. | PRJ-R14 | Active |
 | PRJ-R17 | A requirement's wording is corrected by `requirement edit`, at any time, for any active requirement; every earlier wording is kept. Correcting a requirement no phase serves (dropped or excluded) is refused with `requirement-not-served`. | One place to fix wording, and no editing of what the project no longer promises. | EVD-R2 | Active |
 | PRJ-R18 | A request that names a phase, requirement or plan that does not exist is refused with `no-such-phase`, `no-such-requirement` or `no-such-plan`, naming it. "Unavailable" is answered only for a temporary condition. | A mistake must read as a mistake. | SYS-P10 | Active |
@@ -264,7 +264,7 @@ stateDiagram-v2
   Withdrawn --> [*]
 ```
 
-*Figure 1. States of a phase as this area sees them. Execution and completion transitions belong to [0006](0006-execution.md) and [0007](0007-verification.md) [TARGET]; a withdraw from Executing is refused until `phase.undone` returns it to Planned; Complete is never withdrawn.*
+*Figure 1. States of a phase as this area sees them. Execution and completion transitions belong to [0006](0006-execution.md) and [0007](0007-verification.md); a withdraw from Executing is refused until `phase.undone` returns it to Planned; Complete is never withdrawn.*
 
 ```mermaid
 stateDiagram-v2
@@ -279,7 +279,7 @@ stateDiagram-v2
   Met --> Active: completion.invalidated
 ```
 
-*Figure 2. States of a requirement. Excluded and Dropped are final; Met is derived from its phase's completion ([0007](0007-verification.md) [TARGET]).*
+*Figure 2. States of a requirement. Excluded and Dropped are final; Met is derived from its phase's completion ([0007](0007-verification.md)).*
 
 ```mermaid
 stateDiagram-v2

@@ -342,7 +342,7 @@ Streams used by the record families:
 | `plan/<n>-<k>` | `plan.submitted`, `plan.approved`, `plan.superseded` |
 | `admission/<n>` | `execution.admitted`, `execution.extended` |
 | `dispatch/<id>` | `task.started`, `task.run`, `task.closed`, `suite.run`, `dispatch.ended`, `worker.exited`, `worker.interrupted` |
-| `verification/<id>` | `verification.started`, `verification.run`, `verdict.claimed`, `truth.waived`, `waiver.revoked`, `human.result`, `verification.completed` |
+| `verification/<id>` | `verification.started`, `verification.run`, `verdict.claimed`, `observation.recorded`, `item.overruled`, `truth.waived`, `waiver.revoked`, `verification.completed` ([0007](0007-verification.md)) |
 | `review/<id>` | `review.admitted`, `review.enqueued`, `review.delivered`, `review.returned`, `review.deferred`, `review.adjudicated`, `review.closed` |
 | `risk/<n>` | `risk.observed`, `risk.fired`, `risk.receipt` |
 | `milestone/<name>` | `milestone.close_ready`, `milestone.archived`, `release.proposed`, `release.confirmed`, `landing.started`, `landing.step`, `landing.completed` |
@@ -954,9 +954,9 @@ The domain rules are owned, specified and tested by the area design documents ([
 |---|---|---|
 | A plan's approval binds its exact submitted content, the owner and the time | Context, plans and acceptance [TARGET] | `plan.approved` carries the submission digest, owner and time; admission confirms it against the event |
 | Plan replay is scoped to its phase occurrence | Context, plans and acceptance [TARGET] | Request scope (project, command kind) plus the phase in the digest |
-| Completion binds context, publications, admissions and task and plan history, and stops applying when any of them changes or execution is undone | Verification [TARGET] | The `phase` view computes applicability from the bound facts; `completion.invalidated` is projected when a bound fact changes; completion is confirmed against events when used |
-| Verification records its launch before running | Verification [TARGET] | Claim, act, record |
-| Verification claims are recomputed at commit | Verification [TARGET] | Inside `decide` |
+| Completion binds context, publications, admissions and task and plan history, and stops applying when any of them changes or execution is undone | [0007: Verification](0007-verification.md), VER-R13 | The `phase` view computes applicability from the bound facts; `completion.invalidated` is projected when a bound fact changes; completion is confirmed against events when used |
+| Verification records its launch before running | [0007: Verification](0007-verification.md), VER-R2 | Claim, act, record |
+| Verification claims are recomputed at commit | [0007: Verification](0007-verification.md), VER-R2 | Inside `decide` |
 | Undo records a pending state before its first revert and refuses to continue until an interrupted revert is reconciled | Milestones, landing, undo and pause [TARGET] | Claim, act, record, and reconciliation |
 | Undo keeps its refusal receipts | Milestones, landing, undo and pause [TARGET] | `command.completed` for refusals |
 | Landing records an intent per step and requires reconciliation | Milestones, landing, undo and pause [TARGET] | Claim, act, record per landing step |
