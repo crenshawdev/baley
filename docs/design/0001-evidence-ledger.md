@@ -55,8 +55,7 @@ Baley starts with an empty store (the Cadence records are not imported), so the 
 - **Multi-user or server deployment.** One user, one machine. The port leaves room for a server adapter; none is built.
 - **A separate operating-system user for Baley.** Real process separation is future work; this design uses the hosts' sandboxes (see [Threat model](#threat-model)).
 - **Importing Cadence records.** The store starts empty.
-- **Redesigning the domain rules.** Plans, execution, verification, review, guard, pause and milestones keep their current rules; only how they are recorded changes. [Rules preserved](#rules-preserved) lists each rule and where it lives in the new design. Where a rule exists only to reconcile copies, it is removed.
-- **Windows.** Baley ships for Linux and macOS.
+- **Windows in the first release.** The first release ships for Linux and macOS; Windows comes in a later release ([0002](0002-system-design.md), SYS-R14).
 
 ## Threat model
 
@@ -103,7 +102,7 @@ Identifiers are stable. Requirements changed by the review keep their number; ne
 | EVD-R25 | An owner can see the state and history of any record without reading files: through the CLI, through the MCP document query, and through an explicit export. | Replaces Markdown copies |
 | EVD-R26 | A command with an effect outside the database claims its request and records its intent before acting, and records the result after. Retries and duplicates never repeat the effect. An active claim blocks only its own scope; an interrupted claim (lease expired) is reconciled before work in its scope continues. | External effects cannot be rolled back |
 | EVD-R27 | A decision that grants authority (admission, completion, landing, release) confirms its deciding facts against events inside its transaction, so an edited view cannot grant authority. | Views are derived data |
-| EVD-R28 | Every rule listed in [Rules preserved](#rules-preserved) behaves as it does today, proven by an equivalence test. | Non-goal: redesigning domain rules |
+| EVD-R28 | Withdrawn. The domain rules are owned, specified and tested by the area design documents ([0002](0002-system-design.md)); this design records where each one lives in the ledger ([Where the domain rules live](#where-the-domain-rules-live)). | |
 
 ## Design
 
@@ -809,19 +808,19 @@ The home directory is `BALEY_HOME` if set, otherwise the platform data directory
   backups/              automatic backups before migrations, and scheduled backups
 ```
 
-On every open, Baley resolves the real path of the database and checks: the home and database are owned by the current user; the home is mode 0700 and the files 0600, and anything more permissive is refused with the fix named; neither the home nor the database is a symbolic link; and the filesystem holding the real database path is local. Backups and exports are created private. User configuration lives in the platform configuration directory (`$XDG_CONFIG_HOME/baley`, `~/.config/baley` on Linux; `~/Library/Application Support/baley/config` on macOS).
+On every open, Baley resolves the real path of the database and checks: the home and database are owned by the current user; the home is mode 0700 and the files 0600, and anything more permissive is refused with the fix named; neither the home nor the database is a symbolic link; and the filesystem holding the real database path is local. Backups and exports are created private. Settings are TOML files, one global and one per project ([0002](0002-system-design.md), SYS-R13); where they live is set by the configuration design [TARGET].
 
 Development builds and tests set `BALEY_HOME` so they never touch the owner's real ledger.
 
 #### Project identity and policy (EVD-R17)
 
-A project is initialized once with `baley init`. That creates the project in the ledger with a new random project id (UUID version 4) and writes the project file, `baley.toml`, at the repository root, which the owner commits. TOML allows comments, which a hand-edited policy file needs. The file holds the project id, the project name, and the project's policy: reviewers, routing and protected branches, the settings that today live in the repository config.
+A project is initialized once with `baley init`. That creates the project in the ledger with a new random project id (UUID version 4) and writes the project file, `baley.toml`, at the repository root, which the owner commits. TOML allows comments, which a hand-edited policy file needs. The file holds the project id, the project name, and the project's policy: reviewers, routing and protected branches, the project-level settings (0002, SYS-R13). Where the project file lives is revisited by the configuration design [TARGET].
 
 Baley finds a checkout's project the way git finds a repository: it walks up from the working directory to the first directory holding the project file, stopping at the repository root. The guard uses the same discovery. A directory with no project file is not managed and the guard stays silent. Every checkout Baley sees is recorded with `checkout.seen` (path, root commit, remote URL) for diagnosis only. If two checkouts whose remotes differ claim the same project id (a fork cloned beside its upstream), Baley refuses to record for the second and tells the owner to give it its own id with `baley init --new-id`.
 
-**Effective policy.** Policy has layers, as today: built-in defaults, the owner's user configuration, and the project file, merged with today's precedence, and with settings that today are allowed only in the global file allowed only in the user configuration. Whenever the merged result changes, for any layer, Baley records `policy.effective` with the full merged policy and the layer each value came from. Every command records the policy version it ran under. Each checkout runs under the project file committed at its own HEAD; if two checkouts of one project run under different policies, Hardin reports the divergence and names both. The routing-admission rule is kept: a dispatch whose routing inputs changed since admission is refused.
+**Effective policy.** Policy has layers: built-in defaults, the owner's global settings and the project settings, merged as the configuration design specifies [TARGET], with each host's section applying only to that host (0002, SYS-R13). Whenever the merged result changes, for any layer, Baley records `policy.effective` with the full merged policy and the layer each value came from. Every command records the policy version it ran under. Each checkout runs under the project file committed at its own HEAD; if two checkouts of one project run under different policies, Hardin reports the divergence and names both. The routing-admission rule is kept: a dispatch whose routing inputs changed since admission is refused.
 
-Agents may not edit the project file; the guard refuses writes to it, as it refuses writes to the repository config today.
+Agents may not edit the project file; the guard refuses writes to it.
 
 #### What replaces the Markdown and JSON files (EVD-R18, EVD-R25)
 
@@ -834,7 +833,7 @@ Agents may not edit the project file; the guard refuses writes to it, as it refu
 | `phases/<n>/PLAN-k.md`, parsed by execution | `plan.approved` event carrying the approval binding; execution reads the typed plan from the `plan` view, never parses Markdown. |
 | `phases/<n>/SUMMARY.md` | A query over the `dispatch` and `run` views. Git source accounting no longer needs an exemption for Baley's own files, because Baley writes none. |
 | `phases/<n>/UAT.md` | `human.result` events. |
-| `DEFERRED-*.json`, `ADJUDICATION-*.json` | `review.deferred` and `review.adjudicated` events; the `review_queue` view feeds next-action with today's precedence. |
+| `DEFERRED-*.json`, `ADJUDICATION-*.json` | `review.deferred` and `review.adjudicated` events; the `review_queue` view feeds next-action with the precedence the review design defines [TARGET]. |
 | task, spike and debug Markdown | Their own streams and views. |
 | `why` and `recall` reading Markdown from git history | `why` joins commits to the events that name them (`event(project_id, git_commit)`); `recall` uses the `Search` capability. Nothing is lost when a milestone is archived, because nothing is deleted. |
 | Pause committing store files | `pause.recorded` carries today's resume bindings (preserved HEAD, branch, policy version, occurrence, next step); `pause.resumed` records a resume that passed those checks. Pause still commits the owner's work in progress; it never commits Baley's records. |
@@ -947,30 +946,30 @@ A host may deliver the same tool call twice after a timeout. The second delivery
 
 Two sessions on different projects, or two agents on one project, each hold the write lock only for their commit. The second waits milliseconds at `BEGIN IMMEDIATE`. If both decided on inputs the first one changed, the second's `decide` re-reads them inside its transaction, sees the change, and refuses as stale; its caller re-reads and decides again.
 
-## Rules preserved
+## Where the domain rules live
 
-Every rule below keeps its current behaviour (EVD-R28). Each gets an equivalence test that exercises today's case against the new design.
+The domain rules are owned, specified and tested by the area design documents ([0002](0002-system-design.md)); nothing is required to behave as it did in Cadence. This table records, for each rule the ledger has to carry, which area owns it and how the ledger records it.
 
-| Rule | Today | In the ledger |
+| Rule | Owned by | In the ledger |
 |---|---|---|
-| A plan's approval binds its exact submitted content, the owner and the time | `plan/persistence.rs:135` | `plan.approved` carries the submission digest, owner and time; admission confirms it against the event |
-| Plan replay is scoped to its phase occurrence | `plan/persistence.rs:165` | Request scope (project, command kind) plus the phase in the digest |
-| Completion binds context, publications, admissions and task and plan history, and stops applying when any of them changes or execution is undone | `verification/completion.rs:80-125` | The `phase` view computes applicability from the bound facts; `completion.invalidated` is projected when a bound fact changes; completion is confirmed against events when used |
-| Verification records its launch before running | `verification/runner.rs:144-164` | Claim, act, record |
-| Verification claims are recomputed at commit | `store/writer.rs:1196` | Inside `decide` |
-| Undo records a pending state before its first revert and refuses to continue until an interrupted revert is reconciled | `undo_service.rs:108-112` | Claim, act, record, and reconciliation |
-| Undo keeps its refusal receipts | `undo_service.rs:18` | `command.completed` for refusals |
-| Landing records an intent per step and requires reconciliation | `landing_service.rs:245-287` | Claim, act, record per landing step |
-| Release requires an exact unstarted landing and a retained confirmation | `milestone/release.rs:122-184` | `release.proposed` and `release.confirmed` as separate owner steps |
-| Milestone close records readiness; prune is a later step bound to that exact close | `milestone_service.rs:113`, `milestone/prune.rs:94` | `milestone.close_ready`, then `milestone.archived` bound to it |
-| Resume checks the preserved HEAD, branch, configuration and occurrence | `pause_service.rs:458-490` | `pause.recorded` bindings, checked by `pause.resumed` |
-| Deferred reviews feed next-action with their precedence | `next_action/observations.rs:125`, `next_action/select.rs:93` | `review_queue` view |
-| Config layers merge with repo over global, and some settings are global-only | `config/merge.rs:131`, `config/mod.rs:14` | `policy.effective` with the same precedence and scope rules |
-| A dispatch whose routing inputs changed is refused | `config/reload.rs:190` | Kept; routing inputs are part of the policy version bound at admission |
-| The guard falls back to its remembered denial policy when current config is missing or malformed; it remembers denials only, never permissions | `guard/bash.rs:169`, `guard/bash.rs:375`, `guard/audit.rs:165` | `guard.policy_recorded` events and the `guard_policy` view |
-| The guard answers a re-delivered call with its confirmed answer, even after policy changes | `guard/bash.rs:486` | Request lookup on the guard's session and tool-call id |
-| Guard outcomes: ask, deny, pass, pass on failure, redelivery, audit-storage failure | `guard/bash.rs`, `guard/audit.rs` | Same outcomes, recorded as `guard` events; storage failure keeps today's behaviour |
-| One run can be read by its id | `execution_runner_service.rs:93` | `run` view |
+| A plan's approval binds its exact submitted content, the owner and the time | Context, plans and acceptance [TARGET] | `plan.approved` carries the submission digest, owner and time; admission confirms it against the event |
+| Plan replay is scoped to its phase occurrence | Context, plans and acceptance [TARGET] | Request scope (project, command kind) plus the phase in the digest |
+| Completion binds context, publications, admissions and task and plan history, and stops applying when any of them changes or execution is undone | Verification [TARGET] | The `phase` view computes applicability from the bound facts; `completion.invalidated` is projected when a bound fact changes; completion is confirmed against events when used |
+| Verification records its launch before running | Verification [TARGET] | Claim, act, record |
+| Verification claims are recomputed at commit | Verification [TARGET] | Inside `decide` |
+| Undo records a pending state before its first revert and refuses to continue until an interrupted revert is reconciled | Milestones, landing, undo and pause [TARGET] | Claim, act, record, and reconciliation |
+| Undo keeps its refusal receipts | Milestones, landing, undo and pause [TARGET] | `command.completed` for refusals |
+| Landing records an intent per step and requires reconciliation | Milestones, landing, undo and pause [TARGET] | Claim, act, record per landing step |
+| Release requires an exact unstarted landing and a retained confirmation | Milestones, landing, undo and pause [TARGET] | `release.proposed` and `release.confirmed` as separate owner steps |
+| Milestone close records readiness; prune is a later step bound to that exact close | Milestones, landing, undo and pause [TARGET] | `milestone.close_ready`, then `milestone.archived` bound to it |
+| Resume checks the preserved HEAD, branch, configuration and occurrence | Milestones, landing, undo and pause [TARGET] | `pause.recorded` bindings, checked by `pause.resumed` |
+| Deferred reviews feed next-action with their precedence | Review [TARGET] | `review_queue` view |
+| Settings layers merge, project over global | Configuration and routing [TARGET] | `policy.effective` with the precedence and scope the configuration design defines |
+| A dispatch whose routing inputs changed is refused | Configuration and routing [TARGET] | Kept; routing inputs are part of the policy version bound at admission |
+| The guard falls back to its remembered denial policy when current config is missing or malformed; it remembers denials only, never permissions | Guard [TARGET] | `guard.policy_recorded` events and the `guard_policy` view |
+| The guard answers a re-delivered call with its confirmed answer, even after policy changes | Guard [TARGET] | Request lookup on the guard's session and tool-call id |
+| Guard outcomes: ask, deny, pass, pass on failure, redelivery, audit-storage failure | Guard [TARGET] | Same outcomes, recorded as `guard` events; storage-failure behaviour defined by the guard design |
+| One run can be read by its id | Execution [TARGET] | `run` view |
 
 ## Cross-cutting concerns
 
@@ -1140,7 +1139,7 @@ Slices:
 | EVD-R25 | `show` and `export` render every record family from views. |
 | EVD-R26 | While a claim is active, commands outside its scope proceed and commands inside it wait; a retry during the effect never repeats it. After the owner is killed and the lease expires, a command in scope triggers reconciliation; an anchor claim reconciles automatically from the remote; a revert claim waits for the owner. A cleanly failed anchor push completes the claim and blocks nothing. |
 | EVD-R27 | An edited view document that says "approved" or "complete" does not grant admission or completion, because the event is missing. |
-| EVD-R28 | One equivalence test per row of [Rules preserved](#rules-preserved). |
+| EVD-R28 | Withdrawn. |
 
 The conformance suite lives in `baley-store` and runs against every adapter.
 
