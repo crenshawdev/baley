@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0001: The evidence ledger](../design/0001-evidence-ledger.md) |
 | Supersedes | |
-| Superseded by | |
+| Superseded by | [0020](0020-sandbox-is-a-write-barrier.md), in part: what each host's sandbox denies |
 
 ## Context and problem
 
