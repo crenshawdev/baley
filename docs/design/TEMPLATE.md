@@ -27,6 +27,8 @@ work from, by document number.
 |---|---|---|---|---|
 | PREFIX-R1 | One sentence stating the rule. | Why it exists. | Ids or ADRs | Active |
 
+Status is `Active` (the design now), `Backlog` (decided, for a later release) or `Withdrawn` (dropped; the row and id stay).
+
 ## 4. Roles and actors
 
 | Actor | Receives | Returns | Model and effort from |

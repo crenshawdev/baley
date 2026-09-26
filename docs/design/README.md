@@ -19,7 +19,7 @@ Bug fixes, refactors inside one module and dependency updates do not.
 |---|---|---|
 | Product requirements (PRD) | [`prd/`](prd/) | What Baley is for and what its owner can do, as numbered user stories |
 | System design | [`0002-system-design.md`](0002-system-design.md) | The architecture every area follows: who is responsible for what, the patterns, the parts and the decisions that cut across areas |
-| Area design documents | `NNNN-slug.md` | The full design of one process area (configuration, planning, execution, review and the rest), in the form of [TEMPLATE.md](TEMPLATE.md) |
+| Area design documents | `NNNN-slug.md` | The full design of one process area, in the form of [TEMPLATE.md](TEMPLATE.md). The set: 0003 configuration and routing, 0004 starting a project and changing scope, 0005 context, plans and acceptance, 0006 execution, 0007 verification, 0008 review, 0009 risk, 0010 guard, 0011 milestones, landing, undo and pause, 0012 host interface, 0013 next action and progress, 0014 support families |
 | Decision records (ADRs) | [`../adr/`](../adr/) | One architectural decision each: its context, the options and why one was chosen |
 | C4 model | [`c4/workspace.dsl`](c4/workspace.dsl) | The one model of Baley's structure; every structure diagram is exported from it |
 | Architecture overview | `../architecture/` | The system as it is built today, updated with the code that changes it |
@@ -44,7 +44,7 @@ A document is detailed enough that an engineer who has never seen the project ca
 
 ## Requirements and traceability
 
-Each design document states its requirements with stable identifiers: the document's short prefix and a number, such as `EVD-R1` or `SYS-R3`. Identifiers are never renumbered or reused; a dropped requirement keeps its row, marked Withdrawn. Quality requirements (speed, memory, security, reliability) have their own identifiers and a pass/fail check.
+Each design document states its requirements with stable identifiers: the document's short prefix and a number, such as `EVD-R1` or `SYS-R3`. Identifiers are never renumbered or reused. A requirement's status is `Active` (the design now), `Backlog` (decided, for a later release; the design says what it is, the release says when) or `Withdrawn` (dropped; the row and id stay). Quality requirements (speed, memory, security, reliability) have their own identifiers and a pass/fail check.
 
 Build issues, pull requests, tests and the instructions Baley serves cite the identifiers they satisfy, so any rule in the code traces back to its requirement.
 
@@ -107,3 +107,6 @@ They are technical records for an engineer who has never met the authors. They c
 | [Product requirements](prd/baley.md) | Draft |
 | [0001: The evidence ledger](0001-evidence-ledger.md) | Accepted |
 | [0002: System design](0002-system-design.md) | Draft |
+| [0003: Configuration and routing](0003-configuration-and-routing.md) | Draft |
+| [0004: Starting a project and changing scope](0004-starting-a-project-and-changing-scope.md) | Draft |
+| [0005: Context, plans and acceptance](0005-context-plans-and-acceptance.md) | Draft |

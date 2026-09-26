@@ -43,9 +43,9 @@ The owner works in a familiar loop: start a project, discuss a phase, approve a 
 
 ### Planning
 
-14. As an owner, I want to discuss a phase and agree its truths (the outcomes the phase must deliver) before planning starts, so that the plan is measured against what I actually want.
+14. As an owner, I want to refine each story with its acceptance criteria (truths, the outcomes a person can observe) before it is planned, so that the plan is measured against what I actually want.
 15. As an owner, I want each truth written as a single observable outcome, so that it can be proven or disproven.
-16. As an owner, I want Baley to refuse a phase with more truths than it can verify well, so that phases stay small enough to finish.
+16. As an owner, I want to set a sprint's capacity in tasks and have Baley refuse a plan that would exceed it, so that sprints stay small enough to finish without anyone estimating.
 17. As an owner, I want a planner agent to write the plan, with exactly one check for each truth, so that every promised outcome has a test that proves it.
 18. As an owner, I want an assumptions analyzer to surface what the plan takes for granted, so that I catch wrong assumptions before code is written.
 19. As an owner, I want a plan checker to judge the plan independently, so that a bad plan is caught before it is built.

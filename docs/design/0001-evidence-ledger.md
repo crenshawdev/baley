@@ -337,8 +337,8 @@ Streams used by the record families:
 | Stream | Examples of events |
 |---|---|
 | `project` | `project.initialized`, `project.described`, `scope.approved`, `forge.checked`, `policy.effective`, `checkout.seen` |
-| `roadmap` | `phase.declared`, `phase.reordered`, `phase.withdrawn`, `requirement.declared`, `requirement.corrected`, `requirement.reassigned`, `requirement.dropped` ([0004](0004-starting-a-project-and-changing-scope.md)) |
-| `phase/<n>` | `context.approved`, `dispatch.issued` (serializes one active dispatch per phase), `phase.completed`, `completion.invalidated`, `phase.undone` |
+| `roadmap` | `phase.declared`, `phase.reordered`, `phase.withdrawn`, `requirement.declared`, `requirement.corrected`, `requirement.reassigned`, `requirement.reprioritized`, `requirement.dropped` ([0004](0004-starting-a-project-and-changing-scope.md)), `story.refined` ([0005](0005-context-plans-and-acceptance.md)) |
+| `phase/<n>` | `plan.approved`, `plan.checked`, `plan.replaced`, `sprint.retrospective` ([0005](0005-context-plans-and-acceptance.md)), `dispatch.issued` (serializes one active dispatch per phase), `phase.completed`, `completion.invalidated`, `phase.undone` |
 | `plan/<n>-<k>` | `plan.submitted`, `plan.approved`, `plan.superseded` |
 | `admission/<n>` | `execution.admitted`, `execution.extended` |
 | `dispatch/<id>` | `task.started`, `task.run`, `task.closed`, `suite.run`, `dispatch.ended`, `worker.exited`, `worker.interrupted` |
@@ -829,7 +829,7 @@ Agents may not edit the project file; the guard refuses writes to it.
 | `ROADMAP.md` phase list, read by every status query | `roadmap` stream and view. The commands of [0004](0004-starting-a-project-and-changing-scope.md) declare, edit, reorder and withdraw phases. |
 | `REQUIREMENTS.md` traceability rows | `requirement.declared`, `requirement.corrected`, `requirement.reassigned` and `requirement.dropped` events ([0004](0004-starting-a-project-and-changing-scope.md)) and the `roadmap` view. Completion and undo record events instead of editing rows. |
 | `PROJECT.md` milestone version | The `milestone` view. |
-| `phases/<n>/CONTEXT.md` | `context.approved` event; text is a `record` payload. |
+| `phases/<n>/CONTEXT.md` | `story.refined` events on the stories a sprint commits ([0005](0005-context-plans-and-acceptance.md)); accepted assumptions are part of the event. |
 | `phases/<n>/PLAN-k.md`, parsed by execution | `plan.approved` event carrying the approval binding; execution reads the typed plan from the `plan` view, never parses Markdown. |
 | `phases/<n>/SUMMARY.md` | A query over the `dispatch` and `run` views. Git source accounting no longer needs an exemption for Baley's own files, because Baley writes none. |
 | `phases/<n>/UAT.md` | `human.result` events. |
@@ -1171,7 +1171,7 @@ None. The benchmark and the host matrix, the two acceptance gates, are answered 
 
 | Current namespace or file | Becomes |
 |---|---|
-| `context` | `phase/<n>` stream, `context.approved`; `phase` view |
+| `context` | `roadmap` stream, `story.refined`; `backlog` and `phase` views ([0005](0005-context-plans-and-acceptance.md)) |
 | `plan_publications` (publications, receipts) | `plan/<n>-<k>` stream; `plan` view; receipts replaced by `command.completed` and the `request` view |
 | `acceptance_maps` | `plan.approved` payload; `evidence_map` view |
 | `native_admissions` | `admission/<n>` stream; `admission` view |

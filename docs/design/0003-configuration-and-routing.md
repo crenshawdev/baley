@@ -494,6 +494,7 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `workflow.test_command` | command line | absent | project | 0006 [TARGET] | The suite Baley runs (SYS-R8) |
 | `workflow.lint_command` | command line | absent | project | 0006 [TARGET] | The lint Baley runs |
 | `workflow.skip_discuss` | bool | `false` | project | 0013 [TARGET] | Whether next-action skips the discussion step |
+| `planning.sprint_capacity` | integer, min 1, or absent | absent | both | [0005](0005-context-plans-and-acceptance.md) | The ceiling on a sprint's size in tasks (PLN-R9) |
 | `planning.max_capture_bullets` | integer, min 1 | 40 | both | 0014 [TARGET] | Report-only bound on active captured items |
 | `memory.backend` | `none`, `builtin` | `builtin` | both | 0014 [TARGET] | Whether recall is on |
 | `review.mode` | `single`, `panel`, `adjudicated` | `adjudicated` | both | 0008 [TARGET] | How reviewer findings are combined |
@@ -501,14 +502,14 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `review.request_timeout_ms` | integer, 1 to 600000 | 540000 | both | 0008 [TARGET] | Timeout of one outside review call |
 | `review.max_prompt_tokens` | integer, min 1 | 120000 | both | 0008 [TARGET] | Bound on review prompt size |
 | `review.providers.<p>.tiers.<flagship,balanced,cheap>` | model name | absent | both | 0008 [TARGET] | The model each tier maps to per provider; checked against the catalog (CFG-R14) |
-| `review.triggers.<plan,diff,risk_surface>.gate` | `off`, `advisory`, `deferred`, `blocking`, `adjudicated` | plan `advisory`, diff `off`, risk_surface `blocking` | both | 0008 [TARGET] | How strictly each trigger's review holds work |
+| `review.triggers.<plan,diff,risk_surface>.gate` | `off`, `advisory`, `deferred`, `blocking`, `adjudicated` | plan `advisory`, diff `off`, risk_surface `blocking` | both | 0008 [TARGET] | How strictly each trigger's review holds work; the plan gate is also the plan checker's switch ([0005](0005-context-plans-and-acceptance.md), PLN-R16) |
 | `review.triggers.<t>.tier` | `flagship`, `balanced`, `cheap` | `cheap` | both | 0008 [TARGET] | Which provider tier reviews |
 | `review.triggers.<t>.effort` | `minimal`, `low`, `medium`, `high` | plan `low`, diff `minimal`, risk_surface `low` | both | 0008 [TARGET] | The effort of a provider review |
 | `review.triggers.risk_surface.surfaces` | list of `auth`, `migrations`, `billing`, `concurrency`, `destructive`, `secrets`, `api_contract`, `untrusted_input` | absent | project | 0009 [TARGET] | Which risk surfaces the project declares |
 | `review.triggers.risk_surface.waive_routing_floor` | same list | absent | project | 0009 [TARGET] | Surfaces whose floor the owner waives |
 | `review.consult.enabled`, `.tier`, `.effort`, `.attempt_threshold` | bool; tier; effort; integer min 1 | `false`; `flagship`; `high`; 3 | both | 0008 [TARGET] | The consult call after repeated failures |
 
-Settings removed from the schema because nothing reads them (CFG-R7): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Plan size limits are designed in [0005](0005-context-plans-and-acceptance.md) [TARGET], not as free numbers here.
+Settings removed from the schema because nothing reads them (CFG-R7): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Sprint capacity is designed in [0005](0005-context-plans-and-acceptance.md) (PLN-R9), not as free numbers here.
 
 ## 10. Instructions served
 
