@@ -20,7 +20,7 @@ This area decides:
 - which model names Baley accepts for each host and provider, and how that list stays current;
 - how provider API keys are stored and reached.
 
-It does not decide the meaning of settings owned by other areas (section 9 lists every setting and its owner), how a work order reaches a host or how effort is delivered there ([0012: Host interface](0012-host-interface.md) [TARGET]), whether a review or a risk gate fires ([0008: Review](0008-review.md) [TARGET], [0009: Risk](0009-risk.md) [TARGET]), or what the guard does with git commands ([0010: Guard](0010-guard.md) [TARGET]).
+It does not decide the meaning of settings owned by other areas (section 9 lists every setting and its owner), how a work order reaches a host or how effort is delivered there ([0012: Host interface](0012-host-interface.md) [TARGET]), whether a review or a risk gate fires ([0008: Review](0008-review.md), [0009: Risk](0009-risk.md) [TARGET]), or what the guard does with git commands ([0010: Guard](0010-guard.md) [TARGET]).
 
 Hand-offs: the work order composer ([0002](0002-system-design.md) section 8) asks this area for the model and effort of each dispatch; the ledger ([0001](0001-evidence-ledger.md)) stores what this area records; `baley init` ([0001](0001-evidence-ledger.md), EVD-R17, ADR 0004) creates the project file this area reads.
 
@@ -264,7 +264,7 @@ Called by the work order composer for every dispatch, never by a host.
 | top level | `escalate_on_failure`; any `both`-scoped setting |
 | `[roles.<role>]` | `model`, `effort` for the six roles |
 | `[host.<name>]` and `[host.<name>.roles.<role>]` | The same settings, applied only when that host is connected |
-| `[review]`, `[review.providers.<p>.tiers]`, `[review.triggers.<t>]`, `[review.consult]` | Settings owned by [0008](0008-review.md) [TARGET] and [0009](0009-risk.md) [TARGET] |
+| `[review]`, `[review.providers.<p>.tiers]`, `[review.triggers.<t>]`, `[review.consult]` | Settings owned by [0008](0008-review.md) and [0009](0009-risk.md) [TARGET] |
 | `[memory]`, `[planning]` | Settings owned by [0014](0014-support.md) [TARGET] |
 
 ### The project file `baley.toml` (TOML)
@@ -497,19 +497,18 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `planning.sprint_capacity` | integer, min 1, or absent | absent | both | [0005](0005-context-plans-and-acceptance.md) | The ceiling on a sprint's size in tasks (PLN-R9) |
 | `planning.max_capture_bullets` | integer, min 1 | 40 | both | 0014 [TARGET] | Report-only bound on active captured items |
 | `memory.backend` | `none`, `builtin` | `builtin` | both | 0014 [TARGET] | Whether recall is on |
-| `review.mode` | `single`, `panel`, `adjudicated` | `adjudicated` | both | 0008 [TARGET] | How reviewer findings are combined |
-| `review.reviewers` | list of `claude-subagent`, `openai`, `gemini`, `deepseek` | `["claude-subagent"]` | both | 0008 [TARGET] | Which reviewers may be used |
-| `review.request_timeout_ms` | integer, 1 to 600000 | 540000 | both | 0008 [TARGET] | Timeout of one outside review call |
-| `review.max_prompt_tokens` | integer, min 1 | 120000 | both | 0008 [TARGET] | Bound on review prompt size |
-| `review.providers.<p>.tiers.<flagship,balanced,cheap>` | model name | absent | both | 0008 [TARGET] | The model each tier maps to per provider; checked against the catalog (CFG-R14) |
-| `review.triggers.<plan,diff,risk_surface>.gate` | `off`, `advisory`, `deferred`, `blocking`, `adjudicated` | plan `advisory`, diff `off`, risk_surface `blocking` | both | 0008 [TARGET] | How strictly each trigger's review holds work; the plan gate is also the plan checker's switch ([0005](0005-context-plans-and-acceptance.md), PLN-R16) |
-| `review.triggers.<t>.tier` | `flagship`, `balanced`, `cheap` | `cheap` | both | 0008 [TARGET] | Which provider tier reviews |
-| `review.triggers.<t>.effort` | `minimal`, `low`, `medium`, `high` | plan `low`, diff `minimal`, risk_surface `low` | both | 0008 [TARGET] | The effort of a provider review |
+| `review.reviewers` | list of `host`, `openai`, `gemini`, `deepseek` | `["host"]` | both | [0008](0008-review.md) | Which reviewers run on every triggered review |
+| `review.request_timeout_ms` | integer, 1 to 600000 | 540000 | both | [0008](0008-review.md) | Timeout of one outside review call |
+| `review.max_prompt_tokens` | integer, min 1 | 120000 | both | [0008](0008-review.md) | Bound on review prompt size |
+| `review.providers.<p>.tiers.<flagship,balanced,cheap>` | model name | absent | both | [0008](0008-review.md) | The model each tier maps to per provider; checked against the catalog (CFG-R14) |
+| `review.triggers.<plan,diff,risk_surface>.gate` | `off`, `advisory`, `deferred`, `blocking`, `adjudicated` | plan `advisory`, diff `off`, risk_surface `blocking` | both | [0008](0008-review.md) | How strictly each trigger's review holds work; the plan gate is also the plan checker's switch ([0005](0005-context-plans-and-acceptance.md), PLN-R16) |
+| `review.triggers.<t>.tier` | `flagship`, `balanced`, `cheap` | `cheap` | both | [0008](0008-review.md) | Which provider tier reviews |
+| `review.triggers.<t>.effort` | `minimal`, `low`, `medium`, `high` | plan `low`, diff `minimal`, risk_surface `low` | both | [0008](0008-review.md) | The effort of a provider review |
 | `review.triggers.risk_surface.surfaces` | list of `auth`, `migrations`, `billing`, `concurrency`, `destructive`, `secrets`, `api_contract`, `untrusted_input` | absent | project | 0009 [TARGET] | Which risk surfaces the project declares |
 | `review.triggers.risk_surface.waive_routing_floor` | same list | absent | project | 0009 [TARGET] | Surfaces whose floor the owner waives |
-| `review.consult.enabled`, `.tier`, `.effort`, `.attempt_threshold` | bool; tier; effort; integer min 1 | `false`; `flagship`; `high`; 3 | both | 0008 [TARGET] | The consult call after repeated failures |
+| `review.consult.enabled`, `.tier`, `.effort`, `.attempt_threshold` | bool; tier; effort; integer min 1 | `false`; `flagship`; `high`; 3 | both | 0014 [TARGET] | The consult call in debug after repeated failures |
 
-Settings removed from the schema because nothing reads them (CFG-R7): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Sprint capacity is designed in [0005](0005-context-plans-and-acceptance.md) (PLN-R9), not as free numbers here.
+Settings removed from the schema because nothing reads them (CFG-R7), plus `review.mode` (every reviewer runs, [0008](0008-review.md)): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Sprint capacity is designed in [0005](0005-context-plans-and-acceptance.md) (PLN-R9), not as free numbers here.
 
 ## 10. Instructions served
 

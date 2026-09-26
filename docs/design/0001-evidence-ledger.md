@@ -343,7 +343,7 @@ Streams used by the record families:
 | `admission/<n>` | `execution.admitted`, `execution.extended` |
 | `dispatch/<id>` | `task.started`, `task.run`, `task.closed`, `suite.run`, `dispatch.ended`, `worker.exited`, `worker.interrupted` |
 | `verification/<id>` | `verification.started`, `verification.run`, `verdict.claimed`, `observation.recorded`, `item.overruled`, `truth.waived`, `waiver.revoked`, `verification.completed` ([0007](0007-verification.md)) |
-| `review/<id>` | `review.admitted`, `review.enqueued`, `review.delivered`, `review.returned`, `review.deferred`, `review.adjudicated`, `review.closed` |
+| `review/<id>` | `review.admitted`, `review.issued`, `review.returned`, `review.failed`, `review.adjudication`, `review.adjudicated`, `review.settled`, `review.deferred`, `finding.filed`, `finding.declined`, `finding.uncertain` ([0008](0008-review.md)) |
 | `risk/<n>` | `risk.observed`, `risk.fired`, `risk.receipt` |
 | `milestone/<name>` | `milestone.close_ready`, `milestone.archived`, `release.proposed`, `release.confirmed`, `landing.started`, `landing.step`, `landing.completed` |
 | `pause` | `pause.recorded`, `pause.resumed` |
@@ -832,8 +832,8 @@ Agents may not edit the project file; the guard refuses writes to it.
 | `phases/<n>/CONTEXT.md` | `story.refined` events on the stories a sprint commits ([0005](0005-context-plans-and-acceptance.md)); accepted assumptions are part of the event. |
 | `phases/<n>/PLAN-k.md`, parsed by execution | `plan.approved` event carrying the approval binding; execution reads the typed plan from the `plan` view, never parses Markdown. |
 | `phases/<n>/SUMMARY.md` | A query over the `dispatch` and `run` views. Git source accounting no longer needs an exemption for Baley's own files, because Baley writes none. |
-| `phases/<n>/UAT.md` | `human.result` events. |
-| `DEFERRED-*.json`, `ADJUDICATION-*.json` | `review.deferred` and `review.adjudicated` events; the `review_queue` view feeds next-action with the precedence the review design defines [TARGET]. |
+| `phases/<n>/UAT.md` | `observation.recorded` events ([0007](0007-verification.md)). |
+| `DEFERRED-*.json`, `ADJUDICATION-*.json` | `review.deferred` and `review.adjudicated` events; the `review_queue` view feeds next-action with the precedence [0008](0008-review.md) defines (REV-R11). |
 | task, spike and debug Markdown | Their own streams and views. |
 | `why` and `recall` reading Markdown from git history | `why` joins commits to the events that name them (`event(project_id, git_commit)`); `recall` uses the `Search` capability. Nothing is lost when a milestone is archived, because nothing is deleted. |
 | Pause committing store files | `pause.recorded` carries today's resume bindings (preserved HEAD, branch, policy version, occurrence, next step); `pause.resumed` records a resume that passed those checks. Pause still commits the owner's work in progress; it never commits Baley's records. |
@@ -963,7 +963,7 @@ The domain rules are owned, specified and tested by the area design documents ([
 | Release requires an exact unstarted landing and a retained confirmation | Milestones, landing, undo and pause [TARGET] | `release.proposed` and `release.confirmed` as separate owner steps |
 | Milestone close records readiness; prune is a later step bound to that exact close | Milestones, landing, undo and pause [TARGET] | `milestone.close_ready`, then `milestone.archived` bound to it |
 | Resume checks the preserved HEAD, branch, configuration and occurrence | Milestones, landing, undo and pause [TARGET] | `pause.recorded` bindings, checked by `pause.resumed` |
-| Deferred reviews feed next-action with their precedence | Review [TARGET] | `review_queue` view |
+| Deferred reviews feed next-action with their precedence | [0008: Review](0008-review.md), REV-R11 | `review_queue` view |
 | Settings layers merge, project over global | [0003: Configuration and routing](0003-configuration-and-routing.md), CFG-R6 | `policy.effective` with the precedence and scope the configuration design defines |
 | A dispatch whose routing inputs changed is refused | [0003: Configuration and routing](0003-configuration-and-routing.md), CFG-R10 | Kept; routing inputs are part of the policy version bound at admission |
 | The guard falls back to its remembered denial policy when current config is missing or malformed; it remembers denials only, never permissions | Guard [TARGET] | `guard.policy_recorded` events and the `guard_policy` view |
