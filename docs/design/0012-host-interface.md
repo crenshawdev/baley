@@ -101,7 +101,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is t
 - **Outputs:** the operation's typed result, or one part with the next part's identity.
 - **Refusals:** `unknown-operation`, `malformed-arguments` (naming the field), `not-a-project`, plus the operation's own codes.
 
-Query operations are the reads of every area: `help`, `schema`, `document` (a record by identity: work order, plan, story, sprint, run, review, verification, roadmap row), `document-search`, `instruction` (an instruction by identity), `progress`, `next` ([0013](0013-next-action-and-progress.md)), `why`, `recall`, `search` ([0014](0014-support-families.md) [TARGET]), `route`, `status` operations per area.
+Query operations are the reads of every area: `help`, `schema`, `document` (a record by identity: work order, plan, story, sprint, run, review, verification, roadmap row), `document-search`, `instruction` (an instruction by identity), `progress`, `next` ([0013](0013-next-action-and-progress.md)), `why`, `recall`, `search` ([0014](0014-support-families.md)), `route`, `status` operations per area.
 
 ### baley_apply (tool)
 

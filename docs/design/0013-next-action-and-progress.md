@@ -49,7 +49,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is H
 | NXT-R5 | When a view disagrees with its events (a status the events do not support, a phase the roadmap view lists that no declaration made), the question is refused with `derivation-conflict` naming the view, the key and the event, and nothing is repaired in place; the owner runs `baley verify-ledger --views` ([0001](0001-evidence-ledger.md)). | A wrong view must not become a wrong decision. | EVD-R10 | Active |
 | NXT-R6 | `progress` answers, in bounded parts: the backlog in priority order with each story's state, truth count and size; the current sprint with its goal, committed stories, plans and their state, tasks done of total, capacity and size, checks red and green, the suite's last result, reviews and rulings owed, risk state, landing state; the last closed sprints' velocity; every open hold (interrupted dispatch, stop, pause, deferred reviews, unsettled risk, unanswered questions); refusals hit since the last close; and the next action. Nothing in it is a record; every line names the view it came from. | The owner sees the whole board without asking twice. | NXT-R1, NXT-R3 | Active |
 | NXT-R7 | `suggest` is read-only: from recorded routes and gate fires it proposes setting changes with a ready payload: two or more escalations on one role propose `roles.<role>.effort` at the rung that succeeded; two or more failed risk adjudications on one trigger propose the next stricter `review.triggers.<t>.gate`. The proposal is shown inside `progress` and by `baley suggest`; the owner applies it through `config set`; Baley never applies it. | The record can advise; the owner decides. | CFG-R11, CFG-R16 | Active |
-| NXT-R8 | `why` answers, for a commit, a task, a plan or a story, the events that name it and the decisions they record, joined by the ledger's git facts ([0014](0014-support-families.md) [TARGET] owns the query; this area feeds it the derived state of what it names). | The owner can ask why something is the way it is. | EVD-R4 | Active |
+| NXT-R8 | `why` answers, for a commit, a task, a plan or a story, the events that name it and the decisions they record, joined by the ledger's git facts ([0014](0014-support-families.md) owns the query; this area feeds it the derived state of what it names). | The owner can ask why something is the way it is. | EVD-R4 | Active |
 | NXT-R9 | A dashboard renders what `progress` answers, over the same query, and derives nothing of its own. | A second derivation would disagree with the first. | NXT-R6 | Backlog |
 
 ## 4. Roles and actors
@@ -192,7 +192,7 @@ The code today is the Cadence engine crate awaiting rename; its next action deri
 | NXT-R5 | Built | `derivation-conflict` and `state-conflict` (`crates/cadence/src/derivation/memo.rs:280-326`, `crates/cadence/src/derivation/consistency.rs:14-70`) |
 | NXT-R6 | Partly built | Phase rows, record counts, capture bound, next action (`crates/cadence/src/progress/render.rs:14-73`, `crates/cadence/src/progress_service.rs:31-114`); bounded at 24,576 bytes with a refusal instead of parts |
 | NXT-R7 | Built | `crates/cadence/src/suggest/rules.rs:4-67`, `crates/cadence/src/suggest_service.rs:91-116` |
-| NXT-R8 | Built over Markdown | `why` in `crates/cadence/src/recall` ([0014](0014-support-families.md) [TARGET]) |
+| NXT-R8 | Built over Markdown | `why` in `crates/cadence/src/recall` ([0014](0014-support-families.md)) |
 
 ## 12. Open questions
 

@@ -264,8 +264,8 @@ Called by the work order composer for every dispatch, never by a host.
 | top level | `escalate_on_failure`; any `both`-scoped setting |
 | `[roles.<role>]` | `model`, `effort` for the six roles |
 | `[host.<name>]` and `[host.<name>.roles.<role>]` | The same settings, applied only when that host is connected |
-| `[review]`, `[review.providers.<p>.tiers]`, `[review.triggers.<t>]`, `[review.consult]` | Settings owned by [0008](0008-review.md) and [0009](0009-risk.md) |
-| `[memory]`, `[planning]` | Settings owned by [0014](0014-support.md) [TARGET] |
+| `[review]`, `[review.providers.<p>.tiers]`, `[review.triggers.<t>]` | Settings owned by [0008](0008-review.md) and [0009](0009-risk.md) |
+| `[planning]`, `[debug]` | Settings owned by [0014](0014-support-families.md) |
 
 ### The project file `baley.toml` (TOML)
 
@@ -491,8 +491,7 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `workflow.test_command` | command line | absent | project | [0006](0006-execution.md) | The suite Baley runs (SYS-R8) |
 | `workflow.lint_command` | command line | absent | project | [0006](0006-execution.md) | The lint Baley runs |
 | `planning.sprint_capacity` | integer, min 1, or absent | absent | both | [0005](0005-context-plans-and-acceptance.md) | The ceiling on a sprint's size in tasks (PLN-R9) |
-| `planning.max_capture_bullets` | integer, min 1 | 40 | both | 0014 [TARGET] | Report-only bound on active captured items |
-| `memory.backend` | `none`, `builtin` | `builtin` | both | 0014 [TARGET] | Whether recall is on |
+| `planning.max_capture_bullets` | integer, min 1 | 40 | both | [0014](0014-support-families.md) | Report-only bound on active captured items |
 | `review.reviewers` | list of `host`, `openai`, `gemini`, `deepseek` | `["host"]` | both | [0008](0008-review.md) | Which reviewers run on every triggered review |
 | `review.request_timeout_ms` | integer, 1 to 600000 | 540000 | both | [0008](0008-review.md) | Timeout of one outside review call |
 | `review.max_prompt_tokens` | integer, min 1 | 120000 | both | [0008](0008-review.md) | Bound on review prompt size |
@@ -502,9 +501,9 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `review.triggers.<t>.effort` | `minimal`, `low`, `medium`, `high` | plan `low`, diff `minimal`, risk_surface `low` | both | [0008](0008-review.md) | The effort of a provider review |
 | `review.triggers.risk_surface.surfaces` | list of `auth`, `migrations`, `billing`, `concurrency`, `destructive`, `secrets`, `api_contract`, `untrusted_input` | absent | project | [0009](0009-risk.md) | Which risk surfaces the project declares |
 | `review.triggers.risk_surface.waive_routing_floor` | same list | absent | project | [0009](0009-risk.md) | Surfaces whose floor the owner waives |
-| `review.consult.enabled`, `.tier`, `.effort`, `.attempt_threshold` | bool; tier; effort; integer min 1 | `false`; `flagship`; `high`; 3 | both | 0014 [TARGET] | The consult call in debug after repeated failures |
+| `debug.attempt_threshold` | integer, min 1 | 3 | both | [0014](0014-support-families.md) | Attempts before a diagnosis review is offered |
 
-Settings removed from the schema because nothing reads them (CFG-R7), plus `review.mode` (every reviewer runs, [0008](0008-review.md)) `git.create_tag`, `git.on_land_cleanup`, `git.issue_check` (per-landing choices, [0011](0011-milestones-landing-undo-pause.md)) and `workflow.skip_discuss` (refinement is never skipped, [0013](0013-next-action-and-progress.md)): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Sprint capacity is designed in [0005](0005-context-plans-and-acceptance.md) (PLN-R9), not as free numbers here.
+Settings removed from the schema because nothing reads them (CFG-R7), plus `review.mode` (every reviewer runs, [0008](0008-review.md)) `git.create_tag`, `git.on_land_cleanup`, `git.issue_check` (per-landing choices, [0011](0011-milestones-landing-undo-pause.md)) `workflow.skip_discuss` (refinement is never skipped, [0013](0013-next-action-and-progress.md)), `memory.backend` and `review.consult.*` (recall always available; consult is the diagnosis review, [0014](0014-support-families.md)): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Sprint capacity is designed in [0005](0005-context-plans-and-acceptance.md) (PLN-R9), not as free numbers here.
 
 ## 10. Instructions served
 

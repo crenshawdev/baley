@@ -347,7 +347,7 @@ Streams used by the record families:
 | `risk/<n>` | `risk.observed`, `risk.fired`, `risk.receipt` |
 | `milestone/<name>` | `milestone.close_ready`, `milestone.archived`, `release.proposed`, `release.confirmed`, `landing.started`, `landing.authorized`, `landing.claimed`, `landing.step`, `landing.reconciled`, `landing.confirmed`, `landing.completed`, `tracker.checked` ([0011](0011-milestones-landing-undo-pause.md)) |
 | `pause` | `pause.recorded`, `pause.resumed` |
-| `task/<slug>`, `debug/<slug>`, `spike/<slug>` | the off-roadmap records |
+| `capture`, `task/<slug>`, `debug/<slug>`, `spike/<slug>` | the support families' records ([0014](0014-support-families.md)) |
 | `capture` | `item.captured`, `item.resolved` |
 | `guard` | `guard.allowed`, `guard.asked`, `guard.refused`, `guard.policy_recorded` |
 | `command/<kind>` | `command.claimed`, `command.completed`, `command.reconciled` |
@@ -952,8 +952,8 @@ The domain rules are owned, specified and tested by the area design documents ([
 
 | Rule | Owned by | In the ledger |
 |---|---|---|
-| A plan's approval binds its exact submitted content, the owner and the time | Context, plans and acceptance [TARGET] | `plan.approved` carries the submission digest, owner and time; admission confirms it against the event |
-| Plan replay is scoped to its phase occurrence | Context, plans and acceptance [TARGET] | Request scope (project, command kind) plus the phase in the digest |
+| A plan's approval binds its exact submitted content, the owner and the time | [0005: Context, plans and acceptance](0005-context-plans-and-acceptance.md), PLN-R15 | `plan.approved` carries the submission digest, owner and time; admission confirms it against the event |
+| Plan replay is scoped to its phase occurrence | [0005: Context, plans and acceptance](0005-context-plans-and-acceptance.md), PLN-R15 | Request scope (project, command kind) plus the phase in the digest |
 | Completion binds context, publications, admissions and task and plan history, and stops applying when any of them changes or execution is undone | [0007: Verification](0007-verification.md), VER-R13 | The `phase` view computes applicability from the bound facts; `completion.invalidated` is projected when a bound fact changes; completion is confirmed against events when used |
 | Verification records its launch before running | [0007: Verification](0007-verification.md), VER-R2 | Claim, act, record |
 | Verification claims are recomputed at commit | [0007: Verification](0007-verification.md), VER-R2 | Inside `decide` |

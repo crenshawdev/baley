@@ -23,7 +23,7 @@ This area decides how other models critique the work and what the owner does wit
 - the on-demand reviews: minimalism, decision, diagnosis;
 - filing the findings the owner chooses to track as issues on the forge.
 
-It does not decide how risk is detected or when its review fires ([0009: Risk](0009-risk.md)); the plan checker's dimensions and the plan revision it produces ([0005](0005-context-plans-and-acceptance.md)); gap plans and execution ([0006](0006-execution.md)); debug episodes and consult ([0014](0014-support-families.md) [TARGET]); or how the forge is reached ([0011](0011-milestones-landing-undo-pause.md)).
+It does not decide how risk is detected or when its review fires ([0009: Risk](0009-risk.md)); the plan checker's dimensions and the plan revision it produces ([0005](0005-context-plans-and-acceptance.md)); gap plans and execution ([0006](0006-execution.md)); debug episodes and consult ([0014](0014-support-families.md)); or how the forge is reached ([0011](0011-milestones-landing-undo-pause.md)).
 
 Hand-offs: 0005 raises the plan review; 0006 raises the diff review at plan completion; 0009 raises the risk review; landing (0011) waits on the deferred queue; the work order composer ([0002](0002-system-design.md) section 8) builds every review work order with the route from [0003](0003-configuration-and-routing.md).
 
@@ -326,7 +326,7 @@ sequenceDiagram
 | `review.max_prompt_tokens` | integer, min 1 | 120000 | both | 0008 | Bound on a provider prompt |
 | `roles.reviewer.*` | see [0003](0003-configuration-and-routing.md) | | both | 0003 | The `host` reviewer's route |
 
-`review.mode` is removed: every listed reviewer runs and the host session adjudicates. `review.consult.*` belongs to debug ([0014](0014-support-families.md) [TARGET]).
+`review.mode` and `review.consult.*` are removed: every listed reviewer runs and the host session adjudicates; a stuck debug episode uses the `diagnosis` kind ([0014](0014-support-families.md)).
 
 ## 10. Instructions served
 
