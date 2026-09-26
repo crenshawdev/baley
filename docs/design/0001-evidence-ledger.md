@@ -966,9 +966,9 @@ The domain rules are owned, specified and tested by the area design documents ([
 | Deferred reviews feed next-action with their precedence | [0008: Review](0008-review.md), REV-R11 | `review_queue` view |
 | Settings layers merge, project over global | [0003: Configuration and routing](0003-configuration-and-routing.md), CFG-R6 | `policy.effective` with the precedence and scope the configuration design defines |
 | A dispatch whose routing inputs changed is refused | [0003: Configuration and routing](0003-configuration-and-routing.md), CFG-R10 | Kept; routing inputs are part of the policy version bound at admission |
-| The guard falls back to its remembered denial policy when current config is missing or malformed; it remembers denials only, never permissions | Guard [TARGET] | `guard.policy_recorded` events and the `guard_policy` view |
-| The guard answers a re-delivered call with its confirmed answer, even after policy changes | Guard [TARGET] | Request lookup on the guard's session and tool-call id |
-| Guard outcomes: ask, deny, pass, pass on failure, redelivery, audit-storage failure | Guard [TARGET] | Same outcomes, recorded as `guard` events; storage-failure behaviour defined by the guard design |
+| The guard falls back to its remembered denial policy when current config is missing or malformed; it remembers denials only, never permissions | [0010: Guard](0010-guard.md), GRD-R7 | `guard.policy_recorded` events and the `guard_policy` view |
+| The guard answers a re-delivered call with its confirmed answer, even after policy changes | [0010: Guard](0010-guard.md), GRD-R10 | Request lookup on the guard's session and tool-call id |
+| Guard outcomes: ask, deny, pass, pass on failure, redelivery, audit-storage failure | [0010: Guard](0010-guard.md), GRD-R6 to GRD-R10 | Same outcomes, recorded as `guard` events; storage-failure behaviour per GRD-R9 |
 | One run can be read by its id | [0006: Execution](0006-execution.md), EXE-R7 | `run` view |
 
 ## Cross-cutting concerns

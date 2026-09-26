@@ -20,7 +20,7 @@ This area decides:
 - which model names Baley accepts for each host and provider, and how that list stays current;
 - how provider API keys are stored and reached.
 
-It does not decide the meaning of settings owned by other areas (section 9 lists every setting and its owner), how a work order reaches a host or how effort is delivered there ([0012: Host interface](0012-host-interface.md) [TARGET]), whether a review or a risk gate fires ([0008: Review](0008-review.md), [0009: Risk](0009-risk.md)), or what the guard does with git commands ([0010: Guard](0010-guard.md) [TARGET]).
+It does not decide the meaning of settings owned by other areas (section 9 lists every setting and its owner), how a work order reaches a host or how effort is delivered there ([0012: Host interface](0012-host-interface.md) [TARGET]), whether a review or a risk gate fires ([0008: Review](0008-review.md), [0009: Risk](0009-risk.md)), or what the guard does with git commands ([0010: Guard](0010-guard.md)).
 
 Hand-offs: the work order composer ([0002](0002-system-design.md) section 8) asks this area for the model and effort of each dispatch; the ledger ([0001](0001-evidence-ledger.md)) stores what this area records; `baley init` ([0001](0001-evidence-ledger.md), EVD-R17, ADR 0004) creates the project file this area reads.
 
@@ -152,7 +152,7 @@ graph LR
 | Key store (component) | A provider name | An encrypted key decrypted for one use; facts about keys | Not applicable |
 | Model catalog (component) | A host or provider name and a model name | Whether the name is accepted; the catalog version | Not applicable |
 | Work order composer ([0002](0002-system-design.md) section 8) | A route | A work order carrying it | The route |
-| Guard hook ([0010](0010-guard.md) [TARGET]) | A working directory | The project and its effective policy, or "unmanaged" | Not applicable |
+| Guard hook ([0010](0010-guard.md)) | A working directory | The project and its effective policy, or "unmanaged" | Not applicable |
 | Host adapter ([0012](0012-host-interface.md) [TARGET]) | A rung and a model name | The host's own effort value and model parameter | Not applicable |
 | Dispatched workers (the six roles) | A work order | A typed result | `roles.<role>.model`, `roles.<role>.effort`, `escalate_on_failure` |
 
@@ -479,9 +479,9 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `roles.<role>.model` | model name or absent | absent | both | 0003 | The model passed to the host for that role; absent means the session's model (CFG-R13) |
 | `roles.<role>.effort` | rung | planner, analyzer, executor, verifier `high`; reviewer `medium`; checker `low` | both | 0003 | The starting rung for that role (CFG-R12) |
 | `escalate_on_failure` | bool | `false` | both | 0003 | One rung up on a retry (CFG-R16) |
-| `git.protected_branches` | list of branch names | `["main", "master"]` | project | 0010 [TARGET] | Branches the guard protects |
-| `git.on_protected` | `ask`, `refuse`, `allow` | `ask` | project | 0010 [TARGET] | What the guard does with a commit on a protected branch |
-| `git.guard_hard_fail` | bool | `false` | project | 0010 [TARGET] | Whether a guard that cannot decide refuses instead of passing loudly |
+| `git.protected_branches` | list of branch names | `["main", "master"]` | project | [0010](0010-guard.md) | Branches the guard protects |
+| `git.on_protected` | `ask`, `refuse`, `allow` | `ask` | project | [0010](0010-guard.md) | What the guard does with a commit on a protected branch |
+| `git.guard_hard_fail` | bool | `false` | project | [0010](0010-guard.md) | Whether a guard that cannot decide refuses instead of passing loudly |
 | `git.integration_branch` | `milestone`, `trunk` | `milestone` | project | 0011 [TARGET] | Where task work is integrated |
 | `git.auto_branch` | `ask`, `auto`, `off` | `ask` | project | 0011 [TARGET] | Whether Baley creates the working branch |
 | `git.base_branch` | branch name or absent | absent | project | 0011 [TARGET] | The branch work starts from |
