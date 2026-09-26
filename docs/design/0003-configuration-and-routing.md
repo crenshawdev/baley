@@ -273,7 +273,7 @@ Called by the work order composer for every dispatch, never by a host.
 |---|---|
 | `[project]` | `id` (UUID version 4), `name` (ADR 0004) |
 | `[git]` | `protected_branches`, `on_protected`, `guard_hard_fail`, `integration_branch`, `auto_branch`, `base_branch`, `forge_provider`, `forge_repo`, `forge_host`, and the landing settings owned by [0011](0011-milestones-landing-undo-pause.md) |
-| `[workflow]` | `test_command`, `lint_command`, `skip_discuss` |
+| `[workflow]` | `test_command`, `lint_command` |
 | `[roles.<role>]`, `[host.<name>...]`, `[review...]` | Overrides of the global values, same shape as the global file |
 
 ### policy.effective (event)
@@ -490,7 +490,6 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `git.forge_host` | host name, optional port | absent | project | [0011](0011-milestones-landing-undo-pause.md) | The forge's host for self-hosted forges |
 | `workflow.test_command` | command line | absent | project | [0006](0006-execution.md) | The suite Baley runs (SYS-R8) |
 | `workflow.lint_command` | command line | absent | project | [0006](0006-execution.md) | The lint Baley runs |
-| `workflow.skip_discuss` | bool | `false` | project | 0013 [TARGET] | Whether next-action skips the discussion step |
 | `planning.sprint_capacity` | integer, min 1, or absent | absent | both | [0005](0005-context-plans-and-acceptance.md) | The ceiling on a sprint's size in tasks (PLN-R9) |
 | `planning.max_capture_bullets` | integer, min 1 | 40 | both | 0014 [TARGET] | Report-only bound on active captured items |
 | `memory.backend` | `none`, `builtin` | `builtin` | both | 0014 [TARGET] | Whether recall is on |
@@ -505,7 +504,7 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `review.triggers.risk_surface.waive_routing_floor` | same list | absent | project | [0009](0009-risk.md) | Surfaces whose floor the owner waives |
 | `review.consult.enabled`, `.tier`, `.effort`, `.attempt_threshold` | bool; tier; effort; integer min 1 | `false`; `flagship`; `high`; 3 | both | 0014 [TARGET] | The consult call in debug after repeated failures |
 
-Settings removed from the schema because nothing reads them (CFG-R7), plus `review.mode` (every reviewer runs, [0008](0008-review.md)) and `git.create_tag`, `git.on_land_cleanup`, `git.issue_check` (per-landing choices, [0011](0011-milestones-landing-undo-pause.md)): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Sprint capacity is designed in [0005](0005-context-plans-and-acceptance.md) (PLN-R9), not as free numbers here.
+Settings removed from the schema because nothing reads them (CFG-R7), plus `review.mode` (every reviewer runs, [0008](0008-review.md)) `git.create_tag`, `git.on_land_cleanup`, `git.issue_check` (per-landing choices, [0011](0011-milestones-landing-undo-pause.md)) and `workflow.skip_discuss` (refinement is never skipped, [0013](0013-next-action-and-progress.md)): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Sprint capacity is designed in [0005](0005-context-plans-and-acceptance.md) (PLN-R9), not as free numbers here.
 
 ## 10. Instructions served
 

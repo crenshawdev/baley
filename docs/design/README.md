@@ -117,3 +117,4 @@ They are technical records for an engineer who has never met the authors. They c
 | [0010: Guard](0010-guard.md) | Accepted |
 | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md) | Accepted |
 | [0012: Host interface](0012-host-interface.md) | Draft |
+| [0013: Next action and progress](0013-next-action-and-progress.md) | Draft |
