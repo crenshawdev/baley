@@ -113,3 +113,4 @@ They are technical records for an engineer who has never met the authors. They c
 | [0006: Execution](0006-execution.md) | Draft |
 | [0007: Verification](0007-verification.md) | Draft |
 | [0008: Review](0008-review.md) | Draft |
+| [0009: Risk](0009-risk.md) | Draft |

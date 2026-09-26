@@ -20,7 +20,7 @@ This area decides:
 - which model names Baley accepts for each host and provider, and how that list stays current;
 - how provider API keys are stored and reached.
 
-It does not decide the meaning of settings owned by other areas (section 9 lists every setting and its owner), how a work order reaches a host or how effort is delivered there ([0012: Host interface](0012-host-interface.md) [TARGET]), whether a review or a risk gate fires ([0008: Review](0008-review.md), [0009: Risk](0009-risk.md) [TARGET]), or what the guard does with git commands ([0010: Guard](0010-guard.md) [TARGET]).
+It does not decide the meaning of settings owned by other areas (section 9 lists every setting and its owner), how a work order reaches a host or how effort is delivered there ([0012: Host interface](0012-host-interface.md) [TARGET]), whether a review or a risk gate fires ([0008: Review](0008-review.md), [0009: Risk](0009-risk.md)), or what the guard does with git commands ([0010: Guard](0010-guard.md) [TARGET]).
 
 Hand-offs: the work order composer ([0002](0002-system-design.md) section 8) asks this area for the model and effort of each dispatch; the ledger ([0001](0001-evidence-ledger.md)) stores what this area records; `baley init` ([0001](0001-evidence-ledger.md), EVD-R17, ADR 0004) creates the project file this area reads.
 
@@ -129,7 +129,7 @@ graph LR
 | CFG-R15 | The five rungs are Baley's scale. The host adapter maps a rung to what the host accepts, and the mapping used is recorded with the route. | Hosts differ in the effort levels they take. | SYS-P8 | Active |
 | CFG-R16 | `escalate_on_failure` (default `false`): when true, a retry of a failed dispatch runs one rung above the stored rung, capped at `max`; a further retry holds there. Baley supplies the attempt number from the ledger. When false, every attempt runs at the stored rung. | A failure earns one step more effort, decided by Baley, never by the model. | CFG-R12 | Active |
 | CFG-R17 | Every route records the role, the model, the starting rung, the rung run, the attempt, the setting and layer that supplied the model and the effort, and each reason in plain words. The work order carries the route; nothing else does. | The owner can always see why a worker ran as it did. | SYS-P2, CFG-R8 | Active |
-| CFG-R18 | The plan-time risk floor never changes a model or a rung. | Effort is the owner's choice; risk changes the review gate ([0009](0009-risk.md) [TARGET]), not the cost. | | Active |
+| CFG-R18 | The plan-time risk floor never changes a model or a rung. | Effort is the owner's choice; risk changes the review gate ([0009](0009-risk.md)), not the cost. | | Active |
 | CFG-R19 | The model catalog is data in the per-user database, seeded from the binary at install and at every upgrade, never a setting. Host aliases (for Claude Code: `opus`, `sonnet`, `haiku`, `fable`) come from the host adapter's compiled table. Exact model ids are accepted beside aliases. | Aliases track new models by themselves; the owner's choice stays small. | ADR 0003 | Active |
 | CFG-R20 | For each provider Baley holds a key for, the catalog is refreshed by detection: Baley calls the provider's list endpoint with that key, records every id returned, tags each id from the hint table, and places an untagged id by best fit (newest first) unless the owner chooses. Detection runs at install, when a key is set, when a project is initialized, when a call fails with a model-not-found or deprecated error, and on `baley models update`. It never runs on a timer. Detection sends no prompt and no project content. | The vendor's list is the truth; Baley's table is a hint. Nothing waits on a Baley release. | CFG-R21, SYS-R9 | Active |
 | CFG-R21 | Detection that fails (offline, bad key, rate limit) leaves the previous catalog in place, is recorded as `models.detection_failed`, and never blocks a command. | Setup and dispatch must not depend on a network call. | CFG-R20 | Active |
@@ -264,7 +264,7 @@ Called by the work order composer for every dispatch, never by a host.
 | top level | `escalate_on_failure`; any `both`-scoped setting |
 | `[roles.<role>]` | `model`, `effort` for the six roles |
 | `[host.<name>]` and `[host.<name>.roles.<role>]` | The same settings, applied only when that host is connected |
-| `[review]`, `[review.providers.<p>.tiers]`, `[review.triggers.<t>]`, `[review.consult]` | Settings owned by [0008](0008-review.md) and [0009](0009-risk.md) [TARGET] |
+| `[review]`, `[review.providers.<p>.tiers]`, `[review.triggers.<t>]`, `[review.consult]` | Settings owned by [0008](0008-review.md) and [0009](0009-risk.md) |
 | `[memory]`, `[planning]` | Settings owned by [0014](0014-support.md) [TARGET] |
 
 ### The project file `baley.toml` (TOML)
@@ -504,8 +504,8 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `review.triggers.<plan,diff,risk_surface>.gate` | `off`, `advisory`, `deferred`, `blocking`, `adjudicated` | plan `advisory`, diff `off`, risk_surface `blocking` | both | [0008](0008-review.md) | How strictly each trigger's review holds work; the plan gate is also the plan checker's switch ([0005](0005-context-plans-and-acceptance.md), PLN-R16) |
 | `review.triggers.<t>.tier` | `flagship`, `balanced`, `cheap` | `cheap` | both | [0008](0008-review.md) | Which provider tier reviews |
 | `review.triggers.<t>.effort` | `minimal`, `low`, `medium`, `high` | plan `low`, diff `minimal`, risk_surface `low` | both | [0008](0008-review.md) | The effort of a provider review |
-| `review.triggers.risk_surface.surfaces` | list of `auth`, `migrations`, `billing`, `concurrency`, `destructive`, `secrets`, `api_contract`, `untrusted_input` | absent | project | 0009 [TARGET] | Which risk surfaces the project declares |
-| `review.triggers.risk_surface.waive_routing_floor` | same list | absent | project | 0009 [TARGET] | Surfaces whose floor the owner waives |
+| `review.triggers.risk_surface.surfaces` | list of `auth`, `migrations`, `billing`, `concurrency`, `destructive`, `secrets`, `api_contract`, `untrusted_input` | absent | project | [0009](0009-risk.md) | Which risk surfaces the project declares |
+| `review.triggers.risk_surface.waive_routing_floor` | same list | absent | project | [0009](0009-risk.md) | Surfaces whose floor the owner waives |
 | `review.consult.enabled`, `.tier`, `.effort`, `.attempt_threshold` | bool; tier; effort; integer min 1 | `false`; `flagship`; `high`; 3 | both | 0014 [TARGET] | The consult call in debug after repeated failures |
 
 Settings removed from the schema because nothing reads them (CFG-R7), plus `review.mode` (every reviewer runs, [0008](0008-review.md)): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Sprint capacity is designed in [0005](0005-context-plans-and-acceptance.md) (PLN-R9), not as free numbers here.
