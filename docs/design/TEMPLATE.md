@@ -2,102 +2,103 @@
 
 | | |
 |---|---|
-| Status | Draft |
-| Author | |
-| Reviewers | |
+| Status | Draft / In review / Accepted |
 | Design issue | #N |
-| Milestone | |
-| Requirement prefix | XXX |
-| Supersedes | |
-| Superseded by | |
+| Requirement prefix | PREFIX |
+| Applies | [0002: System design](0002-system-design.md) |
+| Related | ADRs: [TARGET] · C4 views: key, key |
 
-## Summary
+The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
 
-Two or three sentences: what is being built and the one reason it is needed. A reader who stops here should know what this document decides.
+## 1. Purpose and scope
 
-## Context
+What this area decides. What it does not decide. Hand-offs: which areas it passes work to or takes
+work from, by document number.
 
-What exists today, what is wrong with it, and the evidence. Link measurements, issues and code. State facts, not opinions.
+## 2. Terms
 
-## Goals
+| Term | Meaning |
+|---|---|
+| | |
 
-What this design must achieve, each one observable.
+## 3. Requirements
 
-## Non-goals
+| Id | Rule | Why | Depends on | Status |
+|---|---|---|---|---|
+| PREFIX-R1 | One sentence stating the rule. | Why it exists. | Ids or ADRs | Active |
 
-What this design deliberately does not do, and why. Anything a reader might reasonably expect that is out of scope belongs here.
+## 4. Roles and actors
 
-## Threat model
+| Actor | Receives | Returns | Model and effort from |
+|---|---|---|---|
+| | | | |
 
-Who or what the design defends against, what each can do, and what defends against it. Name what is not defended. Omit only when the design has no security surface, and say so.
+## 5. Commands and operations
 
-## Requirements
+### operation-name
 
-| ID | Requirement | Source |
+- **Inputs:**
+- **Outputs:**
+- **Refusals:**
+
+  | Code | When | Requirement |
+  |---|---|---|
+  | | | |
+
+## 6. Records
+
+### record-name
+
+| Field | Type | Meaning |
 |---|---|---|
-| XXX-R1 | One testable statement. | Where it comes from: an issue, a measurement, a decision. |
+| | | |
 
-## Design
-
-### Overview
-
-The shape of the solution in prose, with the highest-level diagram that shows it.
+## 7. States
 
 ```mermaid
-flowchart TB
-  subgraph system [System]
-    a["Container A"] --> b[("Store")]
+stateDiagram-v2
+  [*] --> First
+  First --> Second: trigger
+```
+
+*Figure: states of record-name.*
+
+## 8. Workflows
+
+```mermaid
+sequenceDiagram
+  participant A as Actor
+  participant S as System
+  A->>S: request
+  alt refused
+    S-->>A: refusal code
+  else accepted
+    S-->>A: result
   end
 ```
 
-### Detailed design
+*Figure: flow-name.*
 
-Components, their responsibilities and their interfaces. Data model, wire contracts and state machines, each with the diagram that fits it (see the diagram table in [README.md](README.md)). Every part names the requirements it satisfies.
+## 9. Settings
 
-### Workflows
+| Setting | Type | Default | Set where | Effect |
+|---|---|---|---|---|
+| | | | | |
 
-Each user- or host-visible workflow as a swim lane or sequence diagram, with the failure paths drawn, not only the happy path.
+## 10. Instructions served
 
-## Cross-cutting concerns
+| Instruction | Served to | Carries requirements |
+|---|---|---|
+| | | |
 
-### Security
+## 11. Build status
 
-Trust boundaries, what is validated where, what is secret and how it is kept out of logs, records and review payloads.
+| Requirement | Status | Where |
+|---|---|---|
+| PREFIX-R1 | Built / Partly built / Not built | path:line |
 
-### Failure modes and recovery
+## 12. Open questions
 
-What fails, how it is detected, what the user sees and how the system recovers. Crash consistency for anything written to disk.
-
-### Performance
-
-Expected sizes and rates, the budget for each operation, and how it is measured.
-
-### Observability
-
-What is recorded so a failure can be diagnosed after the fact.
-
-### Compatibility and migration
-
-What existing data, configuration or callers are affected, and how they move. How the change is rolled back.
-
-## Rules preserved
-
-For a redesign of existing behaviour: each current rule, where it lives in the code today, where it lives in the new design, and the test that proves it is unchanged. Omit for new behaviour.
-
-## Alternatives considered
-
-Each serious alternative, what it would have looked like and why it lost. Include doing nothing.
-
-## Testing
-
-How each requirement is proven, at which boundary, and what is out of reach of automated tests.
-
-## Decisions
-
-Decision records this design produces or depends on.
-
-- [ADR NNNN: Title](../adr/NNNN-slug.md)
-
-## Open questions
-
-Questions that must be answered before this document is accepted, including acceptance gates such as a benchmark or a check on each supported host. Empty at acceptance.
+| Question | Decided by |
+|---|---|
+| | |
