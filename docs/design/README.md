@@ -110,3 +110,4 @@ They are technical records for an engineer who has never met the authors. They c
 | [0003: Configuration and routing](0003-configuration-and-routing.md) | Draft |
 | [0004: Starting a project and changing scope](0004-starting-a-project-and-changing-scope.md) | Draft |
 | [0005: Context, plans and acceptance](0005-context-plans-and-acceptance.md) | Draft |
+| [0006: Execution](0006-execution.md) | Draft |

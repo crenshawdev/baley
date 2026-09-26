@@ -491,8 +491,8 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `git.forge_provider` | `github`, `gitlab`, `forgejo` | absent | project | 0011 [TARGET] | Which forge the project uses (CFG-R29) |
 | `git.forge_repo` | `owner/repo` | absent | project | 0011 [TARGET] | The repository on the forge |
 | `git.forge_host` | host name, optional port | absent | project | 0011 [TARGET] | The forge's host for self-hosted forges |
-| `workflow.test_command` | command line | absent | project | 0006 [TARGET] | The suite Baley runs (SYS-R8) |
-| `workflow.lint_command` | command line | absent | project | 0006 [TARGET] | The lint Baley runs |
+| `workflow.test_command` | command line | absent | project | [0006](0006-execution.md) | The suite Baley runs (SYS-R8) |
+| `workflow.lint_command` | command line | absent | project | [0006](0006-execution.md) | The lint Baley runs |
 | `workflow.skip_discuss` | bool | `false` | project | 0013 [TARGET] | Whether next-action skips the discussion step |
 | `planning.sprint_capacity` | integer, min 1, or absent | absent | both | [0005](0005-context-plans-and-acceptance.md) | The ceiling on a sprint's size in tasks (PLN-R9) |
 | `planning.max_capture_bullets` | integer, min 1 | 40 | both | 0014 [TARGET] | Report-only bound on active captured items |

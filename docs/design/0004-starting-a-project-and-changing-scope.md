@@ -264,7 +264,7 @@ stateDiagram-v2
   Withdrawn --> [*]
 ```
 
-*Figure 1. States of a phase as this area sees them. Execution and completion transitions belong to [0006](0006-execution.md) [TARGET] and [0007](0007-verification.md) [TARGET]; a withdraw from Executing is refused until `phase.undone` returns it to Planned; Complete is never withdrawn.*
+*Figure 1. States of a phase as this area sees them. Execution and completion transitions belong to [0006](0006-execution.md) and [0007](0007-verification.md) [TARGET]; a withdraw from Executing is refused until `phase.undone` returns it to Planned; Complete is never withdrawn.*
 
 ```mermaid
 stateDiagram-v2

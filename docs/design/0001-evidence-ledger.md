@@ -338,7 +338,7 @@ Streams used by the record families:
 |---|---|
 | `project` | `project.initialized`, `project.described`, `scope.approved`, `forge.checked`, `policy.effective`, `checkout.seen` |
 | `roadmap` | `phase.declared`, `phase.reordered`, `phase.withdrawn`, `requirement.declared`, `requirement.corrected`, `requirement.reassigned`, `requirement.reprioritized`, `requirement.dropped` ([0004](0004-starting-a-project-and-changing-scope.md)), `story.refined` ([0005](0005-context-plans-and-acceptance.md)) |
-| `phase/<n>` | `plan.approved`, `plan.checked`, `plan.replaced`, `sprint.retrospective` ([0005](0005-context-plans-and-acceptance.md)), `dispatch.issued` (serializes one active dispatch per phase), `phase.completed`, `completion.invalidated`, `phase.undone` |
+| `phase/<n>` | `plan.approved`, `plan.checked`, `plan.replaced`, `sprint.retrospective` ([0005](0005-context-plans-and-acceptance.md)), `plan.admitted`, `dispatch.issued` (serializes one active dispatch per phase), the task, run, suite and plan outcome events of [0006](0006-execution.md), `phase.completed`, `completion.invalidated`, `phase.undone` |
 | `plan/<n>-<k>` | `plan.submitted`, `plan.approved`, `plan.superseded` |
 | `admission/<n>` | `execution.admitted`, `execution.extended` |
 | `dispatch/<id>` | `task.started`, `task.run`, `task.closed`, `suite.run`, `dispatch.ended`, `worker.exited`, `worker.interrupted` |
@@ -969,7 +969,7 @@ The domain rules are owned, specified and tested by the area design documents ([
 | The guard falls back to its remembered denial policy when current config is missing or malformed; it remembers denials only, never permissions | Guard [TARGET] | `guard.policy_recorded` events and the `guard_policy` view |
 | The guard answers a re-delivered call with its confirmed answer, even after policy changes | Guard [TARGET] | Request lookup on the guard's session and tool-call id |
 | Guard outcomes: ask, deny, pass, pass on failure, redelivery, audit-storage failure | Guard [TARGET] | Same outcomes, recorded as `guard` events; storage-failure behaviour defined by the guard design |
-| One run can be read by its id | Execution [TARGET] | `run` view |
+| One run can be read by its id | [0006: Execution](0006-execution.md), EXE-R7 | `run` view |
 
 ## Cross-cutting concerns
 
