@@ -115,4 +115,4 @@ They are technical records for an engineer who has never met the authors. They c
 | [0008: Review](0008-review.md) | Accepted |
 | [0009: Risk](0009-risk.md) | Accepted |
 | [0010: Guard](0010-guard.md) | Accepted |
-| [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md) | Draft |
+| [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md) | Accepted |
