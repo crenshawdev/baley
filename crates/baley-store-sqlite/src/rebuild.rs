@@ -141,7 +141,9 @@ impl SqliteStore {
 
     /// Rebuilds the project's views into a new generation and makes it
     /// live; see `Admin::rebuild`. When removing the old generation fails
-    /// after the flip, `CleanupFailed` names the generation now live.
+    /// after the flip, `CleanupFailed` names the generation now live. A
+    /// marker naming the live generation is refused as
+    /// `LiveGenerationProtected` before any row is removed.
     pub fn rebuild(&self, project: &ProjectId) -> Result<RebuildReport, StoreError> {
         self.start_rebuild(project)?.finish()?.into_report(project)
     }
@@ -157,17 +159,23 @@ impl SqliteStore {
 
     /// Replays the project's events into a scratch generation and compares
     /// it with the live one at one head; see `Admin::verify_views`. Views
-    /// behind this binary's are rebuilt first; the scratch rows are removed
-    /// whatever happens after they were started.
+    /// behind this binary's are rebuilt first. Removing the scratch rows is
+    /// tried whatever the comparison returned; when that fails,
+    /// `UnfinishedGeneration` names the scratch generation left behind.
     pub fn verify_views(&self, project: &ProjectId) -> Result<ViewsReport, StoreError> {
         let _hold = self.hold_maintenance()?;
         self.bring_current_held(project)?;
         let mut scratch = self.start(project, None, Purpose::Verify)?;
         let report = scratch.compare();
-        let cleanup = self.remove_generation(project, scratch.generation, true);
-        let report = report?;
-        cleanup?;
-        Ok(report)
+        match self.remove_generation(project, scratch.generation, true) {
+            Ok(()) => report,
+            // Its marker stays for the next rebuild, and the caller has to
+            // know, even when the comparison failed too.
+            Err(_) => Err(StoreError::UnfinishedGeneration {
+                project: project.clone(),
+                generation: stored_generation(scratch.generation)?,
+            }),
+        }
     }
 
     /// Sets up a new generation under the maintenance lock the caller holds
@@ -298,7 +306,8 @@ impl SqliteStore {
     /// rows across every catalog table, one at a time, and once one is
     /// removed, none after the batch has held the queue `BATCH_TIME`.
     /// `true` once no row is left and the stamps, and with `marker` the
-    /// marker, are gone too.
+    /// marker, are gone too. Refuses the live generation before touching a
+    /// row.
     fn remove_rows(
         &self,
         tx: &rusqlite::Transaction<'_>,
@@ -307,6 +316,14 @@ impl SqliteStore {
         acquired: Duration,
         marker: bool,
     ) -> Result<bool, StoreError> {
+        // The schema lets a damaged marker name the live generation, and
+        // then this would delete every live row.
+        if generations(tx, project)?.0 == generation {
+            return Err(StoreError::LiveGenerationProtected {
+                project: project.clone(),
+                generation: stored_generation(generation)?,
+            });
+        }
         let mut removed = 0;
         for table in catalog_tables(tx)? {
             let mut delete = tx.prepare(&delete_one(tx, &table)?).map_err(sql)?;
@@ -1554,6 +1571,35 @@ mod tests {
         );
     }
 
+    // A building marker that names the live generation, written straight
+    // into the file, makes a rebuild refuse with the generation it would
+    // have removed, and every live row and stamp is still there. Catches
+    // orphan cleanup that deletes the live generation.
+    #[test]
+    fn a_marker_naming_the_live_generation_is_refused() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = created(home.path(), Scripted::still());
+        fixture(&store);
+        let stamped = stamps(home.path(), 0);
+        raw(home.path())
+            .execute(
+                "UPDATE project_gen SET building_gen = 0, building_applied_seq = 0
+                  WHERE project_id = ?1",
+                [PROJECT],
+            )
+            .expect("mark the live generation");
+        assert_eq!(
+            store.rebuild(&project()),
+            Err(StoreError::LiveGenerationProtected {
+                project: project(),
+                generation: 0,
+            })
+        );
+        assert_eq!(live_gen(home.path()), Some(0));
+        assert_eq!(generation_rows(home.path(), 0), 6);
+        assert_eq!(stamps(home.path(), 0), stamped);
+    }
+
     // The pause after a batch is the time from acquiring the queue to
     // releasing it, from supplied instants. Catches a pause that ignores
     // how long the batch held the queue.
@@ -1821,6 +1867,38 @@ mod tests {
         assert_eq!(stored_generations(home.path()), BTreeSet::from([0]));
     }
 
+    // A newer binary raises the epoch in the pause after the scratch
+    // generation is marked, so the replay fails and so does removing the
+    // scratch rows. Verification returns `UnfinishedGeneration` naming the
+    // scratch generation, whose marker stays for the next rebuild. Catches
+    // a failed cleanup hidden behind the comparison's own error.
+    #[test]
+    fn a_failed_scratch_cleanup_is_reported_as_unfinished() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let timing = Scripted::still();
+        let store = created(home.path(), Arc::clone(&timing));
+        fixture(&store);
+        let path = home.path().to_path_buf();
+        timing.at_every_pause(move || {
+            if building_gen(&path).is_some() {
+                raw(&path)
+                    .execute(
+                        "UPDATE schema_meta SET value = ?1 WHERE key = 'epoch'",
+                        [EPOCH + 1],
+                    )
+                    .expect("raise the epoch");
+            }
+        });
+        assert_eq!(
+            store.verify_views(&project()),
+            Err(StoreError::UnfinishedGeneration {
+                project: project(),
+                generation: 1,
+            })
+        );
+        assert_eq!(building_gen(home.path()), Some(1));
+    }
+
     // At every pause of a verification, the one after the turn that pins
     // the comparison snapshot included, the store's read connection is
     // free for other reads. Catches a comparison that holds the store's
@@ -1844,6 +1922,40 @@ mod tests {
         let held = held.lock().expect("held").clone();
         assert!(!held.is_empty());
         assert_eq!(held, vec![false; timing.pauses().len()]);
+    }
+
+    // A second store over the same home commits a command in the pause
+    // right after the turn that pins the comparison snapshot. The report
+    // names the head before it, and scratch and live compare equal there.
+    // Catches a snapshot begun after the queue is released, which would
+    // see the command in live but not in scratch.
+    #[test]
+    fn the_verification_snapshot_is_pinned_before_the_queue_is_released() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let timing = Scripted::still();
+        let store = created(home.path(), Arc::clone(&timing));
+        fixture(&store);
+        let writer = open_with(home.path(), Scripted::still());
+        let mut scratch = store
+            .start(&project(), None, Purpose::Verify)
+            .expect("start");
+        // `compare` pauses first after its catch-up turn, which applies the
+        // whole fixture chain, then after the turn that pins the snapshot.
+        let mut pauses = 0;
+        timing.at_every_pause(move || {
+            pauses += 1;
+            if pauses == 2 {
+                record(&writer, "after", &[(TAIL, "open")]).expect("a command in the pause");
+            }
+        });
+        assert_eq!(
+            scratch.compare(),
+            Ok(ViewsReport {
+                checked_seq: 5,
+                differing: Vec::new(),
+            })
+        );
+        assert_eq!(events(home.path()), 7);
     }
 
     // A session dropped after one batch leaves its generation behind;

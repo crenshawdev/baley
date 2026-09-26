@@ -265,17 +265,23 @@ pub trait Admin {
     /// generation is removed before this returns; a failure there comes
     /// back as `StoreError::CleanupFailed`, naming the generation already
     /// live. Views only rebuild forward: a project whose live views a newer
-    /// binary built is refused as read-only.
+    /// binary built is refused as read-only. A rebuild never removes the
+    /// live generation: a building marker that names it is refused as
+    /// `StoreError::LiveGenerationProtected`, with nothing removed.
     fn rebuild(&self, project: &ProjectId) -> Result<RebuildReport, StoreError>;
 
     /// Replays the project's events into a scratch generation that never
     /// becomes live, compares every registered view's stored rows with the
-    /// live generation's at one head, and removes the scratch rows,
+    /// live generation's at one head, then removes the scratch rows,
     /// including after an error. Views behind this binary's are first
     /// rebuilt forward, as a rebuild would; apart from that it changes no
     /// live row, event or payload. Returns
     /// `StoreError::UnfinishedGeneration` while a rebuild or verification
-    /// that never finished has left its generation behind.
+    /// that never finished has left its generation behind, and whenever
+    /// removing its own scratch generation fails, naming that generation,
+    /// whether or not the comparison failed too. Only when the scratch
+    /// generation is removed does the comparison's report or error come
+    /// back.
     fn verify_views(&self, project: &ProjectId) -> Result<ViewsReport, StoreError>;
 
     /// The store's health as of `at`, a supplied UTC time, with each

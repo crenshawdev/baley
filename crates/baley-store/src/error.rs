@@ -2,9 +2,9 @@
 //!
 //! None of these is a domain outcome. A domain outcome, success or a real
 //! refusal, is recorded as `command.completed` and comes back as `Ok`
-//! (design 0001, Commands). Apart from `CleanupFailed`, these record
-//! nothing: the caller re-reads and retries with the same request id,
-//! waits, or stops.
+//! (design 0001, Commands). A failed command records nothing: the caller
+//! re-reads and retries with the same request id, waits, or stops.
+//! `StoreError` says which errors can follow a change that did commit.
 
 use std::fmt;
 
@@ -14,9 +14,11 @@ use crate::event::{Hash, ProjectId, RequestId};
 use crate::payload::PayloadReference;
 use crate::view::DocKey;
 
-/// Why a port operation did not return its result. Every variant but
-/// `CleanupFailed` means the operation recorded nothing; `CleanupFailed`
-/// comes after a rebuild whose new generation is already live.
+/// Why a port operation did not return its result. A failed command
+/// records nothing. An operation that first brought a project's views
+/// forward to this binary's (a read, a command, `verify_views`) may have
+/// committed that forward rebuild before a later error. `CleanupFailed`
+/// follows a rebuild whose generation is already live.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
     /// Something the decision depended on changed between the caller's slow
@@ -49,9 +51,16 @@ pub enum StoreError {
         cause: Box<StoreError>,
     },
     /// A rebuild or view verification that never finished, as after a
-    /// crash, left `generation` behind. Views cannot be verified until a
-    /// rebuild removes it. Nothing live was changed.
+    /// crash, left `generation` behind with its marker, or a verification
+    /// could not remove its own scratch `generation`. Views cannot be
+    /// verified until a rebuild removes it. The unfinished generation was
+    /// never live.
     UnfinishedGeneration { project: ProjectId, generation: u64 },
+    /// A rebuild or view verification was about to remove `generation`,
+    /// which is the project's live generation, as when a damaged building
+    /// marker names it. Nothing was removed, and the live views stand; the
+    /// project's rebuilds refuse the same way until the marker is repaired.
+    LiveGenerationProtected { project: ProjectId, generation: u64 },
 }
 
 /// The input that moved.
@@ -168,6 +177,14 @@ impl fmt::Display for StoreError {
             } => write!(
                 f,
                 "project {} holds generation {generation} of a rebuild or view verification that never finished; rebuild the project first",
+                project.0
+            ),
+            Self::LiveGenerationProtected {
+                project,
+                generation,
+            } => write!(
+                f,
+                "project {} was about to remove generation {generation}, which is live; nothing was removed",
                 project.0
             ),
         }
