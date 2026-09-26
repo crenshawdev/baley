@@ -18,7 +18,7 @@ This area decides what Baley does at the host's edge, before a tool call an agen
 - the Bash guard: which git commands it acts on, what it asks, what it refuses, and what it does when it cannot decide;
 - the Write/Edit guard: which paths an agent may not write;
 - how each answer is recorded, remembered and replayed;
-- the answer adapter per host, and the host sandbox that keeps agents out of Baley's home.
+- the answer adapter per host, and the host sandbox that keeps agents from writing Baley's home, and from reading it where the host can.
 
 It does not decide the lease itself or what an out-of-lease commit does at task close ([0006](0006-execution.md)); which branch work happens on or how landing pushes ([0011](0011-milestones-landing-undo-pause.md)); risk detection ([0009](0009-risk.md)); or how stubs are rendered and installed ([0012](0012-host-interface.md)).
 
@@ -58,7 +58,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) the guard is t
 | GRD-R10 | A redelivered call with the same call id gets its confirmed answer again, from the record, even after the policy changed. | The host may deliver a call twice; the answer must not differ. | EVD-R26 | Active |
 | GRD-R11 | The Write/Edit guard denies a write to the global settings file, the project file `baley.toml`, any file Baley rendered as a stub, and, during an active dispatch, any path outside the dispatch's lease (EXE-R8). Path resolution canonicalizes the existing prefix and refuses control bytes, doubled separators and non-directory parents; a path it cannot resolve is denied. | The owner sets policy, Baley renders stubs, and the lease means something as the write happens. | CFG-R11, ADR 0009, EXE-R8 | Active |
 | GRD-R12 | The answer adapter renders each answer in the host's form. Claude Code takes `allow`, `deny` and `ask`. Codex takes `deny` and an exit code; it rejects `ask`, so on Codex every `ask` is answered `deny` with the reason and the instruction to run the command outside the agent. | The host that offers less sets the floor. | SYS-P12 | Active |
-| GRD-R13 | The host sandbox, configured at install, keeps agent processes from reading or writing Baley's home; the guard is a second layer, not the first. `baley doctor` checks the sandbox configuration on each host and reports what an agent can reach. | The record is protected by the host, and tampering is detected by the chain and its anchors. | ADR 0008 | Active |
+| GRD-R13 | The host sandbox, configured at install, keeps agent processes from writing Baley's home on both hosts and from reading it on Claude Code; Codex's sandbox grants reads under every policy, which is Codex's policy and not Baley's to change. The guard is a second layer, not the first. `baley doctor` checks the sandbox configuration on each host and reports what an agent can reach, reads included. | The record is protected by the host, and tampering is detected by the chain and its anchors. | ADR 0008 | Active |
 | GRD-R14 | The guard reads the hook's input up to a fixed bound, answers within the hook's timeout, and never launches a program except git for the branch; when git is unavailable it reads the branch from `.git/HEAD` directly, bounded and without following symbolic links. | The guard must answer fast and must not become a way to run things. | | Active |
 
 ## 4. Roles and actors
