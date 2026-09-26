@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted |
 | Covers | The whole product, first release |
 | System design | [0002: System design](../0002-system-design.md) |
 

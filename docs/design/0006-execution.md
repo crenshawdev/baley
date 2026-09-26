@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted |
 | Design issue | [#51](https://github.com/crenshawdev/baley/issues/51), [#55](https://github.com/crenshawdev/baley/issues/55); build issues [#25](https://github.com/crenshawdev/baley/issues/25), [#40](https://github.com/crenshawdev/baley/issues/40) |
 | Requirement prefix | EXE |
 | Applies | [0002: System design](0002-system-design.md) |
@@ -24,7 +24,7 @@ This area decides how an approved plan becomes committed, tested code:
 - retiring a task, gap plans, plan completion, the owner's inspection of checks;
 - a worker that exits without finishing, reconciliation, deviations.
 
-It does not decide the plan's content or its evidence map ([0005](0005-context-plans-and-acceptance.md)); the verdict on each evidence item and a truth's status ([0007: Verification](0007-verification.md)); when a diff review or a risk gate fires after execution ([0008](0008-review.md), [0009](0009-risk.md)); what the guard does with git commands and protected branches ([0010: Guard](0010-guard.md)); which branch work lands on and how execution is undone ([0011](0011-milestones-landing-undo-pause.md) [TARGET]); or how a work order reaches a worker on each host ([0012](0012-host-interface.md) [TARGET]). Off-roadmap tasks (`baley task`) are [0014](0014-support-families.md) [TARGET].
+It does not decide the plan's content or its evidence map ([0005](0005-context-plans-and-acceptance.md)); the verdict on each evidence item and a truth's status ([0007: Verification](0007-verification.md)); when a diff review or a risk gate fires after execution ([0008](0008-review.md), [0009](0009-risk.md)); what the guard does with git commands and protected branches ([0010: Guard](0010-guard.md)); which branch work lands on and how execution is undone ([0011](0011-milestones-landing-undo-pause.md)); or how a work order reaches a worker on each host ([0012](0012-host-interface.md) [TARGET]). Off-roadmap tasks (`baley task`) are [0014](0014-support-families.md) [TARGET].
 
 Hand-offs: 0005 approves plans; this area admits them. The work order composer ([0002](0002-system-design.md) section 8) builds the executor's work order with the route from [0003](0003-configuration-and-routing.md). 0007 verifies what this area recorded. Every command Baley runs goes through the process port ([0002](0002-system-design.md), SYS-P8) under claim, act, record ([0001](0001-evidence-ledger.md), EVD-R26).
 
@@ -371,7 +371,7 @@ sequenceDiagram
 | `workflow.test_command` | command | absent | project | 0006 | The suite Baley runs at plan close (EXE-R12); a project with none cannot admit a plan |
 | `workflow.lint_command` | command | absent | project | 0006 | Run once at plan close beside the suite; a failure is reported, never a gate |
 | `roles.executor.model`, `roles.executor.effort`, `escalate_on_failure` | see [0003](0003-configuration-and-routing.md) | | both | 0003 | The executor's route and its retry rung |
-| `git.protected_branches`, `git.on_protected`, `git.auto_branch`, `git.base_branch` | see [0003](0003-configuration-and-routing.md) | | project | [0010](0010-guard.md), 0011 [TARGET] | Which branch a dispatch works on and what the guard does there |
+| `git.protected_branches`, `git.on_protected`, `git.auto_branch`, `git.base_branch` | see [0003](0003-configuration-and-routing.md) | | project | [0010](0010-guard.md), [0011](0011-milestones-landing-undo-pause.md) | Which branch a dispatch works on and what the guard does there |
 
 ## 10. Instructions served
 

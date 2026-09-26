@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted |
 | Design issue | [#48](https://github.com/crenshawdev/baley/issues/48); build issue [#26](https://github.com/crenshawdev/baley/issues/26) |
 | Requirement prefix | REV |
 | Applies | [0002: System design](0002-system-design.md) |
@@ -23,7 +23,7 @@ This area decides how other models critique the work and what the owner does wit
 - the on-demand reviews: minimalism, decision, diagnosis;
 - filing the findings the owner chooses to track as issues on the forge.
 
-It does not decide how risk is detected or when its review fires ([0009: Risk](0009-risk.md)); the plan checker's dimensions and the plan revision it produces ([0005](0005-context-plans-and-acceptance.md)); gap plans and execution ([0006](0006-execution.md)); debug episodes and consult ([0014](0014-support-families.md) [TARGET]); or how the forge is reached ([0011](0011-milestones-landing-undo-pause.md) [TARGET]).
+It does not decide how risk is detected or when its review fires ([0009: Risk](0009-risk.md)); the plan checker's dimensions and the plan revision it produces ([0005](0005-context-plans-and-acceptance.md)); gap plans and execution ([0006](0006-execution.md)); debug episodes and consult ([0014](0014-support-families.md) [TARGET]); or how the forge is reached ([0011](0011-milestones-landing-undo-pause.md)).
 
 Hand-offs: 0005 raises the plan review; 0006 raises the diff review at plan completion; 0009 raises the risk review; landing (0011) waits on the deferred queue; the work order composer ([0002](0002-system-design.md) section 8) builds every review work order with the route from [0003](0003-configuration-and-routing.md).
 
@@ -63,7 +63,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | REV-R8 | The owner rules on every surviving finding: `fix`, `track` (goes to filing) or `dismiss` with a reason. Each ruling is one `review.adjudicated` record naming the review, round, finding and reviewers. Baley never applies a finding, reruns a review or re-plans on its own. | Who answers for the work decides what is done about it. | SYS-P5 | Active |
 | REV-R9 | A `fix` ruling produces work through the normal path. Plan review: the planner revises the plan and it is re-submitted, checked and approved (0005). Diff or risk review: Baley opens a gap plan (0006) holding the fix as tasks; the planner writes it, the owner approves it, the executor runs it under the lease. On-demand kinds: the ruling records the wanted change for the next sprint planning; nothing runs from it. | A fix is planned and proven like any other change. | PLN-R14, EXE-R14 | Active |
 | REV-R10 | A `fix` ruling on a triggered review grants one more round over the revised material, recorded as used; there is never a third round. The second round's findings are adjudicated and ruled the same way. | Review converges by the owner's decision, not by looping. | REV-R8 | Active |
-| REV-R11 | A `deferred` review stays in the deferred queue until every finding of its current round is ruled. Landing ([0011](0011-milestones-landing-undo-pause.md) [TARGET]) refuses its external steps while the queue holds an unruled review, and next action ([0013](0013-next-action-and-progress.md) [TARGET]) surfaces the queue in its order. Nothing beside the queue can hide a member. | Deferred means later, not never. | REV-R2 | Active |
+| REV-R11 | A `deferred` review stays in the deferred queue until every finding of its current round is ruled. Landing ([0011](0011-milestones-landing-undo-pause.md)) refuses its external steps while the queue holds an unruled review, and next action ([0013](0013-next-action-and-progress.md) [TARGET]) surfaces the queue in its order. Nothing beside the queue can hide a member. | Deferred means later, not never. | REV-R2 | Active |
 | REV-R12 | A review is a new request with a fresh id whenever the reviewer set, the material or the trigger differs; a retry of the same request is answered from the record. Changing the reviewers on the same material is a new review, never a replay. | A changed policy gets a fresh critique. | EVD-R26 | Active |
 | REV-R13 | A review whose reviewer exited without returning is interrupted; it is neither closed nor rerun until the owner says so. A late return that matches the request closes it. | A killed process is never taken as success. | SYS-P7 | Active |
 | REV-R14 | On-demand reviews are one command with a kind: `minimalism` over a named file, a directory or a sprint's range; `decision` over one recorded decision; `diagnosis` over a debug episode's reported cause (0014). Each uses the `host` reviewer and the owner's chosen providers, the same findings, adjudication and rulings, and no gate. | One mechanism for every critique. | REV-R1 | Active |
@@ -83,7 +83,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | Provider reviewer (called by the host session) | The complete prompt and request Baley built | Findings, the provider's model and usage | `review.providers.<p>.tiers.<tier>`, `review.triggers.<t>.effort` |
 | Host session | Work orders; findings to adjudicate | The outside call's result; the adjudication; the owner's rulings | Not applicable |
 | Baley: this area | Admissions, returns, rulings, filing requests | Work orders, refusals, settlement, records | Not applicable |
-| Forge adapter ([0011](0011-milestones-landing-undo-pause.md) [TARGET]) | A fingerprint lookup; a create on approval | Existing issue or none; the created issue | Not applicable |
+| Forge adapter ([0011](0011-milestones-landing-undo-pause.md)) | A fingerprint lookup; a create on approval | Existing issue or none; the created issue | Not applicable |
 
 ## 5. Commands and operations
 
@@ -362,5 +362,5 @@ The code today is the Cadence engine crate awaiting rename. Its review records a
 
 | Question | Decided by |
 |---|---|
-| How soon after a create the forge's search can be trusted to find the new issue by fingerprint | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md) [TARGET] with the forge adapter, by a measurement on GitHub |
+| How soon after a create the forge's search can be trusted to find the new issue by fingerprint | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md) with the forge adapter, by a measurement on GitHub |
 | How the host session's outside call is made on each host and how its result returns typed | [0012: Host interface](0012-host-interface.md) [TARGET] |

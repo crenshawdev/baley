@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted |
 | Design issue | none; build issue [#25](https://github.com/crenshawdev/baley/issues/25) |
 | Requirement prefix | PLN |
 | Applies | [0002: System design](0002-system-design.md) |
@@ -80,7 +80,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | PLN-R19 | Baley owns truths, the evidence map, the red-then-green record for checks ([0006](0006-execution.md)) and the verdict ([0007](0007-verification.md)). The project owns how its tests are written and run: style, framework, count, coverage, mutation, CI. Baley ships one default test style as guidance and never refuses on style. CI status is information at landing, never acceptance evidence. | Acceptance is few and reviewed; tests are many and the developer's. | | Active |
 | PLN-R20 | A sprint is complete when every committed story's truths are met or waived, the suite is green, and every review the sprint raised is ruled. Baley derives this from the record ([0007](0007-verification.md)); the owner's approval of completion is the sprint review. | Done means proven. | SYS-P4 | Active |
 | PLN-R21 | At sprint close Baley shows the sprint's facts (tasks planned and done, checks red then green, suite runs, reviews and rulings, waivers, deviations, refusals hit) and takes the owner's notes as an optional `sprint.retrospective` record in the owner's words. | A decision the owner makes after a sprint is a scope or policy change, and the record says why. | PLN-R20 | Active |
-| PLN-R22 | Stories are mirrored one way to forge issues and sprints to forge milestones through the forge adapter; forge edits are ignored; the ledger stays the truth. | Teammates who live on the forge see the backlog there. | SYS-P6, [0011](0011-milestones-landing-undo-pause.md) [TARGET] | Backlog |
+| PLN-R22 | Stories are mirrored one way to forge issues and sprints to forge milestones through the forge adapter; forge edits are ignored; the ledger stays the truth. | Teammates who live on the forge see the backlog there. | SYS-P6, [0011](0011-milestones-landing-undo-pause.md) | Backlog |
 
 ## 4. Roles and actors
 

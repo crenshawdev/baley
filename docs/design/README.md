@@ -104,14 +104,15 @@ They are technical records for an engineer who has never met the authors. They c
 
 | Document | Status |
 |---|---|
-| [Product requirements](prd/baley.md) | Draft |
+| [Product requirements](prd/baley.md) | Accepted |
 | [0001: The evidence ledger](0001-evidence-ledger.md) | Accepted |
-| [0002: System design](0002-system-design.md) | Draft |
-| [0003: Configuration and routing](0003-configuration-and-routing.md) | Draft |
-| [0004: Starting a project and changing scope](0004-starting-a-project-and-changing-scope.md) | Draft |
-| [0005: Context, plans and acceptance](0005-context-plans-and-acceptance.md) | Draft |
-| [0006: Execution](0006-execution.md) | Draft |
-| [0007: Verification](0007-verification.md) | Draft |
-| [0008: Review](0008-review.md) | Draft |
-| [0009: Risk](0009-risk.md) | Draft |
-| [0010: Guard](0010-guard.md) | Draft |
+| [0002: System design](0002-system-design.md) | Accepted |
+| [0003: Configuration and routing](0003-configuration-and-routing.md) | Accepted |
+| [0004: Starting a project and changing scope](0004-starting-a-project-and-changing-scope.md) | Accepted |
+| [0005: Context, plans and acceptance](0005-context-plans-and-acceptance.md) | Accepted |
+| [0006: Execution](0006-execution.md) | Accepted |
+| [0007: Verification](0007-verification.md) | Accepted |
+| [0008: Review](0008-review.md) | Accepted |
+| [0009: Risk](0009-risk.md) | Accepted |
+| [0010: Guard](0010-guard.md) | Accepted |
+| [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md) | Draft |

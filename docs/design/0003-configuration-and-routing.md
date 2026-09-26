@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted |
 | Design issue | none; build issue [#23](https://github.com/crenshawdev/baley/issues/23) |
 | Requirement prefix | CFG |
 | Applies | [0002: System design](0002-system-design.md) |
@@ -140,7 +140,7 @@ graph LR
 | CFG-R26 | The ledger records that a key exists for a provider and when it was set or removed, never the key. Keys never enter backups, exports or any view. | The record is shareable; the keys are not. | EVD-R14, CFG-R24 | Active |
 | CFG-R27 | Baley reads a stored key for two uses only: to inject it into one command through `baley exec --key <provider>` (SYS-R11) and to call a provider's list endpoint for detection (CFG-R20). | The fewest places a key can leak from. | SYS-R11, CFG-R20 | Active |
 | CFG-R28 | A provider the owner reaches by its own command-line login needs no key in Baley; every command that needs a key says which provider lacks one, and no command forces a key to be set. | No one is forced to hand over a key. | SYS-R10 | Active |
-| CFG-R29 | `git.forge_provider` accepts `github`, `gitlab` and `forgejo`; the first release acts on `github` only, and choosing another value is accepted and reported as not yet supported by [0011: Landing](0011-milestones-landing-undo-pause.md) [TARGET]. | All three forges are planned; the setting must not need to change when they arrive. | | Active |
+| CFG-R29 | `git.forge_provider` accepts `github`, `gitlab` and `forgejo`; the first release acts on `github` only, and choosing another value is accepted and reported as not yet supported by [0011: Landing](0011-milestones-landing-undo-pause.md). | All three forges are planned; the setting must not need to change when they arrive. | | Active |
 
 ## 4. Roles and actors
 
@@ -272,7 +272,7 @@ Called by the work order composer for every dispatch, never by a host.
 | Table | Content |
 |---|---|
 | `[project]` | `id` (UUID version 4), `name` (ADR 0004) |
-| `[git]` | `protected_branches`, `on_protected`, `guard_hard_fail`, `integration_branch`, `auto_branch`, `base_branch`, `forge_provider`, `forge_repo`, `forge_host`, and the landing settings owned by [0011](0011-milestones-landing-undo-pause.md) [TARGET] |
+| `[git]` | `protected_branches`, `on_protected`, `guard_hard_fail`, `integration_branch`, `auto_branch`, `base_branch`, `forge_provider`, `forge_repo`, `forge_host`, and the landing settings owned by [0011](0011-milestones-landing-undo-pause.md) |
 | `[workflow]` | `test_command`, `lint_command`, `skip_discuss` |
 | `[roles.<role>]`, `[host.<name>...]`, `[review...]` | Overrides of the global values, same shape as the global file |
 
@@ -482,15 +482,12 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `git.protected_branches` | list of branch names | `["main", "master"]` | project | [0010](0010-guard.md) | Branches the guard protects |
 | `git.on_protected` | `ask`, `refuse`, `allow` | `ask` | project | [0010](0010-guard.md) | What the guard does with a commit on a protected branch |
 | `git.guard_hard_fail` | bool | `false` | project | [0010](0010-guard.md) | Whether a guard that cannot decide refuses instead of passing loudly |
-| `git.integration_branch` | `milestone`, `trunk` | `milestone` | project | 0011 [TARGET] | Where task work is integrated |
-| `git.auto_branch` | `ask`, `auto`, `off` | `ask` | project | 0011 [TARGET] | Whether Baley creates the working branch |
-| `git.base_branch` | branch name or absent | absent | project | 0011 [TARGET] | The branch work starts from |
-| `git.create_tag` | bool | `true` | project | 0011 [TARGET] | Whether a release creates a tag |
-| `git.on_land_cleanup` | bool | `true` | project | 0011 [TARGET] | Whether landing deletes the merged branch |
-| `git.issue_check` | bool | `true` | project | 0011 [TARGET] | Whether landing checks the linked issue |
-| `git.forge_provider` | `github`, `gitlab`, `forgejo` | absent | project | 0011 [TARGET] | Which forge the project uses (CFG-R29) |
-| `git.forge_repo` | `owner/repo` | absent | project | 0011 [TARGET] | The repository on the forge |
-| `git.forge_host` | host name, optional port | absent | project | 0011 [TARGET] | The forge's host for self-hosted forges |
+| `git.integration_branch` | `sprint`, `milestone`, `trunk` | `sprint` | project | [0011](0011-milestones-landing-undo-pause.md) | Where task commits go and what a landing lands (LND-R1) |
+| `git.auto_branch` | `ask`, `auto`, `off` | `ask` | project | [0011](0011-milestones-landing-undo-pause.md) | Whether Baley creates the working branch |
+| `git.base_branch` | branch name or absent | absent | project | [0011](0011-milestones-landing-undo-pause.md) | The branch work starts from |
+| `git.forge_provider` | `github`, `gitlab`, `forgejo` | absent | project | [0011](0011-milestones-landing-undo-pause.md) | Which forge the project uses (CFG-R29) |
+| `git.forge_repo` | `owner/repo` | absent | project | [0011](0011-milestones-landing-undo-pause.md) | The repository on the forge |
+| `git.forge_host` | host name, optional port | absent | project | [0011](0011-milestones-landing-undo-pause.md) | The forge's host for self-hosted forges |
 | `workflow.test_command` | command line | absent | project | [0006](0006-execution.md) | The suite Baley runs (SYS-R8) |
 | `workflow.lint_command` | command line | absent | project | [0006](0006-execution.md) | The lint Baley runs |
 | `workflow.skip_discuss` | bool | `false` | project | 0013 [TARGET] | Whether next-action skips the discussion step |
@@ -508,7 +505,7 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `review.triggers.risk_surface.waive_routing_floor` | same list | absent | project | [0009](0009-risk.md) | Surfaces whose floor the owner waives |
 | `review.consult.enabled`, `.tier`, `.effort`, `.attempt_threshold` | bool; tier; effort; integer min 1 | `false`; `flagship`; `high`; 3 | both | 0014 [TARGET] | The consult call in debug after repeated failures |
 
-Settings removed from the schema because nothing reads them (CFG-R7), plus `review.mode` (every reviewer runs, [0008](0008-review.md)): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Sprint capacity is designed in [0005](0005-context-plans-and-acceptance.md) (PLN-R9), not as free numbers here.
+Settings removed from the schema because nothing reads them (CFG-R7), plus `review.mode` (every reviewer runs, [0008](0008-review.md)) and `git.create_tag`, `git.on_land_cleanup`, `git.issue_check` (per-landing choices, [0011](0011-milestones-landing-undo-pause.md)): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Sprint capacity is designed in [0005](0005-context-plans-and-acceptance.md) (PLN-R9), not as free numbers here.
 
 ## 10. Instructions served
 

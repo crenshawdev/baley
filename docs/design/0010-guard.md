@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted |
 | Design issue | none; build issue [#24](https://github.com/crenshawdev/baley/issues/24) |
 | Requirement prefix | GRD |
 | Applies | [0002: System design](0002-system-design.md) |
@@ -20,7 +20,7 @@ This area decides what Baley does at the host's edge, before a tool call an agen
 - how each answer is recorded, remembered and replayed;
 - the answer adapter per host, and the host sandbox that keeps agents out of Baley's home.
 
-It does not decide the lease itself or what an out-of-lease commit does at task close ([0006](0006-execution.md)); which branch work happens on or how landing pushes ([0011](0011-milestones-landing-undo-pause.md) [TARGET]); risk detection ([0009](0009-risk.md)); or how stubs are rendered and installed ([0012](0012-host-interface.md) [TARGET]).
+It does not decide the lease itself or what an out-of-lease commit does at task close ([0006](0006-execution.md)); which branch work happens on or how landing pushes ([0011](0011-milestones-landing-undo-pause.md)); risk detection ([0009](0009-risk.md)); or how stubs are rendered and installed ([0012](0012-host-interface.md) [TARGET]).
 
 Hand-offs: 0003 gives the guard project discovery and the settings it reads; 0006 gives it the active lease; 0012 installs the hook and the sandbox configuration; the ledger (0001) stores every guard outcome.
 

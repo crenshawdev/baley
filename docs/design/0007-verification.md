@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted |
 | Design issue | none; build issues [#25](https://github.com/crenshawdev/baley/issues/25), [#93](https://github.com/crenshawdev/baley/issues/93) |
 | Requirement prefix | VER |
 | Applies | [0002: System design](0002-system-design.md) |
@@ -20,7 +20,7 @@ This area decides how a sprint's evidence becomes a decision:
 - what completes a sprint, what the owner approves, and when a completion stops applying;
 - the audit: the read-only trace from a story to its proof.
 
-It does not decide what a truth or an evidence map is ([0005](0005-context-plans-and-acceptance.md)); how checks were made red then green or how the suite ran ([0006](0006-execution.md)); when a review fires on the finished sprint ([0008: Review](0008-review.md)); or what closes a milestone ([0011](0011-milestones-landing-undo-pause.md) [TARGET]).
+It does not decide what a truth or an evidence map is ([0005](0005-context-plans-and-acceptance.md)); how checks were made red then green or how the suite ran ([0006](0006-execution.md)); when a review fires on the finished sprint ([0008: Review](0008-review.md)); or what closes a milestone ([0011](0011-milestones-landing-undo-pause.md)).
 
 Hand-offs: 0006 hands over a sprint whose plans are complete; this area verifies it; 0005's definition of done and sprint close use the status this area derives; 0011 closes milestones over completed sprints.
 

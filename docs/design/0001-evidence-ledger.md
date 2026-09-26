@@ -345,7 +345,7 @@ Streams used by the record families:
 | `verification/<id>` | `verification.started`, `verification.run`, `verdict.claimed`, `observation.recorded`, `item.overruled`, `truth.waived`, `waiver.revoked`, `verification.completed` ([0007](0007-verification.md)) |
 | `review/<id>` | `review.admitted`, `review.issued`, `review.returned`, `review.failed`, `review.adjudication`, `review.adjudicated`, `review.settled`, `review.deferred`, `finding.filed`, `finding.declined`, `finding.uncertain` ([0008](0008-review.md)) |
 | `risk/<n>` | `risk.observed`, `risk.fired`, `risk.receipt` |
-| `milestone/<name>` | `milestone.close_ready`, `milestone.archived`, `release.proposed`, `release.confirmed`, `landing.started`, `landing.step`, `landing.completed` |
+| `milestone/<name>` | `milestone.close_ready`, `milestone.archived`, `release.proposed`, `release.confirmed`, `landing.started`, `landing.authorized`, `landing.claimed`, `landing.step`, `landing.reconciled`, `landing.confirmed`, `landing.completed`, `tracker.checked` ([0011](0011-milestones-landing-undo-pause.md)) |
 | `pause` | `pause.recorded`, `pause.resumed` |
 | `task/<slug>`, `debug/<slug>`, `spike/<slug>` | the off-roadmap records |
 | `capture` | `item.captured`, `item.resolved` |
@@ -957,12 +957,12 @@ The domain rules are owned, specified and tested by the area design documents ([
 | Completion binds context, publications, admissions and task and plan history, and stops applying when any of them changes or execution is undone | [0007: Verification](0007-verification.md), VER-R13 | The `phase` view computes applicability from the bound facts; `completion.invalidated` is projected when a bound fact changes; completion is confirmed against events when used |
 | Verification records its launch before running | [0007: Verification](0007-verification.md), VER-R2 | Claim, act, record |
 | Verification claims are recomputed at commit | [0007: Verification](0007-verification.md), VER-R2 | Inside `decide` |
-| Undo records a pending state before its first revert and refuses to continue until an interrupted revert is reconciled | Milestones, landing, undo and pause [TARGET] | Claim, act, record, and reconciliation |
-| Undo keeps its refusal receipts | Milestones, landing, undo and pause [TARGET] | `command.completed` for refusals |
-| Landing records an intent per step and requires reconciliation | Milestones, landing, undo and pause [TARGET] | Claim, act, record per landing step |
-| Release requires an exact unstarted landing and a retained confirmation | Milestones, landing, undo and pause [TARGET] | `release.proposed` and `release.confirmed` as separate owner steps |
-| Milestone close records readiness; prune is a later step bound to that exact close | Milestones, landing, undo and pause [TARGET] | `milestone.close_ready`, then `milestone.archived` bound to it |
-| Resume checks the preserved HEAD, branch, configuration and occurrence | Milestones, landing, undo and pause [TARGET] | `pause.recorded` bindings, checked by `pause.resumed` |
+| Undo records a pending state before its first revert and refuses to continue until an interrupted revert is reconciled | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md), LND-R15 | Claim, act, record, and reconciliation |
+| Undo keeps its refusal receipts | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md), LND-R19 | `command.completed` for refusals |
+| Landing records an intent per step and requires reconciliation | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md), LND-R3 | Claim, act, record per landing step |
+| Release requires an exact unstarted landing and a retained confirmation | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md), LND-R14 | `release.proposed` and `release.confirmed` as separate owner steps |
+| Milestone close records readiness; prune is a later step bound to that exact close | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md), LND-R12, LND-R13 | `milestone.close_ready`, then `milestone.archived` bound to it |
+| Resume checks the preserved HEAD, branch, configuration and occurrence | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md), LND-R16 | `pause.recorded` bindings, checked by `pause.resumed` |
 | Deferred reviews feed next-action with their precedence | [0008: Review](0008-review.md), REV-R11 | `review_queue` view |
 | Settings layers merge, project over global | [0003: Configuration and routing](0003-configuration-and-routing.md), CFG-R6 | `policy.effective` with the precedence and scope the configuration design defines |
 | A dispatch whose routing inputs changed is refused | [0003: Configuration and routing](0003-configuration-and-routing.md), CFG-R10 | Kept; routing inputs are part of the policy version bound at admission |

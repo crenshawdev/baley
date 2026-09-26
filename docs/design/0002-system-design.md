@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft |
+| Status | Accepted |
 | Requirement prefix | SYS |
 | Product requirements | [PRD](prd/baley.md) |
 | Store | [0001: The evidence ledger](0001-evidence-ledger.md) |
