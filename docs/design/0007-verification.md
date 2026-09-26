@@ -284,4 +284,4 @@ The code today is the Cadence engine crate awaiting rename; its verification pat
 
 | Question | Decided by |
 |---|---|
-| How the verifier reads run output on each host within the bounded read contract | [0012: Host interface](0012-host-interface.md) [TARGET] |
+| How the verifier reads run output on each host within the bounded read contract | [0012: Host interface](0012-host-interface.md) |

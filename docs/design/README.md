@@ -116,3 +116,4 @@ They are technical records for an engineer who has never met the authors. They c
 | [0009: Risk](0009-risk.md) | Accepted |
 | [0010: Guard](0010-guard.md) | Accepted |
 | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md) | Accepted |
+| [0012: Host interface](0012-host-interface.md) | Draft |

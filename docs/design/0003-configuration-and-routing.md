@@ -20,7 +20,7 @@ This area decides:
 - which model names Baley accepts for each host and provider, and how that list stays current;
 - how provider API keys are stored and reached.
 
-It does not decide the meaning of settings owned by other areas (section 9 lists every setting and its owner), how a work order reaches a host or how effort is delivered there ([0012: Host interface](0012-host-interface.md) [TARGET]), whether a review or a risk gate fires ([0008: Review](0008-review.md), [0009: Risk](0009-risk.md)), or what the guard does with git commands ([0010: Guard](0010-guard.md)).
+It does not decide the meaning of settings owned by other areas (section 9 lists every setting and its owner), how a work order reaches a host or how effort is delivered there ([0012: Host interface](0012-host-interface.md)), whether a review or a risk gate fires ([0008: Review](0008-review.md), [0009: Risk](0009-risk.md)), or what the guard does with git commands ([0010: Guard](0010-guard.md)).
 
 Hand-offs: the work order composer ([0002](0002-system-design.md) section 8) asks this area for the model and effort of each dispatch; the ledger ([0001](0001-evidence-ledger.md)) stores what this area records; `baley init` ([0001](0001-evidence-ledger.md), EVD-R17, ADR 0004) creates the project file this area reads.
 
@@ -153,7 +153,7 @@ graph LR
 | Model catalog (component) | A host or provider name and a model name | Whether the name is accepted; the catalog version | Not applicable |
 | Work order composer ([0002](0002-system-design.md) section 8) | A route | A work order carrying it | The route |
 | Guard hook ([0010](0010-guard.md)) | A working directory | The project and its effective policy, or "unmanaged" | Not applicable |
-| Host adapter ([0012](0012-host-interface.md) [TARGET]) | A rung and a model name | The host's own effort value and model parameter | Not applicable |
+| Host adapter ([0012](0012-host-interface.md)) | A rung and a model name | The host's own effort value and model parameter | Not applicable |
 | Dispatched workers (the six roles) | A work order | A typed result | `roles.<role>.model`, `roles.<role>.effort`, `escalate_on_failure` |
 
 No worker is dispatched by this area; it supplies the route others dispatch with.
@@ -221,7 +221,7 @@ All operations of this area are command-line commands run by the owner. Nothing 
 
 - **Inputs:** `--key <provider>`, `--`, the command and its arguments.
 - **Outputs:** the command's exit code; its output with every occurrence of the key replaced by `[baley:<provider>-key]`.
-- **Refusals:** `no-such-key` (CFG-R27, SYS-R11). The full contract of this command belongs to [0012: Host interface](0012-host-interface.md) [TARGET].
+- **Refusals:** `no-such-key` (CFG-R27, SYS-R11). The full contract of this command belongs to [0012: Host interface](0012-host-interface.md).
 
 ### baley models update
 
@@ -509,7 +509,7 @@ Settings removed from the schema because nothing reads them (CFG-R7), plus `revi
 
 ## 10. Instructions served
 
-Not applicable. This area serves no instructions: the model is never told about settings, keys or the catalog (CFG-R11). The route reaches a worker inside its work order, composed by [0002](0002-system-design.md) section 8 and delivered as [0012](0012-host-interface.md) [TARGET] specifies.
+Not applicable. This area serves no instructions: the model is never told about settings, keys or the catalog (CFG-R11). The route reaches a worker inside its work order, composed by [0002](0002-system-design.md) section 8 and delivered as [0012](0012-host-interface.md) specifies.
 
 ## 11. Build status
 
@@ -541,5 +541,5 @@ The code today is the Cadence engine crate awaiting rename. It reads JSON files 
 
 | Question | Decided by |
 |---|---|
-| The exact host names and their compiled alias tables, and how the launcher passes the host's identity to the shared server | [0012: Host interface](0012-host-interface.md) [TARGET] |
+| The exact host alias tables at first release | [0012](0012-host-interface.md) HST-R4 names the hosts (`claude-code`, `codex`); the tables are filled when the adapters are built |
 | The tier hint table's contents for each provider at first release | The owner, when the model catalog is built |

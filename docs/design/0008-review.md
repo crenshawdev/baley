@@ -363,4 +363,4 @@ The code today is the Cadence engine crate awaiting rename. Its review records a
 | Question | Decided by |
 |---|---|
 | How soon after a create the forge's search can be trusted to find the new issue by fingerprint | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md) with the forge adapter, by a measurement on GitHub |
-| How the host session's outside call is made on each host and how its result returns typed | [0012: Host interface](0012-host-interface.md) [TARGET] |
+| How the host session's outside call is made on each host and how its result returns typed | [0012: Host interface](0012-host-interface.md) |

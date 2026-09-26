@@ -20,7 +20,7 @@ This area decides how a project gets its first scope and how an approved scope c
 - the backlog: a requirement is a story, and the backlog is the stories in priority order;
 - what the start checks on the forge and in the settings, and what it offers to fix.
 
-It does not decide a story's acceptance criteria (truths), their revision, sprint planning or plans ([0005: Context, plans and acceptance](0005-context-plans-and-acceptance.md)), how execution is undone ([0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md)), how a repository or ruleset is created on the forge (0011), how settings are written ([0003: Configuration and routing](0003-configuration-and-routing.md)), or how the owner's approval reaches Baley from a host session ([0012: Host interface](0012-host-interface.md) [TARGET]).
+It does not decide a story's acceptance criteria (truths), their revision, sprint planning or plans ([0005: Context, plans and acceptance](0005-context-plans-and-acceptance.md)), how execution is undone ([0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md)), how a repository or ruleset is created on the forge (0011), how settings are written ([0003: Configuration and routing](0003-configuration-and-routing.md)), or how the owner's approval reaches Baley from a host session ([0012: Host interface](0012-host-interface.md)).
 
 Hand-offs: `baley init` ([0001](0001-evidence-ledger.md), EVD-R17) gives the repository its project id and file; this area's start runs it when it has not been run. The `roadmap` and `phase` views ([0001](0001-evidence-ledger.md)) serve what this area records to Hardin, context authoring and progress ([0013](0013-next-action-and-progress.md) [TARGET]). The planner that drafts the first scope is dispatched with a work order ([0002](0002-system-design.md) section 8) and routed by [0003](0003-configuration-and-routing.md).
 
@@ -117,7 +117,7 @@ Every operation here is a typed operation on the host interface, reachable from 
 
 ### scope approve
 
-- **Inputs:** the submission digest; the owner and the time ([0012](0012-host-interface.md) [TARGET] says how a session establishes both).
+- **Inputs:** the submission digest; the owner and the time ([0012](0012-host-interface.md) says how a session establishes both).
 - **Outputs:** the events recorded: `project.described`, one `requirement.declared` per requirement, one `phase.declared` and `phase.reordered` per phase, `scope.approved` binding the digest; the receipt.
 - **Refusals:**
 
@@ -403,4 +403,4 @@ The code today is the Cadence engine crate awaiting rename. It parses and edits 
 
 | Question | Decided by |
 |---|---|
-| How a session establishes the owner's identity and the time of an approval, and how the interview's questions reach the owner from a session | [0012: Host interface](0012-host-interface.md) [TARGET] |
+| How a session establishes the owner's identity and the time of an approval, and how the interview's questions reach the owner from a session | [0012: Host interface](0012-host-interface.md) |

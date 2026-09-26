@@ -408,4 +408,4 @@ The code today is the Cadence engine crate awaiting rename. Truths belong to a p
 | Question | Decided by |
 |---|---|
 | The exact conditions under which a check's verdict is `rejected` for a test that could not have failed | [0007: Verification](0007-verification.md) |
-| How the analyzer and checker work orders are delivered and adjudicated on each host | [0012: Host interface](0012-host-interface.md) [TARGET] |
+| How the analyzer and checker work orders are delivered and adjudicated on each host | [0012: Host interface](0012-host-interface.md) |

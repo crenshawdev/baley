@@ -348,7 +348,5 @@ Decision records this design produces. Each is still to be written.
 
 | Question | Where it is decided |
 |---|---|
-| How effort reaches each host: one rendered agent file per role and effort level, or passed directly | Host interface design [TARGET] |
-| Whether MCP 2026-07-28 still carries the client's name on each request, and how the stdio launcher passes the host's identity to the shared server | Host interface design [TARGET] |
-| Whether Codex connects reliably to an HTTP MCP server (Codex issue openai/codex#11284 is open) | Host interface design, by a test on each host [TARGET] |
+| How effort reaches each host, how the launcher passes the host's identity, and whether Codex connects over HTTP | [0012: Host interface](0012-host-interface.md) (HST-R3, HST-R4, HST-R12; the HTTP test is its open question) |
 | Reading git facts inside the write transaction (issue #40) | Build 4 |
