@@ -180,6 +180,8 @@ flowchart TB
 | Project sequence | The position of an event in its project's ledger. The hash chain follows this order. |
 | Anchor | A copy of a project's chain head (sequence and hash) pushed to the forge as an immutable tag. |
 | View | A keyed collection of documents computed from events, answering one kind of current-state question. |
+| Generation | One complete set of a project's view documents. Readers and commands use the live generation; a rebuild builds the next one beside it. |
+| View set version | The version a binary declares for its whole set of registered views, raised whenever a view is added, removed or renamed. |
 | Projector | Domain code that updates views from an event. Pure: event and current documents in, document changes out. |
 | Payload | Content stored once by hash, outside the event: large content, and every sensitive kind of content regardless of size. |
 | Reference | One event's use of a payload, carrying the retention class for that use. |
@@ -254,7 +256,7 @@ classDiagram
     +status(hash) Present or Reduced or Purged
   }
   class Search {
-    <<trait>>
+    <<trait, slice 8>>
     +search(project, query, scope, page) Hits
   }
   class Admin {
@@ -272,21 +274,40 @@ classDiagram
   class Projector {
     <<trait, implemented in baley-core>>
     +spec() ViewSpec
+    +handles() EventTypes
+    +keys(event) DocKeys
     +apply(event, documents) Changes
+  }
+  class EventSchema {
+    <<trait, implemented in baley-core>>
+    +reads(type, version) bool
+    +projection_payload(event) CurrentVersionAndPayload
+  }
+  class RebuildReport {
+    +generation
+    +events
+  }
+  class ViewsReport {
+    +checked_seq
+    +differing
   }
   Ledger ..> Transaction : decide runs inside
   Ledger ..> Projector : runs after append
+  Ledger ..> EventSchema : fences and upcasts with
   Transaction ..> Payloads : attachments
+  Admin ..> RebuildReport : rebuild returns
+  Admin ..> ViewsReport : verify_views returns
 ```
 
-*Figure 4. The storage port. The decision runs inside the transaction with read access; projectors live in the core and are handed to the adapter, so the adapter never contains business rules.*
+*Figure 4. The storage port. The decision runs inside the transaction with read access; projectors and the event schema live in the core and are handed to the adapter when the store opens, so the adapter never contains business rules. The `Projector` and `EventSchema` traits are defined in `baley-store`, and the store's own `request` projector lives there beside the `command.completed` event it reads (ADR 0010). `Search` arrives with slice 8.*
 
-- **`transact`** runs one command's decision. The caller does its slow work first (tests, model calls, git work) and passes the results in. The adapter opens the write transaction, checks the request, then fences a new request if the project holds an event type or version this binary cannot read. A replay is answered before that fence. `decide` reads through `Transaction` and returns the inputs its caller observed. The adapter re-checks documents and absences against the store and compares the caller-supplied git facts seen and now. Reading git inside the transaction is issue #40, for Build 4. A decision confirms authority against events where required and appends events. Any `Transaction` operation's error fails the command, and a stored payload must be attached to an event. The adapter runs the projectors, writes each changed document once, and commits. If any step fails, nothing is recorded (EVD-R5).
+- **`transact`** runs one command's decision. The caller does its slow work first (tests, model calls, git work) and passes the results in. The adapter takes the writer queue, opens the write transaction and checks that the project's live `request` view was built at this binary's projector version. It checks the request, then fences a new request if any of the project's live views or its view set was built by a newer binary, or if the project holds an event type or version this binary cannot read (see [Views and projectors](#views-and-projectors-evd-r9-evd-r10-evd-r27)). A replay is answered before those fences. `decide` reads through `Transaction` and returns the inputs its caller observed. The adapter re-checks documents and absences against the store and compares the caller-supplied git facts seen and now. Reading git inside the transaction is issue #40, for Build 4. A decision confirms authority against events where required and appends events. Any `Transaction` operation's error fails the command, and a stored payload must be attached to an event. The adapter runs the projectors, writes each changed document once, and commits. If any step fails, nothing is recorded (EVD-R5).
 - **`expect`** additionally names the stream that serializes a contested decision, so two commands that would both pass their own checks are ordered by one version counter. Each contested decision names its stream in [Serializing streams](#serializing-streams).
-- **Views** are declared by the core as a `ViewSpec`: a name, a version, a key shape, indexed fields, the ordering of each index and a page-size bound. `find` reads by a declared index, never by scan, and returns a page with a cursor. One query runs against one read snapshot.
+- **Views** are declared by the core as a `ViewSpec`: a name, a version, a key shape, indexed fields, the ordering of each index and a page-size bound. `find` reads by a declared index, never by scan, and returns a page with a cursor. A cursor is bound to the query, project, generation and view version that issued it and refused under any other. One query runs against one read snapshot, the same snapshot in which the adapter checks the project's live view versions.
+- **`EventSchema`** is the core's registry of event types, handed to the adapter at open. `reads` says which types and versions this binary can read; a project holding any other is read-only for it. `projection_payload` gives an event's current type version and its payload upcast to that version. Projectors never see a stored event directly: ordinary projection and replay both hand them a copy carrying that version and payload.
 - **Payloads** are read through a stream on its own connection and snapshot. A stream opened before a purge keeps reading its snapshot. A purged or reduced payload returns its status and tombstone. Bytes whose hash was reduced or purged cannot be stored again (`PayloadTombstoned`).
 - **Search** is a capability with defined semantics: terms and quoted phrases, scoped by project and optionally phase, results in descending relevance with stable tie-breaking by sequence. The SQLite adapter implements it with FTS5 and BM25; nothing in the core depends on FTS5 syntax.
-- **Admin** covers everything an owner does to the store as a whole. `scrub` is the standalone, idempotent end of a purge.
+- **Admin** covers everything an owner does to the store as a whole. `scrub` is the standalone, idempotent end of a purge. `rebuild` returns a `RebuildReport`: the generation it made live and every event replayed into it, the final tail included, which for a chain without gaps is the head it flipped at. `verify_views` returns a `ViewsReport`: the head it compared at and each differing (view, key), sorted. The SQLite adapter provides `reduce`, `purge`, `scrub`, `rebuild` and `verify_views` as methods of its own until it implements the whole `Admin` trait with backup, export and doctor.
 
 #### Events
 
@@ -310,7 +331,7 @@ Payloads are JSON so that the ledger stays readable with standard tools and quer
 
 Payload numbers are integers within ±(2^53 − 1); floats are refused, because RFC 8785 writes numbers as IEEE doubles. Events and view documents never carry payload body text: a decision puts body content in a payload and records its reference, and an inline fact is never an excerpt of a body. `command.*` and `payload.*` events are recorded only by the store; a decision that appends one is refused.
 
-Event types are named `<family>.<fact>` in the past tense, and each has a payload schema version. A payload schema change adds a new version; old events are never rewritten and are read through an upcaster that converts old versions to the current shape (EVD-R19). An event type or version a binary does not know makes that project read-only for that binary.
+Event types are named `<family>.<fact>` in the past tense, and each has a payload schema version. A payload schema change adds a new version; old events are never rewritten and are read through an upcaster that converts old versions to the current shape (EVD-R19). Ordinary projection and replay both upcast in memory: projectors receive a copy of the event at its type's current version with its payload upcast, while the stored event, its hash and its references stay as recorded. The store's own `command.*` and `payload.*` types are read only at their exact recorded versions. An event type or version a binary does not know makes that project read-only for that binary.
 
 Streams used by the record families:
 
@@ -395,26 +416,35 @@ sequenceDiagram
   S->>C: command
   C->>C: slow work: run tests, read git, call models
   C->>L: transact(project, command, decide)
-  L->>Q: BEGIN IMMEDIATE
-  L->>Q: check compatibility epoch, look up request
-  alt request already answered
-    L->>Q: ROLLBACK
+  L->>Q: take the writer queue, BEGIN IMMEDIATE, check compatibility epoch
+  L->>Q: check the live request view's projector version
+  Note over L,Q: Newer than this binary's: ProjectReadOnly. Older, or never stamped: end the turn, bring the views forward under the maintenance lock (Figure 7), start again
+  L->>Q: look up request in the live generation
+  alt request already answered with the same digest
+    L->>Q: end the transaction, nothing written
     L-->>C: original outcome, a released answer returns its tombstone
+  else request id already used with another digest
+    L->>Q: ROLLBACK
+    L-->>C: refused, nothing recorded
   else new request
+    L->>Q: check every live view's projector version and the live view set version
+    Note over L,Q: Newer: ProjectReadOnly. Older, missing or retired: end the turn, bring forward, start again
     L->>Q: check project event types and versions are readable
     L->>C: decide(transaction)
     C->>L: read inputs through Transaction, return observed slow-work inputs
     C->>L: confirm authority against events, append events, put payloads
     L->>Q: write payload bodies when put_payload is called
-    L->>Q: re-check observed documents and absences, compare supplied git facts seen and now
+    L->>L: fold each appended event's upcast copy through the projectors, in memory
+    L->>Q: refuse if any Transaction operation failed or a stored payload no event attaches
+    L->>Q: re-check observed documents and absences in the live generation, compare supplied git facts seen and now
     Note over L,Q: Git is not read inside the transaction yet, issue #40 (Build 4)
-    alt input moved or any Transaction operation failed
+    alt refused, or an input moved
       L->>Q: ROLLBACK
       L-->>C: error, nothing recorded
     else current
-      L->>Q: refuse a stored payload no event attaches
-      L->>Q: insert events with hash chain and references, write projected views
-      L->>Q: command.completed with git facts, answer inline up to 4 KiB unless sensitive, else record payload
+      L->>Q: append command.completed with git facts, answer inline up to 4 KiB unless sensitive, else record payload
+      L->>Q: insert events with hash chain and references
+      L->>Q: write each changed document once, in the live generation only
       L->>Q: advance project head
       L->>Q: COMMIT (synchronous, survives power loss)
       L-->>C: outcome
@@ -424,7 +454,7 @@ sequenceDiagram
   S-->>D: tool result
 ```
 
-*Figure 6. A database-only command. The request is checked before the readability fence. The caller supplies observed git facts; the adapter checks them and stores the outcome in the same transaction.*
+*Figure 6. A database-only command. The request is checked before the view and readability fences, and needs only the live `request` view at this binary's version. The caller supplies observed git facts; the adapter checks them and stores the outcome in the same transaction. A command writes only the live generation, even while a rebuild builds the next one.*
 
 #### Serializing streams
 
@@ -468,15 +498,68 @@ The chain is per project, so one project's ledger can be exported and verified w
 
 #### Views and projectors (EVD-R9, EVD-R10, EVD-R27)
 
-A projector is registered for the event types it cares about. For each appended event, the adapter loads the documents the projector names by key, calls `apply`, and writes the returned changes. Every view document records the project sequence and projector version that produced it.
+A projector is registered for the event types it cares about. For each appended event, the adapter makes a copy of the event at its type's current version with its payload upcast, loads the documents the projector names by key, calls `apply` with the copy, and folds the returned changes into the command's other changes in memory. Each changed document is written once, stamped with the project sequence of the last event that changed it and the projector version.
 
 **Authority.** Views are fast, derived data. A decision that grants authority (admission, completion, landing, release) confirms its deciding facts against the events themselves inside its transaction, through `Transaction::event_exists`, so an edited view cannot grant authority.
 
-**Rebuild.** Every view row carries a generation, and each project has one live generation that readers and projectors use. A rebuild writes the next generation beside the live one, replaying the project's events in batches of at most 200 events or 15 ms, each through the writer queue, pausing after each batch as long as it held the queue. When it reaches the head, one short transaction applies the remaining events and makes the new generation live, which switches every view at once. The old generation is then deleted in the same small, yielding batches. A crash leaves an unfinished generation that is never live and is deleted on the next rebuild. Progress is tracked per project.
+**Generations.** Every view row carries a generation, and each project has one live generation, `project_gen.live_gen`, that readers and commands use. Commands write only the live generation, also while a rebuild runs. `view_gen` stamps each generation with each view's projector version and the view set version of the binary that built it, so an empty view still says which version built it. The `request` view is a view like any other and belongs to its generation.
 
-**Versions.** A view whose stored projector version is older than the running binary's is rebuilt forward before it is used. A binary never rebuilds a view whose stored version is newer than its own; it treats that project as read-only.
+**Rebuild.** A rebuild holds the maintenance lock (see [Processes and concurrency](#processes-and-concurrency-evd-r8-evd-r19)) from start to end. It first removes what an earlier rebuild left behind, then marks a new generation in `project_gen.building_gen`, numbered above the live generation and every generation still stored, and writes its `view_gen` stamps for every registered view, empty ones included. It replays the project's events into that generation in batches, each its own turn on the writer queue: at most 200 events, and once one event is applied, no further event after the batch has held the queue 15 ms. Each event goes through the same projectors as ordinary projection, as the same upcast copy, reading documents from the generation being built and never from the live one; each changed document is written once per batch, stamped with the last event that changed it, and `building_applied_seq` moves to the last event whose writes commit in that batch. After each batch the rebuild pauses as long as the batch held the queue. Commands that commit between batches change the live generation only, and a later batch reads their events. The final turn reads the current head, applies the tail after `building_applied_seq` and, only if the whole tail fits that same bounded turn, moves `live_gen` to the new generation and clears the marker in the same transaction, which switches every view at once. A tail too long for one turn commits its progress and tries again after the pause. Readers that open a snapshot after the flip see every view in the new generation, and readers already in a snapshot see the old one. A cursor issued under the old generation is refused as `InvalidCursor`, never translated.
 
-**Verification of views.** `baley verify --views` rebuilds a project's views into a scratch generation, compares it with the live generation at the head, reports any document that differs, and deletes the scratch generation.
+The old generation is deleted before the rebuild returns, in turns of at most 200 document rows or 15 ms, each followed by the same pause: its rows in every view table `view_catalog` records, including tables of older versions and of views this binary no longer registers, then its `view_gen` stamps. A crash, or a rebuild abandoned between batches, leaves its generation and marker behind, never live; the next rebuild removes them before it starts, together with every generation that is neither live nor being built, found one at a time by keyed seeks on `view_gen` and on every view table. If deleting the old generation fails after the flip, the flip stands: `rebuild` returns an error saying the new generation is live, and the next rebuild removes what is left. Generation numbers only rise, so no number a cursor was issued under is used again.
+
+**Versions.** The binary declares a version for its whole registered view set, `request` included, and raises it whenever a view is added, removed or renamed. When the store opens, `view_set_catalog` pins each set version to its sorted view names, as `view_catalog` pins each view version to its spec, and a set changed under a version already recorded is refused. Every `view_gen` row of a generation carries the same set version beside its view's projector version.
+
+Before a project's views are used, by a read or a new command, the adapter compares the live stamps with this binary's: a read in the same snapshot as the document or page it returns, a command under the writer queue. A live set version, or a registered view's projector version, newer than this binary's makes the project read-only for this binary: its view reads and new commands are refused with `ProjectReadOnly`, because this binary's table at the newer generation can be empty, and answering from it would report an absence that is not true. History and payload reads still work. An older or missing set stamp, an older or missing view row, or a row for a view this binary retired rebuilds the project forward before use, under the maintenance lock; a caller that waited while another process did it finds the views current and goes on. A retired view's name alone never fences a project: the rebuild's cleanup removes its rows and stamps. A project with no events and no generation yet is stamped at generation 0 on first use, with nothing to replay. Open looks at no project, so a project whose views need work never keeps another from opening. A binary never rebuilds a view whose stored version is newer than its own; its `rebuild` and `verify --views` refuse that project too. A retry of a request already answered needs only the live `request` view at this binary's projector version, whatever the set stamp says.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as A read or a new command
+  participant R as Rebuild
+  participant W as Writer queue
+  participant Q as SQLite
+  participant C as Another command
+  U->>Q: read the live view_gen stamps, in the read snapshot or the command's turn
+  alt a live stamp newer than this binary's
+    Q-->>U: ProjectReadOnly, nothing read or written
+  else older, missing or retired
+    U->>R: wait for the maintenance lock, check the stamps again, rebuild forward
+  end
+  Note over R: holds the maintenance lock from here to the end
+  R->>Q: set up in turns of the queue, each followed by a pause as long as it held the queue
+  Note over R,Q: refuse newer live views, remove an unfinished generation and every retired one, then mark building_gen and stamp view_gen
+  loop replay batches: at most 200 events, and at most 15 ms once one is applied
+    R->>W: take the queue
+    Note over R,Q: the queue is held from here
+    R->>Q: read events after building_applied_seq, fold them through the projectors against the building generation
+    R->>Q: write each changed document once, move building_applied_seq, COMMIT
+    R->>W: release
+    Note over R: pause as long as the queue was held
+    C->>W: take the queue
+    C->>Q: append events, write documents in the live generation only, COMMIT
+    C->>W: release
+  end
+  R->>W: take the queue
+  R->>Q: read the head, apply the tail after building_applied_seq
+  alt the whole tail fits one batch
+    R->>Q: live_gen = building_gen, clear the marker, COMMIT: every view switches at once
+  else tail too long for one batch
+    R->>Q: COMMIT the applied prefix and marker, try again after the pause
+  end
+  R->>W: release
+  Note over R: pause as long as the queue was held
+  loop cleanup batches: at most 200 rows, and at most 15 ms once one is removed
+    R->>W: take the queue
+    R->>Q: delete old generation rows from every catalog table, then its view_gen stamps, COMMIT
+    R->>W: release
+    Note over R: pause as long as the queue was held
+  end
+```
+
+*Figure 7. A rebuild while commands run. The first use of a project whose views are behind this binary's starts one; `baley rebuild` starts one on its own. Each batch holds the writer queue only for its own turn and pauses outside it, so commands, which write only the live generation, run between batches. One transaction applies the tail and flips every view.*
+
+**Verification of views.** `baley verify --views` takes the maintenance lock, so it never runs beside a rebuild. It first rebuilds forward views behind this binary's, and it refuses while an unfinished generation remains until a rebuild removes it. It replays the project's events into a scratch generation, stamped like a rebuild's, through the same batches and projectors, and never makes it live. In the turn that reaches the head it begins a read snapshot before releasing the writer queue, so scratch and live are compared at that one head however many commands follow. For every registered view it compares the two generations' rows key by key: key and index columns, `produced_seq`, `projector_version`, and the stored document text as bytes, so a live document that is not canonical JSON differs. It reports each missing, extra or unequal document once, as (view, key), with the head it checked. The scratch generation is deleted in the same batches afterwards, also after a replay or comparison error; a crash leaves it for the next rebuild. Verification never changes live rows, events or payloads. A report holds for the head it names only: a backup establishes its own snapshot.
 
 Views planned for the first build, by the question they answer. Query contracts (keys, indexes, ordering, page bounds) are in [Appendix B](#appendix-b-reads-mapped-to-views).
 
@@ -528,7 +611,7 @@ The standalone, idempotent scrub checks the compatibility epoch before any write
 
 Purge removes a secret from everything Baley manages. A secret that has already reached a review provider, an export or any other system must still be rotated; the purge report says so.
 
-**Invariant (EVD-R10).** Every fact a projector or the search index needs is inline in the event. Payloads are attachments only. So a purge never changes what a view knows, only whether an attachment's body can be shown, and a rebuild after any purge yields the same views, with tombstones in place of purged attachments.
+**Invariant (EVD-R10).** Every fact a projector or the search index needs is inline in the event. Payloads are attachments only. So a purge never changes what a view knows, only whether an attachment's body can be shown, and a rebuild after any purge yields the same views, with tombstones in place of purged attachments. Replay after a reduction or purge reads the same inline facts: `payload.reduced` and `payload.purged` replay like any other event, the `request` view keeps each answer's reference, and replay never opens a payload body. So a rebuild or a view verification never reconstructs a purged body, an excerpt or a released reference. `payload_ref.released_seq` is not view data and a rebuild never touches it.
 
 ```mermaid
 stateDiagram-v2
@@ -547,7 +630,7 @@ stateDiagram-v2
   end note
 ```
 
-*Figure 7. Payload lifecycle. A body changes state only when its last requiring reference is released; there is no way back from a tombstone.*
+*Figure 8. Payload lifecycle. A body changes state only when its last requiring reference is released; there is no way back from a tombstone.*
 
 ```mermaid
 sequenceDiagram
@@ -562,7 +645,7 @@ sequenceDiagram
     L->>Q: ROLLBACK
     Note over L: report rebuilt from the recorded payload.purged
   else new request
-    L->>Q: readability fence
+    L->>Q: view version fence, readability fence
     L->>Q: release this project's references to each hash and its own reductions' excerpts
     L->>Q: tombstone every body no unreleased reference requires
     L->>Q: delete derived trace rows (search rows from slice 8)
@@ -582,7 +665,7 @@ sequenceDiagram
   L-->>O: PurgeReport: purged, shared, recorded, unreachable, scrubbed
 ```
 
-*Figure 8. A purge: the logical removal in one transaction, then the scrub. The scrub is idempotent and runs on its own too; a pending scrub is marked until it completes.*
+*Figure 9. A purge: the logical removal in one transaction, then the scrub. The scrub is idempotent and runs on its own too; a pending scrub is marked until it completes.*
 
 #### Physical schema (SQLite adapter)
 
@@ -593,7 +676,11 @@ erDiagram
   PROJECT ||--o{ ANCHOR : "is anchored by"
   EVENT ||--o{ PAYLOAD_REF : "uses"
   PAYLOAD ||--o{ PAYLOAD_REF : "is used by"
-  PROJECT ||--o{ VIEW_DOC : "has current state"
+  PROJECT ||--o| PROJECT_GEN : "reads its views through"
+  PROJECT_GEN ||--|{ VIEW_GEN : "live_gen and building_gen name the stamps of"
+  VIEW_GEN ||--o{ VIEW_DOC : "stamps the documents of one generation"
+  VIEW_SET_CATALOG ||--o{ VIEW_GEN : "names the views of each view_set_version"
+  VIEW_CATALOG ||--o{ VIEW_DOC : "holds the spec of each table"
   PROJECT ||--o{ SEARCH_ENTRY : "is searchable by"
   PROJECT {
     text project_id PK
@@ -603,21 +690,21 @@ erDiagram
     blob head_hash
   }
   CHECKOUT {
-    text project_id FK
-    text path
+    text project_id PK, FK
+    text path PK
     text root_commit
     text remote_url
     text last_seen
   }
   ANCHOR {
-    text project_id PK
+    text project_id PK, FK
     integer seq PK
     blob head_hash
     text tag
     text pushed_at
   }
   EVENT {
-    text project_id PK
+    text project_id PK, FK
     integer seq PK
     text stream
     integer stream_version
@@ -640,27 +727,49 @@ erDiagram
     text encoding
     blob body
     text state
-    blob excerpt_hash
+    blob excerpt_hash FK
     text excerpt_class
     text kept
     text purge_reason
   }
   PAYLOAD_REF {
-    text project_id PK
-    integer seq PK
-    blob hash PK
+    text project_id PK, FK
+    integer seq PK, FK
+    blob hash PK, FK
     text class
     text expires_at
     integer released_seq "event that released this reference"
   }
-  VIEW_DOC {
+  PROJECT_GEN {
+    text project_id PK, FK
+    integer live_gen "the generation readers and commands use"
+    integer building_gen "a rebuild or verification in progress"
+    integer building_applied_seq "last event replayed into building_gen"
+  }
+  VIEW_GEN {
+    text project_id PK, FK
+    integer gen PK
     text view PK
-    text project_id PK
+    integer projector_version
+    integer view_set_version "the same on every row of a generation, 0 if never stamped"
+  }
+  VIEW_SET_CATALOG {
+    integer version PK
+    text sorted_view_names "version 1 is request alone"
+  }
+  VIEW_CATALOG {
+    text view PK
+    integer version PK
+    text spec
+  }
+  VIEW_DOC {
+    text project_id PK, FK
     integer generation PK
-    text doc_key PK
+    any k_field PK "one column per key field"
+    any i_field "one column per index field"
     integer produced_seq
     integer projector_version
-    text doc_json
+    text doc_json "canonical JSON"
   }
   SEARCH_ENTRY {
     text project_id
@@ -670,13 +779,17 @@ erDiagram
   }
 ```
 
-*Figure 9. Tables of the SQLite adapter. `VIEW_DOC` stands for one table per view version, `v_<view>_<version>`, with its declared key and index columns. `SEARCH_ENTRY` is an FTS5 virtual table. The `request` view is one of the views.*
+*Figure 10. Tables of the SQLite adapter at compatibility epoch 1. `VIEW_DOC` stands for one table per view version, `v_<view>_<version>`, with a `k_` column per key field and an `i_` column per index field; `request` is an ordinary view, and its documents belong to their generation like any other view's. `SEARCH_ENTRY` is an FTS5 virtual table that arrives with slice 8.*
 
-Further tables: `schema_meta` (compatibility epoch, created and migrated times, and `scrub_pending`), `project_gen` (per project: the live generation, a generation being built and its applied sequence), `view_gen` (each view's projector version per generation), `view_catalog` (each view version's spec), `claim_lease`, and `trace` (diagnostics, outside the chain, size-capped, with an optional payload hash).
+Further tables: `schema_meta` (compatibility epoch, created and migrated times, and `scrub_pending`), `claim_lease`, and `trace` (diagnostics, outside the chain, size-capped, with an optional payload hash).
+
+`project_gen` holds each project's live generation and, while a rebuild or verification runs, the generation it builds and the last event applied to it. `view_gen` holds, per generation, each view's projector version and the view set version of the binary that built it. Per generation, a view's documents and its `view_gen` stamp belong to that generation; a rebuild or cleanup never touches events, payloads, references and their `released_seq`, anchors, checkouts, leases, trace rows, `schema_meta` or either catalog. `view_catalog` records each view version's spec, and `view_set_catalog` each view set version's sorted view names, seeded with version 1 as `request` alone. Both are global and independent of any project's generations: they say what a version means, not which project uses it.
+
+The schema stays at epoch 1 until the first release and is edited in place: `view_gen.view_set_version` and `view_set_catalog` are part of it, no table or column is added to an existing file at open, and a file written before such a change is disposable.
 
 `PAYLOAD_REF.released_seq` is the sequence of the `payload.reduced` event naming its original `[seq, hash]` reference or of the `payload.purged` event listing that reference in `released`. It is derived from those events, not an independent fact.
 
-Indexes: `event(project_id, stream, stream_version)` unique; `event(project_id, type, seq)`; `event(project_id, git_commit)` for `why`; `payload(excerpt_hash)` for non-null excerpts; `payload(state)` for non-present rows; `payload_ref(hash)`; each view's declared indexes.
+Indexes: `event(project_id, stream, stream_version)` unique; `event(project_id, type, seq)`; `event(project_id, git_commit)` for `why`; `payload(excerpt_hash)` for non-null excerpts; `payload(state)` for non-present rows; `payload_ref(hash)`; `trace(payload_hash)` for a purge's trace removal; each view's declared indexes, each on (project, generation, its fields in their orders, the key).
 
 Connection settings: `journal_mode=WAL`, `synchronous=FULL`, `foreign_keys=ON`, `secure_delete=ON`, `busy_timeout=5000`, page size 8 KiB. rusqlite's bundled build compiles SQLite from source (3.53.2 with rusqlite 0.40.1) with FTS5 enabled, so no system SQLite is used.
 
@@ -686,10 +799,12 @@ The home directory is `BALEY_HOME` if set, otherwise the platform data directory
 
 ```
 <home>/
-  baley.db          the ledger database
-  baley.db-wal      SQLite write-ahead log (managed by SQLite)
-  baley.db-shm      SQLite shared memory index (managed by SQLite)
-  backups/          automatic backups before migrations, and scheduled backups
+  baley.db              the ledger database
+  baley.db-wal          SQLite write-ahead log (managed by SQLite)
+  baley.db-shm          SQLite shared memory index (managed by SQLite)
+  baley.db.writer       the writer queue's lock file
+  baley.db.maintenance  the lock a rebuild or view verification holds
+  backups/              automatic backups before migrations, and scheduled backups
 ```
 
 On every open, Baley resolves the real path of the database and checks: the home and database are owned by the current user; the home is mode 0700 and the files 0600, and anything more permissive is refused with the fix named; neither the home nor the database is a symbolic link; and the filesystem holding the real database path is local. Backups and exports are created private. User configuration lives in the platform configuration directory (`$XDG_CONFIG_HOME/baley`, `~/.config/baley` on Linux; `~/Library/Application Support/baley/config` on macOS).
@@ -743,6 +858,10 @@ Each process opens its own connection. SQLite's write-ahead log lets any number 
 
 **Writer queue.** Before `BEGIN IMMEDIATE`, every write, maintenance included, takes a blocking exclusive lock on `<home>/baley.db.writer`. The kernel parks waiting writers and wakes them when the lock is released, instead of SQLite's sleep-and-retry busy handler, which starved writers for seconds under load (see [Performance](#performance)). The lock is not strictly first-in, first-out, so rebuilds and generation cleanup run in short batches and pause after each batch for as long as they held the queue. The purge scrub is the one exception: it holds the queue unbatched through a passive checkpoint, `VACUUM` (one whole-database rebuild), the truncating checkpoint attempts and backup rewrite. It is an owner operation, so the pause is the owner's. Write transactions start with `BEGIN IMMEDIATE`, so a writer takes the database lock before reading and two writers never deadlock on an upgrade. `busy_timeout` stays at 5 seconds as a backstop, after which a writer fails with a clear "store busy" error. Projectors fold all of a transaction's events into their documents in memory and write each changed document once.
 
+**Maintenance lock.** A rebuild or view verification also holds `<home>/baley.db.maintenance` from start to end, taken the way the writer queue is: an in-process mutex first, because `flock` belongs to the open file and two threads of one store would otherwise hold it at once, then a blocking `flock`, so threads of one process and separate processes take turns. Commands do not take it, so they run between a rebuild's batches. A read or command that finds its project's views behind this binary's waits for it with no timeout, checks the views again, and goes on without a rebuild if another process finished one meanwhile. A process that dies during a rebuild releases the lock and leaves the generation's marker for the next rebuild.
+
+**Batch timing.** A store has one timing dependency, a monotonic clock and a pause, and every rebuild, cleanup and view verification batch uses it, whether started by the owner or by a project's first use. A batch's hold runs from acquiring the writer queue, not the wait for it, through commit and release; the 15 ms bound is read from the same clock, and the pause after the batch is as long as the hold. Tests supply their own instants and record the pauses asked for, so no test reads a live clock or sleeps.
+
 **Compatibility epoch.** Every write transaction reads the compatibility epoch from `schema_meta` before anything else. A process whose epoch is older than the stored one stops writing, answers read-only, and tells the caller which binary is needed. Migrations raise the epoch in the same transaction that changes the schema, so an older process that is already running is fenced at its next write. Until the first release, the schema stays at epoch 1 and is edited in place: ledgers written before a release are disposable.
 
 **Checkpoints.** SQLite folds the write-ahead log into the database automatically every 1,000 pages. A reader that never finishes would stop that and let the log grow without bound; Baley's reads are short-lived by construction, and the server runs a passive checkpoint when idle. `baley doctor` reports the log size.
@@ -755,22 +874,27 @@ stateDiagram-v2
   Locating --> Refused : unsafe owner, modes or links, or a network filesystem
   Locating --> Opening
   Opening --> Creating : no database
-  Creating --> Ready
+  Creating --> Declaring : 8 KiB pages, write-ahead log and the epoch-1 schema created under the writer queue
   Opening --> ReadOnly : epoch newer than this binary
   Opening --> BackingUp : epoch older than this binary
   BackingUp --> Migrating
-  Migrating --> Ready : migration committed, epoch raised
+  Migrating --> Declaring : migration committed, epoch raised
   Migrating --> Refused : migration failed, database unchanged
+  Opening --> Refused : epoch current, but not in write-ahead-log mode with 8 KiB pages
   Opening --> Checking : epoch current, server start only
-  Checking --> Ready
+  Checking --> Declaring
   Checking --> ReadOnly : quick_check failed
-  Opening --> Ready : epoch current, guard or CLI
+  Opening --> Declaring : epoch current, guard or CLI
+  Declaring --> Refused : a view version stored with another spec, or the view set version stored with other views
+  Declaring --> Ready : missing view tables, indexes and catalog rows created under the writer queue
   Ready --> Reconciling : interrupted claims found
   Reconciling --> Ready
   Refused --> [*]
 ```
 
-*Figure 10. Opening the store. A binary never writes to an epoch it does not understand, a failed migration leaves the database as it was, and interrupted claims are reconciled before work in their scope continues.*
+*Figure 11. Opening the store. A binary never writes to an epoch it does not understand, a failed migration leaves the database as it was, a changed view spec or view set needs a new version, and interrupted claims are reconciled before work in their scope continues.*
+
+Open checks each declared view version's spec against `view_catalog` and the declared view set version's names against `view_set_catalog`, reading first on the read connection so that an open that finds everything in place takes no write. It records a spec or set version seen for the first time, creates missing view tables and indexes under the writer queue, and refuses a version already recorded with another spec or other names. It looks at no project's views: each project is brought to this binary's views on its first use, as in Figure 7, so one project that needs a rebuild never keeps the store from opening.
 
 The MCP server runs SQLite's `quick_check` when it starts. The guard and the CLI do not, so a guard call never scans the database. The full `integrity_check`, chain and view verification run in `baley doctor` and before every backup.
 
@@ -811,11 +935,11 @@ sequenceDiagram
   end
 ```
 
-*Figure 11. One column per actor. Nobody but Baley writes to the ledger; each step's fact is recorded before Hardin allows the next one, a refusal names the proof that is missing, and a verified phase pushes an anchor.*
+*Figure 12. One column per actor. Nobody but Baley writes to the ledger; each step's fact is recorded before Hardin allows the next one, a refusal names the proof that is missing, and a verified phase pushes an anchor.*
 
 #### A retried tool call
 
-A host may deliver the same tool call twice after a timeout. The second delivery carries the same request id, finds the stored outcome in Figure 6, and returns it. If its project released a stored answer by purge or reduction, the retry receives the tombstone even when another project still requires the body. The event and request document keep the reference. For a command with an external effect, the retry finds the claim and waits for, or returns, its result. Nothing is recorded twice and no effect runs twice.
+A host may deliver the same tool call twice after a timeout. The second delivery carries the same request id, finds the stored outcome in Figure 6, and returns it. The lookup needs only the live `request` view at this binary's projector version; the project's other views and its view set stamp do not matter to a replay, even when a newer binary has since rebuilt them. Only a new request is fenced on every live view's version. If the retry's project released a stored answer by purge or reduction, the retry receives the tombstone even when another project still requires the body. The event and request document keep the reference. For a command with an external effect, the retry finds the claim and waits for, or returns, its result. Nothing is recorded twice and no effect runs twice.
 
 #### Two sessions writing at once
 
@@ -868,7 +992,10 @@ See [Threat model](#threat-model) for who is defended against.
 | Disk full | `SQLITE_FULL` | The command is refused, nothing recorded | Free space; retry |
 | Database corruption | `quick_check` at server start, `integrity_check` in doctor | Read-only, with the check's report | Restore the latest verified backup |
 | Chain differs from its anchor | `baley verify` | The first bad sequence, truncation or rollback, and the unanchored range | Restore from backup; the difference is itself evidence |
-| A view differs from its rebuild | `baley verify --views` | The documents that differ | Rebuild the view; authority was never granted from it |
+| A view differs from its rebuild | `baley verify --views` | The documents that differ, and the head compared at | Rebuild the view; authority was never granted from it |
+| Process killed during a rebuild or view verification | Its generation's marker remains in `project_gen.building_gen` | Nothing live changes; `verify --views` refuses until a rebuild | The next rebuild removes the unfinished generation before it starts |
+| Deleting the old generation fails after a flip | The rebuild's cleanup error | `rebuild` says the new generation is live and the old one is left; a rebuild started by a project's first use goes on with the current views | The next rebuild removes the old generation |
+| Older binary after a newer one rebuilt a project's views | The live view stamps, checked in each view read and new command | That project's view reads and new commands are refused as read-only; history, payloads and other projects still work | Use the newer binary |
 | Older process after an upgrade | Epoch check in its next write | Read-only, naming the needed binary | Restart with the new binary |
 | Migration fails | Transaction error | Refused; database unchanged; backup kept | Report the bug; the old binary still works |
 | Unsafe home or a network filesystem | Checks on open | Refused with the reason and the fix | Fix modes or ownership, or set `BALEY_HOME` to a local path |
@@ -895,6 +1022,8 @@ Budgets on the reference workload, and what the benchmark measured: p99 unless s
 | Rebuild's final flip | 50 ms | 2.8 ms (4.1) | 4.4 ms (4.8) |
 
 Size budget: the reference workload stores in at most 50 MB, counting the database, its write-ahead log after a checkpoint, and every payload body under default retention, with retired prompt text included. **Measured: 24.5 MB**, against 175 MB for the same history in the JSON store. Memory: no operation loads more than its answer; the server's resident memory does not grow with the store. The prototype has no long-running server, so this is verified during the build.
+
+A rebuild batch is timed from acquiring the writer queue to releasing it, commit included and the wait to acquire it excluded; the pause after it is not part of it. The final flip is the last turn of a rebuild, measured the same way: reading the head, applying the tail and moving `live_gen`.
 
 The commit budget was 10 ms before the benchmark. Commit time is mostly the flush that makes a commit durable, and it spikes occasionally on both drives; 20 ms keeps the same meaning (a commit a person never notices) with the flush measured. The rebuild-batch budget moved from 50 to 100 ms for the same reason.
 
@@ -993,14 +1122,14 @@ Slices:
 | EVD-R7 | A command whose view input, absence query or HEAD changes between its slow work and its transaction is refused as stale. |
 | EVD-R8 | Several connections to one database in a temporary directory interleave reads and writes. |
 | EVD-R9 | Each view's query contract (key, index, ordering, paging, bound) is tested against a fixture. |
-| EVD-R10 | Each projector has unit tests: event and documents in, changes out. A conformance test rebuilds every view, including through a simulated crash mid-rebuild, and compares it with the live one; the same after a policy purge and after a targeted purge. |
+| EVD-R10 | Each projector has unit tests: event and documents in, changes out. Two fixture views with hand-written expected documents: live projection and a rebuild both produce them, the rebuild with a corrupted live document present; a command committed between two replay batches reaches the new generation; a projector failing on the tail in the final turn leaves `live_gen` and both views on the old generation; an abandoned rebuild changes nothing live and the next rebuild removes it; an old event replays upcast without its stored row changing; after a reduction and a purge the rebuilt `request` document is unchanged; a view added or removed with a new view set version fences an older binary or rebuilds and cleans the removed view's rows. `verify --views` reports a corrupted live document by key at the head it compared and removes its scratch generation after a projector error. A cursor issued before a flip is refused. A conformance test rebuilds every view, including through a simulated crash mid-rebuild, and compares it with the live one; the same after a policy purge and after a targeted purge. |
 | EVD-R11, R14 | Identical content is stored once; the body decompresses to the original bytes and matches its hash; reduction stores an excerpt with its own hash; a shared body survives one project's purge; a purge removes stored request answer bodies and derived trace rows while leaving view documents and the request row unchanged. Search entries are covered from slice 8. |
 | EVD-R12 | The crate graph is the test: `baley-core` has no path to rusqlite, checked by `cargo tree` in CI. |
 | EVD-R13 | Search returns hits in relevance order with stable ties, scoped by project and phase, over a fixture corpus. |
 | EVD-R15 | An exported project verifies alone. |
 | EVD-R16, R17, R22, R23 | Location resolution, project discovery and the open checks run against directory trees built in a temporary directory with `BALEY_HOME` set: wrong owner, permissive modes, a symbolic-linked home or database, and a filesystem classified as networked. |
 | EVD-R18 | Each command's test asserts it writes nothing in the working tree beyond the named exceptions. |
-| EVD-R19 | Opening a database stamped with a newer epoch yields read-only; a second connection at the old epoch is fenced at its next write; a migration test upgrades a fixture of the previous schema and verifies a backup was taken first; a newer view is never rebuilt backward. |
+| EVD-R19 | Opening a database stamped with a newer epoch yields read-only; a second connection at the old epoch is fenced at its next write; a migration test upgrades a fixture of the previous schema and verifies a backup was taken first; a newer view is never rebuilt backward, and a project whose live view or view set a newer binary built refuses an older binary's view reads and new commands; an older or missing view stamp rebuilds forward before use; a view set changed without a new version is refused at open. |
 | EVD-R20 | Relies on SQLite's documented durability with `synchronous=FULL`. Power loss is not reproducible in a portable test and is not re-tested. |
 | EVD-R21 | The benchmark harness measures every budget on the reference workload. Timings are measured, not asserted in tests, because timing is not portable. |
 | EVD-R24 | The host matrix, run by hand on both hosts before acceptance (done 2026-09-25, `spikes/host-matrix`), and again before each release. |
@@ -1017,10 +1146,12 @@ The conformance suite lives in `baley-store` and runs against every adapter.
 - [ADR 0002: Use SQLite as the storage engine](../adr/0002-sqlite.md)
 - [ADR 0003: Keep one ledger database per user, outside any checkout](../adr/0003-per-user-database.md)
 - [ADR 0004: Identify projects by a committed project file](../adr/0004-project-identity.md)
-- [ADR 0005: Put storage behind a port with engine adapters](../adr/0005-storage-port.md)
+- [ADR 0005: Put storage behind a port with engine adapters](../adr/0005-storage-port.md), superseded in part by ADR 0010
 - [ADR 0006: Keep every operational record in the ledger](../adr/0006-no-markdown-records.md)
 - [ADR 0007: Anchor chain heads on the forge](../adr/0007-forge-anchors.md)
 - [ADR 0008: Use host sandboxes to keep agents out of the ledger](../adr/0008-host-sandbox-isolation.md)
+- [ADR 0009: Serve instructions from the binary; files on disk are stubs](../adr/0009-served-instructions.md)
+- [ADR 0010: Define the projector and event schema traits in the port](../adr/0010-projector-traits-in-the-port.md), superseding ADR 0005 in part
 
 ## Future work
 

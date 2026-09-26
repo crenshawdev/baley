@@ -1,4 +1,4 @@
-//! The tables of Figure 9 in design 0001, minus search (slice 8) and the
+//! The tables of Figure 10 in design 0001, minus search (slice 8) and the
 //! view tables, which are created from each `ViewSpec`.
 
 /// The compatibility epoch this binary writes. A store stamped with a newer
@@ -102,22 +102,42 @@ CREATE TABLE payload_ref (
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX payload_ref_hash ON payload_ref(hash);
 
+-- Readers and commands use `live_gen`. A rebuild or a view verification
+-- replays into `building_gen` and records the last event it applied; the
+-- flip moves `live_gen` and clears both in one transaction. A marker left
+-- behind belongs to a rebuild or verification that never finished.
 CREATE TABLE project_gen (
   project_id TEXT PRIMARY KEY REFERENCES project(project_id),
   live_gen INTEGER NOT NULL,
   building_gen INTEGER,
-  building_applied_seq INTEGER
+  building_applied_seq INTEGER,
+  CHECK ((building_gen IS NULL) = (building_applied_seq IS NULL))
 ) STRICT, WITHOUT ROWID;
 
--- The projector version of each view in each generation, so an empty view
--- still says which version built it; flipped with `live_gen`.
+-- The projector version of each view in each generation, and the view set
+-- version of the binary that built it, the same on every row of one
+-- generation, so an empty view still says which version built it. Written
+-- before the generation's rows, made live with `live_gen`, deleted after
+-- them. A zero set version was never stamped and rebuilds forward.
 CREATE TABLE view_gen (
   project_id TEXT NOT NULL REFERENCES project(project_id),
   gen INTEGER NOT NULL,
   view TEXT NOT NULL,
   projector_version INTEGER NOT NULL,
+  view_set_version INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (project_id, gen, view)
 ) STRICT, WITHOUT ROWID;
+
+-- The registered views of each view set version, sorted and separated by
+-- single spaces (view names hold none), so a set changed without a new
+-- version is refused at open. Global, like `view_catalog`: it names what a
+-- version means, not which project uses it. Version 1 is the store's own
+-- `request` view alone.
+CREATE TABLE view_set_catalog (
+  version INTEGER PRIMARY KEY CHECK (version > 0),
+  sorted_view_names TEXT NOT NULL
+) STRICT, WITHOUT ROWID;
+INSERT INTO view_set_catalog (version, sorted_view_names) VALUES (1, 'request');
 
 -- Each view version's spec as the adapter renders it, so a spec changed
 -- without a new version is refused at open instead of read through the

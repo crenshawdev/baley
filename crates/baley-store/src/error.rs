@@ -77,8 +77,10 @@ pub enum Refusal {
     UnknownProject(ProjectId),
     /// The project exists already.
     ProjectExists(ProjectId),
-    /// This binary must not write to the project: an event type or version
-    /// it cannot read, or a view written by a newer projector (EVD-R19).
+    /// This binary must not write to the project: it holds an event type or
+    /// version this binary cannot read, or its live views were built by a
+    /// newer projector or view set, which refuses this binary's reads of
+    /// those views as well (EVD-R19). History and payload reads still work.
     ProjectReadOnly { project: ProjectId, reason: String },
     /// The request id was used before for this project and command kind
     /// with a different digest (EVD-R6).

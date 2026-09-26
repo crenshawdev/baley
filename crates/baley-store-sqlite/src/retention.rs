@@ -733,6 +733,7 @@ fn rewrite_backup(path: &Path, tombstones: &BTreeMap<Hash, String>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::queue::scripted::Scripted;
     use crate::store::{Options, TraceEntry};
     use baley_store::{
         Actor, Answer, CommandKind, Decision, DocKey, Event, EventSchema, KeyValue, Observed,
@@ -757,6 +758,7 @@ mod tests {
             AT,
             Options {
                 schema: Box::new(Fixture),
+                timing: Scripted::still(),
                 ..Options::default()
             },
         )

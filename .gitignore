@@ -10,19 +10,8 @@
 scratch/
 *.local
 
-# The store is one machine's copy, bound to this directory's identity
-/.planning/config.v4.json
-/.planning/decisions.jsonl
-/.planning/items.jsonl
-/.planning/state.json
-/.planning/.store-intent.json
-
-# Run record, local diagnostics only. The .1 generation and its .claim sidecar
-# are what a rotation leaves behind
-/.planning/trace.jsonl
-/.planning/trace.1.jsonl
-/.planning/trace.1.jsonl.claim
-/.planning/trace.1.jsonl.claim.*
+# The local store and run record, one machine's copy, never committed
+/.planning/
 
 # Cargo build output
 target/

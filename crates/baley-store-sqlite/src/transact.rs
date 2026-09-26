@@ -1,6 +1,11 @@
 //! The write path of a database-only command (design 0001, Commands and
 //! Figure 6; EVD-R5, R6, R7).
 //!
+//! Before the request lookup the project's live `request` view must be at
+//! this binary's version, and before a new request's decision every live
+//! view must be (see `rebuild.rs`); the command writes the live generation
+//! only.
+//!
 //! A decision's events and document changes are held in memory until it
 //! returns. Reads inside the decision see them; the stored rows stay as they
 //! stood when the transaction began. So the re-check of what the caller's
@@ -12,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use baley_store::{
-    Absence, Answer, COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, Change, Claim, Command, Decide,
+    Absence, Answer, COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, Claim, Command, Decide,
     Decision, DocKey, Document, Event, EventDraft, EventMatch, GitFact, GitFacts, Hash, Head,
     INLINE_ANSWER_LIMIT, IndexQuery, NewEvent, Observed, Outcome, PAYLOAD_PURGED, PAYLOAD_REDUCED,
     Page, PageRequest, PayloadRef, PayloadStatus, ProjectId, PurgedEvent, REQUEST_VIEW, Recorded,
@@ -25,8 +30,11 @@ use rusqlite::{OptionalExtension, params, params_from_iter};
 use serde_json::Value;
 
 use crate::payload::{put_payload, put_reference, sql_int, stored};
+use crate::rebuild::read_only;
 use crate::store::{SqliteStore, sql};
-use crate::view::{Staged, find_documents, find_with_staged, get_document, write_live};
+use crate::view::{
+    Fence, Staging, find_documents, find_with_staged, fold, get_document, live_views, write_staged,
+};
 
 impl SqliteStore {
     /// Runs one database-only command: the writer queue, `BEGIN IMMEDIATE`
@@ -59,7 +67,11 @@ impl SqliteStore {
     }
 
     /// Runs the shared request, fence, event and head path for domain and
-    /// store-owned commands. The replay callback sees the recorded event sequence.
+    /// store-owned commands. The replay callback sees the recorded event
+    /// sequence. When the live `request` view, or for a new request any
+    /// live view, is behind this binary's, the turn ends without writing,
+    /// the views are brought forward outside the queue, and the command
+    /// starts again; a newer one refuses.
     pub(crate) fn command_path<T>(
         &self,
         command: &Command,
@@ -74,11 +86,45 @@ impl SqliteStore {
                 "recorded_at is not a UTC instant".into(),
             ))
         })?;
+        let mut replay = Some(replay);
+        let mut new = Some(new);
+        loop {
+            match self.command_turn(command, &mut replay, &mut new)? {
+                Some(recorded) => return Ok(recorded),
+                None => self.bring_current(&command.project)?,
+            }
+        }
+    }
+
+    /// One try at a command under the writer queue. `None` when the
+    /// project's views must be brought forward first; nothing is written
+    /// then, and the callbacks are still unused.
+    fn command_turn<T>(
+        &self,
+        command: &Command,
+        replay: &mut Option<
+            impl FnOnce(&rusqlite::Transaction<'_>, Outcome, u64) -> Result<T, StoreError>,
+        >,
+        new: &mut Option<
+            impl FnOnce(
+                &mut Work<'_, '_>,
+            )
+                -> Result<(T, Outcome, Option<GitFacts>, Option<Observed>), StoreError>,
+        >,
+    ) -> Result<Option<CommandResult<T>>, StoreError> {
         let recorded = self.write(|tx| {
             let project = &command.project;
             let head = stored_head(tx, project)?;
+            let live = live_views(tx, project)?;
+            let generation = match self.views().judge_request(&live)? {
+                Fence::Current(generation) => generation,
+                Fence::Newer(reason) => return Err(read_only(project, reason)),
+                Fence::Unstamped | Fence::Behind => return Ok(None),
+            };
             let requests = self.views().table(REQUEST_VIEW)?;
-            if let Some(document) = get_document(tx, requests, project, &request_key(command))? {
+            if let Some(document) =
+                get_document(tx, requests, project, generation, &request_key(command))?
+            {
                 let (digest, mut outcome) = recorded_outcome(&document.body).ok_or_else(|| {
                     StoreError::Unavailable("a request document that holds no outcome".into())
                 })?;
@@ -97,12 +143,21 @@ impl SqliteStore {
                         };
                     }
                 }
-                return replay(tx, outcome, document.produced_seq).map(CommandResult::Replayed);
+                let replay = replay.take().ok_or_else(spent)?;
+                return replay(tx, outcome, document.produced_seq)
+                    .map(|value| Some(CommandResult::Replayed(value)));
             }
             // A replay above only reads; a project this binary cannot read
-            // still answers it. A new write is fenced here.
+            // still answers it, whatever its other views. A new request
+            // uses them all, and appends only events this binary reads.
+            match self.views().judge_set(&live) {
+                Fence::Current(_) => {}
+                Fence::Newer(reason) => return Err(read_only(project, reason)),
+                Fence::Unstamped | Fence::Behind => return Ok(None),
+            }
             self.check_readable(tx, project, head.as_ref())?;
-            let mut work = Work::new(self, tx, command, head);
+            let new = new.take().ok_or_else(spent)?;
+            let mut work = Work::new(self, tx, command, head, generation);
             let (result, outcome, git, observed) = new(&mut work)?;
             // An operation that failed fails the command, even when the
             // decision went on past the error.
@@ -111,13 +166,13 @@ impl SqliteStore {
             }
             work.check_payloads_attached()?;
             if let Some(observed) = observed {
-                recheck(self, tx, project, &observed)?;
+                recheck(self, tx, project, generation, &observed)?;
             }
             work.complete(&outcome, git)?;
             let head = work.write()?;
-            Ok(CommandResult::New(result, head))
+            Ok(Some(CommandResult::New(result, head)))
         })?;
-        if let CommandResult::New(_, head) = &recorded {
+        if let Some(CommandResult::New(_, head)) = &recorded {
             // Committed: every event through the new head was checked
             // readable or was written here by this binary.
             self.readable()
@@ -129,7 +184,7 @@ impl SqliteStore {
     /// Refuses a project holding an event this binary cannot read. Checks
     /// only the events recorded since the last check, unless the chain no
     /// longer holds the checked head, as after a restore.
-    fn check_readable(
+    pub(crate) fn check_readable(
         &self,
         tx: &rusqlite::Transaction<'_>,
         project: &ProjectId,
@@ -174,6 +229,11 @@ impl SqliteStore {
 pub(crate) enum CommandResult<T> {
     Replayed(T),
     New(T, Head),
+}
+
+/// A callback asked for twice: a turn that used one never asks for a retry.
+fn spent() -> StoreError {
+    StoreError::Unavailable("a command callback ran twice".into())
 }
 
 /// The state of one answer's own reference, including its releasing event.
@@ -250,7 +310,7 @@ fn stored_hash(
 }
 
 /// The project's stored head, `None` for an empty chain.
-fn stored_head(
+pub(crate) fn stored_head(
     tx: &rusqlite::Transaction<'_>,
     project: &ProjectId,
 ) -> Result<Option<Head>, StoreError> {
@@ -292,6 +352,7 @@ fn recheck(
     store: &SqliteStore,
     tx: &rusqlite::Transaction<'_>,
     project: &ProjectId,
+    generation: i64,
     observed: &Observed,
 ) -> Result<(), StoreError> {
     for git in &observed.git {
@@ -311,7 +372,8 @@ fn recheck(
     }
     for document in &observed.documents {
         let table = store.views().table(&document.view)?;
-        let now = get_document(tx, table, project, &document.key)?.map(|found| found.produced_seq);
+        let now = get_document(tx, table, project, generation, &document.key)?
+            .map(|found| found.produced_seq);
         if now != document.produced_seq {
             return Err(StoreError::Stale(StaleInput::Document {
                 view: document.view.clone(),
@@ -338,7 +400,9 @@ fn recheck(
                         after: None,
                     },
                 };
-                !find_documents(tx, table, project, &query)?.items.is_empty()
+                !find_documents(tx, table, project, generation, &query)?
+                    .items
+                    .is_empty()
             }
         };
         if present {
@@ -442,11 +506,13 @@ pub(crate) struct Work<'s, 't> {
     command: &'s Command,
     /// The head after the events appended so far.
     head: Option<Head>,
+    /// The live generation, the only one a command reads or writes.
+    generation: i64,
     events: Vec<(Event, Vec<PayloadRef>)>,
     /// Each stream's version after the events appended so far.
     streams: BTreeMap<StreamName, u64>,
     /// Per view, the documents the appended events changed.
-    staged: BTreeMap<String, BTreeMap<DocKey, Staged>>,
+    staged: Staging,
     /// Every payload the decision stored, each of which an event must
     /// attach.
     put: Vec<Hash>,
@@ -460,12 +526,14 @@ impl<'s, 't> Work<'s, 't> {
         tx: &'s rusqlite::Transaction<'t>,
         command: &'s Command,
         head: Option<Head>,
+        generation: i64,
     ) -> Self {
         Self {
             store,
             tx,
             command,
             head,
+            generation,
             events: Vec::new(),
             streams: BTreeMap::new(),
             staged: BTreeMap::new(),
@@ -610,51 +678,22 @@ impl<'s, 't> Work<'s, 't> {
         Ok(seq)
     }
 
-    /// Folds one event into the staged documents of every projector that
-    /// handles its type.
+    /// Folds the event's projection copy, upcast as replay upcasts it, into
+    /// the staged documents of every projector that handles its type. A
+    /// decision may append an older version its upcaster then refuses.
     fn apply_projectors(&mut self, event: &Event) -> Result<(), StoreError> {
-        let store = self.store;
-        for projector in store.projectors() {
-            if !projector.handles().contains(&event.type_name.as_str()) {
-                continue;
-            }
-            let view = projector.spec().name.clone();
-            let table = store.views().table(&view)?;
-            let mut documents = Vec::new();
-            for key in projector.keys(event) {
-                let body = match self.staged.get(&view).and_then(|staged| staged.get(&key)) {
-                    Some(staged) => staged.body.clone(),
-                    None => get_document(self.tx, table, self.project_id(), &key)?
-                        .map(|document| document.body),
-                };
-                if let Some(body) = body {
-                    documents.push((key, body));
-                }
-            }
-            let changes =
-                projector
-                    .apply(event, &documents)
-                    .map_err(|error| StoreError::Projector {
-                        view: view.clone(),
-                        seq: event.seq,
-                        message: error.0,
-                    })?;
-            let staged = self.staged.entry(view).or_default();
-            for change in changes {
-                let (key, body) = match change {
-                    Change::Put { key, body } => (key, Some(body)),
-                    Change::Delete { key } => (key, None),
-                };
-                staged.insert(
-                    key,
-                    Staged {
-                        body,
-                        produced_seq: event.seq,
-                    },
-                );
-            }
-        }
-        Ok(())
+        let copy = self
+            .store
+            .projection_copy(event)
+            .map_err(|reason| StoreError::Refused(Refusal::InvalidEvent(reason)))?;
+        fold(
+            self.store,
+            self.tx,
+            &self.command.project,
+            self.generation,
+            &copy,
+            &mut self.staged,
+        )
     }
 
     /// The outcome the caller receives: the answer inline when it is small
@@ -707,19 +746,7 @@ impl<'s, 't> Work<'s, 't> {
                 put_reference(self.tx, project, event.seq, attachment)?;
             }
         }
-        for (view, documents) in &self.staged {
-            let table = self.store.views().table(view)?;
-            for (key, staged) in documents {
-                let change = match &staged.body {
-                    Some(body) => Change::Put {
-                        key: key.clone(),
-                        body: body.clone(),
-                    },
-                    None => Change::Delete { key: key.clone() },
-                };
-                write_live(self.tx, table, project, &change, staged.produced_seq)?;
-            }
-        }
+        write_staged(self.tx, self.store, project, self.generation, &self.staged)?;
         self.tx
             .execute(
                 "UPDATE project SET head_seq = ?1, head_hash = ?2 WHERE project_id = ?3",
@@ -771,14 +798,21 @@ impl Work<'_, '_> {
         if let Some(staged) = self.staged.get(view).and_then(|staged| staged.get(key)) {
             return Ok(staged.document(table, key));
         }
-        get_document(self.tx, table, self.project_id(), key)
+        get_document(self.tx, table, self.project_id(), self.generation, key)
     }
 
     fn find_staged(&self, view: &str, query: &IndexQuery) -> Result<Page<Document>, StoreError> {
         let table = self.store.views().table(view)?;
         let empty = BTreeMap::new();
         let staged = self.staged.get(view).unwrap_or(&empty);
-        find_with_staged(self.tx, table, self.project_id(), query, staged)
+        find_with_staged(
+            self.tx,
+            table,
+            self.project_id(),
+            self.generation,
+            query,
+            staged,
+        )
     }
 
     fn exists(&self, matching: &EventMatch) -> Result<bool, StoreError> {
@@ -884,8 +918,10 @@ mod tests {
     use std::path::Path;
     use std::time::Duration;
 
+    use std::num::NonZeroU32;
+
     use baley_store::{
-        Actor, CommandKind, EventSchema, FieldKind, FieldSpec, GitObservation, IndexField,
+        Actor, Change, CommandKind, EventSchema, FieldKind, FieldSpec, GitObservation, IndexField,
         IndexSpec, KeyValue, ObservedDocument, Order, OutcomeKind, PayloadBody, Payloads,
         Projector, ProjectorError, RequestId, ViewSpec, Views, verify_chain,
     };
@@ -893,6 +929,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::queue::scripted::Scripted;
     use crate::store::Options;
 
     const AT: &str = "2026-09-25T18:00:00Z";
@@ -970,11 +1007,14 @@ mod tests {
         ProjectId(PROJECT.into())
     }
 
-    /// A store with the item projector, holding the empty project.
+    /// A store with the item projector, holding the empty project. Set
+    /// version 1 is `request` alone, so this set declares 2.
     fn open(home: &Path) -> SqliteStore {
         let options = Options {
             projectors: vec![Box::new(ItemProjector::new())],
             schema: Box::new(Items),
+            view_set_version: NonZeroU32::new(2).expect("positive"),
+            timing: Scripted::still(),
             ..Options::default()
         };
         let store = SqliteStore::open(home, AT, options).expect("open");
@@ -1089,8 +1129,10 @@ mod tests {
     }
 
     // The same request again returns the first outcome without running
-    // the decision or recording anything. Catches a retry that records
-    // twice.
+    // the decision or recording anything, even after a newer binary's view
+    // set became live beside a `request` view at this binary's version.
+    // Catches a retry that records twice, and a replay refused for views
+    // it does not read.
     #[test]
     fn a_replayed_request_returns_its_outcome_and_records_nothing() {
         let home = tempfile::tempdir().expect("temp dir");
@@ -1107,6 +1149,12 @@ mod tests {
         let Recorded::New { outcome, .. } = first else {
             panic!("the first delivery records");
         };
+        raw(home.path())
+            .execute(
+                "UPDATE view_gen SET view_set_version = 3 WHERE project_id = ?1",
+                [PROJECT],
+            )
+            .expect("a newer set stamp");
         let events = count(home.path(), "event");
         let second = store.transact(&command("item.add", "r1", 1), &mut decide);
         assert_eq!(second, Ok(Recorded::Replayed { outcome }));
