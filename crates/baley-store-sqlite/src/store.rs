@@ -250,6 +250,13 @@ impl SqliteStore {
         self.maintenance_lock.wait().map_err(io)
     }
 
+    /// Runs `action` each time a turn of this store's writer queue has
+    /// been released, before the releasing code goes on.
+    #[cfg(test)]
+    pub(crate) fn at_queue_release(&self, action: impl FnMut() + Send + 'static) {
+        self.queue.at_release(action);
+    }
+
     /// The per-project readable-through marks.
     pub(crate) fn readable(&self) -> MutexGuard<'_, BTreeMap<ProjectId, Head>> {
         self.readable.lock().unwrap_or_else(PoisonError::into_inner)

@@ -161,7 +161,9 @@ impl SqliteStore {
     /// it with the live one at one head; see `Admin::verify_views`. Views
     /// behind this binary's are rebuilt first. Removing the scratch rows is
     /// tried whatever the comparison returned; when that fails,
-    /// `UnfinishedGeneration` names the scratch generation left behind.
+    /// `UnfinishedGeneration` names the scratch generation left behind. A
+    /// marker naming the live generation is refused as
+    /// `LiveGenerationProtected`, as a rebuild refuses it.
     pub fn verify_views(&self, project: &ProjectId) -> Result<ViewsReport, StoreError> {
         let _hold = self.hold_maintenance()?;
         self.bring_current_held(project)?;
@@ -181,14 +183,15 @@ impl SqliteStore {
     /// Sets up a new generation under the maintenance lock the caller holds
     /// or hands over. A rebuild first removes an unfinished generation left
     /// by a crash and every generation that is neither live nor being
-    /// built; a verification refuses while one is unfinished.
+    /// built; a verification refuses while one is unfinished, and like a
+    /// rebuild refuses a marker naming the live generation.
     fn start<'s>(
         &'s self,
         project: &ProjectId,
         hold: Option<Turn<'s>>,
         purpose: Purpose,
     ) -> Result<Rebuild<'s>, StoreError> {
-        let orphan = self.batch(
+        let (orphan, live) = self.batch(
             |tx, _| {
                 let live = live_views(tx, project)?;
                 match self.views().judge_set(&live) {
@@ -205,12 +208,21 @@ impl SqliteStore {
                 // No scan of the chain here, which would hold the queue for
                 // the whole history: replay refuses an unreadable event
                 // before applying it, and it writes only the new generation.
-                marker(tx, project).map(|marker| marker.map(|(generation, _)| generation))
+                let orphan = marker(tx, project)?.map(|(generation, _)| generation);
+                Ok((orphan, generations(tx, project)?.0))
             },
             Ok,
         )?;
         match (orphan, purpose) {
             (Some(orphan), Purpose::Rebuild) => self.remove_generation(project, orphan, true)?,
+            // A damaged marker naming the live generation, which no
+            // rebuild removes, is refused as a rebuild refuses it.
+            (Some(orphan), Purpose::Verify) if orphan == live => {
+                return Err(StoreError::LiveGenerationProtected {
+                    project: project.clone(),
+                    generation: stored_generation(orphan)?,
+                });
+            }
             (Some(orphan), Purpose::Verify) => {
                 return Err(StoreError::UnfinishedGeneration {
                     project: project.clone(),
@@ -1843,6 +1855,37 @@ mod tests {
         );
     }
 
+    // A building marker that names the live generation, written straight
+    // into the file, makes verification refuse with that generation as a
+    // rebuild does, and every live row, stamp and the marker are still
+    // there. Catches a verification that reports it as an unfinished
+    // generation a rebuild would remove, when a rebuild refuses it too.
+    #[test]
+    fn verification_refuses_a_marker_naming_the_live_generation() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = created(home.path(), Scripted::still());
+        fixture(&store);
+        let stamped = stamps(home.path(), 0);
+        raw(home.path())
+            .execute(
+                "UPDATE project_gen SET building_gen = 0, building_applied_seq = 0
+                  WHERE project_id = ?1",
+                [PROJECT],
+            )
+            .expect("mark the live generation");
+        assert_eq!(
+            store.verify_views(&project()),
+            Err(StoreError::LiveGenerationProtected {
+                project: project(),
+                generation: 0,
+            })
+        );
+        assert_eq!(live_gen(home.path()), Some(0));
+        assert_eq!(building_gen(home.path()), Some(0));
+        assert_eq!(generation_rows(home.path(), 0), 6);
+        assert_eq!(stamps(home.path(), 0), stamped);
+    }
+
     // A second store over the same home, whose `tally` projector refuses
     // item 2, fails verification with the projector's error and leaves no
     // scratch row, stamp or marker. Catches an ordinary error that leaves
@@ -1924,28 +1967,28 @@ mod tests {
         assert_eq!(held, vec![false; timing.pauses().len()]);
     }
 
-    // A second store over the same home commits a command in the pause
-    // right after the turn that pins the comparison snapshot. The report
-    // names the head before it, and scratch and live compare equal there.
-    // Catches a snapshot begun after the queue is released, which would
-    // see the command in live but not in scratch.
+    // A second store over the same home commits a command the instant the
+    // turn that pins the comparison snapshot releases the writer queue.
+    // The report names the head before it, and scratch and live compare
+    // equal there. Catches a snapshot pinned after the queue is released,
+    // which would see the command in live but not in scratch.
     #[test]
     fn the_verification_snapshot_is_pinned_before_the_queue_is_released() {
         let home = tempfile::tempdir().expect("temp dir");
-        let timing = Scripted::still();
-        let store = created(home.path(), Arc::clone(&timing));
+        let store = created(home.path(), Scripted::still());
         fixture(&store);
         let writer = open_with(home.path(), Scripted::still());
         let mut scratch = store
             .start(&project(), None, Purpose::Verify)
             .expect("start");
-        // `compare` pauses first after its catch-up turn, which applies the
-        // whole fixture chain, then after the turn that pins the snapshot.
-        let mut pauses = 0;
-        timing.at_every_pause(move || {
-            pauses += 1;
-            if pauses == 2 {
-                record(&writer, "after", &[(TAIL, "open")]).expect("a command in the pause");
+        // `compare` releases the queue first after its catch-up turn, which
+        // applies the whole fixture chain, then after the turn that pins the
+        // snapshot.
+        let mut releases = 0;
+        store.at_queue_release(move || {
+            releases += 1;
+            if releases == 2 {
+                record(&writer, "after", &[(TAIL, "open")]).expect("a command at the release");
             }
         });
         assert_eq!(

@@ -53,13 +53,15 @@ pub enum StoreError {
     /// A rebuild or view verification that never finished, as after a
     /// crash, left `generation` behind with its marker, or a verification
     /// could not remove its own scratch `generation`. Views cannot be
-    /// verified until a rebuild removes it. The unfinished generation was
-    /// never live.
+    /// verified until a rebuild removes it. It is not the live generation:
+    /// a marker naming that one is `LiveGenerationProtected`.
     UnfinishedGeneration { project: ProjectId, generation: u64 },
-    /// A rebuild or view verification was about to remove `generation`,
-    /// which is the project's live generation, as when a damaged building
-    /// marker names it. Nothing was removed, and the live views stand; the
-    /// project's rebuilds refuse the same way until the marker is repaired.
+    /// The project's building marker names `generation`, which is its live
+    /// generation, as when the marker is damaged. A rebuild refuses rather
+    /// than remove it, and a view verification refuses rather than report
+    /// it unfinished. Nothing was removed, and the live views stand; the
+    /// project's rebuilds and view verifications refuse the same way until
+    /// the marker is repaired.
     LiveGenerationProtected { project: ProjectId, generation: u64 },
 }
 
@@ -184,7 +186,7 @@ impl fmt::Display for StoreError {
                 generation,
             } => write!(
                 f,
-                "project {} was about to remove generation {generation}, which is live; nothing was removed",
+                "project {}'s building marker names generation {generation}, which is live; nothing was removed",
                 project.0
             ),
         }

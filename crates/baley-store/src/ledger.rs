@@ -281,7 +281,9 @@ pub trait Admin {
     /// removing its own scratch generation fails, naming that generation,
     /// whether or not the comparison failed too. Only when the scratch
     /// generation is removed does the comparison's report or error come
-    /// back.
+    /// back. A building marker that names the live generation is refused
+    /// as `StoreError::LiveGenerationProtected`, as a rebuild refuses it,
+    /// with nothing removed.
     fn verify_views(&self, project: &ProjectId) -> Result<ViewsReport, StoreError>;
 
     /// The store's health as of `at`, a supplied UTC time, with each
