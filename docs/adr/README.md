@@ -29,3 +29,5 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0019](0019-reviews-adjudicated-and-ruled.md) | Run every configured reviewer, adjudicate in the host session, and let the owner rule on each finding | Accepted |
 | [0020](0020-sandbox-is-a-write-barrier.md) | State what each host's sandbox denies; reads are the host's policy | Accepted, supersedes 0008 in part |
 | [0021](0021-claim-rules-in-the-port.md) | Claim liveness and scope rules in the port | Accepted |
+| [0022](0022-acknowledged-restore.md) | Report owner-acknowledged restores behind a remote anchor | Accepted |
+| [0023](0023-no-backups-in-baley.md) | Keep whole-store backups outside Baley | Accepted |
