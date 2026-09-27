@@ -1,14 +1,18 @@
 //! The ledger's reads, verification and anchor rows on this adapter, and
 //! the core's anchor steps run against it. Each test opens a fresh store in
 //! a temporary directory it owns; remote observations and times are
-//! supplied values, and no test runs git, a forge, a ticker or a clock.
+//! supplied values, and no test runs git, a forge, a ticker or a clock. The
+//! anchor command's retry runs over an in-memory remote that holds no tags
+//! and a ticker that never ticks.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use baley_core::{
-    AnchorRequest, AnchorStatus, ClaimStep, FetchObservation, HeldAnchor, PrePushCheck,
-    PushObservation, ReconcileStep, Registry, TraceRecord, TraceSink, Upcaster, anchor_annotation,
-    claim_step, pre_push_check, reconcile_from_observation, record_step, register_anchor_events,
+    AnchorRequest, AnchorSeams, AnchorStatus, ClaimStep, FetchObservation, Forge, HeldAnchor,
+    PrePushCheck, PushObservation, ReconcileStep, Registry, TagQuery, TickGuard, Ticker,
+    TraceRecord, TraceSink, Upcaster, anchor_annotation, anchor_command, claim_step,
+    pre_push_check, reconcile_from_observation, record_step, register_anchor_events,
     verify_observed,
 };
 use baley_store::{
@@ -50,7 +54,7 @@ fn registry() -> Registry {
 
 struct Fixture {
     home: TempDir,
-    store: SqliteStore,
+    store: Arc<SqliteStore>,
 }
 
 impl Fixture {
@@ -71,11 +75,14 @@ impl Fixture {
                 Ok(())
             })
             .expect("project");
-        Self { home, store }
+        Self {
+            home,
+            store: Arc::new(store),
+        }
     }
 
     fn ledger(&self) -> &dyn Ledger {
-        &self.store
+        self.store.as_ref()
     }
 
     fn raw(&self) -> Connection {
@@ -1026,33 +1033,11 @@ fn an_unreachable_reconciliation_writes_one_trace_row() {
     assert_eq!(open[0].id.request_id, setup.first.request_id);
 }
 
-/// Retries the blocked request once and checks it claims its own new tag
-/// under its original identity.
-fn retry_once(f: &Fixture, setup: &Interrupted) {
-    let head = f.head();
-    let retried = act(f, &setup.second, RETRY);
-    assert_eq!(retried.target.intent.seq, head.seq);
-    assert_ne!(retried.target.tag, setup.held.target.tag);
-    let claim = f
-        .events_of(COMMAND_CLAIMED)
-        .pop()
-        .expect("the retried claim");
-    assert_eq!(claim.request_id, setup.second.request_id);
-    assert_eq!(claim.actor, Actor::Owner);
-    assert_eq!(claim.policy_version, 1);
-    assert_eq!(claim.recorded_at, RETRY);
-    assert_eq!(
-        claim.payload["digest"],
-        json!(setup.second.digest().expect("digest").to_hex())
-    );
-    assert_eq!(claim.payload["scope"], json!(["anchor"]));
-}
-
 // A matching holder tag completes the holder as done under a reconciler
-// attributed to Baley, then the blocked request retries once under its own
-// identity. Catches a missing retry or a changed digest.
+// attributed to Baley. Catches a landed push recorded as anything but
+// done, or a reconciliation written as the owner's.
 #[test]
-fn a_matching_holder_tag_reconciles_as_done_and_retries_once() {
+fn a_matching_holder_tag_reconciles_as_done() {
     let f = Fixture::new();
     let setup = interrupted(&f);
     let step = reconcile(&f, &setup, &matching_tag(&setup.first_act));
@@ -1064,14 +1049,12 @@ fn a_matching_holder_tag_reconciles_as_done_and_retries_once() {
     let reconciled = f.events_of(COMMAND_RECONCILED);
     assert_eq!(reconciled.len(), 1);
     assert_eq!(reconciled[0].actor, Actor::Baley);
-    retry_once(&f, &setup);
 }
 
 // A holder tag naming another head completes the holder as refused with
-// anchor.failed, then retries once. Catches existence taken for
-// agreement.
+// anchor.failed. Catches existence taken for agreement.
 #[test]
-fn a_conflicting_holder_tag_reconciles_as_refused_and_retries_once() {
+fn a_conflicting_holder_tag_reconciles_as_refused() {
     let f = Fixture::new();
     let setup = interrupted(&f);
     let other = FetchObservation::Present {
@@ -1091,13 +1074,12 @@ fn a_conflicting_holder_tag_reconciles_as_refused_and_retries_once() {
     );
     assert_eq!(f.events_of(ANCHOR_FAILED).len(), 1);
     assert_eq!(f.anchor_rows(), []);
-    retry_once(&f, &setup);
 }
 
 // A holder tag the remote confirms absent completes the holder as not
-// pushed, then retries once. Catches absence left unrecorded.
+// pushed. Catches absence left unrecorded.
 #[test]
-fn an_absent_holder_tag_reconciles_as_not_pushed_and_retries_once() {
+fn an_absent_holder_tag_reconciles_as_not_pushed() {
     let f = Fixture::new();
     let setup = interrupted(&f);
     assert!(matches!(
@@ -1108,7 +1090,69 @@ fn an_absent_holder_tag_reconciles_as_not_pushed_and_retries_once() {
         f.request_state("anchor.push", "a1"),
         ("completed".into(), "refused".into())
     );
-    retry_once(&f, &setup);
+}
+
+/// A remote that holds no tags: every fetch finds none and every push
+/// lands.
+struct EmptyRemote;
+
+impl Forge for EmptyRemote {
+    fn push_tag(&mut self, _: &ProjectId, _: &str, _: &str, _: &str) -> PushObservation {
+        PushObservation::Pushed
+    }
+
+    fn fetch_tag(&mut self, _: &ProjectId, _: &str, _: &TagQuery) -> FetchObservation {
+        FetchObservation::Absent
+    }
+}
+
+/// A ticker that never ticks.
+struct Still;
+
+impl Ticker for Still {
+    fn start(&mut self, _: u64, _: Box<dyn FnMut(String) + Send + 'static>) -> Box<dyn TickGuard> {
+        Box::new(Still)
+    }
+}
+
+impl TickGuard for Still {
+    fn stop(self: Box<Self>) {}
+}
+
+// Once the command has reconciled an interrupted holder, it retries the
+// blocked request under its own identity, digest and scope, at the clock's
+// time, and the retried claim reads the head as it then stands. Catches the
+// command stopping after reconciliation instead of retrying, or retrying
+// under another identity or a changed digest.
+#[test]
+fn the_anchor_command_retries_its_request_after_reconciling() {
+    let f = Fixture::new();
+    let setup = interrupted(&f);
+    anchor_command(
+        &setup.second,
+        AnchorSeams {
+            ledger: f.store.clone(),
+            forge: &mut EmptyRemote,
+            ticker: &mut Still,
+            trace: &Trace(&f.store),
+            now: &mut || RETRY.to_owned(),
+        },
+    )
+    .expect("anchor");
+    let claim = f
+        .events_of(COMMAND_CLAIMED)
+        .pop()
+        .expect("the retried claim");
+    assert_eq!(claim.request_id, setup.second.request_id);
+    assert_eq!(claim.actor, Actor::Owner);
+    assert_eq!(claim.policy_version, 1);
+    assert_eq!(claim.recorded_at, RETRY);
+    assert_eq!(
+        claim.payload["digest"],
+        json!(setup.second.digest().expect("digest").to_hex())
+    );
+    assert_eq!(claim.payload["scope"], json!(["anchor"]));
+    assert_eq!(claim.payload["intent"]["seq"], json!(claim.seq - 1));
 }
 
 // A matching tag found by reconciliation writes the anchor row at the
