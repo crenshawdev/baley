@@ -97,7 +97,7 @@ fn field_phase(join: &Join) -> Option<String> {
         Join::Resolved(resolved) => {
             let j = &resolved.brief;
             if let Some(slug) = &j.slug {
-                return Some(format!("off-roadmap task {slug} - a /cad-task run, not a roadmap phase ({})", j.label));
+                return Some(format!("off-roadmap task {slug} - a /bal-task run, not a roadmap phase ({})", j.label));
             }
             let milestone = j.milestone.clone().unwrap_or_else(|| "null".into());
             let phase = j.phase.clone().unwrap_or_else(|| "null".into());
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn an_off_roadmap_task_phase_line_names_the_slug_and_label() {
         let task = resolved(Brief { slug: Some("fix-it".into()), ..brief("tasks/fix-it") });
-        assert_eq!(field_phase(&task).unwrap(), "off-roadmap task fix-it - a /cad-task run, not a roadmap phase (tasks/fix-it)");
+        assert_eq!(field_phase(&task).unwrap(), "off-roadmap task fix-it - a /bal-task run, not a roadmap phase (tasks/fix-it)");
     }
 
     #[test]

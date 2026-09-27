@@ -1,5 +1,5 @@
 //! Compiled authority shared by dispatch and project-free renderers.
-pub const VERIFIER: &str = "**Verifier.** For each evidence item: inspect it with the host's own tools or through Cadence's document surface, run it, or trace it. Return a\nverdict per item - accepted, rejected or not seen - with what you observed.\nA summary is not evidence. An item whose check could not have failed is\nrejected, not accepted. You do not set a truth's status; the binary derives\nit from your verdicts.";
+pub const VERIFIER: &str = "**Verifier.** For each evidence item: inspect it with the host's own tools or through Baley's document surface, run it, or trace it. Return a\nverdict per item - accepted, rejected or not seen - with what you observed.\nA summary is not evidence. An item whose check could not have failed is\nrejected, not accepted. You do not set a truth's status; the binary derives\nit from your verdicts.";
 
 pub const PROTOCOL: &str = r#"## Native item protocol
 
@@ -15,7 +15,7 @@ An execution-worker-exit report may already exist for this attempt. It records
 the host's observation, never invalidates a late verification-submit, and
 remains visible through verification-read. There is no wall-clock timeout.
 
-Inspect each artifact with the host's own tools or Cadence's document surface and inspect its actual substance; a stub, empty body or
+Inspect each artifact with the host's own tools or Baley's document surface and inspect its actual substance; a stub, empty body or
 placeholder is rejected. Trace each link's named value through the real caller
 and recipient and its consumption. Inspect actual red and green test material,
 commits, captured results and owner statements; a setup failure is not a
@@ -34,7 +34,7 @@ document-search. An owner's attestation
 is a record to inspect, not a mechanical proof that the check did not stub its
 subject. Never fake the boundary the truth promises.
 
-Rerun each saved check independently through cadence_apply verification-run:
+Rerun each saved check independently through baley_apply verification-run:
 {"operation":"verification-run","request":{"request_id":"inspect-check-1",
 "attempt":"<retained attempt>","basis":<exact dispatched basis>,
 "item":{"id":"<canonical item>","item_revision":"<saved revision>"}}}.
@@ -79,7 +79,7 @@ Record an observation as seen or not seen, by whom and when, in observed.
 All accepted evidence with an observation caps the truth at concerns; any
 rejected or not_seen item makes it unmet. Only the binary derives statuses.
 Never send a phase verdict, truth status, document path or file-writing arm.
-You have inspection and direct cadence_query/cadence_apply permission, not
+You have inspection and direct baley_query/baley_apply permission, not
 Write, Edit or MultiEdit authority. Do not assign a findings file or update
 UAT, ROADMAP, CONTEXT, SUMMARY or any acceptance projection.
 
@@ -88,8 +88,8 @@ require attributed, timed, exact owner approval. You may prepare a submission;
 you may not manufacture its approval. Blank reply is not consent, skip is not
 waiver, and a verifier cannot erase human history. verification-complete is an
 owner request evaluated by the binary; verification-audit is read-only: the
-phase-scoped requirement trace join behind /cad-audit and its alias
-/cad-coverage, naming each broken edge with its current verdict, never a
+phase-scoped requirement trace join behind /bal-audit and its alias
+/bal-coverage, naming each broken edge with its current verdict, never a
 status, map or document write.
 A waiver is {"operation":"truth-waive","request_id":"...","submission":
 {"truth":{"id":"...","version":1},"basis":<exact current basis>,"reason":"...",
@@ -130,20 +130,20 @@ a successful receipt.
 pub fn contract_markdown() -> String {
     let schema = serde_json::to_string_pretty(&schemars::schema_for!(super::model::CompactPatch))
         .expect("static verifier schema");
-    format!("---\nname: cad-verifier-contract\ndescription: \"Native verifier contract: inspect every dispatched evidence item and return one complete patch.\"\nuser-invocable: false\n---\n\n<role>\nYou are the native verifier. Consume the retained binary dispatch.\n</role>\n\n<instructions>\n{}\n\n{VERIFIER}\n\n{PROTOCOL}\n## Strict item patch schema\n\n```json\n{schema}\n```\n</instructions>\n", crate::read::instructions::CONTRACT)
+    format!("---\nname: bal-verifier-contract\ndescription: \"Native verifier contract: inspect every dispatched evidence item and return one complete patch.\"\nuser-invocable: false\n---\n\n<role>\nYou are the native verifier. Consume the retained binary dispatch.\n</role>\n\n<instructions>\n{}\n\n{VERIFIER}\n\n{PROTOCOL}\n## Strict item patch schema\n\n```json\n{schema}\n```\n</instructions>\n", crate::read::instructions::CONTRACT)
 }
 
-/// The thin `/cad-audit` front door, or its read-only `/cad-coverage` alias
+/// The thin `/bal-audit` front door, or its read-only `/bal-coverage` alias
 /// (D-128): the same verification-audit query and view, no generation arm.
 pub fn audit_frontdoor_markdown(coverage: bool) -> String {
     let read_contract = crate::read::instructions::CONTRACT;
     let (name, description, note) = if coverage {
-        ("cad-coverage",
-         crate::help::table::description("cad-coverage"),
+        ("bal-coverage",
+         crate::help::table::description("bal-coverage"),
          "This alias keeps the old name for the read-only view only. It never\ngenerates tests, never authors a gap plan and never edits status; a\nrequirement without failing-capable evidence appears as a broken or unmet\ntrace for the owner to act on through planning.")
     } else {
-        ("cad-audit",
-         crate::help::table::description("cad-audit"),
+        ("bal-audit",
+         crate::help::table::description("bal-audit"),
          "The audit is the binary's join over the retained records and the owner's\ndocuments as they are. It never repairs a status, seeds a row, infers a\nrequirement-to-truth edge or completes a phase.")
     };
     // The worked example above uses phase 13; the note reads the same way.
@@ -153,10 +153,10 @@ name: {name}
 description: "{description}"
 argument-hint: "<phase>"
 allowed-tools:
-  - mcp__cadence__cadence_query
+  - mcp__baley__baley_query
 ---
 
-Parse the phase as a positive JSON integer. Call cadence_query
+Parse the phase as a positive JSON integer. Call baley_query
 `{{"operation":"verification-audit","phase":13,"command":"{name}"}}` with the
 selected integer. The answer is `verification-audit-1`: `sources` names each
 input as it was read (REQUIREMENTS.md active declarations and trace rows,
@@ -195,18 +195,18 @@ record is written or repaired.
 }
 
 pub fn frontdoor_markdown() -> String {
-    let description = crate::help::table::description("cad-verify");
+    let description = crate::help::table::description("bal-verify");
     format!(r#"---
-name: cad-verify
+name: bal-verify
 description: "{description}"
 argument-hint: "<phase>"
 allowed-tools:
-  - mcp__cadence__cadence_query
-  - mcp__cadence__cadence_apply
+  - mcp__baley__baley_query
+  - mcp__baley__baley_apply
   - Task
 ---
 
-Parse the phase as a positive JSON integer. Call cadence_query
+Parse the phase as a positive JSON integer. Call baley_query
 `{{"operation":"verify-next","phase":13}}` with the selected integer.
 Retain answer field `attempt.id`, `identities` and `route`. A refusal is not a dispatch.
 Invoke Task with answer field `route.choice.agent`, the phase and the supplied
@@ -215,7 +215,7 @@ Tell the verifier to read the identity's index and every part. The binary select
 the rung. The verifier sends independent verification-run calls and one
 complete attempt-named item patch. Read verification-read for its bounded index
 and the attempt document's report part for the complete binary report.
-When the worker you spawned exits, call cadence_apply execution-worker-exit
+When the worker you spawned exits, call baley_apply execution-worker-exit
 with a fresh request_id, the integer phase, `attempt: <attempt.id>`, the actual
 host, `outcome: exited` or `failed`, and optional detail. Retry the same request
 if acknowledgment is lost. A provider delivery is binary-owned and is not

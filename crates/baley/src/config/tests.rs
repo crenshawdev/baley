@@ -14,30 +14,30 @@ fn deep_merge_inherits_absent_keys_and_replaces_with_null_arrays_and_scalars() {
 
 #[test]
 fn merge_keeps_both_raw_layers_records_each_winning_layer_and_fills_defaults() {
-    let global = json!({"roles":{"cad-executor":{"model":"one","effort":"high"},"cad-planner":{"effort":"max"}},
+    let global = json!({"roles":{"bal-executor":{"model":"one","effort":"high"},"bal-planner":{"effort":"max"}},
         "git":{"protected_branches":["main","stable"]}});
-    let repo = json!({"roles":{"cad-executor":{"model":null}},"git":{"protected_branches":[]}});
+    let repo = json!({"roles":{"bal-executor":{"model":null}},"git":{"protected_branches":[]}});
     let merged = merge(Some(global.clone()), Some(repo.clone()), false);
     assert_eq!(merged.raw_global, Some(global));
     assert_eq!(merged.raw_repo, Some(repo));
     assert_eq!(
-        get(&merged.values, "roles.cad-executor.model"),
+        get(&merged.values, "roles.bal-executor.model"),
         Some(&Value::Null)
     );
     assert_eq!(
-        get(&merged.values, "roles.cad-executor.effort"),
+        get(&merged.values, "roles.bal-executor.effort"),
         Some(&json!("high"))
     );
     assert_eq!(
-        get(&merged.values, "roles.cad-planner.effort"),
+        get(&merged.values, "roles.bal-planner.effort"),
         Some(&json!("max"))
     );
     assert_eq!(
         get(&merged.values, "git.protected_branches"),
         Some(&json!([]))
     );
-    assert_eq!(merged.sources["roles.cad-executor.model"], Layer::Repo);
-    assert_eq!(merged.sources["roles.cad-planner.effort"], Layer::Global);
+    assert_eq!(merged.sources["roles.bal-executor.model"], Layer::Repo);
+    assert_eq!(merged.sources["roles.bal-planner.effort"], Layer::Global);
     assert!(get(&merged.repo, "workflow.verifier").is_none());
     assert_eq!(get(&merged.values, "workflow.verifier"), Some(&json!(true)));
 }
@@ -424,21 +424,21 @@ fn batch_preparation_preserves_unknown_values_and_distinguishes_absent_null() {
     use write::{Update, prepare_batch};
     let updates = [
         Update {
-            key: "roles.cad-executor.model".into(),
+            key: "roles.bal-executor.model".into(),
             value: Value::Null,
         },
         Update {
-            key: "roles.cad-executor.effort".into(),
+            key: "roles.bal-executor.effort".into(),
             value: json!("xhigh"),
         },
     ];
     assert_eq!(
         prepare_batch(Layer::Repo, &json!({"unknown":{"saved":7}}), &updates).unwrap(),
         (
-            json!({"unknown":{"saved":7},"roles":{"cad-executor":{"model":null,"effort":"xhigh"}}}),
+            json!({"unknown":{"saved":7},"roles":{"bal-executor":{"model":null,"effort":"xhigh"}}}),
             vec![
-                "roles.cad-executor.effort".to_string(),
-                "roles.cad-executor.model".to_string()
+                "roles.bal-executor.effort".to_string(),
+                "roles.bal-executor.model".to_string()
             ]
         )
     );
@@ -449,9 +449,9 @@ fn batch_preparation_returns_literal_refusals_for_invalid_tail_and_duplicates() 
     use write::{Update, prepare_batch};
     for (key, value, reason) in [
         (
-            "roles.cad-executor.effort",
+            "roles.bal-executor.effort",
             json!("impossible"),
-            "invalid value for roles.cad-executor.effort",
+            "invalid value for roles.bal-executor.effort",
         ),
         ("stakes", json!("high"), "unknown config key stakes"),
         (
@@ -460,14 +460,14 @@ fn batch_preparation_returns_literal_refusals_for_invalid_tail_and_duplicates() 
             "wrong config layer for workflow.test_command",
         ),
         (
-            "roles.cad-executor.model",
+            "roles.bal-executor.model",
             Value::Null,
-            "duplicate config key roles.cad-executor.model",
+            "duplicate config key roles.bal-executor.model",
         ),
     ] {
         let updates = [
             Update {
-                key: "roles.cad-executor.model".into(),
+                key: "roles.bal-executor.model".into(),
                 value: json!("sonnet"),
             },
             Update {
@@ -492,13 +492,13 @@ fn batch_preparation_empty_and_identical_stored_values_return_no_changes() {
     assert_eq!(
         prepare_batch(
             Layer::Repo,
-            &json!({"roles":{"cad-executor":{"model":null}}}),
+            &json!({"roles":{"bal-executor":{"model":null}}}),
             &[Update {
-                key: "roles.cad-executor.model".into(),
+                key: "roles.bal-executor.model".into(),
                 value: Value::Null
             }]
         )
         .unwrap(),
-        (json!({"roles":{"cad-executor":{"model":null}}}), vec![])
+        (json!({"roles":{"bal-executor":{"model":null}}}), vec![])
     );
 }

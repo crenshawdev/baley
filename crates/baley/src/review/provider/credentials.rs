@@ -59,7 +59,7 @@ pub fn providers_env_path(inputs: &dyn Inputs, explicit: Option<&str>) -> PathBu
     let base = nonempty(inputs.env("XDG_CONFIG_HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(home).join(".config"));
-    base.join("cadence/providers.env")
+    base.join("baley/providers.env")
 }
 
 pub fn parse_env_file(text: &str) -> BTreeMap<String, String> {

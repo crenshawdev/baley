@@ -1473,8 +1473,8 @@ mod gate_tests {
     #[test]
     fn create_takes_the_callers_name_before_the_operators() {
         let gate = answered(Some("create"), Some("operator/branch"), Disposition::Adjust);
-        let Ok(Choice::Create(name)) = choice(gate.clone(), Some("cadence/v1.3.0")) else { panic!("a create") };
-        assert_eq!(name, "cadence/v1.3.0");
+        let Ok(Choice::Create(name)) = choice(gate.clone(), Some("baley/v1.3.0")) else { panic!("a create") };
+        assert_eq!(name, "baley/v1.3.0");
         let Ok(Choice::Create(name)) = choice(gate, None) else { panic!("a create") };
         assert_eq!(name, "operator/branch");
     }
@@ -1979,7 +1979,7 @@ mod record_tests {
         let input = |path: &str, bytes: &[u8]| Input { identity: path.into(), bytes: Some(bytes.to_vec()), stamp: None };
         Generation {
             number: 1,
-            global: global.map(|bytes| input("/home/u/.claude/cadence/config.v4.json", bytes)),
+            global: global.map(|bytes| input("/home/u/.claude/baley/config.v4.json", bytes)),
             repo: input("/project/.planning/config.v4.json", repo),
             effective: merge::merge(None, Some(json!({})), false),
         }

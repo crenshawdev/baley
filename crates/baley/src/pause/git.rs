@@ -256,7 +256,7 @@ impl TempIndex {
         loop {
             let sequence = TEMP_INDEX_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let directory = std::env::temp_dir().join(format!(
-                "cadence-risk-index-{}-{sequence}",
+                "baley-risk-index-{}-{sequence}",
                 std::process::id()
             ));
             match fs::create_dir(&directory) {

@@ -169,7 +169,7 @@ pub fn freeze(root: &Path, report: Report, confirmation: Confirm, protected: Vec
     let git = commit::freeze_message(project,&changes,&[],&format!("chore(release): bump version to {}\n\nRecord the owner-confirmed release version before landing.\n",report.request.version), process)?;
     let mode = fs::metadata(path(project,&report.request.manifest)?)?.permissions().mode();
     let mut guards = BTreeMap::new();
-    for path in [root.join("config.v4.json")].into_iter().chain(std::env::var_os("CADENCE_GLOBAL_CONFIG").filter(|v| !v.is_empty()).map(PathBuf::from)) {
+    for path in [root.join("config.v4.json")].into_iter().chain(std::env::var_os("BALEY_GLOBAL_CONFIG").filter(|v| !v.is_empty()).map(PathBuf::from)) {
         guards.insert(path.clone(),guard_bytes(&path)?);
     }
     Ok(WriteSeal {report,confirmation,after,mode,git,guards,protected,on_protected})
@@ -227,7 +227,7 @@ pub fn install(root: &Path, write: &WriteSeal, process: &mut dyn Process) -> Res
     let project = root.parent().unwrap();
     let target = path(project,&write.report.request.manifest)?;
     if fs::read(&target)? != write.after {
-        let temporary = target.with_file_name(format!(".cadence-release-{}",write.report.digest));
+        let temporary = target.with_file_name(format!(".baley-release-{}",write.report.digest));
         // A retained journal may recover an interrupted temporary write.
         if temporary.exists() { fs::remove_file(&temporary)?; }
         let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(write.mode).open(&temporary)?;

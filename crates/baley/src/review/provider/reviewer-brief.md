@@ -1,19 +1,19 @@
 # Reviewer brief
 
-The bar every Cadence reviewer answers to, local or cross-model. It is composed
+The bar every Baley reviewer answers to, local or cross-model. It is composed
 into the `instruction` of a cross-model review payload at the fire site
 (`references/review-cross-model.md`, the arm that composes it), so an external
 reviewer is held to the
 same stance, the same severity vocabulary and the same evidence rule as the
-`cad-reviewer` subagent - and an adjudicator can merge both sides' findings
+`bal-reviewer` subagent - and an adjudicator can merge both sides' findings
 without knowing which reviewer produced which.
 
 This file is a PAYLOAD FRAGMENT, not a prose surface the spine loads: every byte
 of it is sent verbatim to a model that has no repo access, no tools and no
-Cadence installation. So nothing here may name a path, a tool, or a file to
+Baley installation. So nothing here may name a path, a tool, or a file to
 write. What the local reviewer is additionally told - that it holds Read, Bash,
 Grep and Glob, and that resolving the artifact reference is step one - stays in
-`skills/cad-reviewer-contract/SKILL.md`, which is the only copy of the bar this
+`skills/bal-reviewer-contract/SKILL.md`, which is the only copy of the bar this
 file restates.
 
 ## Stance

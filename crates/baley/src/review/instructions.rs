@@ -1,5 +1,5 @@
 //! Compiled review intent, shared by the local dispatch and the provider
-//! payload, and the project-free renderer of the merged `/cad-review` front
+//! payload, and the project-free renderer of the merged `/bal-review` front
 //! door and its three aliases. There is no disk loader and no user override.
 use super::model::{Admission, Specialist};
 use super::selection::Kind;
@@ -43,27 +43,27 @@ const MERGED_HINT: &str = "decision <document> <decision-id> | minimalism <file|
 pub fn frontdoor_markdown(command: &str) -> Option<String> {
     let read_contract = crate::read::instructions::CONTRACT;
     let (name, description, hint, selection) = match command {
-        "cad-review" => (
-            "cad-review",
-            crate::help::table::description("cad-review"),
+        "bal-review" => (
+            "bal-review",
+            crate::help::table::description("bal-review"),
             MERGED_HINT,
             "The first token selects the kind: `decision`, `minimalism` or `plan`; the rest is the target.",
         ),
-        "cad-decision-review" => (
-            "cad-decision-review",
-            crate::help::table::description("cad-decision-review"),
+        "bal-decision-review" => (
+            "bal-decision-review",
+            crate::help::table::description("bal-decision-review"),
             "<document> <decision-id>",
             "This alias selects the `decision` kind; the arguments are the document path and the decision id.",
         ),
-        "cad-minimalism-review" => (
-            "cad-minimalism-review",
-            crate::help::table::description("cad-minimalism-review"),
+        "bal-minimalism-review" => (
+            "bal-minimalism-review",
+            crate::help::table::description("bal-minimalism-review"),
             "<file|directory|phase>",
             "This alias selects the `minimalism` kind; the argument is a file, a directory or a phase number (`file:`, `dir:` and `phase:` disambiguate).",
         ),
-        "cad-plan-review" => (
-            "cad-plan-review",
-            crate::help::table::description("cad-plan-review"),
+        "bal-plan-review" => (
+            "bal-plan-review",
+            crate::help::table::description("bal-plan-review"),
             "<phase|plan-path>",
             "This alias selects the `plan` kind; the argument is a phase number or a plan document path.",
         ),
@@ -74,8 +74,8 @@ name: {name}
 description: "{description}"
 argument-hint: "{hint}"
 allowed-tools:
-  - mcp__cadence__cadence_query
-  - mcp__cadence__cadence_apply
+  - mcp__baley__baley_query
+  - mcp__baley__baley_apply
   - Task
 ---
 
@@ -91,7 +91,7 @@ applies a finding: no file is changed, deleted, staged or committed.
 </read-contract>
 
 <process>
-1. Select. Split `$ARGUMENTS` on whitespace and call cadence_query
+1. Select. Split `$ARGUMENTS` on whitespace and call baley_query
    `{{"operation":"review-select","command":"{name}","arguments":[<tokens>]}}`.
    {selection}
    A refused answer names what is missing, ambiguous or unresolvable in its
@@ -99,10 +99,10 @@ applies a finding: no file is changed, deleted, staged or committed.
    directory, the whole phase or the tree, and never substitute a paragraph of
    your own for the resolved document. Retain answer field `result.kind`, answer field `result.target`,
    answer field `result.material`, answer field `result.intent` and answer field `result.admission`.
-2. Admit. Call cadence_apply `{{"operation":"review-admit","request":<result.admission, unchanged>}}`.
+2. Admit. Call baley_apply `{{"operation":"review-admit","request":<result.admission, unchanged>}}`.
    Only an answer with an admitted fire proceeds; a replayed answer names the
    review already admitted for this selection.
-3. Deliver. Call cadence_query `{{"operation":"review-next","fire":<fire>}}` and
+3. Deliver. Call baley_query `{{"operation":"review-next","fire":<fire>}}` and
    follow only the saved dispatch: invoke Task with dispatch field `dispatch.agent` and exactly
    dispatch field `dispatch.prompt`, passing dispatch field `dispatch.model` only when present. Forward the
    actual launch and return events with review-observation. Read retained
@@ -123,7 +123,7 @@ applies a finding: no file is changed, deleted, staged or committed.
    usable-complete or complete-with-failure. Provider work stays with the
    resident binary; missing or malformed output is failure, never an empty
    clean result.
-   When the local worker you spawned exits, call cadence_apply
+   When the local worker you spawned exits, call baley_apply
    execution-worker-exit with a fresh request_id, the integer phase,
    `review: <attempt.attempt>`, the actual host, `outcome: exited` or `failed`,
    and optional detail. Retry the same request if acknowledgment is lost.

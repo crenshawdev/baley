@@ -16,11 +16,11 @@ mod tests {
             },
             effective: Effective {
                 raw_global: None,
-                raw_repo: Some(json!({"roles":{"cad-executor":{"model":null}}})),
+                raw_repo: Some(json!({"roles":{"bal-executor":{"model":null}}})),
                 global: json!({}),
-                repo: json!({"roles":{"cad-executor":{"model":null}}}),
-                values: json!({"roles":{"cad-executor":{"model":null,"effort":"high"}}}),
-                sources: [("roles.cad-executor.model".into(), Layer::Repo)].into(),
+                repo: json!({"roles":{"bal-executor":{"model":null}}}),
+                values: json!({"roles":{"bal-executor":{"model":null,"effort":"high"}}}),
+                sources: [("roles.bal-executor.model".into(), Layer::Repo)].into(),
                 global_intent: false,
                 diagnostics: Diagnostics::default(),
             },
@@ -29,7 +29,7 @@ mod tests {
         let model = result
             .keys
             .iter()
-            .find(|fact| fact.key == "roles.cad-executor.model")
+            .find(|fact| fact.key == "roles.bal-executor.model")
             .unwrap();
         assert_eq!(
             (
@@ -44,7 +44,7 @@ mod tests {
         let effort = result
             .keys
             .iter()
-            .find(|fact| fact.key == "roles.cad-executor.effort")
+            .find(|fact| fact.key == "roles.bal-executor.effort")
             .unwrap();
         assert_eq!(
             (
@@ -78,7 +78,7 @@ mod routing_inputs_tests {
                 raw_repo: None,
                 global: json!({}),
                 repo: json!({}),
-                values: json!({"model":{"escalate_on_failure":false},"roles":{"cad-executor":{"model":null,"effort":"high"}}}),
+                values: json!({"model":{"escalate_on_failure":false},"roles":{"bal-executor":{"model":null,"effort":"high"}}}),
                 sources: Default::default(),
                 global_intent: false,
                 diagnostics: Diagnostics::default(),
@@ -122,12 +122,12 @@ mod routing_inputs_tests {
     #[test]
     fn role_input_reads_six_schema_defaults_without_treating_effective_values_as_stored() {
         for (role, effort) in [
-            ("cad-planner", "high"),
-            ("cad-assumptions-analyzer", "high"),
-            ("cad-verifier", "high"),
-            ("cad-reviewer", "medium"),
-            ("cad-executor", "high"),
-            ("cad-plan-checker", "low"),
+            ("bal-planner", "high"),
+            ("bal-assumptions-analyzer", "high"),
+            ("bal-verifier", "high"),
+            ("bal-reviewer", "medium"),
+            ("bal-executor", "high"),
+            ("bal-plan-checker", "low"),
         ] {
             let request = RouteRequest {
                 role: role.into(),
@@ -148,14 +148,14 @@ mod routing_inputs_tests {
     fn role_input_uses_projected_layer_and_source_for_each_winning_leaf() {
         let mut generation = generation();
         generation.effective.global =
-            json!({"roles":{"cad-executor":{"model":null,"effort":null}}});
+            json!({"roles":{"bal-executor":{"model":null,"effort":null}}});
         generation.effective.sources = [
-            ("roles.cad-executor.model".into(), Layer::Global),
-            ("roles.cad-executor.effort".into(), Layer::Global),
+            ("roles.bal-executor.model".into(), Layer::Global),
+            ("roles.bal-executor.effort".into(), Layer::Global),
         ]
         .into();
         let request = RouteRequest {
-            role: "cad-executor".into(),
+            role: "bal-executor".into(),
             phase: None,
             plan: None,
             attempt: None,
@@ -164,7 +164,7 @@ mod routing_inputs_tests {
         assert_eq!(
             input.role_model,
             Some(roles::Stored {
-                key: "roles.cad-executor.model".into(),
+                key: "roles.bal-executor.model".into(),
                 layer: "global".into(),
                 value: Value::Null
             })
@@ -172,7 +172,7 @@ mod routing_inputs_tests {
         assert_eq!(
             input.role_effort,
             Some(roles::Stored {
-                key: "roles.cad-executor.effort".into(),
+                key: "roles.bal-executor.effort".into(),
                 layer: "global".into(),
                 value: Value::Null
             })

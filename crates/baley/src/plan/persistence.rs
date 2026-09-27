@@ -54,7 +54,7 @@ pub fn require_execution_ready(data:&Value,phase:u32,documents:&std::collections
     let Some(current)=saved(data,phase)?.filter(|o|!o.publications.is_empty()) else {return Ok(())};
     let retained=admission::records(data,phase)?;
     let number=current.publications.keys().next().expect("nonempty");
-    let record=retained.last().ok_or_else(||admission::refuse(phase,"admission-required","contract",&number.to_string(),format!("phase {phase} plan {number} requires an explicit complete execution admission: submit cadence_apply execution-admit with expected_set_version 0 and a contract naming every published plan's publication_request, content_revision and map_revision, allocating every task and giving each current check exactly one owner")))?;
+    let record=retained.last().ok_or_else(||admission::refuse(phase,"admission-required","contract",&number.to_string(),format!("phase {phase} plan {number} requires an explicit complete execution admission: submit baley_apply execution-admit with expected_set_version 0 and a contract naming every published plan's publication_request, content_revision and map_revision, allocating every task and giving each current check exactly one owner")))?;
     admission::validate(data,documents,&record.request.contract)?;
     Ok(())
 }

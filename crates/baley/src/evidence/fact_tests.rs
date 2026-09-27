@@ -341,7 +341,7 @@ fn a_prose_reference_or_one_missing_a_field_does_not_parse() {
 fn result(checker: Option<&str>, tag: &str, references: Vec<Reference>) -> AcceptedResult {
     AcceptedResult {
         id: "result-1".into(),
-        contract: "cad-verifier".into(),
+        contract: "bal-verifier".into(),
         result: tag.into(),
         evidence_text: "verified".into(),
         references,

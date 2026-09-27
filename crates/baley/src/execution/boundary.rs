@@ -366,13 +366,13 @@ pub struct LeaseRefusal {
 impl LeaseRefusal {
     pub fn new(paths: super::patch::UndeclaredPaths) -> Self {
         let disposition = if paths.committed.is_empty() {
-            "The reported commits were not accepted as execution evidence. Stop execution and have the operator repair the staged index within this dispatch's unchanged lease. Cadence left the index and commits untouched. This dispatch remains open for a corrected full patch with the same dispatch ID and execution version."
+            "The reported commits were not accepted as execution evidence. Stop execution and have the operator repair the staged index within this dispatch's unchanged lease. Baley left the index and commits untouched. This dispatch remains open for a corrected full patch with the same dispatch ID and execution version."
         } else {
             "The commits already exist in Git and were not removed or accepted as execution evidence. Stop execution and have the operator repair or split the offending local history into signed task commits entirely within this dispatch's unchanged lease; do not push, reset, amend, revert or force-push automatically. This dispatch remains open for a corrected full patch with the same dispatch ID and execution version."
         };
         let disposition = if !paths.committed.is_empty() && !paths.staged.is_empty() {
             format!(
-                "{disposition} The operator must also repair the staged index; Cadence left it untouched."
+                "{disposition} The operator must also repair the staged index; Baley left it untouched."
             )
         } else {
             disposition.into()
@@ -690,7 +690,7 @@ impl BoundaryV1 {
             BoundaryScope::Execution {
                 phase: evidence.paths.phase,
             },
-            BoundaryTool::CadenceApply,
+            BoundaryTool::BaleyApply,
             "executor".into(),
             request,
             Some(evidence.paths.dispatch_id.clone()),
@@ -712,7 +712,7 @@ impl BoundaryV1 {
             crate::store::model::digest(&canonical_bytes(&("boundary-terminal-v1", &scope))?);
         Ok(Self::new(
             scope,
-            BoundaryTool::CadenceQuery,
+            BoundaryTool::BaleyQuery,
             "log-bound".into(),
             request,
             None,
@@ -721,7 +721,7 @@ impl BoundaryV1 {
     }
 
     pub fn validate(&self, terminal: bool) -> Result<(), Failure> {
-        if self.is_native_refusal() && (terminal || self.tool != BoundaryTool::CadenceApply
+        if self.is_native_refusal() && (terminal || self.tool != BoundaryTool::BaleyApply
             || self.lease_refusal.is_some()
             || !matches!(self.receipt, Receipt::Compact { envelope: Envelope::Refused { .. } })) {
             return Err(Failure::Encoding);
@@ -744,8 +744,8 @@ impl BoundaryV1 {
                 && !self.is_native_refusal()
                 && self.operation
                     != match self.tool {
-                        BoundaryTool::CadenceQuery => "execute-next",
-                        BoundaryTool::CadenceApply => "executor",
+                        BoundaryTool::BaleyQuery => "execute-next",
+                        BoundaryTool::BaleyApply => "executor",
                     })
         {
             return Err(Failure::Encoding);
@@ -782,7 +782,7 @@ impl BoundaryV1 {
                 prompt_digest,
             } => {
                 if !matches!(self.scope, BoundaryScope::Execution { .. })
-                    || self.tool != BoundaryTool::CadenceQuery
+                    || self.tool != BoundaryTool::BaleyQuery
                     || self.outcome != "dispatch"
                     || self.subject_id.as_ref() != Some(dispatch_id)
                     || *prompt_bytes == Some(0)

@@ -595,7 +595,7 @@ fn a_failed_root_probe_refuses_derivation() {
 fn the_v2_encoding_of_a_minimal_capture_is_the_fixed_bytes_and_key() {
     let mut c = captured("## Phases\n");
     c.root = "/p".into();
-    let expected = "0000000000000011636164656e63652e6c6966656379636c650000000000000002000000000000000300000000000000022f700101000000000000000a2323205068617365730a0000000000000000";
+    let expected = "000000000000000f62616c65792e6c6966656379636c650000000000000002000000000000000300000000000000022f700101000000000000000a2323205068617365730a0000000000000000";
     let bytes = encode_inputs(&c).unwrap();
     assert_eq!(
         bytes.iter().map(|b| format!("{b:02x}")).collect::<String>(),
@@ -603,7 +603,7 @@ fn the_v2_encoding_of_a_minimal_capture_is_the_fixed_bytes_and_key() {
     );
     assert_eq!(
         input_key(&c).unwrap(),
-        "4e3217beae0d07c20320d71147cb29fa341a2079830bb58c94eee8652bd340b5"
+        "bfe7eb6879135b028a5b220996c40c0ec6589b26f651b8937f3c14cb0f2bc256"
     );
 }
 

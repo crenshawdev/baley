@@ -109,7 +109,7 @@ fn plan_instructions_require_a_test_file() {
         "Command, expected output and the test file are content-checked on a check. The\n\
 test function, setup, call, boundary and fakes keep their typed grammar; blank\n\
 strings in those fields and an empty fakes array remain legal. This describes\n\
-mechanical admission, not permission to omit the one-unit shape above. Cadence\n\
+mechanical admission, not permission to omit the one-unit shape above. Baley\n\
 does not infer test style or assertion strength. Test existence, task/check\n\
 bindings, red/green receipts and subject-stub gates belong to execution;\n\
 adequacy belongs to the owner and verifier.",

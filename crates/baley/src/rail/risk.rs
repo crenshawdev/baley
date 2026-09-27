@@ -94,7 +94,7 @@ use schemars::JsonSchema;
 use std::{collections::BTreeMap, num::NonZeroU32};
 
 pub const NAMESPACE: &str = "rail_observations";
-const MARKER: &str = "cadence.rail.observation.v1";
+const MARKER: &str = "baley.rail.observation.v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged, deny_unknown_fields)]

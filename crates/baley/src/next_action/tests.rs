@@ -89,26 +89,26 @@ fn fixtures() -> Vec<Fixture> {
     use LifecycleStatus::*;
     vec![
         fixture("W1", &[Unplanned], "verify the fix on the device").paused(),
-        fixture("W2", &[Planned], "/cad-execute 1"),
+        fixture("W2", &[Planned], "/bal-execute 1"),
         // An Executed phase is verified; no plan report file holds it back.
-        fixture("W3", &[Executed], "/cad-verify 1"),
-        fixture("W5", &[Unplanned], "/cad-context 1"),
-        fixture("W5-skip", &[Unplanned], "/cad-plan 1").skip(),
+        fixture("W3", &[Executed], "/bal-verify 1"),
+        fixture("W5", &[Unplanned], "/bal-context 1"),
+        fixture("W5-skip", &[Unplanned], "/bal-plan 1").skip(),
         fixture("W6", &[Complete], "Triage the deferred queue").queue(),
         fixture("W6-unreadable", &[Complete], "Triage the deferred queue").unreadable(),
-        fixture("W7", &[], "/cad-milestone").residue(),
-        fixture("W8", &[], "/cad-phase add"),
-        fixture("W9", &[Complete], "/cad-milestone"),
+        fixture("W7", &[], "/bal-milestone").residue(),
+        fixture("W8", &[], "/bal-phase add"),
+        fixture("W9", &[Complete], "/bal-milestone"),
         fixture("P12", &[Planned], "verify the fix on the device").paused(),
-        fixture("P23", &[Executed, Planned], "/cad-execute 2"),
-        fixture("P34", &[Executed, Executed], "/cad-verify 1"),
-        fixture("P45", &[Unplanned, Executed], "/cad-verify 2"),
-        fixture("P56", &[Unplanned], "/cad-context 1").queue(),
+        fixture("P23", &[Executed, Planned], "/bal-execute 2"),
+        fixture("P34", &[Executed, Executed], "/bal-verify 1"),
+        fixture("P45", &[Unplanned, Executed], "/bal-verify 2"),
+        fixture("P56", &[Unplanned], "/bal-context 1").queue(),
         fixture("P67", &[], "Triage the deferred queue")
             .queue()
             .residue(),
-        fixture("P78", &[], "/cad-milestone").residue(),
-        fixture("P89", &[], "/cad-phase add"),
+        fixture("P78", &[], "/bal-milestone").residue(),
+        fixture("P89", &[], "/bal-phase add"),
     ]
 }
 
@@ -168,7 +168,7 @@ fn the_lowest_numbered_planned_phase_is_chosen_whatever_the_record_order() {
     let mut case = fixture(
         "order",
         &[LifecycleStatus::Planned, LifecycleStatus::Planned],
-        "/cad-execute 1",
+        "/bal-execute 1",
     );
     case.lifecycle.phases.reverse();
     assert_eq!(
@@ -184,7 +184,7 @@ fn a_pause_saved_for_another_phase_is_not_offered() {
     let mut case = fixture(
         "other phase",
         &[LifecycleStatus::Planned, LifecycleStatus::Planned],
-        "/cad-execute 1",
+        "/bal-execute 1",
     );
     case.pause = Some(Pause {
         phase: PhaseId(2.0),

@@ -185,7 +185,7 @@ async fn execute_inner<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let config = session.config()?;
             request.attempt.route = Some(baley::execution::model::DispatchRoute {
                 choice: super::config_service::route_at(&config, &super::config_service::RouteRequest {
-                    role: "cad-verifier".into(), phase: std::num::NonZeroU32::new(phase), plan: None, attempt: None,
+                    role: "bal-verifier".into(), phase: std::num::NonZeroU32::new(phase), plan: None, attempt: None,
                 }, root)?.choice,
                 inputs: super::config_service::routing_inputs(&config),
             });
@@ -259,7 +259,7 @@ async fn next_answer<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let config = session.config()?;
             baley::execution::model::DispatchRoute {
                 choice: super::config_service::route_at(&config, &super::config_service::RouteRequest {
-                    role: "cad-verifier".into(), phase: std::num::NonZeroU32::new(phase), plan: None, attempt: None,
+                    role: "bal-verifier".into(), phase: std::num::NonZeroU32::new(phase), plan: None, attempt: None,
                 }, root)?.choice,
                 inputs: super::config_service::routing_inputs(&config),
             }

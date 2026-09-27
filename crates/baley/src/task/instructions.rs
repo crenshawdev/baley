@@ -1,13 +1,13 @@
-//! The cad-task front door, rendered by `cadence task-instructions` from the
+//! The bal-task front door, rendered by `baley task-instructions` from the
 //! compiled executor role with the task scope (D-209). Never hand-edited.
 
 const FRONTDOOR: &str = r#"---
-name: cad-task
+name: bal-task
 description: ""
 argument-hint: "[task description] [--plan]"
 allowed-tools:
-  - mcp__cadence__cadence_apply
-  - mcp__cadence__cadence_query
+  - mcp__baley__baley_apply
+  - mcp__baley__baley_query
   - Write
   - Edit
   - Bash
@@ -15,7 +15,7 @@ allowed-tools:
   - Task
 ---
 
-This front door is rendered by `cadence task-instructions` from the compiled
+This front door is rendered by `baley task-instructions` from the compiled
 `execution::instructions` role with the task scope: the phase lease is
 disabled, the protected-branch and risk dispositions are the binary's, and the
 record's home is decided by whether a planning root exists. Inline work is
@@ -27,8 +27,8 @@ done in this context; `--plan` may dispatch one executor.
    concern, a few file edits, no new dependency or architecture), planned
    (`--plan`, or multi-step enough that ordering matters and a partial stop
    would leave the repository broken), or too big (feature-sized). Too big
-   stops here: say it belongs on the roadmap through `/cad-phase add`, or in
-   `/cad-capture`, and run nothing. When unsure between inline and planned,
+   stops here: say it belongs on the roadmap through `/bal-phase add`, or in
+   `/bal-capture`, and run nothing. When unsure between inline and planned,
    pick planned.
 2. Call `task-open` with a fresh `request_id`, the kebab-case slug of the
    description, `mode` `inline` or `planned`, and the description. Show a
@@ -36,7 +36,7 @@ done in this context; `--plan` may dispatch one executor.
    gate's options to the owner through `AskUserQuestion`; `create` means make
    and switch to the named work branch and open again, `abort` means stop.
    With `refuse`, stop. Keep the accepted answer field `task.token`.
-3. Inline: read through `cadence_query`, make the change, verify by observed
+3. Inline: read through `baley_query`, make the change, verify by observed
    behavior, and commit each logical change as one conventional commit of
    specific files. Planned: write the plan as one to three atomic tasks, each
    with files, action and a falsifiable verification, keep it in this context
@@ -63,16 +63,16 @@ done in this context; `--plan` may dispatch one executor.
 - Never use worktrees; a task is sequential.
 - Never write STATE.md or any activity log for a task; git and the binary's record are the record.
 - Never create `.planning/` or `.planning/tasks/<slug>/` yourself; the binary decides the record's home.
-- If the scope grows past planned mid-task, stop and re-route to `/cad-phase add`.
+- If the scope grows past planned mid-task, stop and re-route to `/bal-phase add`.
 </guardrails>
 
 ## Task executor contract
 
 "#;
 
-/// `skills/cad-task/SKILL.md`, a generated artifact: the front door above
+/// `skills/bal-task/SKILL.md`, a generated artifact: the front door above
 /// and the executor role composed with the task scope.
 pub fn markdown() -> String {
-    let frontdoor = crate::help::table::render_description("cad-task", FRONTDOOR).expect("compiled skill front matter");
+    let frontdoor = crate::help::table::render_description("bal-task", FRONTDOOR).expect("compiled skill front matter");
     format!("{frontdoor}{}\n", crate::execution::instructions::role_text(crate::execution::instructions::Scope::Task))
 }

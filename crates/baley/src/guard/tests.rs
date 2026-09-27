@@ -108,7 +108,7 @@ fn event(cwd: &str, target: &str) -> Event {
 }
 
 fn owned(path: &str) -> std::result::Result<(), String> {
-    Err(format!("Cadence owns {path}; use the native execution boundary instead of Write/Edit"))
+    Err(format!("Baley owns {path}; use the native execution boundary instead of Write/Edit"))
 }
 
 fn denied(reason: &str) -> std::result::Result<PathBuf, String> {
@@ -176,7 +176,7 @@ pub(crate) fn rendered_skill_files_are_protected() {
 
 #[test]
 fn the_cli_names_the_guard_and_serve_subcommands() {
-    let command = |word| crate::Cli::try_parse_from(["cadence", word]).unwrap().command;
+    let command = |word| crate::Cli::try_parse_from(["baley", word]).unwrap().command;
     assert!(matches!(command("guard"), crate::Command::Guard));
     assert!(matches!(command("serve"), crate::Command::Serve));
 }
@@ -374,7 +374,7 @@ fn the_global_setting_wins_over_home() {
 fn without_a_global_setting_home_names_the_default() {
     assert_eq!(
         global_setting(None, Some("/home/u".into())),
-        Some("/home/u/.claude/cadence/config.v4.json".into())
+        Some("/home/u/.claude/baley/config.v4.json".into())
     );
     assert_eq!(global_setting(None, None), None);
 }

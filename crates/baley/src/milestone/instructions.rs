@@ -1,20 +1,20 @@
 //! The milestone front door is compiled alongside its typed operations.
 pub fn markdown() -> &'static str {
     static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        crate::help::table::render_description("cad-milestone", r#"---
-name: cad-milestone
+        crate::help::table::render_description("bal-milestone", r#"---
+name: bal-milestone
 description: ""
 argument-hint: "<phase ids> <display label>"
 allowed-tools:
-  - mcp__cadence__cadence_query
-  - mcp__cadence__cadence_apply
+  - mcp__baley__baley_query
+  - mcp__baley__baley_apply
 ---
 
 <process>
 1. Select the owner's explicit nonempty set of positive integer phase ids,
    sorted without duplicates, a display label and a stable occurrence name.
    Ask for missing selection inputs. A milestone label is display text, never
-   cad-audit's phase argument; never parse a label into phases. Call cadence_query
+   bal-audit's phase argument; never parse a label into phases. Call baley_query
    `{"operation":"milestone-read","occurrence":"<occurrence>","selection":{"phases":[15,16],"label":"<display label>"}}`.
 2. Show the returned close identity, generation (record version), immutable
    selection and label. Present every existing audit outcome with its integer
@@ -23,12 +23,12 @@ allowed-tools:
    those outcomes; invent no audit verdict or bypass. A refusal stops the action.
 3. Obtain the owner's explicit choice to close only, close and prune, or leave
    the selection open. To close, send only the returned answer field `actions.close` typed payload
-   unchanged to cadence_apply. Display the returned close record or exact refusal.
+   unchanged to baley_apply. Display the returned close record or exact refusal.
    Reuse the same request for a retry; changed inputs require a fresh read and
    owner choice. A ready close records readiness only; it changes no documents.
    Read milestone-read again with the same occurrence and selection. After the
    owner's choice to prune, send its returned answer field `actions.prune` typed payload
-   unchanged to cadence_apply. This is milestone-prune: it names the ready close
+   unchanged to baley_apply. This is milestone-prune: it names the ready close
    id, expected generation, exact phase selection and request_id. The binary
    owns every removal, document replacement and single-parent commit.
    A deferred member stays unruled: no ruling operation
@@ -36,7 +36,7 @@ allowed-tools:
 4. Close-only stops at the local milestone close. Landing is a separate explicit
    action with its own owner choice and returned operations; a close never grants
    external authorization. Do not perform landing as part of this door. If the
-   owner requests retuning, cadence_query `{"operation":"suggest"}` is advisory:
+   owner requests retuning, baley_query `{"operation":"suggest"}` is advisory:
    its output grants no permission to apply a proposal or to land.
 5. Show the prune's exact selected phase set, durable id, state, commit, single
    parent and next action. After interruption, retry the identical milestone-prune
@@ -49,9 +49,9 @@ allowed-tools:
    default manifest is selected; ask for missing inputs. Read land-read for its
    current generation. If a landing has not been recorded, obtain land-start's
    schema and record the owner's exact source/base/remote selection first.
-   Obtain the milestone-release schema with cadence_query
+   Obtain the milestone-release schema with baley_query
    `{"operation":"schema","tool":"apply","for":"milestone-release"}`.
-   Send milestone-release through cadence_apply with a stable request_id,
+   Send milestone-release through baley_apply with a stable request_id,
    landing, expected_generation, version, tag and manifest {path, format:"json"}.
    This records a release read; it does not bump or tag. Show the named manifest,
    requested version/tag and any collision's exact tag and peeled commit. Show
@@ -69,7 +69,7 @@ allowed-tools:
    re-reading the original milestone-release request returns its retained
    report. The bump updates only the explicitly named manifest and creates no
    tag. Version confirmation grants no publish permission. Leave the tag for
-   cad-land's separately confirmed merge and ordered land-checkout, land-pull,
+   bal-land's separately confirmed merge and ordered land-checkout, land-pull,
    land-tag step, which rechecks the release manifest and version collisions
    on the pulled base. Never create a tag yourself.
 </process>

@@ -135,7 +135,7 @@ fn an_identity_carrying_anything_else_is_refused() {
 // line still has to pass it after `--`.
 #[test]
 fn an_identity_that_reads_as_an_option_is_still_valid_here() {
-    assert!(validate_name("cadence-binary-owns-process").is_ok());
+    assert!(validate_name("baley-binary-owns-process").is_ok());
     assert!(validate_name("-leading").is_ok());
     assert!(validate_name("--phase").is_ok());
 }

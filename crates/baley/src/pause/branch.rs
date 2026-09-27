@@ -315,7 +315,7 @@ pub fn integration_name(project: &str, roadmap: &str) -> Option<String> {
                 .and_then(version)
                 .map(str::to_owned)
         })
-        .map(|v| format!("cadence/{v}"))
+        .map(|v| format!("baley/{v}"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -335,7 +335,7 @@ pub fn integration(policy: &Policy, observed: &Observed) -> Result<Integration> 
     let name = integration_name(&observed.project, &observed.roadmap);
     let published =
         name.as_deref()
-            .and_then(|name| name.strip_prefix("cadence/v"))
+            .and_then(|name| name.strip_prefix("baley/v"))
             .is_some_and(|version| {
                 observed.tags.iter().any(|tag| {
                     tag.strip_prefix('v').unwrap_or(tag).split('+').next() == Some(version)

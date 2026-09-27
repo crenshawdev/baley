@@ -13,31 +13,31 @@
     "type": "bool",
     "default": false
   },
-  "roles.cad-planner.model": {
+  "roles.bal-planner.model": {
     "type": "string_or_null",
     "default": null
   },
-  "roles.cad-assumptions-analyzer.model": {
+  "roles.bal-assumptions-analyzer.model": {
     "type": "string_or_null",
     "default": null
   },
-  "roles.cad-verifier.model": {
+  "roles.bal-verifier.model": {
     "type": "string_or_null",
     "default": null
   },
-  "roles.cad-reviewer.model": {
+  "roles.bal-reviewer.model": {
     "type": "string_or_null",
     "default": null
   },
-  "roles.cad-executor.model": {
+  "roles.bal-executor.model": {
     "type": "string_or_null",
     "default": null
   },
-  "roles.cad-plan-checker.model": {
+  "roles.bal-plan-checker.model": {
     "type": "string_or_null",
     "default": null
   },
-  "roles.cad-planner.effort": {
+  "roles.bal-planner.effort": {
     "type": "enum",
     "values": [
       "low",
@@ -49,7 +49,7 @@
     ],
     "default": "high"
   },
-  "roles.cad-assumptions-analyzer.effort": {
+  "roles.bal-assumptions-analyzer.effort": {
     "type": "enum",
     "values": [
       "low",
@@ -61,7 +61,7 @@
     ],
     "default": "high"
   },
-  "roles.cad-verifier.effort": {
+  "roles.bal-verifier.effort": {
     "type": "enum",
     "values": [
       "low",
@@ -73,7 +73,7 @@
     ],
     "default": "high"
   },
-  "roles.cad-reviewer.effort": {
+  "roles.bal-reviewer.effort": {
     "type": "enum",
     "values": [
       "low",
@@ -85,7 +85,7 @@
     ],
     "default": "medium"
   },
-  "roles.cad-executor.effort": {
+  "roles.bal-executor.effort": {
     "type": "enum",
     "values": [
       "low",
@@ -97,7 +97,7 @@
     ],
     "default": "high"
   },
-  "roles.cad-plan-checker.effort": {
+  "roles.bal-plan-checker.effort": {
     "type": "enum",
     "values": [
       "low",

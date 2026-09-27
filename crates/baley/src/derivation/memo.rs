@@ -1,7 +1,7 @@
 use super::*;
 use crate::store::model::digest;
 
-pub const DOMAIN: &str = "cadence.lifecycle";
+pub const DOMAIN: &str = "baley.lifecycle";
 pub const ENCODING_VERSION: u64 = 2;
 pub const SEMANTICS_VERSION: u64 = 3;
 

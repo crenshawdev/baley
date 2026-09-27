@@ -119,9 +119,9 @@ pub async fn record_native_refusal<I: ConfigIo + Clone + Sync>(
     let encoding = || Error::Invalid("native refusal has no recordable boundary".to_owned());
     let mut decision = boundary(
         phase,
-        BoundaryTool::CadenceApply,
+        BoundaryTool::BaleyApply,
         "executor",
-        &public_request_digest(BoundaryTool::CadenceApply, Some(raw)),
+        &public_request_digest(BoundaryTool::BaleyApply, Some(raw)),
         &response,
         None,
         None,
@@ -458,7 +458,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
         Some(plan) => json!({"operation":"execute-next","phase":phase,"plan":plan}),
         None => json!({"operation":"execute-next","phase":phase}),
     };
-    let raw_request = public_request_digest(BoundaryTool::CadenceQuery, Some(&request));
+    let raw_request = public_request_digest(BoundaryTool::BaleyQuery, Some(&request));
     let (root, session, initial) = begin(factory, selected_root).await?;
     if let Some(answer) = terminal_answer(&session, &initial, &scope(phase)).await? {
         return Ok(answer);
@@ -468,7 +468,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             &session,
             &initial,
             phase,
-            BoundaryTool::CadenceQuery,
+            BoundaryTool::BaleyQuery,
             "execute-next",
             &raw_request,
             "invalid-phase",
@@ -483,7 +483,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             return derivation_refusal(
                 &session,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 &raw_request,
                 error,
             )
@@ -494,7 +494,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
     if let Some(interruption) = baley::execution::history::interrupted_dispatch(
         &view.snapshot.data, phase, view.snapshot.generation).map_err(store_failure)? {
         let located = Located::rule("interrupted", "dispatch").id(&interruption.id);
-        return record_located_refusal(&session, &view, phase, BoundaryTool::CadenceQuery,
+        return record_located_refusal(&session, &view, phase, BoundaryTool::BaleyQuery,
             "execute-next", &raw_request, "continuation-refusal",
             format!("Continue dispatch {} with execution-authorize or retire it", interruption.id),
             Some(interruption.id), Some(located)).await;
@@ -506,7 +506,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "query-next",
                 &raw_request,
                 code,
@@ -523,7 +523,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             &session,
             &view,
             phase,
-            BoundaryTool::CadenceQuery,
+            BoundaryTool::BaleyQuery,
             "execute-next",
             &raw_request,
             "provisional-authoring",
@@ -539,7 +539,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "query-next",
                 &raw_request,
                 code,
@@ -565,7 +565,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "query-next",
                 &raw_request,
                 "invalid-execution-store",
@@ -582,7 +582,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "query-next",
                 &raw_request,
                 "plan-set-changed",
@@ -596,7 +596,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "execute-next",
                 &raw_request,
                 refused(phase, "risk-pending", reason),
@@ -622,7 +622,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "query-next",
                 &raw_request,
                 response,
@@ -640,7 +640,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                         &session,
                         &view,
                         phase,
-                        BoundaryTool::CadenceQuery,
+                        BoundaryTool::BaleyQuery,
                         "query-next",
                         &raw_request,
                         code,
@@ -657,7 +657,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                         &session,
                         &view,
                         phase,
-                        BoundaryTool::CadenceQuery,
+                        BoundaryTool::BaleyQuery,
                         "query-next",
                         &raw_request,
                         "invalid-project-root",
@@ -674,7 +674,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                         &session,
                         &view,
                         phase,
-                        BoundaryTool::CadenceQuery,
+                        BoundaryTool::BaleyQuery,
                         "query-next",
                         &raw_request,
                         "git-head",
@@ -700,7 +700,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                     &session,
                     &view,
                     phase,
-                    BoundaryTool::CadenceQuery,
+                    BoundaryTool::BaleyQuery,
                     "query-next",
                     &raw_request,
                     "inputs-changed",
@@ -714,7 +714,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                     &session,
                     &view,
                     phase,
-                    BoundaryTool::CadenceQuery,
+                    BoundaryTool::BaleyQuery,
                     "query-next",
                     &raw_request,
                     response,
@@ -728,7 +728,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                     &session,
                     &view,
                     phase,
-                    BoundaryTool::CadenceQuery,
+                    BoundaryTool::BaleyQuery,
                     "query-next",
                     &raw_request,
                     "invalid-active-dispatch",
@@ -739,7 +739,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             }
             let decision = boundary(
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "execute-next",
                 &raw_request,
                 &response,
@@ -772,7 +772,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "query-next",
                 &raw_request,
                 error.code(),
@@ -791,7 +791,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             &session,
             &view,
             phase,
-            BoundaryTool::CadenceQuery,
+            BoundaryTool::BaleyQuery,
             "query-next",
             &raw_request,
             "continuation-refusal",
@@ -808,7 +808,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
         let continuation_view = match &continuation.decision {
             ContinuationDecision::Continue { answer, rerun_plans, .. } => {
                 if !rerun_plans.is_empty() {
-                    return record_refusal(&session, &view, phase, BoundaryTool::CadenceQuery, "execute-next", &raw_request,
+                    return record_refusal(&session, &view, phase, BoundaryTool::BaleyQuery, "execute-next", &raw_request,
                         "native-rerun", "native execution never reruns an admitted plan; publish and admit a linked gap plan", None).await;
                 }
                 match answer {
@@ -838,7 +838,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "query-next",
                 &raw_request,
                 "invalid-execution-store",
@@ -867,7 +867,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             &session,
             &view,
             phase,
-            BoundaryTool::CadenceQuery,
+            BoundaryTool::BaleyQuery,
             "query-next",
             &raw_request,
             "plan-set-changed",
@@ -885,7 +885,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                     &session,
                     &view,
                     phase,
-                    BoundaryTool::CadenceQuery,
+                    BoundaryTool::BaleyQuery,
                     "execute-next",
                     &raw_request,
                     refused(phase, "risk-pending", reason),
@@ -902,7 +902,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "query-next",
                 &raw_request,
                 error.code,
@@ -934,7 +934,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "execute-next",
                 &raw_request,
                 "inputs-changed",
@@ -949,7 +949,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
         let response = Response::Complete { phase };
         let decision = boundary(
             phase,
-            BoundaryTool::CadenceQuery,
+            BoundaryTool::BaleyQuery,
             "execute-next",
             &raw_request,
             &response,
@@ -983,7 +983,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "query-next",
                 &raw_request,
                 "invalid-project-root",
@@ -1000,7 +1000,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "query-next",
                 &raw_request,
                 "git-head",
@@ -1014,7 +1014,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
     let choice = match super::config_service::route_at(
         &config,
         &super::config_service::RouteRequest {
-            role: "cad-executor".into(),
+            role: "bal-executor".into(),
             phase: std::num::NonZeroU32::new(phase),
             plan: std::num::NonZeroU32::new(plan.plan),
             attempt: None,
@@ -1027,7 +1027,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "query-next",
                 &raw_request,
                 "route-unavailable",
@@ -1054,7 +1054,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "query-next",
                 &raw_request,
                 error.code,
@@ -1071,7 +1071,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceQuery,
+                BoundaryTool::BaleyQuery,
                 "query-next",
                 &raw_request,
                 error.code,
@@ -1116,7 +1116,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             &session,
             &view,
             phase,
-            BoundaryTool::CadenceQuery,
+            BoundaryTool::BaleyQuery,
             "query-next",
             &raw_request,
             "inputs-changed",
@@ -1127,7 +1127,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
     }
     let decision = boundary(
         phase,
-        BoundaryTool::CadenceQuery,
+        BoundaryTool::BaleyQuery,
         "execute-next",
         &raw_request,
         &response,
@@ -1186,7 +1186,7 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         history, instructions, model::TaskSpec, runner,
     };
     let refuse = |code: &'static str, reason: String, subject: Option<String>| {
-        record_refusal(session, view, phase, BoundaryTool::CadenceQuery, "execute-next", raw_request, code, reason, subject)
+        record_refusal(session, view, phase, BoundaryTool::BaleyQuery, "execute-next", raw_request, code, reason, subject)
     };
     let execution = match execution_snapshot(view) {
         Ok(value) => value,
@@ -1243,7 +1243,7 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
             let plan = plans.values.iter().find(|plan| plan.plan == next).expect("admitted plans are observed");
             let config = session.config().map_err(store_failure)?;
             let choice = match super::config_service::route_at(&config, &super::config_service::RouteRequest {
-                role: "cad-executor".into(), phase: std::num::NonZeroU32::new(phase), plan: std::num::NonZeroU32::new(plan.plan), attempt: None,
+                role: "bal-executor".into(), phase: std::num::NonZeroU32::new(phase), plan: std::num::NonZeroU32::new(plan.plan), attempt: None,
             }, root) {
                 Ok(route) => route.choice,
                 Err(error) => return refuse("route-unavailable", error.to_string(), None).await,
@@ -1367,7 +1367,7 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
     if let Err(reason) = reobserve(session, view, root, phase, names, plans, Some(&head)).await {
         return refuse("inputs-changed", reason, Some(dispatch.id.clone())).await;
     }
-    let decision = boundary(phase, BoundaryTool::CadenceQuery, "execute-next", raw_request, &response, Some(dispatch.id.clone()), Some(dispatch.prompt_digest.clone()))?;
+    let decision = boundary(phase, BoundaryTool::BaleyQuery, "execute-next", raw_request, &response, Some(dispatch.id.clone()), Some(dispatch.prompt_digest.clone()))?;
     let (operation_id, change) = match candidate {
         Some(mut candidate) => {
             candidate.prompt = dispatch.prompt.clone();
@@ -1402,11 +1402,11 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
     driver: &Driver,
 ) -> Answer {
     let raw = serde_json::to_value(&patch).map_err(|_| Failure::Encoding)?;
-    let request = public_request_digest(BoundaryTool::CadenceApply, Some(&raw));
+    let request = public_request_digest(BoundaryTool::BaleyApply, Some(&raw));
     let (root, session, initial) = begin(factory, selected_root).await?;
     let phase = dispatch_phase(&initial, &patch.dispatch_id)?.unwrap_or(0);
     if !baley::execution::admission::records(&initial.snapshot.data,phase).map_err(store_failure)?.is_empty() {
-        return record_refusal(&session,&initial,phase,BoundaryTool::CadenceApply,"executor",&request,
+        return record_refusal(&session,&initial,phase,BoundaryTool::BaleyApply,"executor",&request,
             "native-task-close-unavailable","native tasks cannot close through a schema-1 executor patch",Some(patch.dispatch_id.clone())).await;
     }
     if let Some(answer) = terminal_answer(&session, &initial, &scope(phase)).await? {
@@ -1417,7 +1417,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             &session,
             &initial,
             0,
-            BoundaryTool::CadenceApply,
+            BoundaryTool::BaleyApply,
             "executor",
             &request,
             "foreign-dispatch",
@@ -1432,7 +1432,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             return derivation_refusal(
                 &session,
                 phase,
-                BoundaryTool::CadenceApply,
+                BoundaryTool::BaleyApply,
                 &request,
                 error,
             )
@@ -1450,7 +1450,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             &session,
             &view,
             phase,
-            BoundaryTool::CadenceApply,
+            BoundaryTool::BaleyApply,
             "apply-executor-patch",
             &request,
             "unknown-phase",
@@ -1466,7 +1466,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceApply,
+                BoundaryTool::BaleyApply,
                 "apply-executor-patch",
                 &request,
                 code,
@@ -1483,7 +1483,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceApply,
+                BoundaryTool::BaleyApply,
                 "apply-executor-patch",
                 &request,
                 "invalid-execution-store",
@@ -1498,7 +1498,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             &session,
             &view,
             phase,
-            BoundaryTool::CadenceApply,
+            BoundaryTool::BaleyApply,
             "apply-executor-patch",
             &request,
             "missing-execution",
@@ -1512,7 +1512,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             &session,
             &view,
             phase,
-            BoundaryTool::CadenceApply,
+            BoundaryTool::BaleyApply,
             "apply-executor-patch",
             &request,
             "plan-set-changed",
@@ -1528,7 +1528,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceApply,
+                BoundaryTool::BaleyApply,
                 "apply-executor-patch",
                 &request,
                 error.code,
@@ -1545,7 +1545,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             .find_map(|record| match &record.decision {
                 baley::store::model::Decision::BoundaryV1(value)
                     if value.boundary.scope == scope(phase)
-                        && value.boundary.tool == BoundaryTool::CadenceApply
+                        && value.boundary.tool == BoundaryTool::BaleyApply
                         && value.boundary.request_digest == request
                         && value.boundary.subject_id.as_ref() == Some(&patch.dispatch_id)
                         && (matches!(value.boundary.receipt, Receipt::Compact { envelope: Envelope::Ok(_) })
@@ -1567,7 +1567,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceApply,
+                BoundaryTool::BaleyApply,
                 "executor",
                 &request,
                 refused(phase, "risk-pending", reason),
@@ -1591,7 +1591,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceApply,
+                BoundaryTool::BaleyApply,
                 "executor",
                 &request,
                 "inputs-changed",
@@ -1617,7 +1617,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             &session,
             &view,
             phase,
-            BoundaryTool::CadenceApply,
+            BoundaryTool::BaleyApply,
             "apply-executor-patch",
             &request,
             "lifecycle-refusal",
@@ -1632,7 +1632,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceApply,
+                BoundaryTool::BaleyApply,
                 "apply-executor-patch",
                 &request,
                 "foreign-dispatch",
@@ -1646,7 +1646,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceApply,
+                BoundaryTool::BaleyApply,
                 "apply-executor-patch",
                 &request,
                 code,
@@ -1662,7 +1662,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                     &session,
                     &view,
                     phase,
-                    BoundaryTool::CadenceApply,
+                    BoundaryTool::BaleyApply,
                     "executor",
                     &request,
                     "invalid-project-root",
@@ -1679,7 +1679,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                     &session,
                     &view,
                     phase,
-                    BoundaryTool::CadenceApply,
+                    BoundaryTool::BaleyApply,
                     "apply-executor-patch",
                     &request,
                     "git-head",
@@ -1696,7 +1696,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                     &session,
                     &view,
                     phase,
-                    BoundaryTool::CadenceApply,
+                    BoundaryTool::BaleyApply,
                     "apply-executor-patch",
                     &request,
                     code,
@@ -1716,7 +1716,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceApply,
+                BoundaryTool::BaleyApply,
                 "executor",
                 &request,
                 "staged-paths",
@@ -1736,7 +1736,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceApply,
+                BoundaryTool::BaleyApply,
                 "apply-executor-patch",
                 &request,
                 error.code,
@@ -1762,7 +1762,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             &session,
             &view,
             phase,
-            BoundaryTool::CadenceApply,
+            BoundaryTool::BaleyApply,
             "apply-executor-patch",
             &request,
             "inputs-changed",
@@ -1776,7 +1776,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             &session,
             &view,
             phase,
-            BoundaryTool::CadenceApply,
+            BoundaryTool::BaleyApply,
             "executor",
             &request,
             "inputs-changed",
@@ -1797,7 +1797,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
                 &session,
                 &view,
                 phase,
-                BoundaryTool::CadenceApply,
+                BoundaryTool::BaleyApply,
                 "executor",
                 &request,
                 "invalid-execution-store",
@@ -1831,7 +1831,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
     let answer = PreparedAnswer::new(response.into_envelope())?;
     let decision = BoundaryV1::new(
         scope(phase),
-        BoundaryTool::CadenceApply,
+        BoundaryTool::BaleyApply,
         "executor".into(),
         request,
         Some(patch.dispatch_id.clone()),
@@ -2596,8 +2596,8 @@ impl ValidationFailure {
 
 fn tool_operation(tool: BoundaryTool) -> &'static str {
     match tool {
-        BoundaryTool::CadenceQuery => "execute-next",
-        BoundaryTool::CadenceApply => "executor",
+        BoundaryTool::BaleyQuery => "execute-next",
+        BoundaryTool::BaleyApply => "executor",
     }
 }
 
@@ -2659,17 +2659,17 @@ fn continuation_next_call(decision: &ContinuationDecision) -> String {
     use ContinuationDecision as D;
     use baley::evidence::gates::Purpose;
     match decision {
-        D::AwaitAcceptance => "no owner answer is on record for this phase: submit cadence_apply execution-authorize with the phase, a fresh request_id, the owner, the time and the owner's actual response, naming no checkpoint".into(),
+        D::AwaitAcceptance => "no owner answer is on record for this phase: submit baley_apply execution-authorize with the phase, a fresh request_id, the owner, the time and the owner's actual response, naming no checkpoint".into(),
         D::Stop(answer) => format!(
-            "the Stop answered on question {} is still in force: continue or decline it with cadence_apply execution-authorize carrying the owner's actual response and naming the same checkpoint that Stop named",
+            "the Stop answered on question {} is still in force: continue or decline it with baley_apply execution-authorize carrying the owner's actual response and naming the same checkpoint that Stop named",
             answer.question_id
         ),
         D::NeedQuestion(gate) => format!(
-            "task checkpoint {} has no question on record: answer it with cadence_apply execution-task-answer",
+            "task checkpoint {} has no question on record: answer it with baley_apply execution-task-answer",
             gate.checkpoint_id.as_deref().unwrap_or(&gate.id)
         ),
         D::Wait(gate) if gate.purpose == Purpose::Progress => format!(
-            "question {} is unanswered: submit cadence_apply execution-authorize with the owner's actual response",
+            "question {} is unanswered: submit baley_apply execution-authorize with the owner's actual response",
             gate.id
         ),
         D::Wait(gate) => format!(
@@ -2677,7 +2677,7 @@ fn continuation_next_call(decision: &ContinuationDecision) -> String {
             gate.id
         ),
         D::RepairSuite { question_id, approved: false } => format!(
-            "plan suite repair question {question_id} is unanswered: submit cadence_apply execution-suite-repair-answer with the owner's actual answer, attribution and time"
+            "plan suite repair question {question_id} is unanswered: submit baley_apply execution-suite-repair-answer with the owner's actual answer, attribution and time"
         ),
         D::RepairSuite { approved: true, .. } => "the approved plan suite repair is ready to dispatch".into(),
         D::Ended(_) => "this execution occurrence has ended; no further dispatch is issued for it".into(),
@@ -2689,7 +2689,7 @@ fn continuation_next_call(decision: &ContinuationDecision) -> String {
 }
 
 /// D-140: the envelope keeps each code's own detail. A sentence that fits every
-/// code cannot be joined to anything, and cad-suggest and cad-why read these.
+/// code cannot be joined to anything, and bal-suggest and bal-why read these.
 /// Only a refusal that arrived with nothing to say falls back, and then it says
 /// which code refused and no more.
 fn stable_reason(code: &str, detail: &str) -> String {
@@ -2714,7 +2714,7 @@ async fn begin<I: ConfigIo + Clone + Sync>(
 /// dispatch the store knows goes under that dispatch's phase, and anything
 /// else under the root refusal scope, phase 0.
 pub(crate) fn refusal_phase(view: &View, tool: BoundaryTool, raw: Option<&Value>) -> Result<u32, Failure> {
-    if tool != BoundaryTool::CadenceApply {
+    if tool != BoundaryTool::BaleyApply {
         return Ok(0);
     }
     match raw.and_then(|value| value.get("dispatch_id")).and_then(Value::as_str) {
@@ -3113,7 +3113,7 @@ pub fn risk_material(
     let confirmed = view.decisions.iter().any(|record| match &record.decision {
         baley::store::model::Decision::BoundaryV1(value) => {
             value.store_generation <= view.snapshot.generation
-                && value.boundary.tool == BoundaryTool::CadenceApply
+                && value.boundary.tool == BoundaryTool::BaleyApply
                 && value.boundary.scope == (BoundaryScope::Execution { phase })
                 && value.boundary.subject_id.as_deref() == Some(dispatch_id)
                 && (matches!(&value.boundary.receipt, Receipt::Compact { envelope: Envelope::Ok(_) })
@@ -3285,7 +3285,7 @@ pub async fn review_handoff<I: ConfigIo + Clone + Sync>(
                     let route = super::config_service::route_at(
                         &generation,
                         &super::config_service::RouteRequest {
-                            role: "cad-reviewer".into(),
+                            role: "bal-reviewer".into(),
                             phase: std::num::NonZeroU32::new(phase),
                             plan: std::num::NonZeroU32::new(receipt.outcome.plan),
                             attempt: None,
@@ -3363,9 +3363,9 @@ mod routing_prompt_tests {
 
     #[test]
     fn prompt_operational_returns_the_admitted_choice_verbatim() {
-        let route = json!({"choice":{"role":"cad-executor","agent":"cad-executor-xhigh","rung":"xhigh","starting_rung":"xhigh","model":"opus",
-            "effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"xhigh"},
-            "model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"opus"},
+        let route = json!({"choice":{"role":"bal-executor","agent":"bal-executor-xhigh","rung":"xhigh","starting_rung":"xhigh","model":"opus",
+            "effort_source":{"kind":"role","key":"roles.bal-executor.effort","layer":"repo","stored":"xhigh"},
+            "model_source":{"kind":"role","key":"roles.bal-executor.model","layer":"repo","stored":"opus"},
             "attempt":1,"escalated":false,"reasons":["fixture selection"],"warnings":[]},
             "inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":null,"stamp":null},"global":null,"global_alias":false}});
         let supplied: ActiveDispatch = serde_json::from_value(json!({"schema":1,"id":"dispatch-fixture","expected_execution_version":1,
@@ -3702,14 +3702,14 @@ mod refusal_scope_tests {
     fn a_malformed_apply_naming_an_active_dispatch_is_refused_under_its_phase() {
         let active = dispatch(5, 1);
         let store = view(vec![occurrence(5, Some(active.clone())), occurrence(6, None)]);
-        assert_eq!(refusal_phase(&store, BoundaryTool::CadenceApply, Some(&json!({"dispatch_id": active.id}))), Ok(5));
+        assert_eq!(refusal_phase(&store, BoundaryTool::BaleyApply, Some(&json!({"dispatch_id": active.id}))), Ok(5));
     }
 
     #[test]
     fn a_malformed_apply_naming_no_known_dispatch_is_refused_under_the_root_scope() {
         let store = view(vec![occurrence(5, Some(dispatch(5, 1)))]);
         for raw in [Some(json!({"dispatch_id": "foreign"})), Some(json!({"phase": 5})), Some(json!({"dispatch_id": 7})), None] {
-            assert_eq!(refusal_phase(&store, BoundaryTool::CadenceApply, raw.as_ref()), Ok(0), "{raw:?}");
+            assert_eq!(refusal_phase(&store, BoundaryTool::BaleyApply, raw.as_ref()), Ok(0), "{raw:?}");
         }
     }
 
@@ -3739,19 +3739,19 @@ mod refusal_scope_tests {
     #[test]
     fn a_malformed_apply_naming_a_dispatch_whose_patch_landed_is_refused_under_its_phase() {
         let store = view(vec![occurrence(5, Some(dispatch(5, 1))), received(6, "d1")]);
-        assert_eq!(refusal_phase(&store, BoundaryTool::CadenceApply, Some(&json!({"dispatch_id": "d1"}))), Ok(6));
+        assert_eq!(refusal_phase(&store, BoundaryTool::BaleyApply, Some(&json!({"dispatch_id": "d1"}))), Ok(6));
     }
 
     #[test]
     fn a_request_is_identified_by_its_tool_operation_and_raw_arguments() {
         let digest = |bytes: &str| baley::store::model::digest(bytes.as_bytes());
         assert_eq!(
-            public_request_digest(BoundaryTool::CadenceApply, Some(&json!({"phase": 3}))),
-            digest(r#"["execution-request-v1","cadence-apply","executor",{"phase":3}]"#)
+            public_request_digest(BoundaryTool::BaleyApply, Some(&json!({"phase": 3}))),
+            digest(r#"["execution-request-v1","baley-apply","executor",{"phase":3}]"#)
         );
         assert_eq!(
-            public_request_digest(BoundaryTool::CadenceQuery, None),
-            digest(r#"["execution-request-v1","cadence-query","execute-next",null]"#)
+            public_request_digest(BoundaryTool::BaleyQuery, None),
+            digest(r#"["execution-request-v1","baley-query","execute-next",null]"#)
         );
     }
 
@@ -3768,7 +3768,7 @@ mod refusal_scope_tests {
     fn a_malformed_query_is_refused_under_the_root_scope_whatever_it_names() {
         let active = dispatch(5, 1);
         let store = view(vec![occurrence(5, Some(active.clone()))]);
-        assert_eq!(refusal_phase(&store, BoundaryTool::CadenceQuery, Some(&json!({"dispatch_id": active.id}))), Ok(0));
+        assert_eq!(refusal_phase(&store, BoundaryTool::BaleyQuery, Some(&json!({"dispatch_id": active.id}))), Ok(0));
     }
 
     #[test]
@@ -3789,9 +3789,9 @@ mod reissue_tests {
             "schema":1,"id":"d","expected_execution_version":1,"phase":6,"plan":1,
             "plan_fingerprint":"f","plan_set_fingerprint":"s","requirements":[],"tasks":[],
             "suite":"cargo test","files":[],"policy":{"rung":"fixed","branch":"current","reviews":"disabled"},
-            "route":{"choice":{"role":"cad-executor","agent":agent,"rung":"xhigh","starting_rung":"xhigh","model":"opus",
-                "effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"xhigh"},
-                "model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"opus"},
+            "route":{"choice":{"role":"bal-executor","agent":agent,"rung":"xhigh","starting_rung":"xhigh","model":"opus",
+                "effort_source":{"kind":"role","key":"roles.bal-executor.effort","layer":"repo","stored":"xhigh"},
+                "model_source":{"kind":"role","key":"roles.bal-executor.model","layer":"repo","stored":"opus"},
                 "attempt":1,"escalated":false,"reasons":[],"warnings":[]},
                 "inputs":{"repo":{"identity":"/project/.planning/config.json","content":"0".repeat(64),"stamp":null},
                 "global":null,"global_alias":false}},
@@ -3808,18 +3808,18 @@ mod reissue_tests {
 
     #[test]
     fn a_reissued_dispatch_keeps_its_admitted_executor_and_prompt_and_takes_the_plan_body() {
-        let active = admitted("cad-executor-xhigh", "the admitted prompt");
+        let active = admitted("bal-executor-xhigh", "the admitted prompt");
         let Response::Dispatch { dispatch, prompt } = dispatch_response(&active, &plan()) else {
             panic!("a retained prompt re-issues the dispatch");
         };
-        assert_eq!(dispatch.route.as_ref().unwrap().choice.agent, "cad-executor-xhigh");
+        assert_eq!(dispatch.route.as_ref().unwrap().choice.agent, "bal-executor-xhigh");
         assert_eq!(prompt, "the admitted prompt");
         assert_eq!(*dispatch, ActiveDispatch { body: "the plan body\n".into(), ..active });
     }
 
     #[test]
     fn a_prompt_that_no_longer_matches_its_digest_refuses_the_reissue() {
-        let mut active = admitted("cad-executor", "the admitted prompt");
+        let mut active = admitted("bal-executor", "the admitted prompt");
         active.prompt = "edited".into();
         assert!(matches!(
             dispatch_response(&active, &plan()),
@@ -3829,9 +3829,9 @@ mod reissue_tests {
 
     #[test]
     fn a_dispatch_whose_prompt_was_not_retained_cannot_be_read_back() {
-        let mut digested = admitted("cad-executor", "the admitted prompt");
+        let mut digested = admitted("bal-executor", "the admitted prompt");
         digested.prompt.clear();
-        let mut counted = admitted("cad-executor", "");
+        let mut counted = admitted("bal-executor", "");
         counted.prompt_digest.clear();
         counted.prompt_bytes = Some(12);
         for active in [digested, counted] {
@@ -3841,7 +3841,7 @@ mod reissue_tests {
 
     #[test]
     fn a_dispatch_admitted_without_a_prompt_reissues_an_empty_one() {
-        let mut active = admitted("cad-executor", "");
+        let mut active = admitted("bal-executor", "");
         active.prompt_digest.clear();
         assert_eq!(retained_prompt(&active), Ok(String::new()));
     }

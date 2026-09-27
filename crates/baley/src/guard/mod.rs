@@ -48,7 +48,7 @@ struct HookOutput {
 }
 
 const CONFIG_DENIAL: &str =
-    "Cadence owns this config destination; use cadence_apply config operations instead of Write/Edit";
+    "Baley owns this config destination; use baley_apply config operations instead of Write/Edit";
 
 /// What the filesystem answers about one path, asked one lookup at a time.
 pub(crate) trait Lookup {
@@ -117,7 +117,7 @@ pub fn run() -> ExitCode {
         Input::Bash => bash::run(&bytes, &mut baley::process::System),
         Input::WriteEdit(event) => {
             let global = global_setting(
-                std::env::var_os("CADENCE_GLOBAL_CONFIG"),
+                std::env::var_os("BALEY_GLOBAL_CONFIG"),
                 std::env::var_os("HOME"),
             );
             match write_edit(&event, global.as_deref(), &Disk) {
@@ -178,7 +178,7 @@ fn input(bytes: &[u8]) -> Input {
 fn global_setting(setting: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
     setting
         .map(PathBuf::from)
-        .or_else(|| home.map(|home| PathBuf::from(home).join(".claude/cadence/config.v4.json")))
+        .or_else(|| home.map(|home| PathBuf::from(home).join(".claude/baley/config.v4.json")))
         .filter(|path| !path.as_os_str().is_empty())
 }
 
@@ -198,7 +198,7 @@ fn write_edit(event: &Event, global: Option<&Path>, fs: &dyn Lookup) -> Result<(
         }
         if protected_target(&target)? {
             return Err(format!(
-                "Cadence owns {}; use the native execution boundary instead of Write/Edit",
+                "Baley owns {}; use the native execution boundary instead of Write/Edit",
                 target.display()
             ));
         }

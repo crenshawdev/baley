@@ -9,7 +9,7 @@ use baley::store::{
 };
 use serde_json::{Value, json};
 
-const ROUTE: &str = r#"{"choice":{"role":"cad-executor","agent":"cad-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"reasons":["fixture selection"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stamp":null},"global":null,"global_alias":false}}"#;
+const ROUTE: &str = r#"{"choice":{"role":"bal-executor","agent":"bal-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.bal-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.bal-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"reasons":["fixture selection"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","stamp":null},"global":null,"global_alias":false}}"#;
 const DISPATCH_ID: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 
 fn plan() -> ExecutionPlan {
@@ -46,7 +46,7 @@ fn record() -> DecisionRecord {
             original: Evidence::Missing,
         },
         decision: Decision::Routing {
-            choice: r#"{"agent":"cad-executor","rung":"high","model":"sonnet"}"#.into(),
+            choice: r#"{"agent":"bal-executor","rung":"high","model":"sonnet"}"#.into(),
             config_provenance: [
                 ("dispatch_id".into(), Evidence::Text(DISPATCH_ID.into())),
                 ("route".into(), Evidence::Text(ROUTE.into())),
@@ -71,9 +71,9 @@ fn undated(mut record: DecisionRecord) -> DecisionRecord {
 fn routed_builder_binds_the_literal_model_agent_and_config_input_to_identity() {
     let mut ids = std::collections::BTreeSet::new();
     for (model, rung, agent) in [
-        (Some("sonnet"), "high", "cad-executor"),
-        (Some("opus"), "xhigh", "cad-executor-xhigh"),
-        (None, "high", "cad-executor"),
+        (Some("sonnet"), "high", "bal-executor"),
+        (Some("opus"), "xhigh", "bal-executor-xhigh"),
+        (None, "high", "bal-executor"),
     ] {
         let mut route: DispatchRoute = serde_json::from_str(ROUTE).unwrap();
         route.choice.agent = agent.into();
@@ -182,9 +182,9 @@ fn completed_route_resolver_keeps_saved_spending_for_separate_generations() {
         config_service::{RouteRequest, resolve_route},
     };
     for (number, model, effort, expected_agent) in [
-        (18, json!("sonnet"), "high", "cad-executor"),
-        (19, json!("opus"), "xhigh", "cad-executor-xhigh"),
-        (20, Value::Null, "high", "cad-executor"),
+        (18, json!("sonnet"), "high", "bal-executor"),
+        (19, json!("opus"), "xhigh", "bal-executor-xhigh"),
+        (20, Value::Null, "high", "bal-executor"),
     ] {
         let generation = Generation {
             number,
@@ -197,7 +197,7 @@ fn completed_route_resolver_keeps_saved_spending_for_separate_generations() {
             effective: merge::merge(
                 None,
                 Some(
-                    json!({"roles":{"cad-executor":{"model":model,"effort":effort}},"review":{"triggers":{"plan":{"gate":"off"}}}}),
+                    json!({"roles":{"bal-executor":{"model":model,"effort":effort}},"review":{"triggers":{"plan":{"gate":"off"}}}}),
                 ),
                 false,
             ),
@@ -205,7 +205,7 @@ fn completed_route_resolver_keeps_saved_spending_for_separate_generations() {
         let result = resolve_route(
             &generation,
             &RouteRequest {
-                role: "cad-executor".into(),
+                role: "bal-executor".into(),
                 phase: None,
                 plan: None,
                 attempt: None,
@@ -365,18 +365,18 @@ fn final_reload_rejects_independent_model_reset_and_waiver_changes() {
     use baley::execution::model::{ConfigInput, ConfigInputs};
     for (before, after, global) in [
         (
-            br#"{"roles":{"cad-executor":{"model":"sonnet"}}}"#.as_slice(),
-            br#"{"roles":{"cad-executor":{"model":"opus"}}}"#.as_slice(),
+            br#"{"roles":{"bal-executor":{"model":"sonnet"}}}"#.as_slice(),
+            br#"{"roles":{"bal-executor":{"model":"opus"}}}"#.as_slice(),
             false,
         ),
         (
-            br#"{"roles":{"cad-executor":{"model":"opus"}}}"#.as_slice(),
-            br#"{"roles":{"cad-executor":{"model":"null"}}}"#.as_slice(),
+            br#"{"roles":{"bal-executor":{"model":"opus"}}}"#.as_slice(),
+            br#"{"roles":{"bal-executor":{"model":"null"}}}"#.as_slice(),
             false,
         ),
         (
-            br#"{"roles":{"cad-executor":{"model":"opus"}}}"#.as_slice(),
-            br#"{"roles":{"cad-executor":{"model":null}}}"#.as_slice(),
+            br#"{"roles":{"bal-executor":{"model":"opus"}}}"#.as_slice(),
+            br#"{"roles":{"bal-executor":{"model":null}}}"#.as_slice(),
             true,
         ),
         (
@@ -434,7 +434,7 @@ fn admission() -> baley::store::writer::Operation {
         decision: BoundaryV1 {
             codec: 1,
             scope: BoundaryScope::Execution { phase: 8 },
-            tool: BoundaryTool::CadenceQuery,
+            tool: BoundaryTool::BaleyQuery,
             operation: "execute-next".into(),
             request_digest: "4".repeat(64),
             outcome: "dispatch".into(),
@@ -488,14 +488,14 @@ fn canonical_wire(value: &Value) -> Vec<u8> {
 
 fn wire_unit(defect: &str) -> (Vec<u8>, Vec<u8>, String) {
     use baley::store::model::digest;
-    let boundary = json!({"codec":1,"scope":{"scope":"execution","phase":8},"tool":"cadence-query","operation":"execute-next","request_digest":"4".repeat(64),"outcome":"dispatch","subject_id":DISPATCH_ID,"response_digest":"281a096470439f1147be2843416cd400f527c633d0b92704b50e4eec81b38b96","receipt":{"receipt":"dispatch","dispatch_id":DISPATCH_ID,"prompt_digest":"f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"}});
+    let boundary = json!({"codec":1,"scope":{"scope":"execution","phase":8},"tool":"baley-query","operation":"execute-next","request_digest":"4".repeat(64),"outcome":"dispatch","subject_id":DISPATCH_ID,"response_digest":"281a096470439f1147be2843416cd400f527c633d0b92704b50e4eec81b38b96","receipt":{"receipt":"dispatch","dispatch_id":DISPATCH_ID,"prompt_digest":"f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"}});
     let boundary_id = digest(&canonical_wire(&json!(["boundary-envelope-v1", boundary])));
-    let mut routing = json!({"version":1,"id":format!("routing:{DISPATCH_ID}"),"revision":1,"origin":{"source":"native-routing","original":"missing"},"decision":{"class":"routing","choice":"{\"agent\":\"cad-executor\",\"rung\":\"high\",\"model\":\"sonnet\"}","config_provenance":{"dispatch_id":{"text":DISPATCH_ID},"route":{"text":ROUTE}},"requested_effort":{"text":"high"},"observed_effort":"missing","receipt":"missing"}});
+    let mut routing = json!({"version":1,"id":format!("routing:{DISPATCH_ID}"),"revision":1,"origin":{"source":"native-routing","original":"missing"},"decision":{"class":"routing","choice":"{\"agent\":\"bal-executor\",\"rung\":\"high\",\"model\":\"sonnet\"}","config_provenance":{"dispatch_id":{"text":DISPATCH_ID},"route":{"text":ROUTE}},"requested_effort":{"text":"high"},"observed_effort":"missing","receipt":"missing"}});
     match defect {
         "effort" => routing["decision"]["requested_effort"] = json!({"text":"max"}),
         "model" => {
             routing["decision"]["choice"] =
-                json!("{\"agent\":\"cad-executor\",\"rung\":\"high\",\"model\":\"opus\"}")
+                json!("{\"agent\":\"bal-executor\",\"rung\":\"high\",\"model\":\"opus\"}")
         }
         "provenance" => routing["decision"]["config_provenance"]["route"] = json!({"text":"{}"}),
         "observation" => routing["decision"]["observed_effort"] = json!({"text":"high"}),
@@ -695,13 +695,13 @@ const SAVED: [SavedCase; 3] = [
         rung: "high",
         stored: r#"{
   "roles": {
-    "cad-executor": {
+    "bal-executor": {
       "model": "sonnet",
       "effort": "high"
     }
   }
 }"#,
-        route: r#"{"choice":{"role":"cad-executor","agent":"cad-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"reasons":["roles.cad-executor.effort: role from repo; starting rung high","roles.cad-executor.model: role from repo; sonnet"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"26f39647895f5607ad04a8e5cad9e1fa67c304e1014fc5f74708fb7fbb8ad282","stamp":null},"global":null,"global_alias":false}}"#,
+        route: r#"{"choice":{"role":"bal-executor","agent":"bal-executor","rung":"high","starting_rung":"high","model":"sonnet","effort_source":{"kind":"role","key":"roles.bal-executor.effort","layer":"repo","stored":"high"},"model_source":{"kind":"role","key":"roles.bal-executor.model","layer":"repo","stored":"sonnet"},"attempt":1,"escalated":false,"reasons":["roles.bal-executor.effort: role from repo; starting rung high","roles.bal-executor.model: role from repo; sonnet"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"26f39647895f5607ad04a8e5cad9e1fa67c304e1014fc5f74708fb7fbb8ad282","stamp":null},"global":null,"global_alias":false}}"#,
         id: "fb5d0571637ee342cdc0b4719132195e477a085c9bc3d1c45d4f4d5f24ba07bd",
     },
     SavedCase {
@@ -709,13 +709,13 @@ const SAVED: [SavedCase; 3] = [
         rung: "xhigh",
         stored: r#"{
   "roles": {
-    "cad-executor": {
+    "bal-executor": {
       "model": "opus",
       "effort": "xhigh"
     }
   }
 }"#,
-        route: r#"{"choice":{"role":"cad-executor","agent":"cad-executor-xhigh","rung":"xhigh","starting_rung":"xhigh","model":"opus","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"xhigh"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"opus"},"attempt":1,"escalated":false,"reasons":["roles.cad-executor.effort: role from repo; starting rung xhigh","roles.cad-executor.model: role from repo; opus"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"37024e43a0630149ea71e1a283911411fab1287744e69195f688c55bccc023c4","stamp":null},"global":null,"global_alias":false}}"#,
+        route: r#"{"choice":{"role":"bal-executor","agent":"bal-executor-xhigh","rung":"xhigh","starting_rung":"xhigh","model":"opus","effort_source":{"kind":"role","key":"roles.bal-executor.effort","layer":"repo","stored":"xhigh"},"model_source":{"kind":"role","key":"roles.bal-executor.model","layer":"repo","stored":"opus"},"attempt":1,"escalated":false,"reasons":["roles.bal-executor.effort: role from repo; starting rung xhigh","roles.bal-executor.model: role from repo; opus"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"37024e43a0630149ea71e1a283911411fab1287744e69195f688c55bccc023c4","stamp":null},"global":null,"global_alias":false}}"#,
         id: "95bfd239172b542536fdc88fb2cd0ccaf0bb9d6d31e8c67442368e56e2c66cbc",
     },
     SavedCase {
@@ -723,13 +723,13 @@ const SAVED: [SavedCase; 3] = [
         rung: "xhigh",
         stored: r#"{
   "roles": {
-    "cad-executor": {
+    "bal-executor": {
       "model": null,
       "effort": "xhigh"
     }
   }
 }"#,
-        route: r#"{"choice":{"role":"cad-executor","agent":"cad-executor-xhigh","rung":"xhigh","starting_rung":"xhigh","effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"repo","stored":"xhigh"},"model_source":{"kind":"reset","key":"roles.cad-executor.model","layer":"repo","stored":null},"attempt":1,"escalated":false,"reasons":["roles.cad-executor.effort: role from repo; starting rung xhigh","roles.cad-executor.model: reset from repo; omit model; inherit session"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"0a500276235db1450dbb6d6ca088ddd8b7d794d72e91206892b7b89fefc66ba4","stamp":null},"global":null,"global_alias":false}}"#,
+        route: r#"{"choice":{"role":"bal-executor","agent":"bal-executor-xhigh","rung":"xhigh","starting_rung":"xhigh","effort_source":{"kind":"role","key":"roles.bal-executor.effort","layer":"repo","stored":"xhigh"},"model_source":{"kind":"reset","key":"roles.bal-executor.model","layer":"repo","stored":null},"attempt":1,"escalated":false,"reasons":["roles.bal-executor.effort: role from repo; starting rung xhigh","roles.bal-executor.model: reset from repo; omit model; inherit session"],"warnings":[]},"inputs":{"repo":{"identity":"/project/.planning/config.v4.json","content":"0a500276235db1450dbb6d6ca088ddd8b7d794d72e91206892b7b89fefc66ba4","stamp":null},"global":null,"global_alias":false}}"#,
         id: "afa483fa5f82bd58b20ef660b53ceac308f2b3fa1fed50e5f1cdde01e4bfcb77",
     },
 ];
@@ -761,7 +761,7 @@ fn saved_generation_resolves_literal_sources_resets_and_reason_trails() {
         let answer = resolve_route(
             &supplied,
             &RouteRequest {
-                role: "cad-executor".into(),
+                role: "bal-executor".into(),
                 phase: None,
                 plan: None,
                 attempt: None,
@@ -809,9 +809,9 @@ fn each_new_admission_returns_the_exact_saved_choice_and_missing_host_evidence()
         };
         admit_boundary_dispatch(&mut next, &decision, "2".repeat(64), supplied, None).unwrap();
         let expected_choice = match case.model {
-            Some("sonnet") => r#"{"agent":"cad-executor","rung":"high","model":"sonnet"}"#,
-            Some("opus") => r#"{"agent":"cad-executor-xhigh","rung":"xhigh","model":"opus"}"#,
-            None => r#"{"agent":"cad-executor-xhigh","rung":"xhigh"}"#,
+            Some("sonnet") => r#"{"agent":"bal-executor","rung":"high","model":"sonnet"}"#,
+            Some("opus") => r#"{"agent":"bal-executor-xhigh","rung":"xhigh","model":"opus"}"#,
+            None => r#"{"agent":"bal-executor-xhigh","rung":"xhigh"}"#,
             _ => unreachable!(),
         };
         assert_eq!(
@@ -892,7 +892,7 @@ fn routed_dispatch() -> baley::execution::model::ActiveDispatch {
 fn specified_prompt(dispatch: &baley::execution::model::ActiveDispatch, schema: &Value, lease: &str) -> String {
     let operational = serde_json::to_string_pretty(&baley::execution::render::prompt_operational(dispatch)).unwrap();
     format!(
-        "Cadence native execution dispatch\n\nOperational input:\n{operational}\n\nExecutor patch schema:\n{}\n\nInstructions:\n{}\n\n\
+        "Baley native execution dispatch\n\nOperational input:\n{operational}\n\nExecutor patch schema:\n{}\n\nInstructions:\n{}\n\n\
 Complete tasks in listed order. Use one distinct signed commit per completed task. Run each task's exact verification commands and the suite. \
 Return exactly one executor patch matching this schema. Stop at the first blocker and mark all later tasks not-run.{lease}\n\n\
 Opaque plan body (17 UTF-8 bytes):\nBuild the thing.\n",
@@ -918,7 +918,7 @@ fn the_dispatch_prompt_with_the_lease_section_is_the_specified_bytes() {
     let lease = "\nThe lease has zero exemptions: all reported commit paths and the whole staged set must be covered by files or directories, \
 including both rename endpoints, new files, lockfiles and reports. A repairable mistake within this lease is not a blocker; correct it and rerun \
 the required verification. If an undeclared-files refusal occurs, stop execution, preserve the rejected SHAs and request operator-controlled repair. \
-Cadence leaves Git and the index untouched and the dispatch open. Do not push, reset, amend, revert or force-push automatically. After operator \
+Baley leaves Git and the index untouched and the dispatch open. Do not push, reset, amend, revert or force-push automatically. After operator \
 repair, resubmit a corrected full patch with the same dispatch ID and execution version, within the unchanged lease and plan fingerprint. An \
 undeclared necessary file requires an operator planning correction; changing the lease or body cannot repair this active dispatch.";
     assert_eq!(

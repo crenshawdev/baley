@@ -51,7 +51,7 @@ fn advisory_route() -> (Generation, super::super::config_service::Route) {
     let route = super::super::config_service::resolve_route(
         &generation,
         &super::super::config_service::RouteRequest {
-            role: "cad-reviewer".into(),
+            role: "bal-reviewer".into(),
             phase: None,
             plan: None,
             attempt: None,
@@ -130,7 +130,7 @@ fn a_new_attempt_keeps_its_requested_model_and_has_no_observed_model() {
         entries: vec![],
     };
     let requested = RequestedVoice {
-        agent: "cad-reviewer".into(),
+        agent: "bal-reviewer".into(),
         model: Some("opus".into()),
         effort: None,
         routing: None,

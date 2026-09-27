@@ -27,16 +27,16 @@ fn stored(key: String, layer: &str, value: Value) -> Stored {
 #[test]
 fn default_role_inputs_return_the_six_literal_starting_choices() {
     for (role, default_effort, agent) in [
-        ("cad-planner", "high", "cad-planner"),
+        ("bal-planner", "high", "bal-planner"),
         (
-            "cad-assumptions-analyzer",
+            "bal-assumptions-analyzer",
             "high",
-            "cad-assumptions-analyzer-high",
+            "bal-assumptions-analyzer-high",
         ),
-        ("cad-verifier", "high", "cad-verifier"),
-        ("cad-reviewer", "medium", "cad-reviewer-medium"),
-        ("cad-executor", "high", "cad-executor"),
-        ("cad-plan-checker", "low", "cad-plan-checker"),
+        ("bal-verifier", "high", "bal-verifier"),
+        ("bal-reviewer", "medium", "bal-reviewer-medium"),
+        ("bal-executor", "high", "bal-executor"),
+        ("bal-plan-checker", "low", "bal-plan-checker"),
     ] {
         let answer = resolve(&input(role, default_effort)).unwrap();
         assert_eq!(
@@ -64,63 +64,63 @@ fn default_role_inputs_return_the_six_literal_starting_choices() {
 fn explicit_values_keep_their_source_and_all_thirty_agent_names_are_literal() {
     for (role, expected) in [
         (
-            "cad-planner",
+            "bal-planner",
             [
-                "cad-planner-low",
-                "cad-planner-medium",
-                "cad-planner",
-                "cad-planner-xhigh",
-                "cad-planner-max",
+                "bal-planner-low",
+                "bal-planner-medium",
+                "bal-planner",
+                "bal-planner-xhigh",
+                "bal-planner-max",
             ],
         ),
         (
-            "cad-assumptions-analyzer",
+            "bal-assumptions-analyzer",
             [
-                "cad-assumptions-analyzer-low",
-                "cad-assumptions-analyzer-medium",
-                "cad-assumptions-analyzer-high",
-                "cad-assumptions-analyzer",
-                "cad-assumptions-analyzer-max",
+                "bal-assumptions-analyzer-low",
+                "bal-assumptions-analyzer-medium",
+                "bal-assumptions-analyzer-high",
+                "bal-assumptions-analyzer",
+                "bal-assumptions-analyzer-max",
             ],
         ),
         (
-            "cad-verifier",
+            "bal-verifier",
             [
-                "cad-verifier-low",
-                "cad-verifier-medium",
-                "cad-verifier",
-                "cad-verifier-xhigh",
-                "cad-verifier-max",
+                "bal-verifier-low",
+                "bal-verifier-medium",
+                "bal-verifier",
+                "bal-verifier-xhigh",
+                "bal-verifier-max",
             ],
         ),
         (
-            "cad-reviewer",
+            "bal-reviewer",
             [
-                "cad-reviewer-low",
-                "cad-reviewer-medium",
-                "cad-reviewer",
-                "cad-reviewer-xhigh",
-                "cad-reviewer-max",
+                "bal-reviewer-low",
+                "bal-reviewer-medium",
+                "bal-reviewer",
+                "bal-reviewer-xhigh",
+                "bal-reviewer-max",
             ],
         ),
         (
-            "cad-executor",
+            "bal-executor",
             [
-                "cad-executor-low",
-                "cad-executor-medium",
-                "cad-executor",
-                "cad-executor-xhigh",
-                "cad-executor-max",
+                "bal-executor-low",
+                "bal-executor-medium",
+                "bal-executor",
+                "bal-executor-xhigh",
+                "bal-executor-max",
             ],
         ),
         (
-            "cad-plan-checker",
+            "bal-plan-checker",
             [
-                "cad-plan-checker",
-                "cad-plan-checker-medium",
-                "cad-plan-checker-high",
-                "cad-plan-checker-xhigh",
-                "cad-plan-checker-max",
+                "bal-plan-checker",
+                "bal-plan-checker-medium",
+                "bal-plan-checker-high",
+                "bal-plan-checker-xhigh",
+                "bal-plan-checker-max",
             ],
         ),
     ] {
@@ -164,12 +164,12 @@ fn explicit_values_keep_their_source_and_all_thirty_agent_names_are_literal() {
 #[test]
 fn retries_advance_once_from_the_starting_rung_and_hold_at_max() {
     for role in [
-        "cad-planner",
-        "cad-assumptions-analyzer",
-        "cad-verifier",
-        "cad-reviewer",
-        "cad-executor",
-        "cad-plan-checker",
+        "bal-planner",
+        "bal-assumptions-analyzer",
+        "bal-verifier",
+        "bal-reviewer",
+        "bal-executor",
+        "bal-plan-checker",
     ] {
         for (start, next) in [
             ("low", "medium"),
@@ -200,9 +200,9 @@ fn retries_advance_once_from_the_starting_rung_and_hold_at_max() {
 
 #[test]
 fn unsupported_custom_model_is_reported_verbatim_and_omitted() {
-    let mut request = input("cad-executor", "high");
+    let mut request = input("bal-executor", "high");
     request.role_model = Some(stored(
-        "roles.cad-executor.model".into(),
+        "roles.bal-executor.model".into(),
         "repo",
         json!(" custom \"x\" = λ "),
     ));
@@ -216,7 +216,7 @@ fn unsupported_custom_model_is_reported_verbatim_and_omitted() {
     assert_eq!(
         answer.warnings,
         [
-            "roles.cad-executor.model=\" custom \\\"x\\\" = λ \" is unsupported; supported host aliases are opus/sonnet/haiku/fable; omit model"
+            "roles.bal-executor.model=\" custom \\\"x\\\" = λ \" is unsupported; supported host aliases are opus/sonnet/haiku/fable; omit model"
         ]
     );
 }
@@ -229,7 +229,7 @@ fn resolve_refuses_a_zero_attempt_phase_or_plan_or_a_plan_without_a_phase() {
         (1, Some(8), Some(0)),
         (1, None, Some(1)),
     ] {
-        let mut request = input("cad-executor", "high");
+        let mut request = input("bal-executor", "high");
         request.attempt = attempt;
         request.phase = phase;
         request.plan = plan;
@@ -249,14 +249,14 @@ fn resolve_refuses_an_unknown_routing_role() {
 
 #[test]
 fn global_resets_return_the_literal_reason_trail() {
-    let mut request = input("cad-executor", "high");
+    let mut request = input("bal-executor", "high");
     request.role_effort = Some(stored(
-        "roles.cad-executor.effort".into(),
+        "roles.bal-executor.effort".into(),
         "global",
         Value::Null,
     ));
     request.role_model = Some(stored(
-        "roles.cad-executor.model".into(),
+        "roles.bal-executor.model".into(),
         "global",
         Value::Null,
     ));
@@ -264,8 +264,8 @@ fn global_resets_return_the_literal_reason_trail() {
     assert_eq!(
         answer.reasons,
         [
-            "roles.cad-executor.effort: reset from global; starting rung high",
-            "roles.cad-executor.model: reset from global; omit model; inherit session",
+            "roles.bal-executor.effort: reset from global; starting rung high",
+            "roles.bal-executor.model: reset from global; omit model; inherit session",
         ]
     );
 }
@@ -448,12 +448,12 @@ fn route_generation(repo: Value) -> baley::config::reload::Generation {
 #[test]
 fn route_bundle_uses_the_supplied_generation_for_policy_and_spending() {
     let generation = route_generation(
-        json!({"roles":{"cad-executor":{"model":"sonnet","effort":"xhigh"}},"review":{"triggers":{"plan":{"gate":"off"}}}}),
+        json!({"roles":{"bal-executor":{"model":"sonnet","effort":"xhigh"}},"review":{"triggers":{"plan":{"gate":"off"}}}}),
     );
     let result = baley::config_service::resolve_route(
         &generation,
         &baley::config_service::RouteRequest {
-            role: "cad-executor".into(),
+            role: "bal-executor".into(),
             phase: None,
             plan: None,
             attempt: None,
@@ -471,7 +471,7 @@ fn route_bundle_uses_the_supplied_generation_for_policy_and_spending() {
         (
             17,
             Some("sonnet".into()),
-            "cad-executor-xhigh".into(),
+            "bal-executor-xhigh".into(),
             "off",
             baley::config::floor::State::NotComputed
         )
@@ -485,7 +485,7 @@ fn route_bundle_refuses_invalid_supported_policy() {
         baley::config_service::resolve_route(
             &generation,
             &baley::config_service::RouteRequest {
-                role: "cad-executor".into(),
+                role: "bal-executor".into(),
                 phase: None,
                 plan: None,
                 attempt: None
@@ -681,7 +681,7 @@ fn floor_named_plan_is_clean_independently_of_risky_sibling() {
         &[(1, &["plain.rs"], &[]), (2, &["auth/new.rs"], &[])],
         &[("plain.rs", b"fn main() {}")],
     );
-    let result = read(&mut io, "cad-executor", Some(1));
+    let result = read(&mut io, "bal-executor", Some(1));
     assert_eq!(
         (result.state, result.paths, result.matches),
         (State::Complete, vec!["plain.rs".into()], vec![])
@@ -691,7 +691,7 @@ fn floor_named_plan_is_clean_independently_of_risky_sibling() {
 #[test]
 fn floor_phase_union_includes_new_file_path_evidence() {
     let mut io = scripted(&[(2, &["auth/new.rs"], &[]), (1, &["plain.rs"], &[])], &[]);
-    let result = read(&mut io, "cad-verifier", None);
+    let result = read(&mut io, "bal-verifier", None);
     assert_eq!(
         (result.state, result.paths, result.matches, result.bytes),
         (
@@ -732,9 +732,9 @@ fn floor_preplan_roles_and_no_phase_do_no_filesystem_access() {
         }
     }
     for (role, phase, expected) in [
-        ("cad-planner", Some(8), State::Bypassed),
-        ("cad-assumptions-analyzer", Some(8), State::Bypassed),
-        ("cad-executor", None, State::NotComputed),
+        ("bal-planner", Some(8), State::Bypassed),
+        ("bal-assumptions-analyzer", Some(8), State::Bypassed),
+        ("bal-executor", None, State::NotComputed),
     ] {
         assert_eq!(
             floor::read_with(planning(), role, phase, Some(1), &categories(), &mut Forbidden)
@@ -748,7 +748,7 @@ fn floor_preplan_roles_and_no_phase_do_no_filesystem_access() {
 #[test]
 fn floor_missing_named_plan_does_not_fall_back_to_a_sibling() {
     let mut io = scripted(&[(2, &["plain.rs"], &[])], &[]);
-    let result = read(&mut io, "cad-executor", Some(1));
+    let result = read(&mut io, "bal-executor", Some(1));
     assert_eq!(
         (
             result.state,
@@ -775,7 +775,7 @@ fn floor_native_parser_refuses_malformed_and_empty_leases() {
     ] {
         let mut io = scripted(&[], &[]);
         io.file(".planning/phases/8/PLAN-1.md", bytes.as_bytes());
-        let result = read(&mut io, "cad-executor", Some(1));
+        let result = read(&mut io, "bal-executor", Some(1));
         assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, reason));
     }
 }
@@ -787,7 +787,7 @@ fn floor_plan_identity_cannot_cross_the_named_phase() {
         ".planning/phases/8/PLAN-1.md",
         native_plan(1, &["plain.rs"], &[]).replace("phase: 8", "phase: 9").as_bytes(),
     );
-    let result = read(&mut io, "cad-executor", Some(1));
+    let result = read(&mut io, "bal-executor", Some(1));
     assert_eq!(first_reason(&result), "plan parse: identity-mismatch");
 }
 
@@ -795,7 +795,7 @@ fn floor_plan_identity_cannot_cross_the_named_phase() {
 fn floor_unreadable_sibling_keeps_union_incomplete() {
     let mut io = scripted(&[(1, &["plain.rs"], &[]), (2, &["auth/new.rs"], &[])], &[]);
     io.failures.push((Step::Read, "PLAN-2.md", Failure::Other("injected plan read")));
-    let result = read(&mut io, "cad-verifier", None);
+    let result = read(&mut io, "bal-verifier", None);
     assert_eq!(
         (result.state.clone(), result.paths.clone(), first_reason(&result)),
         (State::Incomplete, vec!["plain.rs".into()], "plan read: injected plan read")
@@ -807,7 +807,7 @@ fn floor_neutral_path_metadata_failures_never_become_new_files() {
     for code in [libc::EACCES, libc::ELOOP, libc::ENOTDIR] {
         let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", b"jwt.verify(token)")]);
         io.failures.push((Step::Metadata, "plain.rs", Failure::Os(code)));
-        let result = read(&mut io, "cad-executor", Some(1));
+        let result = read(&mut io, "bal-executor", Some(1));
         assert_eq!(
             (result.state, result.matches, result.diagnostics),
             (
@@ -830,7 +830,7 @@ fn floor_source_read_and_canonicalization_failures_are_incomplete() {
     ] {
         let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", b"jwt.verify(token)")]);
         io.failures.push((step, "plain.rs", Failure::Other("injected failure")));
-        let result = read(&mut io, "cad-executor", Some(1));
+        let result = read(&mut io, "bal-executor", Some(1));
         assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, expected));
     }
 }
@@ -845,7 +845,7 @@ fn floor_outside_symlinked_parent_refuses_existing_and_missing_leaves() {
             io.metadata.insert("/p/link/plain.rs".into(), entry(Kind::File, 17));
             io.canonical.insert("/p/link/plain.rs".into(), "/outside/plain.rs".into());
         }
-        let result = read(&mut io, "cad-executor", Some(1));
+        let result = read(&mut io, "bal-executor", Some(1));
         assert_eq!(
             (result.state.clone(), result.bytes, first_reason(&result)),
             (State::Incomplete, 0, "metadata or containment: path resolves outside the project")
@@ -861,7 +861,7 @@ fn floor_final_symlink_and_fifo_are_rejected_before_open() {
     ] {
         let mut io = scripted(&[(1, &["plain.rs"], &[])], &[]);
         io.metadata.insert("/p/plain.rs".into(), entry(kind, 0));
-        let result = read(&mut io, "cad-executor", Some(1));
+        let result = read(&mut io, "bal-executor", Some(1));
         assert_eq!((result.state.clone(), result.bytes, first_reason(&result)), (State::Incomplete, 0, expected));
         assert!(!io.opens.iter().any(|path| path.ends_with("plain.rs")), "{kind:?} body opened");
     }
@@ -871,7 +871,7 @@ fn floor_final_symlink_and_fifo_are_rejected_before_open() {
 fn floor_a_body_replaced_before_open_is_incomplete() {
     let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", b"safe")]);
     io.opened.insert("/p/plain.rs".into(), Meta { stamp: [1; 7], ..entry(Kind::File, 4) });
-    let result = read(&mut io, "cad-executor", Some(1));
+    let result = read(&mut io, "bal-executor", Some(1));
     assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, "body read: body replaced before open"));
 }
 
@@ -886,7 +886,7 @@ fn floor_a_body_that_changes_while_it_is_read_is_incomplete() {
     for change in [grew, restamped] {
         let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", b"safe")]);
         change(&mut io);
-        let result = read(&mut io, "cad-executor", Some(1));
+        let result = read(&mut io, "bal-executor", Some(1));
         assert_eq!(
             (result.state.clone(), first_reason(&result)),
             (State::Incomplete, "body read: body replaced or grew during read")
@@ -897,7 +897,7 @@ fn floor_a_body_that_changes_while_it_is_read_is_incomplete() {
 #[test]
 fn floor_a_body_over_the_size_bound_is_incomplete() {
     let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", &vec![b'x'; floor::MAX_BODY_BYTES + 1])]);
-    let result = read(&mut io, "cad-executor", Some(1));
+    let result = read(&mut io, "bal-executor", Some(1));
     assert_eq!(
         (result.state.clone(), first_reason(&result)),
         (State::Incomplete, "body read: body size or total read budget exceeded")
@@ -907,14 +907,14 @@ fn floor_a_body_over_the_size_bound_is_incomplete() {
 #[test]
 fn floor_a_body_that_is_not_utf8_is_incomplete() {
     let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", &[255])]);
-    let result = read(&mut io, "cad-executor", Some(1));
+    let result = read(&mut io, "bal-executor", Some(1));
     assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, "body is not UTF-8"));
 }
 
 #[test]
 fn floor_directory_walk_reads_every_entry_whatever_an_ignore_file_says() {
     let mut io = scripted(&[(1, &[], &["src"])], &[("src/plain.rs", b"safe"), ("src/.gitignore", b"*")]);
-    let result = read(&mut io, "cad-executor", Some(1));
+    let result = read(&mut io, "bal-executor", Some(1));
     assert_eq!(
         (result.state, result.paths, result.bytes),
         (State::Complete, vec!["src".into(), "src/.gitignore".into(), "src/plain.rs".into()], 5)
@@ -927,7 +927,7 @@ fn floor_directory_walk_reads_an_overlapping_declaration_once() {
         &[(1, &["src/plain.rs"], &["src", "src/auth"])],
         &[("src/plain.rs", b"safe"), ("src/auth/new.rs", b"safe")],
     );
-    let result = read(&mut io, "cad-executor", Some(1));
+    let result = read(&mut io, "bal-executor", Some(1));
     assert_eq!(
         (result.state, result.paths, result.bytes),
         (
@@ -946,7 +946,7 @@ fn floor_directory_and_phase_enumeration_failures_are_incomplete() {
     ] {
         let mut io = scripted(&[(1, &[], &["src"])], &[("src/plain.rs", b"safe")]);
         io.failures.push((Step::List, suffix, Failure::Other("injected listing")));
-        let result = read(&mut io, "cad-executor", plan);
+        let result = read(&mut io, "bal-executor", plan);
         assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, reason));
     }
 }
@@ -956,7 +956,7 @@ fn floor_directory_walk_entry_bound_reports_incomplete() {
     let mut io = scripted(&[(1, &[], &["src"])], &[]);
     let src = io.directory("src");
     io.listings.insert(src.clone(), (0..4097).map(|i| src.join(i.to_string())).collect());
-    let result = read(&mut io, "cad-executor", Some(1));
+    let result = read(&mut io, "bal-executor", Some(1));
     assert_eq!(first_reason(&result), "directory enumeration: directory exceeds 4096 entry bound");
 }
 
@@ -967,7 +967,7 @@ fn floor_total_source_read_budget_is_not_silently_truncated() {
     for i in 0..33 {
         io.file(&format!("src/{i:02}.md"), &body);
     }
-    let result = read(&mut io, "cad-executor", Some(1));
+    let result = read(&mut io, "bal-executor", Some(1));
     assert_eq!(
         (result.state, result.bytes, result.diagnostics),
         (
@@ -1098,8 +1098,8 @@ fn route_value(
     waivers: &[&str],
 ) -> baley::config_service::Route {
     baley::config_service::Route {
-        choice: serde_json::from_value(json!({"role":"cad-executor","agent":"cad-executor-xhigh","rung":"xhigh","starting_rung":"high","model":"sonnet",
-            "effort_source":{"kind":"role","key":"roles.cad-executor.effort","layer":"global","stored":"high"},"model_source":{"kind":"role","key":"roles.cad-executor.model","layer":"repo","stored":"sonnet"},"attempt":3,"escalated":true,"reasons":["saved choice"],"warnings":[]})).unwrap(),
+        choice: serde_json::from_value(json!({"role":"bal-executor","agent":"bal-executor-xhigh","rung":"xhigh","starting_rung":"high","model":"sonnet",
+            "effort_source":{"kind":"role","key":"roles.bal-executor.effort","layer":"global","stored":"high"},"model_source":{"kind":"role","key":"roles.bal-executor.model","layer":"repo","stored":"sonnet"},"attempt":3,"escalated":true,"reasons":["saved choice"],"warnings":[]})).unwrap(),
         generation: 17, config_diagnostics: Default::default(),
         policy: policy::Policy { mode: "adjudicated".into(),
             triggers: [
@@ -1170,7 +1170,7 @@ fn route_floor_effect_matrix_changes_only_deep_and_the_default_plan_gate() {
                 Some("sonnet"),
                 "high",
                 "xhigh",
-                "cad-executor-xhigh",
+                "bal-executor-xhigh",
                 3,
                 true,
                 policy::Trigger {

@@ -1,4 +1,4 @@
-//! Root-bound MCP adapter. Raw tool arguments are validated inside Cadence.
+//! Root-bound MCP adapter. Raw tool arguments are validated inside Baley.
 
 use baley::execution::{
     boundary::ExecutionEnvelope,
@@ -100,7 +100,7 @@ pub mod capture_service;
 #[path = "read_service.rs"]
 pub mod read_service;
 
-/// What `cadence_version` reports on success.
+/// What `baley_version` reports on success.
 ///
 /// A struct rather than a bare string because an `ok` envelope's payload sits
 /// beside the `status` tag at the top level, so it has to have named fields
@@ -120,12 +120,12 @@ pub struct VersionReport {
 
 /// One resident and one startup-bound planning root per public session.
 #[derive(Clone)]
-pub struct CadenceServer {
+pub struct BaleyServer {
     service: recall::Resident,
 }
 
 #[allow(dead_code)]
-impl CadenceServer {
+impl BaleyServer {
     pub async fn pause(
         &self,
         input: baley::pause::Input,
@@ -217,13 +217,13 @@ impl CadenceServer {
     }
 }
 
-impl CadenceServer {
+impl BaleyServer {
     pub fn new() -> Self {
-        let global = std::env::var_os("CADENCE_GLOBAL_CONFIG")
+        let global = std::env::var_os("BALEY_GLOBAL_CONFIG")
             .map(std::path::PathBuf::from)
             .or_else(|| {
                 std::env::var_os("HOME")
-                    .map(|home| std::path::PathBuf::from(home).join(".claude/cadence/config.v4.json"))
+                    .map(|home| std::path::PathBuf::from(home).join(".claude/baley/config.v4.json"))
             })
             .filter(|path| !path.as_os_str().is_empty());
         // These internal operations only own planning storage. Forge and
@@ -234,7 +234,7 @@ impl CadenceServer {
         ))
     }
 
-    async fn cadence_version(&self) -> Result<Json<Envelope<VersionReport>>, ErrorData> {
+    async fn baley_version(&self) -> Result<Json<Envelope<VersionReport>>, ErrorData> {
         // `Json` rather than a text block: the envelope is the answer, so it
         // rides `structuredContent` where a caller can branch on `status`
         // (D-07). The tool returns `structuredContent` without declaring an
@@ -358,7 +358,7 @@ enum QueryArguments {
     },
 }
 
-/// Every request `cadence_apply` accepts, for on-demand request schemas.
+/// Every request `baley_apply` accepts, for on-demand request schemas.
 /// Routing never parses this enum: it reads the operation name,
 /// finds the group in [`APPLY_OPERATIONS`], and parses with that group's own
 /// `#[serde(tag = "operation")]` type, so a miss names the field that was
@@ -442,7 +442,7 @@ const APPLY_GROUPS: [ApplyGroup; 22] = [
     ApplyGroup::Task,
 ];
 
-/// The operation names `cadence_apply` accepts, each with its routing group
+/// The operation names `baley_apply` accepts, each with its routing group
 /// and its derived request schema. Both come from one walk of
 /// the derived [`ApplyArguments`] schema.
 struct ApplyOperations {
@@ -502,7 +502,7 @@ fn unknown_apply_operation(operation: &str) -> Value {
         .join(", ");
     Refusal::new(
         "unknown-operation",
-        format!("no cadence_apply operation is named `{operation}`; the operations are {known}"),
+        format!("no baley_apply operation is named `{operation}`; the operations are {known}"),
     )
     .slot("operation")
     .value()
@@ -584,7 +584,7 @@ fn minimal_schema<'a>(
         "type":"object", "required":["operation"],
         "properties":{"operation":{
             "type":"string", "enum":names.collect::<Vec<_>>(),
-            "description":format!("Full request shapes: cadence_query {{\"operation\":\"schema\",\"tool\":\"{tool}\",\"for\":\"<operation>\"}} or the compiled contracts.")
+            "description":format!("Full request shapes: baley_query {{\"operation\":\"schema\",\"tool\":\"{tool}\",\"for\":\"<operation>\"}} or the compiled contracts.")
         }},
         "additionalProperties":true
     });
@@ -698,7 +698,7 @@ fn schema_answer(tool: &str, operation: &str, part: Option<usize>) -> Value {
             .slot("tool").value(),
     };
     let Some(schema) = schema else {
-        return Refusal::new("unknown-operation", format!("no cadence_{tool} operation is named `{operation}`"))
+        return Refusal::new("unknown-operation", format!("no baley_{tool} operation is named `{operation}`"))
             .slot("for").value();
     };
     schema_part(tool, operation, schema, part)
@@ -727,7 +727,7 @@ fn schema_part(tool: &str, operation: &str, schema: &Value, part: Option<usize>)
         "bound":SCHEMA_PART_BOUND,"part":part,"body":body,"next":next})
 }
 
-impl CadenceServer {
+impl BaleyServer {
     pub fn bind_project(self, project: &Path) -> Result<PublicServer, std::io::Error> {
         Ok(PublicServer {
             server: self,
@@ -739,7 +739,7 @@ impl CadenceServer {
 /// Startup configuration belongs to the public adapter, not internal resident clients.
 #[derive(Clone)]
 pub struct PublicServer {
-    server: CadenceServer,
+    server: BaleyServer,
     root: PathBuf,
 }
 
@@ -882,7 +882,7 @@ where
 /// The server's answer to the host's initialize request.
 pub(crate) fn info() -> ServerInfo {
     let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-        .with_server_info(Implementation::new("cadence", env!("CARGO_PKG_VERSION")));
+        .with_server_info(Implementation::new("baley", env!("CARGO_PKG_VERSION")));
     info.instructions = Some(baley::read::instructions::CONTRACT.to_owned());
     info
 }
@@ -890,19 +890,19 @@ pub(crate) fn info() -> ServerInfo {
 pub(crate) fn tools() -> Vec<Tool> {
     vec![
         tool(
-            "cadence_version",
+            "baley_version",
             "Report this binary's version, OS and architecture without changing state.",
             serde_json::to_value(schemars::schema_for!(VersionArguments))
                 .expect("version schema"),
         ),
         tool(
-            "cadence_query",
-            "Read the bound project's records, configuration, routing and evidence without changing state; request shapes come from cadence_query {\"operation\":\"schema\",\"tool\":\"query\",\"for\":\"<operation>\"} and the compiled contracts. Read process records through document and document-search; read project source with the host's own tools.",
+            "baley_query",
+            "Read the bound project's records, configuration, routing and evidence without changing state; request shapes come from baley_query {\"operation\":\"schema\",\"tool\":\"query\",\"for\":\"<operation>\"} and the compiled contracts. Read process records through document and document-search; read project source with the host's own tools.",
             query_schema(),
         ),
         tool(
-            "cadence_apply",
-            "Change the bound project through one replay-safe operation that is refused with a located rule when it cannot apply; request shapes come from cadence_query {\"operation\":\"schema\",\"tool\":\"apply\",\"for\":\"<operation>\"} and the compiled contracts.",
+            "baley_apply",
+            "Change the bound project through one replay-safe operation that is refused with a located rule when it cannot apply; request shapes come from baley_query {\"operation\":\"schema\",\"tool\":\"apply\",\"for\":\"<operation>\"} and the compiled contracts.",
             apply_schema(),
         ),
     ]
@@ -949,14 +949,14 @@ impl PublicServer {
     ) -> Result<CallToolResponse, ErrorData> {
         let _in_flight = crate::review_ingress::InFlight::enter();
         match name {
-            "cadence_version" => {
+            "baley_version" => {
                 let envelope = match raw
                     .and_then(|value| serde_json::from_value::<VersionArguments>(value).ok())
                 {
-                    Some(_) => self.server.cadence_version().await?.0,
+                    Some(_) => self.server.baley_version().await?.0,
                     None => Envelope::Refused {
                         code: "invalid-arguments".into(),
-                        reason: "cadence_version requires an empty arguments object".into(),
+                        reason: "baley_version requires an empty arguments object".into(),
                     },
                 };
                 Ok(CallToolResult::structured(
@@ -964,7 +964,7 @@ impl PublicServer {
                 )
                 .into())
             }
-            "cadence_query" => {
+            "baley_query" => {
                 if raw.as_ref().is_some_and(|value| value["operation"] == "help") {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
                         Ok(QueryArguments::Help { name }) => baley::help::table::answer(name.as_deref()),
@@ -1356,13 +1356,13 @@ impl PublicServer {
                         )));
                     }
                     Some(QueryArguments::Recall { .. } | QueryArguments::VerifyNext { .. } | QueryArguments::VerificationRead { .. } | QueryArguments::VerificationAudit { .. }) => unreachable!("recall and verification routed before generic query"),
-                    None => self.refuse_raw(BoundaryTool::CadenceQuery, raw).await,
+                    None => self.refuse_raw(BoundaryTool::BaleyQuery, raw).await,
                 };
                 let envelope = answer
                     .map_err(|failure| ErrorData::internal_error(failure.to_string(), None))?;
                 structured_result(Ok(QueryOutput::Execution(envelope)))
             }
-            "cadence_apply" => {
+            "baley_apply" => {
                 let observation = raw.clone().unwrap_or(Value::Null);
                 // Legacy executor patches retain their existing boundary contract.
                 // The shared native wrapper also sees early decode/shape returns.
@@ -1373,7 +1373,7 @@ impl PublicServer {
                 let group = match operation.as_deref() {
                     None if historical => ApplyGroup::Executor,
                     None => return structured_result(Ok(ApplyOutput::NativeExecution(
-                        Refusal::new("invalid-arguments", "cadence_apply requires an operation").slot("operation").value()
+                        Refusal::new("invalid-arguments", "baley_apply requires an operation").slot("operation").value()
                     ))),
                     Some(operation) => match apply_group(operation) {
                         Some(group) => group,
@@ -1432,7 +1432,7 @@ impl PublicServer {
                     ApplyGroup::Executor => {
                         let patch = raw.clone().and_then(|value| serde_json::from_value::<ExecutorPatch>(value).ok());
                         let Some(patch) = patch else {
-                            return execution_result(self.refuse_raw(BoundaryTool::CadenceApply, raw).await);
+                            return execution_result(self.refuse_raw(BoundaryTool::BaleyApply, raw).await);
                         };
                         let dispatch = patch.dispatch_id.clone();
                         if let Some(review) = self.review_handoff(None, Some(dispatch.clone())).await? {
@@ -1637,7 +1637,7 @@ mod wire_tests {
                     None,
                     std::sync::Arc::new(crate::config::planning_policy),
                 );
-                let server = CadenceServer::with_factory(factory).bind_project(project.path()).unwrap();
+                let server = BaleyServer::with_factory(factory).bind_project(project.path()).unwrap();
                 server.call(tool, Some(json!({}))).await
             })
     }
@@ -1646,7 +1646,7 @@ mod wire_tests {
     // no MCP request context, so a check can exercise the wire in process.
     #[test]
     fn a_tool_call_answers_in_process() {
-        let CallToolResponse::Complete(result) = answer("cadence_version").unwrap() else {
+        let CallToolResponse::Complete(result) = answer("baley_version").unwrap() else {
             panic!("a complete answer")
         };
         let structured = result.structured_content.expect("a structured answer");
@@ -1655,12 +1655,12 @@ mod wire_tests {
 
     #[test]
     fn an_unknown_tool_is_invalid_params() {
-        assert_eq!(answer("cadence_unknown").unwrap_err().message, "unknown tool");
+        assert_eq!(answer("baley_unknown").unwrap_err().message, "unknown tool");
     }
 
     #[test]
-    fn the_initialize_answer_names_the_server_cadence() {
-        assert_eq!(info().server_info.name, "cadence");
+    fn the_initialize_answer_names_the_server_baley() {
+        assert_eq!(info().server_info.name, "baley");
     }
 
     #[test]

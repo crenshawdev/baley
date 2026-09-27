@@ -11,7 +11,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, path::PathBuf};
 
-pub const CONTRACT: &str = "cadence.pause.risk-surface.v1";
+pub const CONTRACT: &str = "baley.pause.risk-surface.v1";
 
 /// Native pause admissions retain authored staged material and use ordinary
 /// findings. The historical Review/CONTRACT decoder below remains separate.

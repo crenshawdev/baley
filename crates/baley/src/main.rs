@@ -13,9 +13,9 @@ use clap::{Parser, Subcommand};
 use rmcp::ServiceExt;
 use rmcp::service::ServerInitializeError;
 
-/// cadence: the plan/execute/verify loop, served over MCP stdio.
+/// baley: the plan/execute/verify loop, served over MCP stdio.
 #[derive(Parser)]
-#[command(name = "cadence", version)]
+#[command(name = "baley", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -48,7 +48,7 @@ enum Command {
     WhyInstructions,
     /// Render the capture front door without opening a project.
     CaptureInstructions,
-    /// Render the cad-task front door and task executor contract without opening a project.
+    /// Render the bal-task front door and task executor contract without opening a project.
     TaskInstructions,
     /// Run the MCP stdio server.
     Serve,
@@ -62,25 +62,25 @@ enum Command {
     PlanInstructions,
     /// Render the compiled executor contract without opening a project.
     ExecutorInstructions {
-        /// Render the cad-execute front door from the same compiled source.
+        /// Render the bal-execute front door from the same compiled source.
         #[arg(long)]
         frontdoor: bool,
     },
     /// Render the compiled verifier contract without opening a project.
     VerifierInstructions {
-        /// Render the cad-verify front door from the same compiled source.
+        /// Render the bal-verify front door from the same compiled source.
         #[arg(long)]
         frontdoor: bool,
     },
-    /// Render the merged cad-review front door, or one alias, without opening a project.
+    /// Render the merged bal-review front door, or one alias, without opening a project.
     ReviewInstructions {
-        /// cad-decision-review, cad-minimalism-review or cad-plan-review.
+        /// bal-decision-review, bal-minimalism-review or bal-plan-review.
         #[arg(long)]
         alias: Option<String>,
     },
-    /// Render the read-only cad-audit front door without opening a project.
+    /// Render the read-only bal-audit front door without opening a project.
     AuditInstructions {
-        /// Render the cad-coverage alias of the same read-only view.
+        /// Render the bal-coverage alias of the same read-only view.
         #[arg(long)]
         coverage: bool,
     },
@@ -105,7 +105,7 @@ fn run_command(command: Command) -> std::process::ExitCode {
                 return std::process::ExitCode::FAILURE;
             }
             let Some(rendered) = baley::help::table::render_description(name, &markdown) else {
-                eprintln!("cadence: unknown user skill or missing description front matter");
+                eprintln!("baley: unknown user skill or missing description front matter");
                 return std::process::ExitCode::FAILURE;
             };
             return match std::io::stdout().lock().write_all(rendered.as_bytes()) {
@@ -137,7 +137,7 @@ fn run_command(command: Command) -> std::process::ExitCode {
         Command::AuditInstructions { coverage: true } => vec!["audit-instructions", "--coverage"],
     };
     let Some(rendered) = instruction_surfaces::render(&arguments) else {
-        eprintln!("cadence: {} is not a review command", arguments[2]);
+        eprintln!("baley: {} is not a review command", arguments[2]);
         return std::process::ExitCode::FAILURE;
     };
     match std::io::stdout().lock().write_all(rendered.as_bytes()) {
@@ -154,10 +154,10 @@ fn run_serve(project_root: Option<std::path::PathBuf>) -> std::process::ExitCode
     };
     let runtime = tokio::runtime::Runtime::new().expect("failed to start tokio runtime");
     let outcome = runtime.block_on(async {
-        let handler = match server::CadenceServer::new().bind_project(&project) {
+        let handler = match server::BaleyServer::new().bind_project(&project) {
             Ok(handler) => handler,
             Err(_) => {
-                eprintln!("cadence: project root is unavailable");
+                eprintln!("baley: project root is unavailable");
                 return std::process::ExitCode::FAILURE;
             }
         };
@@ -166,7 +166,7 @@ fn run_serve(project_root: Option<std::path::PathBuf>) -> std::process::ExitCode
         let mut terminate = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
             Ok(signal) => signal,
             Err(error) => {
-                eprintln!("cadence: cannot listen for SIGTERM: {error}");
+                eprintln!("baley: cannot listen for SIGTERM: {error}");
                 return std::process::ExitCode::FAILURE;
             }
         };
@@ -186,7 +186,7 @@ fn run_serve(project_root: Option<std::path::PathBuf>) -> std::process::ExitCode
                 Ok(service) => service.waiting().await.map(|_| ()),
                 Err(ServerInitializeError::ConnectionClosed(_) | ServerInitializeError::Cancelled) => Ok(()),
                 Err(error) => {
-                    eprintln!("cadence: failed to start MCP server: {error}");
+                    eprintln!("baley: failed to start MCP server: {error}");
                     return false;
                 }
             }.is_ok()
@@ -205,7 +205,7 @@ fn run_serve(project_root: Option<std::path::PathBuf>) -> std::process::ExitCode
                 false
             }
             Err(review_ingress::ShutdownError::Worker) => {
-                eprintln!("cadence: shutdown worker failed");
+                eprintln!("baley: shutdown worker failed");
                 false
             }
         };

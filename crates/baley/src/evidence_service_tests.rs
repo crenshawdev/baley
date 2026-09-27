@@ -1,5 +1,5 @@
 use super::{
-    CadenceServer,
+    BaleyServer,
     evidence_service::Command,
 };
 use crate::session::SessionFactory;
@@ -20,7 +20,7 @@ fn fixture() -> tempfile::TempDir {
 fn closed_resident_returns_closed() {
     let root = fixture();
     let rt = runtime();
-    let server = rt.block_on(async { CadenceServer::with_factory(factory()) });
+    let server = rt.block_on(async { BaleyServer::with_factory(factory()) });
     drop(rt);
     assert_eq!(
         runtime().block_on(server.evidence(root.path(), Command::Read)),

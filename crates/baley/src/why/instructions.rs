@@ -1,11 +1,11 @@
 pub fn markdown() -> &'static str {
     static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        crate::help::table::render_description("cad-why", r#"---
-name: cad-why
+        crate::help::table::render_description("bal-why", r#"---
+name: bal-why
 description: <compiled>
 argument-hint: "<path>[:<line>] | <phase> refusals"
 allowed-tools:
-  - mcp__cadence__cadence_query
+  - mcp__baley__baley_query
 ---
 
 For `<phase> refusals`, require a positive integer phase and call once with
@@ -18,7 +18,7 @@ line only when it is all digits; a colon followed by anything else stays part
 of the path. Refuse a blank path, a trailing colon, a zero line and a
 non-integer line, saying which, and never substitute a default.
 
-Call `mcp__cadence__cadence_query` once with `{"operation":"why","path":"<path>"}`,
+Call `mcp__baley__baley_query` once with `{"operation":"why","path":"<path>"}`,
 adding `"line":<n>` as a JSON integer when a line was given. Make no other
 call, run no command and open no file: the binary reads the repository and
 the record itself, including the phases a milestone close pruned.

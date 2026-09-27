@@ -183,7 +183,7 @@ pub fn delivery_completion(
 // the snapshot; the service turns the result into an admission request.
 // ---------------------------------------------------------------------------
 
-pub const CANONICAL: &str = "cad-review";
+pub const CANONICAL: &str = "bal-review";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -196,9 +196,9 @@ pub enum Kind {
 impl Kind {
     pub fn alias(self) -> &'static str {
         match self {
-            Kind::Decision => "cad-decision-review",
-            Kind::Minimalism => "cad-minimalism-review",
-            Kind::Plan => "cad-plan-review",
+            Kind::Decision => "bal-decision-review",
+            Kind::Minimalism => "bal-minimalism-review",
+            Kind::Plan => "bal-plan-review",
         }
     }
     fn hint(self) -> &'static str {
@@ -227,7 +227,7 @@ pub struct Refusal {
 }
 
 fn required(kind: Kind, missing: &str) -> Refusal {
-    Refusal { code: "review-target-required", reason: format!("{} needs {}; supply {missing}", kind.alias().trim_start_matches("cad-").trim_end_matches("-review"), kind.hint()) }
+    Refusal { code: "review-target-required", reason: format!("{} needs {}; supply {missing}", kind.alias().trim_start_matches("bal-").trim_end_matches("-review"), kind.hint()) }
 }
 fn ambiguous(reason: String) -> Refusal {
     Refusal { code: "review-target-ambiguous", reason }
@@ -258,11 +258,11 @@ pub struct Selected {
     pub discriminator: String,
 }
 
-/// `cad-review <kind> <target...>` or an alias that implies its kind.
+/// `bal-review <kind> <target...>` or an alias that implies its kind.
 pub fn command_kind(command: &str, arguments: &[String]) -> Result<(Kind, Vec<String>), Refusal> {
     if command == CANONICAL {
         let Some(first) = arguments.first() else {
-            return Err(Refusal { code: "review-kind-required", reason: "cad-review needs a kind first: decision, minimalism or plan".into() });
+            return Err(Refusal { code: "review-kind-required", reason: "bal-review needs a kind first: decision, minimalism or plan".into() });
         };
         let Some(kind) = Kind::parse(first) else {
             return Err(Refusal { code: "review-kind-unknown", reason: format!("{first} is not a review kind; use decision, minimalism or plan") });
@@ -274,7 +274,7 @@ pub fn command_kind(command: &str, arguments: &[String]) -> Result<(Kind, Vec<St
             return Ok((kind, arguments.to_vec()));
         }
     }
-    Err(Refusal { code: "review-command-unknown", reason: format!("{command} is not a review command; use cad-review or one of its aliases cad-decision-review, cad-minimalism-review, cad-plan-review") })
+    Err(Refusal { code: "review-command-unknown", reason: format!("{command} is not a review command; use bal-review or one of its aliases bal-decision-review, bal-minimalism-review, bal-plan-review") })
 }
 
 fn line_count(bytes: &[u8]) -> u64 {

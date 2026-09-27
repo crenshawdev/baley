@@ -1,17 +1,17 @@
 //! The landing front door delegates permission and effects to the binary.
 pub fn markdown() -> &'static str {
     static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        crate::help::table::render_description("cad-land", r#"---
-name: cad-land
+        crate::help::table::render_description("bal-land", r#"---
+name: bal-land
 description: ""
 argument-hint: "<landing id>"
 allowed-tools:
-  - mcp__cadence__cadence_query
-  - mcp__cadence__cadence_apply
+  - mcp__baley__baley_query
+  - mcp__baley__baley_apply
 ---
 
 <process>
-1. Require the identified landing id, then call cadence_query
+1. Require the identified landing id, then call baley_query
    `{"operation":"land-read","landing":"<landing id>"}`. Show its exact id,
    generation, frozen source branch and commit, remote name and URL, and base
    branch and commit. Present the actual branch, ahead, dirty and remote state,
@@ -20,7 +20,7 @@ allowed-tools:
    Show `done`, including each receipt's observed remote ref/object or exact PR
    identity/state and reconciliation provenance, and the single `next_step`.
    If `resume` is present, send that typed land-resume payload unchanged to
-   cadence_apply. It reads the actual remote before any unfinished step, records
+   baley_apply. It reads the actual remote before any unfinished step, records
    an existing effect once, and runs an absent effect only under the retained
    exact authorization. It grants no new permission. Show its receipt or exact
    discrepancy, then land-read again. A failed or ambiguous read stops without
@@ -30,18 +30,18 @@ allowed-tools:
    version, exact tag and bump commit. Release confirmation grants no external
    authorization and creates no tag; use the updated source commit from this read.
 2. For an external step, show the proposed exact step: push, open, merge or tag-push. Obtain its request
-   schema through cadence_query `{"operation":"schema","tool":"apply","for":"land-authorize"}`.
+   schema through baley_query `{"operation":"schema","tool":"apply","for":"land-authorize"}`.
    Show every input before asking: source and destination refs; for open, configured
    forge provider, repository, host and the complete proposed title/body; for merge,
    that same forge and the recorded PR identity; for tag-push, the exact tag and
    object id. Missing inputs require an owner answer. Configuration grants no
    permission. A different landing, version, step or changed head needs a fresh choice.
 3. Only after the owner's explicit choice, record land-authorize through
-   cadence_apply with a fresh request_id, the landing id and expected_generation,
+   baley_apply with a fresh request_id, the landing id and expected_generation,
    exact source/base/remote copied from land-read, that one step's inputs, and
    the actual owner's name and authorization time. Ask for missing attribution;
    never invent it. Declining stops without writing an authorization or running a step.
-4. Send the returned `action` typed payload unchanged to cadence_apply. It invokes
+4. Send the returned `action` typed payload unchanged to baley_apply. It invokes
    land-publish, land-open, land-merge or land-tag-push. Print the exact refusal or
    durable receipt, including landing, step and authorization identity, and read
    land-read again. A refusal stops. An uncertain intent requires reconciliation;
@@ -53,7 +53,7 @@ allowed-tools:
    landing id and generation, exact source/base/remote, the merge receipt's forge
    and PR number, and the observed merged commit at answer field `git.remote.base_head`.
    If an observation is unavailable, stop and show it; never guess a commit.
-   Obtain the land-confirm-merge schema through cadence_query
+   Obtain the land-confirm-merge schema through baley_query
    `{"operation":"schema","tool":"apply","for":"land-confirm-merge"}`.
    Ask the owner to explicitly confirm this merged PR/commit identity and the
    local cleanup choices: an annotated tag's exact name/message or no tag, and
@@ -70,7 +70,7 @@ allowed-tools:
    `reap` (the owner's boolean choice), owner and at. Show the durable
    `confirmation` id and binding, then land-read again. A refusal stops.
 7. With the confirmation recorded, send the returned `cleanup` typed payload
-   unchanged to cadence_apply, one operation at a time: land-checkout,
+   unchanged to baley_apply, one operation at a time: land-checkout,
    land-pull, land-tag, land-reap. Show each receipt's confirmation id,
    predecessor receipts, intended and actual ref identities, and done or
    explicit skipped state; then land-read and follow the returned next step.

@@ -157,7 +157,7 @@ struct StepRequest<'a> { request: &'a Publish, step: &'a Step, resume: bool }
 
 /// An integration-test caller can kill the real writer after a named effect.
 /// Release builds ignore the variable.
-fn exit_after_effect(step: &Step) { if cfg!(debug_assertions) && std::env::var("CADENCE_LANDING_EXIT_AFTER_EFFECT").ok().as_deref() == Some(step.name()) { std::process::exit(86); } }
+fn exit_after_effect(step: &Step) { if cfg!(debug_assertions) && std::env::var("BALEY_LANDING_EXIT_AFTER_EFFECT").ok().as_deref() == Some(step.name()) { std::process::exit(86); } }
 
 #[allow(clippy::too_many_arguments)]
 async fn local_effect(store: &Store, view: &mut View, records: &mut Records<Landing>, project: &Path,

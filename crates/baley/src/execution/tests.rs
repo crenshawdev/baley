@@ -72,7 +72,7 @@ fn later_answered_launch_supersedes_only_matching_unanswered_runs() {
     let task = Task { phase: 33, occurrence: "active-cycle:phase:33".into(), admission_digest: "admitted".into(),
         plan: 3, task: "P33-3-T3".into() };
     let launch = |id: &str| Launch { run_id: id.into(), check: None, stage: Stage::Verify,
-        material: Material { command: "cargo nextest run -p cadence --test mcp".into(), commit: "f74d252d".into(),
+        material: Material { command: "cargo nextest run -p baley --test mcp".into(), commit: "f74d252d".into(),
             tree: "material-tree".into(), test_file: String::new(), test_digest: String::new() }, launched_at: 1 };
     let result = |id: &str| Event::Result(RunResult { run_id: id.into(), disposition: Disposition::Exited { code: 0 },
         stdout: capture(&b""[..]), stderr: capture(&b""[..]), observed_at: 2,
@@ -89,7 +89,7 @@ fn later_answered_launch_supersedes_only_matching_unanswered_runs() {
         let mut first = launch("dead-launch");
         let mut second = launch("resumed-launch");
         match case {
-            "different command" => second.material.command = "cargo nextest run -p cadence --test phase33_verification".into(),
+            "different command" => second.material.command = "cargo nextest run -p baley --test phase33_verification".into(),
             "different stage" => second.stage = Stage::Green,
             "different check" => second.check = Some(check.clone()),
             "different check revision" | "matching check" => {

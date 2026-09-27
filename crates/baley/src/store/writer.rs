@@ -43,10 +43,10 @@ pub fn drain_limit_diagnostic(limit: &DrainLimit) -> String {
     let seconds = limit.bound.as_secs();
     match &limit.open_write {
         Some(id) => format!(
-            "cadence: shutdown drain reached {seconds} seconds; open admitted write {id} left to journal recovery."
+            "baley: shutdown drain reached {seconds} seconds; open admitted write {id} left to journal recovery."
         ),
         None => format!(
-            "cadence: shutdown drain reached {seconds} seconds while joining writers; any open intent is left to journal recovery."
+            "baley: shutdown drain reached {seconds} seconds while joining writers; any open intent is left to journal recovery."
         ),
     }
 }
@@ -380,7 +380,7 @@ impl Store {
         let (requests, mut receiver) = mpsc::channel::<Option<Request>>(32);
         let (ready, completion) = oneshot::channel();
         let worker = std::thread::Builder::new()
-            .name("cadence-store".into())
+            .name("baley-store".into())
             .spawn(move || {
                 let mut writer = match Writer::open(storage, policy) {
                     Ok(writer) => {
@@ -1391,7 +1391,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 requirements,
             } => {
                 if decision.scope != (BoundaryScope::Execution { phase })
-                    || decision.tool != BoundaryTool::CadenceQuery
+                    || decision.tool != BoundaryTool::BaleyQuery
                     || decision.receipt
                         != (Receipt::Compact {
                             envelope: Envelope::Ok(Success::Complete { phase }),
@@ -1446,7 +1446,7 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             } => {
                 let phase = dispatch.phase;
                 if decision.scope != (BoundaryScope::Execution { phase })
-                    || decision.tool != BoundaryTool::CadenceQuery
+                    || decision.tool != BoundaryTool::BaleyQuery
                     || decision.receipt
                         != (Receipt::Dispatch {
                             dispatch_id: issue_dispatch_id.clone(),
@@ -2147,7 +2147,7 @@ pub(crate) fn patch_boundary_valid(
         && !complete_phase
         && patch.outcome == PlanDisposition::Complete;
     supported_render(render_version)
-        && decision.tool == BoundaryTool::CadenceApply
+        && decision.tool == BoundaryTool::BaleyApply
         && decision.subject_id.as_ref() == Some(&patch.dispatch_id)
         && (risk_pending
             || matches!(&decision.receipt, Receipt::Compact { envelope: Envelope::Ok(_) }))
@@ -2372,8 +2372,8 @@ fn boundary_record(decision: &BoundaryDecision, store_generation: u64, at: Optio
         decision: model::Decision::Boundary {
             phase: decision.phase,
             tool: match decision.tool {
-                BoundaryTool::CadenceQuery => "cadence-query",
-                BoundaryTool::CadenceApply => "cadence-apply",
+                BoundaryTool::BaleyQuery => "baley-query",
+                BoundaryTool::BaleyApply => "baley-apply",
             }
             .into(),
             operation: decision.operation.clone(),
@@ -2403,7 +2403,7 @@ fn terminal_record(phase: u32, store_generation: u64, at: Option<u64>) -> Result
         },
         decision: model::Decision::Boundary {
             phase,
-            tool: "cadence-boundary".into(),
+            tool: "baley-boundary".into(),
             operation: "execution".into(),
             request_digest: identity.clone(),
             outcome: "log-bound".into(),
@@ -2470,7 +2470,7 @@ pub fn admit_boundary_dispatch(
         next.decisions.push(routing);
     }
     if decision.scope != (BoundaryScope::Execution { phase })
-        || decision.tool != BoundaryTool::CadenceQuery
+        || decision.tool != BoundaryTool::BaleyQuery
         || decision.receipt
             != (Receipt::Dispatch {
                 dispatch_id: dispatch.id.clone(),
@@ -2606,7 +2606,7 @@ pub fn require_current_execution(view: &View) -> std::result::Result<(), Failure
                         if !value.terminal
                             && value.store_generation <= view.snapshot.generation
                             && value.boundary.scope == (BoundaryScope::Execution { phase: dispatch.phase })
-                            && value.boundary.tool == BoundaryTool::CadenceQuery
+                            && value.boundary.tool == BoundaryTool::BaleyQuery
                             && value.boundary.subject_id.as_ref() == Some(&dispatch.id)
                             && matches!(&value.boundary.receipt, Receipt::Dispatch { dispatch_id, .. }
                                 if dispatch_id == &dispatch.id))

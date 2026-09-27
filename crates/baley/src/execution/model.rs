@@ -284,8 +284,8 @@ pub struct ExecutorPatch {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum BoundaryTool {
-    CadenceQuery,
-    CadenceApply,
+    BaleyQuery,
+    BaleyApply,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

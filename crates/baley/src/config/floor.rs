@@ -45,7 +45,7 @@ pub struct Scope {
 
 impl Scope {
     pub fn pending(role: &str, phase: Option<u32>) -> Self {
-        let (state, reason) = if matches!(role, "cad-planner" | "cad-assumptions-analyzer") {
+        let (state, reason) = if matches!(role, "bal-planner" | "bal-assumptions-analyzer") {
             (State::Bypassed, "pre-plan role bypasses declared-scope I/O")
         } else if phase.is_none() {
             (

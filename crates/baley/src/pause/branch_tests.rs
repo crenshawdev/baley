@@ -31,8 +31,8 @@ fn branches(names: &[(&str, &str)]) -> BTreeMap<String, String> {
 #[test]
 fn each_ref_reads_as_a_branch_name_without_its_prefix() {
     assert_eq!(
-        parse_branches(&format!("refs/heads/main {MAIN}\nrefs/heads/cadence/work {WORK}\n")).unwrap(),
-        branches(&[("main", MAIN), ("cadence/work", WORK)])
+        parse_branches(&format!("refs/heads/main {MAIN}\nrefs/heads/baley/work {WORK}\n")).unwrap(),
+        branches(&[("main", MAIN), ("baley/work", WORK)])
     );
 }
 
@@ -82,7 +82,7 @@ fn the_protected_order_decides_which_of_several_is_chosen() {
 
 #[test]
 fn no_protected_branch_exists_and_none_is_named_leaves_no_base() {
-    assert_eq!(choose_base(&policy(None, &["main"]), &branches(&[("cadence/work", WORK)])), None);
+    assert_eq!(choose_base(&policy(None, &["main"]), &branches(&[("baley/work", WORK)])), None);
     assert_eq!(choose_base(&policy(None, &[]), &branches(&[("main", MAIN)])), None);
 }
 
@@ -193,13 +193,13 @@ fn any_other_merge_base_exit_is_a_failure() {
 fn the_active_version_in_project_wins_over_the_roadmap_title() {
     assert_eq!(
         integration_name("# Project\n\n### Active\n\nv1.4.0 adds pause.\n", "# Roadmap v1.3.0\n"),
-        Some("cadence/v1.4.0".into())
+        Some("baley/v1.4.0".into())
     );
 }
 
 #[test]
 fn without_an_active_version_the_roadmap_title_names_the_branch() {
-    assert_eq!(integration_name("# Project\n", "# Roadmap v1.3.0\n"), Some("cadence/v1.3.0".into()));
+    assert_eq!(integration_name("# Project\n", "# Roadmap v1.3.0\n"), Some("baley/v1.3.0".into()));
     assert_eq!(integration_name("# Project\n", "# Roadmap\n"), None);
 }
 
@@ -227,7 +227,7 @@ fn integration_stays_on_trunk_off_a_protected_branch_or_with_auto_branch_off() {
 fn auto_creates_the_named_integration_branch() {
     assert_eq!(
         integration(&milestone("auto"), &versioned("main", &[])).unwrap(),
-        Integration::Create("cadence/v1.3.0".into())
+        Integration::Create("baley/v1.3.0".into())
     );
 }
 
@@ -237,7 +237,7 @@ fn ask_asks_to_create_the_named_integration_branch() {
         panic!("an integration question")
     };
     assert!(gate.id.starts_with("pause-integration-"), "{}", gate.id);
-    assert_eq!(name.as_deref(), Some("cadence/v1.3.0"));
+    assert_eq!(name.as_deref(), Some("baley/v1.3.0"));
 }
 
 #[test]

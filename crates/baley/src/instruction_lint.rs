@@ -11,10 +11,10 @@
 //! markers likewise classify their next span before lookup; slash paths and
 //! language examples inside prose strings are not dotted identifiers or JSON keys.
 //! Operations are JSON operation string values/consts, `operation: name` spans,
-//! and explicit cadence_query/apply invocations (including slash-separated names).
+//! and explicit baley_query/apply invocations (including slash-separated names).
 //! The grammatical connectors `with`, `operation`, `permission` and `an` after a
 //! bare tool name introduce prose, not an invocation. Skill candidates use
-//! `/cad-*` syntax, including `skills/cad-*/SKILL.md`; bare agent names do not.
+//! `/bal-*` syntax, including `skills/bal-*/SKILL.md`; bare agent names do not.
 //! Hook candidates are code spans directly introduced by `hook event`.
 
 use std::collections::BTreeSet;
@@ -28,8 +28,8 @@ fn corpus() -> Vec<(String, String)> {
             .unwrap_or_else(|| panic!("{}: no renderer for {:?}", file.path, file.command)))
     }).collect();
     // An explicit canonical alias is also accepted by main.rs.
-    surfaces.push(("review-instructions --alias cad-review".into(),
-        super::instruction_surfaces::render(&["review-instructions", "--alias", "cad-review"])
+    surfaces.push(("review-instructions --alias bal-review".into(),
+        super::instruction_surfaces::render(&["review-instructions", "--alias", "bal-review"])
             .expect("canonical review alias")));
     surfaces.push(("executor dispatch_text".into(), instructions::dispatch_text()));
     for present in instructions::MANIFESTS.iter().map(|(name, _)| vec![*name])
@@ -74,11 +74,11 @@ fn compiled_instructions_name_only_what_exists() {
         .chain(super::server::apply_operation_names()).collect();
     // Shipped skills only: the rendered files plus the hand-authored ones,
     // traced against skills/ independently of this assertion. The help
-    // catalog is not proof that a skill exists. `cad-phase` has no skill; the
-    // task instructions still send oversized work to `/cad-phase add` until
+    // catalog is not proof that a skill exists. `bal-phase` has no skill; the
+    // task instructions still send oversized work to `/bal-phase add` until
     // the owner decides that wording, and this names it rather than hiding it.
     let mut skills: BTreeSet<_> = [
-        "cad-review-delivery", "cad-reviewer-contract", "cad-phase",
+        "bal-review-delivery", "bal-reviewer-contract", "bal-phase",
     ].into_iter().collect();
     skills.extend(RENDERED_PROJECT_FILES.iter().map(|file| {
         file.path.strip_prefix("skills/").unwrap().strip_suffix("/SKILL.md").unwrap()
@@ -94,8 +94,8 @@ fn compiled_instructions_name_only_what_exists() {
     let json_operations = Regex::new(r#""operation"\s*:\s*"([^"]+)""#).unwrap();
     let operation_consts = Regex::new(r#""operation"\s*:\s*\{[^{}]*"const"\s*:\s*"([^"]+)""#).unwrap();
     let operation_fields = Regex::new(r#"\boperation:\s*"?([a-z][a-z0-9_-]*)"#).unwrap();
-    let invocations = Regex::new(r"\bcadence_(?:query|apply)(?:`\s+with\s+`|\s+(?:with\s+operation\s+)?)([a-z][a-z0-9_/-]*)").unwrap();
-    let skill_names = Regex::new(r"/(cad-[a-z0-9-]+)").unwrap();
+    let invocations = Regex::new(r"\bbaley_(?:query|apply)(?:`\s+with\s+`|\s+(?:with\s+operation\s+)?)([a-z][a-z0-9_/-]*)").unwrap();
+    let skill_names = Regex::new(r"/(bal-[a-z0-9-]+)").unwrap();
     let mut unresolved = BTreeSet::new();
     for (surface, text) in corpus() {
         let mut candidates = BTreeSet::new();
@@ -167,30 +167,30 @@ fn schema_defaults_match_their_declared_domain() {
 #[test]
 fn rendered_files_obey_named_byte_ceilings() {
     let ceilings = [
-        ("skills/cad-help/SKILL.md", 1024),
-        ("skills/cad-spike/SKILL.md", 6144),
-        ("skills/cad-debug/SKILL.md", 15360),
-        ("skills/cad-undo/SKILL.md", 4096),
-        ("skills/cad-land/SKILL.md", 8192),
-        ("skills/cad-milestone/SKILL.md", 6144),
-        ("skills/cad-suggest/SKILL.md", 1536),
-        ("skills/cad-why/SKILL.md", 4096),
-        ("skills/cad-progress/SKILL.md", 1024),
-        ("skills/cad-capture/SKILL.md", 1536),
-        ("skills/cad-context/SKILL.md", 24576),
-        ("skills/cad-plan/SKILL.md", 57344),
-        ("skills/cad-executor-contract/SKILL.md", 28672),
-        ("skills/cad-execute/SKILL.md", 20480),
-        ("skills/cad-verifier-contract/SKILL.md", 18432),
-        ("skills/cad-verify/SKILL.md", 18432),
-        ("skills/cad-review/SKILL.md", 12288),
-        ("skills/cad-decision-review/SKILL.md", 12288),
-        ("skills/cad-minimalism-review/SKILL.md", 12288),
-        ("skills/cad-plan-review/SKILL.md", 12288),
-        ("skills/cad-audit/SKILL.md", 9216),
-        ("skills/cad-coverage/SKILL.md", 9216),
-        ("skills/cad-read-contract/SKILL.md", 6144),
-        ("skills/cad-task/SKILL.md", 32768),
+        ("skills/bal-help/SKILL.md", 1024),
+        ("skills/bal-spike/SKILL.md", 6144),
+        ("skills/bal-debug/SKILL.md", 15360),
+        ("skills/bal-undo/SKILL.md", 4096),
+        ("skills/bal-land/SKILL.md", 8192),
+        ("skills/bal-milestone/SKILL.md", 6144),
+        ("skills/bal-suggest/SKILL.md", 1536),
+        ("skills/bal-why/SKILL.md", 4096),
+        ("skills/bal-progress/SKILL.md", 1024),
+        ("skills/bal-capture/SKILL.md", 1536),
+        ("skills/bal-context/SKILL.md", 24576),
+        ("skills/bal-plan/SKILL.md", 57344),
+        ("skills/bal-executor-contract/SKILL.md", 28672),
+        ("skills/bal-execute/SKILL.md", 20480),
+        ("skills/bal-verifier-contract/SKILL.md", 18432),
+        ("skills/bal-verify/SKILL.md", 18432),
+        ("skills/bal-review/SKILL.md", 12288),
+        ("skills/bal-decision-review/SKILL.md", 12288),
+        ("skills/bal-minimalism-review/SKILL.md", 12288),
+        ("skills/bal-plan-review/SKILL.md", 12288),
+        ("skills/bal-audit/SKILL.md", 9216),
+        ("skills/bal-coverage/SKILL.md", 9216),
+        ("skills/bal-read-contract/SKILL.md", 6144),
+        ("skills/bal-task/SKILL.md", 32768),
     ];
     for file in RENDERED_PROJECT_FILES {
         let ceiling = ceilings.iter().find(|(path, _)| *path == file.path)
@@ -206,20 +206,20 @@ fn rendered_files_obey_named_byte_ceilings() {
 fn compiled_contracts_send_source_reads_to_host_tools() {
     let expected = "Search and read code with the host's file, search and shell tools: locate first, then read only the lines the work needs rather than whole files.";
     let carriers = [
-        "skills/cad-context/SKILL.md",
-        "skills/cad-plan/SKILL.md",
-        "skills/cad-executor-contract/SKILL.md",
-        "skills/cad-execute/SKILL.md",
-        "skills/cad-task/SKILL.md",
-        "skills/cad-verifier-contract/SKILL.md",
-        "skills/cad-verify/SKILL.md",
-        "skills/cad-review/SKILL.md",
-        "skills/cad-decision-review/SKILL.md",
-        "skills/cad-minimalism-review/SKILL.md",
-        "skills/cad-plan-review/SKILL.md",
-        "skills/cad-audit/SKILL.md",
-        "skills/cad-coverage/SKILL.md",
-        "skills/cad-read-contract/SKILL.md",
+        "skills/bal-context/SKILL.md",
+        "skills/bal-plan/SKILL.md",
+        "skills/bal-executor-contract/SKILL.md",
+        "skills/bal-execute/SKILL.md",
+        "skills/bal-task/SKILL.md",
+        "skills/bal-verifier-contract/SKILL.md",
+        "skills/bal-verify/SKILL.md",
+        "skills/bal-review/SKILL.md",
+        "skills/bal-decision-review/SKILL.md",
+        "skills/bal-minimalism-review/SKILL.md",
+        "skills/bal-plan-review/SKILL.md",
+        "skills/bal-audit/SKILL.md",
+        "skills/bal-coverage/SKILL.md",
+        "skills/bal-read-contract/SKILL.md",
         "executor dispatch_text",
         "server initialize instructions",
     ];
@@ -256,12 +256,12 @@ fn the_query_tool_description_sends_source_reads_to_host_tools() {
     let tools = super::server::tools();
     let query = tools
         .iter()
-        .find(|tool| tool.name == "cadence_query")
-        .expect("cadence_query tool");
-    let description = query.description.as_deref().expect("cadence_query description");
+        .find(|tool| tool.name == "baley_query")
+        .expect("baley_query tool");
+    let description = query.description.as_deref().expect("baley_query description");
     assert!(
         description.contains(expected),
-        "cadence_query description: missing host-tools sentence"
+        "baley_query description: missing host-tools sentence"
     );
 }
 
@@ -284,7 +284,7 @@ defect it would catch. Stop when another case would distinguish no new required
 behavior or meaningful failure. Reuse adequate existing tests and relevant
 regressions; do not pursue test counts, a test per function, blanket
 permutations or coverage percentages. Use the managed project's approved
-language and test framework; Cadence being written in Rust does not choose the
+language and test framework; Baley being written in Rust does not choose the
 project's language.";
     let gathering = "Classify an adapter as pure gathering only after separating its owned parsing,
 validation, error interpretation and decisions; test those responsibilities,
@@ -308,7 +308,7 @@ fn plan_instructions_bound_test_dependencies() {
 libraries, including mocking libraries, from that language's package ecosystem.
 It must need no other language runtime, host-installed program, particular
 hardware or pre-existing machine state, and give the same result wherever the
-project builds. Test code starts no program. Cadence may launch the approved
+project builds. Test code starts no program. Baley may launch the approved
 test runner; that permission does not let test code launch a program.
 
 A test may create a fresh temporary directory as its one filesystem seam. Keep
@@ -379,10 +379,10 @@ close this live obligation.";
 fn plan_review_asks_the_test_questions() {
     let expected = "For each proposed test, ask: does it serve the approved requirement, can its assertion catch the defect it names, and does a fake provide the very decision being tested? Judge the fake relative to the responsibility the test exercises, using plain inputs where they suffice.";
     for carrier in [
-        "cad-review",
-        "cad-decision-review",
-        "cad-minimalism-review",
-        "cad-plan-review",
+        "bal-review",
+        "bal-decision-review",
+        "bal-minimalism-review",
+        "bal-plan-review",
     ] {
         let text = baley::review::instructions::frontdoor_markdown(carrier)
             .unwrap_or_else(|| panic!("{carrier}: missing review front door"));
@@ -400,10 +400,10 @@ fn plan_review_asks_the_test_questions() {
 
 #[test]
 fn plan_review_keeps_existing_completion_judgments() {
-    let text = baley::review::instructions::frontdoor_markdown("cad-plan-review")
-        .expect("cad-plan-review front door");
+    let text = baley::review::instructions::frontdoor_markdown("bal-plan-review")
+        .expect("bal-plan-review front door");
     let expected = "These questions are advisory to plan submission and add no plan-submit gate. The owner's exact check inspection at execution-plan-complete and the verifier's item verdicts at verification-complete remain required completion judgments.";
-    assert!(text.contains(expected), "cad-plan-review: missing advisory and completion-judgment block");
+    assert!(text.contains(expected), "bal-plan-review: missing advisory and completion-judgment block");
 }
 
 #[test]
@@ -422,8 +422,8 @@ when a check ran but does not establish the behavior, and not_seen only when
 the evidence was unavailable, stating what was observed; never invent a new
 status or accept unsupported evidence.";
     for (carrier, text) in [
-        ("cad-verifier-contract", baley::verification::instructions::contract_markdown()),
-        ("cad-verify", baley::verification::instructions::frontdoor_markdown()),
+        ("bal-verifier-contract", baley::verification::instructions::contract_markdown()),
+        ("bal-verify", baley::verification::instructions::frontdoor_markdown()),
     ] {
         assert!(text.contains(expected), "{carrier}: missing evidence-limits block");
     }

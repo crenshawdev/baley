@@ -37,7 +37,7 @@ pub fn minimalism_selection(retained: &Manifest) -> Result<MinimalismRequest, &'
 pub fn minimalism_voice(retained: &Manifest) -> Result<super::model::RequestedVoice, &'static str> {
     let request = minimalism_selection(retained)?;
     Ok(super::model::RequestedVoice {
-        agent: "cad-reviewer".into(),
+        agent: "bal-reviewer".into(),
         model: None,
         effort: None,
         routing: request.ordinary_routing,

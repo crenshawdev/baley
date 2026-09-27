@@ -29,7 +29,7 @@ pub struct Transient {
 
 impl Transient {
     pub fn create(token: &str) -> Result<Self> {
-        let directory = std::env::temp_dir().join(format!("cadence-task-{token}"));
+        let directory = std::env::temp_dir().join(format!("baley-task-{token}"));
         match fs::create_dir(&directory) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {

@@ -22,7 +22,7 @@ async fn audits<I: ConfigIo + Clone + Sync>(factory: &SessionFactory<I>, root: &
     for phase in &selection.phases {
         let audit = super::verification_service::execute(factory, root,
             super::verification_service::Command::Query(baley::verification::model::Query::Audit {
-                phase: phase.get(), command: Some("cad-audit".into()),
+                phase: phase.get(), command: Some("bal-audit".into()),
             }),
             process,).await?;
         answers.push(json!({"phase":phase.get(),"audit":audit}));

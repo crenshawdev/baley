@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 fn refusal(unique: &str) -> BoundaryV1 {
     BoundaryV1::new(
         BoundaryScope::RootRefusal,
-        BoundaryTool::CadenceQuery,
+        BoundaryTool::BaleyQuery,
         "execute-next".into(),
         model::digest(unique.as_bytes()),
         None,
@@ -130,7 +130,7 @@ fn a_terminal_log_bound_record_is_valid_only_as_the_257th_once_and_last() {
 
 #[test]
 fn a_legacy_compact_receipt_boundary_reserializes_identically_under_its_canonical_identity() {
-    let old = json!({"codec":1,"scope":{"scope":"root-refusal"},"tool":"cadence-query","operation":"execute-next",
+    let old = json!({"codec":1,"scope":{"scope":"root-refusal"},"tool":"baley-query","operation":"execute-next",
         "request_digest":model::digest(b"one"),"outcome":"refused:invalid-input","subject_id":null,
         "response_digest":model::digest(&canonical(&json!({"status":"refused","code":"invalid-input","reason":"invalid execution input"}))),
         "receipt":{"receipt":"compact","envelope":{"status":"refused","code":"invalid-input","reason":"invalid execution input"}}});
@@ -278,7 +278,7 @@ fn historical_boundary(dispatch: &Value, prompt: &str) -> (Value, DecisionRecord
         receipt["prompt_digest"] = dispatch["prompt_digest"].clone();
     }
     let raw = json!({"codec":1,"scope":{"scope":"execution","phase":6},
-        "tool":"cadence-query","operation":"execute-next",
+        "tool":"baley-query","operation":"execute-next",
         "request_digest":"a".repeat(64),"outcome":"dispatch","subject_id":dispatch["id"],
         "response_digest":model::digest(&canonical(&retained_envelope)),"receipt":receipt});
     let record: DecisionRecord = serde_json::from_value(wire_record(raw.clone(), 1, false)).unwrap();
@@ -288,7 +288,7 @@ fn historical_boundary(dispatch: &Value, prompt: &str) -> (Value, DecisionRecord
 /// Verbatim from this project's decisions.jsonl (generation 11): every dispatch
 /// boundary written before D-165 carries `prompt_bytes`, and its id is the
 /// digest of exactly those bytes.
-const RETAINED_DISPATCH: &[u8] = br#"{"version":1,"id":"fd73b34e20f4eea7940d0199b87a8291c52f5d731458f2cde5d3850dee3666f2","revision":1,"origin":{"source":"execution-boundary-v1","original":"missing"},"decision":{"class":"boundary_v1","boundary":{"codec":1,"scope":{"scope":"execution","phase":31},"tool":"cadence-query","operation":"execute-next","request_digest":"42bd9246acd9b54f997d46b23cc1c90ab780ff86d7aaddbae85ee2556c4c32a5","outcome":"dispatch","subject_id":"c68a606535f1f85db58f11a95117f76d404ce79c9f11ba171bc795d17b053c28","response_digest":"547338b6015175af68b49b2ecaed279cccd14b7c55189c5269e5b47defb54835","receipt":{"receipt":"dispatch","dispatch_id":"c68a606535f1f85db58f11a95117f76d404ce79c9f11ba171bc795d17b053c28","prompt_bytes":63671}},"store_generation":11,"terminal":false}}"#;
+const RETAINED_DISPATCH: &[u8] = br#"{"version":1,"id":"005922aec07ad6b375093e1892c1c7d8879f148c0ef964288391918e50c6e015","revision":1,"origin":{"source":"execution-boundary-v1","original":"missing"},"decision":{"class":"boundary_v1","boundary":{"codec":1,"scope":{"scope":"execution","phase":31},"tool":"baley-query","operation":"execute-next","request_digest":"ac3f92d6838f86491124705dda6bf9781f1a6d6f19c9713b3820b48fbc0f6e12","outcome":"dispatch","subject_id":"c68a606535f1f85db58f11a95117f76d404ce79c9f11ba171bc795d17b053c28","response_digest":"547338b6015175af68b49b2ecaed279cccd14b7c55189c5269e5b47defb54835","receipt":{"receipt":"dispatch","dispatch_id":"c68a606535f1f85db58f11a95117f76d404ce79c9f11ba171bc795d17b053c28","prompt_bytes":63671}},"store_generation":11,"terminal":false}}"#;
 
 #[test]
 fn retained_dispatch_receipt_with_prompt_bytes_keeps_its_identity() {

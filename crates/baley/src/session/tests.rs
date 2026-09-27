@@ -73,18 +73,18 @@ fn a_derivation_from_a_stale_view_is_refused() {
 
 fn first_run_answers() -> Vec<write::Update> {
     serde_json::from_value(json!([
-        {"key":"roles.cad-planner.model","value":null},
-        {"key":"roles.cad-planner.effort","value":"high"},
-        {"key":"roles.cad-assumptions-analyzer.model","value":null},
-        {"key":"roles.cad-assumptions-analyzer.effort","value":"high"},
-        {"key":"roles.cad-verifier.model","value":null},
-        {"key":"roles.cad-verifier.effort","value":"high"},
-        {"key":"roles.cad-reviewer.model","value":null},
-        {"key":"roles.cad-reviewer.effort","value":"medium"},
-        {"key":"roles.cad-executor.model","value":null},
-        {"key":"roles.cad-executor.effort","value":"high"},
-        {"key":"roles.cad-plan-checker.model","value":null},
-        {"key":"roles.cad-plan-checker.effort","value":"low"},
+        {"key":"roles.bal-planner.model","value":null},
+        {"key":"roles.bal-planner.effort","value":"high"},
+        {"key":"roles.bal-assumptions-analyzer.model","value":null},
+        {"key":"roles.bal-assumptions-analyzer.effort","value":"high"},
+        {"key":"roles.bal-verifier.model","value":null},
+        {"key":"roles.bal-verifier.effort","value":"high"},
+        {"key":"roles.bal-reviewer.model","value":null},
+        {"key":"roles.bal-reviewer.effort","value":"medium"},
+        {"key":"roles.bal-executor.model","value":null},
+        {"key":"roles.bal-executor.effort","value":"high"},
+        {"key":"roles.bal-plan-checker.model","value":null},
+        {"key":"roles.bal-plan-checker.effort","value":"low"},
         {"key":"review.triggers.risk_surface.waive_routing_floor","value":[]}
     ]))
     .unwrap()
@@ -113,18 +113,18 @@ async fn first_global_batch_returns_thirteen_leaves_from_missing_parent_registra
         result.changed_keys,
         [
             "review.triggers.risk_surface.waive_routing_floor",
-            "roles.cad-assumptions-analyzer.effort",
-            "roles.cad-assumptions-analyzer.model",
-            "roles.cad-executor.effort",
-            "roles.cad-executor.model",
-            "roles.cad-plan-checker.effort",
-            "roles.cad-plan-checker.model",
-            "roles.cad-planner.effort",
-            "roles.cad-planner.model",
-            "roles.cad-reviewer.effort",
-            "roles.cad-reviewer.model",
-            "roles.cad-verifier.effort",
-            "roles.cad-verifier.model",
+            "roles.bal-assumptions-analyzer.effort",
+            "roles.bal-assumptions-analyzer.model",
+            "roles.bal-executor.effort",
+            "roles.bal-executor.model",
+            "roles.bal-plan-checker.effort",
+            "roles.bal-plan-checker.model",
+            "roles.bal-planner.effort",
+            "roles.bal-planner.model",
+            "roles.bal-reviewer.effort",
+            "roles.bal-reviewer.model",
+            "roles.bal-verifier.effort",
+            "roles.bal-verifier.model",
         ]
     );
 }
@@ -154,14 +154,14 @@ fn initialization_takes_its_effective_config_from_the_active_global() {
     let mut io = SuppliedConfig(
         [(
             active.global.clone().unwrap(),
-            br#"{"roles":{"cad-executor":{"model":"sonnet"}}}"#.to_vec(),
+            br#"{"roles":{"bal-executor":{"model":"sonnet"}}}"#.to_vec(),
         )]
         .into(),
     );
     let result = prepare_initialization(root, &active, &mut io).unwrap();
     assert_eq!(
         result.generation.effective.raw_global,
-        Some(json!({"roles":{"cad-executor":{"model":"sonnet"}}}))
+        Some(json!({"roles":{"bal-executor":{"model":"sonnet"}}}))
     );
 }
 
@@ -170,12 +170,12 @@ fn an_existing_native_repo_config_is_the_repo_layer_and_not_created() {
     let root = Path::new("/fixture/project/.planning");
     let active = Paths { repo: root.join("config.v4.json"), global: None };
     let mut io = SuppliedConfig(
-        [(active.repo.clone(), br#"{"roles":{"cad-executor":{"model":"sonnet"}}}"#.to_vec())].into(),
+        [(active.repo.clone(), br#"{"roles":{"bal-executor":{"model":"sonnet"}}}"#.to_vec())].into(),
     );
     let result = prepare_initialization(root, &active, &mut io).unwrap();
     assert_eq!(
         result.generation.effective.raw_repo,
-        Some(json!({"roles":{"cad-executor":{"model":"sonnet"}}}))
+        Some(json!({"roles":{"bal-executor":{"model":"sonnet"}}}))
     );
     assert!(!result.manifest.created.contains(&active.repo), "{:?}", result.manifest.created);
 }
@@ -248,14 +248,14 @@ fn initialization_refuses_an_unusable_active_global() {
     let mut io = SuppliedConfig(
         [(
             active.global.clone().unwrap(),
-            br#"{"roles":{"cad-executor":{"effort":"invalid"}}}"#.to_vec(),
+            br#"{"roles":{"bal-executor":{"effort":"invalid"}}}"#.to_vec(),
         )]
         .into(),
     );
     assert_eq!(
         prepare_initialization(root, &active, &mut io).err(),
         Some(Error::Policy(
-            "config unavailable: unusable roles.cad-executor.effort".into()
+            "config unavailable: unusable roles.bal-executor.effort".into()
         ))
     );
 }

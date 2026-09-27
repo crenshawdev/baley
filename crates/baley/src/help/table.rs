@@ -14,27 +14,27 @@ pub const CLUSTERS: &[&str] = &[
 ];
 
 pub const COMMANDS: &[Command] = &[
-    Command { name: "cad-context", cluster: "Build spine", description: "Discuss a phase's scope, decisions and truths with its owner, then publish only the exact approved set through Cadence" },
-    Command { name: "cad-plan", cluster: "Build spine", description: "Author a phase's plans and publish the exact owner-approved content through Cadence" },
-    Command { name: "cad-execute", cluster: "Build spine", description: "Execute a native phase: the binary composes each executor dispatch from state and owns every task, run and suite receipt." },
-    Command { name: "cad-verify", cluster: "Build spine", description: "Inspect a phase through the retained native verifier dispatch." },
-    Command { name: "cad-progress", cluster: "Build spine", description: "Show derived phase status, located issues, records, captures and the next action." },
-    Command { name: "cad-task", cluster: "Build spine", description: "Execute a small off-roadmap task with atomic commits - inline by default, --plan for multi-step work" },
-    Command { name: "cad-review", cluster: "Review & quality gates", description: "Review one explicitly selected target - a decision, a minimalism delete-list over code, or a plan - through the native review subsystem." },
-    Command { name: "cad-plan-review", cluster: "Review & quality gates", description: "Alias of /cad-review plan: review a phase's native plan slices with its locked context, or one plan document." },
-    Command { name: "cad-decision-review", cluster: "Review & quality gates", description: "Alias of /cad-review decision: refute one named decision in one named document." },
-    Command { name: "cad-minimalism-review", cluster: "Review & quality gates", description: "Alias of /cad-review minimalism: a ranked delete-list over one file, one frozen directory or one native phase range." },
-    Command { name: "cad-debug", cluster: "Review & quality gates", description: "Resume a recorded debug session, review its staged fix, and offer a configured consult at dead ends." },
-    Command { name: "cad-coverage", cluster: "Review & quality gates", description: "Read-only alias of /cad-audit: the phase-scoped requirement-to-evidence trace over the retained map and current verdicts; the test-generation arm is removed." },
-    Command { name: "cad-audit", cluster: "Review & quality gates", description: "Read-only verification audit: every requirement's phase-scoped trace to its plans, truths, evidence and current verdicts, with each broken edge named." },
-    Command { name: "cad-land", cluster: "Lifecycle & git", description: "Authorize landing steps, confirm the merge and follow ordered local cleanup." },
-    Command { name: "cad-milestone", cluster: "Lifecycle & git", description: "Close and prune a milestone, or confirm an explicit release manifest bump before landing." },
-    Command { name: "cad-undo", cluster: "Lifecycle & git", description: "Undo a phase's exact recorded commits and report retained progress." },
-    Command { name: "cad-capture", cluster: "Support", description: "Park a phase-linked todo, a seed for a later milestone, or a note, as one typed item." },
-    Command { name: "cad-help", cluster: "Support", description: "List Cadence commands shipped under skills/ by cluster, or show one command and its compiled description." },
-    Command { name: "cad-spike", cluster: "Support", description: "Record risk-ordered spike criteria before experimenting, then retain observations and a bounded verdict." },
-    Command { name: "cad-suggest", cluster: "Support", description: "Show retune suggestions from retained decisions and apply only an accepted payload." },
-    Command { name: "cad-why", cluster: "Support", description: "Explain file[:line] through its git and planning history, or list a phase's journal refusals with <phase> refusals." },
+    Command { name: "bal-context", cluster: "Build spine", description: "Discuss a phase's scope, decisions and truths with its owner, then publish only the exact approved set through Baley" },
+    Command { name: "bal-plan", cluster: "Build spine", description: "Author a phase's plans and publish the exact owner-approved content through Baley" },
+    Command { name: "bal-execute", cluster: "Build spine", description: "Execute a native phase: the binary composes each executor dispatch from state and owns every task, run and suite receipt." },
+    Command { name: "bal-verify", cluster: "Build spine", description: "Inspect a phase through the retained native verifier dispatch." },
+    Command { name: "bal-progress", cluster: "Build spine", description: "Show derived phase status, located issues, records, captures and the next action." },
+    Command { name: "bal-task", cluster: "Build spine", description: "Execute a small off-roadmap task with atomic commits - inline by default, --plan for multi-step work" },
+    Command { name: "bal-review", cluster: "Review & quality gates", description: "Review one explicitly selected target - a decision, a minimalism delete-list over code, or a plan - through the native review subsystem." },
+    Command { name: "bal-plan-review", cluster: "Review & quality gates", description: "Alias of /bal-review plan: review a phase's native plan slices with its locked context, or one plan document." },
+    Command { name: "bal-decision-review", cluster: "Review & quality gates", description: "Alias of /bal-review decision: refute one named decision in one named document." },
+    Command { name: "bal-minimalism-review", cluster: "Review & quality gates", description: "Alias of /bal-review minimalism: a ranked delete-list over one file, one frozen directory or one native phase range." },
+    Command { name: "bal-debug", cluster: "Review & quality gates", description: "Resume a recorded debug session, review its staged fix, and offer a configured consult at dead ends." },
+    Command { name: "bal-coverage", cluster: "Review & quality gates", description: "Read-only alias of /bal-audit: the phase-scoped requirement-to-evidence trace over the retained map and current verdicts; the test-generation arm is removed." },
+    Command { name: "bal-audit", cluster: "Review & quality gates", description: "Read-only verification audit: every requirement's phase-scoped trace to its plans, truths, evidence and current verdicts, with each broken edge named." },
+    Command { name: "bal-land", cluster: "Lifecycle & git", description: "Authorize landing steps, confirm the merge and follow ordered local cleanup." },
+    Command { name: "bal-milestone", cluster: "Lifecycle & git", description: "Close and prune a milestone, or confirm an explicit release manifest bump before landing." },
+    Command { name: "bal-undo", cluster: "Lifecycle & git", description: "Undo a phase's exact recorded commits and report retained progress." },
+    Command { name: "bal-capture", cluster: "Support", description: "Park a phase-linked todo, a seed for a later milestone, or a note, as one typed item." },
+    Command { name: "bal-help", cluster: "Support", description: "List Baley commands shipped under skills/ by cluster, or show one command and its compiled description." },
+    Command { name: "bal-spike", cluster: "Support", description: "Record risk-ordered spike criteria before experimenting, then retain observations and a bounded verdict." },
+    Command { name: "bal-suggest", cluster: "Support", description: "Show retune suggestions from retained decisions and apply only an accepted payload." },
+    Command { name: "bal-why", cluster: "Support", description: "Explain file[:line] through its git and planning history, or list a phase's journal refusals with <phase> refusals." },
 ];
 
 pub fn description(name: &str) -> &'static str {
@@ -66,12 +66,12 @@ pub fn answer(name: Option<&str>) -> Value {
         return json!({"status":"ok", "clusters":clusters});
     };
     let name = name.strip_prefix('/').unwrap_or(name);
-    let name = name.strip_prefix("cad-").unwrap_or(name);
-    let rows: Vec<_> = COMMANDS.iter().filter(|row| row.name.strip_prefix("cad-") == Some(name)).collect();
+    let name = name.strip_prefix("bal-").unwrap_or(name);
+    let rows: Vec<_> = COMMANDS.iter().filter(|row| row.name.strip_prefix("bal-") == Some(name)).collect();
     let mut closest = Vec::new();
     if rows.is_empty() {
         let mut ranked: Vec<_> = COMMANDS.iter().map(|row|
-            (edit_distance(name, row.name.strip_prefix("cad-").unwrap()), row.name)).collect();
+            (edit_distance(name, row.name.strip_prefix("bal-").unwrap()), row.name)).collect();
         ranked.sort_unstable();
         closest.extend(ranked.into_iter().take(3).map(|(_, name)| name));
     }

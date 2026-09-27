@@ -1,4 +1,4 @@
 {
-  "pinned": {"agent":"cad-reviewer","model":"sonnet","effort":null,"routing":null,"selection_evidence":"route1"},
-  "inherited": {"agent":"cad-reviewer","model":null,"effort":null,"routing":null,"selection_evidence":"route1"}
+  "pinned": {"agent":"bal-reviewer","model":"sonnet","effort":null,"routing":null,"selection_evidence":"route1"},
+  "inherited": {"agent":"bal-reviewer","model":null,"effort":null,"routing":null,"selection_evidence":"route1"}
 }

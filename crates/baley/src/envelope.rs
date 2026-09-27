@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 pub enum Envelope<T> {
     /// The operation ran and this is what it produced.
     Ok(T),
-    /// The operation could have run and Cadence declined to run it. The caller
+    /// The operation could have run and Baley declined to run it. The caller
     /// asked a well-formed question and the answer is no.
     Refused {
         /// Machine token in the operation's kebab-case vocabulary.
@@ -50,7 +50,7 @@ pub enum Envelope<T> {
         /// Why, in words a person reads.
         reason: String,
     },
-    /// Cadence cannot say. The question is a fair one for this operation and
+    /// Baley cannot say. The question is a fair one for this operation and
     /// the evidence to answer it is missing, unreadable or ambiguous.
     Unknown {
         /// Machine token in the operation's kebab-case vocabulary.

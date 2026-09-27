@@ -1328,7 +1328,7 @@ impl Intent {
             .ok_or_else(|| Error::Invalid("finalization lacks decision".into()))?;
         if !matches!(&decision.decision, model::Decision::BoundaryV1(value)
             if value.store_generation == snapshot.generation && !value.terminal
-                && value.boundary.tool == baley::execution::model::BoundaryTool::CadenceQuery
+                && value.boundary.tool == baley::execution::model::BoundaryTool::BaleyQuery
                 && value.boundary.receipt == (Receipt::Compact { envelope:Envelope::Ok(Success::Complete {phase:*phase}) }))
         {
             return Err(Error::Invalid("invalid risk finalization decision".into()));
@@ -2599,7 +2599,7 @@ mod recovery_rule_tests {
 
     fn refusal(scope: BoundaryScope, name: &str) -> BoundaryV1 {
         let answer = PreparedAnswer::new(Envelope::Refused { code: "refused".into(), reason: name.into() }).unwrap();
-        BoundaryV1::new(scope, BoundaryTool::CadenceApply, "executor".into(), model::digest(name.as_bytes()), None, &answer)
+        BoundaryV1::new(scope, BoundaryTool::BaleyApply, "executor".into(), model::digest(name.as_bytes()), None, &answer)
     }
 
     fn record(boundary: BoundaryV1, store_generation: u64, terminal: bool) -> DecisionRecord {
@@ -2729,7 +2729,7 @@ mod recovery_rule_tests {
             revision: 1,
             origin: model::Origin { source: "execution-boundary".into(), original: model::Evidence::Missing },
             decision: model::Decision::Boundary {
-                phase: 3, tool: "cadence-apply".into(), operation: "execution-refusal".into(),
+                phase: 3, tool: "baley-apply".into(), operation: "execution-refusal".into(),
                 request_digest: digest.clone(), outcome: "refused".into(), subject_id: None,
                 store_generation: 1, prompt_digest: None, response_digest: digest, terminal: false,
             },

@@ -1,14 +1,14 @@
 //! Compiled debug role; the installed skill is only its rendering.
 pub fn markdown() -> &'static str {
     static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        crate::help::table::render_description("cad-debug", r#"---
-name: cad-debug
+        crate::help::table::render_description("bal-debug", r#"---
+name: bal-debug
 description: ""
 argument-hint: "[list | status <slug> | continue <slug> | --diagnose] [symptom]"
 allowed-tools:
   - Task
-  - mcp__cadence__cadence_apply
-  - mcp__cadence__cadence_query
+  - mcp__baley__baley_apply
+  - mcp__baley__baley_query
   - Write
   - Edit
   - Bash
@@ -25,7 +25,7 @@ not complete a phase or verify settlement.
 
 <route>
 Parse $ARGUMENTS:
-- list: call cadence_query {"operation":"debug-list"}, show the open records
+- list: call baley_query {"operation":"debug-list"}, show the open records
   with slug and symptom, then stop.
 - status <slug>: call debug-status with slug, show the returned record, then stop.
 - continue <slug>: call debug-continue with slug and resume from its record
@@ -35,7 +35,7 @@ Parse $ARGUMENTS:
   applying a fix.
 - Otherwise the remaining text is a new symptom.
 
-Use cadence_query schema with tool apply or query and for set to the operation
+Use baley_query schema with tool apply or query and for set to the operation
 name for its exact request shape. Debug mutations carry request field `request.request_id`, slug
 and expected_version. Open uses expected_version 0; later steps copy the last
 returned answer field `record.version`. Slugs contain 1..80 lowercase letters, digits or
@@ -58,7 +58,7 @@ from it. Read project code with the host's own tools.
    never a confirmed hypothesis. Under config key `memory.backend` none, the answer has no
    hits and reads no corpus; an unset key uses the schema default builtin.
    Continue presents the retained snapshot, even if the corpus or backend changed.
-   For an explicit recall request, call cadence_query
+   For an explicit recall request, call baley_query
    {"operation":"recall","query":"<words>","limit":5,"phase":1}, replacing
    the words and optional positive integer limit/phase with the owner's request.
    Omit phase for unfiltered recall. A phase filter excludes phaseless hits and
@@ -117,7 +117,7 @@ repeating identical evidence does not.
 For an offered entry whose epoch equals answer field `record.epoch`, show its recorded id,
 provider/model and effort. Ask the owner to choose Consult or Keep going without
 it. Wait for explicit owner acceptance or decline; an offer never spends tokens.
-Read the debug-consult schema and call cadence_apply with operation debug-consult
+Read the debug-consult schema and call baley_apply with operation debug-consult
 and request {request_id, slug, expected_version, offer, epoch, decision}. Copy
 answer field `record.version`, the offer id and its epoch; decision is accept or decline,
 matching the owner's actual choice. Use a distinct request ID for each choice.
@@ -175,8 +175,8 @@ issued fire. A same-fix retry resumes this coordination without a second scan
 or fire. A blocking admitted fire keeps resolve pending; changed material
 cannot inherit its clearance. Preserve the fire and refusal as pending.
 
-For the issued fire, call cadence_query review-next with fire and follow
-cad-review-delivery with caller debug and home reviews/<fire>. Preserve the
+For the issued fire, call baley_query review-next with fire and follow
+bal-review-delivery with caller debug and home reviews/<fire>. Preserve the
 actual staged/null-head target. When review-next answers a host dispatch, run
 that actual host Task once, wait, and forward the actual observations and
 unchanged return through the shared delivery operations. There is no Rust
@@ -222,7 +222,7 @@ reuse an earlier receipt. Only exact accepted settlement reaches reproduction
 verification; preserve any pending findings and refusal until the owner acts.
 Use no trace-count script.
 
-@${CLAUDE_PLUGIN_ROOT}/skills/cad-review-delivery/SKILL.md
+@${CLAUDE_PLUGIN_ROOT}/skills/bal-review-delivery/SKILL.md
 </resolve>
 
 <recovery>

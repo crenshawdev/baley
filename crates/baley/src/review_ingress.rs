@@ -249,7 +249,7 @@ impl Decoder {
     fn review(&self) -> Option<bool> {
         let fields = [
             (&self.method, "tools/call"),
-            (&self.tool, "cadence_apply"),
+            (&self.tool, "baley_apply"),
             (&self.operation, "review-return"),
         ];
         if fields
@@ -795,7 +795,7 @@ impl Drop for InFlight {
 /// still running; otherwise an answer was owed and will never be written.
 fn eof_notice(pending: usize) -> Option<String> {
     (pending > 0).then(|| format!(
-        "cadence: stdin closed with {pending} request(s) still running; their answers were never sent. A client keeps stdin open until it has read every response."
+        "baley: stdin closed with {pending} request(s) still running; their answers were never sent. A client keeps stdin open until it has read every response."
     ))
 }
 
@@ -853,7 +853,7 @@ where
                 self.read.closed = true;
                 self.failed.store(true, Ordering::Release);
                 self.admission.close();
-                eprintln!("cadence: input refused: {error}");
+                eprintln!("baley: input refused: {error}");
                 None
             }
         }
@@ -901,7 +901,7 @@ mod tests {
     }
 
 
-    const PREFIX: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"cadence_apply","arguments":{"operation":"review-return","raw":""#;
+    const PREFIX: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"baley_apply","arguments":{"operation":"review-return","raw":""#;
     const SUFFIX: &[u8] = b"\"}}}\n";
     struct Chunked {
         bytes: Vec<u8>,
@@ -1035,7 +1035,7 @@ mod tests {
     }
     #[test]
     fn gap157_reordered_escaped_keys_identify_actual_raw_path() {
-        let wire=br#"{"params":{"arguments":{"r\u0061w":"{\"findings\":[]}","oper\u0061tion":"review-return"},"n\u0061me":"cadence_apply"},"method":"tools/call","jsonrpc":"2.0","id":1}"#;
+        let wire=br#"{"params":{"arguments":{"r\u0061w":"{\"findings\":[]}","oper\u0061tion":"review-return"},"n\u0061me":"baley_apply"},"method":"tools/call","jsonrpc":"2.0","id":1}"#;
         let decoder = decode(wire).unwrap();
         assert_eq!(decoder.review(), Some(true));
         assert_eq!(decoder.raw_bytes, 15);
@@ -1070,7 +1070,7 @@ mod tests {
     }
     #[tokio::test]
     async fn gap157_metadata_excess_stops_before_frame_end() {
-        let mut wire=br#"{"jsonrpc":"2.0","method":"tools/call","params":{"name":"cadence_apply","arguments":{"operation":"review-return","note":""#.to_vec();
+        let mut wire=br#"{"jsonrpc":"2.0","method":"tools/call","params":{"name":"baley_apply","arguments":{"operation":"review-return","note":""#.to_vec();
         wire.extend(std::iter::repeat_n(b'x', METADATA_LIMIT + 1));
         wire.extend_from_slice(SUFFIX);
         let length = wire.len();
@@ -1102,7 +1102,7 @@ mod tests {
     }
     #[tokio::test]
     async fn gap157_unrelated_operation_has_no_raw_return_cap() {
-        let wire=b"{\"method\":\"tools/call\",\"params\":{\"name\":\"cadence_apply\",\"arguments\":{\"operation\":\"other\",\"raw\":\"1234567890\"}}}\n";
+        let wire=b"{\"method\":\"tools/call\",\"params\":{\"name\":\"baley_apply\",\"arguments\":{\"operation\":\"other\",\"raw\":\"1234567890\"}}}\n";
         let mut input = BoundedInput::new(
             Chunked::new(wire.to_vec()),
             Limits {

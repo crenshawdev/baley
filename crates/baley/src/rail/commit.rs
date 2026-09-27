@@ -145,7 +145,7 @@ pub fn freeze_message(root: &Path, changes: &BTreeMap<String, Option<Vec<u8>>>, 
     let commit = object(root,"commit",sign(root,format!("tree {tree}\nparent {parent}\nauthor {author}\ncommitter {committer}\n\n{message}").into_bytes(), process)?, process)?;
     let index_path = root.join(text(root,&["rev-parse","--git-path","index"], process)?);
     let index_before = fs::read(&index_path)?;
-    let temporary = Temporary(index_path.with_file_name(format!(".cadence-prune-index-{}",std::process::id())));
+    let temporary = Temporary(index_path.with_file_name(format!(".baley-prune-index-{}",std::process::id())));
     let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary.0)?;
     file.write_all(&index_before)?;
     drop(file);
@@ -170,7 +170,7 @@ pub fn freeze_staged(root: &Path, changes: &BTreeMap<String, Vec<u8>>, subject: 
     }
     let index_path = root.join(text(root, &["rev-parse", "--git-path", "index"], process)?);
     let index_before = fs::read(&index_path)?;
-    let temporary = Temporary(index_path.with_file_name(format!(".cadence-undo-index-{}", std::process::id())));
+    let temporary = Temporary(index_path.with_file_name(format!(".baley-undo-index-{}", std::process::id())));
     let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary.0)?;
     file.write_all(&index_before)?;
     drop(file);

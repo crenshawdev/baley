@@ -13,7 +13,7 @@ fn voice(name: &str) -> RequestedVoice {
 fn model_present_round_trips_pin() {
     assert_eq!(
         serde_json::to_value(voice("pinned")).unwrap(),
-        json!({"agent":"cad-reviewer","model":"sonnet","effort":null,"routing":null,"selection_evidence":"route1"})
+        json!({"agent":"bal-reviewer","model":"sonnet","effort":null,"routing":null,"selection_evidence":"route1"})
     );
 }
 
@@ -21,6 +21,6 @@ fn model_present_round_trips_pin() {
 fn model_absent_round_trips_inheritance() {
     assert_eq!(
         serde_json::to_value(voice("inherited")).unwrap(),
-        json!({"agent":"cad-reviewer","model":null,"effort":null,"routing":null,"selection_evidence":"route1"})
+        json!({"agent":"bal-reviewer","model":null,"effort":null,"routing":null,"selection_evidence":"route1"})
     );
 }

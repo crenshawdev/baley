@@ -73,7 +73,7 @@ fn an_entry_that_parses_opens_the_session_carrying_its_entry() {
 
 #[test]
 fn a_declined_or_unanswered_interview_only_observes() {
-    let answers = Some(vec![Update { key: "roles.cad-executor.effort".into(), value: json!("low") }]);
+    let answers = Some(vec![Update { key: "roles.bal-executor.effort".into(), value: json!("low") }]);
     for (accepted, answers) in [(false, answers.clone()), (false, None), (true, None)] {
         assert!(matches!(start(&interview(accepted, answers)), Start::ObserveOnly), "accepted {accepted}");
     }

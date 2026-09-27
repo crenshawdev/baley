@@ -1,13 +1,13 @@
 //! Compiled spike role; the installed skill is only its rendering.
 pub fn markdown() -> &'static str {
     static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        crate::help::table::render_description("cad-spike", r#"---
-name: cad-spike
+        crate::help::table::render_description("bal-spike", r#"---
+name: bal-spike
 description: ""
 argument-hint: "<the question or hypothesis to resolve>"
 allowed-tools:
-  - mcp__cadence__cadence_apply
-  - mcp__cadence__cadence_query
+  - mcp__baley__baley_apply
+  - mcp__baley__baley_query
   - Write
   - Edit
   - Bash
@@ -22,9 +22,9 @@ retains observations; it does not adjudicate experimental truth.
 </role>
 
 <protocol>
-Use cadence_query schema with tool apply and for set to spike-open,
+Use baley_query schema with tool apply and for set to spike-open,
 spike-observation, spike-verdict or spike-close for the exact request shape.
-Each cadence_apply operation carries request with request_id, slug and
+Each baley_apply operation carries request with request_id, slug and
 expected_version. Open uses expected_version 0; later mutations copy the last
 returned answer field `record.version`. Use distinct request IDs for new mutations. Retry an
 uncertain delivery with the identical request_id and inputs; changed-input

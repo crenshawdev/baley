@@ -33,23 +33,23 @@ mod tests {
     #[test]
     fn rendered_command_identity_selects_the_requested_surface() {
         for (command, name) in [
-            (&["help-instructions"][..], "cad-help"),
-            (&["executor-instructions"][..], "cad-executor-contract"),
-            (&["executor-instructions", "--frontdoor"][..], "cad-execute"),
-            (&["verifier-instructions"][..], "cad-verifier-contract"),
-            (&["verifier-instructions", "--frontdoor"][..], "cad-verify"),
-            (&["review-instructions"][..], "cad-review"),
-            (&["review-instructions", "--alias", "cad-decision-review"][..], "cad-decision-review"),
-            (&["review-instructions", "--alias", "cad-minimalism-review"][..], "cad-minimalism-review"),
-            (&["review-instructions", "--alias", "cad-plan-review"][..], "cad-plan-review"),
-            (&["audit-instructions"][..], "cad-audit"),
-            (&["audit-instructions", "--coverage"][..], "cad-coverage"),
-            (&["task-instructions"][..], "cad-task"),
+            (&["help-instructions"][..], "bal-help"),
+            (&["executor-instructions"][..], "bal-executor-contract"),
+            (&["executor-instructions", "--frontdoor"][..], "bal-execute"),
+            (&["verifier-instructions"][..], "bal-verifier-contract"),
+            (&["verifier-instructions", "--frontdoor"][..], "bal-verify"),
+            (&["review-instructions"][..], "bal-review"),
+            (&["review-instructions", "--alias", "bal-decision-review"][..], "bal-decision-review"),
+            (&["review-instructions", "--alias", "bal-minimalism-review"][..], "bal-minimalism-review"),
+            (&["review-instructions", "--alias", "bal-plan-review"][..], "bal-plan-review"),
+            (&["audit-instructions"][..], "bal-audit"),
+            (&["audit-instructions", "--coverage"][..], "bal-coverage"),
+            (&["task-instructions"][..], "bal-task"),
         ] {
             let text = super::render(command).expect("instruction command");
             assert!(text.starts_with(&format!("---\nname: {name}\n")), "{command:?}");
         }
-        assert!(super::render(&["review-instructions", "--alias", "cad-help"]).is_none());
+        assert!(super::render(&["review-instructions", "--alias", "bal-help"]).is_none());
         assert!(super::render(&["executor-instructions", "--coverage"]).is_none());
     }
 }

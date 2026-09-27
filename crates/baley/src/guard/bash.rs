@@ -400,11 +400,11 @@ fn commit_decision(
         Outcome::Pass
     };
     audit.reason = match audit.outcome {
-        Outcome::Deny if failure_denies => format!("Cadence rail: git.guard_hard_fail=true denies a commit on provably protected branch {:?} while guard inputs are unavailable.", branch),
-        Outcome::Deny => format!("Cadence rail: git.on_protected=refuse denies a commit on protected branch {:?}.", branch),
-        Outcome::Ask => format!("Cadence rail: permission is required before this commit on branch {:?}.", branch),
-        Outcome::FailurePass => "Cadence guard failure: command proceeds without a Cadence permission veto; this is not policy approval.".into(),
-        Outcome::Pass => "Cadence protected-branch policy supplies no permission veto.".into(),
+        Outcome::Deny if failure_denies => format!("Baley rail: git.guard_hard_fail=true denies a commit on provably protected branch {:?} while guard inputs are unavailable.", branch),
+        Outcome::Deny => format!("Baley rail: git.on_protected=refuse denies a commit on protected branch {:?}.", branch),
+        Outcome::Ask => format!("Baley rail: permission is required before this commit on branch {:?}.", branch),
+        Outcome::FailurePass => "Baley guard failure: command proceeds without a Baley permission veto; this is not policy approval.".into(),
+        Outcome::Pass => "Baley protected-branch policy supplies no permission veto.".into(),
     };
     if torn {
         audit.reason.push_str(" The protected-branch list or controlling settings are unavailable: the branch rails are deciding with defaults rather than the user's settings. Fix the named layer or approve deliberately.");
@@ -437,7 +437,7 @@ fn respond(receipt: &Audit) -> ExitCode {
 }
 fn audit_failed(audit: &Audit, error: impl std::fmt::Display) -> ExitCode {
     eprintln!(
-        "cadence guard failure: audit storage/confirmation unavailable: {error}; decision was not confirmed durably. {}",
+        "baley guard failure: audit storage/confirmation unavailable: {error}; decision was not confirmed durably. {}",
         audit.reason
     );
     if audit.outcome == Outcome::Deny {
@@ -467,7 +467,7 @@ pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
     };
     let planning = project.join(".planning");
     let global = super::global_setting(
-        std::env::var_os("CADENCE_GLOBAL_CONFIG"),
+        std::env::var_os("BALEY_GLOBAL_CONFIG"),
         std::env::var_os("HOME"),
     );
     let factory =
@@ -476,7 +476,7 @@ pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
         event_id: audit::event_identity(event.session_id.as_deref(), event.tool_use_id.as_deref()),
         command_digest: digest(event.tool_input.command.as_bytes()), cwd: event.cwd,
         project: project.clone(), verb, branch: None, policy: None, outcome: Outcome::Ask,
-        unavailable: vec![], reason: "Cadence rail: every Bash git push requires permission. Approve only if you are deliberately publishing.".into(),
+        unavailable: vec![], reason: "Baley rail: every Bash git push requires permission. Approve only if you are deliberately publishing.".into(),
     };
     let runtime = match tokio::runtime::Builder::new_current_thread().build() {
         Ok(runtime) => runtime,

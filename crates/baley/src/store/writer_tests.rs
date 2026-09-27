@@ -18,7 +18,7 @@ fn drain_limit_diagnostic_names_the_open_write_and_bound() {
         bound: std::time::Duration::from_secs(10),
     };
     assert_eq!(super::writer::drain_limit_diagnostic(&limit),
-        "cadence: shutdown drain reached 10 seconds; open admitted write drain-02 left to journal recovery.");
+        "baley: shutdown drain reached 10 seconds; open admitted write drain-02 left to journal recovery.");
 }
 
 #[test]
@@ -28,7 +28,7 @@ fn drain_limit_diagnostic_names_the_open_write_and_bound_without_inventing_a_wri
         bound: std::time::Duration::from_secs(10),
     };
     assert_eq!(super::writer::drain_limit_diagnostic(&limit),
-        "cadence: shutdown drain reached 10 seconds while joining writers; any open intent is left to journal recovery.");
+        "baley: shutdown drain reached 10 seconds while joining writers; any open intent is left to journal recovery.");
 }
 
 #[test]
@@ -299,7 +299,7 @@ fn legacy_boundary_line() -> String {
     format!(
         concat!(
             r#"{{"version":1,"id":"{d}","revision":1,"origin":{{"source":"execution-boundary","original":"missing"}},"#,
-            r#""decision":{{"class":"boundary","phase":3,"tool":"cadence-apply","operation":"execution-refusal","#,
+            r#""decision":{{"class":"boundary","phase":3,"tool":"baley-apply","operation":"execution-refusal","#,
             r#""request_digest":"{d}","outcome":"refused","subject_id":null,"store_generation":1,"prompt_digest":null,"#,
             r#""response_digest":"{d}","terminal":false}},"at":1}}"#
         ),
@@ -343,7 +343,7 @@ mod boundaries {
     fn request(phase: u32, name: &str) -> BoundaryDecision {
         BoundaryDecision {
             phase,
-            tool: BoundaryTool::CadenceApply,
+            tool: BoundaryTool::BaleyApply,
             operation: "execution-refusal".into(),
             request_digest: digest(name.as_bytes()),
             outcome: "refused".into(),
@@ -363,7 +363,7 @@ mod boundaries {
             origin: Origin { source: "execution-boundary".into(), original: Evidence::Missing },
             decision: Decision::Boundary {
                 phase,
-                tool: "cadence-apply".into(),
+                tool: "baley-apply".into(),
                 operation: "execution-refusal".into(),
                 request_digest: id.clone(),
                 outcome: if terminal { "log-bound" } else { "refused" }.into(),
@@ -515,7 +515,7 @@ mod scoped {
 
     fn boundary(scope: BoundaryScope, operation: &str, name: &str) -> BoundaryV1 {
         let answer = PreparedAnswer::new(Envelope::Refused { code: "refused".into(), reason: name.into() }).unwrap();
-        BoundaryV1::new(scope, BoundaryTool::CadenceApply, operation.into(), digest(name.as_bytes()), None, &answer)
+        BoundaryV1::new(scope, BoundaryTool::BaleyApply, operation.into(), digest(name.as_bytes()), None, &answer)
     }
 
     /// A scoped decision already in the log, written by hand.
@@ -699,7 +699,7 @@ mod scoped {
         use super::super::writer::patch_boundary_valid;
         use baley::execution::model::{ExecutorPatch, PatchKind, PlanDisposition};
         let answer = PreparedAnswer::new(Envelope::Refused { code: "risk-pending".into(), reason: "review pending".into() }).unwrap();
-        let decision = BoundaryV1::new(PHASE, BoundaryTool::CadenceApply, "executor".into(), digest(b"patch"), Some("d-1".into()), &answer);
+        let decision = BoundaryV1::new(PHASE, BoundaryTool::BaleyApply, "executor".into(), digest(b"patch"), Some("d-1".into()), &answer);
         let patch = ExecutorPatch {
             schema: 1, kind: PatchKind::Executor, dispatch_id: "d-1".into(), expected_execution_version: 1,
             outcome: PlanDisposition::Complete, tasks: vec![], deviations: vec![], blockers: vec![],

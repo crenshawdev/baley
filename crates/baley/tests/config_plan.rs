@@ -62,10 +62,10 @@ fn pretty(value: Value) -> Option<Vec<u8>> {
 
 #[test]
 fn config_is_the_planning_roots_config_v4_json_and_the_global_setting_as_given() {
-    let paths = paths(Path::new("/project/.planning"), Some(PathBuf::from("/home/u/.cadence/config.v4.json")));
+    let paths = paths(Path::new("/project/.planning"), Some(PathBuf::from("/home/u/.baley/config.v4.json")));
     assert_eq!(
         (paths.repo, paths.global),
-        (PathBuf::from("/project/.planning/config.v4.json"), Some(PathBuf::from("/home/u/.cadence/config.v4.json")))
+        (PathBuf::from("/project/.planning/config.v4.json"), Some(PathBuf::from("/home/u/.baley/config.v4.json")))
     );
 }
 
@@ -77,15 +77,15 @@ fn without_a_global_setting_there_is_no_global_layer() {
 #[test]
 fn a_repo_batch_replaces_the_repo_file_and_reports_its_changed_keys_sorted() {
     let planned = plan(
-        &generation(None, Some(json!({"roles":{"cad-executor":{"effort":"high"}}}))),
+        &generation(None, Some(json!({"roles":{"bal-executor":{"effort":"high"}}}))),
         &distinct(),
         Layer::Repo,
-        &[update("roles.cad-executor.model", json!("sonnet")), update("roles.cad-executor.effort", json!("low"))],
+        &[update("roles.bal-executor.model", json!("sonnet")), update("roles.bal-executor.effort", json!("low"))],
     )
     .unwrap();
     assert_eq!(
         (planned.target, planned.destination.as_path(), planned.changed_keys.as_slice()),
-        ("repo-config", Path::new(REPO), ["roles.cad-executor.effort".to_string(), "roles.cad-executor.model".to_string()].as_slice())
+        ("repo-config", Path::new(REPO), ["roles.bal-executor.effort".to_string(), "roles.bal-executor.model".to_string()].as_slice())
     );
 }
 
@@ -95,20 +95,20 @@ fn the_installed_layer_is_pretty_printed_and_keeps_unknown_keys_and_literal_null
         &generation(None, Some(json!({"unknown":{"saved":7}}))),
         &distinct(),
         Layer::Repo,
-        &[update("roles.cad-executor.model", Value::Null)],
+        &[update("roles.bal-executor.model", Value::Null)],
     )
     .unwrap();
-    assert_eq!(planned.bytes, pretty(json!({"unknown":{"saved":7},"roles":{"cad-executor":{"model":null}}})));
+    assert_eq!(planned.bytes, pretty(json!({"unknown":{"saved":7},"roles":{"bal-executor":{"model":null}}})));
 }
 
 #[test]
 fn a_global_batch_replaces_only_the_global_file_with_the_literal_model_text() {
-    let before = json!({"roles":{"cad-planner":{"effort":"high"}}});
+    let before = json!({"roles":{"bal-planner":{"effort":"high"}}});
     let planned = plan(
         &generation(Some(before.clone()), Some(json!({"surfaces":["auth"]}))),
         &distinct(),
         Layer::Global,
-        &[update("roles.cad-planner.model", json!("claude-opus-5-5"))],
+        &[update("roles.bal-planner.model", json!("claude-opus-5-5"))],
     )
     .unwrap();
     assert_eq!(
@@ -117,8 +117,8 @@ fn a_global_batch_replaces_only_the_global_file_with_the_literal_model_text() {
             target: "global-config",
             destination: GLOBAL.into(),
             prepared_against: Some(serde_json::to_vec(&before).unwrap()),
-            changed_keys: vec!["roles.cad-planner.model".into()],
-            bytes: pretty(json!({"roles":{"cad-planner":{"effort":"high","model":"claude-opus-5-5"}}})),
+            changed_keys: vec!["roles.bal-planner.model".into()],
+            bytes: pretty(json!({"roles":{"bal-planner":{"effort":"high","model":"claude-opus-5-5"}}})),
         }
     );
 }
@@ -143,7 +143,7 @@ fn a_repo_only_key_at_the_global_layer_is_refused_whether_or_not_the_path_is_ali
 fn a_global_batch_without_a_global_address_is_refused() {
     let paths = Paths { repo: REPO.into(), global: None };
     assert_eq!(
-        plan(&generation(None, None), &paths, Layer::Global, &[update("roles.cad-planner.effort", json!("low"))]),
+        plan(&generation(None, None), &paths, Layer::Global, &[update("roles.bal-planner.effort", json!("low"))]),
         Err(Error::Invalid("global config address unavailable".into()))
     );
 }
@@ -153,7 +153,7 @@ fn a_file_that_is_no_longer_the_one_the_session_bound_is_refused() {
     let mut rebound = generation(None, None);
     rebound.repo.identity = "/elsewhere/config.v4.json".into();
     assert_eq!(
-        plan(&rebound, &distinct(), Layer::Repo, &[update("roles.cad-executor.effort", json!("low"))]),
+        plan(&rebound, &distinct(), Layer::Repo, &[update("roles.bal-executor.effort", json!("low"))]),
         Err(Error::Conflict("active config identity changed; reopen session before writing config".into()))
     );
 }
@@ -165,7 +165,7 @@ fn an_invalid_update_anywhere_in_the_batch_refuses_the_plan() {
             &generation(None, None),
             &distinct(),
             Layer::Repo,
-            &[update("roles.cad-executor.effort", json!("low")), update("stakes", json!("high"))]
+            &[update("roles.bal-executor.effort", json!("low")), update("stakes", json!("high"))]
         ),
         Err(Error::Invalid("unknown config key stakes".into()))
     );
@@ -218,10 +218,10 @@ fn a_batch_reports_the_layer_it_was_asked_for() {
 
 #[test]
 fn a_value_changed_and_then_changed_back_is_written_both_times() {
-    let key = "roles.cad-executor.effort";
+    let key = "roles.bal-executor.effort";
     for (stored, requested) in [("high", "low"), ("low", "high")] {
         let planned = plan(
-            &generation(None, Some(json!({"roles":{"cad-executor":{"effort":stored}}}))),
+            &generation(None, Some(json!({"roles":{"bal-executor":{"effort":stored}}}))),
             &distinct(),
             Layer::Repo,
             &[update(key, json!(requested))],
@@ -255,7 +255,7 @@ fn repo_plan() -> Plan {
         &generation(None, Some(json!({"a":1}))),
         &distinct(),
         Layer::Repo,
-        &[update("roles.cad-executor.effort", json!("low"))],
+        &[update("roles.bal-executor.effort", json!("low"))],
     )
     .unwrap()
 }
@@ -301,12 +301,12 @@ fn a_failed_config_read_refuses_the_write_as_a_policy_error() {
 fn a_first_global_batch_of_the_thirteen_defaults_changes_all_thirteen_in_the_global_file() {
     let mut updates = Vec::new();
     for (role, effort) in [
-        ("cad-planner", "high"),
-        ("cad-assumptions-analyzer", "high"),
-        ("cad-verifier", "high"),
-        ("cad-reviewer", "medium"),
-        ("cad-executor", "high"),
-        ("cad-plan-checker", "low"),
+        ("bal-planner", "high"),
+        ("bal-assumptions-analyzer", "high"),
+        ("bal-verifier", "high"),
+        ("bal-reviewer", "medium"),
+        ("bal-executor", "high"),
+        ("bal-plan-checker", "low"),
     ] {
         updates.push(update(&format!("roles.{role}.model"), Value::Null));
         updates.push(update(&format!("roles.{role}.effort"), json!(effort)));
@@ -317,18 +317,18 @@ fn a_first_global_batch_of_the_thirteen_defaults_changes_all_thirteen_in_the_glo
         planned.changed_keys,
         [
             "review.triggers.risk_surface.waive_routing_floor",
-            "roles.cad-assumptions-analyzer.effort",
-            "roles.cad-assumptions-analyzer.model",
-            "roles.cad-executor.effort",
-            "roles.cad-executor.model",
-            "roles.cad-plan-checker.effort",
-            "roles.cad-plan-checker.model",
-            "roles.cad-planner.effort",
-            "roles.cad-planner.model",
-            "roles.cad-reviewer.effort",
-            "roles.cad-reviewer.model",
-            "roles.cad-verifier.effort",
-            "roles.cad-verifier.model",
+            "roles.bal-assumptions-analyzer.effort",
+            "roles.bal-assumptions-analyzer.model",
+            "roles.bal-executor.effort",
+            "roles.bal-executor.model",
+            "roles.bal-plan-checker.effort",
+            "roles.bal-plan-checker.model",
+            "roles.bal-planner.effort",
+            "roles.bal-planner.model",
+            "roles.bal-reviewer.effort",
+            "roles.bal-reviewer.model",
+            "roles.bal-verifier.effort",
+            "roles.bal-verifier.model",
         ]
     );
     assert_eq!((planned.target, planned.destination.as_path()), ("global-config", Path::new(GLOBAL)));
@@ -336,12 +336,12 @@ fn a_first_global_batch_of_the_thirteen_defaults_changes_all_thirteen_in_the_glo
         planned.bytes,
         pretty(json!({
             "roles": {
-                "cad-planner": {"model": null, "effort": "high"},
-                "cad-assumptions-analyzer": {"model": null, "effort": "high"},
-                "cad-verifier": {"model": null, "effort": "high"},
-                "cad-reviewer": {"model": null, "effort": "medium"},
-                "cad-executor": {"model": null, "effort": "high"},
-                "cad-plan-checker": {"model": null, "effort": "low"}
+                "bal-planner": {"model": null, "effort": "high"},
+                "bal-assumptions-analyzer": {"model": null, "effort": "high"},
+                "bal-verifier": {"model": null, "effort": "high"},
+                "bal-reviewer": {"model": null, "effort": "medium"},
+                "bal-executor": {"model": null, "effort": "high"},
+                "bal-plan-checker": {"model": null, "effort": "low"}
             },
             "review": {"triggers": {"risk_surface": {"waive_routing_floor": []}}}
         }))

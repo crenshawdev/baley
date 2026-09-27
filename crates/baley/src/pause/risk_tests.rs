@@ -113,7 +113,7 @@ fn this_fires_contracted_review_parses() {
 fn a_result_that_is_not_this_fires_contracted_review_is_unusable() {
     let review = review(fire("f", 1));
     let mut other_contract = result(&review);
-    other_contract.contract = "cadence.other.v1".into();
+    other_contract.contract = "baley.other.v1".into();
     let mut not_reviewed = result(&review);
     not_reviewed.result = "accepted".into();
     let mut not_a_review = result(&review);

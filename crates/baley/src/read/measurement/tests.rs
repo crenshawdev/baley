@@ -11,9 +11,9 @@ fn transcript_reads_are_counted_by_kind() {
             {"type": "tool_use", "id": "g1", "name": "Grep", "input": {"pattern": "needle"}},
             {"type": "tool_use", "id": "b1", "name": "Bash", "input": {"command": "cat src/a.rs"}},
             {"type": "tool_use", "id": "b2", "name": "Bash", "input": {"command": "make"}},
-            {"type": "tool_use", "id": "q1", "name": "mcp__cadence__cadence_query", "input": {"operation": "search"}},
-            {"type": "tool_use", "id": "q2", "name": "mcp__cadence__cadence_query", "input": {"operation": "read"}},
-            {"type": "tool_use", "id": "q3", "name": "mcp__cadence__cadence_query", "input": {"operation": "document"}}
+            {"type": "tool_use", "id": "q1", "name": "mcp__baley__baley_query", "input": {"operation": "search"}},
+            {"type": "tool_use", "id": "q2", "name": "mcp__baley__baley_query", "input": {"operation": "read"}},
+            {"type": "tool_use", "id": "q3", "name": "mcp__baley__baley_query", "input": {"operation": "document"}}
         ]}}),
         json!({"type": "user", "message": {"content": [
             {"type": "tool_result", "tool_use_id": "r1", "content": "a".repeat(10)},
@@ -35,23 +35,23 @@ fn transcript_reads_are_counted_by_kind() {
             ("Grep".into(), Tally { calls: 1, bytes: 8 }),
             ("shell read".into(), Tally { calls: 1, bytes: 30 }),
             ("unclassified".into(), Tally { calls: 1, bytes: 5 }),
-            ("cadence_query search".into(), Tally { calls: 1, bytes: 40 }),
-            ("cadence_query read".into(), Tally { calls: 1, bytes: 50 }),
-            ("cadence_query document".into(), Tally { calls: 1, bytes: 60 }),
+            ("baley_query search".into(), Tally { calls: 1, bytes: 40 }),
+            ("baley_query read".into(), Tally { calls: 1, bytes: 50 }),
+            ("baley_query document".into(), Tally { calls: 1, bytes: 60 }),
         ])
     );
 
     let codex = vec![
         json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
-            "type": "McpToolCall", "server": "cadence", "tool": "cadence_query", "arguments": {"operation": "search"},
+            "type": "McpToolCall", "server": "baley", "tool": "baley_query", "arguments": {"operation": "search"},
             "result": {"content": [{"type": "text", "text": "s".repeat(100)}], "structuredContent": {"k": "v"}}
         }}}),
         json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
-            "type": "McpToolCall", "server": "cadence", "tool": "cadence_query", "arguments": {"operation": "read"},
+            "type": "McpToolCall", "server": "baley", "tool": "baley_query", "arguments": {"operation": "read"},
             "result": {"content": [{"type": "text", "text": "r".repeat(200)}], "structuredContent": {"k": "v"}}
         }}}),
         json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
-            "type": "McpToolCall", "server": "cadence", "tool": "cadence_apply", "arguments": {"operation": "plan-submit"},
+            "type": "McpToolCall", "server": "baley", "tool": "baley_apply", "arguments": {"operation": "plan-submit"},
             "result": {"content": [{"type": "text", "text": "a".repeat(70)}]}
         }}}),
         json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
@@ -72,8 +72,8 @@ fn transcript_reads_are_counted_by_kind() {
     assert_eq!(
         count_reads(Host::Codex, &codex, &BTreeMap::new()).unwrap(),
         BTreeMap::from([
-            ("cadence_query search".into(), Tally { calls: 1, bytes: 100 }),
-            ("cadence_query read".into(), Tally { calls: 1, bytes: 200 }),
+            ("baley_query search".into(), Tally { calls: 1, bytes: 100 }),
+            ("baley_query read".into(), Tally { calls: 1, bytes: 200 }),
             ("shell read".into(), Tally { calls: 2, bytes: 700 }),
             ("unclassified".into(), Tally { calls: 3, bytes: 7 }),
         ])
@@ -84,7 +84,7 @@ fn transcript_reads_are_counted_by_kind() {
 fn every_agent_call_in_the_episode_selects_its_worker() {
     let main = vec![json!({"message": {"content": [
         {"type": "tool_use", "id": "a1", "name": "Agent", "input": {"subagent_type": "general-purpose"}},
-        {"type": "tool_use", "id": "a2", "name": "Agent", "input": {"subagent_type": "cad-planner"}}
+        {"type": "tool_use", "id": "a2", "name": "Agent", "input": {"subagent_type": "bal-planner"}}
     ]}})];
     let workers = vec![
         ("a1".into(), vec![json!({"message": {"content": [
@@ -108,10 +108,10 @@ fn an_episode_without_agent_calls_selects_no_worker() {
 fn the_report_lists_each_kind_with_its_calls_and_bytes() {
     let counts = BTreeMap::from([
         ("Grep".into(), Tally { calls: 2, bytes: 30 }),
-        ("cadence_query read".into(), Tally { calls: 1, bytes: 50 }),
+        ("baley_query read".into(), Tally { calls: 1, bytes: 50 }),
     ]);
     assert_eq!(report_lines(&counts),
-        "reads[Grep]: 2 calls, 30 bytes\nreads[cadence_query read]: 1 calls, 50 bytes\n");
+        "reads[Grep]: 2 calls, 30 bytes\nreads[baley_query read]: 1 calls, 50 bytes\n");
 }
 
 #[test]

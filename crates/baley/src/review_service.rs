@@ -39,7 +39,7 @@ pub enum Query {
         attempt: Option<String>,
         supplied: Option<Value>,
     },
-    /// Resolve one explicit review target (D-133): `command` is cad-review or
+    /// Resolve one explicit review target (D-133): `command` is bal-review or
     /// one of its three aliases, `arguments` the whitespace-split tokens. The
     /// answer carries the exact admission request to submit unchanged.
     #[serde(rename = "review-select")]
@@ -262,7 +262,7 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
                     super::config_service::route_at(
                         generation,
                         &super::config_service::RouteRequest {
-                            role: "cad-reviewer".into(),
+                            role: "bal-reviewer".into(),
                             phase: request.phase,
                             plan: request.plan,
                             attempt: None,
@@ -378,7 +378,7 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
                     };
                     Ok(RequestedVoice {
                         agent: if choice == "base" {
-                            "cad-reviewer".into()
+                            "bal-reviewer".into()
                         } else if local {
                             route.choice.agent.clone()
                         } else {
@@ -1326,8 +1326,8 @@ fn select(
     };
     let kind = selected.kind;
     let (caller, trigger, specialist) = match kind {
-        review::selection::Kind::Decision => ("cad-review", Value::Null, json!("decision")),
-        review::selection::Kind::Minimalism => ("cad-review", Value::Null, json!("minimalism")),
+        review::selection::Kind::Decision => ("bal-review", Value::Null, json!("decision")),
+        review::selection::Kind::Minimalism => ("bal-review", Value::Null, json!("minimalism")),
         review::selection::Kind::Plan => ("manual-plan", json!("plan"), Value::Null),
     };
     let home = match selected.phase {
@@ -1519,7 +1519,7 @@ pub(super) async fn next(store: &Store, fire: &str) -> Answer {
         return output(
             "review-next",
             json!({"state":"dispatch","dispatch":review::invoking::local_dispatch(&admission,&attempt),"attempt":attempt,"admission":admission,
-                "guidance":"WAIT: run this local dispatch once. Read retained material through document review-entry identities and their bounded parts. Forward actual launch and return events with cadence_apply review-observation; submit the unchanged five-field findings array with review-return using this admission/attempt identity, launch and host_return. For definite launch failure, use failure_event and host_failure without launch or findings. For missing or malformed host output, report host_failure without findings. Wait for the durable review-return digest/count acknowledgment, then poll review-next."}),
+                "guidance":"WAIT: run this local dispatch once. Read retained material through document review-entry identities and their bounded parts. Forward actual launch and return events with baley_apply review-observation; submit the unchanged five-field findings array with review-return using this admission/attempt identity, launch and host_return. For definite launch failure, use failure_event and host_failure without launch or findings. For missing or malformed host output, report host_failure without findings. Wait for the durable review-return digest/count acknowledgment, then poll review-next."}),
         );
     }
     let mut changed = false;
@@ -1552,7 +1552,7 @@ pub(super) async fn next(store: &Store, fire: &str) -> Answer {
     )
 }
 
-const PROVIDER_POLL_GUIDANCE: &str = "Provider work belongs to the resident binary. Poll cadence_query review-next with the same fire while pending; canceling a poll does not cancel or restart a paid request. Wait for durable closure before advancing. If local dispatch is returned, run it once and follow its WAIT/observation/unchanged-return acknowledgment contract. After a killed binary, interrupted or uncertain work requires recovery, never automatic resend.";
+const PROVIDER_POLL_GUIDANCE: &str = "Provider work belongs to the resident binary. Poll baley_query review-next with the same fire while pending; canceling a poll does not cancel or restart a paid request. Wait for durable closure before advancing. If local dispatch is returned, run it once and follow its WAIT/observation/unchanged-return acknowledgment contract. After a killed binary, interrupted or uncertain work requires recovery, never automatic resend.";
 
 pub async fn execute<I: ConfigIo + Clone + Sync>(
     factory: &SessionFactory<I>,
@@ -1783,7 +1783,7 @@ mod gap155_voice_tests {
                 requested_voice(Some(&Specialist::Minimalism), &manifest, || ordinary).unwrap();
             assert_eq!(
                 serde_json::to_value(voice).unwrap(),
-                json!({"agent":"cad-reviewer","model":null,"effort":null,
+                json!({"agent":"bal-reviewer","model":null,"effort":null,
                 "routing":null,"selection_evidence":"minimalism:m1"})
             );
         }

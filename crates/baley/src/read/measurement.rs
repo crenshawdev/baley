@@ -82,7 +82,7 @@ fn text_bytes(content: &Value) -> u64 {
 
 fn query_kind(input: &Value) -> String {
     input["operation"].as_str()
-        .map_or_else(|| "unclassified".into(), |operation| format!("cadence_query {operation}"))
+        .map_or_else(|| "unclassified".into(), |operation| format!("baley_query {operation}"))
 }
 
 fn read_name(name: &str) -> bool {
@@ -92,7 +92,7 @@ fn read_name(name: &str) -> bool {
 
 fn claude_read_kind(name: &str, input: &Value, read_lines: &BTreeMap<String, u64>) -> Option<String> {
     let kind = match name {
-        "mcp__cadence__cadence_query" => return Some(query_kind(input)),
+        "mcp__baley__baley_query" => return Some(query_kind(input)),
         "Grep" | "Glob" => name,
         "Read" => {
             match input["file_path"].as_str().and_then(|path| read_lines.get(path)) {
@@ -131,7 +131,7 @@ fn codex_read(item: &Value) -> Option<(String, u64)> {
     match item["type"].as_str() {
         Some("McpToolCall") => {
             let tool = item["tool"].as_str().unwrap_or("");
-            let kind = if item["server"] == "cadence" && tool == "cadence_query" {
+            let kind = if item["server"] == "baley" && tool == "baley_query" {
                 query_kind(&item["arguments"])
             } else if read_name(tool) {
                 "unclassified".into()
@@ -431,7 +431,7 @@ fn measure(read_lines: &BTreeMap<String, u64>, phase: u32, session_id: &str, fir
                     if !tool_ids.insert(id.to_owned()) { continue }
                     let name = block["name"].as_str().unwrap_or("");
                     let input = &block["input"];
-                    if name == "mcp__cadence__cadence_query"
+                    if name == "mcp__baley__baley_query"
                         && (input["phase"].as_u64() == Some(u64::from(phase))
                             || input["phase"].as_str() == Some(&phase.to_string()))
                     {

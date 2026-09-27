@@ -1,8 +1,8 @@
 {
   "schema": "phase12-pre29-capture-1",
-  "root": "/tmp/cadence-phase12-pre29-5b7de640",
-  "owner": "cadence-phase12-pre29-5b7de640",
-  "lock": "/tmp/cadence-phase12-pre29-5b7de640.lock",
+  "root": "/tmp/baley-phase12-pre29-5b7de640",
+  "owner": "baley-phase12-pre29-5b7de640",
+  "lock": "/tmp/baley-phase12-pre29-5b7de640.lock",
   "provenance": {
     "commit": "b353f09dba50db20992bd39ae52b0b331168d2f0",
     "archive_sha256": "2121ba4dd564530023c8794ee9041d42f5c50ebf32d561345df4900f2c4ba67d",
@@ -12,16 +12,16 @@
       "build",
       "--locked",
       "-p",
-      "cadence",
+      "baley",
       "--bin",
-      "cadence",
+      "baley",
       "--target-dir",
-      "/tmp/cadence-phase12-old-target-2i9iqwia"
+      "/tmp/baley-phase12-old-target-2i9iqwia"
     ],
     "build_attempts": [
       {
         "exit": 0,
-        "output": "   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling shlex v2.0.1\n   Compiling find-msvc-tools v0.1.12\n   Compiling libc v0.2.189\n   Compiling memchr v2.8.3\n   Compiling itoa v1.0.18\n   Compiling pin-project-lite v0.2.17\n   Compiling cfg-if v1.0.4\n   Compiling stable_deref_trait v1.2.1\n   Compiling tree-sitter-language v0.1.8\n   Compiling futures-core v0.3.34\n   Compiling bytes v1.12.1\n   Compiling futures-sink v0.3.34\n   Compiling serde_core v1.0.229\n   Compiling equivalent v1.0.2\n   Compiling zmij v1.0.23\n   Compiling hashbrown v0.17.1\n   Compiling smallvec v1.16.0\n   Compiling futures-io v0.3.34\n   Compiling litemap v0.8.3\n   Compiling futures-task v0.3.34\n   Compiling slab v0.4.12\n   Compiling writeable v0.6.4\n   Compiling futures-channel v0.3.34\n   Compiling once_cell v1.21.4\n   Compiling icu_normalizer_data v2.3.0\n   Compiling cc v1.4.5\n   Compiling icu_properties_data v2.3.0\n   Compiling utf8_iter v1.0.4\n   Compiling regex-syntax v0.8.11\n   Compiling autocfg v1.5.1\n   Compiling serde_json v1.0.151\n   Compiling serde v1.0.229\n   Compiling percent-encoding v2.3.2\n   Compiling zeroize v1.9.0\n   Compiling strsim v0.11.1\n   Compiling version_check v0.9.5\n   Compiling rustls-pki-types v1.15.1\n   Compiling httparse v1.10.1\n   Compiling num-traits v0.2.19\n   Compiling untrusted v0.9.0\n   Compiling tracing-core v0.1.36\n   Compiling generic-array v0.14.7\n   Compiling indexmap v2.14.2\n   Compiling http v1.5.0\n   Compiling try-lock v0.2.5\n   Compiling aho-corasick v1.1.5\n   Compiling log v0.4.34\n   Compiling ident_case v1.0.1\n   Compiling typenum v1.20.1\n   Compiling crossbeam-utils v0.8.23\n   Compiling anstyle v1.0.14\n   Compiling http-body v1.1.0\n   Compiling tower-service v0.3.3\n   Compiling rustls v0.23.44\n   Compiling want v0.3.1\n   Compiling form_urlencoded v1.2.2\n   Compiling ref-cast v1.0.27\n   Compiling atomic-waker v1.1.2\n   Compiling getrandom v0.4.3\n   Compiling syn v3.0.5\n   Compiling syn v2.0.119\n   Compiling subtle v2.6.1\n   Compiling crossbeam-epoch v0.9.21\n   Compiling utf8parse v0.2.2\n   Compiling sync_wrapper v1.0.2\n   Compiling encoding_rs v0.8.35\n   Compiling mio v1.2.3\n   Compiling socket2 v0.6.5\n   Compiling getrandom v0.2.17\n   Compiling anstyle-parse v1.0.0\n   Compiling colorchoice v1.0.5\n   Compiling ring v0.17.14\n   Compiling anstyle-query v1.1.5\n   Compiling ipnet v2.12.2\n   Compiling thiserror v2.0.20\n   Compiling base64 v0.22.1\n   Compiling is_terminal_polyfill v1.70.2\n   Compiling tower-layer v0.3.3\n   Compiling crossbeam-deque v0.8.8\n   Compiling synstructure v0.13.2\n   Compiling tracing-attributes v0.1.31\n   Compiling tree-sitter-rust v0.24.2\n   Compiling anstream v1.0.0\n   Compiling tree-sitter-json v0.24.8\n   Compiling zerofrom-derive v0.1.7\n   Compiling yoke-derive v0.8.2\n   Compiling tree-sitter-md v0.5.3\n   Compiling tree-sitter-python v0.25.0\n   Compiling tree-sitter-javascript v0.25.0\n   Compiling grep-matcher v0.1.9\n   Compiling webpki-roots v1.0.9\n   Compiling bitflags v2.13.1\n   Compiling heck v0.5.0\n   Compiling ryu v1.0.23\n   Compiling dyn-clone v1.0.20\n   Compiling arraydeque v0.5.1\n   Compiling unicode-width v0.2.2\n   Compiling tracing v0.1.44\n   Compiling crypto-common v0.1.7\n   Compiling block-buffer v0.10.4\n   Compiling rmcp v3.2.0\n   Compiling zerofrom v0.1.8\n   Compiling same-file v1.0.6\n   Compiling clap_lex v1.1.0\n   Compiling yoke v0.8.3\n   Compiling uuid v1.26.0\n   Compiling digest v0.10.7\n   Compiling granit-parser v1.2.0\n   Compiling walkdir v2.5.0\n   Compiling rustls-webpki v0.103.15\n   Compiling memmap2 v0.9.11\n   Compiling http-body-util v0.1.5\n   Compiling clap_builder v4.6.6\n   Compiling annotate-snippets v0.12.16\n   Compiling streaming-iterator v0.1.9\n   Compiling pastey v0.2.3\n   Compiling base64 v0.23.1\n   Compiling cpufeatures v0.2.17\n   Compiling regex-automata v0.4.18\n   Compiling sha2 v0.10.9\n   Compiling encoding_rs_io v0.1.8\n   Compiling serde-saphyr v1.2.0\n   Compiling tree-sitter v0.27.0\n   Compiling darling_core v0.24.1\n   Compiling serde_derive_internals v0.30.0\n   Compiling zerovec-derive v0.11.6\n   Compiling displaydoc v0.2.7\n   Compiling tokio-macros v2.7.2\n   Compiling futures-macro v0.3.34\n   Compiling serde_derive v1.0.229\n   Compiling ref-cast-impl v1.0.27\n   Compiling thiserror-impl v2.0.20\n   Compiling clap_derive v4.6.4\n   Compiling zerotrie v0.2.5\n   Compiling tokio v1.53.1\n   Compiling futures-util v0.3.34\n   Compiling zerovec v0.11.8\n   Compiling schemars_derive v1.2.2\n   Compiling tinystr v0.8.4\n   Compiling potential_utf v0.1.6\n   Compiling icu_collections v2.3.0\n   Compiling icu_locale_core v2.3.0\n   Compiling futures-executor v0.3.34\n   Compiling icu_provider v2.3.1\n   Compiling futures v0.3.34\n   Compiling hyper v1.11.1\n   Compiling tokio-rustls v0.26.5\n   Compiling tower v0.5.3\n   Compiling tokio-util v0.7.19\n   Compiling clap v4.6.6\n   Compiling icu_properties v2.3.0\n   Compiling icu_normalizer v2.3.0\n   Compiling hyper-util v0.1.20\n   Compiling idna_adapter v1.2.2\n   Compiling idna v1.1.0\n   Compiling hyper-rustls v0.27.9\n   Compiling url v2.5.8\n   Compiling tower-http v0.6.11\n   Compiling darling_macro v0.24.1\n   Compiling darling v0.24.1\n   Compiling rmcp-macros v3.2.0\n   Compiling chrono v0.4.45\n   Compiling serde_urlencoded v0.7.1\n   Compiling bstr v1.13.1\n   Compiling regex v1.13.1\n   Compiling reqwest v0.12.28\n   Compiling globset v0.4.20\n   Compiling grep-regex v0.1.14\n   Compiling grep-searcher v0.1.17\n   Compiling schemars v1.2.2\n   Compiling ignore v0.4.33\n   Compiling cadence v3.7.12 (/tmp/cadence-phase12-old-source-t9zn5an4/crates/cadence)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 25.56s\n"
+        "output": "   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling shlex v2.0.1\n   Compiling find-msvc-tools v0.1.12\n   Compiling libc v0.2.189\n   Compiling memchr v2.8.3\n   Compiling itoa v1.0.18\n   Compiling pin-project-lite v0.2.17\n   Compiling cfg-if v1.0.4\n   Compiling stable_deref_trait v1.2.1\n   Compiling tree-sitter-language v0.1.8\n   Compiling futures-core v0.3.34\n   Compiling bytes v1.12.1\n   Compiling futures-sink v0.3.34\n   Compiling serde_core v1.0.229\n   Compiling equivalent v1.0.2\n   Compiling zmij v1.0.23\n   Compiling hashbrown v0.17.1\n   Compiling smallvec v1.16.0\n   Compiling futures-io v0.3.34\n   Compiling litemap v0.8.3\n   Compiling futures-task v0.3.34\n   Compiling slab v0.4.12\n   Compiling writeable v0.6.4\n   Compiling futures-channel v0.3.34\n   Compiling once_cell v1.21.4\n   Compiling icu_normalizer_data v2.3.0\n   Compiling cc v1.4.5\n   Compiling icu_properties_data v2.3.0\n   Compiling utf8_iter v1.0.4\n   Compiling regex-syntax v0.8.11\n   Compiling autocfg v1.5.1\n   Compiling serde_json v1.0.151\n   Compiling serde v1.0.229\n   Compiling percent-encoding v2.3.2\n   Compiling zeroize v1.9.0\n   Compiling strsim v0.11.1\n   Compiling version_check v0.9.5\n   Compiling rustls-pki-types v1.15.1\n   Compiling httparse v1.10.1\n   Compiling num-traits v0.2.19\n   Compiling untrusted v0.9.0\n   Compiling tracing-core v0.1.36\n   Compiling generic-array v0.14.7\n   Compiling indexmap v2.14.2\n   Compiling http v1.5.0\n   Compiling try-lock v0.2.5\n   Compiling aho-corasick v1.1.5\n   Compiling log v0.4.34\n   Compiling ident_case v1.0.1\n   Compiling typenum v1.20.1\n   Compiling crossbeam-utils v0.8.23\n   Compiling anstyle v1.0.14\n   Compiling http-body v1.1.0\n   Compiling tower-service v0.3.3\n   Compiling rustls v0.23.44\n   Compiling want v0.3.1\n   Compiling form_urlencoded v1.2.2\n   Compiling ref-cast v1.0.27\n   Compiling atomic-waker v1.1.2\n   Compiling getrandom v0.4.3\n   Compiling syn v3.0.5\n   Compiling syn v2.0.119\n   Compiling subtle v2.6.1\n   Compiling crossbeam-epoch v0.9.21\n   Compiling utf8parse v0.2.2\n   Compiling sync_wrapper v1.0.2\n   Compiling encoding_rs v0.8.35\n   Compiling mio v1.2.3\n   Compiling socket2 v0.6.5\n   Compiling getrandom v0.2.17\n   Compiling anstyle-parse v1.0.0\n   Compiling colorchoice v1.0.5\n   Compiling ring v0.17.14\n   Compiling anstyle-query v1.1.5\n   Compiling ipnet v2.12.2\n   Compiling thiserror v2.0.20\n   Compiling base64 v0.22.1\n   Compiling is_terminal_polyfill v1.70.2\n   Compiling tower-layer v0.3.3\n   Compiling crossbeam-deque v0.8.8\n   Compiling synstructure v0.13.2\n   Compiling tracing-attributes v0.1.31\n   Compiling tree-sitter-rust v0.24.2\n   Compiling anstream v1.0.0\n   Compiling tree-sitter-json v0.24.8\n   Compiling zerofrom-derive v0.1.7\n   Compiling yoke-derive v0.8.2\n   Compiling tree-sitter-md v0.5.3\n   Compiling tree-sitter-python v0.25.0\n   Compiling tree-sitter-javascript v0.25.0\n   Compiling grep-matcher v0.1.9\n   Compiling webpki-roots v1.0.9\n   Compiling bitflags v2.13.1\n   Compiling heck v0.5.0\n   Compiling ryu v1.0.23\n   Compiling dyn-clone v1.0.20\n   Compiling arraydeque v0.5.1\n   Compiling unicode-width v0.2.2\n   Compiling tracing v0.1.44\n   Compiling crypto-common v0.1.7\n   Compiling block-buffer v0.10.4\n   Compiling rmcp v3.2.0\n   Compiling zerofrom v0.1.8\n   Compiling same-file v1.0.6\n   Compiling clap_lex v1.1.0\n   Compiling yoke v0.8.3\n   Compiling uuid v1.26.0\n   Compiling digest v0.10.7\n   Compiling granit-parser v1.2.0\n   Compiling walkdir v2.5.0\n   Compiling rustls-webpki v0.103.15\n   Compiling memmap2 v0.9.11\n   Compiling http-body-util v0.1.5\n   Compiling clap_builder v4.6.6\n   Compiling annotate-snippets v0.12.16\n   Compiling streaming-iterator v0.1.9\n   Compiling pastey v0.2.3\n   Compiling base64 v0.23.1\n   Compiling cpufeatures v0.2.17\n   Compiling regex-automata v0.4.18\n   Compiling sha2 v0.10.9\n   Compiling encoding_rs_io v0.1.8\n   Compiling serde-saphyr v1.2.0\n   Compiling tree-sitter v0.27.0\n   Compiling darling_core v0.24.1\n   Compiling serde_derive_internals v0.30.0\n   Compiling zerovec-derive v0.11.6\n   Compiling displaydoc v0.2.7\n   Compiling tokio-macros v2.7.2\n   Compiling futures-macro v0.3.34\n   Compiling serde_derive v1.0.229\n   Compiling ref-cast-impl v1.0.27\n   Compiling thiserror-impl v2.0.20\n   Compiling clap_derive v4.6.4\n   Compiling zerotrie v0.2.5\n   Compiling tokio v1.53.1\n   Compiling futures-util v0.3.34\n   Compiling zerovec v0.11.8\n   Compiling schemars_derive v1.2.2\n   Compiling tinystr v0.8.4\n   Compiling potential_utf v0.1.6\n   Compiling icu_collections v2.3.0\n   Compiling icu_locale_core v2.3.0\n   Compiling futures-executor v0.3.34\n   Compiling icu_provider v2.3.1\n   Compiling futures v0.3.34\n   Compiling hyper v1.11.1\n   Compiling tokio-rustls v0.26.5\n   Compiling tower v0.5.3\n   Compiling tokio-util v0.7.19\n   Compiling clap v4.6.6\n   Compiling icu_properties v2.3.0\n   Compiling icu_normalizer v2.3.0\n   Compiling hyper-util v0.1.20\n   Compiling idna_adapter v1.2.2\n   Compiling idna v1.1.0\n   Compiling hyper-rustls v0.27.9\n   Compiling url v2.5.8\n   Compiling tower-http v0.6.11\n   Compiling darling_macro v0.24.1\n   Compiling darling v0.24.1\n   Compiling rmcp-macros v3.2.0\n   Compiling chrono v0.4.45\n   Compiling serde_urlencoded v0.7.1\n   Compiling bstr v1.13.1\n   Compiling regex v1.13.1\n   Compiling reqwest v0.12.28\n   Compiling globset v0.4.20\n   Compiling grep-regex v0.1.14\n   Compiling grep-searcher v0.1.17\n   Compiling schemars v1.2.2\n   Compiling ignore v0.4.33\n   Compiling baley v3.7.12 (/tmp/baley-phase12-old-source-t9zn5an4/crates/baley)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 25.56s\n"
       }
     ],
     "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1.1)"
@@ -50,7 +50,7 @@
             "tools": {}
           },
           "serverInfo": {
-            "name": "cadence",
+            "name": "baley",
             "version": "3.7.12"
           }
         }
@@ -62,7 +62,7 @@
         "id": 2,
         "method": "tools/call",
         "params": {
-          "name": "cadence_apply",
+          "name": "baley_apply",
           "arguments": {
             "operation": "context-submit",
             "submission": {
@@ -159,7 +159,7 @@
         "id": 3,
         "method": "tools/call",
         "params": {
-          "name": "cadence_query",
+          "name": "baley_query",
           "arguments": {
             "operation": "plan-read",
             "phase_address": "12",
@@ -885,7 +885,7 @@
         "id": 4,
         "method": "tools/call",
         "params": {
-          "name": "cadence_query",
+          "name": "baley_query",
           "arguments": {
             "operation": "plan-read",
             "phase_address": "12",
@@ -1232,7 +1232,7 @@
         "id": 5,
         "method": "tools/call",
         "params": {
-          "name": "cadence_apply",
+          "name": "baley_apply",
           "arguments": {
             "operation": "plan-submit",
             "submission": {
@@ -2006,7 +2006,7 @@
     }
   ],
   "environment": {
-    "CADENCE_GLOBAL_CONFIG": "",
+    "BALEY_GLOBAL_CONFIG": "",
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_NOSYSTEM": "1"
   },

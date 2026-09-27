@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 use std::{collections::{BTreeMap, BTreeSet}, path::Path};
 
 pub const SCHEMA: &str = "verification-audit-1";
-pub const CANONICAL: &str = "cad-audit";
-pub const ALIAS: &str = "cad-coverage";
+pub const CANONICAL: &str = "bal-audit";
+pub const ALIAS: &str = "bal-coverage";
 pub const OPERATION: &str = "verification-audit";
 pub const SCOPE_LIMIT: &str = "phase-scoped: the requirement-to-truth association is the phase's whole truth set, never a semantic edge";
 pub const READ_ONLY_LIMIT: &str = "read-only: no status, map, UAT or store record is written or repaired";
@@ -246,7 +246,7 @@ pub fn report(root: &Path, data: &Value, phase: u32, requested: Option<&str>, pr
             match &context {
                 None => {
                     edges.push(edge("plan->truths", "missing", Value::Null));
-                    breaks.push(broken("plan->truths", format!("phase {phase} has no native approved context"), format!("approve native context for phase {phase} through /cad-context")));
+                    breaks.push(broken("plan->truths", format!("phase {phase} has no native approved context"), format!("approve native context for phase {phase} through /bal-context")));
                 }
                 Some(_) => {
                     edges.push(json!({"edge":"plan->truths","state":"present","scope":"phase-scoped","value":truths.iter().map(|t| t["id"].clone()).collect::<Vec<_>>()}));

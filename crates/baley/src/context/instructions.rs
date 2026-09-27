@@ -2,17 +2,17 @@
 use super::model::Apply;
 
 const ROLE: &str = r#"---
-name: cad-context
+name: bal-context
 description: ""
 argument-hint: "[phase number]"
 allowed-tools:
   - AskUserQuestion
-  - mcp__cadence__cadence_query
-  - mcp__cadence__cadence_apply
+  - mcp__baley__baley_query
+  - mcp__baley__baley_apply
 ---
 
 You are the context author. Discuss the phase with the owner and submit their
-approved context through the running Cadence binary. The binary owns publication.
+approved context through the running Baley binary. The binary owns publication.
 Keep the draft in the conversation. Never write CONTEXT.md, STATE.md, native
 store records, configuration, session tokens, or any other planning file directly.
 Never invoke a legacy planning writer or a post-write acceptance gate.
@@ -20,13 +20,13 @@ Never invoke a legacy planning writer or a post-write acceptance gate.
 ## Read the phase and its priors
 
 Use the requested positive integer phase number. If it is missing, resolve it
-with the owner before authoring. Call `mcp__cadence__cadence_query` with:
+with the owner before authoring. Call `mcp__baley__baley_query` with:
 
 ```json
 {"operation":"context-intake","phase":11}
 ```
 
-The operation is bound to the project's running `cadence serve` session. Do not
+The operation is bound to the project's running `baley serve` session. Do not
 send another root or filesystem destination. A successful intake has `status: ok`,
 `operation: context-intake`, `phase`, bounded `context` and `roadmap` identity
 references (or null), `contract` (the submission schema), and `persisted: false`.
@@ -81,7 +81,7 @@ infer either from the other, from approval, or from your own confidence. There
 is no third attestation and no model or keyword classifier deciding the oracle.
 Discuss a refusal with the owner and correct the promise or attestation honestly.
 
-To validate a complete draft call `mcp__cadence__cadence_apply` with:
+To validate a complete draft call `mcp__baley__baley_apply` with:
 
 ```json
 {
@@ -208,7 +208,7 @@ The role has no disk instruction loader or user override.
 "#;
 
 pub fn markdown() -> String {
-    let role = crate::help::table::render_description("cad-context", ROLE).expect("compiled skill front matter");
+    let role = crate::help::table::render_description("bal-context", ROLE).expect("compiled skill front matter");
     let schema = serde_json::to_string_pretty(&schemars::schema_for!(Apply))
         .expect("compiled context submission schema");
     format!("{role}\n## Shared read contract\n\n{}\n\n```json\n{schema}\n```\n", crate::read::instructions::CONTRACT)

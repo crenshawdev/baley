@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 pub const NAMESPACE: &str = "native_evidence";
-const MARKER: &str = "cadence.native_evidence.v1";
+const MARKER: &str = "baley.native_evidence.v1";
 
 pub fn confirmed_participants(view: &View) -> Result<[(&'static str, Vec<u8>); 3]> {
     Ok([

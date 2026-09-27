@@ -352,7 +352,7 @@ pub fn validate_route_choice(dispatch: &ActiveDispatch) -> Result<(), PlanError>
     };
     let choice = &route.choice;
     let agent = super::model::roles::agent_for(&choice.role, &choice.rung);
-    if choice.role != "cad-executor"
+    if choice.role != "bal-executor"
         || agent != Some(choice.agent.as_str())
         || dispatch.policy.rung != routed_rung(&choice.rung)?
         || choice.attempt == 0

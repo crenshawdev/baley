@@ -27,13 +27,13 @@ impl Action {
             Self::Resolve { phase, source } => format!("Resolve {source}: set the tick on phase {} to match its derived status", phase.address()),
             Self::Resume(next) => next.clone(),
             Self::Interrupted(id) => format!("Continue dispatch {id} with execution-authorize or retire it"),
-            Self::Execute(id) => format!("/cad-execute {}", id.address()),
-            Self::Verify(id) => format!("/cad-verify {}", id.address()),
-            Self::Context(id) => format!("/cad-context {}", id.address()),
-            Self::Plan(id) => format!("/cad-plan {}", id.address()),
+            Self::Execute(id) => format!("/bal-execute {}", id.address()),
+            Self::Verify(id) => format!("/bal-verify {}", id.address()),
+            Self::Context(id) => format!("/bal-context {}", id.address()),
+            Self::Plan(id) => format!("/bal-plan {}", id.address()),
             Self::TriageDeferred => "Triage the deferred queue".into(),
-            Self::Milestone => "/cad-milestone".into(),
-            Self::AddPhase => "/cad-phase add".into(),
+            Self::Milestone => "/bal-milestone".into(),
+            Self::AddPhase => "/bal-phase add".into(),
         }
     }
 }

@@ -28,12 +28,12 @@ fn generation(global: Option<Value>, repo: Option<Value>, alias: bool) -> Genera
 }
 fn defaults() -> Vec<Update> {
     serde_json::from_value(json!([
-        {"key":"roles.cad-planner.model","value":null}, {"key":"roles.cad-planner.effort","value":"high"},
-        {"key":"roles.cad-assumptions-analyzer.model","value":null}, {"key":"roles.cad-assumptions-analyzer.effort","value":"high"},
-        {"key":"roles.cad-verifier.model","value":null}, {"key":"roles.cad-verifier.effort","value":"high"},
-        {"key":"roles.cad-reviewer.model","value":null}, {"key":"roles.cad-reviewer.effort","value":"medium"},
-        {"key":"roles.cad-executor.model","value":null}, {"key":"roles.cad-executor.effort","value":"high"},
-        {"key":"roles.cad-plan-checker.model","value":null}, {"key":"roles.cad-plan-checker.effort","value":"low"},
+        {"key":"roles.bal-planner.model","value":null}, {"key":"roles.bal-planner.effort","value":"high"},
+        {"key":"roles.bal-assumptions-analyzer.model","value":null}, {"key":"roles.bal-assumptions-analyzer.effort","value":"high"},
+        {"key":"roles.bal-verifier.model","value":null}, {"key":"roles.bal-verifier.effort","value":"high"},
+        {"key":"roles.bal-reviewer.model","value":null}, {"key":"roles.bal-reviewer.effort","value":"medium"},
+        {"key":"roles.bal-executor.model","value":null}, {"key":"roles.bal-executor.effort","value":"high"},
+        {"key":"roles.bal-plan-checker.model","value":null}, {"key":"roles.bal-plan-checker.effort","value":"low"},
         {"key":"review.triggers.risk_surface.waive_routing_floor","value":[]}
     ])).unwrap()
 }
@@ -48,62 +48,62 @@ fn prepare_returns_thirteen_ordered_current_defaults_and_sources() {
             .collect::<Vec<_>>(),
         vec![
             (
-                "roles.cad-planner.model".into(),
+                "roles.bal-planner.model".into(),
                 Value::Null,
                 "defaults".into()
             ),
             (
-                "roles.cad-planner.effort".into(),
+                "roles.bal-planner.effort".into(),
                 json!("high"),
                 "defaults".into()
             ),
             (
-                "roles.cad-assumptions-analyzer.model".into(),
+                "roles.bal-assumptions-analyzer.model".into(),
                 Value::Null,
                 "defaults".into()
             ),
             (
-                "roles.cad-assumptions-analyzer.effort".into(),
+                "roles.bal-assumptions-analyzer.effort".into(),
                 json!("high"),
                 "defaults".into()
             ),
             (
-                "roles.cad-verifier.model".into(),
+                "roles.bal-verifier.model".into(),
                 Value::Null,
                 "defaults".into()
             ),
             (
-                "roles.cad-verifier.effort".into(),
+                "roles.bal-verifier.effort".into(),
                 json!("high"),
                 "defaults".into()
             ),
             (
-                "roles.cad-reviewer.model".into(),
+                "roles.bal-reviewer.model".into(),
                 Value::Null,
                 "defaults".into()
             ),
             (
-                "roles.cad-reviewer.effort".into(),
+                "roles.bal-reviewer.effort".into(),
                 json!("medium"),
                 "defaults".into()
             ),
             (
-                "roles.cad-executor.model".into(),
+                "roles.bal-executor.model".into(),
                 Value::Null,
                 "defaults".into()
             ),
             (
-                "roles.cad-executor.effort".into(),
+                "roles.bal-executor.effort".into(),
                 json!("high"),
                 "defaults".into()
             ),
             (
-                "roles.cad-plan-checker.model".into(),
+                "roles.bal-plan-checker.model".into(),
                 Value::Null,
                 "defaults".into()
             ),
             (
-                "roles.cad-plan-checker.effort".into(),
+                "roles.bal-plan-checker.effort".into(),
                 json!("low"),
                 "defaults".into()
             ),
@@ -135,7 +135,7 @@ fn raw_presence_classifies_independently_of_coverage() {
     let output = [
         None,
         Some(json!({"roles":{}})),
-        Some(json!({"roles":{"cad-executor":{"model":null}}})),
+        Some(json!({"roles":{"bal-executor":{"model":null}}})),
     ]
     .into_iter()
     .map(|raw| {
@@ -156,7 +156,7 @@ fn raw_presence_classifies_independently_of_coverage() {
             (
                 false,
                 Layer::Repo,
-                vec!["roles.cad-executor.model".into()],
+                vec!["roles.bal-executor.model".into()],
                 13
             )
         ]
@@ -167,7 +167,7 @@ fn aliased_global_presence_retains_repo_provenance() {
     let output = interview::prepare(
         &generation(
             None,
-            Some(json!({"roles":{"cad-executor":{"model":null}}})),
+            Some(json!({"roles":{"bal-executor":{"model":null}}})),
             true,
         ),
         Mode::Roles,
@@ -243,7 +243,7 @@ fn one_changed_role_returns_only_diff_and_empty_pin() {
             Layer::Repo,
             vec![
                 Update {
-                    key: "roles.cad-executor.model".into(),
+                    key: "roles.bal-executor.model".into(),
                     value: json!("  custom \"model\" = 雪  ")
                 },
                 Update {
@@ -258,8 +258,8 @@ fn one_changed_role_returns_only_diff_and_empty_pin() {
 fn explicit_global_questions_show_global_instead_of_repo() {
     let output = interview::prepare(
         &generation(
-            Some(json!({"roles":{"cad-executor":{"model":"sonnet"}}})),
-            Some(json!({"roles":{"cad-executor":{"model":"opus"}}})),
+            Some(json!({"roles":{"bal-executor":{"model":"sonnet"}}})),
+            Some(json!({"roles":{"bal-executor":{"model":"opus"}}})),
             false,
         ),
         Mode::Global,
@@ -374,7 +374,7 @@ fn first_batch_prepares_exact_thirteen_stored_leaves() {
             .unwrap()
             .0,
         json!({
-            "roles": {"cad-planner":{"model":null,"effort":"high"},"cad-assumptions-analyzer":{"model":null,"effort":"high"},"cad-verifier":{"model":null,"effort":"high"},"cad-reviewer":{"model":null,"effort":"medium"},"cad-executor":{"model":null,"effort":"high"},"cad-plan-checker":{"model":null,"effort":"low"}},
+            "roles": {"bal-planner":{"model":null,"effort":"high"},"bal-assumptions-analyzer":{"model":null,"effort":"high"},"bal-verifier":{"model":null,"effort":"high"},"bal-reviewer":{"model":null,"effort":"medium"},"bal-executor":{"model":null,"effort":"high"},"bal-plan-checker":{"model":null,"effort":"low"}},
             "review":{"triggers":{"risk_surface":{"waive_routing_floor":[]}}}
         })
     );
@@ -473,8 +473,8 @@ fn entry_preparation_retains_every_named_mode() {
 fn token_parser_preserves_literal_model_text_null_effort_and_empty_array() {
     assert_eq!(
         interview::entry(&[
-            "roles.cad-executor.model=  \"vendor model\" = 雪  ".into(),
-            "roles.cad-executor.effort=null".into(),
+            "roles.bal-executor.model=  \"vendor model\" = 雪  ".into(),
+            "roles.bal-executor.effort=null".into(),
             "review.triggers.risk_surface.waive_routing_floor=[]".into(),
         ])
         .unwrap(),
@@ -482,11 +482,11 @@ fn token_parser_preserves_literal_model_text_null_effort_and_empty_array() {
             layer: Layer::Repo,
             updates: vec![
                 Update {
-                    key: "roles.cad-executor.model".into(),
+                    key: "roles.bal-executor.model".into(),
                     value: json!("  \"vendor model\" = 雪  ")
                 },
                 Update {
-                    key: "roles.cad-executor.effort".into(),
+                    key: "roles.bal-executor.effort".into(),
                     value: Value::Null
                 },
                 Update {
@@ -500,11 +500,11 @@ fn token_parser_preserves_literal_model_text_null_effort_and_empty_array() {
 #[test]
 fn token_parser_accepts_unquoted_named_rung() {
     assert_eq!(
-        interview::entry(&["roles.cad-executor.effort=xhigh".into()]).unwrap(),
+        interview::entry(&["roles.bal-executor.effort=xhigh".into()]).unwrap(),
         interview::Entry::Values {
             layer: Layer::Repo,
             updates: vec![Update {
-                key: "roles.cad-executor.effort".into(),
+                key: "roles.bal-executor.effort".into(),
                 value: json!("xhigh")
             }]
         }
@@ -524,7 +524,7 @@ fn grouped_apply_decodes_exact_literal_answer_fields() {
     let output:baley::config_service::Apply=serde_json::from_value(json!({
         "operation":"config-interview-apply","mode":"global","accepted":true,
         "captured":{"repo":{"identity":"/repo/config.v4.json","content":null,"stamp":null},"global":null,"global_alias":true},
-        "answers":[{"key":"roles.cad-executor.model","value":"  \"model\" = 雪  "},{"key":"roles.cad-executor.effort","value":null},{"key":"review.triggers.risk_surface.waive_routing_floor","value":[]}]
+        "answers":[{"key":"roles.bal-executor.model","value":"  \"model\" = 雪  "},{"key":"roles.bal-executor.effort","value":null},{"key":"review.triggers.risk_surface.waive_routing_floor","value":[]}]
     })).unwrap();
     assert_eq!(
         match output {
@@ -550,11 +550,11 @@ fn grouped_apply_decodes_exact_literal_answer_fields() {
             true,
             Some(vec![
                 Update {
-                    key: "roles.cad-executor.model".into(),
+                    key: "roles.bal-executor.model".into(),
                     value: json!("  \"model\" = 雪  ")
                 },
                 Update {
-                    key: "roles.cad-executor.effort".into(),
+                    key: "roles.bal-executor.effort".into(),
                     value: Value::Null
                 },
                 Update {
@@ -573,11 +573,11 @@ fn literal_relay_updates_prepare_identical_native_stored_values() {
             &json!({}),
             &[
                 Update {
-                    key: "roles.cad-executor.model".into(),
+                    key: "roles.bal-executor.model".into(),
                     value: json!("  \"model\" = 雪  ")
                 },
                 Update {
-                    key: "roles.cad-executor.effort".into(),
+                    key: "roles.bal-executor.effort".into(),
                     value: Value::Null
                 },
                 Update {
@@ -588,18 +588,18 @@ fn literal_relay_updates_prepare_identical_native_stored_values() {
         )
         .unwrap()
         .0,
-        json!({"roles":{"cad-executor":{"model":"  \"model\" = 雪  ","effort":null}},"review":{"triggers":{"risk_surface":{"waive_routing_floor":[]}}}})
+        json!({"roles":{"bal-executor":{"model":"  \"model\" = 雪  ","effort":null}},"review":{"triggers":{"risk_surface":{"waive_routing_floor":[]}}}})
     );
 }
 #[test]
 fn invalid_live_input_check_returns_named_error_without_write() {
     let shared = std::sync::Arc::new(std::sync::Mutex::new(Some(
-        br#"{"roles":{"cad-executor":{"effort":"invalid"}}}"#.to_vec(),
+        br#"{"roles":{"bal-executor":{"effort":"invalid"}}}"#.to_vec(),
     )));
     assert_eq!(
         captured_check(shared)(),
         Err(Error::Policy(
-            "config unavailable: unusable roles.cad-executor.effort".into()
+            "config unavailable: unusable roles.bal-executor.effort".into()
         ))
     );
 }
@@ -613,27 +613,27 @@ fn surfaces_entry_is_separate_from_the_floor_interview() {
 
 const STORED_DEFAULTS: &str = r#"{
   "roles": {
-    "cad-planner": {
+    "bal-planner": {
       "model": null,
       "effort": "high"
     },
-    "cad-assumptions-analyzer": {
+    "bal-assumptions-analyzer": {
       "model": null,
       "effort": "high"
     },
-    "cad-verifier": {
+    "bal-verifier": {
       "model": null,
       "effort": "high"
     },
-    "cad-reviewer": {
+    "bal-reviewer": {
       "model": null,
       "effort": "medium"
     },
-    "cad-executor": {
+    "bal-executor": {
       "model": null,
       "effort": "high"
     },
-    "cad-plan-checker": {
+    "bal-plan-checker": {
       "model": null,
       "effort": "low"
     }
@@ -673,84 +673,84 @@ fn native_reopened_facts_return_all_thirteen_global_values_and_later_classificat
             Layer::Repo,
             vec![
                 (
-                    "roles.cad-planner.model".into(),
+                    "roles.bal-planner.model".into(),
                     Value::Null,
                     "global".into(),
                     true,
                     false
                 ),
                 (
-                    "roles.cad-planner.effort".into(),
+                    "roles.bal-planner.effort".into(),
                     json!("high"),
                     "global".into(),
                     true,
                     false
                 ),
                 (
-                    "roles.cad-assumptions-analyzer.model".into(),
+                    "roles.bal-assumptions-analyzer.model".into(),
                     Value::Null,
                     "global".into(),
                     true,
                     false
                 ),
                 (
-                    "roles.cad-assumptions-analyzer.effort".into(),
+                    "roles.bal-assumptions-analyzer.effort".into(),
                     json!("high"),
                     "global".into(),
                     true,
                     false
                 ),
                 (
-                    "roles.cad-verifier.model".into(),
+                    "roles.bal-verifier.model".into(),
                     Value::Null,
                     "global".into(),
                     true,
                     false
                 ),
                 (
-                    "roles.cad-verifier.effort".into(),
+                    "roles.bal-verifier.effort".into(),
                     json!("high"),
                     "global".into(),
                     true,
                     false
                 ),
                 (
-                    "roles.cad-reviewer.model".into(),
+                    "roles.bal-reviewer.model".into(),
                     Value::Null,
                     "global".into(),
                     true,
                     false
                 ),
                 (
-                    "roles.cad-reviewer.effort".into(),
+                    "roles.bal-reviewer.effort".into(),
                     json!("medium"),
                     "global".into(),
                     true,
                     false
                 ),
                 (
-                    "roles.cad-executor.model".into(),
+                    "roles.bal-executor.model".into(),
                     Value::Null,
                     "global".into(),
                     true,
                     false
                 ),
                 (
-                    "roles.cad-executor.effort".into(),
+                    "roles.bal-executor.effort".into(),
                     json!("high"),
                     "global".into(),
                     true,
                     false
                 ),
                 (
-                    "roles.cad-plan-checker.model".into(),
+                    "roles.bal-plan-checker.model".into(),
                     Value::Null,
                     "global".into(),
                     true,
                     false
                 ),
                 (
-                    "roles.cad-plan-checker.effort".into(),
+                    "roles.bal-plan-checker.effort".into(),
                     json!("low"),
                     "global".into(),
                     true,
@@ -787,7 +787,7 @@ fn native_later_answers_return_exactly_one_role_diff_with_existing_floor_pin() {
         Ok((
             Layer::Repo,
             vec![Update {
-                key: "roles.cad-executor.effort".into(),
+                key: "roles.bal-executor.effort".into(),
                 value: json!("xhigh")
             }]
         ))
@@ -799,7 +799,7 @@ fn repo_model_facts() -> baley::config_service::Facts {
     baley::config_service::observed_facts(
         &generation(
             None,
-            Some(json!({"roles":{"cad-executor":{"model":"current"}}})),
+            Some(json!({"roles":{"bal-executor":{"model":"current"}}})),
             false,
         ),
         Mode::Roles,
@@ -817,62 +817,62 @@ fn interview_subjects_show_current_repo_and_default_values_with_their_sources() 
             .collect::<Vec<_>>(),
         vec![
             (
-                "roles.cad-planner.model".into(),
+                "roles.bal-planner.model".into(),
                 Value::Null,
                 "defaults".into()
             ),
             (
-                "roles.cad-planner.effort".into(),
+                "roles.bal-planner.effort".into(),
                 json!("high"),
                 "defaults".into()
             ),
             (
-                "roles.cad-assumptions-analyzer.model".into(),
+                "roles.bal-assumptions-analyzer.model".into(),
                 Value::Null,
                 "defaults".into()
             ),
             (
-                "roles.cad-assumptions-analyzer.effort".into(),
+                "roles.bal-assumptions-analyzer.effort".into(),
                 json!("high"),
                 "defaults".into()
             ),
             (
-                "roles.cad-verifier.model".into(),
+                "roles.bal-verifier.model".into(),
                 Value::Null,
                 "defaults".into()
             ),
             (
-                "roles.cad-verifier.effort".into(),
+                "roles.bal-verifier.effort".into(),
                 json!("high"),
                 "defaults".into()
             ),
             (
-                "roles.cad-reviewer.model".into(),
+                "roles.bal-reviewer.model".into(),
                 Value::Null,
                 "defaults".into()
             ),
             (
-                "roles.cad-reviewer.effort".into(),
+                "roles.bal-reviewer.effort".into(),
                 json!("medium"),
                 "defaults".into()
             ),
             (
-                "roles.cad-executor.model".into(),
+                "roles.bal-executor.model".into(),
                 json!("current"),
                 "repo".into()
             ),
             (
-                "roles.cad-executor.effort".into(),
+                "roles.bal-executor.effort".into(),
                 json!("high"),
                 "defaults".into()
             ),
             (
-                "roles.cad-plan-checker.model".into(),
+                "roles.bal-plan-checker.model".into(),
                 Value::Null,
                 "defaults".into()
             ),
             (
-                "roles.cad-plan-checker.effort".into(),
+                "roles.bal-plan-checker.effort".into(),
                 json!("low"),
                 "defaults".into()
             ),
@@ -956,7 +956,7 @@ fn native_reopened_custom_model_has_exact_text_and_repo_source() {
     let output = baley::config_service::observed_facts(
         &generation(
             Some(json!({"roles":{}})),
-            Some(json!({"roles":{"cad-executor":{"model":"  \"model\" = 雪  "}}})),
+            Some(json!({"roles":{"bal-executor":{"model":"  \"model\" = 雪  "}}})),
             false,
         ),
         Mode::Roles,

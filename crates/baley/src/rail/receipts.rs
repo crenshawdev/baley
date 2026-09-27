@@ -393,7 +393,7 @@ fn invalid(message: &str) -> Error {
 }
 
 pub const NAMESPACE: &str = "rail_receipts";
-const MARKER: &str = "cadence.rail.receipt.v1";
+const MARKER: &str = "baley.rail.receipt.v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

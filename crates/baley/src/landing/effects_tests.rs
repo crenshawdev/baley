@@ -11,7 +11,7 @@ use super::effects::valid_ref;
 fn a_plain_branch_or_tag_reference_is_valid() {
     for name in [
         "refs/heads/main",
-        "refs/heads/cadence/binary-owns-process",
+        "refs/heads/baley/binary-owns-process",
         "refs/tags/v4.0.0",
         "refs/remotes/origin/main",
     ] {
