@@ -352,27 +352,27 @@ No worker is dispatched; no instruction reaches a model beyond the stub.
 
 ## 11. Build status
 
-The code today is the Cadence engine crate awaiting rename; its landing, milestone and undo paths are close to this design, and its pause is unreachable.
+The binary crate holds the inherited engine; its landing, milestone and undo paths are close to this design, and its pause is unreachable.
 
 | Requirement | Status | Where |
 |---|---|---|
-| LND-R1 | Partly built | Integration branch `cadence/v<semver>` per milestone only, on the unreachable pause path (`crates/cadence/src/pause/branch.rs:275-333`); no sprint branch |
-| LND-R2 | Built | `crates/cadence/src/landing_service.rs:71-101`, `crates/cadence/src/landing/authorization.rs:11-45` |
-| LND-R3 | Built | `crates/cadence/src/landing_service.rs:245-290`, `crates/cadence/src/landing/reconcile.rs:21-65` |
-| LND-R4 | Built | `crates/cadence/src/landing_service.rs:123-128`, `crates/cadence/src/landing/effects.rs:58-92` |
-| LND-R5 | Built | `crates/cadence/src/landing/effects.rs:97-126`, `crates/cadence/src/landing/cleanup.rs:9, 85-255` |
-| LND-R6 | Built | `crates/cadence/src/landing/cleanup.rs:30-73` |
-| LND-R7 | Partly built | `crates/cadence/src/landing/report.rs:45-76`; every failure is `unavailable` and the listing is cut at 30 without saying so (`crates/cadence/src/landing/forge.rs:75`) |
-| LND-R8 | Built | `crates/cadence/src/landing/forge.rs:8-70, 100-163`, `crates/cadence/src/landing/effects.rs:12-45` |
+| LND-R1 | Partly built | Integration branch `baley/v<semver>` per milestone only, on the unreachable pause path (`crates/baley/src/pause/branch.rs:278-336`); no sprint branch |
+| LND-R2 | Built | `crates/baley/src/landing_service.rs:150-220`, `crates/baley/src/landing/authorization.rs:17-75` |
+| LND-R3 | Built | `crates/baley/src/landing_service.rs:535-618`, `crates/baley/src/landing/reconcile.rs:32-132` |
+| LND-R4 | Built | `crates/baley/src/landing_service.rs:279-289`, `crates/baley/src/landing/effects.rs:85-169` |
+| LND-R5 | Built | `crates/baley/src/landing/effects.rs:180-258`, `crates/baley/src/landing/cleanup.rs:18, 169-561` |
+| LND-R6 | Built | `crates/baley/src/landing/cleanup.rs:48-150` |
+| LND-R7 | Partly built | `crates/baley/src/landing/report.rs:81-166`; every failure is `unavailable` and the listing is cut at 30 without saying so (`crates/baley/src/landing/forge.rs:154-156`) |
+| LND-R8 | Built | `crates/baley/src/landing/forge.rs:11-146, 203-327`, `crates/baley/src/landing/effects.rs:18-58` |
 | LND-R11 | Not built | |
-| LND-R12 | Built | `crates/cadence/src/milestone_service.rs:91-123`, `crates/cadence/src/milestone/preflight.rs:12-37` |
-| LND-R13 | Not built as designed | Prune deletes phase directories and rewrites Markdown (`crates/cadence/src/milestone/prune.rs:110-238`) |
-| LND-R14 | Built | `crates/cadence/src/milestone/release.rs:81-209` |
-| LND-R15 | Built | `crates/cadence/src/undo/manifest.rs:15-86`, `crates/cadence/src/undo/revert.rs:19-49`, `crates/cadence/src/undo_service.rs:91-133`; no pushed check |
-| LND-R16 | Not reachable | `crates/cadence/src/pause_service.rs:1227` has no MCP route (`crates/cadence/src/server.rs:127-134`) |
-| LND-R17 | Partly built | Stop as an owner answer (`crates/cadence/src/execution_service.rs:281-289`) |
+| LND-R12 | Built | `crates/baley/src/milestone_service.rs:168-230`, `crates/baley/src/milestone/preflight.rs:18-71` |
+| LND-R13 | Not built as designed | Prune deletes phase directories and rewrites Markdown (`crates/baley/src/milestone/prune.rs:171-447`) |
+| LND-R14 | Built | `crates/baley/src/milestone/release.rs:164-498` |
+| LND-R15 | Built | `crates/baley/src/undo/manifest.rs:30-171`, `crates/baley/src/undo/revert.rs:36-109`, `crates/baley/src/undo_service.rs:189-311`; no pushed check |
+| LND-R16 | Not reachable | `crates/baley/src/pause_service.rs:1275` has no MCP route (`crates/baley/src/server.rs:127-134`) |
+| LND-R17 | Partly built | Stop as an owner answer (`crates/baley/src/execution_service.rs:451-465`) |
 | LND-R18 | Not built | Anchors are designed in 0001 and not yet pushed by any code |
-| LND-R19 | Built | Receipts per namespace (`crates/cadence/src/milestone_service.rs:146-259`, `crates/cadence/src/landing_service.rs:137-138`) |
+| LND-R19 | Built | Receipts per namespace (`crates/baley/src/milestone_service.rs:253-549`, `crates/baley/src/landing_service.rs:310-316`) |
 
 ## 12. Open questions
 

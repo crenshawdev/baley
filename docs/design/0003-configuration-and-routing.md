@@ -511,29 +511,29 @@ Not applicable. This area serves no instructions: the model is never told about 
 
 ## 11. Build status
 
-The code today is the Cadence engine crate awaiting rename. It reads JSON files under `.planning/` and `~/.claude/cadence/`, which this design replaces.
+The binary crate holds the inherited engine. It reads JSON files under `.planning/` and `~/.claude/baley/`, which this design replaces.
 
 | Requirement | Status | Where |
 |---|---|---|
-| CFG-R1, CFG-R2, CFG-R3 | Not built | JSON layers at `crates/cadence/src/config/write.rs:19-24` and `crates/cadence/src/server.rs:222-228` |
-| CFG-R4 | Partly built | Bash guard walks up to `.planning` (`crates/cadence/src/guard/bash.rs:27-44`); the server binds one project per process (`crates/cadence/src/server.rs:730-737`); Write/Edit guard does not walk (`crates/cadence/src/guard/mod.rs:323-334`) |
-| CFG-R5 | Partly built | `GLOBAL_ONLY` and `repo_only` flags (`crates/cadence/src/config/mod.rs:14-18`, `crates/cadence/src/config/merge.rs:59-87`); scopes differ from this design |
-| CFG-R6 | Partly built | defaults, global, repo merge (`crates/cadence/src/config/merge.rs:35-49`); no host sections |
-| CFG-R7 | Partly built | unknown keys dropped with a diagnostic (`crates/cadence/src/config/merge.rs:93-129`); eleven keys without readers still in `crates/cadence/src/config/schema.json` |
-| CFG-R8 | Not built | routes persist config inputs only (`crates/cadence/src/config/reload.rs:147-161`) |
-| CFG-R9 | Built | `crates/cadence/src/config/reload.rs:280-292`, `crates/cadence/src/session/mod.rs:474-485` |
-| CFG-R10 | Built | `crates/cadence/src/config/reload.rs:190-201`, `crates/cadence/src/execution/boundary.rs:149` |
-| CFG-R11 | Partly built | guard denies both config paths (`crates/cadence/src/guard/mod.rs:186-207`); the MCP `config-apply` and interview operations still exist (`crates/cadence/src/config_service.rs:19-31`) |
-| CFG-R12, CFG-R13 | Built | `crates/cadence/src/config/roles.rs:7-14, 106-116`, defaults in `crates/cadence/src/config/schema.json` |
-| CFG-R14 | Not built | unsupported names are dropped with a warning at dispatch (`crates/cadence/src/config/roles.rs:122-132`) |
-| CFG-R15 | Partly built | rungs exist (`crates/cadence/src/config/roles.rs:15`); the map to a host is the 30 agent names (`crates/cadence/src/config/roles.rs:17-60`), no per-host mapping |
-| CFG-R16 | Partly built | resolution at `crates/cadence/src/config/roles.rs:117-121`; every caller passes attempt `None` (#69) |
-| CFG-R17 | Partly built | reasons and sources in `crates/cadence/src/config/roles.rs:133-170`; no policy or catalog version |
-| CFG-R18 | Built | `crates/cadence/src/config/policy.rs:108-129` |
-| CFG-R19 to CFG-R23 | Not built | fixed list at `crates/cadence/src/config/roles.rs:16` |
-| CFG-R24 to CFG-R27 | Not built | keys read from env and a key file (`crates/cadence/src/review/provider/credentials.rs:48-97`) |
-| CFG-R28 | Built | provider reviewers are optional (`crates/cadence/src/config/policy.rs:78-93`) |
-| CFG-R29 | Partly built | enum in `crates/cadence/src/config/schema.json`; no not-yet-supported report |
+| CFG-R1, CFG-R2, CFG-R3 | Not built | JSON layers at `crates/baley/src/config/write.rs:19-24` and `crates/baley/src/server.rs:224-230` |
+| CFG-R4 | Partly built | Bash guard walks up to `.planning` (`crates/baley/src/guard/bash.rs:27-44`); the server binds one project per process (`crates/baley/src/server.rs:810-817`); Write/Edit guard does not walk (`crates/baley/src/guard/mod.rs:323-334`) |
+| CFG-R5 | Partly built | `GLOBAL_ONLY` and `repo_only` flags (`crates/baley/src/config/mod.rs:14-18`, `crates/baley/src/config/merge.rs:59-87`); scopes differ from this design |
+| CFG-R6 | Partly built | defaults, global, repo merge (`crates/baley/src/config/merge.rs:35-49`); no host sections |
+| CFG-R7 | Partly built | unknown keys dropped with a diagnostic (`crates/baley/src/config/merge.rs:93-129`); eleven keys without readers still in `crates/baley/src/config/schema.json` |
+| CFG-R8 | Not built | routes persist config inputs only (`crates/baley/src/config/reload.rs:168-181`) |
+| CFG-R9 | Built | `crates/baley/src/config/reload.rs:300-312`, `crates/baley/src/session/mod.rs:498-509` |
+| CFG-R10 | Built | `crates/baley/src/config/reload.rs:210-221`, `crates/baley/src/execution/boundary.rs:172` |
+| CFG-R11 | Partly built | guard denies both config paths (`crates/baley/src/guard/mod.rs:186-207`); the MCP `config-apply` and interview operations still exist (`crates/baley/src/config_service.rs:19-31`) |
+| CFG-R12, CFG-R13 | Built | `crates/baley/src/config/roles.rs:7-14, 116-126`, defaults in `crates/baley/src/config/schema.json` |
+| CFG-R14 | Not built | unsupported names are dropped with a warning at dispatch (`crates/baley/src/config/roles.rs:132-142`) |
+| CFG-R15 | Partly built | rungs exist (`crates/baley/src/config/roles.rs:15`); the map to a host is the 30 agent names (`crates/baley/src/config/roles.rs:17-60`), no per-host mapping |
+| CFG-R16 | Partly built | resolution at `crates/baley/src/config/roles.rs:127-131`; every caller passes attempt `None` (#69) |
+| CFG-R17 | Partly built | reasons and sources in `crates/baley/src/config/roles.rs:143-180`; no policy or catalog version |
+| CFG-R18 | Built | `crates/baley/src/config/policy.rs:108-129` |
+| CFG-R19 to CFG-R23 | Not built | fixed list at `crates/baley/src/config/roles.rs:16` |
+| CFG-R24 to CFG-R27 | Not built | keys read from env and a key file (`crates/baley/src/review/provider/credentials.rs:52-112`) |
+| CFG-R28 | Built | provider reviewers are optional (`crates/baley/src/config/policy.rs:78-93`) |
+| CFG-R29 | Partly built | enum in `crates/baley/src/config/schema.json`; no not-yet-supported report |
 
 ## 12. Open questions
 

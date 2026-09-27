@@ -98,7 +98,7 @@ graph LR
 
 ## 4. The flow the owner works in
 
-The working loop comes from Cadence: discuss, plan, check, execute, verify, land, with an approved plan before any work, one signed commit per task, and proof before anything counts. The loop is kept because it is familiar; nothing underneath it is required to work the way Cadence did.
+The working loop comes from the earlier system: discuss, plan, check, execute, verify, land, with an approved plan before any work, one signed commit per task, and proof before anything counts. The loop is kept because it is familiar; nothing underneath it is required to work the same way.
 
 | Step | Owner | Baley | Model (worker) | Host session |
 |---|---|---|---|---|

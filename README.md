@@ -2,7 +2,7 @@
 
 Baley keeps AI coding agents accountable to the person who answers for their work. You approve the plan, the agents do the work, and Baley records what they did and the proof that it works. It refuses to let the work move forward on a claim nobody has proven.
 
-> **Status: designed, now being built. Not ready to use.** The repository is public so the work can be followed as it happens. Nothing here is released, and the internal names (the crate and binary are still called `cadence`) change before the first release.
+> **Status: designed, now being built. Not ready to use.** The repository is public so the work can be followed as it happens. Nothing here is released. The binary crate holds the inherited code until later builds replace it.
 
 ## What it does
 

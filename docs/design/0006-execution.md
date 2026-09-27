@@ -384,31 +384,31 @@ The lease is stated to the executor as the exact files and directories, with the
 
 ## 11. Build status
 
-The code today is the Cadence engine crate awaiting rename. Its native execution path is close to this design; the differences are listed per requirement.
+The binary crate holds the inherited engine. Its native execution path is close to this design; the differences are listed per requirement.
 
 | Requirement | Status | Where |
 |---|---|---|
-| EXE-R1 | Built | `crates/cadence/src/execution/admission.rs:84-124, 178-272`, `crates/cadence/src/execution/allocation.rs:69-118` |
-| EXE-R2 | Built | `crates/cadence/src/execution/dispatch.rs:43-55, 178-211, 234-287` |
-| EXE-R3 | Built, with the old read shape | `crates/cadence/src/execution/instructions.rs:16-24`, `crates/cadence/src/read/document.rs:33-160` |
-| EXE-R4 | Partly built | Signature checked on the closing commit only (`crates/cadence/src/execution/receipts.rs:700-701, 729-734`) |
-| EXE-R5 | Built | `crates/cadence/src/execution/receipts.rs:456-490` |
-| EXE-R6 | Built | `crates/cadence/src/execution/receipts.rs:502-514` |
-| EXE-R7 | Partly built | Runner at `crates/cadence/src/execution/runner.rs:303-394, 497-547`; classification understands only cargo and nextest lines (`runner.rs:603-636`), no exit-code rule or report file |
-| EXE-R8 | Not built as designed | Out-of-lease commits close as deviations (`crates/cadence/src/execution/receipts.rs:722-727`); staged paths refuse (`:735-739`); guard denies no lease path |
+| EXE-R1 | Built | `crates/baley/src/execution/admission.rs:126-224, 351-596`, `crates/baley/src/execution/allocation.rs:26-129` |
+| EXE-R2 | Built | `crates/baley/src/execution/dispatch.rs:43-55, 192-259, 286-342` |
+| EXE-R3 | Built, with the old read shape | `crates/baley/src/execution/instructions.rs:16-24`, `crates/baley/src/read/document.rs:47-332` |
+| EXE-R4 | Partly built | Signature checked on the closing commit only (`crates/baley/src/execution/receipts.rs:1127-1129, 1181-1190`) |
+| EXE-R5 | Built | `crates/baley/src/execution/receipts.rs:645-736` |
+| EXE-R6 | Built | `crates/baley/src/execution/receipts.rs:761-785` |
+| EXE-R7 | Partly built | Runner at `crates/baley/src/execution/runner.rs:486-699, 928-1002`; classification understands only cargo and nextest lines (`runner.rs:1114-1160`), no exit-code rule or report file |
+| EXE-R8 | Not built as designed | Out-of-lease commits close as deviations (`crates/baley/src/execution/receipts.rs:1166-1179`); staged paths refuse (`:1191-1201`); guard denies no lease path |
 | EXE-R9 | Built | No source edit exists |
 | EXE-R10 | Not built | Documented in 3.x only |
-| EXE-R11 | Built as prose | The binary accepts suite and completion from any caller (`crates/cadence/src/execution_runner_service.rs:34-91`) |
-| EXE-R12 | Built | `crates/cadence/src/execution/history.rs:1051-1169` |
-| EXE-R13 | Built | `crates/cadence/src/execution/history.rs:336-357, 435-469` |
-| EXE-R14 | Partly built | Gap plans enter by extension (`crates/cadence/src/execution/admission.rs:103-105`); nothing links a gap plan to the plan it repairs; completion accepts any later completed plan (`crates/cadence/src/execution/history.rs:897-910`) |
-| EXE-R15 | Built | `crates/cadence/src/execution/history.rs:1171-1219`, `crates/cadence/src/execution/receipts.rs:134-237` |
-| EXE-R16 | Built | `crates/cadence/src/execution/runner.rs:137-216` |
-| EXE-R17 | Built | `crates/cadence/src/execution_service.rs:1281-1286`, `crates/cadence/src/execution/runner.rs:232-263` |
-| EXE-R18 | Partly built | Executor-stated deviations are not copied onto the plan outcome (`crates/cadence/src/execution/history.rs:917-968`) |
-| EXE-R19 | Built | `crates/cadence/src/execution_service.rs:246-300, 387-417` |
-| EXE-R20 | Built | `crates/cadence/src/execution/history.rs:1030-1050` |
-| EXE-R21 | Built | Plans in numeric order (`crates/cadence/src/execution/plan.rs:495-519`) |
+| EXE-R11 | Built as prose | The binary accepts suite and completion from any caller (`crates/baley/src/execution_runner_service.rs:63-210`) |
+| EXE-R12 | Built | `crates/baley/src/execution/history.rs:1863-2126` |
+| EXE-R13 | Built | `crates/baley/src/execution/history.rs:617-664, 809-859` |
+| EXE-R14 | Partly built | Gap plans enter by extension (`crates/baley/src/execution/admission.rs:169-177`); nothing links a gap plan to the plan it repairs; completion accepts any later completed plan (`crates/baley/src/execution/history.rs:1525-1547`) |
+| EXE-R15 | Built | `crates/baley/src/execution/history.rs:2128-2265`, `crates/baley/src/execution/receipts.rs:179-319` |
+| EXE-R16 | Built | `crates/baley/src/execution/runner.rs:168-340` |
+| EXE-R17 | Built | `crates/baley/src/execution_service.rs:1832-1838`, `crates/baley/src/execution/runner.rs:373-433` |
+| EXE-R18 | Partly built | Executor-stated deviations are not copied onto the plan outcome (`crates/baley/src/execution/history.rs:1564-1676`) |
+| EXE-R19 | Built | `crates/baley/src/execution_service.rs:364-501, 709-798` |
+| EXE-R20 | Built | `crates/baley/src/execution/history.rs:1825-1862` |
+| EXE-R21 | Built | Plans in numeric order (`crates/baley/src/execution/plan.rs:495-522`) |
 | EXE-R22 | Not built | `GitObservation` values supplied by the caller (`crates/baley-store-sqlite/src/transact.rs`, #40) |
 
 ## 12. Open questions

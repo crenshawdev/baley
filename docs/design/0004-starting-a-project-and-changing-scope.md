@@ -383,21 +383,21 @@ Not applicable. This area reads no setting of its own. The start runs the settin
 
 ## 11. Build status
 
-The code today is the Cadence engine crate awaiting rename. It parses and edits `ROADMAP.md` and `REQUIREMENTS.md` under `.planning/`, which this design replaces.
+The binary crate holds the inherited engine. It parses and edits `ROADMAP.md` and `REQUIREMENTS.md` under `.planning/`, which this design replaces.
 
 | Requirement | Status | Where |
 |---|---|---|
 | PRJ-R1, PRJ-R2, PRJ-R5, PRJ-R6, PRJ-R7 | Not built | No start operation exists; `baley init` is not built (#23) |
-| PRJ-R3 | Partly built | Context submissions are validated field by field (`crates/cadence/src/context/validation.rs:15-101`); no scope submission exists |
-| PRJ-R4 | Not built | `REQUIREMENTS.md` rows are seeded at plan-submit (`crates/cadence/src/plan_service.rs:327-345`); no assignment check |
+| PRJ-R3 | Partly built | Context submissions are validated field by field (`crates/baley/src/context/validation.rs:17-103`); no scope submission exists |
+| PRJ-R4 | Not built | `REQUIREMENTS.md` rows are seeded at plan-submit (`crates/baley/src/plan_service.rs:410-437`); no assignment check |
 | PRJ-R8, PRJ-R9 | Not built | |
-| PRJ-R10 | Not built | Phase ids parsed as floating-point numbers (`crates/cadence/src/derivation/model.rs:22`); order is the textual order of `ROADMAP.md` (`crates/cadence/src/derivation/parse.rs:150-191`) |
-| PRJ-R11, PRJ-R12, PRJ-R13 | Not built | No phase declaration, edit or withdraw; `ROADMAP.md` is edited only to tick a phase (`crates/cadence/src/verification/completion.rs:161-179`) |
-| PRJ-R14, PRJ-R15, PRJ-R16 | Not built | A second context approval is refused `native-context-exists` (`crates/cadence/src/context_service.rs:129-137`); truth version is always 1 (`crates/cadence/src/context/persistence.rs:33-49`); the plan check accepts only version 1 (`crates/cadence/src/plan/limits.rs:233-236`) |
+| PRJ-R10 | Not built | Phase ids parsed as floating-point numbers (`crates/baley/src/derivation/model.rs:22`); order is the textual order of `ROADMAP.md` (`crates/baley/src/derivation/parse.rs:150-191`) |
+| PRJ-R11, PRJ-R12, PRJ-R13 | Not built | No phase declaration, edit or withdraw; `ROADMAP.md` is edited only to tick a phase (`crates/baley/src/verification/completion.rs:266-303`) |
+| PRJ-R14, PRJ-R15, PRJ-R16 | Not built | A second context approval is refused `native-context-exists` (`crates/baley/src/context_service.rs:184-192`); truth version is always 1 (`crates/baley/src/context/persistence.rs:33-49`); the plan check accepts only version 1 (`crates/baley/src/plan/limits.rs:401-408`) |
 | PRJ-R17 | Not built | |
-| PRJ-R18 | Partly built | Context intake answers `unavailable` for a phase not on the roadmap (`crates/cadence/src/context_service.rs:33-44`) |
-| PRJ-R19 | Partly built | Context submit, draft and approve by digest with `stale-draft` and `unknown-draft` (`crates/cadence/src/context_service.rs:86-152`); drafts are memory-only and lost on restart (`crates/cadence/src/context_service.rs:95-98`); owner and time are any non-blank strings |
-| PRJ-R20 | Not built | `PROJECT.md` is never read or written (`crates/cadence/src`, no reader) |
+| PRJ-R18 | Partly built | Context intake answers `unavailable` for a phase not on the roadmap (`crates/baley/src/context_service.rs:35-53`) |
+| PRJ-R19 | Partly built | Context submit, draft and approve by digest with `stale-draft` and `unknown-draft` (`crates/baley/src/context_service.rs:116-207`); drafts are memory-only and lost on restart (`crates/baley/src/context_service.rs:131-137`); owner and time are any non-blank strings |
+| PRJ-R20 | Not built | `PROJECT.md` is never read or written (`crates/baley/src`, no reader) |
 
 ## 12. Open questions
 

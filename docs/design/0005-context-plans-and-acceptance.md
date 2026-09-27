@@ -387,21 +387,21 @@ The test derivation rules the planner receives, as served:
 
 ## 11. Build status
 
-The code today is the Cadence engine crate awaiting rename. Truths belong to a phase's context there, plans are rendered to `PLAN-N.md`, and nothing knows a story, a sprint or a size.
+The binary crate holds the inherited engine. Truths belong to a phase's context there, plans are rendered to `PLAN-N.md`, and nothing knows a story, a sprint or a size.
 
 | Requirement | Status | Where |
 |---|---|---|
-| PLN-R1, PLN-R7 to PLN-R10, PLN-R20 to PLN-R22 | Not built | Truths are per phase (`crates/cadence/src/context/model.rs:36-46`); no backlog, sprint, size or capacity |
-| PLN-R2, PLN-R3 | Built, per phase | `crates/cadence/src/context/validation.rs:15-101` (form, one trigger, one observer, verbs, kinds, attestations) |
-| PLN-R4 | Partly built | Version always 1, no revision (`crates/cadence/src/context/persistence.rs:33-49`, `crates/cadence/src/context_service.rs:129-137`) |
-| PLN-R5 | Not built | More than seven truths refused `seven-truths` (`crates/cadence/src/context/validation.rs:28-37`), to be removed |
-| PLN-R6 | Not built | `/cad-context` says "Do not dispatch an analyzer" (`crates/cadence/src/context/instructions.rs:43-44`) |
-| PLN-R11 | Built, minus stories | Typed content and lease rules (`crates/cadence/src/plan/model.rs:29-75`, `crates/cadence/src/plan/validation.rs:89-152`) |
-| PLN-R12, PLN-R13 | Built, minus the sprint refusals | `crates/cadence/src/plan/associations.rs:190-280`, `crates/cadence/src/plan/limits.rs:110-258`, `crates/cadence/src/plan/evidence.rs:12-111` |
-| PLN-R14 | Built | `crates/cadence/src/plan/inventory.rs:129-170`, `crates/cadence/src/plan/validation.rs:23-84` |
-| PLN-R15 | Partly built | Draft, digest, `stale-draft` (`crates/cadence/src/plan_service.rs:148-198`); drafts are memory-only and lost on restart (`crates/cadence/src/context_service.rs:95-98`) |
-| PLN-R16 | Not built | `/cad-plan` forbids checker dispatch (`crates/cadence/src/plan/instructions.rs:504-506`); the 3.x checker verdict record survives as a fact kind (`crates/cadence/src/evidence/checker.rs:54-66`) |
-| PLN-R17, PLN-R18, PLN-R19 | Built as text | The derivation rules are compiled at `crates/cadence/src/plan/instructions.rs:120-180` |
+| PLN-R1, PLN-R7 to PLN-R10, PLN-R20 to PLN-R22 | Not built | Truths are per phase (`crates/baley/src/context/model.rs:36-46`); no backlog, sprint, size or capacity |
+| PLN-R2, PLN-R3 | Built, per phase | `crates/baley/src/context/validation.rs:17-103` (form, one trigger, one observer, verbs, kinds, attestations) |
+| PLN-R4 | Partly built | Version always 1, no revision (`crates/baley/src/context/persistence.rs:33-49`, `crates/baley/src/context_service.rs:184-192`) |
+| PLN-R5 | Not built | More than seven truths refused `seven-truths` (`crates/baley/src/context/validation.rs:30-39`), to be removed |
+| PLN-R6 | Not built | `/bal-context` says "Do not dispatch an analyzer" (`crates/baley/src/context/instructions.rs:43-44`) |
+| PLN-R11 | Built, minus stories | Typed content and lease rules (`crates/baley/src/plan/model.rs:29-75`, `crates/baley/src/plan/validation.rs:110-186`) |
+| PLN-R12, PLN-R13 | Built, minus the sprint refusals | `crates/baley/src/plan/associations.rs:317-487`, `crates/baley/src/plan/limits.rs:187-438`, `crates/baley/src/plan/evidence.rs:12-116` |
+| PLN-R14 | Built | `crates/baley/src/plan/inventory.rs:129-179`, `crates/baley/src/plan/validation.rs:23-105` |
+| PLN-R15 | Partly built | Draft, digest, `stale-draft` (`crates/baley/src/plan_service.rs:163-260`); drafts are memory-only and lost on restart (`crates/baley/src/context_service.rs:131-137`) |
+| PLN-R16 | Not built | `/bal-plan` forbids checker dispatch (`crates/baley/src/plan/instructions.rs:504-506`); the 3.x checker verdict record survives as a fact kind (`crates/baley/src/evidence/checker.rs:54-66`) |
+| PLN-R17, PLN-R18, PLN-R19 | Built as text | The derivation rules are compiled at `crates/baley/src/plan/instructions.rs:120-180` |
 
 ## 12. Open questions
 

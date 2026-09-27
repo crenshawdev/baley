@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cadence guard",
+            "command": "baley guard",
             "timeout": 10
           }
         ]

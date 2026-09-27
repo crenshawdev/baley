@@ -555,7 +555,7 @@ fn summarize(runs: &[Value]) -> Value {
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let profile = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("profile/cadence-4.0.json");
+    let profile = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("profile/baseline-store.json");
     match args.get(1).map(String::as_str) {
         Some("guard-once") => guard_once(Path::new(&args[2]), &args[3], &args[4]),
         Some("writer") => writer(Path::new(&args[2]), &args[3], &args[4], args[5].parse()?),

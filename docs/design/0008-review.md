@@ -339,24 +339,24 @@ sequenceDiagram
 
 ## 11. Build status
 
-The code today is the Cadence engine crate awaiting rename. Its review records are close to this design; its gates cannot clear and Baley itself calls providers.
+The binary crate holds the inherited engine. Its review records are close to this design; its gates cannot clear and Baley itself calls providers.
 
 | Requirement | Status | Where |
 |---|---|---|
-| REV-R1 | Built | `crates/cadence/src/review/policy.rs:7-11`, `crates/cadence/src/review_service.rs:189` |
-| REV-R2 | Partly built | Gate actions (`crates/cadence/src/review/policy.rs:83-106`); blocking and adjudicated wait for a settlement nothing writes (`crates/cadence/src/review_service.rs:426`) |
-| REV-R3 | Partly built | Selection modes still exist (`crates/cadence/src/review/selection.rs:55-179`); fallback fixed to `claude-subagent` (`review_service.rs:574-578`) |
-| REV-R4 | Not built as designed | Baley calls providers itself (`crates/cadence/src/review/provider/delivery.rs`, `transport.rs:59-117`); prompt bound built (`payload.rs:128-134`) |
-| REV-R5 | Built | `crates/cadence/src/review/material.rs:425-687`, `crates/cadence/src/review/admission.rs:22-47` |
-| REV-R6 | Built | `crates/cadence/src/review/contract.rs:80-172`, `crates/cadence/src/review/returns.rs:326-374` |
-| REV-R7, REV-R8, REV-R9, REV-R10 | Not built | No adjudication or ruling operation (`crates/cadence/src/review/views.rs` transports supplied views only); the extra round exists on an unreachable pause path (`crates/cadence/src/pause_service.rs:976-996`) |
-| REV-R11 | Partly built | Queue written (`crates/cadence/src/review/deferred.rs:128-170`); no operation leaves `Unruled`, so landing blocks forever (`crates/cadence/src/landing_service.rs:123-127`) |
-| REV-R12 | Partly built | Replay key from target bytes alone (`crates/cadence/src/review_service.rs:1338`) |
-| REV-R13 | Partly built | `recover_attempt` has no caller (`crates/cadence/src/review/recovery.rs:42-96`) |
-| REV-R14 | Partly built | Minimalism and decision built (`crates/cadence/src/review/specialist.rs:23-46`, `crates/cadence/src/review/selection.rs:298-323`); diagnosis has no caller |
-| REV-R15, REV-R16 | Not built | Landing's tracker check only reads (`crates/cadence/src/landing/report.rs:1`) |
-| REV-R19 | Built | `crates/cadence/src/review/provider/usage.rs:8-9, 85-106`, `records.rs:22-46` |
-| REV-R20 | Built | `crates/cadence/src/review/provider/payload.rs:25-80` |
+| REV-R1 | Built | `crates/baley/src/review/policy.rs:7-11`, `crates/baley/src/review_service.rs:195` |
+| REV-R2 | Partly built | Gate actions (`crates/baley/src/review/policy.rs:83-106`); blocking and adjudicated wait for a settlement nothing writes (`crates/baley/src/review_service.rs:442`) |
+| REV-R3 | Partly built | Selection modes still exist (`crates/baley/src/review/selection.rs:55-179`); fallback fixed to `claude-subagent` (`review_service.rs:607-611`) |
+| REV-R4 | Not built as designed | Baley calls providers itself (`crates/baley/src/review/provider/delivery.rs`, `transport.rs:66-142`); prompt bound built (`payload.rs:196-210`) |
+| REV-R5 | Built | `crates/baley/src/review/material.rs:442-711`, `crates/baley/src/review/admission.rs:22-52` |
+| REV-R6 | Built | `crates/baley/src/review/contract.rs:80-172`, `crates/baley/src/review/returns.rs:338-386` |
+| REV-R7, REV-R8, REV-R9, REV-R10 | Not built | No adjudication or ruling operation (`crates/baley/src/review/views.rs` transports supplied views only); the extra round exists on an unreachable pause path (`crates/baley/src/pause_service.rs:1010-1034`) |
+| REV-R11 | Partly built | Queue written (`crates/baley/src/review/deferred.rs:131-176`); no operation leaves `Unruled`, so landing blocks forever (`crates/baley/src/landing_service.rs:279-288`) |
+| REV-R12 | Partly built | Replay key from target bytes alone (`crates/baley/src/review_service.rs:1416`) |
+| REV-R13 | Partly built | `recover_attempt` has no caller (`crates/baley/src/review/recovery.rs:45-102`) |
+| REV-R14 | Partly built | Minimalism and decision built (`crates/baley/src/review/specialist.rs:23-46`, `crates/baley/src/review/selection.rs:329-381`); diagnosis has no caller |
+| REV-R15, REV-R16 | Not built | Landing's tracker check only reads (`crates/baley/src/landing/report.rs:1`) |
+| REV-R19 | Built | `crates/baley/src/review/provider/usage.rs:8-9, 114-143`, `records.rs:34-77` |
+| REV-R20 | Built | `crates/baley/src/review/provider/payload.rs:25-113` |
 
 ## 12. Open questions
 

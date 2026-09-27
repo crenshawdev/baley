@@ -1,0 +1,201 @@
+//! The shipped user commands and their shared front matter descriptions.
+use serde::Serialize;
+use serde_json::{Value, json};
+
+#[derive(Serialize)]
+pub struct Command {
+    pub name: &'static str,
+    pub cluster: &'static str,
+    pub description: &'static str,
+}
+
+pub const CLUSTERS: &[&str] = &[
+    "Build spine",
+    "Review & quality gates",
+    "Lifecycle & git",
+    "Support",
+];
+
+pub const COMMANDS: &[Command] = &[
+    Command {
+        name: "bal-context",
+        cluster: "Build spine",
+        description: "Discuss a phase's scope, decisions and truths with its owner, then publish only the exact approved set through Baley",
+    },
+    Command {
+        name: "bal-plan",
+        cluster: "Build spine",
+        description: "Author a phase's plans and publish the exact owner-approved content through Baley",
+    },
+    Command {
+        name: "bal-execute",
+        cluster: "Build spine",
+        description: "Execute a native phase: the binary composes each executor dispatch from state and owns every task, run and suite receipt.",
+    },
+    Command {
+        name: "bal-verify",
+        cluster: "Build spine",
+        description: "Inspect a phase through the retained native verifier dispatch.",
+    },
+    Command {
+        name: "bal-progress",
+        cluster: "Build spine",
+        description: "Show derived phase status, located issues, records, captures and the next action.",
+    },
+    Command {
+        name: "bal-task",
+        cluster: "Build spine",
+        description: "Execute a small off-roadmap task with atomic commits - inline by default, --plan for multi-step work",
+    },
+    Command {
+        name: "bal-review",
+        cluster: "Review & quality gates",
+        description: "Review one explicitly selected target - a decision, a minimalism delete-list over code, or a plan - through the native review subsystem.",
+    },
+    Command {
+        name: "bal-plan-review",
+        cluster: "Review & quality gates",
+        description: "Alias of /bal-review plan: review a phase's native plan slices with its locked context, or one plan document.",
+    },
+    Command {
+        name: "bal-decision-review",
+        cluster: "Review & quality gates",
+        description: "Alias of /bal-review decision: refute one named decision in one named document.",
+    },
+    Command {
+        name: "bal-minimalism-review",
+        cluster: "Review & quality gates",
+        description: "Alias of /bal-review minimalism: a ranked delete-list over one file, one frozen directory or one native phase range.",
+    },
+    Command {
+        name: "bal-debug",
+        cluster: "Review & quality gates",
+        description: "Resume a recorded debug session, review its staged fix, and offer a configured consult at dead ends.",
+    },
+    Command {
+        name: "bal-coverage",
+        cluster: "Review & quality gates",
+        description: "Read-only alias of /bal-audit: the phase-scoped requirement-to-evidence trace over the retained map and current verdicts; the test-generation arm is removed.",
+    },
+    Command {
+        name: "bal-audit",
+        cluster: "Review & quality gates",
+        description: "Read-only verification audit: every requirement's phase-scoped trace to its plans, truths, evidence and current verdicts, with each broken edge named.",
+    },
+    Command {
+        name: "bal-land",
+        cluster: "Lifecycle & git",
+        description: "Authorize landing steps, confirm the merge and follow ordered local cleanup.",
+    },
+    Command {
+        name: "bal-milestone",
+        cluster: "Lifecycle & git",
+        description: "Close and prune a milestone, or confirm an explicit release manifest bump before landing.",
+    },
+    Command {
+        name: "bal-undo",
+        cluster: "Lifecycle & git",
+        description: "Undo a phase's exact recorded commits and report retained progress.",
+    },
+    Command {
+        name: "bal-capture",
+        cluster: "Support",
+        description: "Park a phase-linked todo, a seed for a later milestone, or a note, as one typed item.",
+    },
+    Command {
+        name: "bal-help",
+        cluster: "Support",
+        description: "List Baley commands shipped under skills/ by cluster, or show one command and its compiled description.",
+    },
+    Command {
+        name: "bal-spike",
+        cluster: "Support",
+        description: "Record risk-ordered spike criteria before experimenting, then retain observations and a bounded verdict.",
+    },
+    Command {
+        name: "bal-suggest",
+        cluster: "Support",
+        description: "Show retune suggestions from retained decisions and apply only an accepted payload.",
+    },
+    Command {
+        name: "bal-why",
+        cluster: "Support",
+        description: "Explain file[:line] through its git and planning history, or list a phase's journal refusals with <phase> refusals.",
+    },
+];
+
+pub fn description(name: &str) -> &'static str {
+    COMMANDS
+        .iter()
+        .find(|row| row.name == name)
+        .expect("compiled user skill")
+        .description
+}
+
+/// Replace only a description value, preserving its quoted/plain form and all
+/// other bytes. Also used to regenerate the seven authored skill bodies.
+pub fn render_description(name: &str, markdown: &str) -> Option<String> {
+    let row = COMMANDS.iter().find(|row| row.name == name)?;
+    let (frontmatter, _) = markdown.strip_prefix("---\n")?.split_once("\n---\n")?;
+    let marker = "\ndescription: ";
+    let start = 4 + frontmatter.find(marker)? + marker.len();
+    let end = start + markdown[start..].find('\n')?;
+    let description = if markdown[start..end].starts_with('"') {
+        serde_json::to_string(row.description).expect("description string")
+    } else {
+        row.description.to_owned()
+    };
+    Some(format!(
+        "{}{description}{}",
+        &markdown[..start],
+        &markdown[end..]
+    ))
+}
+
+pub fn answer(name: Option<&str>) -> Value {
+    let Some(name) = name else {
+        let clusters: Vec<_> = CLUSTERS.iter().map(|cluster| json!({
+            "name": cluster,
+            "commands": COMMANDS.iter().filter(|row| row.cluster == *cluster).collect::<Vec<_>>(),
+        })).collect();
+        return json!({"status":"ok", "clusters":clusters});
+    };
+    let name = name.strip_prefix('/').unwrap_or(name);
+    let name = name.strip_prefix("bal-").unwrap_or(name);
+    let rows: Vec<_> = COMMANDS
+        .iter()
+        .filter(|row| row.name.strip_prefix("bal-") == Some(name))
+        .collect();
+    let mut closest = Vec::new();
+    if rows.is_empty() {
+        let mut ranked: Vec<_> = COMMANDS
+            .iter()
+            .map(|row| {
+                (
+                    edit_distance(name, row.name.strip_prefix("bal-").unwrap()),
+                    row.name,
+                )
+            })
+            .collect();
+        ranked.sort_unstable();
+        closest.extend(ranked.into_iter().take(3).map(|(_, name)| name));
+    }
+    json!({"status":"ok", "rows":rows, "closest":closest})
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<_> = right.chars().collect();
+    let mut previous: Vec<_> = (0..=right.len()).collect();
+    for (i, a) in left.chars().enumerate() {
+        let mut current = vec![i + 1];
+        for (j, b) in right.iter().enumerate() {
+            current.push(
+                (current[j] + 1)
+                    .min(previous[j + 1] + 1)
+                    .min(previous[j] + usize::from(a != *b)),
+            );
+        }
+        previous = current;
+    }
+    previous[right.len()]
+}
