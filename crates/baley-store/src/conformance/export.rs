@@ -6,6 +6,11 @@ use crate::*;
 pub fn an_export_verifies_alone_and_holds_no_other_project<F: StoreFactory>(factory: &F) {
     let store = created(factory);
     fixture(&store);
+    let own = attach(
+        &store,
+        &command("fixture.add", "own"),
+        b"exported project body",
+    );
     let mut cmd = command("fixture.add", "other");
     cmd.project = other_project();
     let other = attach(&store, &cmd, b"other project only");
@@ -17,7 +22,14 @@ pub fn an_export_verifies_alone_and_holds_no_other_project<F: StoreFactory>(fact
         vec![(project(), "fixture".into())]
     );
     assert_eq!(history(&exported), history(&store));
-    assert!(exported.verify(&project(), None).unwrap().chain.is_intact());
+    let report = exported.verify(&project(), None).unwrap();
+    assert!(report.chain.is_intact());
+    assert!(report.payloads.is_empty());
+    assert_eq!(report.bodies_checked, 1);
+    assert_eq!(
+        super::payloads::bytes(&exported, &own.hash),
+        b"exported project body"
+    );
     assert_eq!(
         exported.status(&other.hash),
         Err(StoreError::Refused(Refusal::UnknownPayload(other.hash)))

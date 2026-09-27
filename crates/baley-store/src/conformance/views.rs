@@ -142,8 +142,19 @@ pub fn a_cursor_from_another_query_is_refused<F: StoreFactory>(factory: &F) {
         (
             project(),
             "by_state_rank",
-            vec![KeyValue::Text("open".into())],
-            cursor.clone(),
+            vec![KeyValue::Text("done".into())],
+            store
+                .find(
+                    &project(),
+                    "item",
+                    &IndexQuery {
+                        equals: vec![KeyValue::Text("open".into())],
+                        ..query(2)
+                    },
+                )
+                .unwrap()
+                .next
+                .unwrap(),
         ),
         (other_project(), "by_state_rank", vec![], cursor),
         (project(), "by_state_rank", vec![], {

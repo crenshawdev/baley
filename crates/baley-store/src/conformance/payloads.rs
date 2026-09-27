@@ -53,7 +53,7 @@ pub fn a_present_body_reports_its_uncompressed_length<F: StoreFactory>(factory: 
 /// Streams across several chunks. Catches lost or repeated stream positions.
 pub fn a_body_over_several_chunks_streams_back_byte_for_byte<F: StoreFactory>(factory: &F) {
     let store = created(factory);
-    let input = body_bytes();
+    let input = [noise(400_000), vec![b'x'; 400_000]].concat();
     let body = attach(&store, &command("fixture.add", "body"), &input);
     assert_eq!(bytes(&store, &body.hash), input);
 }

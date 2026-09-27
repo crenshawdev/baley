@@ -519,3 +519,17 @@ pub(super) fn attach_class(
 pub(super) fn body_bytes() -> Vec<u8> {
     [vec![b'a'; 65536], vec![b'b'; 65536], vec![b'c'; 65536]].concat()
 }
+
+/// Bytes that do not compress, from a fixed xorshift seed, so the stored
+/// body spans several reads of its compressed form.
+pub(super) fn noise(len: usize) -> Vec<u8> {
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    (0..len)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state.to_le_bytes()[0]
+        })
+        .collect()
+}
