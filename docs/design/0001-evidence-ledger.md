@@ -464,23 +464,23 @@ sequenceDiagram
   and check and act
     C->>F: fetch the latest remote anchor
     F-->>C: observation
-    C->>L: verify(project, fetched anchor)
-    L-->>C: chain report and payload faults
-    alt chain agrees with the remote anchor, or no anchor yet and the chain verifies
-      C->>F: push the tag of the pre-claim head
-      F-->>C: pushed, refused, no remote or unreachable
-    else truncated, rewritten, broken, malformed or remote not read
-      C->>C: push nothing, keep the mismatch as the reason
+    alt a well-formed anchor tag, or the remote confirms none
+      C->>L: verify(project, the remote anchor or none)
+      L-->>C: chain report and payload faults
+      alt chain agrees with the remote anchor, or no anchor yet and the chain verifies
+        C->>F: push the tag of the pre-claim head
+        F-->>C: pushed, refused, no remote or unreachable
+      else truncated, rewritten or broken
+        C->>C: push nothing, keep the mismatch as the reason
+      end
+    else malformed latest tag, remote unreachable or no remote
+      C->>C: no verify, push nothing, keep the fetch status as the reason
     end
   end
   C->>C: stop and join the ticker
-  C->>L: retry claim with same request id
-  L-->>C: InProgress, no write and no second effect
   C->>L: complete(command, owner, decide)
   L->>Q: check owner and scope, append anchor.pushed and the anchor row or anchor.failed, then command.completed, delete lease, commit
   L-->>C: New outcome
-  C->>L: retry claim after completion
-  L-->>C: Replayed outcome, no write
   C->>L: scoped command meets an interrupted claim
   L-->>C: Blocked with Interrupted and claim id
   C->>F: fetch the remote tag named by the claim
@@ -494,7 +494,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 6. Claim, act and record, drawn for an anchor push. The lease is renewed as soon as the claim commits and every 10 seconds through the latest-anchor fetch, the verification and any push, outside the chain; the ticker is stopped before the record step whether the check refused or the push ran. An interrupted holder is reconciled from a fetch of its own tag before the blocked request retries once.*
+*Figure 6. Claim, act and record, drawn for an anchor push. The lease is renewed as soon as the claim commits and every 10 seconds through the latest-anchor fetch, any verification and any push, outside the chain; the ticker is stopped before the record step whether the check refused or the push ran. Only a well-formed latest tag or a confirmed absence leads to `verify`; a malformed tag, an unreachable remote or none refuses without it. An interrupted holder is reconciled from a fetch of its own tag before the blocked request retries once. Apart from that retry the command never resends its request; a caller that resends one gets `InProgress` while the claim is open and `Replayed` once it completes, with no write and no second push.*
 
 ```mermaid
 sequenceDiagram
