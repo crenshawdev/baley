@@ -279,17 +279,17 @@ The binary crate holds the inherited engine; capture, debug and spike write JSON
 
 | Requirement | Status | Where |
 |---|---|---|
-| SUP-R1 | Built, three kinds | `crates/baley/src/capture_service.rs:19-105`, `crates/baley/src/capture/mod.rs:18-87` |
+| SUP-R1 | Built, three kinds | `crates/baley/src/capture_service.rs:19-131`, `crates/baley/src/capture/mod.rs:18-91` |
 | SUP-R2 | Not built | No promote or decline operation; the bound counts every capture ever made |
-| SUP-R3 | Built | `crates/baley/src/session/mod.rs:587-594`, `crates/baley/src/config/mod.rs:68-80` |
-| SUP-R4 | Built over `.planning` | `crates/baley/src/task_service.rs:79-273`; the episode is memory-only without a planning root (`task_service.rs:16-35`) |
-| SUP-R5, SUP-R6 | Built | `crates/baley/src/debug_service.rs:63-211`, `crates/baley/src/debug/model.rs:7-69, 331-392` |
-| SUP-R7 | Built as consult, to be replaced | `crates/baley/src/debug_service.rs:225-272`, `crates/baley/src/review/provider/consult.rs:10-76` |
-| SUP-R8 | Built | `crates/baley/src/spike/model.rs:7-221`, `crates/baley/src/spike_service.rs:23-44` |
-| SUP-R9 | Built over Markdown and git | `crates/baley/src/recall/mod.rs:61-187, 389-501` |
+| SUP-R3 | Built | `crates/baley/src/session/mod.rs:612-619`, `crates/baley/src/config/mod.rs:68-77` |
+| SUP-R4 | Built over `.planning` | `crates/baley/src/task_service.rs:111-437`; the episode is memory-only without a planning root (`task_service.rs:25-44`) |
+| SUP-R5, SUP-R6 | Built | `crates/baley/src/debug_service.rs:117-448`, `crates/baley/src/debug/model.rs:10-107, 520-633` |
+| SUP-R7 | Built as consult, to be replaced | `crates/baley/src/debug_service.rs:474-563`, `crates/baley/src/review/provider/consult.rs:12-130` |
+| SUP-R8 | Built | `crates/baley/src/spike/model.rs:13-384`, `crates/baley/src/spike_service.rs:49-95` |
+| SUP-R9 | Built over Markdown and git | `crates/baley/src/recall/mod.rs:61-197, 399-523` |
 | SUP-R10 | Built | Code search removed (2026-09-24); `document` by identity (`crates/baley/src/read/document.rs`) |
-| SUP-R11 | Built over Markdown | `crates/baley/src/why/corpus.rs:509-694`, `crates/baley/src/why_service.rs:23-120` |
-| SUP-R12 | Built | `crates/baley/src/help/table.rs:12-93` |
+| SUP-R11 | Built over Markdown | `crates/baley/src/why/corpus.rs:742-1138`, `crates/baley/src/why_service.rs:23-160` |
+| SUP-R12 | Built | `crates/baley/src/help/table.rs:12-201` |
 
 ## 12. Open questions
 

@@ -185,13 +185,13 @@ The binary crate holds the inherited engine; its next action derives from `ROADM
 
 | Requirement | Status | Where |
 |---|---|---|
-| NXT-R1 | Not built as designed | A read writes the lifecycle memo into `state.json` (`crates/baley/src/derivation_service.rs:139-167`) |
+| NXT-R1 | Not built as designed | A read writes the lifecycle memo into `state.json` (`crates/baley/src/derivation_service.rs:146-174`) |
 | NXT-R2 | Not built | Derivation parses `ROADMAP.md` and lists phase directories (`crates/baley/src/derivation/capture.rs:120-168`) |
-| NXT-R3 | Partly built | Rule order over phases, lowest number first (`crates/baley/src/next_action/select.rs:54-119, 141-148`); no sprint, story or landing rules |
-| NXT-R4 | Partly built | The resolve action tells the owner to hand-edit a roadmap tick (`crates/baley/src/next_action/select.rs:27`) and points at a `/bal-phase add` that does not exist (`select.rs:36`) |
-| NXT-R5 | Built | `derivation-conflict` and `state-conflict` (`crates/baley/src/derivation/memo.rs:280-326`, `crates/baley/src/derivation/consistency.rs:14-70`) |
-| NXT-R6 | Partly built | Phase rows, record counts, capture bound, next action (`crates/baley/src/progress/render.rs:14-73`, `crates/baley/src/progress_service.rs:31-114`); bounded at 24,576 bytes with a refusal instead of parts |
-| NXT-R7 | Built | `crates/baley/src/suggest/rules.rs:4-67`, `crates/baley/src/suggest_service.rs:91-116` |
+| NXT-R3 | Partly built | Rule order over phases, lowest number first (`crates/baley/src/next_action/select.rs:59-133, 165-197`); no sprint, story or landing rules |
+| NXT-R4 | Partly built | The resolve action tells the owner to hand-edit a roadmap tick (`crates/baley/src/next_action/select.rs:27-30`) and points at a `/bal-phase add` that does not exist (`select.rs:41`) |
+| NXT-R5 | Built | `derivation-conflict` and `state-conflict` (`crates/baley/src/derivation/memo.rs:291-337`, `crates/baley/src/derivation/consistency.rs:14-70`) |
+| NXT-R6 | Partly built | Phase rows, record counts, capture bound, next action (`crates/baley/src/progress/render.rs:14-141`, `crates/baley/src/progress_service.rs:47-211`); bounded at 24,576 bytes with a refusal instead of parts |
+| NXT-R7 | Built | `crates/baley/src/suggest/rules.rs:4-80`, `crates/baley/src/suggest_service.rs:160-216` |
 | NXT-R8 | Built over Markdown | `why` in `crates/baley/src/recall` ([0014](0014-support-families.md)) |
 
 ## 12. Open questions

@@ -215,7 +215,7 @@ flowchart TB
 
 *Figure 3. Only the binary and the adapter know the engine exists. `baley-core` cannot import rusqlite, so domain code cannot reach SQL.*
 
-The binary wires one adapter into the core at start-up. The binary crate also holds the inherited engine until each build replaces it. Tests of the domain run against the real SQLite adapter in a temporary directory or in memory; no fake store exists.
+The binary wires one adapter into the core at start-up. The binary crate also holds the inherited code until each build replaces it. Tests of the domain run against the real SQLite adapter in a temporary directory or in memory; no fake store exists.
 
 #### The storage port
 
@@ -531,10 +531,10 @@ The existing source checks are kept and run at these points:
 
 | Check | Today | Runs |
 |---|---|---|
-| Verification claim recomputed at commit | `store/writer.rs:1196` | Inside `decide` for `verdict.claimed` |
-| Source reachability, commit signatures, staged-path leases | `execution/receipts.rs:700-712` | Before `transact`, facts recorded; HEAD re-checked inside |
-| Changed source or index refused on re-observation | `verification/inputs.rs:248` | Inside `decide` |
-| HEAD unchanged during an execution request | `execution_service.rs:2131` | Inside `decide` |
+| Verification claim recomputed at commit | `store/writer.rs:1514` | Inside `decide` for `verdict.claimed` |
+| Source reachability, commit signatures, staged-path leases | `execution/receipts.rs:1127-1145` | Before `transact`, facts recorded; HEAD re-checked inside |
+| Changed source or index refused on re-observation | `verification/inputs.rs:458-461` | Inside `decide` |
+| HEAD unchanged during an execution request | `execution_service.rs:2825` | Inside `decide` |
 
 #### The hash chain and anchors (EVD-R3)
 
@@ -1014,7 +1014,7 @@ Two sessions on different projects, or two agents on one project, each hold the 
 
 ## Where the domain rules live
 
-The domain rules are owned, specified and tested by the area design documents ([0002](0002-system-design.md)); nothing is required to behave as it did in the old store. This table records, for each rule the ledger has to carry, which area owns it and how the ledger records it.
+The domain rules are owned, specified and tested by the area design documents ([0002](0002-system-design.md)); nothing is required to behave as it did in the earlier system. This table records, for each rule the ledger has to carry, which area owns it and how the ledger records it.
 
 | Rule | Owned by | In the ledger |
 |---|---|---|
