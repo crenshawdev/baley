@@ -1290,9 +1290,9 @@ mod tests {
     use std::num::NonZeroU32;
 
     use baley_store::{
-        Actor, Change, CommandKind, EventSchema, FieldKind, FieldSpec, GitObservation, IndexField,
-        IndexSpec, KeyValue, ObservedDocument, Order, OutcomeKind, PayloadBody, Payloads,
-        Projector, ProjectorError, RequestId, ViewSpec, Views, verify_chain,
+        Actor, Change, CommandKind, EventSchema, FieldKind, FieldSpec, IndexField, IndexSpec,
+        KeyValue, Order, OutcomeKind, PayloadBody, Payloads, Projector, ProjectorError, RequestId,
+        ViewSpec, Views, verify_chain,
     };
     use rusqlite::{Connection, ErrorCode};
     use serde_json::json;
@@ -1459,117 +1459,28 @@ mod tests {
             .expect("record")
     }
 
-    /// A command that appends nothing and depends on `observed`.
-    fn observing(store: &SqliteStore, observed: Observed) -> Result<Recorded, StoreError> {
-        store.transact(&command("item.check", "check", 1), &mut |_| {
-            Ok(Decision {
-                observed: observed.clone(),
-                ..done(json!("ok"))
-            })
-        })
-    }
-
     fn item_key(id: i64) -> DocKey {
         DocKey(vec![KeyValue::Integer(id)])
     }
 
-    // A projector fails on the decision's event, the decision ignores the
-    // error and answers, and still nothing is left: no event, payload,
-    // reference, document or request answer. Catches a partial commit and
-    // a projector failure a decision can swallow.
+    // Catches a replay fenced by a raw newer set stamp beside a current request view.
     #[test]
-    fn a_failing_projector_leaves_nothing_behind() {
+    fn a_replay_is_answered_beside_a_newer_view_set() {
         let home = tempfile::tempdir().expect("temp dir");
         let store = open(home.path());
-        let result = store.transact(&command("item.add", "r1", 1), &mut |tx| {
-            let output = tx.put_payload(b"output", RetentionClass::Output)?;
-            let mut event = item(1, "broken");
-            event.payload["output"] = output.to_value();
-            event.attachments.push(output);
-            let _ignored = tx.append(event);
-            Ok(done(json!("ok")))
-        });
-        assert!(matches!(
-            result,
-            Err(StoreError::Projector { view, seq: 1, .. }) if view == "item"
-        ));
-        for table in ["event", "payload", "payload_ref", "v_item_1", "v_request_2"] {
-            assert_eq!(count(home.path(), table), 0, "{table}");
-        }
-    }
-
-    // The same request again returns the first outcome without running
-    // the decision or recording anything, even after a newer binary's view
-    // set became live beside a `request` view at this binary's version.
-    // Catches a retry that records twice, and a replay refused for views
-    // it does not read.
-    #[test]
-    fn a_replayed_request_returns_its_outcome_and_records_nothing() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = open(home.path());
-        let runs = Cell::new(0);
-        let mut decide = |tx: &mut dyn Transaction| {
-            runs.set(runs.get() + 1);
-            tx.append(item(1, "open"))?;
-            Ok(done(json!({ "added": 1 })))
-        };
-        let first = store
-            .transact(&command("item.add", "r1", 1), &mut decide)
-            .expect("first");
-        let Recorded::New { outcome, .. } = first else {
-            panic!("the first delivery records");
+        let Recorded::New { outcome, .. } = record(&store, "r1", &[(1, "open")]) else {
+            panic!("new request")
         };
         raw(home.path())
             .execute(
-                "UPDATE view_gen SET view_set_version = 3 WHERE project_id = ?1",
+                "UPDATE view_gen SET view_set_version = 4 WHERE project_id = ?1",
                 [PROJECT],
             )
-            .expect("a newer set stamp");
-        let events = count(home.path(), "event");
-        let second = store.transact(&command("item.add", "r1", 1), &mut decide);
-        assert_eq!(second, Ok(Recorded::Replayed { outcome }));
-        assert_eq!(runs.get(), 1);
-        assert_eq!(count(home.path(), "event"), events);
-    }
-
-    // The same request id and kind with another digest is refused and
-    // records nothing. Catches a retry matched on the id alone.
-    #[test]
-    fn the_same_request_with_another_digest_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = open(home.path());
-        record(&store, "r1", &[(1, "open")]);
-        let events = count(home.path(), "event");
-        let result = store.transact(&command("item.add", "r1", 2), &mut |tx| {
-            tx.append(item(2, "open"))?;
-            Ok(done(json!("ok")))
-        });
+            .expect("newer set");
         assert_eq!(
-            result,
-            Err(StoreError::Refused(Refusal::RequestDigestMismatch {
-                request_id: RequestId("r1".into())
-            }))
+            store.transact(&command("item.add", "r1", 1), &mut |_| panic!("replay ran")),
+            Ok(Recorded::Replayed { outcome })
         );
-        assert_eq!(count(home.path(), "event"), events);
-    }
-
-    // Two command kinds with one request id are two requests: the second
-    // runs and gets its own answer. Catches request answers keyed without
-    // the command kind.
-    #[test]
-    fn two_command_kinds_do_not_share_a_request_id() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = open(home.path());
-        record(&store, "shared", &[]);
-        let other = store
-            .transact(&command("item.remove", "shared", 1), &mut |_| {
-                Ok(done(json!("removed")))
-            })
-            .expect("other kind");
-        assert!(matches!(
-            other,
-            Recorded::New { outcome, .. } if outcome.answer == Answer::Inline(json!("removed"))
-        ));
     }
 
     // A decision expecting a stream at the version it read is refused once
@@ -1591,106 +1502,6 @@ mod tests {
                 stream: stream.clone(),
                 expected: 0,
                 actual: 1,
-            }))
-        );
-    }
-
-    // A document the caller saw at sequence 1 is at sequence 3 now, so the
-    // command is stale. Catches a stale check that compares the wrong
-    // sequence or none.
-    #[test]
-    fn a_document_seen_at_an_older_sequence_is_stale() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = open(home.path());
-        record(&store, "r1", &[(1, "open")]);
-        record(&store, "r2", &[(1, "done")]);
-        let observed = Observed {
-            documents: vec![ObservedDocument {
-                view: "item".into(),
-                key: item_key(1),
-                produced_seq: Some(1),
-            }],
-            ..Observed::default()
-        };
-        assert_eq!(
-            observing(&store, observed),
-            Err(StoreError::Stale(StaleInput::Document {
-                view: "item".into(),
-                key: item_key(1),
-                seen: Some(1),
-                now: Some(3),
-            }))
-        );
-    }
-
-    // An event the caller saw absent now exists, so the command is stale.
-    // Catches an event absence that is never re-checked.
-    #[test]
-    fn an_event_absence_that_no_longer_holds_is_stale() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = open(home.path());
-        record(&store, "r1", &[(1, "open")]);
-        let absence = Absence::Event(EventMatch {
-            type_name: RECORDED.into(),
-            stream: None,
-            fields: BTreeMap::from([("id".into(), json!(1))]),
-        });
-        let observed = Observed {
-            absences: vec![absence.clone()],
-            ..Observed::default()
-        };
-        assert_eq!(
-            observing(&store, observed),
-            Err(StoreError::Stale(StaleInput::Absence(absence)))
-        );
-    }
-
-    // No open item was seen, and now one exists, so the command is stale.
-    // Catches a document absence that is never re-checked.
-    #[test]
-    fn a_document_absence_that_no_longer_holds_is_stale() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = open(home.path());
-        record(&store, "r1", &[(1, "open")]);
-        let absence = Absence::Documents {
-            view: "item".into(),
-            index: "by_state".into(),
-            equals: vec![KeyValue::Text("open".into())],
-        };
-        let observed = Observed {
-            absences: vec![absence.clone()],
-            ..Observed::default()
-        };
-        assert_eq!(
-            observing(&store, observed),
-            Err(StoreError::Stale(StaleInput::Absence(absence)))
-        );
-    }
-
-    // The HEAD the caller saw differs from the HEAD read again inside the
-    // transaction, so the command is stale. Catches git facts that are
-    // recorded but never compared.
-    #[test]
-    fn a_moved_head_is_stale() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = open(home.path());
-        let observed = Observed {
-            git: vec![GitObservation {
-                checkout: "/work".into(),
-                head_seen: "aaa".into(),
-                head_now: "bbb".into(),
-                index_seen: "idx".into(),
-                index_now: "idx".into(),
-            }],
-            ..Observed::default()
-        };
-        assert_eq!(
-            observing(&store, observed),
-            Err(StoreError::Stale(StaleInput::Git {
-                checkout: "/work".into(),
-                fact: GitFact::Head,
-                seen: "aaa".into(),
-                now: "bbb".into(),
             }))
         );
     }

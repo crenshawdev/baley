@@ -405,42 +405,14 @@ mod tests {
             .expect("hold")
     }
 
-    // Catches a retry that records a second claim.
+    // Catches a retry changing lease or request row counts.
     #[test]
-    fn retry_of_active_claim_returns_in_progress_without_writes() {
-        let f = Fixture::new();
-        let first = f.take(&claim_command());
-        let before = (
-            f.count("event"),
-            f.count("claim_lease"),
-            f.count("v_request_2"),
-        );
-        let retried = f.take(&claim_command());
-        assert!(matches!(first, Claimed::New { .. }));
-        assert!(matches!(retried, Claimed::InProgress(_)));
-        assert_eq!(
-            (
-                f.count("event"),
-                f.count("claim_lease"),
-                f.count("v_request_2")
-            ),
-            before
-        );
-    }
-
-    // Catches a clean failure left as an open claim.
-    #[test]
-    fn clean_failure_completes_the_request() {
+    fn a_claim_retry_adds_no_lease_or_request_rows() {
         let f = Fixture::new();
         f.take(&claim_command());
-        f.store
-            .complete(&claim_command(), &owner(), &mut |_| Ok(refused()))
-            .expect("complete");
-        let body = f.request("anchor.push", "r1");
-        assert_eq!(
-            (body["state"].as_str(), body["outcome"].as_str()),
-            (Some("completed"), Some("refused"))
-        );
+        let before = (f.count("claim_lease"), f.count("v_request_2"));
+        f.take(&claim_command());
+        assert_eq!((f.count("claim_lease"), f.count("v_request_2")), before);
     }
 
     // Catches a completed claim whose lease row remains.
@@ -570,30 +542,6 @@ mod tests {
                 state: ClaimState::Active
             }))
         );
-        assert_eq!(f.count("event"), before);
-    }
-
-    // Catches a scope check left to the decision.
-    #[test]
-    fn scoped_database_command_is_blocked_before_decide() {
-        let f = Fixture::new();
-        f.take(&claim_command());
-        let before = f.count("event");
-        let mut ran = false;
-        let result = f
-            .store
-            .transact(&command("other", "r2", AT, &["anchor"]), &mut |_| {
-                ran = true;
-                Ok(done())
-            });
-        assert_eq!(
-            result,
-            Err(StoreError::Blocked(Block {
-                claim: claim_id(),
-                state: ClaimState::Active
-            }))
-        );
-        assert!(!ran);
         assert_eq!(f.count("event"), before);
     }
 
@@ -865,23 +813,6 @@ mod tests {
         );
     }
 
-    // Catches a reconciliation without its finding event.
-    #[test]
-    fn resolved_reconciliation_records_its_finding() {
-        let f = Fixture::new();
-        resolve(&f);
-        let text: String = f
-            .raw()
-            .query_row(
-                "SELECT payload_json FROM event WHERE type = 'command.reconciled' AND stream = 'command/anchor.push'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("event");
-        let payload: Value = serde_json::from_str(&text).expect("json");
-        assert_eq!(payload["finding"], json!({"remote": "absent"}));
-    }
-
     // Catches reconciliation leaving the claim open.
     #[test]
     fn claim_retry_after_reconciliation_replays() {
@@ -955,40 +886,6 @@ mod tests {
                 state: ClaimState::AwaitingOwner
             }))
         );
-    }
-
-    // Catches an automatic reconciler resolving an owner hold.
-    #[test]
-    fn automatic_reconcile_refuses_an_owner_hold() {
-        let f = Fixture::new();
-        hold(&f);
-        let before = f.count("event");
-        assert_eq!(
-            f.store.reconcile(
-                &reconciler(LATER, "rec2"),
-                &claim_id(),
-                ReconcileAuthority::Automatic,
-                &mut |_, _| Ok(reconcile_decision(Resolution::Resolved(Box::new(done()))))
-            ),
-            Err(StoreError::Refused(Refusal::AwaitingOwner(claim_id())))
-        );
-        assert_eq!(f.count("event"), before);
-    }
-
-    // Catches an owner hold with no path to completion.
-    #[test]
-    fn owner_reconcile_resolves_a_held_claim() {
-        let f = Fixture::new();
-        hold(&f);
-        f.store
-            .reconcile(
-                &reconciler(LATER, "rec2"),
-                &claim_id(),
-                ReconcileAuthority::Owner,
-                &mut |_, _| Ok(reconcile_decision(Resolution::Resolved(Box::new(done())))),
-            )
-            .expect("owner reconcile");
-        assert_eq!(f.request("anchor.push", "r1")["state"], "completed");
     }
 
     // Catches reconciliation of a live lease.

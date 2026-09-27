@@ -610,14 +610,19 @@ mod tests {
         assert_eq!(created_at, AT);
     }
 
-    // A newer binary raising the epoch while this store is open fences
-    // this store at its next write, which records nothing, while reads go
-    // on. Catches a write that skips the epoch read and trusts the value
-    // seen at open.
+    // Catches trace writes bypassing the epoch fence.
     #[test]
-    fn a_newer_epoch_fences_an_open_store_at_its_next_write() {
+    fn a_trace_write_after_a_newer_epoch_records_nothing() {
         let home = tempfile::tempdir().expect("temp dir");
-        let store = open(home.path());
+        let store = SqliteStore::open(
+            home.path(),
+            AT,
+            Options {
+                timing: crate::queue::scripted::Scripted::still(),
+                ..Options::default()
+            },
+        )
+        .expect("open");
         raw(home.path())
             .execute("UPDATE schema_meta SET value = 2 WHERE key = 'epoch'", [])
             .expect("stamp");
@@ -625,24 +630,39 @@ mod tests {
             store.record_trace(&trace("after")),
             Err(StoreError::ReadOnly { needed_epoch: 2 })
         );
-        assert_eq!(store.epoch(), Ok(2));
         let rows: i64 = raw(home.path())
             .query_row("SELECT count(*) FROM trace", [], |row| row.get(0))
             .expect("count");
         assert_eq!(rows, 0);
     }
 
-    // A store already stamped newer opens for reading and refuses writes
-    // with the epoch it needs. Catches an open that fails outright, or
-    // one that writes to a schema it does not understand.
+    // Catches a reopened store misreporting its epoch or accepting a trace write.
     #[test]
-    fn a_store_stamped_newer_opens_read_only() {
+    fn a_reopened_newer_epoch_is_reported_and_fences_trace() {
         let home = tempfile::tempdir().expect("temp dir");
-        drop(open(home.path()));
+        drop(
+            SqliteStore::open(
+                home.path(),
+                AT,
+                Options {
+                    timing: crate::queue::scripted::Scripted::still(),
+                    ..Options::default()
+                },
+            )
+            .expect("open"),
+        );
         raw(home.path())
             .execute("UPDATE schema_meta SET value = 3 WHERE key = 'epoch'", [])
             .expect("stamp");
-        let store = open(home.path());
+        let store = SqliteStore::open(
+            home.path(),
+            AT,
+            Options {
+                timing: crate::queue::scripted::Scripted::still(),
+                ..Options::default()
+            },
+        )
+        .expect("open");
         assert_eq!(store.epoch(), Ok(3));
         assert_eq!(
             store.record_trace(&trace("refused")),
@@ -697,45 +717,6 @@ mod tests {
             // synchronous 2 is FULL.
             assert_eq!(settings, ("wal".into(), 2, 1, 1, 5000, 8192));
         }
-    }
-
-    // While one connection holds a write transaction open, a second
-    // connection reads without error and sees the state before that write;
-    // after the commit it sees the write. Catches a reader that waits for
-    // the writer, as under an exclusive locking mode.
-    #[test]
-    fn a_reader_runs_during_another_connections_write() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let writer = open(home.path());
-        let reader = open(home.path());
-        let count = |store: &SqliteStore| {
-            store.read(|conn| {
-                conn.query_row("SELECT count(*) FROM trace", [], |row| row.get::<_, i64>(0))
-            })
-        };
-
-        let (in_write, wait_for_write) = mpsc::channel();
-        let (read_done, wait_for_read) = mpsc::channel::<()>();
-        let handle = thread::spawn(move || {
-            writer.write(|tx| {
-                tx.execute(
-                    "INSERT INTO trace (at, kind, data) VALUES (?1, 'write', '{}')",
-                    params![AT],
-                )
-                .map_err(sql)?;
-                in_write.send(()).expect("signal");
-                wait_for_read.recv().expect("wait");
-                Ok(())
-            })
-        });
-
-        wait_for_write
-            .recv()
-            .expect("writer inside its transaction");
-        assert_eq!(count(&reader), Ok(0));
-        read_done.send(()).expect("release");
-        handle.join().expect("writer thread").expect("write");
-        assert_eq!(count(&reader), Ok(1));
     }
 
     // Past the cap, each new diagnostic drops the oldest. Catches a trace

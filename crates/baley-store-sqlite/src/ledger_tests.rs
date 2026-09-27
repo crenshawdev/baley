@@ -573,46 +573,6 @@ fn head_is_none_for_an_empty_project_and_refused_for_an_absent_one() {
 
 // --- verification ---
 
-// An anchor whose hash the chain does not have at its sequence is a
-// rewrite. Catches a verify that ignores the anchor.
-#[test]
-fn verify_reports_a_rewrite_against_a_foreign_head() {
-    let f = Fixture::new();
-    f.record("w1", 3);
-    let foreign = Anchor {
-        seq: 2,
-        hash: Hash([9; 32]),
-    };
-    let report = f
-        .ledger()
-        .verify(&project(), Some(&foreign))
-        .expect("verify");
-    assert!(matches!(
-        report.chain.anchor,
-        AnchorVerdict::Rewritten { seq: 2, .. }
-    ));
-}
-
-// An anchor past the head is a truncation. Catches a short chain accepted
-// as merely unanchored.
-#[test]
-fn verify_reports_truncation_past_the_head() {
-    let f = Fixture::new();
-    f.record("w1", 3);
-    let past = Anchor {
-        seq: 10,
-        hash: Hash([9; 32]),
-    };
-    let report = f.ledger().verify(&project(), Some(&past)).expect("verify");
-    assert_eq!(
-        report.chain.anchor,
-        AnchorVerdict::Truncated {
-            anchored: 10,
-            head: 4
-        }
-    );
-}
-
 // Verification only reads: with the database file gone it fails and
 // leaves no file behind. Catches a verify connection opened read-write,
 // which creates an empty baley.db.
@@ -625,87 +585,15 @@ fn verify_without_a_database_file_fails_and_creates_none() {
     assert!(!path.exists());
 }
 
-// A body whose stored bytes are damaged, its event untouched, is corrupt
-// while the chain verifies. Catches a verify that never opens a body.
+// Catches malformed compressed bytes escaping body fault reporting.
 #[test]
-fn a_body_corrupted_in_place_is_corrupt_and_the_chain_holds() {
+fn an_undecodable_body_is_corrupt() {
     let f = Fixture::new();
     let body = f.attach("w1", b"the test output", RetentionClass::Output);
     f.overwrite_body(&body.hash, b"not zstd at all");
     let report = f.ledger().verify(&project(), None).expect("verify");
     assert!(report.chain.is_intact());
     assert_eq!(report.payloads, [PayloadFault::Corrupt(body.hash)]);
-}
-
-// A purged body is a valid tombstone, not a fault. Catches a tombstone
-// reported as corruption.
-#[test]
-fn a_purged_body_is_a_tombstone() {
-    let f = Fixture::new();
-    let body = f.attach("w1", b"a secret in the output", RetentionClass::Output);
-    f.store
-        .purge(
-            &Command {
-                kind: CommandKind("retention.purge".into()),
-                ..fixture_command("p1", T1)
-            },
-            &[body.hash],
-            "owner request",
-        )
-        .expect("purge");
-    let report = f.ledger().verify(&project(), None).expect("verify");
-    assert!(report.chain.is_intact());
-    assert_eq!(report.payloads, []);
-    assert_eq!(report.tombstones_checked, 1);
-}
-
-/// A reducible output body: over 128 KiB, its edges distinct.
-fn long_output() -> Vec<u8> {
-    let mut body = vec![7u8; 200 * 1024];
-    body[..65_536].fill(1);
-    body[200 * 1024 - 65_536..].fill(2);
-    body
-}
-
-fn reduce(f: &Fixture, reference: &PayloadReference) -> Hash {
-    f.store
-        .reduce(
-            &Command {
-                kind: CommandKind("retention.reduce".into()),
-                ..fixture_command("r1", T1)
-            },
-            reference,
-        )
-        .expect("reduce")
-        .hash
-}
-
-// A reduced original is a tombstone and its retained excerpt is opened and
-// hashed. Catches retained bytes skipped with their original.
-#[test]
-fn a_reduced_body_checks_its_retained_excerpt() {
-    let f = Fixture::new();
-    let reference = f.attach("w1", &long_output(), RetentionClass::Output);
-    reduce(&f, &reference);
-    let report = f.ledger().verify(&project(), None).expect("verify");
-    assert_eq!(report.payloads, []);
-    assert_eq!(report.tombstones_checked, 1);
-    assert_eq!(report.bodies_checked, 1);
-}
-
-// An excerpt whose bytes decompress to other content is corrupt, while its
-// reduced original stays a tombstone. Catches corruption taken for a
-// tombstone.
-#[test]
-fn a_corrupt_excerpt_faults_beside_a_valid_tombstone() {
-    let f = Fixture::new();
-    let reference = f.attach("w1", &long_output(), RetentionClass::Output);
-    let excerpt = reduce(&f, &reference);
-    let other = zstd::bulk::compress(&vec![5u8; 131_072], 3).expect("compress");
-    f.overwrite_body(&excerpt, &other);
-    let report = f.ledger().verify(&project(), None).expect("verify");
-    assert_eq!(report.payloads, [PayloadFault::Corrupt(excerpt)]);
-    assert_eq!(report.tombstones_checked, 1);
 }
 
 // --- anchor rows ---
@@ -1201,10 +1089,9 @@ fn a_late_record_step_replays_the_reconciled_outcome() {
 
 // --- verification through the core ---
 
-// A remote anchor newer than the local row is the witness, and the row is
-// reported as behind. Catches the local row taken as authoritative.
+// Catches a local row replacing the remote observation status.
 #[test]
-fn a_remote_anchor_newer_than_the_row_reports_the_row_behind() {
+fn a_remote_anchor_observation_retains_its_status() {
     let f = Fixture::new();
     f.record("w1", 2);
     let request = anchor_request("a1", Some("origin"));
@@ -1227,41 +1114,22 @@ fn a_remote_anchor_newer_than_the_row_reports_the_row_behind() {
     )
     .expect("verify");
     assert_eq!(verified.status, AnchorCheck::Remote(head_anchor(&later)));
-    assert_eq!(verified.report.chain.anchor, AnchorVerdict::Matches);
-    assert_eq!(
-        verified.report.stored_anchor_comparison,
-        StoredAnchorComparison::LocalBehind
-    );
 }
 
-// A row at the remote's sequence with another hash, or another tag, is a
-// conflict. Catches a row trusted because its sequence matches.
+// Catches the stored tag omitted from anchor comparison.
 #[test]
-fn a_same_sequence_row_that_differs_is_a_conflict() {
-    let head_tag = |f: &Fixture| anchor_tag(&project(), f.head().seq);
-    for (hash, tag) in [
-        (Some(Hash([9; 32])), None),
-        (None, Some("baley-anchor/x/4")),
-    ] {
-        let f = Fixture::new();
-        let head = f.record("w1", 3);
-        f.insert_anchor_row(
-            head.seq,
-            hash.unwrap_or(head.hash),
-            tag.map_or_else(|| head_tag(&f), str::to_owned).as_str(),
-        );
-        let verified = verify_observed(
-            f.ledger(),
-            &project(),
-            &remote_anchor(&head_anchor(&head)),
-            T1,
-        )
+fn a_same_sequence_row_with_another_tag_is_a_conflict() {
+    let f = Fixture::new();
+    let head = f.record("w1", 3);
+    f.insert_anchor_row(head.seq, head.hash, "baley-anchor/x/4");
+    let report = f
+        .ledger()
+        .verify(&project(), Some(&head_anchor(&head)))
         .expect("verify");
-        assert_eq!(
-            verified.report.stored_anchor_comparison,
-            StoredAnchorComparison::Conflict
-        );
-    }
+    assert_eq!(
+        report.stored_anchor_comparison,
+        StoredAnchorComparison::Conflict
+    );
 }
 
 // No remote gives an explicitly local-only report: the whole chain is
@@ -1394,15 +1262,15 @@ fn project_work_starts_the_age_at_its_own_time() {
     assert_eq!(report.chain.age_unanchored_since.as_deref(), Some(T1));
 }
 
-// Catches an export that leaks another project's events, references or bodies.
+// Catches another project's raw rows left in an export.
 #[test]
-fn exported_project_verifies_alone_without_other_projects() {
+fn an_export_holds_no_row_of_another_project() {
     let f = Fixture::new();
     let other = ProjectId("other".into());
     f.store
         .create_project(&other, "Other", T0)
         .expect("other project");
-    let head = f.record("one", 1);
+    f.record("one", 1);
     let mut other_command = fixture_command("other-work", T0);
     other_command.project = other.clone();
     let mut other_hash = None;
@@ -1419,24 +1287,7 @@ fn exported_project_verifies_alone_without_other_projects() {
         .expect("other work");
     let other_hash = other_hash.expect("other payload");
     let target = f.home.path().join("export");
-    let exported = f.store.export(&project(), &target, T1).expect("export");
-    assert_eq!(exported.head, Some(head));
-    let copy = SqliteStore::open(
-        &target,
-        T1,
-        Options {
-            schema: Box::new(registry()),
-            ..Options::default()
-        },
-    )
-    .expect("open copy");
-    let report = copy.verify(&project(), None).expect("verify copy");
-    assert!(report.chain.first_break.is_none());
-    assert!(report.payloads.is_empty());
-    assert_eq!(
-        copy.projects().expect("projects"),
-        vec![(project(), "fixture".into())]
-    );
+    f.store.export(&project(), &target, T1).expect("export");
     let exported_db = Connection::open(target.join("baley.db")).expect("exported database");
     for table in ["event", "payload_ref"] {
         let rows: i64 = exported_db
@@ -1568,9 +1419,9 @@ fn completed_export_record_holds_the_verified_head() {
     assert_eq!(recorded, Some(head.seq as i64));
 }
 
-// Catches a released shared body leaking through the exporting project.
+// Catches released body bytes left inside an export.
 #[test]
-fn export_tombstones_a_body_released_by_its_project() {
+fn an_export_removes_the_bytes_of_a_released_body() {
     let f = Fixture::new();
     let other = ProjectId("other".into());
     f.store.create_project(&other, "Other", T0).expect("other");

@@ -334,9 +334,6 @@ mod tests {
     const AT: &str = "2026-09-25T18:00:00Z";
     const PROJECT: &str = "7f0c2a4e-8d1b-4c3a-9e5f-2b6d8a1c4e70";
 
-    /// SHA-256("abc"), FIPS 180-2 appendix B.1.
-    const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-
     fn open(home: &Path) -> SqliteStore {
         SqliteStore::open(home, AT, Options::default()).expect("open")
     }
@@ -395,15 +392,6 @@ mod tests {
             .collect()
     }
 
-    fn read_all(body: PayloadBody<'_>) -> Vec<u8> {
-        let PayloadBody::Present(mut stream) = body else {
-            panic!("the body is gone");
-        };
-        let mut bytes = Vec::new();
-        stream.read_to_end(&mut bytes).expect("read the stream");
-        bytes
-    }
-
     // The same bytes stored for two events make one payload row and two
     // references, each naming the one hash. Catches a body stored again per
     // use, or a reference that carries its own copy.
@@ -452,25 +440,19 @@ mod tests {
         );
     }
 
-    // The hash is SHA-256 of the bytes as given, and the length is theirs.
-    // Catches hashing or measuring the compressed body instead.
+    // Catches bodies stored without compression.
     #[test]
-    fn the_hash_and_length_are_those_of_the_uncompressed_bytes() {
+    fn a_body_is_stored_compressed() {
         let home = tempfile::tempdir().expect("temp dir");
-        let store = open(home.path());
-        let payload = put(&store, b"abc", RetentionClass::Record);
-        assert_eq!(payload.hash.to_hex(), ABC_SHA256);
-        assert_eq!(payload.bytes, 3);
-        assert_eq!(payload.class, RetentionClass::Record);
-    }
-
-    // A body larger than one chunk is stored compressed and streams back
-    // byte for byte. Catches a body stored raw, and a chunked read that
-    // loses or repeats its place between chunks.
-    #[test]
-    fn the_body_streams_back_as_the_original_bytes() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = open(home.path());
+        let store = SqliteStore::open(
+            home.path(),
+            AT,
+            Options {
+                timing: crate::queue::scripted::Scripted::still(),
+                ..Options::default()
+            },
+        )
+        .expect("open");
         let original = [noise(400_000), vec![b'x'; 400_000]].concat();
         let payload = put(&store, &original, RetentionClass::Output);
 
@@ -483,22 +465,6 @@ mod tests {
             .expect("stored row");
         assert_eq!(encoding, "zstd");
         assert!(stored < 500_000, "stored {stored} bytes of 800000");
-
-        let streamed = read_all(store.open(&payload.hash).expect("open"));
-        assert!(streamed == original, "the streamed body differs");
-    }
-
-    // A present payload reports its uncompressed length. Catches the
-    // compressed length reported, or a present body read as a tombstone.
-    #[test]
-    fn a_present_payload_reports_its_length() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = open(home.path());
-        let payload = put(&store, &vec![b'a'; 10_000], RetentionClass::Output);
-        assert_eq!(
-            store.status(&payload.hash),
-            Ok(PayloadStatus::Present { bytes: 10_000 })
-        );
     }
 
     // A hash the store never saw is a refusal naming it. Catches a panic or

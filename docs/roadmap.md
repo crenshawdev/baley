@@ -55,7 +55,7 @@ Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work
 
 The evidence ledger store: a storage port with a SQLite adapter behind it, one conformance suite every adapter must pass, the hash chain, forge anchors, verify, export, doctor and acknowledge-restore. Nothing uses it yet.
 
-ADRs: [0001 event ledger](adr/0001-event-ledger.md), [0002 SQLite](adr/0002-sqlite.md), [0003 per-user database](adr/0003-per-user-database.md), [0005 storage port](adr/0005-storage-port.md), [0007 forge anchors](adr/0007-forge-anchors.md), [0010 projector traits in the port](adr/0010-projector-traits-in-the-port.md), [0012 optimistic concurrency](adr/0012-optimistic-concurrency.md), [0021 claim rules in the port](adr/0021-claim-rules-in-the-port.md), [0022 acknowledged restore](adr/0022-acknowledged-restore.md), [0023 no backups in Baley](adr/0023-no-backups-in-baley.md).
+ADRs: [0001 event ledger](adr/0001-event-ledger.md), [0002 SQLite](adr/0002-sqlite.md), [0003 per-user database](adr/0003-per-user-database.md), [0005 storage port](adr/0005-storage-port.md), [0007 forge anchors](adr/0007-forge-anchors.md), [0010 projector traits in the port](adr/0010-projector-traits-in-the-port.md), [0012 optimistic concurrency](adr/0012-optimistic-concurrency.md), [0021 claim rules in the port](adr/0021-claim-rules-in-the-port.md), [0022 acknowledged restore](adr/0022-acknowledged-restore.md), [0023 no backups in Baley](adr/0023-no-backups-in-baley.md), [0024 conformance suite and adapter tests](adr/0024-conformance-suite-and-adapter-tests.md).
 
 ```mermaid
 flowchart LR
@@ -90,7 +90,7 @@ Figure 2. Build 1's tasks. One pull request per task.
 | T10 | Claims, leases and reconciliation | [#132](https://github.com/crenshawdev/baley/pull/132) | Merged |
 | T11 | Anchors and the adapter's `verify` | [#135](https://github.com/crenshawdev/baley/pull/135) | Merged |
 | T12 | Export, doctor and the owner-only acknowledge-restore command; backups removed | [#138](https://github.com/crenshawdev/baley/pull/138) | Merged |
-| T13 | The conformance suite, run against every store adapter | | Planned |
+| T13 | The conformance suite, run against every store adapter | [#140](https://github.com/crenshawdev/baley/pull/140) | In review |
 | T14 | CLI commands `verify`, `doctor`, `export`, `purge`, `anchor` and `acknowledge-restore`; the real git forge and ticker, and the benchmark | | Planned |
 
 

@@ -634,9 +634,8 @@ mod tests {
     use crate::queue::scripted::Scripted;
     use crate::store::{Options, TraceEntry};
     use baley_store::{
-        Actor, Admin, Answer, CommandKind, Decision, DocKey, Event, EventSchema, KeyValue,
-        Observed, PayloadBody, PayloadStatus, Payloads, REQUEST_VIEW, Recorded, RequestId, Views,
-        verify_chain,
+        Actor, Answer, CommandKind, Decision, Event, EventSchema, Observed, PayloadBody,
+        PayloadStatus, Payloads, Recorded, RequestId,
     };
     use std::io::Read;
 
@@ -783,71 +782,6 @@ mod tests {
             .expect("purge")
     }
 
-    // Catches a purge that ignores a completed export holding the removed body.
-    #[test]
-    fn purge_lists_an_earlier_export_of_its_project() {
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a"]);
-        let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
-        let target = home.path().join("copy");
-        store
-            .export(&ProjectId("a".into()), &target, AT)
-            .expect("export");
-        assert_eq!(
-            purge(&store, "a", "p1", reference.hash).unreachable,
-            vec![target.canonicalize().expect("target")]
-        );
-    }
-
-    // Catches listing an export made after its project released the body.
-    #[test]
-    fn purge_skips_an_export_after_that_projects_release() {
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a", "b"]);
-        let (a, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
-        let (b, _) = attach(&store, "b", "b1", b"secret", RetentionClass::Material);
-        purge(&store, "a", "p1", a.hash);
-        let target = home.path().join("late");
-        store
-            .export(&ProjectId("a".into()), &target, AT)
-            .expect("export");
-        assert!(purge(&store, "b", "p2", b.hash).unreachable.is_empty());
-    }
-
-    // Catches omitting another project's earlier export for a shared body.
-    #[test]
-    fn shared_purge_lists_another_projects_export() {
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a", "b"]);
-        let (a, _) = attach(&store, "a", "a1", b"shared", RetentionClass::Material);
-        attach(&store, "b", "b1", b"shared", RetentionClass::Material);
-        let target = home.path().join("copy-b");
-        store
-            .export(&ProjectId("b".into()), &target, AT)
-            .expect("export");
-        let report = purge(&store, "a", "p1", a.hash);
-        assert_eq!(report.shared, vec![a.hash]);
-        assert_eq!(
-            report.unreachable,
-            vec![target.canonicalize().expect("target")]
-        );
-    }
-
-    // Catches a purge replay forgetting the export listing.
-    #[test]
-    fn replayed_purge_lists_the_same_export() {
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a"]);
-        let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
-        let target = home.path().join("copy");
-        store
-            .export(&ProjectId("a".into()), &target, AT)
-            .expect("export");
-        let first = purge(&store, "a", "p1", reference.hash);
-        let replay = purge(&store, "a", "p1", reference.hash);
-        assert_eq!(replay.unreachable, first.unreachable);
-    }
-
     // Catches an interrupted export hidden while its head is pending.
     #[test]
     fn pending_export_record_is_listed() {
@@ -958,71 +892,6 @@ mod tests {
         assert!(
             steps.iter().any(|step| step.contains("payload_excerpt")),
             "{steps:?}"
-        );
-    }
-
-    // Catches a purge that deletes a body another project still requires.
-    #[test]
-    fn a_shared_body_survives_one_projects_purge() {
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a", "b"]);
-        let bytes = b"shared body";
-        let (a, _) = attach(&store, "a", "a1", bytes, RetentionClass::Material);
-        attach(&store, "b", "b1", bytes, RetentionClass::Material);
-        let b_head = head(home.path(), "b");
-        let report = purge(&store, "a", "p1", a.hash);
-        assert!(report.purged.is_empty());
-        assert_eq!(report.shared, vec![a.hash]);
-        assert_eq!(
-            store.status(&a.hash),
-            Ok(PayloadStatus::Present {
-                bytes: bytes.len() as u64
-            })
-        );
-        assert_eq!(head(home.path(), "b"), b_head);
-    }
-
-    // Catches a removal that rewrites the event chain or loses its tombstone.
-    #[test]
-    fn a_purged_chain_still_verifies() {
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a"]);
-        let (reference, _) = attach(&store, "a", "a1", b"private", RetentionClass::Material);
-        purge(&store, "a", "p1", reference.hash);
-        assert!(verify_chain(&events(home.path(), "a"), None).is_intact());
-        assert_eq!(
-            store.status(&reference.hash),
-            Ok(PayloadStatus::Purged {
-                reason: "owner request".into()
-            })
-        );
-    }
-
-    // Catches a wrong edge, wrong excerpt hash, or absent reduction tombstone.
-    #[test]
-    fn reduction_keeps_the_first_and_last_64_kib() {
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a"]);
-        let body = body(300_000, 3);
-        let (original, _) = attach(&store, "a", "a1", &body, RetentionClass::Output);
-        let excerpt = reduce(&store, "a", "r1", &original);
-        let mut expected = body[..65_536].to_vec();
-        expected.extend_from_slice(&body[234_464..]);
-        assert_eq!(read_body(&store, &excerpt.hash), expected);
-        let reduction = events(home.path(), "a")
-            .into_iter()
-            .find(|event| event.type_name == PAYLOAD_REDUCED)
-            .expect("reduction");
-        let payload = ReducedEvent::from_value(&reduction.payload).expect("payload");
-        assert_eq!(payload.original, original.hash);
-        assert_eq!(payload.excerpt, excerpt);
-        assert_eq!(payload.kept, [0..65_536, 234_464..300_000]);
-        assert_eq!(
-            store.status(&original.hash),
-            Ok(PayloadStatus::Reduced {
-                excerpt,
-                kept: vec![0..65_536, 234_464..300_000]
-            })
         );
     }
 
@@ -1322,45 +1191,6 @@ mod tests {
             panic!("stored answer");
         };
         reference
-    }
-
-    // Catches a request row deleted with its body or a replay that gives out gone bytes.
-    #[test]
-    fn a_retry_after_purge_gets_the_tombstone() {
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a"]);
-        let reference = sensitive_answer(&store, "a", "a1");
-        purge(&store, "a", "p1", reference.hash);
-        let before = head(home.path(), "a");
-        let replay = store
-            .transact(&command("a", "fixture.answer", "a1"), &mut |_| {
-                panic!("decision replayed")
-            })
-            .expect("replay");
-        assert_eq!(
-            replay,
-            Recorded::Replayed {
-                outcome: Outcome {
-                    kind: OutcomeKind::Done,
-                    answer: Answer::Tombstone {
-                        reference: reference.clone(),
-                        status: PayloadStatus::Purged {
-                            reason: "owner request".into()
-                        }
-                    }
-                }
-            }
-        );
-        assert_eq!(head(home.path(), "a"), before);
-        let key = DocKey(vec![
-            KeyValue::Text("fixture.answer".into()),
-            KeyValue::Text("a1".into()),
-        ]);
-        let document = store
-            .get(&ProjectId("a".into()), REQUEST_VIEW, &key)
-            .expect("get")
-            .expect("request");
-        assert_eq!(document.body["answer"]["stored"], reference.to_value());
     }
 
     // Catches a replay that checks only the hash-wide body, not A's reference.

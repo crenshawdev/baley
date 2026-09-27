@@ -6,9 +6,13 @@
 //! chain and bodies against an anchor the caller fetched. T12 requires a
 //! fresh ledger: earlier epoch-1 files are disposable and a different
 //! schema digest is refused at open.
+//! The adapter runs the port's conformance suite as one test per check,
+//! and keeps its own tests for SQLite mechanisms.
 
 mod admin;
 mod claim;
+#[cfg(test)]
+mod conformance_tests;
 mod doctor;
 mod export;
 mod ledger;
