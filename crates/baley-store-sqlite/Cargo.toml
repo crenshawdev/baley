@@ -26,5 +26,8 @@ sha2 = "0.10"
 zstd = "0.13"
 
 [dev-dependencies]
+# The T11 tests run the core's anchor steps against this adapter; a test
+# dependency only, so the normal graph keeps the core and this crate apart.
+baley-core = { path = "../baley-core" }
 # Each store test opens its database in a fresh temporary directory it owns.
 tempfile = "3"

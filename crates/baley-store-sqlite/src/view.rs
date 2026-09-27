@@ -1278,7 +1278,7 @@ fn cursor_identity(
     text
 }
 
-fn encode(text: &mut String, value: &KeyValue) {
+pub(crate) fn encode(text: &mut String, value: &KeyValue) {
     match value {
         KeyValue::Text(value) => {
             text.push_str(&format!("t{}:{value}", value.len()));

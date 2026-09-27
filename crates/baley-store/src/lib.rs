@@ -7,6 +7,7 @@
 //! live here too, because the domain writes them and the adapter stores and
 //! verifies them.
 
+pub mod anchor;
 pub mod canonical;
 pub mod chain;
 pub mod claim;
@@ -21,9 +22,15 @@ pub mod retention;
 pub mod time;
 pub mod view;
 
+pub use anchor::{
+    ANCHOR_FAILED, ANCHOR_FAILED_VERSION, ANCHOR_PUSH, ANCHOR_PUSHED, ANCHOR_PUSHED_VERSION,
+    ANCHOR_RECONCILE, ANCHOR_SCOPE, ANCHOR_STREAM, ANCHOR_TAG_PREFIX, AnchorPushedPayload,
+    anchor_command_event, anchor_tag,
+};
 pub use canonical::{CanonicalError, MAX_SAFE_INTEGER, canonical_json};
 pub use chain::{
-    Anchor, AnchorVerdict, Break, BreakKind, ChainReport, Head, chain_hash, verify_chain,
+    Anchor, AnchorVerdict, Break, BreakKind, ChainReport, ChainVerifier, Head, chain_hash,
+    verify_chain,
 };
 pub use claim::{
     Block, CLAIM_SCOPE_VIEW, COMMAND_CLAIMED, COMMAND_CLAIMED_VERSION, COMMAND_RECONCILED,
@@ -43,9 +50,10 @@ pub use event::{
     SealError,
 };
 pub use ledger::{
-    Admin, BackupReport, Decide, DecideClaim, DecideReconcile, EventSchema, Health, HistoryFilter,
-    Ledger, PayloadFault, ProjectHealth, PurgeReport, RebuildReport, ScrubReport, Transaction,
-    VerifyReport, Views, ViewsReport,
+    Admin, BackupReport, Decide, DecideClaim, DecideReconcile, EVENT_PAGE_BOUND, EventSchema,
+    Health, HistoryFilter, Ledger, PayloadFault, ProjectHealth, PurgeReport, RebuildReport,
+    ScrubReport, StoredAnchor, StoredAnchorComparison, Transaction, VerifyReport, Views,
+    ViewsReport, compare_stored_anchor,
 };
 pub use payload::{
     PayloadBody, PayloadRef, PayloadReference, PayloadStatus, Payloads, RetentionClass,
@@ -53,7 +61,7 @@ pub use payload::{
 pub use request::{
     COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, ClaimDoc, INLINE_ANSWER_LIMIT, REQUEST_VIEW,
     RequestProjector, RequestState, command_stream, completed_payload, completed_payload_for,
-    recorded_outcome, request_key, request_spec, request_state, store_owned,
+    recorded_outcome, request_digest, request_key, request_spec, request_state, store_owned,
 };
 pub use retention::{
     EXCERPT_EDGE, PAYLOAD_PURGED, PAYLOAD_PURGED_VERSION, PAYLOAD_REDUCED, PAYLOAD_REDUCED_VERSION,

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::anchor::anchor_tag;
 use crate::chain::{Anchor, ChainReport, Head};
 use crate::claim::{
     Claim, ClaimDecision, ClaimId, ClaimOwner, Claimed, ReconcileAuthority, Reconciliation,
@@ -116,7 +117,9 @@ pub trait Ledger {
     /// joined with matching lease rows for caller-driven reconciliation.
     fn open_claims(&self, project: &ProjectId) -> Result<Vec<Claim>, StoreError>;
 
-    /// A stream's events from `from_version` on, in stream order.
+    /// A stream's events from `from_version` on, in stream order, at most
+    /// `min(limit, EVENT_PAGE_BOUND)` per page with a cursor bound to this query. Events
+    /// come back exactly as stored, never upcast.
     fn stream(
         &self,
         project: &ProjectId,
@@ -125,7 +128,8 @@ pub trait Ledger {
         page: PageRequest,
     ) -> Result<Page<Event>, StoreError>;
 
-    /// A project's events in `range` that pass `filter`, in sequence order.
+    /// A project's events in `range` that pass `filter`, in sequence order,
+    /// paged and returned as `stream` returns them.
     fn history(
         &self,
         project: &ProjectId,
@@ -134,12 +138,17 @@ pub trait Ledger {
         page: PageRequest,
     ) -> Result<Page<Event>, StoreError>;
 
-    /// The project's last event, or `None` for an empty chain.
+    /// The project's last event, or `None` for an empty chain. An absent
+    /// project is `UnknownProject`.
     fn head(&self, project: &ProjectId) -> Result<Option<Head>, StoreError>;
 
-    /// Verifies the project's chain against `anchor`, which the caller
+    /// Verifies the project's whole chain against `anchor`, which the caller
     /// fetched from the forge (the store never runs git), then hashes every
-    /// present payload body and retained excerpt the project references.
+    /// present payload body and retained excerpt the project references,
+    /// counting reduced and purged bodies as tombstones. Reports the latest
+    /// local anchor row beside the supplied anchor without trusting it, and
+    /// the time the unanchored age runs from. Reads one snapshot, holding
+    /// no more than one page of rows or one chunk of a body at a time.
     fn verify(
         &self,
         project: &ProjectId,
@@ -147,21 +156,100 @@ pub trait Ledger {
     ) -> Result<VerifyReport, StoreError>;
 }
 
-/// Which events `history` returns. Empty means every event.
+/// The most events one `stream` or `history` page holds.
+pub const EVENT_PAGE_BOUND: u32 = 100;
+
+/// Which events `history` returns: any of `types` (empty means every
+/// type), and of those only the ones that recorded `git_commit` when it is
+/// set.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HistoryFilter {
+    /// Event types, any of which passes.
     pub types: Vec<String>,
     /// Events that recorded this commit, for `why`.
     pub git_commit: Option<String>,
 }
 
-/// The chain's verdict and every payload that failed its hash.
+/// What `verify` found: the chain's verdict against the supplied anchor,
+/// every referenced body that failed its hash, and how the latest local
+/// anchor row compares with the supplied anchor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifyReport {
+    /// The chain's verdict against the supplied anchor.
     pub chain: ChainReport,
+    /// Every referenced body or excerpt that is missing or corrupt.
     pub payloads: Vec<PayloadFault>,
     /// Bodies and excerpts opened and hashed.
     pub bodies_checked: u64,
+    /// Reduced or purged bodies found as valid tombstones.
+    pub tombstones_checked: u64,
+    /// The project's latest local anchor row, if any. A cache of what the
+    /// record step confirmed, never the outside witness.
+    pub stored_anchor: Option<StoredAnchor>,
+    /// How that row compares with the supplied anchor.
+    pub stored_anchor_comparison: StoredAnchorComparison,
+    /// The recorded time of the earliest accepted event after the supplied
+    /// anchor that is not one of the anchor command's own events, or
+    /// `None` when there is none. `doctor` measures the unanchored age from
+    /// it; the raw range stays in `chain.unanchored`.
+    pub age_unanchored_since: Option<String>,
+}
+
+/// A local anchor row: the anchor, its tag and when Baley confirmed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredAnchor {
+    /// The anchored sequence and head.
+    pub anchor: Anchor,
+    /// The confirmed tag.
+    pub tag: String,
+    /// When Baley confirmed it, a UTC time.
+    pub pushed_at: String,
+}
+
+/// How the latest local anchor row compares with the anchor fetched from
+/// the remote. The remote is the witness; a difference is reported, never
+/// repaired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoredAnchorComparison {
+    /// No anchor was supplied.
+    NotCompared,
+    /// The row names the supplied anchor's sequence, hash and tag.
+    Matches,
+    /// No local row, although the remote holds an anchor.
+    MissingLocal,
+    /// The row is older than the remote anchor, as when a push landed
+    /// before its record step.
+    LocalBehind,
+    /// The row is newer than the remote anchor.
+    LocalAhead,
+    /// The row names the same sequence with another hash or tag.
+    Conflict,
+}
+
+/// Compares the latest local row with the supplied anchor of `project`.
+/// The expected tag comes from the supplied anchor's sequence.
+pub fn compare_stored_anchor(
+    project: &ProjectId,
+    supplied: Option<&Anchor>,
+    stored: Option<&StoredAnchor>,
+) -> StoredAnchorComparison {
+    let Some(supplied) = supplied else {
+        return StoredAnchorComparison::NotCompared;
+    };
+    let Some(stored) = stored else {
+        return StoredAnchorComparison::MissingLocal;
+    };
+    match stored.anchor.seq.cmp(&supplied.seq) {
+        std::cmp::Ordering::Less => StoredAnchorComparison::LocalBehind,
+        std::cmp::Ordering::Greater => StoredAnchorComparison::LocalAhead,
+        std::cmp::Ordering::Equal
+            if stored.anchor.hash == supplied.hash
+                && stored.tag == anchor_tag(project, supplied.seq) =>
+        {
+            StoredAnchorComparison::Matches
+        }
+        std::cmp::Ordering::Equal => StoredAnchorComparison::Conflict,
+    }
 }
 
 /// A referenced body that is not what its hash says. A reduced or purged
@@ -206,6 +294,21 @@ pub trait Transaction {
     /// The project's head after events appended in this transaction, or
     /// `None` when it has no events. A claim decision sees the pre-claim head.
     fn head(&mut self) -> Result<Option<Head>, StoreError>;
+
+    /// Writes the project's anchor row for `anchor` in this transaction, so
+    /// it commits or rolls back with the result event. An `anchor.pushed`
+    /// event appended earlier in this transaction must carry exactly these
+    /// values, and `tag` must be the anchor's tag in the command's project.
+    /// `observed_at` becomes the row's `pushed_at`. A row already stored
+    /// for the same sequence must agree in every value, or the command is
+    /// refused and nothing is written.
+    fn record_anchor(
+        &mut self,
+        anchor: &Anchor,
+        tag: &str,
+        remote: &str,
+        observed_at: &str,
+    ) -> Result<(), StoreError>;
 }
 
 /// View reads outside a transaction. One query runs against one snapshot,
@@ -382,4 +485,95 @@ pub struct ProjectHealth {
     pub unanchored_since: Option<String>,
     /// Set when the unanchored range is more than a day old at `at`.
     pub unanchored_warning: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project() -> ProjectId {
+        ProjectId("p".into())
+    }
+
+    fn anchor(seq: u64, byte: u8) -> Anchor {
+        Anchor {
+            seq,
+            hash: Hash([byte; 32]),
+        }
+    }
+
+    fn row(seq: u64, byte: u8, tag: &str) -> StoredAnchor {
+        StoredAnchor {
+            anchor: anchor(seq, byte),
+            tag: tag.into(),
+            pushed_at: "2026-09-25T18:00:00Z".into(),
+        }
+    }
+
+    // With no supplied anchor there is nothing to compare, even when a row
+    // exists. Catches a local row reported as agreeing with a witness that
+    // was never fetched.
+    #[test]
+    fn no_supplied_anchor_is_not_compared() {
+        let stored = row(3, 1, "baley-anchor/p/3");
+        assert_eq!(
+            compare_stored_anchor(&project(), None, Some(&stored)),
+            StoredAnchorComparison::NotCompared
+        );
+    }
+
+    // The same sequence, hash and tag match; a missing row is reported as
+    // missing. Catches a match on sequence alone.
+    #[test]
+    fn a_row_matches_only_with_its_hash_and_tag() {
+        let remote = anchor(3, 1);
+        assert_eq!(
+            compare_stored_anchor(
+                &project(),
+                Some(&remote),
+                Some(&row(3, 1, "baley-anchor/p/3"))
+            ),
+            StoredAnchorComparison::Matches
+        );
+        assert_eq!(
+            compare_stored_anchor(&project(), Some(&remote), None),
+            StoredAnchorComparison::MissingLocal
+        );
+    }
+
+    // A row at the remote's sequence with another hash, or with another
+    // tag, is a conflict. Catches a row silently trusted.
+    #[test]
+    fn a_same_sequence_row_that_differs_conflicts() {
+        let remote = anchor(3, 1);
+        for stored in [row(3, 2, "baley-anchor/p/3"), row(3, 1, "baley-anchor/q/3")] {
+            assert_eq!(
+                compare_stored_anchor(&project(), Some(&remote), Some(&stored)),
+                StoredAnchorComparison::Conflict
+            );
+        }
+    }
+
+    // A row older or newer than the remote is reported as behind or ahead.
+    // Catches the local row taken for the witness.
+    #[test]
+    fn an_older_or_newer_row_is_behind_or_ahead() {
+        let remote = anchor(5, 1);
+        assert_eq!(
+            compare_stored_anchor(
+                &project(),
+                Some(&remote),
+                Some(&row(3, 1, "baley-anchor/p/3"))
+            ),
+            StoredAnchorComparison::LocalBehind
+        );
+        assert_eq!(
+            compare_stored_anchor(
+                &project(),
+                Some(&remote),
+                Some(&row(7, 1, "baley-anchor/p/7"))
+            ),
+            StoredAnchorComparison::LocalAhead
+        );
+    }
 }

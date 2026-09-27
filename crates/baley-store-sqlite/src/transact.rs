@@ -12,23 +12,24 @@
 //! slow work observed compares against the store before this command, never
 //! against the command's own writes. Then, in the same transaction, the
 //! events are written with their chain and references, each changed
-//! document once, and the project's head moves. A claim appends no completion
-//! until its record step.
+//! document once, any anchor row the decision recorded, and the project's
+//! head moves. A claim appends no completion until its record step.
 
 use std::collections::BTreeMap;
 
 use baley_store::{
-    Absence, Answer, Block, CLAIM_SCOPE_VIEW, COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, Claim,
-    ClaimId, ClaimOwner, Command, Decide, Decision, DocKey, Document, Event, EventDraft,
-    EventMatch, GitFact, GitFacts, Hash, Head, INLINE_ANSWER_LIMIT, IndexQuery, KeyValue, NewEvent,
-    Observed, Outcome, PAYLOAD_PURGED, PAYLOAD_REDUCED, Page, PageRequest, PayloadRef,
-    PayloadStatus, ProjectId, PurgedEvent, REQUEST_VIEW, Recorded, ReducedEvent, Refusal,
-    RequestState, RetentionClass, StaleInput, StoreError, StreamName, Transaction, UtcInstant,
-    blocking, canonical_json, claim_state, command_stream, completed_payload_for, request_key,
-    request_state, store_owned,
+    ANCHOR_PUSHED, ANCHOR_PUSHED_VERSION, ANCHOR_STREAM, Absence, Anchor, AnchorPushedPayload,
+    Answer, Block, CLAIM_SCOPE_VIEW, COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, Claim, ClaimId,
+    ClaimOwner, Command, Decide, Decision, DocKey, Document, Event, EventDraft, EventMatch,
+    GitFact, GitFacts, Hash, Head, INLINE_ANSWER_LIMIT, IndexQuery, KeyValue, NewEvent, Observed,
+    Outcome, PAYLOAD_PURGED, PAYLOAD_REDUCED, Page, PageRequest, PayloadRef, PayloadStatus,
+    ProjectId, PurgedEvent, REQUEST_VIEW, Recorded, ReducedEvent, Refusal, RequestState,
+    RetentionClass, StaleInput, StoreError, StoredAnchor, StreamName, Transaction, UtcInstant,
+    anchor_tag, blocking, canonical_json, claim_state, command_stream, completed_payload_for,
+    request_key, request_state, store_owned,
 };
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{OptionalExtension, params, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde_json::Value;
 
 use crate::claim::{claim_from_doc, open_claims_in};
@@ -512,7 +513,7 @@ fn stored_hash(
 
 /// The project's stored head, `None` for an empty chain.
 pub(crate) fn stored_head(
-    tx: &rusqlite::Transaction<'_>,
+    tx: &Connection,
     project: &ProjectId,
 ) -> Result<Option<Head>, StoreError> {
     let row = tx
@@ -717,6 +718,8 @@ pub(crate) struct Work<'s, 't> {
     /// Every payload the decision stored, each of which an event must
     /// attach.
     put: Vec<Hash>,
+    /// Anchor rows the decision recorded, written with the events.
+    anchors: Vec<StoredAnchor>,
     /// The first error any operation returned, which fails the command.
     failed: Option<StoreError>,
 }
@@ -739,6 +742,7 @@ impl<'s, 't> Work<'s, 't> {
             streams: BTreeMap::new(),
             staged: BTreeMap::new(),
             put: Vec::new(),
+            anchors: Vec::new(),
             failed: None,
         }
     }
@@ -991,6 +995,20 @@ impl<'s, 't> Work<'s, 't> {
             }
         }
         write_staged(self.tx, self.store, project, self.generation, &self.staged)?;
+        for row in &self.anchors {
+            self.tx
+                .execute(
+                    "INSERT INTO anchor (project_id, seq, head_hash, tag, pushed_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        project.0,
+                        sql_int(row.anchor.seq)?,
+                        &row.anchor.hash.0[..],
+                        row.tag,
+                        row.pushed_at
+                    ],
+                )
+                .map_err(sql)?;
+        }
         self.tx
             .execute(
                 "UPDATE project SET head_seq = ?1, head_hash = ?2 WHERE project_id = ?3",
@@ -1107,6 +1125,95 @@ impl Work<'_, '_> {
     pub(crate) fn next_seq(&self) -> u64 {
         self.head.as_ref().map_or(1, |head| head.seq + 1)
     }
+
+    /// Stages an anchor row after checking it against the command's own
+    /// `anchor.pushed` event and any row already stored for its sequence.
+    fn stage_anchor(
+        &mut self,
+        anchor: &Anchor,
+        tag: &str,
+        remote: &str,
+        observed_at: &str,
+    ) -> Result<(), StoreError> {
+        let invalid = |reason: String| StoreError::Refused(Refusal::InvalidEvent(reason));
+        if tag != anchor_tag(self.project_id(), anchor.seq) {
+            return Err(invalid(format!(
+                "{tag} is not the anchor tag of sequence {} in this project",
+                anchor.seq
+            )));
+        }
+        let expected = AnchorPushedPayload {
+            tag: tag.into(),
+            seq: anchor.seq,
+            head: anchor.hash,
+            remote: remote.into(),
+            observed_at: observed_at.into(),
+        };
+        let evidenced = self.events.iter().any(|(event, _)| {
+            event.type_name == ANCHOR_PUSHED
+                && event.type_version == ANCHOR_PUSHED_VERSION
+                && event.stream == ANCHOR_STREAM
+                && AnchorPushedPayload::from_value(&event.payload).as_ref() == Some(&expected)
+        });
+        if !evidenced {
+            return Err(invalid(
+                "an anchor row needs a matching anchor.pushed event in the same command".into(),
+            ));
+        }
+        let row = StoredAnchor {
+            anchor: anchor.clone(),
+            tag: tag.into(),
+            pushed_at: observed_at.into(),
+        };
+        let stored = self
+            .tx
+            .query_row(
+                "SELECT head_hash, tag, pushed_at FROM anchor WHERE project_id = ?1 AND seq = ?2",
+                params![self.project_id().0, sql_int(anchor.seq)?],
+                |found| {
+                    Ok((
+                        found.get::<_, Vec<u8>>(0)?,
+                        found.get::<_, String>(1)?,
+                        found.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(sql)?
+            .map(|(hash, tag, pushed_at)| {
+                <[u8; 32]>::try_from(hash)
+                    .map(|hash| StoredAnchor {
+                        anchor: Anchor {
+                            seq: anchor.seq,
+                            hash: Hash(hash),
+                        },
+                        tag,
+                        pushed_at,
+                    })
+                    .map_err(|_| {
+                        StoreError::Unavailable("a stored anchor hash that is not 32 bytes".into())
+                    })
+            })
+            .transpose()?;
+        let earlier = stored.or_else(|| {
+            self.anchors
+                .iter()
+                .find(|staged| staged.anchor.seq == anchor.seq)
+                .cloned()
+        });
+        match earlier {
+            // The same row again changes nothing.
+            Some(earlier) if earlier == row => Ok(()),
+            Some(_) => Err(invalid(format!(
+                "an anchor row for sequence {} already records another hash, tag or time",
+                anchor.seq
+            ))),
+            None => {
+                self.anchors.push(row);
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Every operation's error is noted, so a decision that goes on past one
@@ -1159,6 +1266,17 @@ impl Transaction for Work<'_, '_> {
 
     fn head(&mut self) -> Result<Option<Head>, StoreError> {
         Ok(self.head.clone())
+    }
+
+    fn record_anchor(
+        &mut self,
+        anchor: &Anchor,
+        tag: &str,
+        remote: &str,
+        observed_at: &str,
+    ) -> Result<(), StoreError> {
+        let result = self.stage_anchor(anchor, tag, remote, observed_at);
+        self.noted(result)
     }
 }
 

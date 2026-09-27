@@ -7,7 +7,9 @@
 //! projector beside the core's and reads the view before any decision runs.
 
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
+use crate::canonical::{CanonicalError, canonical_json};
 use crate::claim::{
     COMMAND_CLAIMED, COMMAND_RECONCILED, ClaimOwner, ClaimedPayload, ReconciledPayload,
     ReconciledResolution,
@@ -27,6 +29,13 @@ pub const REQUEST_VIEW: &str = "request";
 /// An answer whose canonical JSON is longer than this is stored as a
 /// `record` payload and `command.completed` carries its reference.
 pub const INLINE_ANSWER_LIMIT: usize = 4096;
+
+/// A request digest: the SHA-256 of the canonical form of the command's
+/// kind and every field that carries authority, as the caller builds it.
+/// A value with no canonical form, such as one holding a float, has none.
+pub fn request_digest(value: &Value) -> Result<Hash, CanonicalError> {
+    Ok(Hash(Sha256::digest(canonical_json(value)?).into()))
+}
 
 /// The stream a command kind's `command.*` events go to.
 pub fn command_stream(kind: &CommandKind) -> StreamName {
@@ -305,5 +314,24 @@ impl Projector for RequestProjector {
             _ => return Ok(Vec::new()),
         };
         Ok(vec![Change::Put { key, body }])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The digest is the SHA-256 of the canonical bytes, keys in UTF-16
+    // order: U+10000 before U+E000, where a byte sort puts them the other
+    // way. The vector is `printf '{"\xf0\x90\x80\x80":2,"\xee\x80\x80":1}' |
+    // sha256sum`. Catches a digest over serializer output, which another
+    // implementation of the same request could not reproduce.
+    #[test]
+    fn the_digest_hashes_the_canonical_bytes() {
+        let digest = request_digest(&json!({"\u{e000}": 1, "\u{10000}": 2})).expect("digest");
+        assert_eq!(
+            digest.to_hex(),
+            "9d4cdc71dda603c42f9b21d88d0c2ffc31a76cd1bd461d7359406cf169845f1e"
+        );
     }
 }
