@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status is as of origin/main `2bb6de55` on 2026-09-27, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status is as of origin/main `f46727bd` on 2026-09-27, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
 
 ## The path to the first release
 
@@ -55,24 +55,23 @@ Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work
 
 The evidence ledger store: a storage port with a SQLite adapter behind it, one conformance suite every adapter must pass, the hash chain, forge anchors, verify, export, doctor and acknowledge-restore. Nothing uses it yet.
 
-ADRs: [0001 event ledger](adr/0001-event-ledger.md), [0002 SQLite](adr/0002-sqlite.md), [0003 per-user database](adr/0003-per-user-database.md), [0005 storage port](adr/0005-storage-port.md), [0007 forge anchors](adr/0007-forge-anchors.md), [0010 projector traits in the port](adr/0010-projector-traits-in-the-port.md), [0012 optimistic concurrency](adr/0012-optimistic-concurrency.md), [0021 claim rules in the port](adr/0021-claim-rules-in-the-port.md).
+ADRs: [0001 event ledger](adr/0001-event-ledger.md), [0002 SQLite](adr/0002-sqlite.md), [0003 per-user database](adr/0003-per-user-database.md), [0005 storage port](adr/0005-storage-port.md), [0007 forge anchors](adr/0007-forge-anchors.md), [0010 projector traits in the port](adr/0010-projector-traits-in-the-port.md), [0012 optimistic concurrency](adr/0012-optimistic-concurrency.md), [0021 claim rules in the port](adr/0021-claim-rules-in-the-port.md), [0022 acknowledged restore](adr/0022-acknowledged-restore.md), [0023 no backups in Baley](adr/0023-no-backups-in-baley.md).
 
 ```mermaid
 flowchart LR
-    T1["T1 to T11<br/>merged"]
-    T12["T12<br/>export, doctor,<br/>acknowledge-restore<br/>backups removed"]
+    T1["T1 to T12<br/>merged"]
     T13["T13<br/>conformance suite"]
     T14["T14<br/>CLI, git forge,<br/>ticker, benchmark"]
 
-    T1 --> T12 --> T13 --> T14
+    T1 --> T13 --> T14
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
     classDef next fill:#fff8c5,stroke:#9a6700,stroke-width:3px,color:#3b2300
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
 
     class T1 done
-    class T12 next
-    class T13,T14 planned
+    class T13 next
+    class T14 planned
 ```
 
 Figure 2. Build 1's tasks. One pull request per task.
@@ -90,7 +89,7 @@ Figure 2. Build 1's tasks. One pull request per task.
 | T9 | Generations, rebuild and `verify --views` | [#42](https://github.com/crenshawdev/baley/pull/42), [#43](https://github.com/crenshawdev/baley/pull/43) | Merged |
 | T10 | Claims, leases and reconciliation | [#132](https://github.com/crenshawdev/baley/pull/132) | Merged |
 | T11 | Anchors and the adapter's `verify` | [#135](https://github.com/crenshawdev/baley/pull/135) | Merged |
-| T12 | Export, doctor and the owner-only acknowledge-restore command; backups removed | [#138](https://github.com/crenshawdev/baley/pull/138) | In review |
+| T12 | Export, doctor and the owner-only acknowledge-restore command; backups removed | [#138](https://github.com/crenshawdev/baley/pull/138) | Merged |
 | T13 | The conformance suite, run against every store adapter | | Planned |
 | T14 | CLI commands `verify`, `doctor`, `export`, `purge`, `anchor` and `acknowledge-restore`; the real git forge and ticker, and the benchmark | | Planned |
 
@@ -210,7 +209,7 @@ Every issue here except #134 blocks the release design #14. #134 blocks Build 4,
 | Issue | What | Milestone | Depends on / blocks |
 |---|---|---|---|
 | [#134](https://github.com/crenshawdev/baley/issues/134) | Choose what a plan re-check reads | Encyclopedists | Blocks Build 4 and lands before it |
-| [#47](https://github.com/crenshawdev/baley/issues/47) | Repository upkeep and the build gate | Encyclopedists | #49 #50 #52 #54 wait on it (stated in their text; no GitHub link) |
+| [#47](https://github.com/crenshawdev/baley/issues/47) | Repository upkeep and the build gate | Encyclopedists | #49 #50 #54 wait on it (stated in their text; no GitHub link) |
 
 ### Upkeep and docs
 
@@ -219,7 +218,6 @@ Every issue here except #134 blocks the release design #14. #134 blocks Build 4,
 | [#44](https://github.com/crenshawdev/baley/issues/44) | Start the architecture overview | Evidence | None |
 | [#49](https://github.com/crenshawdev/baley/issues/49) | Check formatting in CI | Encyclopedists | #47 (stated in its text) |
 | [#50](https://github.com/crenshawdev/baley/issues/50) | Prune the label set; add an impact field to the bug form | Encyclopedists | #47 (stated in its text) |
-| [#52](https://github.com/crenshawdev/baley/issues/52) | Repository description and topics; fix a stale README line | Encyclopedists | #47 (stated in its text) |
 | [#54](https://github.com/crenshawdev/baley/issues/54) | List the slow tests; read what the suite's count is made of | Encyclopedists | #47 (stated in its text) |
 
 ### Bugs
@@ -241,11 +239,11 @@ Counts as of 2026-09-27.
 | Milestone | Theme | Closed | Open | Open issues | State |
 |---|---|---|---|---|---|
 | [Evidence](https://github.com/crenshawdev/baley/milestone/1) | Replace the JSON store with one designed from how records are read and written, and move it out of the repository's .planning directory. | 22 | 11 | Builds 1 to 9, bug #40 and #44 | Open |
-| [Encyclopedists](https://github.com/crenshawdev/baley/milestone/7) | Keep the repository's names, public face and build gate accurate: Baley names throughout, formatting, labels, description and topics, the README, and what the test suite costs. | 1 | 6 | #134, #47, #49, #50, #52, #54 | Open |
+| [Encyclopedists](https://github.com/crenshawdev/baley/milestone/7) | Keep the repository's names, public face and build gate accurate: Baley names throughout, formatting, labels, description and topics, the README, and what the test suite costs. | 2 | 5 | #134, #47, #49, #50, #54 | Open |
 | [Traders](https://github.com/crenshawdev/baley/milestone/5) | Publish Baley and install it on a machine for both hosts, after a live run of the whole loop on each. | 0 | 1 | #14 | Open |
-| [Seldon](https://github.com/crenshawdev/baley/milestone/3) | Bring a new or existing repository under Baley and write its first requirements and roadmap. | 1 | 0 | None | Open |
-| [Mule](https://github.com/crenshawdev/baley/milestone/4) | Change what was approved: edit or withdraw a phase, move its requirements, revise a truth or a requirement, keeping every earlier version on record. | 1 | 0 | None | Open |
-| [Little Lost Robot](https://github.com/crenshawdev/baley/milestone/6) | What an agent may touch: how a task's file lease is enforced, and whether Baley edits source itself. | 2 | 0 | None | Open |
+| [Seldon](https://github.com/crenshawdev/baley/milestone/3) | Bring a new or existing repository under Baley and write its first requirements and roadmap. | 1 | 0 | None | Closed |
+| [Mule](https://github.com/crenshawdev/baley/milestone/4) | Change what was approved: edit or withdraw a phase, move its requirements, revise a truth or a requirement, keeping every earlier version on record. | 1 | 0 | None | Closed |
+| [Little Lost Robot](https://github.com/crenshawdev/baley/milestone/6) | What an agent may touch: how a task's file lease is enforced, and whether Baley edits source itself. | 2 | 0 | None | Closed |
 | [Terminus](https://github.com/crenshawdev/baley/milestone/2) | Open the repository to the public: a README for visitors, a security policy, issue templates, and branch protection with no bypass. | 2 | 0 | None | Closed |
 
 ## Not yet decided
@@ -254,9 +252,7 @@ What the records leave open or do not say.
 
 - Builds 2 to 9 have no task breakdown. Each lists the design requirements it delivers, and all but Build 7 add a short list of settled points.
 - There is no first version number. The release design #14 picks it.
-- #44 was meant to land before Build 1 T10, which has merged. #49, #50, #52 and #54 wait on the #47 design, as their text says; GitHub has no dependency link for them. No order is given for #47 itself or for bug #70.
+- #44 was meant to land before Build 1 T10, which has merged. #49, #50 and #54 wait on the #47 design, as their text says; GitHub has no dependency link for them. No order is given for #47 itself or for bug #70.
 - Whether Codex connects reliably to a local HTTP MCP server is open in [design 0012](design/0012-host-interface.md), to be settled by a test when the service transport is built.
 - #14 places each host's sandbox protection in Build 2 (#23), and leaves open whether host setup runs from a session-start hook. #24 and design 0012 (HST-R17) put the sandbox in Build 3's `baley install` and give neither host a session-start hook. This file follows #24.
-- The T11 checkbox in #22 is still unticked, although #135 merged.
-- Seldon, Mule and Little Lost Robot have no open issues but are still open milestones.
 - The board's Status field is set only on the build issues, #40 and #14.
