@@ -267,7 +267,7 @@ fn verify_in(
                 break;
             }
             if age_unanchored_since.is_none()
-                && event.seq >= unanchored_from
+                && unanchored_from.is_some_and(|from| event.seq >= from)
                 && !anchor_command_event(&event.type_name, &event.payload)
             {
                 age_unanchored_since = Some(event.recorded_at);
