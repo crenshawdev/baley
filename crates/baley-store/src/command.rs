@@ -28,8 +28,11 @@ pub struct Command {
     /// The caller's fresh UUID.
     pub request_id: RequestId,
     /// SHA-256 of the canonical form of the kind and every field that
-    /// carries authority. The same id with another digest is refused.
+    /// carries authority, including the canonical form of `scope`. The same
+    /// id with another digest is refused.
     pub digest: Hash,
+    /// Exact scope tokens held or checked by this command. Empty is unscoped.
+    pub scope: Vec<String>,
     /// Stamped on every event the command appends.
     pub policy_version: u64,
     /// The supplied time every event of the command is recorded at: UTC,

@@ -1,7 +1,7 @@
 //! Generations: a project's views brought to this binary's on first use,
 //! rebuilt in yielding batches and flipped in one transaction, old rows
 //! cleaned up, and view verification against a scratch generation (design
-//! 0001, Views and projectors, Figure 7; EVD-R10, R19).
+//! 0001, Views and projectors, Figure 8; EVD-R10, R19).
 //!
 //! Every view row carries a generation, and `project_gen.live_gen` names the
 //! one readers and commands use. Commands write only the live generation. A
@@ -1141,7 +1141,7 @@ mod tests {
             Options {
                 projectors,
                 schema: Box::new(Schema),
-                view_set_version: set(view_set_version),
+                view_set_version: set(view_set_version + 1),
                 timing,
                 ..Options::default()
             },
@@ -1175,6 +1175,7 @@ mod tests {
             kind: CommandKind(kind.into()),
             request_id: RequestId(request.into()),
             digest: Hash([1; 32]),
+            scope: Vec::new(),
             policy_version: 1,
             recorded_at: AT.into(),
             actor: Actor::Owner,
@@ -1246,7 +1247,7 @@ mod tests {
 
     fn completed(request: &str) -> Value {
         json!({"kind": "fixture.add", "request_id": request, "digest": "01".repeat(32),
-               "outcome": "done", "answer": {"inline": "ok"}})
+               "state": "completed", "scope": [], "outcome": "done", "answer": {"inline": "ok"}})
     }
 
     /// The fixture chain's documents, written by hand from its events:
@@ -1675,7 +1676,7 @@ mod tests {
             .expect("purge");
         store.rebuild(&project()).expect("rebuild");
         let expected = json!({"kind": "fixture.secret", "request_id": "s1",
-            "digest": "01".repeat(32), "outcome": "done",
+            "digest": "01".repeat(32), "state": "completed", "scope": [], "outcome": "done",
             "answer": {"stored": {"payload": answer.to_hex(), "bytes": 7, "class": "record"}}});
         assert_eq!(
             doc(&store, "request", &request("fixture.secret", "s1")),
@@ -1719,10 +1720,11 @@ mod tests {
         assert_eq!(
             stamps(home.path(), live),
             [
-                ("item".into(), 2, 2),
-                ("quiet".into(), 1, 2),
-                ("request".into(), 1, 2),
-                ("tally".into(), 1, 2),
+                ("claim_scope".into(), 1, 3),
+                ("item".into(), 2, 3),
+                ("quiet".into(), 1, 3),
+                ("request".into(), 2, 3),
+                ("tally".into(), 1, 3),
             ]
         );
     }
@@ -2039,7 +2041,7 @@ mod tests {
             AT,
             Options {
                 projectors: vec![item(2), tally(None)],
-                view_set_version: set(2),
+                view_set_version: set(3),
                 timing: Scripted::still(),
                 ..Options::default()
             },
@@ -2110,7 +2112,11 @@ mod tests {
         let live = live_gen(home.path()).expect("live");
         assert_eq!(
             stamps(home.path(), live),
-            [("item".into(), 2, 3), ("request".into(), 1, 3)]
+            [
+                ("claim_scope".into(), 1, 4),
+                ("item".into(), 2, 4),
+                ("request".into(), 2, 4)
+            ]
         );
         assert_eq!(rows(home.path(), "v_tally_1"), 0);
         assert_eq!(

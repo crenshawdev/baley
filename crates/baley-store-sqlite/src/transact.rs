@@ -1,5 +1,5 @@
-//! The write path of a database-only command (design 0001, Commands and
-//! Figure 6; EVD-R5, R6, R7).
+//! The shared command write path (design 0001, Commands and Figure 7;
+//! EVD-R5, R6, R7).
 //!
 //! Before the request lookup the project's live `request` view must be at
 //! this binary's version, and before a new request's decision every live
@@ -12,23 +12,26 @@
 //! slow work observed compares against the store before this command, never
 //! against the command's own writes. Then, in the same transaction, the
 //! events are written with their chain and references, each changed
-//! document once, `command.completed` last, and the project's head moves.
+//! document once, and the project's head moves. A claim appends no completion
+//! until its record step.
 
 use std::collections::BTreeMap;
 
 use baley_store::{
-    Absence, Answer, COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, Claim, Command, Decide,
-    Decision, DocKey, Document, Event, EventDraft, EventMatch, GitFact, GitFacts, Hash, Head,
-    INLINE_ANSWER_LIMIT, IndexQuery, NewEvent, Observed, Outcome, PAYLOAD_PURGED, PAYLOAD_REDUCED,
-    Page, PageRequest, PayloadRef, PayloadStatus, ProjectId, PurgedEvent, REQUEST_VIEW, Recorded,
-    ReducedEvent, Refusal, RetentionClass, StaleInput, StoreError, StreamName, Transaction,
-    UtcInstant, canonical_json, command_stream, completed_payload, recorded_outcome, request_key,
-    store_owned,
+    Absence, Answer, Block, CLAIM_SCOPE_VIEW, COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, Claim,
+    ClaimId, ClaimOwner, Command, Decide, Decision, DocKey, Document, Event, EventDraft,
+    EventMatch, GitFact, GitFacts, Hash, Head, INLINE_ANSWER_LIMIT, IndexQuery, KeyValue, NewEvent,
+    Observed, Outcome, PAYLOAD_PURGED, PAYLOAD_REDUCED, Page, PageRequest, PayloadRef,
+    PayloadStatus, ProjectId, PurgedEvent, REQUEST_VIEW, Recorded, ReducedEvent, Refusal,
+    RequestState, RetentionClass, StaleInput, StoreError, StreamName, Transaction, UtcInstant,
+    blocking, canonical_json, claim_state, command_stream, completed_payload_for, request_key,
+    request_state, store_owned,
 };
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{OptionalExtension, params, params_from_iter};
 use serde_json::Value;
 
+use crate::claim::{claim_from_doc, open_claims_in};
 use crate::payload::{put_payload, put_reference, sql_int, stored};
 use crate::rebuild::read_only;
 use crate::store::{SqliteStore, sql};
@@ -81,6 +84,32 @@ impl SqliteStore {
         )
             -> Result<(T, Outcome, Option<GitFacts>, Option<Observed>), StoreError>,
     ) -> Result<CommandResult<T>, StoreError> {
+        self.command_path_for(
+            command,
+            Entry::Ordinary,
+            move |tx, state, seq| match state {
+                RequestState::Completed(_, outcome) => replay(tx, outcome, seq),
+                _ => Err(StoreError::Unavailable(
+                    "a request that cannot replay".into(),
+                )),
+            },
+            move |work, _| {
+                let (result, outcome, git, observed) = new(work)?;
+                work.finish(&outcome, git, observed.as_ref())?;
+                Ok(result)
+            },
+        )
+    }
+
+    /// The common path for all command entries. The callback appends the
+    /// store-owned event or events appropriate to its entry.
+    pub(crate) fn command_path_for<T>(
+        &self,
+        command: &Command,
+        entry: Entry<'_>,
+        replay: impl FnOnce(&rusqlite::Transaction<'_>, RequestState, u64) -> Result<T, StoreError>,
+        new: impl FnOnce(&mut Work<'_, '_>, Option<Claim>) -> Result<T, StoreError>,
+    ) -> Result<CommandResult<T>, StoreError> {
         UtcInstant::parse(&command.recorded_at).map_err(|_| {
             StoreError::Refused(Refusal::InvalidEvent(
                 "recorded_at is not a UTC instant".into(),
@@ -89,7 +118,7 @@ impl SqliteStore {
         let mut replay = Some(replay);
         let mut new = Some(new);
         loop {
-            match self.command_turn(command, &mut replay, &mut new)? {
+            match self.command_turn(command, entry, &mut replay, &mut new)? {
                 Some(recorded) => return Ok(recorded),
                 None => self.bring_current(&command.project)?,
             }
@@ -102,15 +131,11 @@ impl SqliteStore {
     fn command_turn<T>(
         &self,
         command: &Command,
+        entry: Entry<'_>,
         replay: &mut Option<
-            impl FnOnce(&rusqlite::Transaction<'_>, Outcome, u64) -> Result<T, StoreError>,
+            impl FnOnce(&rusqlite::Transaction<'_>, RequestState, u64) -> Result<T, StoreError>,
         >,
-        new: &mut Option<
-            impl FnOnce(
-                &mut Work<'_, '_>,
-            )
-                -> Result<(T, Outcome, Option<GitFacts>, Option<Observed>), StoreError>,
-        >,
+        new: &mut Option<impl FnOnce(&mut Work<'_, '_>, Option<Claim>) -> Result<T, StoreError>>,
     ) -> Result<Option<CommandResult<T>>, StoreError> {
         let recorded = self.write(|tx| {
             let project = &command.project;
@@ -125,27 +150,95 @@ impl SqliteStore {
             if let Some(document) =
                 get_document(tx, requests, project, generation, &request_key(command))?
             {
-                let (digest, mut outcome) = recorded_outcome(&document.body).ok_or_else(|| {
-                    StoreError::Unavailable("a request document that holds no outcome".into())
+                let state = request_state(&document.body).ok_or_else(|| {
+                    StoreError::Unavailable("a request document that holds no state".into())
                 })?;
+                let digest = match &state {
+                    RequestState::Completed(digest, _) => *digest,
+                    RequestState::Claimed(doc) | RequestState::AwaitingOwner(doc, _) => doc.digest,
+                };
                 if digest != command.digest {
                     return Err(StoreError::Refused(Refusal::RequestDigestMismatch {
                         request_id: command.request_id.clone(),
                     }));
                 }
-                if let Answer::Stored(reference) = &outcome.answer {
-                    let status =
-                        reference_status(tx, project, document.produced_seq, &reference.hash)?;
-                    if !matches!(status, PayloadStatus::Present { .. }) {
-                        outcome.answer = Answer::Tombstone {
-                            reference: reference.clone(),
-                            status,
+                match state {
+                    RequestState::Completed(digest, mut outcome) => {
+                        if let Answer::Stored(reference) = &outcome.answer {
+                            let status = reference_status(
+                                tx,
+                                project,
+                                document.produced_seq,
+                                &reference.hash,
+                            )?;
+                            if !matches!(status, PayloadStatus::Present { .. }) {
+                                outcome.answer = Answer::Tombstone {
+                                    reference: reference.clone(),
+                                    status,
+                                };
+                            }
+                        }
+                        let replay = replay.take().ok_or_else(spent)?;
+                        return replay(
+                            tx,
+                            RequestState::Completed(digest, outcome),
+                            document.produced_seq,
+                        )
+                        .map(|value| Some(CommandResult::Replayed(value)));
+                    }
+                    RequestState::Claimed(doc) | RequestState::AwaitingOwner(doc, _)
+                        if matches!(entry, Entry::Complete(_)) =>
+                    {
+                        if document.body.get("state").and_then(Value::as_str)
+                            == Some("awaiting_owner")
+                        {
+                            return Err(StoreError::Refused(Refusal::AwaitingOwner(doc.id)));
+                        }
+                        let Entry::Complete(owner) = entry else {
+                            unreachable!()
                         };
+                        if &doc.owner != owner {
+                            return Err(StoreError::Refused(Refusal::NotClaimOwner(doc.id)));
+                        }
+                        if doc.scope != command.scope {
+                            return Err(StoreError::Refused(Refusal::ScopeMismatch {
+                                claim: doc.id,
+                                supplied: command.scope.clone(),
+                                claimed: doc.scope,
+                            }));
+                        }
+                    }
+                    state @ (RequestState::Claimed(_) | RequestState::AwaitingOwner(_, _))
+                        if matches!(entry, Entry::Claim) =>
+                    {
+                        let replay = replay.take().ok_or_else(spent)?;
+                        return replay(tx, state, document.produced_seq)
+                            .map(|value| Some(CommandResult::Replayed(value)));
+                    }
+                    RequestState::Claimed(doc) | RequestState::AwaitingOwner(doc, _) => {
+                        let claim = claim_from_doc(
+                            tx,
+                            project,
+                            &doc,
+                            document
+                                .body
+                                .get("held")
+                                .and_then(|held| held.get("seq"))
+                                .and_then(Value::as_u64),
+                        )?;
+                        return Err(StoreError::Blocked(Block {
+                            claim: doc.id,
+                            state: claim_state(&claim, &command.recorded_at).map_err(|_| {
+                                StoreError::Unavailable("an invalid lease time".into())
+                            })?,
+                        }));
                     }
                 }
-                let replay = replay.take().ok_or_else(spent)?;
-                return replay(tx, outcome, document.produced_seq)
-                    .map(|value| Some(CommandResult::Replayed(value)));
+            } else if matches!(entry, Entry::Complete(_)) {
+                return Err(StoreError::Refused(Refusal::UnknownClaim(ClaimId {
+                    kind: command.kind.clone(),
+                    request_id: command.request_id.clone(),
+                })));
             }
             // A replay above only reads; a project this binary cannot read
             // still answers it, whatever its other views. A new request
@@ -156,19 +249,33 @@ impl SqliteStore {
                 Fence::Unstamped | Fence::Behind => return Ok(None),
             }
             self.check_readable(tx, project, head.as_ref())?;
+            let own_claim = if matches!(entry, Entry::Complete(_)) {
+                let document =
+                    get_document(tx, requests, project, generation, &request_key(command))?
+                        .ok_or_else(|| {
+                            StoreError::Unavailable("a claim request vanished".into())
+                        })?;
+                let RequestState::Claimed(doc) =
+                    request_state(&document.body).ok_or_else(|| {
+                        StoreError::Unavailable("a request document that holds no state".into())
+                    })?
+                else {
+                    return Err(StoreError::Unavailable("a claim request changed".into()));
+                };
+                Some(claim_from_doc(tx, project, &doc, None)?)
+            } else {
+                None
+            };
+            self.check_scope(tx, command, generation, entry.excluded(own_claim.as_ref()))?;
             let new = new.take().ok_or_else(spent)?;
             let mut work = Work::new(self, tx, command, head, generation);
-            let (result, outcome, git, observed) = new(&mut work)?;
+            let result = new(&mut work, own_claim)?;
             // An operation that failed fails the command, even when the
             // decision went on past the error.
             if let Some(error) = work.failed.take() {
                 return Err(error);
             }
             work.check_payloads_attached()?;
-            if let Some(observed) = observed {
-                recheck(self, tx, project, generation, &observed)?;
-            }
-            work.complete(&outcome, git)?;
             let head = work.write()?;
             Ok(Some(CommandResult::New(result, head)))
         })?;
@@ -179,6 +286,81 @@ impl SqliteStore {
                 .insert(command.project.clone(), head.clone());
         }
         Ok(recorded)
+    }
+
+    fn check_scope(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        command: &Command,
+        generation: i64,
+        excluded: Option<&ClaimId>,
+    ) -> Result<(), StoreError> {
+        if command.scope.is_empty() {
+            return Ok(());
+        }
+        let scopes = self.views().table(CLAIM_SCOPE_VIEW)?;
+        let requests = self.views().table(REQUEST_VIEW)?;
+        let mut holders = Vec::new();
+        for token in &command.scope {
+            let key = DocKey(vec![KeyValue::Text(token.clone())]);
+            let Some(token_doc) = get_document(tx, scopes, &command.project, generation, &key)?
+            else {
+                continue;
+            };
+            let invalid = || {
+                StoreError::Unavailable(
+                    "a claim_scope document names a claim that does not hold it".into(),
+                )
+            };
+            let named = token_doc.body.get("claim").ok_or_else(invalid)?;
+            let kind = named
+                .get("kind")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let request_id = named
+                .get("request_id")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let seq = named
+                .get("seq")
+                .and_then(Value::as_u64)
+                .ok_or_else(invalid)?;
+            if token_doc.body.get("scope").and_then(Value::as_str) != Some(token) {
+                return Err(invalid());
+            }
+            let request_key = DocKey(vec![
+                KeyValue::Text(kind.into()),
+                KeyValue::Text(request_id.into()),
+            ]);
+            let request_doc =
+                get_document(tx, requests, &command.project, generation, &request_key)?
+                    .ok_or_else(invalid)?;
+            let doc = match request_state(&request_doc.body).ok_or_else(invalid)? {
+                RequestState::Claimed(doc) | RequestState::AwaitingOwner(doc, _) => doc,
+                RequestState::Completed(_, _) => return Err(invalid()),
+            };
+            if doc.id.kind.0 != kind
+                || doc.id.request_id.0 != request_id
+                || doc.seq != seq
+                || !doc.scope.contains(token)
+            {
+                return Err(invalid());
+            }
+            if excluded != Some(&doc.id) {
+                let held = request_doc
+                    .body
+                    .get("held")
+                    .and_then(|held| held.get("seq"))
+                    .and_then(Value::as_u64);
+                holders.push(claim_from_doc(tx, &command.project, &doc, held)?);
+            }
+        }
+        if let Some(block) = blocking(&command.scope, &holders, &command.recorded_at)
+            .map_err(|_| StoreError::Unavailable("an invalid lease time".into()))?
+        {
+            return Err(StoreError::Blocked(block));
+        }
+        Ok(())
     }
 
     /// Refuses a project holding an event this binary cannot read. Checks
@@ -229,6 +411,25 @@ impl SqliteStore {
 pub(crate) enum CommandResult<T> {
     Replayed(T),
     New(T, Head),
+}
+
+/// Which request lookup rules and scope exclusion apply.
+#[derive(Clone, Copy)]
+pub(crate) enum Entry<'a> {
+    Ordinary,
+    Claim,
+    Complete(&'a ClaimOwner),
+    Reconcile(&'a ClaimId),
+}
+
+impl Entry<'_> {
+    fn excluded<'a>(&'a self, own: Option<&'a Claim>) -> Option<&'a ClaimId> {
+        match self {
+            Self::Complete(_) => own.map(|claim| &claim.id),
+            Self::Reconcile(id) => Some(id),
+            _ => None,
+        }
+    }
 }
 
 /// A callback asked for twice: a turn that used one never asks for a retry.
@@ -348,7 +549,7 @@ fn unsigned(value: i64) -> Result<u64, StoreError> {
 /// Refuses the command as stale if anything the caller's slow work
 /// observed moved. Runs before the command's writes, so it sees the store
 /// as it stood when the command began.
-fn recheck(
+pub(crate) fn recheck(
     store: &SqliteStore,
     tx: &rusqlite::Transaction<'_>,
     project: &ProjectId,
@@ -521,7 +722,7 @@ pub(crate) struct Work<'s, 't> {
 }
 
 impl<'s, 't> Work<'s, 't> {
-    fn new(
+    pub(crate) fn new(
         store: &'s SqliteStore,
         tx: &'s rusqlite::Transaction<'t>,
         command: &'s Command,
@@ -552,7 +753,7 @@ impl<'s, 't> Work<'s, 't> {
     }
 
     /// Refuses a payload the decision stored that no event attaches.
-    fn check_payloads_attached(&self) -> Result<(), StoreError> {
+    pub(crate) fn check_payloads_attached(&self) -> Result<(), StoreError> {
         for hash in &self.put {
             let attached = self.events.iter().any(|(_, attachments)| {
                 attachments
@@ -698,7 +899,7 @@ impl<'s, 't> Work<'s, 't> {
 
     /// The outcome the caller receives: the answer inline when it is small
     /// and not sensitive, otherwise stored as a `record` payload.
-    fn outcome(&mut self, decision: &Decision) -> Result<Outcome, StoreError> {
+    pub(crate) fn outcome(&mut self, decision: &Decision) -> Result<Outcome, StoreError> {
         let bytes = canonical_json(&decision.answer)
             .map_err(|error| StoreError::Refused(Refusal::InvalidEvent(error.to_string())))?;
         let answer = if !decision.sensitive && bytes.len() <= INLINE_ANSWER_LIMIT {
@@ -712,9 +913,31 @@ impl<'s, 't> Work<'s, 't> {
         })
     }
 
+    pub(crate) fn recheck_observed(&self, observed: &Observed) -> Result<(), StoreError> {
+        recheck(
+            self.store,
+            self.tx,
+            self.project_id(),
+            self.generation,
+            observed,
+        )
+    }
+
+    pub(crate) fn current_head(&self) -> Option<Head> {
+        self.head.clone()
+    }
+
     /// Appends `command.completed` for the outcome, with the git facts it
     /// depended on.
-    fn complete(&mut self, outcome: &Outcome, git: Option<GitFacts>) -> Result<(), StoreError> {
+    pub(crate) fn complete_for(
+        &mut self,
+        kind: &baley_store::CommandKind,
+        request_id: &baley_store::RequestId,
+        digest: &Hash,
+        scope: &[String],
+        outcome: &Outcome,
+        git: Option<GitFacts>,
+    ) -> Result<(), StoreError> {
         let attachments = match &outcome.answer {
             Answer::Stored(reference) | Answer::Tombstone { reference, .. } => {
                 vec![reference.clone()]
@@ -722,19 +945,40 @@ impl<'s, 't> Work<'s, 't> {
             Answer::Inline(_) => Vec::new(),
         };
         self.push(NewEvent {
-            stream: command_stream(&self.command.kind),
+            stream: command_stream(kind),
             type_name: COMMAND_COMPLETED.into(),
             type_version: COMMAND_COMPLETED_VERSION,
             git,
-            payload: completed_payload(self.command, outcome),
+            payload: completed_payload_for(kind, request_id, digest, scope, outcome),
             attachments,
         })?;
         Ok(())
     }
 
+    pub(crate) fn finish(
+        &mut self,
+        outcome: &Outcome,
+        git: Option<GitFacts>,
+        observed: Option<&Observed>,
+    ) -> Result<(), StoreError> {
+        if let Some(observed) = observed {
+            recheck(
+                self.store,
+                self.tx,
+                self.project_id(),
+                self.generation,
+                observed,
+            )?;
+        }
+        let kind = self.command.kind.clone();
+        let request_id = self.command.request_id.clone();
+        let digest = self.command.digest;
+        self.complete_for(&kind, &request_id, &digest, &[], outcome, git)
+    }
+
     /// Writes the events, their references, each staged document once and
     /// the new head.
-    fn write(self) -> Result<Head, StoreError> {
+    pub(crate) fn write(self) -> Result<Head, StoreError> {
         let head = self
             .head
             .clone()
@@ -902,12 +1146,19 @@ impl Transaction for Work<'_, '_> {
         self.noted(result)
     }
 
-    /// Claims arrive with Build 1's tenth task; until then no claim can
-    /// exist, and saying so is an error rather than an empty list a
-    /// decision would trust.
     fn open_claims(&mut self) -> Result<Vec<Claim>, StoreError> {
-        let result = Err(StoreError::Unavailable("claims are not built yet".into()));
+        let result = open_claims_in(
+            self.tx,
+            self.store,
+            self.project_id(),
+            self.generation,
+            Some(&self.staged),
+        );
         self.noted(result)
+    }
+
+    fn head(&mut self) -> Result<Option<Head>, StoreError> {
+        Ok(self.head.clone())
     }
 }
 
@@ -1013,7 +1264,7 @@ mod tests {
         let options = Options {
             projectors: vec![Box::new(ItemProjector::new())],
             schema: Box::new(Items),
-            view_set_version: NonZeroU32::new(2).expect("positive"),
+            view_set_version: NonZeroU32::new(3).expect("positive"),
             timing: Scripted::still(),
             ..Options::default()
         };
@@ -1050,6 +1301,7 @@ mod tests {
             kind: CommandKind(kind.into()),
             request_id: RequestId(request.into()),
             digest: Hash([digest; 32]),
+            scope: Vec::new(),
             policy_version: 1,
             recorded_at: AT.into(),
             actor: Actor::Owner,
@@ -1123,7 +1375,7 @@ mod tests {
             result,
             Err(StoreError::Projector { view, seq: 1, .. }) if view == "item"
         ));
-        for table in ["event", "payload", "payload_ref", "v_item_1", "v_request_1"] {
+        for table in ["event", "payload", "payload_ref", "v_item_1", "v_request_2"] {
             assert_eq!(count(home.path(), table), 0, "{table}");
         }
     }
@@ -1670,7 +1922,7 @@ mod tests {
             result,
             Err(StoreError::Refused(Refusal::ProjectReadOnly {
                 project: project(),
-                reason: "item.future version 1 is not readable by this binary".into(),
+                reason: "item.future version 2 is not readable by this binary".into(),
             }))
         );
     }

@@ -1,6 +1,7 @@
 //! Opening the store and the write path every write goes through (design
 //! 0001, Opening the store; Processes and concurrency; EVD-R8, R19, R20).
 
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::num::NonZeroU32;
@@ -9,9 +10,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use baley_store::{
-    COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, Event, EventSchema, Hash, Head, PAYLOAD_PURGED,
-    PAYLOAD_PURGED_VERSION, PAYLOAD_REDUCED, PAYLOAD_REDUCED_VERSION, ProjectId, Projector,
-    RequestProjector, StoreError, ViewSpec, store_owned,
+    COMMAND_CLAIMED, COMMAND_CLAIMED_VERSION, COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION,
+    COMMAND_RECONCILED, COMMAND_RECONCILED_VERSION, ClaimScopeProjector, Event, EventSchema, Hash,
+    Head, PAYLOAD_PURGED, PAYLOAD_PURGED_VERSION, PAYLOAD_REDUCED, PAYLOAD_REDUCED_VERSION,
+    ProjectId, Projector, Refusal, RequestProjector, StoreError, ViewSpec, store_owned,
 };
 use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
 
@@ -27,16 +29,15 @@ const PAGE_SIZE: i64 = 8192;
 pub struct Options {
     /// The most trace rows kept; the oldest go first.
     pub trace_cap: u64,
-    /// The core's projectors. Their views' missing tables and indexes are
-    /// created at open. The store adds its own `request` projector.
+    /// The core's projectors. The store adds `claim_scope` and `request`.
     pub projectors: Vec<Box<dyn Projector>>,
     /// The event types and versions this binary reads, beyond the store's
     /// own `command.*` types. A project holding any other is read-only
     /// here, and a decision may append no other (EVD-R19).
     pub schema: Box<dyn EventSchema>,
-    /// The version of the whole registered view set, `request` included.
-    /// Raised whenever a view is added, removed or renamed; version 1 is
-    /// `request` alone. Open pins each version to its sorted view names and
+    /// The version of the whole registered view set. Raised whenever a view
+    /// is added, removed or renamed; version 2 is `claim_scope request`.
+    /// Open pins each version to its sorted view names and
     /// refuses a changed set under a version already recorded. Every
     /// generation is stamped with it, so a project whose live set is newer
     /// is read-only here and one whose set is older rebuilds forward.
@@ -46,14 +47,14 @@ pub struct Options {
 }
 
 impl Default for Options {
-    /// No projectors, view set version 1, a schema that reads none of the
+    /// No domain projectors, store view set version 2, a schema that reads none of the
     /// core's types, and the monotonic clock.
     fn default() -> Self {
         Self {
             trace_cap: 10_000,
             projectors: Vec::new(),
             schema: Box::new(ReadsNothing),
-            view_set_version: NonZeroU32::MIN,
+            view_set_version: NonZeroU32::new(2).expect("nonzero"),
             timing: Arc::new(Monotonic),
         }
     }
@@ -124,7 +125,9 @@ impl SqliteStore {
     /// could write: a store stamped with a newer epoch is opened for
     /// reading and left exactly as it was, one at an older epoch is refused
     /// until migration exists, and a missing schema is created under the
-    /// writer queue with `at` as its creation time. A store at this
+    /// writer queue with `at` as its creation time. An existing file whose
+    /// epoch-1 schema digest differs is refused before any write; T10 needs
+    /// a fresh ledger. A store at this
     /// binary's epoch must be in write-ahead-log mode with 8 KiB pages.
     /// The declared views and the view set version's names are checked
     /// before anything is touched, and at this binary's epoch their missing
@@ -139,7 +142,10 @@ impl SqliteStore {
                 home.display()
             )));
         }
-        let mut projectors: Vec<Box<dyn Projector>> = vec![Box::new(RequestProjector::new())];
+        let mut projectors: Vec<Box<dyn Projector>> = vec![
+            Box::new(ClaimScopeProjector::new()),
+            Box::new(RequestProjector::new()),
+        ];
         projectors.extend(options.projectors);
         let specs: Vec<ViewSpec> = projectors
             .iter()
@@ -152,7 +158,20 @@ impl SqliteStore {
         let writer = connect(&path)?;
 
         let epoch = match stored_epoch(&writer)? {
-            Some(epoch) => epoch,
+            Some(epoch) => {
+                let digest = writer
+                    .query_row(
+                        "SELECT value FROM schema_meta WHERE key = 'schema_digest'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .map_err(sql)?;
+                if digest.as_deref() != Some(schema_digest().as_str()) {
+                    return Err(StoreError::Refused(Refusal::SchemaChanged { path }));
+                }
+                epoch
+            }
             None => {
                 create(&writer, &queue, at)?;
                 stored_epoch(&writer)?
@@ -211,6 +230,8 @@ impl SqliteStore {
     /// store's own, or the core's.
     pub(crate) fn reads(&self, type_name: &str, version: u32) -> bool {
         (type_name == COMMAND_COMPLETED && version == COMMAND_COMPLETED_VERSION)
+            || (type_name == COMMAND_CLAIMED && version == COMMAND_CLAIMED_VERSION)
+            || (type_name == COMMAND_RECONCILED && version == COMMAND_RECONCILED_VERSION)
             || (type_name == PAYLOAD_REDUCED && version == PAYLOAD_REDUCED_VERSION)
             || (type_name == PAYLOAD_PURGED && version == PAYLOAD_PURGED_VERSION)
             || (!store_owned(type_name) && self.schema.reads(type_name, version))
@@ -433,6 +454,10 @@ fn stored_epoch(conn: &Connection) -> Result<Option<u32>, StoreError> {
     .map_err(sql)
 }
 
+fn schema_digest() -> String {
+    format!("{:x}", Sha256::digest(SCHEMA.as_bytes()))
+}
+
 /// Creates the file settings and the schema under the writer queue. A
 /// second process that was waiting finds the schema and changes nothing.
 fn create(conn: &Connection, queue: &FileLock, at: &str) -> Result<(), StoreError> {
@@ -459,8 +484,8 @@ fn create(conn: &Connection, queue: &FileLock, at: &str) -> Result<(), StoreErro
         }
         conn.execute_batch(SCHEMA).map_err(sql)?;
         conn.execute(
-            "INSERT INTO schema_meta (key, value) VALUES ('epoch', ?1), ('created_at', ?2)",
-            params![EPOCH, at],
+            "INSERT INTO schema_meta (key, value) VALUES ('epoch', ?1), ('created_at', ?2), ('schema_digest', ?3)",
+            params![EPOCH, at, schema_digest()],
         )
         .map_err(sql)?;
         Ok(())
@@ -563,7 +588,7 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .expect("meta");
-        assert_eq!(rows, 2);
+        assert_eq!(rows, 3);
         assert_eq!(created_at, AT);
     }
 
@@ -714,8 +739,8 @@ mod tests {
             .expect("journal mode");
         conn.execute_batch(SCHEMA).expect("schema");
         conn.execute(
-            "INSERT INTO schema_meta (key, value) VALUES ('epoch', ?1), ('created_at', ?2)",
-            params![EPOCH, AT],
+            "INSERT INTO schema_meta (key, value) VALUES ('epoch', ?1), ('created_at', ?2), ('schema_digest', ?3)",
+            params![EPOCH, AT, schema_digest()],
         )
         .expect("epoch");
     }

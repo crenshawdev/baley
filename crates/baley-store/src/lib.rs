@@ -25,7 +25,13 @@ pub use canonical::{CanonicalError, MAX_SAFE_INTEGER, canonical_json};
 pub use chain::{
     Anchor, AnchorVerdict, Break, BreakKind, ChainReport, Head, chain_hash, verify_chain,
 };
-pub use claim::{Claim, ClaimDecision, ClaimId, ClaimOwner, Claimed, Reconciliation, Resolution};
+pub use claim::{
+    Block, CLAIM_SCOPE_VIEW, COMMAND_CLAIMED, COMMAND_CLAIMED_VERSION, COMMAND_RECONCILED,
+    COMMAND_RECONCILED_VERSION, Claim, ClaimDecision, ClaimId, ClaimOwner, ClaimScopeProjector,
+    ClaimState, Claimed, ClaimedPayload, LEASE_EXPIRY_SECONDS, LEASE_RENEWAL_SECONDS, LeaseState,
+    ReconcileAuthority, ReconciledPayload, ReconciledResolution, Reconciliation, Resolution,
+    blocking, claim_scope_spec, claim_state, lease_state,
+};
 pub use command::{
     Absence, Answer, Command, CommandKind, Decision, EventMatch, GitObservation, NewEvent,
     Observed, ObservedDocument, Outcome, OutcomeKind, Recorded, StreamName,
@@ -45,9 +51,9 @@ pub use payload::{
     PayloadBody, PayloadRef, PayloadReference, PayloadStatus, Payloads, RetentionClass,
 };
 pub use request::{
-    COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, INLINE_ANSWER_LIMIT, REQUEST_VIEW,
-    RequestProjector, command_stream, completed_payload, recorded_outcome, request_key,
-    request_spec, store_owned,
+    COMMAND_COMPLETED, COMMAND_COMPLETED_VERSION, ClaimDoc, INLINE_ANSWER_LIMIT, REQUEST_VIEW,
+    RequestProjector, RequestState, command_stream, completed_payload, completed_payload_for,
+    recorded_outcome, request_key, request_spec, request_state, store_owned,
 };
 pub use retention::{
     EXCERPT_EDGE, PAYLOAD_PURGED, PAYLOAD_PURGED_VERSION, PAYLOAD_REDUCED, PAYLOAD_REDUCED_VERSION,

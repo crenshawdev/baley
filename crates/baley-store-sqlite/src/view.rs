@@ -1447,7 +1447,7 @@ mod tests {
                 .into_iter()
                 .map(|spec| Box::new(Declares(spec)) as Box<dyn Projector>)
                 .collect(),
-            view_set_version: NonZeroU32::new(2).expect("positive"),
+            view_set_version: NonZeroU32::new(3).expect("positive"),
             timing: Scripted::still(),
             ..Options::default()
         };
@@ -1520,10 +1520,10 @@ mod tests {
                     [],
                 )
                 .map_err(sql)?;
-                for (view, version) in [("item", 3), ("request", 1)] {
+                for (view, version) in [("claim_scope", 1), ("item", 3), ("request", 2)] {
                     tx.execute(
                         "INSERT INTO view_gen (project_id, gen, view, projector_version, view_set_version)
-                         VALUES ('p1', 1, ?1, ?2, 2)",
+                         VALUES ('p1', 1, ?1, ?2, 3)",
                         params![view, version],
                     )
                     .map_err(sql)?;
@@ -1595,7 +1595,8 @@ mod tests {
         let mut statement = conn
             .prepare(
                 "SELECT name FROM sqlite_schema WHERE name LIKE 'v\\_%' ESCAPE '\\'
-                   AND name NOT LIKE 'v\\_request\\_%' ESCAPE '\\' ORDER BY name",
+                   AND name NOT LIKE 'v\\_request\\_%' ESCAPE '\\'
+                   AND name NOT LIKE 'v\\_claim\\_scope\\_%' ESCAPE '\\' ORDER BY name",
             )
             .expect("prepare");
         statement
@@ -1608,7 +1609,7 @@ mod tests {
     fn catalog(conn: &Connection) -> Vec<(String, i64)> {
         let mut statement = conn
             .prepare(
-                "SELECT view, version FROM view_catalog WHERE view <> 'request'
+                "SELECT view, version FROM view_catalog WHERE view NOT IN ('request', 'claim_scope')
                   ORDER BY view, version",
             )
             .expect("prepare");

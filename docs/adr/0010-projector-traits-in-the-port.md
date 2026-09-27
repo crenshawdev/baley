@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0001: The evidence ledger](../design/0001-evidence-ledger.md) |
 | Supersedes | [0005](0005-storage-port.md), in part: where projectors live |
-| Superseded by | |
+| Superseded by | [0021](0021-claim-rules-in-the-port.md), in part: the placement of the claim liveness and scope rules |
 
 ## Context and problem
 
