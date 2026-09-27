@@ -650,6 +650,25 @@ mod tests {
         );
     }
 
+    // With every connection closed, the write-ahead log checkpointed and
+    // its -wal and -shm files gone, a read-only connection still opens the
+    // database and reads what was written. Catches a verification that
+    // cannot open a store no other connection holds open.
+    #[test]
+    fn a_read_only_connection_opens_a_closed_store() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        store.record_trace(&trace("written")).expect("write");
+        drop(store);
+        assert!(!home.path().join("baley.db-wal").exists());
+        assert!(!home.path().join("baley.db-shm").exists());
+        let conn = connect_read_only(&home.path().join("baley.db")).expect("open");
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM trace", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(rows, 1);
+    }
+
     // The settings the design names read back from both of the store's
     // connections. Catches a pragma misspelt, which SQLite ignores without
     // an error, or one set on the write connection only.
