@@ -308,9 +308,9 @@ fn historical_boundary(dispatch: &Value, prompt: &str) -> (Value, DecisionRecord
     (raw, record)
 }
 
-/// Verbatim from this project's decisions.jsonl (generation 11): every dispatch
-/// boundary written before D-165 carries `prompt_bytes`, and its id is the
-/// digest of exactly those bytes.
+/// Retained from a generation-11 store, with its tool name and identities
+/// recomputed for the current names. Every dispatch boundary written before
+/// D-165 carries `prompt_bytes`, and its id is the digest of exactly those bytes.
 const RETAINED_DISPATCH: &[u8] = br#"{"version":1,"id":"005922aec07ad6b375093e1892c1c7d8879f148c0ef964288391918e50c6e015","revision":1,"origin":{"source":"execution-boundary-v1","original":"missing"},"decision":{"class":"boundary_v1","boundary":{"codec":1,"scope":{"scope":"execution","phase":31},"tool":"baley-query","operation":"execute-next","request_digest":"ac3f92d6838f86491124705dda6bf9781f1a6d6f19c9713b3820b48fbc0f6e12","outcome":"dispatch","subject_id":"c68a606535f1f85db58f11a95117f76d404ce79c9f11ba171bc795d17b053c28","response_digest":"547338b6015175af68b49b2ecaed279cccd14b7c55189c5269e5b47defb54835","receipt":{"receipt":"dispatch","dispatch_id":"c68a606535f1f85db58f11a95117f76d404ce79c9f11ba171bc795d17b053c28","prompt_bytes":63671}},"store_generation":11,"terminal":false}}"#;
 
 #[test]

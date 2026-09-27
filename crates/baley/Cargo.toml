@@ -30,12 +30,12 @@ clap = { version = "4", features = ["derive", "env"] }
 libc = "0.2"
 # ripgrep as a library: Baley ships one static binary per target with no
 # runtime dependency on an external search program.
+# The grep crates serve record search and risk diffs.
 grep-searcher = "0.1.17"
 grep-regex = "0.1.14"
 grep-matcher = "0.1.9"
 
-# These never reach the shipped binary. insta renders comparison failures;
-# tempfile holds writable fixtures and negative-control copies; regex applies
-# shared rules in the same dialect subset as the JavaScript recorder.
+# Test-only; never reaches the shipped binary. tempfile holds writable fixtures
+# and negative-control copies.
 [dev-dependencies]
 tempfile = "3"

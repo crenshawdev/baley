@@ -1,5 +1,5 @@
 # Virtual workspace manifest: the Rust code lives under `crates/`. The binary
-# holds the inherited engine while the evidence ledger replaces it by build.
+# holds the inherited code while the evidence ledger replaces it by build.
 # The four crates match design 0001's target structure.
 [workspace]
 # Stated rather than inferred. A virtual root has no `edition` of its own, so
