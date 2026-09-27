@@ -1,13 +1,12 @@
-# Virtual workspace manifest: the Rust code lives under `crates/`. `cadence`
-# is the running 4.0 binary until the Baley crates replace it (design 0001,
-# slice 9); the four `baley*` crates are the evidence ledger being built.
+# Virtual workspace manifest: the Rust code lives under `crates/`. The binary
+# holds the inherited engine while the evidence ledger replaces it by build.
+# The four crates match design 0001's target structure.
 [workspace]
 # Stated rather than inferred. A virtual root has no `edition` of its own, so
 # without this it would fall back to the 2015 resolver while the member is on
 # edition 2024 - two different feature-unification rules over one lockfile.
 resolver = "3"
 members = [
-    "crates/cadence",
     "crates/baley-store",
     "crates/baley-core",
     "crates/baley-store-sqlite",

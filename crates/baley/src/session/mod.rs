@@ -1,0 +1,953 @@
+use baley::store::model::digest;
+use serde::{Deserialize, Serialize};
+
+use crate::config::{
+    self, Layer, merge,
+    reload::{self, ConfigIo, FileIo, Generation, Input, Paths, Reload, Shared},
+    write,
+};
+use baley::derivation::{
+    self, ArtifactFiles, ArtifactIo, InputFailure, InputFailureCategory, Observation,
+};
+use baley::store::{
+    Error, MutationContext, Policy, Result, Storage,
+    filesystem::Stage,
+    model::{DECISIONS, ITEMS, STATE, Snapshot},
+    transaction::{ExternalChange, INTENT, Transaction},
+    writer::{Operation, Store, View},
+};
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+pub type Evaluate = Arc<dyn Fn(&MutationContext<'_>, &Generation) -> Result<()> + Send + Sync>;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SourceGuard {
+    pub path: PathBuf,
+    pub identity: PathBuf,
+    pub content: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ImportManifest {
+    pub format: u32,
+    pub complete: bool,
+    pub source_generation: String,
+    pub sources: Vec<SourceGuard>,
+    pub active: Paths,
+    pub created: Vec<PathBuf>,
+    pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_global: Option<SourceGuard>,
+}
+
+/// Snapshot field holding the layer mapping as it stands now. The import
+/// manifest keeps where the layers were at import and never changes; this
+/// record keeps where they are, the digest of the global layer's bytes as the
+/// store last wrote them (the writer refreshes it on every global-config
+/// participant), and every relocation the store accepted.
+pub const LAYERS: &str = "layers";
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LayerRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<Paths>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relocations: Vec<Relocation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Relocation {
+    pub from: PathBuf,
+    pub to: PathBuf,
+    /// The generation that recorded the move.
+    pub generation: u64,
+}
+
+struct InitInputs {
+    manifest: ImportManifest,
+    generation: Generation,
+    transaction: Transaction,
+}
+
+/// Reads the lifecycle documents through the session's own reader, with one
+/// guard per document naming the bytes read. Listing and probing a phase
+/// directory stay with the derivation's reader.
+struct GuardedDocuments<'a, I: ConfigIo> {
+    io: &'a mut I,
+    files: ArtifactFiles,
+    guards: Vec<SourceGuard>,
+    failure: Option<Error>,
+}
+
+impl<I: ConfigIo> ArtifactIo for GuardedDocuments<'_, I> {
+    fn acceptance(&mut self, root: &Path) -> std::result::Result<baley::derivation::AcceptanceOverlay, baley::derivation::DerivationError> {
+        self.files.acceptance(root)
+    }
+    fn resolve_root(&mut self, selected: &Path) -> std::result::Result<PathBuf, InputFailure> {
+        self.files.resolve_root(selected)
+    }
+    fn probe_root(&mut self, root: &Path) -> Observation<()> {
+        self.files.probe_root(root)
+    }
+    fn list_phase(&mut self, path: &Path) -> Observation<Vec<String>> {
+        self.files.list_phase(path)
+    }
+    fn read(&mut self, path: &Path) -> Observation<Vec<u8>> {
+        match observe(self.io, path) {
+            Ok(input) => {
+                self.guards.push(guard(path.to_owned(), &input));
+                match input.bytes {
+                    Some(bytes) => Observation::Present(bytes),
+                    None => Observation::Absent,
+                }
+            }
+            Err(error) => {
+                let diagnostic = error.to_string();
+                self.failure.get_or_insert(error);
+                Observation::Failed(InputFailure {
+                    path: path.to_owned(),
+                    category: InputFailureCategory::OtherIo,
+                    diagnostic: Some(diagnostic),
+                })
+            }
+        }
+    }
+}
+
+/// The lifecycle documents: the capture derivation works from, and one guard
+/// per document naming the bytes read.
+pub fn observe_documents<I: ConfigIo>(
+    root: &Path,
+    io: &mut I,
+) -> Result<(derivation::CapturedInputs, Vec<SourceGuard>)> {
+    let mut documents = GuardedDocuments { io, files: ArtifactFiles, guards: Vec::new(), failure: None };
+    let capture = derivation::capture_inputs(root, &mut documents)
+        .map_err(|error| Error::Io(format!("legacy documents unavailable: {error}")))?;
+    if let Some(error) = documents.failure {
+        return Err(error);
+    }
+    Ok((capture, documents.guards))
+}
+
+fn observe<I: ConfigIo>(io: &mut I, path: &Path) -> Result<Input> {
+    let identity = io.identity(path)?;
+    io.read(&identity)
+}
+
+// The same pure interpreter is used by store open and pre-open session input.
+use baley::acquisition::store_error as store_input_error;
+
+fn observe_store<I: ConfigIo>(io: &mut I, path: &Path) -> Result<Input> {
+    io.read_store(&reload::identity(path)?).map_err(store_input_error)
+}
+fn guard(path: PathBuf, input: &Input) -> SourceGuard {
+    SourceGuard {
+        path,
+        identity: input.identity.clone(),
+        content: input.bytes.as_deref().map(digest),
+    }
+}
+/// The global layer's identity is a canonical path, so a home that moves
+/// between a symlink and a real directory changes the layer mapping while
+/// every byte stays the same. Only the global layer may move, only to a place
+/// holding exactly the bytes the store last knew (the writer's record, or the
+/// import's content guard for a store that predates the record), and the
+/// refusal names both places. A repo move, an absent record, or different
+/// bytes are a different layer mapping and stay refused.
+fn relocate_global_layer<I: ConfigIo>(
+    io: &mut I,
+    manifest: &ImportManifest,
+    layers: &LayerRecord,
+    recorded: &Paths,
+    active: &Paths,
+    generation: u64,
+) -> Result<LayerRecord> {
+    let display = |paths: &Paths| {
+        paths
+            .global
+            .as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(none)".into())
+    };
+    let refused = |why: &str| {
+        Error::Conflict(format!(
+            "changed layer mapping: {why}; global layer recorded at {}, now {}",
+            display(recorded),
+            display(active)
+        ))
+    };
+    if recorded.repo != active.repo {
+        return Err(refused("the repo layer moved"));
+    }
+    let (Some(old), Some(new)) = (&recorded.global, &active.global) else {
+        return Err(refused("the global layer appeared or disappeared"));
+    };
+    let Some(expected) = layers
+        .global_content
+        .as_deref()
+        .or_else(|| manifest.shared_global.as_ref()?.content.as_deref())
+    else {
+        return Err(refused(
+            "no recorded content proves the new place is the same layer",
+        ));
+    };
+    let current = observe(io, new)?;
+    if current.bytes.as_deref().map(digest).as_deref() != Some(expected) {
+        return Err(refused(
+            "the bytes at the new place differ from the recorded layer",
+        ));
+    }
+    let mut next = layers.clone();
+    next.active = Some(active.clone());
+    next.global_content = Some(expected.to_owned());
+    next.relocations.push(Relocation {
+        from: old.clone(),
+        to: new.clone(),
+        generation,
+    });
+    Ok(next)
+}
+
+fn parse_input(input: &Input) -> Result<Option<Value>> {
+    input
+        .bytes
+        .as_deref()
+        .map(|b| serde_json::from_slice(b).map_err(Error::from))
+        .transpose()
+}
+
+fn validate_shared<I: ConfigIo>(io: &mut I, manifest: &ImportManifest) -> Result<()> {
+    if let Some(expected) = &manifest.shared_global {
+        let current = observe(io, &expected.path)?;
+        if guard(expected.path.clone(), &current) != *expected {
+            return Err(Error::Conflict(
+                "active shared config changed during import".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn prepare_initialization<I: ConfigIo>(
+    root: &Path,
+    active: &Paths,
+    io: &mut I,
+) -> Result<InitInputs> {
+    let repo = observe(io, &active.repo)?;
+    let shared = match &active.global {
+        Some(path) if path != &active.repo => Some(observe(io, path)?),
+        _ => None,
+    };
+    let reused = shared.as_ref().filter(|input| input.bytes.is_some());
+    // An existing native repo config is the repo layer; initialization keeps it.
+    let effective = merge::merge(reused.map(parse_input).transpose()?.flatten(), parse_input(&repo)?, false);
+    reload::validate_effective(&effective)?;
+    let generation = Generation {
+        number: 0,
+        global: reused.cloned(),
+        repo,
+        effective,
+    };
+    let guards: Vec<SourceGuard> = Vec::new();
+    let mut warnings = Vec::new();
+    for diagnostic in generation
+        .effective
+        .diagnostics
+        .scope
+        .iter()
+        .chain(&generation.effective.diagnostics.migration)
+    {
+        warnings.push(format!(
+            "{:?} {}: {}",
+            diagnostic.layer, diagnostic.key, diagnostic.reason
+        ));
+    }
+    let mut created: Vec<_> = [ITEMS, DECISIONS, STATE]
+        .iter()
+        .map(|name| root.join(name))
+        .collect();
+    if generation.repo.bytes.is_none() {
+        created.push(active.repo.clone());
+    }
+    let source_generation = digest(&serde_json::to_vec(&guards)?);
+    let manifest = ImportManifest {
+        format: 1,
+        complete: true,
+        source_generation: source_generation.clone(),
+        sources: guards,
+        active: active.clone(),
+        created,
+        warnings,
+        shared_global: shared
+            .as_ref()
+            .map(|input| guard(active.global.clone().unwrap(), input)),
+    };
+    let snapshot = json!({"import":manifest});
+    Ok(InitInputs {
+        manifest,
+        generation,
+        transaction: Transaction {
+            id: format!("import:{source_generation}"),
+            items: vec![],
+            decisions: vec![],
+            snapshot: Some(snapshot),
+            external: vec![],
+        },
+    })
+}
+
+/// The repo config bytes the initialization transaction installs, given what
+/// the participant holds now: an existing native config is kept byte for
+/// byte, an absent one becomes the empty layer, and anything else changed
+/// since initialization observed it.
+fn initial_repo_config(generation: &Generation, installed: Option<&[u8]>) -> Result<Vec<u8>> {
+    match (&generation.repo.bytes, installed) {
+        (Some(observed), Some(installed)) if observed.as_slice() == installed => Ok(observed.clone()),
+        (None, None) => Ok(serde_json::to_vec_pretty(&generation.effective.repo)?),
+        _ => Err(Error::Conflict("repo config changed during initialization".into())),
+    }
+}
+
+struct SessionPolicy<I: ConfigIo> {
+    config: Shared<I>,
+    importing: Arc<Mutex<Option<InitInputs>>>,
+    io: I,
+    evaluate: Evaluate,
+}
+impl<I: ConfigIo> Policy for SessionPolicy<I> {
+    fn validate(&mut self, context: &MutationContext<'_>) -> Result<()> {
+        self.validate_inputs(context, None)
+    }
+
+    fn validate_routing_admission(
+        &mut self,
+        context: &MutationContext<'_>,
+        inputs: &baley::execution::model::ConfigInputs,
+    ) -> Result<()> {
+        self.validate_inputs(context, Some(inputs))
+    }
+}
+
+impl<I: ConfigIo> SessionPolicy<I> {
+    fn validate_inputs(
+        &mut self,
+        context: &MutationContext<'_>,
+        expected: Option<&baley::execution::model::ConfigInputs>,
+    ) -> Result<()> {
+        if matches!(context.operation, "guard_audit" | "guard_audit_recovery") {
+            // The writer and intent validator prove the narrow projection before
+            // this exception can admit work with unavailable controlling inputs.
+            return Ok(());
+        }
+        let pending = self
+            .importing
+            .lock()
+            .map_err(|_| Error::Policy("import guard unavailable".into()))?;
+        let generation = if let Some(inputs) = pending.as_ref() {
+            validate_shared(&mut self.io, &inputs.manifest)?;
+            if context.operation == "recovery"
+                && (context.snapshot.data["import"]["source_generation"]
+                    != inputs.manifest.source_generation
+                    || context.snapshot.data["import"]["shared_global"]
+                        != serde_json::to_value(&inputs.manifest.shared_global)?)
+            {
+                return Err(Error::Conflict(
+                    "pending import source generation changed".into(),
+                ));
+            }
+            inputs.generation.clone()
+        } else {
+            let mut reload = self
+                .config
+                .lock()
+                .map_err(|_| Error::Policy("config unavailable".into()))?;
+            match expected {
+                Some(inputs) => reload.refresh_expected(inputs)?,
+                None => reload.refresh()?,
+            }
+        };
+        (self.evaluate)(context, &generation)
+    }
+}
+
+pub struct Session<I: ConfigIo = FileIo> {
+    root: PathBuf,
+    store: Store,
+    config: Shared<I>,
+    /// Where the layers were at import. History; never rewritten.
+    manifest: ImportManifest,
+    /// Where the layers stand now, after every relocation the store accepted.
+    active: Paths,
+    pub drafts: Arc<Mutex<baley::session::Drafts>>,
+}
+
+#[derive(Clone)]
+pub struct PlanDraft {
+    pub submission: baley::plan::model::Submission,
+    pub documents: Vec<baley::read::document::Resolved>,
+}
+
+#[derive(Clone)]
+pub struct ContextDraft {
+    pub submission: baley::context::model::Submission,
+    pub document: baley::read::document::Resolved,
+}
+
+#[derive(Default)]
+pub struct Drafts {
+    pub plans: std::collections::BTreeMap<(u32, String), PlanDraft>,
+    pub contexts: std::collections::BTreeMap<(u32, String), ContextDraft>,
+    pub newest_plan: std::collections::BTreeMap<u32, String>,
+    pub newest_context: std::collections::BTreeMap<u32, String>,
+}
+
+/// Drafts precede the store's approval barrier and survive only this process.
+pub fn drafts(root: &Path) -> Result<Arc<Mutex<Drafts>>> {
+    type Registry = std::collections::BTreeMap<PathBuf, Arc<Mutex<Drafts>>>;
+    static DRAFTS: std::sync::OnceLock<Mutex<Registry>> = std::sync::OnceLock::new();
+    let root = reload::identity(root)?;
+    let mut registry = DRAFTS.get_or_init(Mutex::default).lock()
+        .map_err(|_| Error::Invalid("draft registry unavailable".into()))?;
+    Ok(registry.entry(root).or_default().clone())
+}
+/// Whether an evidence decision is already in the log. Reconstructing the
+/// projection after another write changes attempt data, not the logical
+/// input, so a recorded submission is recovered, never projected again. The
+/// comparison is over the content, never the write-time stamp: a retried
+/// submit is a second process and never saw the second the first one wrote in.
+/// The same operation identity with other content is refused.
+pub fn replays_evidence(
+    decisions: &[baley::store::model::DecisionRecord],
+    decision: &baley::store::model::DecisionRecord,
+) -> Result<bool> {
+    match decisions.iter().find(|prior| prior.id == decision.id) {
+        None => Ok(false),
+        Some(prior) if prior.same_record(decision) => Ok(true),
+        Some(_) => Err(Error::Conflict("operation identity reused for different content".into())),
+    }
+}
+
+/// The guarded write for a new evidence record: its history decision appended
+/// and the record projected into `expected`, the view it was prepared
+/// against, which must still carry the session's import `manifest`.
+pub fn evidence_write(
+    expected: &View,
+    manifest: &Value,
+    decision: baley::store::model::DecisionRecord,
+    record: &baley::evidence::Record,
+) -> Result<Operation> {
+    if expected.snapshot.data.get("import") != Some(manifest) {
+        return Err(Error::Invalid("evidence proposal must preserve import manifest".into()));
+    }
+    let data = baley::evidence::persistence::project(&expected.snapshot.data, record)?;
+    Ok(Operation::CompareTransact {
+        expected_generation: expected.snapshot.generation,
+        expected_integrity: expected.snapshot.integrity.clone(),
+        transaction: Transaction {
+            id: decision.id.clone(),
+            items: Vec::new(),
+            decisions: vec![decision],
+            snapshot: Some(data),
+            external: Vec::new(),
+        },
+    })
+}
+
+impl<I: ConfigIo> Session<I> {
+    /// Saved review operations read admitted policy; the writer still validates
+    /// current controlling inputs before every conditional mutation.
+    pub fn review_store(&self) -> &Store {
+        &self.store
+    }
+
+    pub fn import_manifest(&self) -> &ImportManifest {
+        &self.manifest
+    }
+    pub fn active_paths(&self) -> &Paths {
+        &self.active
+    }
+    pub fn config(&self) -> Result<Generation> {
+        self.config
+            .lock()
+            .map_err(|_| Error::Policy("config unavailable".into()))?
+            .refresh()
+    }
+    pub async fn request(&self, operation: Operation) -> Result<View> {
+        // Queries refuse unavailable controlling config as well. Keep durable
+        // import metadata through later snapshot changes.
+        if !matches!(operation, Operation::GuardAudit(..)) {
+            self.config()?;
+        }
+        let pinned = matches!(&operation, Operation::RewriteSnapshot(_))
+            || matches!(&operation, Operation::Transact(transaction) if transaction.snapshot.is_some());
+        let operation = if pinned {
+            let current = self.store.request(Operation::ReadVerified).await?;
+            conditional(&current, operation)?
+        } else {
+            operation
+        };
+        self.store.request(operation).await
+    }
+    pub async fn shared_derivation_view(&self) -> Result<std::sync::Arc<View>> {
+        self.config()?;
+        self.store.shared_view().await
+    }
+
+    pub async fn derivation_view(&self) -> Result<View> {
+        self.config()?;
+        self.store.request(Operation::ReadVerified).await
+    }
+
+    /// Full snapshot data, retaining the import manifest and the layer record.
+    /// The supplied generation is checked again by the writer on its owner thread.
+    pub async fn commit_derivation(&self, expected: &View, data: Value) -> Result<View> {
+        let current = self.derivation_view().await?;
+        check_derivation(&current, expected, &data)?;
+        self.store
+            .request(Operation::CompareRewriteSnapshot {
+                expected_generation: expected.snapshot.generation,
+                expected_integrity: expected.snapshot.integrity.clone(),
+                data,
+            })
+            .await
+    }
+
+    /// Evidence owns only its namespace. Derivation retains its separate contract.
+    pub async fn commit_evidence(
+        &self,
+        expected: &View,
+        operation_id: &str,
+        record: &baley::evidence::Record,
+    ) -> Result<View> {
+        use baley::evidence::persistence;
+        self.config()?;
+        let decision = persistence::history(operation_id, record, baley::store::model::stamped_at())?;
+        let current = self.store.request(Operation::ReadVerified).await?;
+        if replays_evidence(&current.decisions, &decision)? {
+            return Ok(current);
+        }
+        let manifest = serde_json::to_value(&self.manifest)?;
+        self.store
+            .request(evidence_write(expected, &manifest, decision, record)?)
+            .await
+    }
+
+    pub async fn set_config(&self, layer: Layer, key: &str, value: Value) -> Result<View> {
+        write::ConfigWriter {
+            root: self.root.clone(),
+            active: self.active.clone(),
+            store: self.store.clone(),
+            config: self.config.clone(),
+        }
+        .set(layer, key, value)
+        .await
+    }
+    pub async fn batch_config(
+        &self,
+        layer: Layer,
+        updates: &[write::Update],
+    ) -> Result<write::Written> {
+        write::ConfigWriter {
+            root: self.root.clone(),
+            active: self.active.clone(),
+            store: self.store.clone(),
+            config: self.config.clone(),
+        }
+        .batch(layer, updates)
+        .await
+    }
+    pub async fn interview_config(
+        &self,
+        mode: config::interview::Mode,
+        captured: config::interview::Captured,
+        accepted: bool,
+        answers: Option<&[write::Update]>,
+    ) -> Result<Option<write::Written>> {
+        if !accepted || answers.is_none() {
+            return Ok(None);
+        }
+        let generation = self.config()?;
+        let (layer, updates) =
+            config::interview::answers(&generation, mode, &captured, accepted, answers)?;
+        write::ConfigWriter {
+            root: self.root.clone(),
+            active: self.active.clone(),
+            store: self.store.clone(),
+            config: self.config.clone(),
+        }
+        .batch_captured(layer, &updates, Some(captured))
+        .await
+        .map(Some)
+    }
+    pub async fn capture_report(&self) -> Result<config::CaptureReport> {
+        let current = self.config()?;
+        let bound = merge::get(&current.effective.values, "planning.max_capture_bullets")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| Error::Policy("capture report unavailable".into()))?;
+        let view = self.store.request(Operation::Read).await?;
+        Ok(config::capture_report(&view.items, bound))
+    }
+}
+
+/// The operation a session sends once it has read `current`: a snapshot
+/// rewrite, or a transaction carrying a snapshot, becomes a compare-and-replace
+/// pinned to `current`, with its provenance kept. Anything else is unchanged.
+pub fn conditional(current: &View, operation: Operation) -> Result<Operation> {
+    Ok(match operation {
+        Operation::RewriteSnapshot(value) => Operation::CompareRewriteSnapshot {
+            expected_generation: current.snapshot.generation,
+            expected_integrity: current.snapshot.integrity.clone(),
+            data: replace_current(&current.snapshot.data, value)?,
+        },
+        Operation::Transact(mut transaction) if transaction.snapshot.is_some() => {
+            transaction.snapshot = Some(replace_current(
+                &current.snapshot.data,
+                transaction.snapshot.take().unwrap(),
+            )?);
+            Operation::CompareTransact {
+                expected_generation: current.snapshot.generation,
+                expected_integrity: current.snapshot.integrity.clone(),
+                transaction,
+            }
+        }
+        other => other,
+    })
+}
+
+/// Whether a derivation may replace `current` with `data`: it was derived from
+/// the current snapshot, and it keeps the import manifest and the layer record
+/// exactly as they are.
+pub fn check_derivation(current: &View, expected: &View, data: &Value) -> Result<()> {
+    if current.snapshot.generation != expected.snapshot.generation
+        || current.snapshot.integrity != expected.snapshot.integrity
+    {
+        return Err(Error::Conflict(
+            baley::store::writer::STALE_SNAPSHOT.into(),
+        ));
+    }
+    if !data.is_object() || data.get("import") != current.snapshot.data.get("import") {
+        return Err(Error::Invalid(
+            "derivation replacement must preserve import manifest".into(),
+        ));
+    }
+    if data.get(LAYERS) != current.snapshot.data.get(LAYERS) {
+        return Err(Error::Invalid(format!(
+            "derivation replacement changed provenance: {LAYERS}"
+        )));
+    }
+    Ok(())
+}
+
+fn replace_current(previous: &Value, value: Value) -> Result<Value> {
+    let mut next = previous.clone();
+    let object = next
+        .as_object_mut()
+        .ok_or_else(|| Error::Invalid("session snapshot must be an object".into()))?;
+    if let Some(current) = object.get_mut("current")
+        && contains_provenance(current)
+    {
+        *current = replace_current(current, value)?;
+    } else {
+        object.insert("current".into(), value);
+    }
+    baley::store::transaction::preserve_provenance(previous, &next)?;
+    Ok(next)
+}
+
+fn contains_provenance(value: &Value) -> bool {
+    value.get("import").is_some() || value.get("current").is_some_and(contains_provenance)
+}
+
+#[cfg(test)]
+type TestProbe = Arc<dyn Fn(Stage, &Path) -> Result<()> + Send + Sync>;
+
+/// Resident handler composition seam. Constructing a factory performs no I/O;
+/// first touch serializes initialization and shares one owner per resolved root.
+pub struct SessionFactory<I: ConfigIo + Clone = FileIo> {
+    global: Option<PathBuf>,
+    io: I,
+    evaluate: Evaluate,
+    sessions: tokio::sync::Mutex<BTreeMap<PathBuf, Arc<Session<I>>>>,
+    // Keep writers even when first-touch initialization fails after opening one.
+    writers: tokio::sync::Mutex<Vec<Store>>,
+    #[cfg(test)]
+    probe: Option<TestProbe>,
+}
+
+impl<I: ConfigIo + Clone> SessionFactory<I> {
+    /// The reader every session of this factory observes documents through.
+    pub fn io(&self) -> I {
+        self.io.clone()
+    }
+}
+
+struct AuditOnlyPolicy;
+impl Policy for AuditOnlyPolicy {
+    fn validate(&mut self, context: &MutationContext<'_>) -> Result<()> {
+        if matches!(context.operation, "guard_audit" | "guard_audit_recovery") {
+            Ok(())
+        } else {
+            Err(Error::Policy(
+                "guard audit cannot admit or recover policy-dependent work".into(),
+            ))
+        }
+    }
+}
+impl SessionFactory<FileIo> {
+    pub fn new(global: Option<PathBuf>, evaluate: Evaluate) -> Self {
+        Self::with_io(global, FileIo, evaluate)
+    }
+}
+impl<I: ConfigIo + Clone> SessionFactory<I> {
+    pub fn active_config_paths(&self, root: &Path) -> Result<Paths> {
+        write::active_paths(&write::paths(root, self.global.clone()))
+    }
+
+    /// The effective config of a planning root, read without acquiring storage
+    /// ownership or replaying an intent. An uninitialized project can reuse an
+    /// active global.
+    pub fn observe_config(&self, root: &Path) -> Result<Generation> {
+        Reload::new(self.active_config_paths(root)?, self.io.clone()).refresh()
+    }
+
+    pub async fn guard_audit(
+        &self,
+        root: &Path,
+        audit: baley::store::writer::audit::Audit,
+    ) -> Result<View> {
+        match self.first_touch(root).await {
+            Ok(session) => session.request(Operation::GuardAudit(audit)).await,
+            Err(error) => {
+                // Healthy policy must use normal import ownership, including its
+                // source-change refusals. Only unavailable policy admits fallback.
+                if self.observe_config(root).is_ok() {
+                    return Err(error);
+                }
+                let storage = baley::store::filesystem::Filesystem::new(root)?;
+                let store = Store::open(storage, AuditOnlyPolicy).await?;
+                self.writers.lock().await.push(store.clone());
+                store.request(Operation::GuardAudit(audit)).await
+            }
+        }
+    }
+
+    pub fn with_io(global: Option<PathBuf>, io: I, evaluate: Evaluate) -> Self {
+        Self {
+            global,
+            io,
+            evaluate,
+            sessions: tokio::sync::Mutex::new(BTreeMap::new()),
+            writers: tokio::sync::Mutex::new(Vec::new()),
+            #[cfg(test)]
+            probe: None,
+        }
+    }
+    #[cfg(test)]
+    pub fn with_probe(mut self, probe: TestProbe) -> Self {
+        self.probe = Some(probe);
+        self
+    }
+
+    pub async fn shutdown(&self) -> Result<()> {
+        let mut result = Ok(());
+        for store in self.writers.lock().await.drain(..) {
+            if let Err(error) = store.shutdown().await {
+                result = Err(error);
+            }
+        }
+        result
+    }
+
+    pub async fn first_touch(&self, root: &Path) -> Result<Arc<Session<I>>> {
+        let root = reload::identity(root)?;
+        let mut sessions = self.sessions.lock().await;
+        if let Some(session) = sessions.get(&root) {
+            return Ok(session.clone());
+        }
+        let active = self.active_config_paths(&root)?;
+        let mut io = self.io.clone();
+        let pending = observe_store(&mut io, &root.join(INTENT))?.bytes;
+        let state = observe_store(&mut io, &root.join(STATE))?.bytes;
+        let mut pending_audit = false;
+        let pending_import = if let Some(bytes) = &pending {
+            let intent: Value = serde_json::from_slice(bytes)?;
+            pending_audit = intent["kind"]["operation"] == "guard-audit";
+            let participant = intent["participants"]
+                .as_array()
+                .and_then(|p| p.iter().find(|p| p["target"] == STATE))
+                .ok_or_else(|| Error::Conflict("pending intent lacks snapshot".into()))?;
+            let bytes = baley::store::transaction::intent_bytes(&participant["bytes"])?;
+            let snapshot: Snapshot = serde_json::from_slice(&bytes)?;
+            let previous = baley::store::transaction::intent_bytes_option(&participant["expected"]["bytes"])?;
+            // A prune requires an already imported store. Its digest-encoded
+            // preimage omits bytes; that omission is not an import transition.
+            intent["kind"]["operation"] != "milestone-prune-v1"
+                && snapshot.data["import"]["complete"] == true
+                && previous
+                    .as_deref()
+                    .map(serde_json::from_slice::<Snapshot>)
+                    .transpose()?
+                    .is_none_or(|s| s.data["import"]["complete"] != true)
+        } else {
+            false
+        };
+        let existing = state
+            .as_deref()
+            .map(serde_json::from_slice::<Snapshot>)
+            .transpose()?;
+        let audit_only = existing
+            .as_ref()
+            .is_some_and(baley::store::writer::audit::audit_only);
+        let importing = Arc::new(Mutex::new(
+            if state.is_none() || pending_import || audit_only {
+                Some(prepare_initialization(&root, &active, &mut io)?)
+            } else {
+                None
+            },
+        ));
+        if pending.is_none() && state.is_none() {
+            for path in [root.join(ITEMS), root.join(DECISIONS)] {
+                let input = observe_store(&mut io, &path)?;
+                if input.bytes.is_some() {
+                    return Err(Error::Conflict(format!(
+                        "unrelated partial output: {}",
+                        path.display()
+                    )));
+                }
+            }
+        }
+        let config = Arc::new(Mutex::new(Reload::new(active.clone(), self.io.clone())));
+        let policy = SessionPolicy {
+            config: config.clone(),
+            importing: importing.clone(),
+            io: self.io.clone(),
+            evaluate: self.evaluate.clone(),
+        };
+        let guard_for_prepare = importing.clone();
+        let mut source_io = self.io.clone();
+        #[cfg(test)]
+        let probe = self.probe.clone();
+        let mut storage = write::register(&root, &active)?.with_probe(move |stage, path| {
+            #[cfg(test)]
+            if let Some(probe) = &probe {
+                probe(stage, path)?;
+            }
+            #[cfg(not(test))]
+            let _ = path;
+            if stage == Stage::Prepared
+                && let Some(inputs) = guard_for_prepare
+                    .lock()
+                    .map_err(|_| Error::Policy("import guard unavailable".into()))?
+                    .as_ref()
+            {
+                validate_shared(&mut source_io, &inputs.manifest)?;
+            }
+            Ok(())
+        });
+        let transaction = if (pending.is_none() || pending_audit)
+            && let Some(inputs) = importing
+                .lock()
+                .map_err(|_| Error::Policy("import guard unavailable".into()))?
+                .as_ref()
+        {
+            let mut transaction = inputs.transaction.clone();
+            let expected = storage.read("repo-config")?;
+            let bytes = initial_repo_config(&inputs.generation, expected.bytes.as_deref())?;
+            transaction.external.push(ExternalChange {
+                target: "repo-config".into(),
+                expected,
+                bytes,
+            });
+            Some(transaction)
+        } else {
+            None
+        };
+        let store = Store::open(storage, policy).await?;
+        self.writers.lock().await.push(store.clone());
+        let view = if let Some(mut transaction) = transaction {
+            let current = store.request(Operation::ReadVerified).await?;
+            if current.snapshot.data["import"]["complete"] == true {
+                current
+            } else {
+                if let Some(guard) = current.snapshot.data.get("guard_audit") {
+                    transaction.snapshot.as_mut().unwrap()["guard_audit"] = guard.clone();
+                }
+                store
+                    .request(Operation::CompareTransact {
+                        expected_generation: current.snapshot.generation,
+                        expected_integrity: current.snapshot.integrity,
+                        transaction,
+                    })
+                    .await?
+            }
+        } else {
+            store.request(Operation::Read).await?
+        };
+        let manifest: ImportManifest = serde_json::from_value(view.snapshot.data["import"].clone())
+            .map_err(|_| {
+                Error::Conflict("new-format generation lacks import completion metadata".into())
+            })?;
+        if manifest.format != 1 || !manifest.complete {
+            return Err(Error::Conflict("invalid import completion".into()));
+        }
+        *importing
+            .lock()
+            .map_err(|_| Error::Policy("import guard unavailable".into()))? = None;
+        config
+            .lock()
+            .map_err(|_| Error::Policy("config unavailable".into()))?
+            .refresh()?;
+        let layers: LayerRecord = view
+            .snapshot
+            .data
+            .get(LAYERS)
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
+        let recorded = layers
+            .active
+            .clone()
+            .unwrap_or_else(|| manifest.active.clone());
+        if recorded != active {
+            // A moved home changes the identity the global layer canonicalizes
+            // to without changing a byte. The store's record of the layer's
+            // bytes decides whether the new place is that same layer; the
+            // mapping is then recorded at its own generation so the next open
+            // is exact. The import manifest stays as history.
+            let generation = view
+                .snapshot
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| Error::Invalid("generation overflow".into()))?;
+            let next =
+                relocate_global_layer(&mut io, &manifest, &layers, &recorded, &active, generation)?;
+            let mut data = view.snapshot.data.clone();
+            data[LAYERS] = serde_json::to_value(&next)?;
+            store
+                .request(Operation::CompareRewriteSnapshot {
+                    expected_generation: view.snapshot.generation,
+                    expected_integrity: view.snapshot.integrity.clone(),
+                    data,
+                })
+                .await?;
+        }
+        // The import manifest stays as history; the session carries where the
+        // layers stand now beside it.
+        let session = Arc::new(Session {
+            root: root.clone(),
+            drafts: baley::session::drafts(&root)?,
+            store,
+            config,
+            manifest,
+            active,
+        });
+        sessions.insert(root, session.clone());
+        Ok(session)
+    }
+}
