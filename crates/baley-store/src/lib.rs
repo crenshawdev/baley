@@ -44,7 +44,7 @@ pub use command::{
     Absence, Answer, Command, CommandKind, Decision, EventMatch, GitObservation, NewEvent,
     Observed, ObservedDocument, Outcome, OutcomeKind, Recorded, StreamName,
 };
-pub use conformance::{Corruption, StoreFactory};
+pub use conformance::{Binary, Corruption, StoreFactory};
 pub use error::{GitFact, Refusal, StaleInput, StoreError};
 pub use event::{
     Actor, ActorError, AgentRole, Event, EventDraft, GitFacts, Hash, ProjectId, RequestId,

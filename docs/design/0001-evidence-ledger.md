@@ -1286,29 +1286,75 @@ Slices:
 
 | Requirement | How it is proven |
 |---|---|
-| EVD-R2, R3 | Conformance tests append events, verify the chain, then in a copy of the database in a temporary directory: alter, insert, delete and reorder rows; recompute the whole chain after an edit; truncate the tail; restore an older copy. Against a local anchor fixture, `verify` names the first bad position, the truncation or the rollback. T11's unit tests prove the mechanism the conformance suite (T13) then runs in full: against a supplied anchor naming another head `verify` reports a rewrite, and past the head a truncation; a body corrupted in place is corrupt while the chain holds, a purged body is a tombstone, a reduced body's retained excerpt is hashed and a corrupt excerpt faults beside its tombstone; a local row behind or conflicting with the remote anchor is reported as such; no remote, an absent tag and an unreachable remote each give their own status with no anchor compared; a rolled-back chain is refused before the push even after it grows past the remote anchor; the anchor command's own events start no unanchored age while the project's work does. |
-| EVD-R5 | A conformance test fails a projector mid-command and asserts no event, view change, payload, reference or outcome was recorded. |
-| EVD-R6 | Replay of a request id with the same digest returns the original outcome; with a different digest it is refused; two sessions using the same id for different command kinds do not collide. |
-| EVD-R7 | A command whose view input, absence query or HEAD changes between its slow work and its transaction is refused as stale. |
-| EVD-R8 | Several connections to one database in a temporary directory interleave reads and writes. |
-| EVD-R9 | Each view's query contract (key, index, ordering, paging, bound) is tested against a fixture. |
-| EVD-R10 | Each projector has unit tests: event and documents in, changes out. Two fixture views with hand-written expected documents: live projection and a rebuild both produce them, the rebuild with a corrupted live document present; a command committed between two replay batches reaches the new generation, and so does one committed in the pause right after the final turn, which a tail and flip committed separately would lose; a projector failing on the tail in the final turn leaves `live_gen` and both views on the old generation; an abandoned rebuild changes nothing live and the next rebuild removes it; a building marker that names the live generation makes a rebuild refuse with `LiveGenerationProtected` and every live row stays; a rebuild stops at an event this binary cannot read with nothing live changed; a cleanup turn stops at the time bound, and a cleanup failure after the flip returns `CleanupFailed` with the generation now live; an old event replays upcast without its stored row changing; after a reduction and a purge the rebuilt `request` document is unchanged; a view added or removed with a new view set version fences an older binary or rebuilds and cleans the removed view's rows. `verify --views` reports a corrupted live document by key at the head it compared, removes its scratch generation after a projector error, returns `UnfinishedGeneration` naming its scratch generation when deleting it fails after a failed replay, refuses with `UnfinishedGeneration` while an abandoned generation remains and with `LiveGenerationProtected` while the building marker names the live generation, pins its snapshot before the writer queue is released so a command committed the instant that turn releases the queue stays out of the report, and leaves the store's read connection free throughout. A cursor issued before a flip is refused. A conformance test rebuilds every view, including through a simulated crash mid-rebuild, and compares it with the live one; the same after a policy purge and after a targeted purge. |
-| EVD-R11, R14 | Identical content is stored once; the body decompresses to the original bytes and matches its hash; reduction stores an excerpt with its own hash; a shared body survives one project's purge; a purge removes stored request answer bodies and derived trace rows while leaving view documents and the request row unchanged. Search entries are covered from slice 8. |
-| EVD-R12 | The crate graph is the test: `baley-core` has no path to rusqlite, checked by `cargo tree` in CI. |
+| EVD-R2, R3 | The conformance suite damages a store in its check's own temporary directory: payload edits, inserted and deleted events, reordered events, recomputed chains, tail truncation, restored copies and regrowth. It checks the first bad position, anchors and unanchored ranges, owner-acknowledged restores, unchanged events after purge, bodies, excerpts, tombstones and local anchor-row comparisons. The core's tests over the adapter retain remote fetch statuses, pre-push refusal of rolled-back chains, and the rule that anchor events start no unanchored age. Adapter tests retain undecodable bodies, wrong stored anchor tags and the core observation's reported status. |
+| EVD-R5 | Conformance checks a swallowed projector error and rollback of history, head, views, request and payload, then a retry that runs again. SQLite's enforced reference foreign keys and the absent payload and event establish that no reference remains. |
+| EVD-R6 | Conformance checks replay returns the original outcome without running the decision or recording again, another digest is refused, and request ids are scoped to both project and command kind. The adapter retains replay beside a raw newer set stamp and raw claim lease/request row counts. |
+| EVD-R7 | Conformance checks moved view documents, event and document absences, and supplied HEAD changes are stale and record nothing. |
+| EVD-R8 | Conformance checks two independent connections in one process: a read runs during a write and alternating writes extend one chain. Writer-queue and BEGIN IMMEDIATE mechanisms remain adapter tests; no test starts multiple processes. |
+| EVD-R9 | Conformance checks declared keys and indexes, ordering with ties and descending fields, prefix equality, paging, bounds and cursor binding. SQL plans and SQL limits remain adapter tests. |
+| EVD-R10 | Each projector has its own pure unit tests. Conformance checks live and replayed fixture views against hand-written documents, ignores corrupted live documents during rebuild, catches up commands committed between batches, preserves live documents after a failed tail or abandoned replay, rebuilds after abandonment, protects a live generation named by a damaged marker, refuses unreadable events, and upcasts without rewriting history. A reduction and a purge leave replay independent of bodies and preserve request references. View verification reports differences once by key at the checked head, cleans up ordinary projector failures, refuses unfinished work and live markers repeatedly, and cursors cannot cross a flip. Adapter tests retain pause timing, cleanup time bounds, cleanup failure after flip, the tail and flip in one transaction, scratch cleanup failures, the snapshot pinned before queue release and the free read connection. They also inspect raw generation numbers, rows and stamps, deleted retired-view rows and stamps, scratch rows removed after a projector error, and stored payload text preserved during upcasting. |
+| EVD-R11, R14 | Conformance checks SHA-256 addressing and original length, chunked byte-for-byte streaming, excerpt edges and their own hash, shared bodies surviving one project's purge, request documents retained after answer purge, and retries receiving tombstones. Identical content stored once, compression and derived trace removal remain adapter tests. Search entries are covered from Build 8. |
+| EVD-R12 | The crate graph proves the first half: baley-core and baley-store have no normal dependency path to rusqlite, and baley-store has none to baley-core. Each adapter runs the conformance suite as one test per check for the second half. |
 | EVD-R13 | Search returns hits in relevance order with stable ties, scoped by project and phase, over a fixture corpus. |
-| EVD-R15 | A project export verifies alone, contains no other projects rows, tombstones bodies it released, and records its verified head. A purge lists affected completed and pending exports, including on replay. |
+| EVD-R15 | Conformance opens exports independently, lists only the exported project, compares history, verifies the chain, refuses the other project's body, checks released-body tombstones and the reported head, and checks purge export listings including replay and shared references. Export records, pending exports and stored released-body bytes remain adapter tests. Rows of a project an export does not list are not observable through the port; the adapter counts them in the exported file. |
 | EVD-R16, R17, R22, R23 | Location resolution, project discovery and the open checks run against directory trees built in a temporary directory with `BALEY_HOME` set: wrong owner, permissive modes, a symbolic-linked home or database, and a filesystem classified as networked. |
 | EVD-R18 | Each command's test asserts it writes nothing in the working tree beyond the named exceptions. |
-| EVD-R19 | Opening a database stamped with a newer epoch yields read-only; a second connection at the old epoch is fenced at its next write; a migration test arrives with the first migration; a newer view is never rebuilt backward, and a project whose live view or view set a newer binary built refuses an older binary's view reads and new commands; an older or missing view stamp rebuilds forward before use; a view set changed without a new version is refused at open. |
+| EVD-R19 | Conformance checks opening a newer epoch read-only and fencing an already-open connection, newer view and view-set read/write fences, refusal to rebuild backward, forward rebuilds before first use including removed views, and changed sets refused without a new version. A missing view stamp, the raw epoch getter and epoch fences on trace writes remain adapter tests. The migration check arrives with the first migration. |
 | EVD-R20 | Relies on SQLite's documented durability with `synchronous=FULL`. Power loss is not reproducible in a portable test and is not re-tested. |
 | EVD-R21 | The benchmark harness measures every budget on the reference workload. Timings are measured, not asserted in tests, because timing is not portable. |
 | EVD-R24 | The host matrix, run by hand on both hosts before acceptance (done 2026-09-25, `spikes/host-matrix`), and again before each release. |
 | EVD-R25 | `show` and `export` render every record family from views. |
-| EVD-R26 | T10 proves the store half with fixture decisions: commands outside an active claim's scope proceed, commands inside return `Blocked`, an in-progress retry does not repeat the effect, and a clean failure completes the claim. A caller can reconcile an interrupted claim from a supplied observation; an awaiting-owner claim is resolved only with `ReconcileAuthority::Owner`. T11 proves the anchor call path in separate units: the claim step acts only after its claim event exists and names the pre-claim head; missing remote, in-progress, replayed and blocked requests do not act; refused and unreachable pushes complete the claim with `anchor.failed`; a successful record writes `anchor.pushed`, the completion and the row together, and a conflicting row leaves all three unwritten; matching, conflicting and absent holder tags reconcile and retry once under the original identity; an unreachable holder fetch writes one trace row and leaves the claim open; the heartbeat renews at once, ticks through the work and stops before the record step, and a failed renewal cancels nothing. Slice 6 proves a real revert held for the owner. |
+| EVD-R26 | The conformance suite proves the store half with supplied times and findings: commands outside an active claim's scope proceed, commands inside return Blocked before deciding, a retry returns InProgress, a clean failure completes the claim, an interrupted claim reconciles from a supplied finding, and an awaiting-owner claim refuses automatic reconciliation and accepts owner resolution. The core's tests over the adapter prove the anchor call path in separate units: the claim step acts only after its claim event exists and names the pre-claim head; missing remote, in-progress, replayed and blocked requests do not act; refused and unreachable pushes complete the claim with `anchor.failed`; a successful record writes `anchor.pushed`, the completion and the row together, and a conflicting row leaves all three unwritten; matching, conflicting and absent holder tags reconcile and retry once under the original identity; an unreachable holder fetch writes one trace row and leaves the claim open; the heartbeat renews at once, ticks through the work and stops before the record step, and a failed renewal cancels nothing. Slice 6 proves a real revert held for the owner. |
 | EVD-R27 | An edited view document that says "approved" or "complete" does not grant admission or completion, because the event is missing. |
 | EVD-R28 | Withdrawn. |
 
-The conformance suite lives in `baley-store` and runs against every adapter.
+**The conformance suite.** Each check in `baley-store` is a public function named after its fault. Each adapter invokes `conformance_suite!` as one test per check, evaluating a fresh factory inside each test. The factory creates and reopens stores as a given binary, damages rows, copies and restores the database file into a new home, opens an export, and stops or interleaves a rebuild, all inside one temporary directory per check. No check reads a clock, sleeps, starts a process or reaches a network. Each adapter keeps its own mechanism tests, as [ADR 0024](../adr/0024-conformance-suite-and-adapter-tests.md) records.
+
+```mermaid
+classDiagram
+    class Suite["conformance_suite!"]
+    class Checks["Public generic checks"]
+    class StoreFactory {
+        <<trait>>
+        +create(Binary) Store
+        +reopen(Store, Binary) Store
+        +corrupt(Store, ProjectId, Corruption)
+        +snapshot(Store) Snapshot
+        +restore(Snapshot, Binary) Store
+        +open_export(Path, Binary) Store
+        +crash_rebuild(Store, ProjectId, batches)
+        +rebuild_between(Store, ProjectId, callback)
+    }
+    class Binary {
+        +projectors
+        +schema
+        +view_set_version
+    }
+    class Corruption
+    class Store["Store associated type"]
+    class Ledger { <<trait>> }
+    class Views { <<trait>> }
+    class Payloads { <<trait>> }
+    class Admin { <<trait>> }
+    class SqliteFactory
+    class SqliteStore
+    Suite ..> Checks : one test per check
+    Checks ..> StoreFactory : engine operations
+    Checks ..> Store : port assertions
+    StoreFactory ..> Binary : opens as
+    StoreFactory ..> Corruption : applies
+    StoreFactory ..> Store : creates
+    Ledger <|.. Store
+    Views <|.. Store
+    Payloads <|.. Store
+    Admin <|.. Store
+    StoreFactory <|.. SqliteFactory
+    SqliteFactory ..> SqliteStore : opens and damages
+    Store <|.. SqliteStore
+```
+
+*Figure 14. The port crate owns the scenarios, assertions and factory contract. The SQLite test harness owns homes, raw damage, file copies and rebuild interleaving. Each check gets a fresh directory.*
+
 
 ## Decisions
 
@@ -1323,6 +1369,10 @@ The conformance suite lives in `baley-store` and runs against every adapter.
 - [ADR 0009: Serve instructions from the binary; files on disk are stubs](../adr/0009-served-instructions.md)
 - [ADR 0010: Define the projector and event schema traits in the port](../adr/0010-projector-traits-in-the-port.md), superseding ADR 0005 in part, superseded in part by ADR 0021
 - [ADR 0021: Claim liveness and scope rules in the port](../adr/0021-claim-rules-in-the-port.md)
+
+- [ADR 0022: Report owner-acknowledged restores behind a remote anchor](../adr/0022-acknowledged-restore.md)
+- [ADR 0023: Keep whole-store backups outside Baley](../adr/0023-no-backups-in-baley.md)
+- [ADR 0024: Separate port conformance from adapter mechanism tests](../adr/0024-conformance-suite-and-adapter-tests.md)
 
 ## Future work
 

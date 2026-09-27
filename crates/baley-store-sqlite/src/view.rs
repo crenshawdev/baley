@@ -1383,7 +1383,7 @@ impl Views for SqliteStore {
 mod tests {
     use std::path::Path;
 
-    use baley_store::{FieldSpec, IndexField, PageRequest, Projector};
+    use baley_store::{FieldSpec, IndexField, Projector};
 
     use super::*;
     use crate::queue::scripted::Scripted;
@@ -1568,39 +1568,6 @@ mod tests {
         store
     }
 
-    fn query(index: &str, equals: &[KeyValue], limit: u32, after: Option<Cursor>) -> IndexQuery {
-        IndexQuery {
-            index: index.into(),
-            equals: equals.to_vec(),
-            page: PageRequest { limit, after },
-        }
-    }
-
-    /// Every page from the first to the last, as ids.
-    fn pages(store: &SqliteStore, index: &str, equals: &[KeyValue], limit: u32) -> Vec<Vec<i64>> {
-        let mut pages = Vec::new();
-        let mut after = None;
-        loop {
-            let page = store
-                .find(&project(), "item", &query(index, equals, limit, after))
-                .expect("find");
-            pages.push(
-                page.items
-                    .iter()
-                    .map(|document| match document.key.0.as_slice() {
-                        [KeyValue::Integer(id)] => *id,
-                        other => panic!("not an item key: {other:?}"),
-                    })
-                    .collect(),
-            );
-            assert!(pages.len() <= 10, "paging does not end: {pages:?}");
-            match page.next {
-                Some(cursor) => after = Some(cursor),
-                None => return pages,
-            }
-        }
-    }
-
     fn text(value: &str) -> KeyValue {
         KeyValue::Text(value.into())
     }
@@ -1634,72 +1601,6 @@ mod tests {
             .expect("catalog")
             .collect::<rusqlite::Result<_>>()
             .expect("catalog")
-    }
-
-    // Pages of two follow state ascending, rank descending, then id, and
-    // each cursor picks up exactly where its page ended, across the ties on
-    // rank 5 and 7. Catches a cursor keyed on the non-unique index fields,
-    // which skips or repeats tied items, and a descending field paged as
-    // ascending.
-    #[test]
-    fn pages_follow_the_declared_order_and_continue_without_gaps_or_repeats() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = stocked(home.path());
-        assert_eq!(
-            pages(&store, "by_state_rank", &[], 2),
-            [vec![4, 6], vec![2, 7], vec![1, 3], vec![5]]
-        );
-    }
-
-    // Four items owned by ann read in two full pages of two, and the second
-    // says no page follows. Catches a cursor issued whenever a page is
-    // full, which hands the caller an empty last page.
-    #[test]
-    fn a_last_full_page_has_no_next() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = stocked(home.path());
-        assert_eq!(
-            pages(&store, "by_owner", &[text("ann")], 2),
-            [vec![1, 4], vec![5, 7]]
-        );
-    }
-
-    // Asking for ten from a view bounded at three gets pages of three.
-    // Catches a limit that ignores the view's bound.
-    #[test]
-    fn no_page_holds_more_than_the_views_bound() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = stocked(home.path());
-        assert_eq!(
-            pages(&store, "by_state_rank", &[], 10),
-            [vec![4, 6, 2], vec![7, 1, 3], vec![5]]
-        );
-    }
-
-    // Equality on a leading prefix keeps only matching items, still in the
-    // index's order for the rest. Catches equality values bound to the
-    // wrong columns, and a prefix that drops the remaining order.
-    #[test]
-    fn equality_on_a_prefix_selects_and_keeps_the_rest_of_the_order() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = stocked(home.path());
-        assert_eq!(
-            pages(&store, "by_state_rank", &[text("open")], 2),
-            [vec![2, 7], vec![1, 3], vec![5]]
-        );
-        assert_eq!(
-            pages(
-                &store,
-                "by_state_rank",
-                &[text("open"), KeyValue::Integer(5)],
-                10
-            ),
-            [vec![1, 3, 5]]
-        );
-        assert_eq!(
-            pages(&store, "by_owner", &[text("ann")], 10),
-            [vec![1, 4, 5], vec![7]]
-        );
     }
 
     /// A position of the right kinds for the order after `fixed` fields.
@@ -1848,161 +1749,6 @@ mod tests {
         // (done, 9), none; past rank 9 in done, item 6; past done, the
         // five open items.
         assert_eq!(counts, [2, 0, 1, 2]);
-    }
-
-    // Catches `find` falling back to some other index or a scan when the
-    // named index is not declared.
-    #[test]
-    fn an_undeclared_index_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = stocked(home.path());
-        assert_eq!(
-            store.find(&project(), "item", &query("by_rank", &[], 2, None)),
-            Err(StoreError::Refused(Refusal::UndeclaredIndex {
-                view: "item".into(),
-                index: "by_rank".into(),
-            }))
-        );
-    }
-
-    // Catches a read of an undeclared view reaching SQL, here a table of
-    // the ledger's own.
-    #[test]
-    fn an_unknown_view_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = stocked(home.path());
-        assert_eq!(
-            store.get(&project(), "event", &key(1)),
-            Err(StoreError::Refused(Refusal::UnknownView("event".into())))
-        );
-    }
-
-    // A key of the wrong kind or length is refused, not matched loosely.
-    // Catches a text key compared with an integer column, and extra or
-    // missing key values ignored.
-    #[test]
-    fn a_key_that_does_not_fit_the_declared_fields_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = stocked(home.path());
-        for bad in [
-            DocKey(vec![text("1")]),
-            DocKey(vec![KeyValue::Integer(1), KeyValue::Integer(2)]),
-            DocKey(Vec::new()),
-        ] {
-            assert!(
-                matches!(
-                    store.get(&project(), "item", &bad),
-                    Err(StoreError::Refused(Refusal::MalformedKey { .. }))
-                ),
-                "{bad:?}"
-            );
-        }
-    }
-
-    // Equality values of the wrong kind, or more than the index has
-    // fields, are refused. Catches values bound to columns they do not fit.
-    #[test]
-    fn equality_values_that_do_not_fit_the_index_are_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = stocked(home.path());
-        for equals in [
-            vec![KeyValue::Integer(1)],
-            vec![text("open"), text("5")],
-            vec![text("open"), KeyValue::Integer(5), KeyValue::Integer(1)],
-        ] {
-            assert!(
-                matches!(
-                    store.find(
-                        &project(),
-                        "item",
-                        &query("by_state_rank", &equals, 2, None)
-                    ),
-                    Err(StoreError::Refused(Refusal::MalformedKey { .. }))
-                ),
-                "{equals:?}"
-            );
-        }
-    }
-
-    // A cursor is refused by any other query: other equality values,
-    // another index, another project, or altered text. Catches a cursor
-    // read as a bare position, which would page one query from another's
-    // place.
-    #[test]
-    fn a_cursor_this_query_did_not_issue_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = stocked(home.path());
-        store
-            .write(|tx| {
-                tx.execute(
-                    "INSERT INTO project (project_id, name, created_at) VALUES ('p2', 'two', ?1)",
-                    [AT],
-                )
-                .map_err(sql)?;
-                Ok(())
-            })
-            .expect("project");
-        let open_items = [text("open")];
-        let cursor = store
-            .find(
-                &project(),
-                "item",
-                &query("by_state_rank", &open_items, 2, None),
-            )
-            .expect("find")
-            .next
-            .expect("a next page");
-        let mut altered = cursor.clone();
-        altered.0.pop();
-        let refused = Err(StoreError::Refused(Refusal::InvalidCursor));
-        for (in_project, other) in [
-            (
-                project(),
-                query("by_state_rank", &[text("done")], 2, Some(cursor.clone())),
-            ),
-            (
-                project(),
-                query("by_owner", &open_items, 2, Some(cursor.clone())),
-            ),
-            (
-                project(),
-                query("by_state_rank", &open_items, 2, Some(altered)),
-            ),
-            (
-                ProjectId("p2".into()),
-                query("by_state_rank", &open_items, 2, Some(cursor.clone())),
-            ),
-        ] {
-            assert_eq!(
-                store.find(&in_project, "item", &other),
-                refused,
-                "{other:?}"
-            );
-        }
-    }
-
-    // A cursor issued while generation 0 was live is refused once the
-    // project reads generation 1. Catches a cursor that carries only a
-    // position, which would page the new generation from the old one's
-    // place.
-    #[test]
-    fn a_cursor_from_another_generation_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
-        let store = stocked(home.path());
-        let cursor = store
-            .find(&project(), "item", &query("by_state_rank", &[], 2, None))
-            .expect("find")
-            .next
-            .expect("a next page");
-        flip_to_generation_1(&store);
-        assert_eq!(
-            store.find(
-                &project(),
-                "item",
-                &query("by_state_rank", &[], 2, Some(cursor))
-            ),
-            Err(StoreError::Refused(Refusal::InvalidCursor))
-        );
     }
 
     // A second put at the same key replaces the first: `get` returns the
