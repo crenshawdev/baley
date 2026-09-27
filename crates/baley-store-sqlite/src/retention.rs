@@ -784,6 +784,7 @@ mod tests {
             kind: CommandKind(kind.into()),
             request_id: RequestId(request.into()),
             digest: Hash([7; 32]),
+            scope: Vec::new(),
             policy_version: 1,
             recorded_at: AT.into(),
             actor: Actor::Owner,

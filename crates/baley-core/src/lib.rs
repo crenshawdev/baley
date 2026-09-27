@@ -4,8 +4,10 @@
 //! (design 0001, EVD-R12). The event itself, its canonical bytes and the
 //! chain live in the port, because both sides of it speak them.
 
+pub mod reconcile;
 pub mod registry;
 pub mod retention;
 
+pub use reconcile::{AnchorFinding, AnchorIntent, RemoteTag, anchor_reconciliation, judge_anchor};
 pub use registry::{Current, Fence, FenceReason, Registry, RegistryError, UpcastError, Upcaster};
 pub use retention::{Closure, MATERIAL_SECONDS, Retention, RetentionError, eligibility};

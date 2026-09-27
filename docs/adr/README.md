@@ -17,7 +17,7 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0007](0007-forge-anchors.md) | Anchor chain heads on the forge | Accepted |
 | [0008](0008-host-sandbox-isolation.md) | Use host sandboxes to keep agents out of the ledger | Accepted, superseded in part by 0020 |
 | [0009](0009-served-instructions.md) | Serve instructions from the binary; files on disk are stubs | Accepted |
-| [0010](0010-projector-traits-in-the-port.md) | Define the projector and event schema traits in the port | Accepted |
+| [0010](0010-projector-traits-in-the-port.md) | Define the projector and event schema traits in the port | Accepted, superseded in part by 0021 |
 | [0011](0011-one-shared-server.md) | Run one shared Baley server per user over stdio and HTTP | Accepted |
 | [0012](0012-optimistic-concurrency.md) | Use optimistic concurrency in the shared server | Accepted |
 | [0013](0013-host-session-calls-outside-models.md) | Let the host session call outside models, never Baley | Accepted |
@@ -28,3 +28,4 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0018](0018-lease-enforced-at-close.md) | Enforce the lease at task close on both hosts, with the guard as an early stop where it sees writes | Accepted |
 | [0019](0019-reviews-adjudicated-and-ruled.md) | Run every configured reviewer, adjudicate in the host session, and let the owner rule on each finding | Accepted |
 | [0020](0020-sandbox-is-a-write-barrier.md) | State what each host's sandbox denies; reads are the host's policy | Accepted, supersedes 0008 in part |
+| [0021](0021-claim-rules-in-the-port.md) | Claim liveness and scope rules in the port | Accepted |

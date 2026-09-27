@@ -1,4 +1,4 @@
-//! The tables of Figure 10 in design 0001, minus search (slice 8) and the
+//! The tables of Figure 11 in design 0001, minus search (slice 8) and the
 //! view tables, which are created from each `ViewSpec`.
 
 /// The compatibility epoch this binary writes. A store stamped with a newer
@@ -132,12 +132,13 @@ CREATE TABLE view_gen (
 -- single spaces (view names hold none), so a set changed without a new
 -- version is refused at open. Global, like `view_catalog`: it names what a
 -- version means, not which project uses it. Version 1 is the store's own
--- `request` view alone.
+-- `request` view alone. Version 2 is the store's `claim_scope request` set.
 CREATE TABLE view_set_catalog (
   version INTEGER PRIMARY KEY CHECK (version > 0),
   sorted_view_names TEXT NOT NULL
 ) STRICT, WITHOUT ROWID;
 INSERT INTO view_set_catalog (version, sorted_view_names) VALUES (1, 'request');
+INSERT INTO view_set_catalog (version, sorted_view_names) VALUES (2, 'claim_scope request');
 
 -- Each view version's spec as the adapter renders it, so a spec changed
 -- without a new version is refused at open instead of read through the
@@ -149,12 +150,12 @@ CREATE TABLE view_catalog (
   PRIMARY KEY (view, version)
 ) STRICT, WITHOUT ROWID;
 
+-- Liveness only. The sequence matches this row to one claimed event.
 CREATE TABLE claim_lease (
   project_id TEXT NOT NULL REFERENCES project(project_id),
   kind TEXT NOT NULL,
   request_id TEXT NOT NULL,
   claim_seq INTEGER NOT NULL,
-  owner TEXT NOT NULL,
   renewed_at TEXT NOT NULL,
   PRIMARY KEY (project_id, kind, request_id)
 ) STRICT, WITHOUT ROWID;

@@ -7,8 +7,9 @@
 //! `StoreError` says which errors can follow a change that did commit.
 
 use std::fmt;
+use std::path::PathBuf;
 
-use crate::claim::ClaimId;
+use crate::claim::{Block, ClaimId};
 use crate::command::{Absence, StreamName};
 use crate::event::{Hash, ProjectId, RequestId};
 use crate::payload::PayloadReference;
@@ -21,6 +22,8 @@ use crate::view::DocKey;
 /// follows a rebuild whose generation is already live.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
+    /// An open claim holds a token needed by this command. Nothing was recorded.
+    Blocked(Block),
     /// Something the decision depended on changed between the caller's slow
     /// work and the transaction (EVD-R7). Re-read and retry with the same
     /// request id.
@@ -85,9 +88,11 @@ pub enum StaleInput {
         seen: String,
         now: String,
     },
-    /// The claim being completed or reconciled is no longer open: another
-    /// process completed or reconciled it. Its outcome is in the request.
+    /// The claim is no longer open to its owner because another process
+    /// completed or reconciled it, or because it awaits the owner.
     Claim(ClaimId),
+    /// A live claim cannot be reconciled yet.
+    ClaimActive(ClaimId),
     /// `expect` named a stream version the stream has moved past.
     StreamVersion {
         stream: StreamName,
@@ -146,11 +151,43 @@ pub enum Refusal {
     UnattachedPayload(Hash),
     /// No claim with that id was ever taken in the project.
     UnknownClaim(ClaimId),
+    /// The owner supplied does not hold the claim.
+    NotClaimOwner(ClaimId),
+    /// The renewal time is malformed or earlier than the claim's floor.
+    LeaseTime {
+        /// The claim being renewed.
+        claim: ClaimId,
+        /// The supplied renewal time.
+        at: String,
+        /// The earliest permitted renewal time.
+        floor: String,
+    },
+    /// The claim is held for an owner resolution.
+    AwaitingOwner(ClaimId),
+    /// A record step did not carry the scope it claimed under.
+    ScopeMismatch {
+        /// The claim being completed.
+        claim: ClaimId,
+        /// The record step's scope.
+        supplied: Vec<String>,
+        /// The scope taken at claim time.
+        claimed: Vec<String>,
+    },
+    /// An owner resolution must be attributed to the owner.
+    NotOwner,
+    /// The file was created by a build with another epoch-1 schema.
+    SchemaChanged {
+        /// The ledger created with another schema text.
+        path: PathBuf,
+    },
 }
 
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Blocked(block) => {
+                write!(f, "blocked by claim {:?} ({:?})", block.claim, block.state)
+            }
             Self::Stale(input) => write!(f, "stale input, re-read and retry: {input:?}"),
             Self::Busy => f.write_str("store busy, retry"),
             Self::ReadOnly { needed_epoch } => {
@@ -159,6 +196,11 @@ impl fmt::Display for StoreError {
                     "store is read-only for this binary; epoch {needed_epoch} is needed"
                 )
             }
+            Self::Refused(Refusal::SchemaChanged { path }) => write!(
+                f,
+                "refused: {} was written by a build with another epoch-1 schema; delete this pre-release ledger and create a fresh one",
+                path.display()
+            ),
             Self::Refused(refusal) => write!(f, "refused: {refusal:?}"),
             Self::Projector { view, seq, message } => {
                 write!(f, "projector for {view} failed at event {seq}: {message}")

@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::chain::{Anchor, ChainReport, Head};
-use crate::claim::{Claim, ClaimDecision, ClaimId, ClaimOwner, Claimed, Reconciliation};
+use crate::claim::{
+    Claim, ClaimDecision, ClaimId, ClaimOwner, Claimed, ReconcileAuthority, Reconciliation,
+};
 use crate::command::{Command, Decision, EventMatch, NewEvent, Recorded, StreamName};
 use crate::error::StoreError;
 use crate::event::{Event, Hash, ProjectId};
@@ -71,14 +73,15 @@ pub trait Ledger {
     fn transact(&self, command: &Command, decide: &mut Decide<'_>) -> Result<Recorded, StoreError>;
 
     /// The claim step of a command with an external effect (EVD-R26):
-    /// checks the request, then records `command.claimed` and takes the
-    /// lease, or records the decision's refusal. A retry of an open claim
-    /// gets it back and records nothing.
+    /// checks the request and scope, then records `command.claimed` and
+    /// takes the lease, or completes a refusal. A retry gets `InProgress`
+    /// or its recorded outcome without writing.
     fn claim(&self, command: &Command, decide: &mut DecideClaim<'_>)
     -> Result<Claimed, StoreError>;
 
-    /// Renews an open claim's lease at `at`, a supplied UTC time. Records
-    /// no event.
+    /// Renews a claimed request's lease at a supplied UTC time without an
+    /// event. The owner must match and the time cannot precede the matching
+    /// row's time, or the claim time when no row matches.
     fn renew_lease(
         &self,
         project: &ProjectId,
@@ -87,24 +90,30 @@ pub trait Ledger {
         at: &str,
     ) -> Result<(), StoreError>;
 
-    /// The record step: re-checks that the claim `command` took is still
-    /// open, runs `decide`, records its events and `command.completed` for
-    /// the claim's request, and closes the claim. A cleanly failed effect is
-    /// an outcome recorded here like any other.
-    fn complete(&self, command: &Command, decide: &mut Decide<'_>) -> Result<Recorded, StoreError>;
+    /// The acting owner's record step: checks the claimed request, digest,
+    /// owner and scope, then records the result and closes the claim. An
+    /// expired lease does not prevent its owner from recording first.
+    fn complete(
+        &self,
+        command: &Command,
+        owner: &ClaimOwner,
+        decide: &mut Decide<'_>,
+    ) -> Result<Recorded, StoreError>;
 
-    /// Reconciles an interrupted claim under the reconciling `command`:
-    /// records `command.reconciled` with the finding and, when the real
-    /// state was read, completes the claim's request with it.
+    /// Reconciles an interrupted claim under a separate command. It records
+    /// the finding and the reconciler's receipt, and either completes the
+    /// claim or holds it for the owner. Only an owner actor with owner
+    /// authority may resolve a held claim.
     fn reconcile(
         &self,
         command: &Command,
         claim: &ClaimId,
+        authority: ReconcileAuthority,
         decide: &mut DecideReconcile<'_>,
     ) -> Result<Recorded, StoreError>;
 
-    /// The project's open claims, active and interrupted, with their
-    /// leases, for reconciliation at start.
+    /// The project's claimed and awaiting-owner requests, oldest first,
+    /// joined with matching lease rows for caller-driven reconciliation.
     fn open_claims(&self, project: &ProjectId) -> Result<Vec<Claim>, StoreError>;
 
     /// A stream's events from `from_version` on, in stream order.
@@ -190,9 +199,13 @@ pub trait Transaction {
         class: RetentionClass,
     ) -> Result<PayloadRef, StoreError>;
 
-    /// The command's project's open claims with their leases, so the
-    /// decision can refuse a command inside an active claim's scope.
+    /// The project's open claims with their matching leases, including
+    /// documents staged earlier in this transaction.
     fn open_claims(&mut self) -> Result<Vec<Claim>, StoreError>;
+
+    /// The project's head after events appended in this transaction, or
+    /// `None` when it has no events. A claim decision sees the pre-claim head.
+    fn head(&mut self) -> Result<Option<Head>, StoreError>;
 }
 
 /// View reads outside a transaction. One query runs against one snapshot,

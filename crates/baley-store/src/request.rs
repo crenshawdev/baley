@@ -8,15 +8,20 @@
 
 use serde_json::{Value, json};
 
+use crate::claim::{
+    COMMAND_CLAIMED, COMMAND_RECONCILED, ClaimOwner, ClaimedPayload, ReconciledPayload,
+    ReconciledResolution,
+};
 use crate::command::{Answer, Command, CommandKind, Outcome, OutcomeKind, StreamName};
-use crate::event::{Event, Hash};
+use crate::event::{Event, Hash, RequestId};
 use crate::payload::PayloadRef;
 use crate::view::{
-    Change, DocKey, FieldKind, FieldSpec, KeyValue, Projector, ProjectorError, ViewSpec,
+    Change, DocKey, FieldKind, FieldSpec, IndexField, IndexSpec, KeyValue, Order, Projector,
+    ProjectorError, ViewSpec,
 };
 
 pub const COMMAND_COMPLETED: &str = "command.completed";
-pub const COMMAND_COMPLETED_VERSION: u32 = 1;
+pub const COMMAND_COMPLETED_VERSION: u32 = 2;
 pub const REQUEST_VIEW: &str = "request";
 
 /// An answer whose canonical JSON is longer than this is stored as a
@@ -46,6 +51,23 @@ pub fn request_key(command: &Command) -> DocKey {
 /// A stored answer is its reference object, so the store records the
 /// reference like any other attachment.
 pub fn completed_payload(command: &Command, outcome: &Outcome) -> Value {
+    completed_payload_for(
+        &command.kind,
+        &command.request_id,
+        &command.digest,
+        &[],
+        outcome,
+    )
+}
+
+/// Builds a completion for the named request, including a closed claim's scope.
+pub fn completed_payload_for(
+    kind: &CommandKind,
+    request_id: &RequestId,
+    digest: &Hash,
+    scope: &[String],
+    outcome: &Outcome,
+) -> Value {
     let answer = match &outcome.answer {
         Answer::Inline(value) => json!({ "inline": value }),
         Answer::Stored(reference) | Answer::Tombstone { reference, .. } => {
@@ -53,15 +75,94 @@ pub fn completed_payload(command: &Command, outcome: &Outcome) -> Value {
         }
     };
     json!({
-        "kind": command.kind.0,
-        "request_id": command.request_id.0,
-        "digest": command.digest.to_hex(),
+        "kind": kind.0,
+        "request_id": request_id.0,
+        "digest": digest.to_hex(),
+        "scope": scope,
         "outcome": match outcome.kind {
             OutcomeKind::Done => "done",
             OutcomeKind::Refused => "refused",
         },
         "answer": answer,
     })
+}
+
+/// The claimed fields kept in a request document, without lease liveness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimDoc {
+    /// The claimed command's identity.
+    pub id: crate::claim::ClaimId,
+    /// The claimed command's digest.
+    pub digest: Hash,
+    /// The claim event's sequence.
+    pub seq: u64,
+    /// The claim event's recorded time.
+    pub claimed_at: String,
+    /// The tokens held by the claim.
+    pub scope: Vec<String>,
+    /// The process that acts.
+    pub owner: ClaimOwner,
+    /// The intended external effect.
+    pub intent: Value,
+}
+
+/// The state held by a request document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestState {
+    /// An open claim.
+    Claimed(ClaimDoc),
+    /// An open claim held for the owner at this reconciliation sequence.
+    AwaitingOwner(ClaimDoc, u64),
+    /// A completed request and its digest.
+    Completed(Hash, Outcome),
+}
+
+/// Parses the current request document shape.
+pub fn request_state(body: &Value) -> Option<RequestState> {
+    match body.get("state")?.as_str()? {
+        "completed" => {
+            body.get("scope")?
+                .as_array()?
+                .iter()
+                .map(|token| token.as_str())
+                .collect::<Option<Vec<_>>>()?;
+            let (digest, outcome) = recorded_outcome(body)?;
+            Some(RequestState::Completed(digest, outcome))
+        }
+        "claimed" | "awaiting_owner" => {
+            let claimed = body.get("claim")?;
+            let owner = claimed.get("owner")?;
+            let doc = ClaimDoc {
+                id: crate::claim::ClaimId {
+                    kind: CommandKind(body.get("kind")?.as_str()?.into()),
+                    request_id: RequestId(body.get("request_id")?.as_str()?.into()),
+                },
+                digest: Hash::from_hex(body.get("digest")?.as_str()?)?,
+                seq: claimed.get("seq")?.as_u64()?,
+                claimed_at: claimed.get("claimed_at")?.as_str()?.into(),
+                scope: claimed
+                    .get("scope")?
+                    .as_array()?
+                    .iter()
+                    .map(|token| token.as_str().map(str::to_owned))
+                    .collect::<Option<Vec<_>>>()?,
+                owner: ClaimOwner {
+                    process: owner.get("process")?.as_str()?.into(),
+                    host_session: owner.get("host_session")?.as_str()?.into(),
+                    started_at: owner.get("started_at")?.as_str()?.into(),
+                },
+                intent: claimed.get("intent")?.clone(),
+            };
+            if body.get("state")?.as_str()? == "claimed" {
+                Some(RequestState::Claimed(doc))
+            } else {
+                let held = body.get("held")?;
+                held.get("finding")?;
+                Some(RequestState::AwaitingOwner(doc, held.get("seq")?.as_u64()?))
+            }
+        }
+        _ => None,
+    }
 }
 
 /// The digest and outcome a `request` document records, or `None` if the
@@ -86,11 +187,11 @@ pub fn recorded_outcome(body: &Value) -> Option<(Hash, Outcome)> {
 }
 
 /// The `request` view: one document per (command kind, request id), the
-/// outcome a retry receives. No index: it is only ever read by key.
+/// outcome or open claim a retry receives, indexed by state for open claims.
 pub fn request_spec() -> ViewSpec {
     ViewSpec {
         name: REQUEST_VIEW.into(),
-        version: 1,
+        version: 2,
         key: vec![
             FieldSpec {
                 name: "kind".into(),
@@ -101,8 +202,15 @@ pub fn request_spec() -> ViewSpec {
                 kind: FieldKind::Text,
             },
         ],
-        indexes: Vec::new(),
-        page_bound: 1,
+        indexes: vec![IndexSpec {
+            name: "by_state".into(),
+            fields: vec![IndexField {
+                name: "state".into(),
+                kind: FieldKind::Text,
+                order: Order::Ascending,
+            }],
+        }],
+        page_bound: 100,
     }
 }
 
@@ -139,7 +247,7 @@ impl Projector for RequestProjector {
     }
 
     fn handles(&self) -> &[&str] {
-        &[COMMAND_COMPLETED]
+        &[COMMAND_CLAIMED, COMMAND_COMPLETED, COMMAND_RECONCILED]
     }
 
     fn keys(&self, event: &Event) -> Vec<DocKey> {
@@ -149,14 +257,53 @@ impl Projector for RequestProjector {
     fn apply(
         &self,
         event: &Event,
-        _documents: &[(DocKey, Value)],
+        documents: &[(DocKey, Value)],
     ) -> Result<Vec<Change>, ProjectorError> {
         let key = key_of(event).ok_or_else(|| {
-            ProjectorError("command.completed without its kind and request id".into())
+            ProjectorError("a command event without its kind and request id".into())
         })?;
-        Ok(vec![Change::Put {
-            key,
-            body: event.payload.clone(),
-        }])
+        let body = match event.type_name.as_str() {
+            COMMAND_CLAIMED => {
+                let payload = ClaimedPayload::from_value(&event.payload)
+                    .ok_or_else(|| ProjectorError("a malformed command.claimed payload".into()))?;
+                json!({"kind": payload.kind.0, "request_id": payload.request_id.0, "digest": payload.digest.to_hex(),
+                    "state": "claimed", "claim": {"seq": event.seq, "claimed_at": event.recorded_at,
+                    "scope": payload.scope, "owner": {"process": payload.owner.process, "host_session": payload.owner.host_session, "started_at": payload.owner.started_at}, "intent": payload.intent}})
+            }
+            COMMAND_RECONCILED => {
+                let payload = ReconciledPayload::from_value(&event.payload).ok_or_else(|| {
+                    ProjectorError("a malformed command.reconciled payload".into())
+                })?;
+                if payload.resolution == ReconciledResolution::Resolved {
+                    return Ok(Vec::new());
+                }
+                let mut body = documents
+                    .iter()
+                    .find(|(found, _)| found == &key)
+                    .map(|(_, body)| body.clone())
+                    .ok_or_else(|| {
+                        ProjectorError("command.reconciled without an open claim".into())
+                    })?;
+                match request_state(&body) {
+                    Some(RequestState::Claimed(doc) | RequestState::AwaitingOwner(doc, _))
+                        if doc.seq == payload.claim_seq => {}
+                    _ => {
+                        return Err(ProjectorError(
+                            "command.reconciled without its claim".into(),
+                        ));
+                    }
+                }
+                body["state"] = json!("awaiting_owner");
+                body["held"] = json!({"seq": event.seq, "finding": payload.finding});
+                body
+            }
+            COMMAND_COMPLETED => {
+                let mut body = event.payload.clone();
+                body["state"] = json!("completed");
+                body
+            }
+            _ => return Ok(Vec::new()),
+        };
+        Ok(vec![Change::Put { key, body }])
     }
 }

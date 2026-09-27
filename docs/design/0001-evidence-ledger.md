@@ -186,6 +186,8 @@ flowchart TB
 | Reference | One event's use of a payload, carrying the retention class for that use. |
 | Command | One request from a caller that may record events. It carries a request id. |
 | Claim | The intent event a command with an external effect records before acting. |
+| Lease | A claim's renewal time outside the chain. It is liveness only and expires 60 seconds after renewal. |
+| Scope token | An exact string declared on a command. An open claim holds its tokens and blocks other commands that declare one of them. |
 | Port | The set of storage traits the domain depends on. |
 | Adapter | An implementation of the port for one engine. |
 | Hardin | The part of Baley that reads views and names the one allowed next step. |
@@ -228,10 +230,10 @@ classDiagram
     +history(project, range, filter, page) Page
     +claim(command, decide) Claimed
     +renew_lease(project, claim, owner, at)
-    +complete(command, decide) Recorded
-    +reconcile(command, claim, decide) Recorded
+    +complete(command, owner, decide) Recorded
+    +reconcile(command, claim, authority, decide) Recorded
     +open_claims(project) Claims
-    +head(project) Head
+    +head(project) Option~Head~
     +verify(project, anchor) VerifyReport
   }
   class Transaction {
@@ -243,6 +245,7 @@ classDiagram
     +append(event) Seq
     +put_payload(bytes, class) PayloadRef
     +open_claims() Claims
+    +head() Option~Head~
   }
   class Views {
     <<trait>>
@@ -298,9 +301,10 @@ classDiagram
   Admin ..> ViewsReport : verify_views returns
 ```
 
-*Figure 4. The storage port. The decision runs inside the transaction with read access. The `Projector` and `EventSchema` traits are defined in `baley-store` (ADR 0010). The core implements the domain projectors and the event type registry and hands them to the adapter when the store opens, so the adapter never contains business rules. The store's own `request` projector lives in `baley-store` beside the `command.completed` event it reads, and a store opened without the core's registry reads none of the core's types. `Search` arrives with slice 8.*
+*Figure 4. The storage port. The decision runs inside the transaction with read access. `Transaction::head` is `None` for a project with no events, so an empty chain has nothing to anchor. The `Projector` and `EventSchema` traits are defined in `baley-store` (ADR 0010). The core implements domain projectors and the event type registry. The store-owned `request` and `claim_scope` projectors live in `baley-store` (ADR 0021). An adapter opened without the core's registry reads none of the core's types. `Search` arrives with slice 8.*
 
 - **`transact`** runs one command's decision. The caller does its slow work first (tests, model calls, git work) and passes the results in. The adapter takes the writer queue, opens the write transaction and checks that the project's live `request` view was built at this binary's projector version. It checks the request, then fences a new request if any of the project's live views or its view set was built by a newer binary, or if the project holds an event type or version this binary cannot read (see [Views and projectors](#views-and-projectors-evd-r9-evd-r10-evd-r27)). A replay is answered before those fences. `decide` reads through `Transaction` and returns the inputs its caller observed. The adapter re-checks documents and absences against the store and compares the caller-supplied git facts seen and now. Reading git inside the transaction is issue #40, for Build 4. A decision confirms authority against events where required and appends events. Any `Transaction` operation's error fails the command, and a stored payload must be attached to an event. The adapter runs the projectors, writes each changed document once, and commits. If any step fails, nothing is recorded (EVD-R5).
+- **Claims** use the same write path. `claim` records `command.claimed` and a lease before the effect, or records a refusal as `command.completed`. `renew_lease` changes only the lease row. `complete` records the acting owner's outcome and closes the claim, even after lease expiry if reconciliation has not closed it. `reconcile` records a finding and either closes an interrupted claim or holds it for the owner. `open_claims` pages through claimed and awaiting-owner request documents and joins their matching lease rows. These methods are on the SQLite adapter itself, as `transact` is, until T11 implements `Ledger`. The lease and scope rules, event shapes and `claim_scope` view are store-owned in `baley-store` (ADR 0021).
 - **`expect`** additionally names the stream that serializes a contested decision, so two commands that would both pass their own checks are ordered by one version counter. Each contested decision names its stream in [Serializing streams](#serializing-streams).
 - **Views** are declared by the core as a `ViewSpec`: a name, a version, a key shape, indexed fields, the ordering of each index and a page-size bound. `find` reads by a declared index, never by scan, and returns a page with a cursor. A cursor is bound to the query, project, generation and view version that issued it and refused under any other. One query runs against one read snapshot, the same snapshot in which the adapter checks the project's live view versions.
 - **`EventSchema`** is the core's registry of event types, handed to the adapter at open. `reads` says which types and versions this binary can read; a project holding any other is read-only for it. `projection_payload` gives an event's current type version and its payload upcast to that version. Projectors never see a stored event directly: ordinary projection and replay both hand them a copy carrying that version and payload.
@@ -332,6 +336,8 @@ Payload numbers are integers within ±(2^53 − 1); floats are refused, because 
 
 Event types are named `<family>.<fact>` in the past tense, and each has a payload schema version. A payload schema change adds a new version; old events are never rewritten and are read through an upcaster that converts old versions to the current shape (EVD-R19). Ordinary projection and replay both upcast in memory: projectors receive a copy of the event at its type's current version with its payload upcast, while the stored event, its hash and its references stay as recorded. The store's own `command.*` and `payload.*` types are read only at their exact recorded versions. An event type or version a binary does not know makes that project read-only for that binary.
 
+`command.claimed` version 1 carries the kind, request id, digest, intent, scope and owner. `command.reconciled` version 1 carries the claim's kind and request id, claim sequence, finding and resolution (`resolved` or `awaiting_owner`). `command.completed` version 2 carries `scope`: the closed claim's tokens when it closes a claim, or `[]` otherwise. The store reads these events only at those exact versions. A project holding version 1 of `command.completed` is read-only for this binary. T10 requires a fresh ledger; ledgers written before the first release are disposable.
+
 Streams used by the record families:
 
 | Stream | Examples of events |
@@ -357,24 +363,24 @@ The full mapping from today's namespaces is in [Appendix A](#appendix-a-mapping-
 
 #### Commands
 
-A command is one request from a caller, carrying a request id.
+A command is one request from a caller, carrying a request id and a scope: a list of exact tokens. An empty scope holds no token and skips the scope gate. The same-request rule still applies: another entry under an open claim's request id is `Blocked` whatever its scope. Scope carries authority and belongs in the request digest.
 
 **Request ids (EVD-R6).** The caller generates a fresh UUID for each command. Baley scopes it to the project and the command kind, so two sessions, two hosts or two command kinds can never collide or receive each other's answers. The request digest is the SHA-256 of the canonical form of the command kind and every field that carries authority (the approved content, the phase and plan, the target dispatch, the policy version). Guard decisions keep today's identity built from the host session and tool-call id.
 
 **Outcomes.** Every command that reaches a domain outcome, success or a real refusal, records a `command.completed` event carrying the command kind, request id, digest, outcome kind, the git facts it depended on and the answer. An answer is inline when its canonical JSON is at most 4 KiB and is not sensitive; otherwise it is a `record` payload reference. This includes commands that record no other event. The `request` view is built from those events and is rebuildable like any other. A replay whose answer its own project released by purge or reduction returns its tombstone even when another project still requires the body. The event and request document keep the reference. Infrastructure failures (store busy, disk full) and stale-input refusals are not outcomes: nothing is recorded, and the caller re-reads and tries again with the same request id.
 
-**Database-only commands** run in one transaction: check the request first, then decide, append, project and commit, as in Figure 6.
+**Database-only commands** run in one transaction: check the request first, then the command's scope, then decide, append, project and commit, as in Figure 7. `Blocked` is a store error, not a recorded outcome, so a command may be retried after reconciliation.
 
 **Commands with an external effect (EVD-R26)** use three steps, because SQLite cannot roll back a git revert, a provider call or a pushed ref:
 
-1. **Claim.** One short transaction checks the request and records `command.claimed` with the command's inputs and intended effect. A retry or a duplicate finds the claim and receives the in-progress or finished answer; it never repeats the effect.
+1. **Claim.** One short transaction checks the request and scope, reads the pre-claim head through `Transaction::head` where the effect needs it, and records `command.claimed` with the command's inputs, intended effect and owner. It takes a lease in the same transaction. A retry or duplicate finds the claim and receives `InProgress` or `Replayed`; it never repeats the effect.
 2. **Act.** The external work runs outside any transaction.
-3. **Record.** One more transaction re-checks the claim is still current, records the result events and `command.completed`.
+3. **Record.** One more transaction re-checks the claim and acting owner, records the result events and `command.completed`, and removes the lease. It carries the same digest and scope in the command. A changed scope is refused before the scope check. An owner resolution uses `reconcile` with an owner actor.
 
-**Active and interrupted claims.** A claim records its owner (process, host session and start time) and a scope. The owner holds a lease on the claim and renews it every 10 seconds while it works; the lease expires 60 seconds after the last renewal. Leases are liveness, not evidence: they live in a `claim_lease` table outside the chain, and renewing one records no event.
+**Active and interrupted claims.** A claim records its owner (process, host session and start time) and scope. The owner holds a lease and renews it every 10 seconds while it works. From supplied times, the lease is active strictly before the instant 60 seconds after its last renewal and interrupted at that instant. The row is liveness, not evidence: `claim_lease` lives outside the chain and is matched to the claim event by `claim_seq`. A missing or mismatched row means interrupted at once. Renewal records no event. A renewal by another owner, of a closed or held claim, at an invalid time, or before the matching row's time is refused. With no matching row, the floor is the claim event's time. The owner may renew an expired open claim or record its result after expiry, until reconciliation closes it.
 
 - A claim whose lease is current is **active**. It blocks only commands in its own scope; everything else proceeds.
-- A claim whose lease has expired is **interrupted**: its owner died or lost its connection. Only an interrupted claim is reconciled.
+- A claim whose lease has expired is **interrupted**: its owner died or lost its connection. An interrupted claim can be reconciled automatically; a claim held for the owner needs the owner's reconciliation.
 
 | Claim | Scope it blocks while active or interrupted |
 |---|---|
@@ -384,7 +390,11 @@ A command is one request from a caller, carrying a request id.
 | Anchor push | Another anchor push for the project |
 | Provider review call | Another delivery of the same review |
 
-**Reconciliation.** When Baley finds an interrupted claim, at start or when a command in its scope arrives, it reconciles automatically wherever the real state can be read: an interrupted anchor push checks the remote for its tag, an interrupted test run is recorded as interrupted, an interrupted provider call is recorded as undelivered and may be retried under a new request. It stops for the owner only where the real state is ambiguous, as with a revert that may be half applied, which is today's undo rule. Either way, `command.reconciled` records what was found.
+The command declares exact-string tokens. Slice 1 has `anchor` for anchor pushes; later slices declare their verification, provider, revert, landing and release tokens. For every command with tokens, the store reads only those keys in `claim_scope`, validates each holder against its `request` document and fails the command without writing if the views disagree. It excludes the claim a record or reconciliation step is closing. A valid holder returns `Blocked` with the claim and its active, interrupted or awaiting-owner state. A claim stays open in the `request` view while claimed or awaiting owner; `open_claims` pages those states by index and joins matching lease rows.
+
+**Reconciliation.** The caller checks interrupted claims on its first use of a project after starting, and when a scoped command receives `Blocked { Interrupted }`. The shared server performs the first-use check per project. The anchor command is the first scoped caller: it fetches the tag through the forge, judges the observation and retries its original request after resolution. An interrupted test run is recorded as interrupted; an interrupted provider call is recorded as undelivered and may be retried under a new request. A finding is recorded as `command.reconciled`, followed by the claim's completion when resolved and the reconciling command's own completion. An unreachable remote finds nothing, records nothing in the chain, writes a trace row and leaves the claim interrupted. Ambiguous real state, such as a half-applied revert, makes the `request` document `awaiting_owner`. It keeps blocking its scope, refuses automatic reconciliation and is resolved only through the owner's `reconcile`.
+
+A claim reconciled as not pushed can land late because leases measure liveness, not evidence. This is harmless for anchors because verification reads the remote. The finding carries `checked_at`, the time of the remote check, and a late owner record step receives the reconciliation's outcome as a replay.
 
 **Failures are outcomes.** An effect that fails cleanly (the remote refused the push, the provider returned an error) is a domain outcome: the record step commits `command.completed` with that result, and the claim is finished, not interrupted. A failed anchor push therefore never blocks work; the unanchored range grows, the next anchor point retries, and `doctor` warns once the unanchored range is more than a day old.
 
@@ -394,14 +404,52 @@ stateDiagram-v2
   Active --> Active : lease renewed every 10 s
   Active --> Completed : result recorded, success or clean failure
   Active --> Interrupted : lease expires, owner gone
-  Interrupted --> Reconciling : start, or a command in its scope
+  Interrupted --> Active : owner renews
+  Interrupted --> Completed : owner records before reconciliation
+  Interrupted --> Reconciling : caller first uses project, or command in scope
   Reconciling --> Completed : real state read and recorded
+  Reconciling --> Interrupted : remote unreachable, trace row only
   Reconciling --> AwaitingOwner : real state ambiguous
   AwaitingOwner --> Completed : owner reconciles
   Completed --> [*]
 ```
 
-*Figure 5. A command with an external effect. An active claim blocks only its scope; only an interrupted claim is reconciled, automatically where the real state can be read. A claim is never re-executed.*
+*Figure 5. A command with an external effect. An active claim blocks only its scope. An interrupted claim can be reconciled automatically where the real state can be read; a held claim needs the owner's reconciliation. An unreachable remote is not a finding. A claim is never re-executed.*
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as Caller
+  participant L as Ledger
+  participant Q as SQLite
+  participant F as Forge
+  C->>L: claim(command, decide)
+  L->>Q: begin write, check request and scope tokens
+  L->>C: decide reads the pre-claim head
+  L->>Q: append command.claimed, project claim and scope, take lease, commit
+  L-->>C: New with claim sequence
+  C->>F: perform external effect
+  loop every 10 seconds during the effect
+    C->>L: renew_lease with supplied time
+    L->>Q: update matching lease row without an event
+  end
+  C->>L: retry claim with same request id
+  L-->>C: InProgress, no write and no second effect
+  C->>L: complete(command, owner, decide)
+  L->>Q: check owner and scope, append result and command.completed, delete lease, commit
+  L-->>C: New outcome
+  C->>L: retry claim after completion
+  L-->>C: Replayed outcome, no write
+  C->>L: scoped command meets an interrupted claim
+  L-->>C: Blocked with Interrupted and claim id
+  C->>F: fetch the remote tag named by the claim
+  F-->>C: observation
+  C->>L: reconcile from observation
+  L->>Q: append finding, claim completion and reconciling receipt, commit
+  C->>L: retry original scoped request id
+```
+
+*Figure 6. Claim, act and record. Leases renew outside the chain. An interrupted holder is reconciled from a remote observation before the blocked request retries.*
 
 ```mermaid
 sequenceDiagram
@@ -414,10 +462,10 @@ sequenceDiagram
   D->>S: tool call with request id
   S->>C: command
   C->>C: slow work: run tests, read git, call models
-  C->>L: transact(project, command, decide)
+  C->>L: transact(command, decide)
   L->>Q: take the writer queue, BEGIN IMMEDIATE, check compatibility epoch
   L->>Q: check the live request view's projector version
-  Note over L,Q: Newer than this binary's: ProjectReadOnly. Older, or never stamped: end the turn, bring the views forward under the maintenance lock (Figure 7), start again
+  Note over L,Q: Newer than this binary's: ProjectReadOnly. Older, or never stamped: end the turn, bring the views forward under the maintenance lock (Figure 8), start again
   L->>Q: look up request in the live generation
   alt request already answered with the same digest
     L->>Q: end the transaction, nothing written
@@ -425,11 +473,18 @@ sequenceDiagram
   else request id already used with another digest
     L->>Q: ROLLBACK
     L-->>C: refused, nothing recorded
+  else request holds an open claim
+    L->>Q: ROLLBACK
+    L-->>C: Blocked with claim and state, nothing recorded
   else new request
     L->>Q: check every live view's projector version and the live view set version
     Note over L,Q: Newer: ProjectReadOnly. Older, missing or retired: end the turn, bring forward, start again
     L->>Q: check project event types and versions are readable
-    L->>C: decide(transaction)
+    L->>Q: check the command's tokens in claim_scope against their request holders
+    alt a token is held
+      L-->>C: Blocked before decide, nothing recorded
+    else no token is held
+      L->>C: decide(transaction)
     C->>L: read inputs through Transaction, return observed slow-work inputs
     C->>L: confirm authority against events, append events, put payloads
     L->>Q: write payload bodies when put_payload is called
@@ -448,12 +503,13 @@ sequenceDiagram
       L->>Q: COMMIT (synchronous, survives power loss)
       L-->>C: outcome
     end
+    end
   end
   C-->>S: answer
   S-->>D: tool result
 ```
 
-*Figure 6. A database-only command. The request is checked before the view and readability fences, and needs only the live `request` view at this binary's version. The caller supplies observed git facts; the adapter checks them and stores the outcome in the same transaction. A command writes only the live generation, even while a rebuild builds the next one.*
+*Figure 7. A database-only command. An open claim under the same request id returns `Blocked` without writing, and every token is checked through `claim_scope` before the decision. The request is checked before the view and readability fences, and needs only the live `request` view at this binary's version. The caller supplies observed git facts; the adapter checks them and stores the outcome in the same transaction. A command writes only the live generation, even while a rebuild builds the next one.*
 
 #### Serializing streams
 
@@ -507,7 +563,7 @@ A projector is registered for the event types it cares about. For each appended 
 
 The old generation is deleted before the rebuild returns, one row at a time in turns of at most 200 document rows, and once one row is removed, no further row after the turn has held the queue 15 ms, each turn followed by the same pause: its rows in every view table `view_catalog` records, including tables of older versions and of views this binary no longer registers, then its `view_gen` stamps. A crash, or a rebuild abandoned between batches, leaves its generation and marker behind, never live; the next rebuild removes them before it starts, together with every generation that is neither live nor being built, found one at a time by keyed seeks on `view_gen` and on every view table. Every removal turn first reads `live_gen` and refuses the live generation before deleting a row: a damaged marker that names it makes the rebuild return `LiveGenerationProtected`, and the live rows stay. If deleting the old generation fails after the flip, the flip stands: `rebuild` returns `CleanupFailed`, naming the generation now live and the error that stopped the cleanup, and the next rebuild removes what is left. Generation numbers only rise, so no number a cursor was issued under is used again.
 
-**Versions.** The binary declares a version for its whole registered view set, `request` included, and raises it whenever a view is added, removed or renamed. When the store opens, `view_set_catalog` pins each set version to its sorted view names, as `view_catalog` pins each view version to its spec, and a set changed under a version already recorded is refused. Every `view_gen` row of a generation carries the same set version beside its view's projector version.
+**Versions.** The binary declares a version for its whole registered view set, `request` and `claim_scope` included, and raises it whenever a view is added, removed or renamed. Version 1 names `request` alone; version 2 is the store's own `claim_scope request` set. A binary adding domain views declares a higher number. When the store opens, `view_set_catalog` pins each set version to its sorted view names, as `view_catalog` pins each view version to its spec, and a set changed under a version already recorded is refused. Every `view_gen` row of a generation carries the same set version beside its view's projector version.
 
 Before a project's views are used, by a read or a new command, the adapter compares the live stamps with this binary's: a read in the same snapshot as the document or page it returns, a command under the writer queue. A live set version, or a registered view's projector version, newer than this binary's makes the project read-only for this binary: its view reads and new commands are refused with `ProjectReadOnly`, because this binary's table at the newer generation can be empty, and answering from it would report an absence that is not true. History and payload reads still work. An older or missing set stamp, an older or missing view row, or a row for a view this binary retired rebuilds the project forward before use, under the maintenance lock; a caller that waited while another process did it finds the views current and goes on. A retired view's name alone never fences a project: the rebuild's cleanup removes its rows and stamps. A project with no events and no generation yet is stamped at generation 0 on first use, with nothing to replay. Open looks at no project, so a project whose views need work never keeps another from opening. A binary never rebuilds a view whose stored version is newer than its own; its `rebuild` and `verify --views` refuse that project too. A retry of a request already answered needs only the live `request` view at this binary's projector version, whatever the set stamp says.
 
@@ -558,11 +614,13 @@ sequenceDiagram
   end
 ```
 
-*Figure 7. A rebuild while commands run. The first use of a project whose views are behind this binary's starts one; `baley rebuild` starts one on its own. Each batch holds the writer queue only for its own turn and pauses outside it, so commands, which write only the live generation, run between batches. One transaction applies the tail and flips every view.*
+*Figure 8. A rebuild while commands run. The first use of a project whose views are behind this binary's starts one; `baley rebuild` starts one on its own. Each batch holds the writer queue only for its own turn and pauses outside it, so commands, which write only the live generation, run between batches. One transaction applies the tail and flips every view.*
 
 **Verification of views.** `baley verify --views` takes the maintenance lock, so it never runs beside a rebuild. It first rebuilds forward views behind this binary's, and while an unfinished generation remains it refuses with `UnfinishedGeneration`, naming that generation, until a rebuild removes it. A building marker that names the live generation is not unfinished work a rebuild can remove: verification refuses it with `LiveGenerationProtected`, as a rebuild does. It replays the project's events into a scratch generation, stamped like a rebuild's, through the same batches and projectors, and never makes it live. In the turn that reaches the head it begins a read snapshot, on a connection of its own, before releasing the writer queue, so scratch and live are compared at that one head however many commands follow, and the store's other reads go on meanwhile. For every registered view it compares the two generations' rows key by key: key and index columns, `produced_seq`, `projector_version`, and the stored document text as bytes, so a live document that is not canonical JSON differs. It reports each missing, extra or unequal document once, as (view, key), with the head it checked. Deleting the scratch generation in the same batches is tried afterwards, also after a replay or comparison error. If that deletion fails, verification returns `UnfinishedGeneration` naming the scratch generation, whether or not the comparison failed too, and its marker stays for the next rebuild; only once the scratch generation is gone does the report or the comparison's error come back. A crash leaves it for the next rebuild too. Verification changes no live row, event or payload, except through the forward rebuild it runs first for views behind this binary's. A report holds for the head it names only: a backup establishes its own snapshot.
 
 Views planned for the first build, by the question they answer. Query contracts (keys, indexes, ordering, page bounds) are in [Appendix B](#appendix-b-reads-mapped-to-views).
+
+The store-owned `request` view is at version 2. It projects `command.claimed` to a claimed document, `command.reconciled` with an owner hold to an awaiting-owner document, and `command.completed` to a completed document. Its `by_state` index pages open claims with a bound of 100. The `claim_scope` view is at version 1, keyed by one exact token with page bound 1. `command.claimed` puts its tokens and a claim completion removes only tokens still naming that claim. Both views rebuild from events.
 
 | View | Key | Indexed by | Answers |
 |---|---|---|---|
@@ -582,7 +640,8 @@ Views planned for the first build, by the question they answer. Query contracts 
 | `policy` | (project, checkout) | | Effective policy and its layers |
 | `guard_policy` | project | | The remembered denial policy |
 | `capture` | (project, item id) | phase, disposition | The capture queue |
-| `request` | (project, command kind, request id) | | Outcome of each command, for retries |
+| `request` | (project, command kind, request id) | state | Each request's open claim, held claim or outcome, for retries and open claims |
+| `claim_scope` | (project, scope token) | | The open claim holding each scope token, for the scope check |
 
 Hardin reads only views, and confirms authority against events. The next-action rules, progress and gate checks become queries over `phase`, `plan`, `dispatch`, `verification`, `review_queue`, `pause` and `capture`, not a walk over the whole store.
 
@@ -631,7 +690,7 @@ stateDiagram-v2
   end note
 ```
 
-*Figure 8. Payload lifecycle. A body changes state only when its last requiring reference is released; there is no way back from a tombstone.*
+*Figure 9. Payload lifecycle. A body changes state only when its last requiring reference is released; there is no way back from a tombstone.*
 
 ```mermaid
 sequenceDiagram
@@ -666,7 +725,7 @@ sequenceDiagram
   L-->>O: PurgeReport: purged, shared, recorded, unreachable, scrubbed
 ```
 
-*Figure 9. A purge: the logical removal in one transaction, then the scrub. The scrub is idempotent and runs on its own too; a pending scrub is marked until it completes.*
+*Figure 10. A purge: the logical removal in one transaction, then the scrub. The scrub is idempotent and runs on its own too; a pending scrub is marked until it completes.*
 
 #### Physical schema (SQLite adapter)
 
@@ -675,6 +734,7 @@ erDiagram
   PROJECT ||--o{ EVENT : "records"
   PROJECT ||--o{ CHECKOUT : "is seen at"
   PROJECT ||--o{ ANCHOR : "is anchored by"
+  PROJECT ||--o{ CLAIM_LEASE : "leases the open claims of"
   EVENT ||--o{ PAYLOAD_REF : "uses"
   PAYLOAD ||--o{ PAYLOAD_REF : "is used by"
   PROJECT ||--o| PROJECT_GEN : "reads its views through"
@@ -703,6 +763,13 @@ erDiagram
     blob head_hash
     text tag
     text pushed_at
+  }
+  CLAIM_LEASE {
+    text project_id PK, FK
+    text kind PK
+    text request_id PK
+    integer claim_seq "the command.claimed event this row belongs to"
+    text renewed_at
   }
   EVENT {
     text project_id PK, FK
@@ -756,7 +823,7 @@ erDiagram
   }
   VIEW_SET_CATALOG {
     integer version PK
-    text sorted_view_names "version 1 is request alone"
+    text sorted_view_names "version 2 is claim_scope request"
   }
   VIEW_CATALOG {
     text view PK
@@ -780,13 +847,13 @@ erDiagram
   }
 ```
 
-*Figure 10. Tables of the SQLite adapter at compatibility epoch 1. `VIEW_DOC` stands for one table per view version, `v_<view>_<version>`, with a `k_` column per key field and an `i_` column per index field; `request` is an ordinary view, and its documents belong to their generation like any other view's. `SEARCH_ENTRY` is an FTS5 virtual table that arrives with slice 8.*
+*Figure 11. Tables of the SQLite adapter at compatibility epoch 1. `VIEW_DOC` stands for one table per view version, `v_<view>_<version>`, with a `k_` column per key field and an `i_` column per index field; `request` is an ordinary view, and its documents belong to their generation like any other view's. `SEARCH_ENTRY` is an FTS5 virtual table that arrives with slice 8.*
 
-Further tables: `schema_meta` (compatibility epoch, created and migrated times, and `scrub_pending`), `claim_lease`, and `trace` (diagnostics, outside the chain, size-capped, with an optional payload hash).
+Further tables: `schema_meta` (compatibility epoch, `schema_digest`, created and migrated times, and `scrub_pending`) and `trace` (diagnostics, outside the chain, size-capped, with an optional payload hash). A `claim_lease` row is liveness only, matched to its claim by `claim_seq`, and never rebuilt.
 
-`project_gen` holds each project's live generation and, while a rebuild or verification runs, the generation it builds and the last event applied to it. `view_gen` holds, per generation, each view's projector version and the view set version of the binary that built it. Per generation, a view's documents and its `view_gen` stamp belong to that generation; a rebuild or cleanup never touches events, payloads, references and their `released_seq`, anchors, checkouts, leases, trace rows, `schema_meta` or either catalog. `view_catalog` records each view version's spec, and `view_set_catalog` each view set version's sorted view names, seeded with version 1 as `request` alone. Both are global and independent of any project's generations: they say what a version means, not which project uses it.
+`project_gen` holds each project's live generation and, while a rebuild or verification runs, the generation it builds and the last event applied to it. `view_gen` holds, per generation, each view's projector version and the view set version of the binary that built it. Per generation, a view's documents and its `view_gen` stamp belong to that generation; a rebuild or cleanup never touches events, payloads, references and their `released_seq`, anchors, checkouts, leases, trace rows, `schema_meta` or either catalog. `view_catalog` records each view version's spec, and `view_set_catalog` each view set version's sorted view names, seeded with version 1 as `request` alone and version 2 as `claim_scope request`. Both are global and independent of any project's generations: they say what a version means, not which project uses it.
 
-The schema stays at epoch 1 until the first release and is edited in place: `view_gen.view_set_version` and `view_set_catalog` are part of it, no table or column is added to an existing file at open, and a file written before such a change is disposable.
+The schema stays at epoch 1 until the first release and is edited in place: `view_gen.view_set_version` and `view_set_catalog` are part of it, no table or column is added to an existing file at open, and a file written before such a change is disposable. `schema_meta` records the SHA-256 digest of the schema text at creation. A build whose schema text differs refuses to open the file and tells the owner to delete it; there is no migration.
 
 `PAYLOAD_REF.released_seq` is the sequence of the `payload.reduced` event naming its original `[seq, hash]` reference or of the `payload.purged` event listing that reference in `released`. It is derived from those events, not an independent fact.
 
@@ -863,7 +930,7 @@ Each process opens its own connection. SQLite's write-ahead log lets any number 
 
 **Batch timing.** A store has one timing dependency, a monotonic clock and a pause, and every rebuild, cleanup and view verification batch uses it, whether started by the owner or by a project's first use. A batch's hold runs from acquiring the writer queue, not the wait for it, through commit and release; the 15 ms bound is read from the same clock, and the pause after the batch is as long as the hold. Tests supply their own instants and record the pauses asked for, so no test reads a live clock or sleeps.
 
-**Compatibility epoch.** Every write transaction reads the compatibility epoch from `schema_meta` before anything else. A process whose epoch is older than the stored one stops writing, answers read-only, and tells the caller which binary is needed. Migrations raise the epoch in the same transaction that changes the schema, so an older process that is already running is fenced at its next write. Until the first release, the schema stays at epoch 1 and is edited in place: ledgers written before a release are disposable.
+**Compatibility epoch.** Every write transaction reads the compatibility epoch from `schema_meta` before anything else. A process whose epoch is older than the stored one stops writing, answers read-only, and tells the caller which binary is needed. Migrations raise the epoch in the same transaction that changes the schema, so an older process that is already running is fenced at its next write. Until the first release, the schema stays at epoch 1 and is edited in place: ledgers written before a release are disposable. `schema_meta` records the digest of the schema text at creation; a build with a different epoch-1 schema refuses to open the file and tells the owner to delete it, with no migration.
 
 **Checkpoints.** SQLite folds the write-ahead log into the database automatically every 1,000 pages. A reader that never finishes would stop that and let the log grow without bound; Baley's reads are short-lived by construction, apart from a view verification's comparison snapshot, which lasts one project's comparison; the server runs a passive checkpoint when idle. `baley doctor` reports the log size.
 
@@ -876,6 +943,7 @@ stateDiagram-v2
   Locating --> Opening
   Opening --> Creating : no database
   Creating --> Declaring : 8 KiB pages, write-ahead log and the epoch-1 schema created under the writer queue
+  Opening --> Refused : epoch 1, schema digest differs from this build
   Opening --> ReadOnly : epoch newer than this binary
   Opening --> BackingUp : epoch older than this binary
   BackingUp --> Migrating
@@ -888,14 +956,12 @@ stateDiagram-v2
   Opening --> Declaring : epoch current, guard or CLI
   Declaring --> Refused : a view version stored with another spec, or the view set version stored with other views
   Declaring --> Ready : missing view tables, indexes and catalog rows created under the writer queue
-  Ready --> Reconciling : interrupted claims found
-  Reconciling --> Ready
   Refused --> [*]
 ```
 
-*Figure 11. Opening the store. A binary never writes to an epoch it does not understand, a failed migration leaves the database as it was, a changed view spec or view set needs a new version, and interrupted claims are reconciled before work in their scope continues.*
+*Figure 12. Opening the store. A binary never writes to an epoch it does not understand or to an epoch-1 file of another schema. A failed migration leaves the database as it was, and a changed view spec or view set needs a new version. Reconciliation at start belongs to the caller on its first use of each project.*
 
-Open checks each declared view version's spec against `view_catalog` and the declared view set version's names against `view_set_catalog`, reading first on the read connection so that an open that finds everything in place takes no write. It records a spec or set version seen for the first time, creates missing view tables and indexes under the writer queue, and refuses a version already recorded with another spec or other names. It looks at no project's views: each project is brought to this binary's views on its first use, as in Figure 7, so one project that needs a rebuild never keeps the store from opening.
+Open checks each declared view version's spec against `view_catalog` and the declared view set version's names against `view_set_catalog`, reading first on the read connection so that an open that finds everything in place takes no write. It records a spec or set version seen for the first time, creates missing view tables and indexes under the writer queue, and refuses a version already recorded with another spec or other names. It looks at no project's views: each project is brought to this binary's views on its first use, as in Figure 8, so one project that needs a rebuild never keeps the store from opening.
 
 The MCP server runs SQLite's `quick_check` when it starts. The guard and the CLI do not, so a guard call never scans the database. The full `integrity_check`, chain and view verification run in `baley doctor` and before every backup.
 
@@ -936,11 +1002,11 @@ sequenceDiagram
   end
 ```
 
-*Figure 12. One column per actor. Nobody but Baley writes to the ledger; each step's fact is recorded before Hardin allows the next one, a refusal names the proof that is missing, and a verified phase pushes an anchor.*
+*Figure 13. One column per actor. Nobody but Baley writes to the ledger; each step's fact is recorded before Hardin allows the next one, a refusal names the proof that is missing, and a verified phase pushes an anchor.*
 
 #### A retried tool call
 
-A host may deliver the same tool call twice after a timeout. The second delivery carries the same request id, finds the stored outcome in Figure 6, and returns it. The lookup needs only the live `request` view at this binary's projector version; the project's other views and its view set stamp do not matter to a replay, even when a newer binary has since rebuilt them. Only a new request is fenced on every live view's version. If the retry's project released a stored answer by purge or reduction, the retry receives the tombstone even when another project still requires the body. The event and request document keep the reference. For a command with an external effect, the retry finds the claim and waits for, or returns, its result. Nothing is recorded twice and no effect runs twice.
+A host may deliver the same tool call twice after a timeout. The second delivery carries the same request id. A completed request gets `Replayed`, and an open claim gets `InProgress`; neither re-executes the effect. The lookup needs only the live `request` view at this binary's projector version; the project's other views and its view set stamp do not matter to a replay, even when a newer binary has since rebuilt them. Only a new request is fenced on every live view's version. If the retry's project released a stored answer by purge or reduction, the retry receives the tombstone even when another project still requires the body. The event and request document keep the reference. Nothing is recorded twice and no effect runs twice.
 
 #### Two sessions writing at once
 
@@ -952,6 +1018,9 @@ The domain rules are owned, specified and tested by the area design documents ([
 
 | Rule | Owned by | In the ledger |
 |---|---|---|
+| Lease state and the 60-second expiry | [0001: The evidence ledger](0001-evidence-ledger.md) | `baley-store::claim::lease_state`, enforced by the shared command path |
+| Scope blocking by exact token | [0001: The evidence ledger](0001-evidence-ledger.md) | The `claim_scope` view and `baley-store::claim::blocking`, run by the store for every command |
+| Anchor reconciliation judgement | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md), LND-R18 | `baley-core::reconcile`, recorded as `command.reconciled` |
 | A plan's approval binds its exact submitted content, the owner and the time | [0005: Context, plans and acceptance](0005-context-plans-and-acceptance.md), PLN-R15 | `plan.approved` carries the submission digest, owner and time; admission confirms it against the event |
 | Plan replay is scoped to its phase occurrence | [0005: Context, plans and acceptance](0005-context-plans-and-acceptance.md), PLN-R15 | Request scope (project, command kind) plus the phase in the digest |
 | Completion binds context, publications, admissions and task and plan history, and stops applying when any of them changes or execution is undone | [0007: Verification](0007-verification.md), VER-R13 | The `phase` view computes applicability from the bound facts; `completion.invalidated` is projected when a bound fact changes; completion is confirmed against events when used |
@@ -987,7 +1056,10 @@ See [Threat model](#threat-model) for who is defended against.
 | Failure | Detection | What the user sees | Recovery |
 |---|---|---|---|
 | Process killed in a database-only command | SQLite rolls back the uncommitted transaction | The command did not happen | Retry with the same request id |
-| Process killed after a claim, during or after the external effect | The claim's lease expires | Commands in the claim's scope wait for reconciliation, naming the claim; other work continues | Reconcile against the real state; `command.reconciled` records it |
+| Process killed after a claim, during or after the external effect | The claim's lease expires | Commands in the claim's scope return `Blocked` naming the claim and its state; other work continues | Reconcile against the real state; a finding records `command.reconciled` |
+| Remote unreachable during reconciliation | The remote observation is unreachable | Nothing is recorded in the chain; a trace row names the attempt and the claim stays interrupted | Retry reconciliation after the remote is reachable |
+| A claim awaits the owner | The `request` document is `awaiting_owner` | Commands in its scope return `Blocked { AwaitingOwner }` | The owner's `reconcile` resolves it |
+| `claim_scope` and `request` disagree on a holder | The scope check validates the holder's request identity, sequence and token | The scoped command fails with nothing written | `verify --views` shows the difference; rebuild repairs it |
 | Power loss after acknowledgement | None needed | Nothing is lost (`synchronous=FULL`) | None |
 | Store busy longer than 5 s | `SQLITE_BUSY` after the timeout | "store busy" | Retry; `doctor` shows long-running holders |
 | Disk full | `SQLITE_FULL` | The command is refused, nothing recorded | Free space; retry |
@@ -1044,7 +1116,7 @@ SQLite's limits sit far beyond these numbers: 281 TB per database and about 1 GB
 
 ### Observability
 
-- `baley doctor` reports the compatibility epoch, `integrity_check`, chain verification against the latest anchor per project, view verification, write-ahead log size, database size by record family and retention class, view versions and lag, active and interrupted claims, the age of the unanchored range, and backups present.
+- `baley doctor` reports the compatibility epoch, `integrity_check`, chain verification against the latest anchor per project, view verification, write-ahead log size, database size by record family and retention class, view versions and lag, active, interrupted and awaiting-owner claims, the age of the unanchored range, and backups present.
 - The `trace` table records diagnostics (timings, retries, busy waits) outside the chain, with its own size cap and rotation.
 - Every refusal carries a stable code and the facts that caused it, as refusals do today.
 
@@ -1137,7 +1209,7 @@ Slices:
 | EVD-R21 | The benchmark harness measures every budget on the reference workload. Timings are measured, not asserted in tests, because timing is not portable. |
 | EVD-R24 | The host matrix, run by hand on both hosts before acceptance (done 2026-09-25, `spikes/host-matrix`), and again before each release. |
 | EVD-R25 | `show` and `export` render every record family from views. |
-| EVD-R26 | While a claim is active, commands outside its scope proceed and commands inside it wait; a retry during the effect never repeats it. After the owner is killed and the lease expires, a command in scope triggers reconciliation; an anchor claim reconciles automatically from the remote; a revert claim waits for the owner. A cleanly failed anchor push completes the claim and blocks nothing. |
+| EVD-R26 | T10 proves the store half with fixture decisions: commands outside an active claim's scope proceed, commands inside return `Blocked`, an in-progress retry does not repeat the effect, and a clean failure completes the claim. A caller can reconcile an interrupted claim from a supplied observation; an awaiting-owner claim is resolved only with `ReconcileAuthority::Owner`. T11 proves the anchor call path, and slice 6 proves a real revert held for the owner. |
 | EVD-R27 | An edited view document that says "approved" or "complete" does not grant admission or completion, because the event is missing. |
 | EVD-R28 | Withdrawn. |
 
@@ -1154,7 +1226,8 @@ The conformance suite lives in `baley-store` and runs against every adapter.
 - [ADR 0007: Anchor chain heads on the forge](../adr/0007-forge-anchors.md)
 - [ADR 0008: Use host sandboxes to keep agents out of the ledger](../adr/0008-host-sandbox-isolation.md)
 - [ADR 0009: Serve instructions from the binary; files on disk are stubs](../adr/0009-served-instructions.md)
-- [ADR 0010: Define the projector and event schema traits in the port](../adr/0010-projector-traits-in-the-port.md), superseding ADR 0005 in part
+- [ADR 0010: Define the projector and event schema traits in the port](../adr/0010-projector-traits-in-the-port.md), superseding ADR 0005 in part, superseded in part by ADR 0021
+- [ADR 0021: Claim liveness and scope rules in the port](../adr/0021-claim-rules-in-the-port.md)
 
 ## Future work
 
