@@ -28,6 +28,7 @@ Baley keeps AI coding agents accountable to the person who answers for their wor
 ## Following the work
 
 - **What is being built:** the [milestones](https://github.com/crenshawdev/baley/milestones), each a theme of the design, and the build issues under them.
+- **In what order:** the [roadmap](docs/roadmap.md), from the build under way to the first release, updated by each build pull request.
 - **How it is designed:** every significant change starts as a design document with requirements and diagrams, and each architectural decision is kept as a decision record. See [the design process](docs/design/README.md), [design documents](docs/design/) and [decision records](docs/adr/).
 - **How it is built:** every change reaches `main` through a pull request with passing CI (tests, clippy, cargo-deny), and signed commits are required.
 
