@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0001: The evidence ledger](../design/0001-evidence-ledger.md) |
 | Supersedes | |
-| Superseded by | |
+| Superseded by | [0023](0023-no-backups-in-baley.md), in part: the automatic backup before a migration and verified backups as a safeguard |
 
 ## Context and problem
 

@@ -5,23 +5,24 @@
 //! anchor command's retry runs over an in-memory remote that holds no tags
 //! and a ticker that never ticks.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use baley_core::{
-    AnchorRequest, AnchorSeams, AnchorStatus, ClaimStep, FetchObservation, Forge, HeldAnchor,
-    PrePushCheck, PushObservation, ReconcileStep, Registry, TagQuery, TickGuard, Ticker,
-    TraceRecord, TraceSink, Upcaster, anchor_annotation, anchor_command, claim_step,
-    pre_push_check, reconcile_from_observation, record_step, register_anchor_events,
-    verify_observed,
+    AcknowledgeRestore, AcknowledgeRestoreError, AnchorRequest, AnchorSeams, ClaimStep,
+    FetchObservation, Forge, HeldAnchor, PrePushCheck, PushObservation, ReconcileStep, Registry,
+    TagQuery, TickGuard, Ticker, TraceRecord, TraceSink, Upcaster, acknowledge_restore,
+    anchor_annotation, anchor_command, claim_step, pre_push_check, reconcile_from_observation,
+    record_step, register_anchor_events, verify_observed,
 };
 use baley_store::{
-    ANCHOR_FAILED, ANCHOR_PUSHED, Actor, Anchor, AnchorVerdict, COMMAND_CLAIMED, COMMAND_COMPLETED,
-    COMMAND_RECONCILED, ClaimOwner, ClaimState, Command, CommandKind, Decision, DocKey, Event,
-    EventSchema, GitFacts, Hash, Head, HistoryFilter, KeyValue, Ledger, NewEvent, Observed,
-    OutcomeKind, PageRequest, PayloadFault, PayloadReference, ProjectId, REQUEST_VIEW, Recorded,
-    Refusal, RequestId, RetentionClass, StoreError, StoredAnchorComparison, StreamName,
-    Transaction, Views, anchor_tag,
+    ANCHOR_FAILED, ANCHOR_PUSHED, Actor, Admin, Anchor, AnchorCheck, AnchorVerdict,
+    COMMAND_CLAIMED, COMMAND_COMPLETED, COMMAND_RECONCILED, ClaimDecision, ClaimOwner, ClaimState,
+    Command, CommandKind, Decision, DocKey, Event, EventSchema, GitFacts, Hash, Head,
+    HistoryFilter, KeyValue, Ledger, NewEvent, Observed, OutcomeKind, PageRequest, PayloadFault,
+    PayloadReference, ProjectId, REQUEST_VIEW, Recorded, Refusal, RequestId, RetentionClass,
+    StoreError, StoredAnchorComparison, StreamName, Transaction, UnanchoredAge, Views, anchor_tag,
 };
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
@@ -1225,7 +1226,7 @@ fn a_remote_anchor_newer_than_the_row_reports_the_row_behind() {
         T2,
     )
     .expect("verify");
-    assert_eq!(verified.status, AnchorStatus::Remote(head_anchor(&later)));
+    assert_eq!(verified.status, AnchorCheck::Remote(head_anchor(&later)));
     assert_eq!(verified.report.chain.anchor, AnchorVerdict::Matches);
     assert_eq!(
         verified.report.stored_anchor_comparison,
@@ -1273,7 +1274,7 @@ fn no_remote_gives_a_local_only_report() {
     f.insert_anchor_row(head.seq, head.hash, &anchor_tag(&project(), head.seq));
     let verified =
         verify_observed(f.ledger(), &project(), &FetchObservation::NoRemote, T1).expect("verify");
-    assert_eq!(verified.status, AnchorStatus::LocalOnly);
+    assert_eq!(verified.status, AnchorCheck::LocalOnly);
     assert_eq!(verified.report.chain.anchor, AnchorVerdict::NoAnchor);
     assert_eq!(verified.report.chain.unanchored, Some(1..=head.seq));
     assert_eq!(
@@ -1291,7 +1292,7 @@ fn a_remote_absence_is_reported_despite_a_local_row() {
     f.insert_anchor_row(head.seq, head.hash, &anchor_tag(&project(), head.seq));
     let verified =
         verify_observed(f.ledger(), &project(), &FetchObservation::Absent, T1).expect("verify");
-    assert_eq!(verified.status, AnchorStatus::RemoteAbsent);
+    assert_eq!(verified.status, AnchorCheck::RemoteAbsent);
     assert_eq!(verified.report.chain.anchor, AnchorVerdict::NoAnchor);
 }
 
@@ -1303,7 +1304,7 @@ fn an_unreachable_remote_leaves_verification_unanchored() {
     f.record("w1", 2);
     let verified = verify_observed(f.ledger(), &project(), &FetchObservation::Unreachable, T1)
         .expect("verify");
-    assert_eq!(verified.status, AnchorStatus::RemoteUnreachable);
+    assert_eq!(verified.status, AnchorCheck::RemoteUnreachable);
     assert_eq!(verified.report.chain.anchor, AnchorVerdict::NoAnchor);
 }
 
@@ -1347,7 +1348,7 @@ fn a_fresh_anchor_starts_no_unanchored_age() {
         report.chain.unanchored,
         Some(anchor.seq + 1..=anchor.seq + 3)
     );
-    assert_eq!(report.age_unanchored_since, None);
+    assert_eq!(report.chain.age_unanchored_since, None);
 }
 
 // After an interrupted anchor is reconciled and the retried push fails,
@@ -1376,7 +1377,7 @@ fn reconciliation_and_a_failed_retry_start_no_unanchored_age() {
         .expect("verify");
     assert_eq!(report.chain.anchor, AnchorVerdict::Matches);
     assert!(report.chain.unanchored.is_some());
-    assert_eq!(report.age_unanchored_since, None);
+    assert_eq!(report.chain.age_unanchored_since, None);
 }
 
 // Project work after an anchor starts the age at its own recorded time,
@@ -1390,5 +1391,714 @@ fn project_work_starts_the_age_at_its_own_time() {
     f.record_at("w2", 1, T1);
     anchor_now(&f, "a2", T2);
     let report = f.ledger().verify(&project(), Some(&first)).expect("verify");
-    assert_eq!(report.age_unanchored_since.as_deref(), Some(T1));
+    assert_eq!(report.chain.age_unanchored_since.as_deref(), Some(T1));
+}
+
+// Catches an export that leaks another project's events, references or bodies.
+#[test]
+fn exported_project_verifies_alone_without_other_projects() {
+    let f = Fixture::new();
+    let other = ProjectId("other".into());
+    f.store
+        .create_project(&other, "Other", T0)
+        .expect("other project");
+    let head = f.record("one", 1);
+    let mut other_command = fixture_command("other-work", T0);
+    other_command.project = other.clone();
+    let mut other_hash = None;
+    f.store
+        .transact(&other_command, &mut |tx| {
+            let body = tx.put_payload(b"other project's body", RetentionClass::Material)?;
+            other_hash = Some(body.hash);
+            tx.append(NewEvent {
+                attachments: vec![body.clone()],
+                ..fixture_event(json!({"body": body.to_value()}), None)
+            })?;
+            Ok(done())
+        })
+        .expect("other work");
+    let other_hash = other_hash.expect("other payload");
+    let target = f.home.path().join("export");
+    let exported = f.store.export(&project(), &target, T1).expect("export");
+    assert_eq!(exported.head, Some(head));
+    let copy = SqliteStore::open(
+        &target,
+        T1,
+        Options {
+            schema: Box::new(registry()),
+            ..Options::default()
+        },
+    )
+    .expect("open copy");
+    let report = copy.verify(&project(), None).expect("verify copy");
+    assert!(report.chain.first_break.is_none());
+    assert!(report.payloads.is_empty());
+    assert_eq!(
+        copy.projects().expect("projects"),
+        vec![(project(), "fixture".into())]
+    );
+    let exported_db = Connection::open(target.join("baley.db")).expect("exported database");
+    for table in ["event", "payload_ref"] {
+        let rows: i64 = exported_db
+            .query_row(
+                &format!("SELECT count(*) FROM {table} WHERE project_id = ?1"),
+                [&other.0],
+                |row| row.get(0),
+            )
+            .expect("other rows");
+        assert_eq!(rows, 0, "{table}");
+    }
+    let bodies: i64 = exported_db
+        .query_row(
+            "SELECT count(*) FROM payload WHERE hash = ?1",
+            [&other_hash.0[..]],
+            |row| row.get(0),
+        )
+        .expect("other payload");
+    assert_eq!(bodies, 0);
+}
+
+// Catches an export mixing two source snapshots after a command commits.
+#[test]
+fn export_keeps_the_snapshot_fixed_after_its_first_read() {
+    let f = Fixture::new();
+    let before = f.record("before", 1);
+    let target = f.home.path().join("export");
+    let exported = f
+        .store
+        .export_with(&project(), &target, T1, || {
+            f.record("after", 1);
+        })
+        .expect("export");
+    assert_eq!(exported.head, Some(before));
+    let copy = SqliteStore::open(
+        &target,
+        T1,
+        Options {
+            schema: Box::new(registry()),
+            ..Options::default()
+        },
+    )
+    .expect("open copy");
+    assert!(
+        copy.verify(&project(), None)
+            .expect("verify")
+            .chain
+            .first_break
+            .is_none()
+    );
+}
+
+// Catches an existing directory overwritten or recorded as an export.
+#[test]
+fn existing_export_target_is_refused_without_a_record() {
+    let f = Fixture::new();
+    let target = f.home.path().join("export");
+    std::fs::create_dir(&target).expect("existing");
+    assert_eq!(
+        f.store.export(&project(), &target, T1),
+        Err(StoreError::Refused(Refusal::TargetExists(target.clone())))
+    );
+    let records: i64 = f
+        .raw()
+        .query_row("SELECT count(*) FROM export_record", [], |row| row.get(0))
+        .expect("records");
+    assert_eq!(records, 0);
+    assert!(target.is_dir());
+}
+
+// Catches a corrupt local chain reported as a successful export.
+#[test]
+fn export_refuses_a_copy_with_an_edited_event() {
+    let f = Fixture::new();
+    f.record("one", 1);
+    f.raw()
+        .execute(
+            "UPDATE event SET payload_json = '{\"edited\":true}' WHERE project_id = ?1 AND seq = 1",
+            [&project().0],
+        )
+        .expect("edit");
+    let target = f.home.path().join("export");
+    assert!(matches!(
+        f.store.export(&project(), &target, T1),
+        Err(StoreError::Refused(Refusal::ExportUnverified { .. }))
+    ));
+    assert!(!target.exists());
+    assert_eq!(
+        f.raw()
+            .query_row("SELECT count(*) FROM export_record", [], |row| row
+                .get::<_, i64>(0))
+            .expect("records"),
+        0
+    );
+}
+
+// Catches creating a target before the epoch-fenced intent can be written.
+#[test]
+fn export_record_failure_creates_no_target() {
+    let f = Fixture::new();
+    f.record("work", 1);
+    f.raw()
+        .execute(
+            "UPDATE schema_meta SET value = ?1 WHERE key = 'epoch'",
+            [crate::EPOCH + 1],
+        )
+        .expect("newer epoch");
+    let target = f.home.path().join("export");
+    assert_eq!(
+        f.store.export(&project(), &target, T1),
+        Err(StoreError::ReadOnly {
+            needed_epoch: crate::EPOCH + 1
+        })
+    );
+    assert!(!target.exists());
+}
+
+// Catches a completed export record left pending after verification.
+#[test]
+fn completed_export_record_holds_the_verified_head() {
+    let f = Fixture::new();
+    let head = f.record("one", 1);
+    let target = f.home.path().join("export");
+    f.store.export(&project(), &target, T1).expect("export");
+    let recorded: Option<i64> = f
+        .raw()
+        .query_row("SELECT head_seq FROM export_record", [], |row| row.get(0))
+        .expect("record");
+    assert_eq!(recorded, Some(head.seq as i64));
+}
+
+// Catches a released shared body leaking through the exporting project.
+#[test]
+fn export_tombstones_a_body_released_by_its_project() {
+    let f = Fixture::new();
+    let other = ProjectId("other".into());
+    f.store.create_project(&other, "Other", T0).expect("other");
+    let reference = f.attach("one", b"shared secret", RetentionClass::Material);
+    let mut command = fixture_command("other-one", T0);
+    command.project = other;
+    f.store
+        .transact(&command, &mut |tx| {
+            let body = tx.put_payload(b"shared secret", RetentionClass::Material)?;
+            tx.append(NewEvent {
+                attachments: vec![body.clone()],
+                ..fixture_event(json!({"body": body.to_value()}), None)
+            })?;
+            Ok(done())
+        })
+        .expect("other reference");
+    let mut purge = fixture_command("purge-one", T1);
+    purge.kind = CommandKind("retention.purge".into());
+    f.store
+        .purge(&purge, &[reference.hash], "owner request")
+        .expect("purge");
+    let target = f.home.path().join("export");
+    f.store.export(&project(), &target, T2).expect("export");
+    let row: (String, Option<Vec<u8>>) = Connection::open(target.join("baley.db"))
+        .expect("copy")
+        .query_row(
+            "SELECT state, body FROM payload WHERE hash = ?1",
+            [&reference.hash.0[..]],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("row");
+    assert_eq!(row, ("purged".into(), None));
+}
+
+fn local_checks() -> BTreeMap<ProjectId, AnchorCheck> {
+    BTreeMap::from([(project(), AnchorCheck::LocalOnly)])
+}
+
+// Catches a pending scrub marker or epoch read from the wrong metadata key.
+#[test]
+fn doctor_reports_epoch_and_pending_scrub() {
+    let f = Fixture::new();
+    f.raw()
+        .execute(
+            "INSERT INTO schema_meta (key, value) VALUES ('scrub_pending', ?1)",
+            [T1],
+        )
+        .expect("marker");
+    let health = f.store.doctor(T2, &local_checks()).expect("doctor");
+    assert_eq!(
+        (health.epoch, health.scrub_pending.as_deref()),
+        (crate::EPOCH, Some(T1))
+    );
+}
+
+// Catches an integrity check omitted or misread on a sound fixture.
+#[test]
+fn doctor_reports_sqlite_integrity_rows() {
+    let f = Fixture::new();
+    assert_eq!(
+        f.store
+            .doctor(T2, &local_checks())
+            .expect("doctor")
+            .integrity,
+        ["ok"]
+    );
+}
+
+// Catches measuring a different file or inventing a missing log size.
+#[test]
+fn doctor_reports_main_and_log_file_sizes() {
+    let f = Fixture::new();
+    let main = std::fs::metadata(f.home.path().join("baley.db"))
+        .expect("main")
+        .len();
+    let wal = std::fs::metadata(f.home.path().join("baley.db-wal"))
+        .map(|file| file.len())
+        .unwrap_or(0);
+    let health = f.store.doctor(T2, &local_checks()).expect("doctor");
+    assert_eq!((health.database_bytes, health.log_bytes), (main, wal));
+}
+
+// Catches reading view stamps after doctor rebuilt a marked generation.
+#[test]
+fn doctor_reports_raw_view_versions_and_building_lag() {
+    let f = Fixture::new();
+    let head = f.record("work", 1);
+    f.raw().execute("UPDATE view_gen SET projector_version = projector_version - 1, view_set_version = 1 WHERE project_id = ?1", [&project().0]).expect("older stamps");
+    f.raw().execute("UPDATE project_gen SET building_gen = 5, building_applied_seq = 1 WHERE project_id = ?1", [&project().0]).expect("marker");
+    let health = f.store.doctor(T2, &local_checks()).expect("doctor");
+    let entry = &health.projects[0];
+    let raw_views = entry.raw_views.as_ref().expect("raw views");
+    assert_eq!(raw_views.view_set, (Some(1), 2));
+    assert_eq!(
+        raw_views
+            .views
+            .iter()
+            .map(|view| (view.view.as_str(), view.live_version, view.binary_version))
+            .collect::<Vec<_>>(),
+        vec![("claim_scope", Some(0), 1), ("request", Some(1), 2)]
+    );
+    assert_eq!(
+        raw_views.building,
+        Some(baley_store::Building {
+            generation: 5,
+            applied_seq: 1,
+            lag: head.seq - 1
+        })
+    );
+}
+
+// Catches one project's malformed building marker aborting the whole doctor run.
+#[test]
+fn doctor_keeps_a_bad_building_marker_inside_its_entry() {
+    let f = Fixture::new();
+    let other = ProjectId("other".into());
+    f.store.create_project(&other, "Other", T0).expect("other");
+    f.raw()
+        .execute(
+            "INSERT INTO project_gen (project_id, live_gen, building_gen, building_applied_seq) VALUES (?1, 0, 5, -1)",
+            [&other.0],
+        )
+        .expect("bad marker");
+    let checks = BTreeMap::from([
+        (project(), AnchorCheck::LocalOnly),
+        (other.clone(), AnchorCheck::LocalOnly),
+    ]);
+    let health = f.store.doctor(T2, &checks).expect("doctor");
+    assert_eq!(health.projects.len(), 2);
+    assert_eq!(health.projects[0].project, project());
+    assert!(health.projects[0].verify.is_ok());
+    assert!(health.projects[0].raw_views.is_ok());
+    assert_eq!(health.projects[1].project, other);
+    assert_eq!(
+        health.projects[1].raw_views,
+        Err(StoreError::Unavailable(
+            "malformed building sequence".into()
+        ))
+    );
+}
+
+// Catches losing the first accepted work event's age in doctor.
+#[test]
+fn doctor_reports_unanchored_work_from_the_chain() {
+    let f = Fixture::new();
+    f.record_at("work", 1, T1);
+    let health = f.store.doctor(T2, &local_checks()).expect("doctor");
+    assert_eq!(
+        health.projects[0].unanchored,
+        UnanchoredAge::Since {
+            since: T1.into(),
+            warning: false
+        }
+    );
+}
+
+// Catches one project's malformed event time aborting the whole doctor run.
+#[test]
+fn doctor_keeps_an_unjudgeable_unanchored_age_inside_its_project() {
+    let f = Fixture::new();
+    let other = ProjectId("other".into());
+    f.store.create_project(&other, "Other", T0).expect("other");
+    f.record("work", 1);
+    let events = f
+        .ledger()
+        .history(
+            &project(),
+            1..=u64::MAX,
+            &HistoryFilter {
+                types: vec![],
+                git_commit: None,
+            },
+            PageRequest {
+                limit: 100,
+                after: None,
+            },
+        )
+        .expect("history")
+        .items;
+    let mut previous = None;
+    for (index, mut event) in events.into_iter().enumerate() {
+        if index == 0 {
+            event.recorded_at = "invalid time".into();
+        }
+        event.prev_hash = previous;
+        event.hash = event.compute_hash().expect("reseal");
+        f.raw()
+            .execute(
+                "UPDATE event SET recorded_at = ?1, prev_hash = ?2, hash = ?3 WHERE project_id = ?4 AND seq = ?5",
+                params![event.recorded_at, event.prev_hash.map(|hash| hash.0.to_vec()), &event.hash.0[..], project().0, event.seq as i64],
+            )
+            .expect("rewrite event");
+        previous = Some(event.hash);
+    }
+    f.raw()
+        .execute(
+            "UPDATE project SET head_hash = ?1 WHERE project_id = ?2",
+            params![&previous.expect("head").0[..], project().0],
+        )
+        .expect("rewrite head");
+    let checks = BTreeMap::from([
+        (project(), AnchorCheck::LocalOnly),
+        (other.clone(), AnchorCheck::LocalOnly),
+    ]);
+    let health = f.store.doctor(T2, &checks).expect("doctor");
+    assert_eq!(health.projects.len(), 2);
+    assert_eq!(
+        health.projects[0]
+            .verify
+            .as_ref()
+            .expect("verified chain")
+            .chain
+            .age_unanchored_since
+            .as_deref(),
+        Some("invalid time")
+    );
+    assert_eq!(health.projects[0].unanchored, UnanchoredAge::Unchecked);
+    assert_eq!(health.projects[1].project, other);
+    assert_eq!(health.projects[1].unanchored, UnanchoredAge::None);
+}
+
+// Catches an invalid supplied time hidden when a project has no work to age.
+#[test]
+fn doctor_rejects_an_invalid_supplied_time() {
+    let f = Fixture::new();
+    assert_eq!(
+        f.store.doctor("invalid time", &local_checks()),
+        Err(StoreError::Unavailable("malformed doctor time".into()))
+    );
+}
+
+// Catches claim counts judged without the supplied doctor time.
+#[test]
+fn doctor_counts_active_and_interrupted_claims_at_the_supplied_time() {
+    let f = Fixture::new();
+    for (id, at, scope) in [("old", T0, "old-scope"), ("new", EXPIRED, "new-scope")] {
+        let mut command = fixture_command(id, at);
+        command.kind = CommandKind("fixture.effect".into());
+        command.scope = vec![scope.into()];
+        f.store
+            .claim(&command, &mut |_| {
+                Ok(ClaimDecision::Claim {
+                    intent: json!({"effect": id}),
+                    owner: ClaimOwner {
+                        started_at: at.into(),
+                        ..owner()
+                    },
+                    git: None,
+                    observed: Observed::default(),
+                })
+            })
+            .expect("claim");
+    }
+    let counts = f
+        .store
+        .doctor(EXPIRED, &local_checks())
+        .expect("doctor")
+        .projects
+        .remove(0)
+        .claims
+        .expect("claims");
+    assert_eq!(
+        (counts.active, counts.interrupted, counts.awaiting_owner),
+        (1, 1, 0)
+    );
+}
+
+// Catches a project silently verified as local-only without a supplied check.
+#[test]
+fn doctor_requires_one_check_per_project() {
+    let f = Fixture::new();
+    f.store
+        .create_project(&ProjectId("other".into()), "Other", T0)
+        .expect("other");
+    assert_eq!(
+        f.store.doctor(T2, &local_checks()),
+        Err(StoreError::Refused(Refusal::MissingAnchorCheck(ProjectId(
+            "other".into()
+        ))))
+    );
+}
+
+// Catches a remote witness ignored while verifying a project.
+#[test]
+fn doctor_uses_the_remote_anchor_for_verification() {
+    let f = Fixture::new();
+    f.record("work", 1);
+    let remote = Anchor {
+        seq: 99,
+        hash: Hash([9; 32]),
+    };
+    let checks = BTreeMap::from([(project(), AnchorCheck::Remote(remote))]);
+    let health = f.store.doctor(T2, &checks).expect("doctor");
+    assert!(matches!(
+        health.projects[0]
+            .verify
+            .as_ref()
+            .expect("verify")
+            .chain
+            .anchor,
+        AnchorVerdict::Truncated { anchored: 99, .. }
+    ));
+}
+
+// Catches a locally confirmed tag lost from the remote without a finding.
+#[test]
+fn doctor_reports_remote_absence_beside_a_local_anchor_row() {
+    let f = Fixture::new();
+    let head = f.record("work", 1);
+    f.insert_anchor_row(head.seq, head.hash, &anchor_tag(&project(), head.seq));
+    let checks = BTreeMap::from([(project(), AnchorCheck::RemoteAbsent)]);
+    let health = f.store.doctor(T2, &checks).expect("doctor");
+    assert_eq!(
+        health.projects[0]
+            .remote_absent_local_row
+            .as_ref()
+            .map(|row| row.anchor.clone()),
+        Some(head_anchor(&head))
+    );
+}
+
+// Catches an unreachable remote reported as a known empty age.
+#[test]
+fn doctor_marks_unreachable_remote_age_unchecked() {
+    let f = Fixture::new();
+    f.record("work", 1);
+    let checks = BTreeMap::from([(project(), AnchorCheck::RemoteUnreachable)]);
+    assert_eq!(
+        f.store.doctor(T2, &checks).expect("doctor").projects[0].unanchored,
+        UnanchoredAge::Unchecked
+    );
+}
+
+// Catches one project's failed view check aborting all of doctor.
+#[test]
+fn doctor_keeps_a_project_view_failure_inside_its_entry() {
+    let f = Fixture::new();
+    let other = ProjectId("other".into());
+    f.store.create_project(&other, "Other", T0).expect("other");
+    f.record("work", 1);
+    f.raw().execute("UPDATE project_gen SET building_gen = 5, building_applied_seq = 1 WHERE project_id = ?1", [&project().0]).expect("marker");
+    let checks = BTreeMap::from([
+        (project(), AnchorCheck::LocalOnly),
+        (other, AnchorCheck::LocalOnly),
+    ]);
+    let health = f.store.doctor(T2, &checks).expect("doctor");
+    assert_eq!(health.projects.len(), 2);
+    assert!(matches!(
+        health
+            .projects
+            .iter()
+            .find(|entry| entry.project == project())
+            .expect("project")
+            .views_check,
+        Err(StoreError::UnfinishedGeneration { .. })
+    ));
+}
+
+// Catches project creation reading a clock instead of storing its argument.
+#[test]
+fn create_project_stores_the_supplied_time() {
+    let f = Fixture::new();
+    let added = ProjectId("added".into());
+    f.store.create_project(&added, "Added", T2).expect("create");
+    let at: String = f
+        .raw()
+        .query_row(
+            "SELECT created_at FROM project WHERE project_id = ?1",
+            [&added.0],
+            |row| row.get(0),
+        )
+        .expect("time");
+    assert_eq!(at, T2);
+}
+
+// Catches a created project omitted from the admin list.
+#[test]
+fn admin_projects_lists_created_projects_in_id_order() {
+    let f = Fixture::new();
+    f.store
+        .create_project(&ProjectId("a".into()), "Alpha", T2)
+        .expect("create");
+    assert_eq!(
+        f.store.projects().expect("projects"),
+        vec![
+            (project(), "fixture".into()),
+            (ProjectId("a".into()), "Alpha".into())
+        ]
+    );
+}
+
+struct FixedRemote(Anchor);
+
+impl Forge for FixedRemote {
+    fn push_tag(&mut self, _: &ProjectId, _: &str, _: &str, _: &str) -> PushObservation {
+        panic!("acknowledgement never pushes")
+    }
+
+    fn fetch_tag(&mut self, _: &ProjectId, _: &str, _: &TagQuery) -> FetchObservation {
+        remote_anchor(&self.0)
+    }
+}
+
+fn restore_request(actor: Actor) -> AcknowledgeRestore {
+    AcknowledgeRestore {
+        project: project(),
+        request_id: RequestId("restore-1".into()),
+        actor,
+        policy_version: 1,
+        remote: "origin".into(),
+    }
+}
+
+fn remote_future() -> Anchor {
+    Anchor {
+        seq: 8,
+        hash: Hash([8; 32]),
+    }
+}
+
+// Catches an acknowledgement recorded but ignored by verification.
+#[test]
+fn acknowledged_restore_verifies_as_accepted() {
+    let f = Fixture::new();
+    f.record("work", 1);
+    let remote = remote_future();
+    acknowledge_restore(
+        &restore_request(Actor::Owner),
+        f.ledger(),
+        &mut FixedRemote(remote.clone()),
+        &mut || T1.into(),
+    )
+    .expect("acknowledge");
+    let report = f
+        .ledger()
+        .verify(&project(), Some(&remote))
+        .expect("verify");
+    assert!(matches!(
+        report.chain.anchor,
+        AnchorVerdict::Acknowledged { anchored: 8, .. }
+    ));
+    assert_eq!(report.chain.acknowledged_restores.len(), 1);
+}
+
+// Catches pre-push still refusing an owner-accepted restore gap.
+#[test]
+fn acknowledged_restore_permits_the_next_anchor_check() {
+    let f = Fixture::new();
+    f.record("work", 1);
+    let remote = remote_future();
+    acknowledge_restore(
+        &restore_request(Actor::Owner),
+        f.ledger(),
+        &mut FixedRemote(remote.clone()),
+        &mut || T1.into(),
+    )
+    .expect("acknowledge");
+    assert!(matches!(
+        pre_push_check(f.ledger(), &project(), &remote_anchor(&remote)).expect("check"),
+        PrePushCheck::Push { .. }
+    ));
+}
+
+// Catches a non-owner acknowledgement that appends an event.
+#[test]
+fn non_owner_cannot_record_a_restore_acknowledgement() {
+    let f = Fixture::new();
+    let before = f.record("work", 1);
+    let result = acknowledge_restore(
+        &restore_request(Actor::Baley),
+        f.ledger(),
+        &mut FixedRemote(remote_future()),
+        &mut || T1.into(),
+    );
+    assert_eq!(
+        result,
+        Err(AcknowledgeRestoreError::Store(StoreError::Refused(
+            Refusal::NotOwner
+        )))
+    );
+    assert_eq!(f.head(), before);
+}
+
+// Catches a retry digest bound to the head moved by the first completion.
+#[test]
+fn restore_acknowledgement_retry_replays_without_a_second_event() {
+    let f = Fixture::new();
+    f.record("work", 1);
+    let remote = remote_future();
+    let request = restore_request(Actor::Owner);
+    acknowledge_restore(
+        &request,
+        f.ledger(),
+        &mut FixedRemote(remote.clone()),
+        &mut || T1.into(),
+    )
+    .expect("first");
+    let before = f.head();
+    assert!(matches!(
+        acknowledge_restore(&request, f.ledger(), &mut FixedRemote(remote), &mut || T2
+            .into()),
+        Ok(Recorded::Replayed { .. })
+    ));
+    assert_eq!(f.head(), before);
+}
+
+// Catches acknowledgement of a tail added after verification.
+#[test]
+fn restore_acknowledgement_refuses_a_stale_head() {
+    let f = Fixture::new();
+    f.record("work", 1);
+    let mut calls = 0;
+    let result = acknowledge_restore(
+        &restore_request(Actor::Owner),
+        f.ledger(),
+        &mut FixedRemote(remote_future()),
+        &mut || {
+            calls += 1;
+            if calls == 2 {
+                f.record("late", 1);
+            }
+            T1.into()
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(AcknowledgeRestoreError::Store(StoreError::Stale(
+            baley_store::StaleInput::Head { .. }
+        )))
+    ));
 }

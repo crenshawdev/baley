@@ -126,7 +126,7 @@ impl SqliteStore {
     /// reading and left exactly as it was, one at an older epoch is refused
     /// until migration exists, and a missing schema is created under the
     /// writer queue with `at` as its creation time. An existing file whose
-    /// epoch-1 schema digest differs is refused before any write; T10 needs
+    /// epoch-1 schema digest differs is refused before any write; T12 needs
     /// a fresh ledger at epoch 1. A store at this binary's epoch must be in
     /// write-ahead-log mode with 8 KiB pages.
     /// The declared views and the view set version's names are checked
@@ -478,7 +478,7 @@ fn schema_digest() -> String {
 
 /// Creates the file settings and the schema under the writer queue. A
 /// second process that was waiting finds the schema and changes nothing.
-fn create(conn: &Connection, queue: &FileLock, at: &str) -> Result<(), StoreError> {
+pub(crate) fn create(conn: &Connection, queue: &FileLock, at: &str) -> Result<(), StoreError> {
     let _turn = queue.wait().map_err(io)?;
     if stored_epoch(conn)?.is_some() {
         return Ok(());

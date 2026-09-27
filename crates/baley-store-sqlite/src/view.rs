@@ -131,7 +131,7 @@ impl ViewSet {
 
     /// Checks again inside the write transaction, then creates whatever is
     /// still missing.
-    pub(crate) fn create(&self, tx: &rusqlite::Transaction<'_>) -> Result<(), StoreError> {
+    pub(crate) fn create(&self, tx: &Connection) -> Result<(), StoreError> {
         if self.set_pending(tx)? {
             tx.execute(
                 "INSERT INTO view_set_catalog (version, sorted_view_names) VALUES (?1, ?2)",
@@ -314,11 +314,23 @@ pub(crate) enum Fence {
 
 /// The project's live generation and stamps. An unknown project is refused.
 pub(crate) fn live_views(conn: &Connection, project: &ProjectId) -> Result<LiveViews, StoreError> {
+    live_views_attached(conn, project, "main")
+}
+
+/// Reads a project's live stamps from a checked attached schema.
+pub(crate) fn live_views_attached(
+    conn: &Connection,
+    project: &ProjectId,
+    schema: &str,
+) -> Result<LiveViews, StoreError> {
+    debug_assert!(matches!(schema, "main" | "source"));
     let (head, generation) = conn
         .query_row(
-            "SELECT p.head_seq, g.live_gen FROM project p
-               LEFT JOIN project_gen g ON g.project_id = p.project_id
-              WHERE p.project_id = ?1",
+            &format!(
+                "SELECT p.head_seq, g.live_gen FROM {schema}.project p
+               LEFT JOIN {schema}.project_gen g ON g.project_id = p.project_id
+              WHERE p.project_id = ?1"
+            ),
             [&project.0],
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?)),
         )
@@ -330,10 +342,10 @@ pub(crate) fn live_views(conn: &Connection, project: &ProjectId) -> Result<LiveV
     let mut stamps = BTreeMap::new();
     if let Some(generation) = generation {
         let mut statement = conn
-            .prepare(
-                "SELECT view, projector_version, view_set_version FROM view_gen
-                  WHERE project_id = ?1 AND gen = ?2",
-            )
+            .prepare(&format!(
+                "SELECT view, projector_version, view_set_version FROM {schema}.view_gen
+                  WHERE project_id = ?1 AND gen = ?2"
+            ))
             .map_err(sql)?;
         let rows = statement
             .query_map(params![project.0, generation], |row| {
@@ -359,6 +371,10 @@ pub(crate) fn live_views(conn: &Connection, project: &ProjectId) -> Result<LiveV
 }
 
 impl ViewTable {
+    /// The checked physical table name for this view version.
+    pub(crate) fn physical_name(&self) -> &str {
+        &self.table
+    }
     /// The declared spec.
     pub(crate) fn spec(&self) -> &ViewSpec {
         &self.spec

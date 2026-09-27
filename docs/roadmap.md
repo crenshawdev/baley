@@ -53,14 +53,14 @@ Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work
 
 [#22](https://github.com/crenshawdev/baley/issues/22) · milestone Evidence · design [0001 evidence ledger](design/0001-evidence-ledger.md) · in progress
 
-The evidence ledger store: a storage port with a SQLite adapter behind it, one conformance suite every adapter must pass, the hash chain, forge anchors, verify, doctor and backup. Nothing uses it yet.
+The evidence ledger store: a storage port with a SQLite adapter behind it, one conformance suite every adapter must pass, the hash chain, forge anchors, verify, export, doctor and acknowledge-restore. Nothing uses it yet.
 
 ADRs: [0001 event ledger](adr/0001-event-ledger.md), [0002 SQLite](adr/0002-sqlite.md), [0003 per-user database](adr/0003-per-user-database.md), [0005 storage port](adr/0005-storage-port.md), [0007 forge anchors](adr/0007-forge-anchors.md), [0010 projector traits in the port](adr/0010-projector-traits-in-the-port.md), [0012 optimistic concurrency](adr/0012-optimistic-concurrency.md), [0021 claim rules in the port](adr/0021-claim-rules-in-the-port.md).
 
 ```mermaid
 flowchart LR
     T1["T1 to T11<br/>merged"]
-    T12["T12<br/>backup, export,<br/>doctor, migration"]
+    T12["T12<br/>export, doctor,<br/>acknowledge-restore<br/>backups removed"]
     T13["T13<br/>conformance suite"]
     T14["T14<br/>CLI, git forge,<br/>ticker, benchmark"]
 
@@ -90,17 +90,16 @@ Figure 2. Build 1's tasks. One pull request per task.
 | T9 | Generations, rebuild and `verify --views` | [#42](https://github.com/crenshawdev/baley/pull/42), [#43](https://github.com/crenshawdev/baley/pull/43) | Merged |
 | T10 | Claims, leases and reconciliation | [#132](https://github.com/crenshawdev/baley/pull/132) | Merged |
 | T11 | Anchors and the adapter's `verify` | [#135](https://github.com/crenshawdev/baley/pull/135) | Merged |
-| T12 | Backup, export, doctor, migration, and the owner-only acknowledge-restore command | | Next |
+| T12 | Export, doctor and the owner-only acknowledge-restore command; backups removed | [#138](https://github.com/crenshawdev/baley/pull/138) | In review |
 | T13 | The conformance suite, run against every store adapter | | Planned |
-| T14 | The CLI, the real git forge and ticker, and the benchmark | | Planned |
+| T14 | CLI commands `verify`, `doctor`, `export`, `purge`, `anchor` and `acknowledge-restore`; the real git forge and ticker, and the benchmark | | Planned |
 
-Also open: [#136](https://github.com/crenshawdev/baley/pull/136), "fix: close the review findings on anchors and verify", fixes review findings on T11 ([#135](https://github.com/crenshawdev/baley/pull/135)). It is under review and not merged.
 
 ## Build 2: Identity, settings and keys
 
 [#23](https://github.com/crenshawdev/baley/issues/23) · milestone Evidence · next
 
-Baley finds its per-user ledger safely, and `baley init` ties a repository to a project through a committed `baley.toml`. It reads the two TOML settings files ([ADR 0015](adr/0015-settings-in-toml.md)) and resolves routes against a model catalog it refreshes from each provider. Provider keys are stored encrypted in the ledger, with the master key in the OS secret store ([ADR 0016](adr/0016-key-store.md)). They reach a call only through `baley exec --key`, and never enter events, views, backups or exports. All of it runs from the command line, on Linux and macOS.
+Baley finds its per-user ledger safely, and `baley init` ties a repository to a project through a committed `baley.toml`. It reads the two TOML settings files ([ADR 0015](adr/0015-settings-in-toml.md)) and resolves routes against a model catalog it refreshes from each provider. Provider keys are stored encrypted in the ledger, with the master key in the OS secret store ([ADR 0016](adr/0016-key-store.md)). They reach a call only through `baley exec --key`, and never enter events, views or exports. An owner's copy of the whole store carries the keys encrypted. All of it runs from the command line, on Linux and macOS.
 
 - Designs: [0001 evidence ledger](design/0001-evidence-ledger.md), [0002 system design](design/0002-system-design.md), [0003 configuration and routing](design/0003-configuration-and-routing.md), [0012 host interface](design/0012-host-interface.md)
 - ADRs: [0003 per-user database](adr/0003-per-user-database.md), [0004 project identity](adr/0004-project-identity.md), [0013 host session calls outside models](adr/0013-host-session-calls-outside-models.md), [0015 settings in TOML](adr/0015-settings-in-toml.md), [0016 key store](adr/0016-key-store.md)

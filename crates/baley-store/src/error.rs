@@ -9,9 +9,11 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::chain::Head;
 use crate::claim::{Block, ClaimId};
 use crate::command::{Absence, StreamName};
 use crate::event::{Hash, ProjectId, RequestId};
+use crate::ledger::VerifyReport;
 use crate::payload::PayloadReference;
 use crate::view::DocKey;
 
@@ -71,6 +73,11 @@ pub enum StoreError {
 /// The input that moved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaleInput {
+    /// The project head changed after verification.
+    Head {
+        seen: Option<Head>,
+        now: Option<Head>,
+    },
     /// A view document is not at the sequence the caller saw. `None` on
     /// either side means absent.
     Document {
@@ -104,6 +111,15 @@ pub enum StaleInput {
 /// Why the port refused a request outright.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
+    /// Doctor has no remote check for this project.
+    MissingAnchorCheck(ProjectId),
+    /// An export target already exists, including a symbolic link.
+    TargetExists(PathBuf),
+    /// The exported copy failed its own verification.
+    ExportUnverified {
+        project: ProjectId,
+        report: Box<VerifyReport>,
+    },
     /// No such project in this store.
     UnknownProject(ProjectId),
     /// The project exists already.
@@ -200,6 +216,21 @@ impl fmt::Display for StoreError {
                 f,
                 "refused: {} was written by a build with another epoch-1 schema; delete this pre-release ledger and create a fresh one",
                 path.display()
+            ),
+            Self::Refused(Refusal::MissingAnchorCheck(project)) => write!(
+                f,
+                "refused: no anchor check was supplied for project {}",
+                project.0
+            ),
+            Self::Refused(Refusal::TargetExists(path)) => write!(
+                f,
+                "refused: export target already exists: {}",
+                path.display()
+            ),
+            Self::Refused(Refusal::ExportUnverified { project, report }) => write!(
+                f,
+                "refused: export of project {} did not verify: {report:?}",
+                project.0
             ),
             Self::Refused(refusal) => write!(f, "refused: {refusal:?}"),
             Self::Projector { view, seq, message } => {

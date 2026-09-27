@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0003: Configuration and routing](../design/0003-configuration-and-routing.md) |
 | Supersedes |  |
-| Superseded by | |
+| Superseded by | [0023](0023-no-backups-in-baley.md), in part: keys kept out of backups |
 
 ## Context and problem
 

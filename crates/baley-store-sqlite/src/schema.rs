@@ -40,6 +40,15 @@ CREATE TABLE anchor (
   PRIMARY KEY (project_id, seq)
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE export_record (
+  id INTEGER PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES project(project_id),
+  target TEXT NOT NULL,
+  exported_at TEXT NOT NULL,
+  head_seq INTEGER
+) STRICT;
+CREATE INDEX export_record_project ON export_record(project_id);
+
 CREATE TABLE event (
   project_id TEXT NOT NULL REFERENCES project(project_id),
   seq INTEGER NOT NULL,
@@ -86,7 +95,6 @@ CREATE TABLE payload (
   CHECK ((state = 'purged') = (purge_reason IS NOT NULL))
 ) STRICT;
 CREATE INDEX payload_excerpt ON payload(excerpt_hash) WHERE excerpt_hash IS NOT NULL;
-CREATE INDEX payload_non_present ON payload(state) WHERE state != 'present';
 
 -- The release event sequence is reconstructed from payload.reduced.reference
 -- and the [source sequence, hash] pairs in payload.purged.released.

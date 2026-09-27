@@ -17,6 +17,8 @@ use crate::request::COMMAND_COMPLETED;
 pub const ANCHOR_PUSH: &str = "anchor.push";
 /// The command kind that reconciles an interrupted anchor push.
 pub const ANCHOR_RECONCILE: &str = "anchor.reconcile";
+/// The command kind that accepts a restored chain behind a remote anchor.
+pub const ANCHOR_ACKNOWLEDGE_RESTORE: &str = "anchor.acknowledge_restore";
 /// The scope token an anchor push holds.
 pub const ANCHOR_SCOPE: &str = "anchor";
 /// The stream the anchor result events go to.
@@ -29,6 +31,10 @@ pub const ANCHOR_PUSHED_VERSION: u32 = 1;
 pub const ANCHOR_FAILED: &str = "anchor.failed";
 /// The current `anchor.failed` payload version.
 pub const ANCHOR_FAILED_VERSION: u32 = 1;
+/// The event that records an owner accepted restore gap.
+pub const ANCHOR_RESTORE_ACKNOWLEDGED: &str = "anchor.restore_acknowledged";
+/// The current restore acknowledgement payload version.
+pub const ANCHOR_RESTORE_ACKNOWLEDGED_VERSION: u32 = 1;
 /// Every anchor tag's name starts with this.
 pub const ANCHOR_TAG_PREFIX: &str = "baley-anchor/";
 
@@ -91,16 +97,90 @@ impl AnchorPushedPayload {
     }
 }
 
+/// The remote anchor an owner accepted and the local head before the event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreAcknowledgedPayload {
+    /// Remote whose anchor was checked.
+    pub remote: String,
+    /// Project anchor tag name.
+    pub tag: String,
+    /// Sequence of the remote anchor.
+    pub seq: u64,
+    /// Hash of the remote anchor.
+    pub head: Hash,
+    /// Local sequence before this event.
+    pub restored_seq: u64,
+    /// Local hash before this event, absent for an empty chain.
+    pub restored_head: Option<Hash>,
+    /// Time of the remote check.
+    pub checked_at: String,
+}
+
+impl RestoreAcknowledgedPayload {
+    /// Encodes the exact event payload.
+    pub fn to_value(&self) -> Value {
+        json!({"remote": self.remote, "tag": self.tag, "seq": self.seq,
+            "head": self.head.to_hex(), "restored_seq": self.restored_seq,
+            "restored_head": self.restored_head.map(|hash| hash.to_hex()),
+            "checked_at": self.checked_at})
+    }
+
+    /// Decodes only the exact event payload with lower case hashes.
+    pub fn from_value(value: &Value) -> Option<Self> {
+        let object = value.as_object()?;
+        if object.len() != 7 {
+            return None;
+        }
+        let head_text = object.get("head")?.as_str()?;
+        let head = Hash::from_hex(head_text)?;
+        if head.to_hex() != head_text {
+            return None;
+        }
+        let restored_head = match object.get("restored_head")? {
+            Value::Null => None,
+            Value::String(text) => {
+                let hash = Hash::from_hex(text)?;
+                if hash.to_hex() != *text {
+                    return None;
+                }
+                Some(hash)
+            }
+            _ => return None,
+        };
+        Some(Self {
+            remote: object.get("remote")?.as_str()?.into(),
+            tag: object.get("tag")?.as_str()?.into(),
+            seq: object.get("seq")?.as_u64()?,
+            head,
+            restored_seq: object.get("restored_seq")?.as_u64()?,
+            restored_head,
+            checked_at: object.get("checked_at")?.as_str()?.into(),
+        })
+    }
+
+    /// The remote anchor accepted by the owner.
+    pub fn anchor(&self) -> Anchor {
+        Anchor {
+            seq: self.seq,
+            hash: self.head,
+        }
+    }
+}
+
 /// Whether an event is one the anchor command itself records: its claim,
-/// its result, a reconciliation of it, or a completion of it or of its
-/// reconciler. These say nothing about the project's own work, so they do
+/// push result, reconciliation, acknowledgement of a restore, or completion
+/// of the push, reconciler or acknowledgement command. These say nothing
+/// about the project's own work, so they do
 /// not start the unanchored age that `doctor` warns on.
 pub fn anchor_command_event(type_name: &str, payload: &Value) -> bool {
     let kind = || payload.get("kind").and_then(Value::as_str);
     match type_name {
-        ANCHOR_PUSHED | ANCHOR_FAILED => true,
+        ANCHOR_PUSHED | ANCHOR_FAILED | ANCHOR_RESTORE_ACKNOWLEDGED => true,
         COMMAND_CLAIMED | crate::claim::COMMAND_RECONCILED => kind() == Some(ANCHOR_PUSH),
-        COMMAND_COMPLETED => matches!(kind(), Some(ANCHOR_PUSH | ANCHOR_RECONCILE)),
+        COMMAND_COMPLETED => matches!(
+            kind(),
+            Some(ANCHOR_PUSH | ANCHOR_RECONCILE | ANCHOR_ACKNOWLEDGE_RESTORE)
+        ),
         _ => false,
     }
 }
