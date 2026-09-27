@@ -15,7 +15,7 @@ use baley_store::{
     Head, PAYLOAD_PURGED, PAYLOAD_PURGED_VERSION, PAYLOAD_REDUCED, PAYLOAD_REDUCED_VERSION,
     ProjectId, Projector, Refusal, RequestProjector, StoreError, ViewSpec, store_owned,
 };
-use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
 use crate::queue::{FileLock, Monotonic, Timing, Turn, pause_for};
 use crate::schema::{EPOCH, SCHEMA};
@@ -432,6 +432,23 @@ pub(crate) fn connect(path: &Path) -> Result<Connection, StoreError> {
     Ok(conn)
 }
 
+/// A connection that can only read the existing database file: opened
+/// read-only, so a missing file is an error and never created. Only the
+/// busy timeout is set; the write settings `connect` applies have nothing
+/// to do on it.
+pub(crate) fn connect_read_only(path: &Path) -> Result<Connection, StoreError> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(sql)?;
+    conn.busy_timeout(Duration::from_millis(5000))
+        .map_err(sql)?;
+    Ok(conn)
+}
+
 /// The stored epoch, or `None` when there is no schema yet. Reads only.
 fn stored_epoch(conn: &Connection) -> Result<Option<u32>, StoreError> {
     let exists = conn
@@ -631,6 +648,25 @@ mod tests {
             store.record_trace(&trace("refused")),
             Err(StoreError::ReadOnly { needed_epoch: 3 })
         );
+    }
+
+    // With every connection closed, the write-ahead log checkpointed and
+    // its -wal and -shm files gone, a read-only connection still opens the
+    // database and reads what was written. Catches a verification that
+    // cannot open a store no other connection holds open.
+    #[test]
+    fn a_read_only_connection_opens_a_closed_store() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        store.record_trace(&trace("written")).expect("write");
+        drop(store);
+        assert!(!home.path().join("baley.db-wal").exists());
+        assert!(!home.path().join("baley.db-shm").exists());
+        let conn = connect_read_only(&home.path().join("baley.db")).expect("open");
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM trace", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(rows, 1);
     }
 
     // The settings the design names read back from both of the store's

@@ -221,9 +221,12 @@ impl ChainVerifier {
     }
 
     /// The first sequence no anchor covers: after the anchored sequence,
-    /// or 1 without an anchor.
-    pub fn unanchored_from(&self) -> u64 {
-        self.anchor.as_ref().map_or(1, |anchor| anchor.seq + 1)
+    /// or 1 without an anchor. `None` when the anchor is at the last
+    /// sequence there can be, so no event is left after it.
+    pub fn unanchored_from(&self) -> Option<u64> {
+        self.anchor
+            .as_ref()
+            .map_or(Some(1), |anchor| anchor.seq.checked_add(1))
     }
 
     /// The report for the events pushed so far.
@@ -241,7 +244,9 @@ impl ChainVerifier {
                 head: head_seq,
             },
         };
-        let unanchored = (head_seq >= unanchored_from).then_some(unanchored_from..=head_seq);
+        let unanchored = unanchored_from
+            .filter(|from| head_seq >= *from)
+            .map(|from| from..=head_seq);
         ChainReport {
             head: self.head,
             first_break: self.first_break,
@@ -478,6 +483,28 @@ mod tests {
         );
         assert_eq!(report.unanchored, None);
         assert!(!report.is_intact());
+    }
+
+    // A remote anchor at the largest sequence a tag can name is past any
+    // local head: truncation, with nothing after it left unanchored.
+    // Catches the sequence after the anchor overflowing, which panics or
+    // wraps to 0 and reports the whole chain as unanchored.
+    #[test]
+    fn an_anchor_at_the_last_sequence_reports_truncation() {
+        let events = chain(2);
+        let anchor = Anchor {
+            seq: u64::MAX,
+            hash: Hash([0x11; 32]),
+        };
+        let report = verify_chain(&events, Some(&anchor));
+        assert_eq!(
+            report.anchor,
+            AnchorVerdict::Truncated {
+                anchored: u64::MAX,
+                head: 2
+            }
+        );
+        assert_eq!(report.unanchored, None);
     }
 
     // The anchored sequence is present but its recomputed hash is not the

@@ -18,7 +18,7 @@ use baley_store::{
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 
-use crate::store::{SqliteStore, connect, sql};
+use crate::store::{SqliteStore, connect_read_only, sql};
 
 /// The only encoding this binary writes or reads.
 const ZSTD: &str = "zstd";
@@ -98,10 +98,9 @@ impl Payloads for SqliteStore {
             .read(|conn| Ok(conn.path().map(str::to_owned)))?
             .filter(|path| !path.is_empty())
             .ok_or_else(|| StoreError::Unavailable("the store has no database file".into()))?;
-        let conn = connect(Path::new(&path))?;
+        let conn = connect_read_only(Path::new(&path))?;
         // The first read below starts the snapshot the stream keeps.
-        conn.execute_batch("PRAGMA query_only = ON; BEGIN DEFERRED;")
-            .map_err(sql)?;
+        conn.execute_batch("BEGIN DEFERRED").map_err(sql)?;
         let found = stored(&conn, hash)?;
         if !matches!(found.status, PayloadStatus::Present { .. }) {
             return Ok(PayloadBody::Gone(found.status));
@@ -526,6 +525,19 @@ mod tests {
             store.open(&unknown),
             Err(StoreError::Refused(Refusal::UnknownPayload(hash))) if hash == unknown
         ));
+    }
+
+    // Opening a body only reads: with the database file gone it fails and
+    // leaves no file behind. Catches a stream connection opened
+    // read-write, which creates an empty baley.db.
+    #[test]
+    fn opening_a_body_without_a_database_file_fails_and_creates_none() {
+        let home = tempfile::tempdir().expect("temp dir");
+        let store = open(home.path());
+        let path = home.path().join("baley.db");
+        std::fs::remove_file(&path).expect("remove");
+        assert!(store.open(&Hash([9; 32])).is_err());
+        assert!(!path.exists());
     }
 
     /// Tombstones a payload by hand, as the retention task will.
