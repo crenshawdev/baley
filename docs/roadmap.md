@@ -90,7 +90,7 @@ Figure 2. Build 1's tasks. One pull request per task.
 | T10 | Claims, leases and reconciliation | [#132](https://github.com/crenshawdev/baley/pull/132) | Merged |
 | T11 | Anchors and the adapter's `verify` | [#135](https://github.com/crenshawdev/baley/pull/135) | Merged |
 | T12 | Export, doctor and the owner-only acknowledge-restore command; backups removed | [#138](https://github.com/crenshawdev/baley/pull/138) | Merged |
-| T13 | The conformance suite, run against every store adapter | Pending | In review |
+| T13 | The conformance suite, run against every store adapter | [#140](https://github.com/crenshawdev/baley/pull/140) | In review |
 | T14 | CLI commands `verify`, `doctor`, `export`, `purge`, `anchor` and `acknowledge-restore`; the real git forge and ticker, and the benchmark | | Planned |
 
 
