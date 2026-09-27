@@ -311,26 +311,26 @@ The text of every instruction is owned by the area it serves; this area serves i
 
 ## 11. Build status
 
-The code today is the Cadence engine crate awaiting rename: one stdio server bound to one project per process, Claude Code only.
+The binary crate holds the inherited engine: one stdio server bound to one project per process, Claude Code only.
 
 | Requirement | Status | Where |
 |---|---|---|
-| HST-R1, HST-R2, HST-R3 | Not built | `serve` binds one project per process on stdio (`crates/cadence/src/main.rs:92, 150-154`, `crates/cadence/src/server.rs:730-737`); no HTTP, no service, no launcher |
-| HST-R4 | Not built | No adapter; the host model list is Claude-only (`crates/cadence/src/config/roles.rs:16`) |
-| HST-R5 | Built, under the old names | Three tools (`crates/cadence/src/server.rs:890-909`), append-only operation names asserted (`server.rs:453-484`), flat schema plus `schema` operation (`server.rs:578-612, 689-728`) |
-| HST-R6 | Built | Parts at 24,576 bytes (`crates/cadence/src/read/instructions.rs:5`, `server.rs:689`); `document` and `document-search` only (`server.rs:292-295`) |
-| HST-R7 | Partly built | One admission queue serializes every call (`crates/cadence/src/review_ingress.rs:641-706`); no per-call working directory |
+| HST-R1, HST-R2, HST-R3 | Not built | `serve` binds one project per process on stdio (`crates/baley/src/main.rs:92, 150-154`, `crates/baley/src/server.rs:730-737`); no HTTP, no service, no launcher |
+| HST-R4 | Not built | No adapter; the host model list is Claude-only (`crates/baley/src/config/roles.rs:16`) |
+| HST-R5 | Built | Three tools (`crates/baley/src/server.rs:890-909`), append-only operation names asserted (`server.rs:453-484`), flat schema plus `schema` operation (`server.rs:578-612, 689-728`) |
+| HST-R6 | Built | Parts at 24,576 bytes (`crates/baley/src/read/instructions.rs:5`, `server.rs:689`); `document` and `document-search` only (`server.rs:292-295`) |
+| HST-R7 | Partly built | One admission queue serializes every call (`crates/baley/src/review_ingress.rs:641-706`); no per-call working directory |
 | HST-R8 | Not built | Suite runs inside one call; Codex registration sets a 7,200 s tool timeout (`.codex/config.toml`) |
-| HST-R9, HST-R10 | Partly built | Owner questions are gate records answered by `execution-authorize` with any non-blank owner and time (`crates/cadence/src/execution_service.rs:246-300`) |
-| HST-R11 | Built | Compiled instructions, no disk loader (`crates/cadence/src/plan/instructions.rs:12-16`, `crates/cadence/src/instruction_surfaces.rs:3-29`) |
-| HST-R12 | Not built | `*-instructions` commands print full skills to stdout (`crates/cadence/src/main.rs:116-146`); no stub rendering, no install |
-| HST-R13 | Not built | The full read contract is sent as instructions (`crates/cadence/src/server.rs:883-888`) |
-| HST-R14 | Built | Dispatch answers id and route, never a prompt (`crates/cadence/src/execution/boundary.rs:76-124`) |
+| HST-R9, HST-R10 | Partly built | Owner questions are gate records answered by `execution-authorize` with any non-blank owner and time (`crates/baley/src/execution_service.rs:246-300`) |
+| HST-R11 | Built | Compiled instructions, no disk loader (`crates/baley/src/plan/instructions.rs:12-16`, `crates/baley/src/instruction_surfaces.rs:3-29`) |
+| HST-R12 | Not built | `*-instructions` commands print full skills to stdout (`crates/baley/src/main.rs:116-146`); no stub rendering, no install |
+| HST-R13 | Not built | The full read contract is sent as instructions (`crates/baley/src/server.rs:883-888`) |
+| HST-R14 | Built | Dispatch answers id and route, never a prompt (`crates/baley/src/execution/boundary.rs:76-124`) |
 | HST-R15 | Not built | |
-| HST-R16 | Not built | The CLI has `serve`, `guard`, `skill-description` and the render commands only (`crates/cadence/src/main.rs:27-87`) |
+| HST-R16 | Not built | The CLI has `serve`, `guard`, `skill-description` and the render commands only (`crates/baley/src/main.rs:27-87`) |
 | HST-R17 | Not built | Registrations are hand-written (`.mcp.json`, `.codex/config.toml`, `hooks/hooks.json`) |
-| HST-R18 | Partly built | Store failures are MCP errors (`crates/cadence/src/server.rs:813-823`); refused applies recorded best effort (`server.rs:1548-1554`) |
-| HST-R19 | Built | `crates/cadence/src/review_ingress.rs:17-23`, `crates/cadence/src/guard/mod.rs:14`, `crates/cadence/src/process.rs:23-65` |
+| HST-R18 | Partly built | Store failures are MCP errors (`crates/baley/src/server.rs:813-823`); refused applies recorded best effort (`server.rs:1548-1554`) |
+| HST-R19 | Built | `crates/baley/src/review_ingress.rs:17-23`, `crates/baley/src/guard/mod.rs:14`, `crates/baley/src/process.rs:23-65` |
 | HST-R20 | Not built | |
 
 ## 12. Open questions

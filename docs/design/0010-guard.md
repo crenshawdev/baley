@@ -233,24 +233,24 @@ Not applicable. The guard gives no instructions; an agent sees only the host's o
 
 ## 11. Build status
 
-The code today is the Cadence engine crate awaiting rename; its guard is close to this design.
+The binary crate holds the inherited engine; its guard is close to this design.
 
 | Requirement | Status | Where |
 |---|---|---|
 | GRD-R1 | Partly built | One hook for Claude Code (`hooks/hooks.json`); no Codex hook installation |
-| GRD-R2 | Partly built | Bash walks up to `.planning` (`crates/cadence/src/guard/bash.rs:27-44`); Write/Edit has no discovery (`crates/cadence/src/guard/mod.rs:116-126`) |
-| GRD-R3 | Built | `crates/cadence/src/guard/bash.rs:47-151, 450-464` |
-| GRD-R4 | Built | `crates/cadence/src/guard/bash.rs:475-480` |
-| GRD-R5 | Built | `crates/cadence/src/guard/bash.rs:160-252, 363-429` |
-| GRD-R6 | Built | `crates/cadence/src/guard/bash.rs:363-429` |
-| GRD-R7 | Built | `crates/cadence/src/guard/audit.rs:150-195` |
-| GRD-R8 | Built | `crates/cadence/src/guard/audit.rs:9-127` |
-| GRD-R9 | Not built | An unrecordable ask becomes allow (`crates/cadence/src/guard/bash.rs:438-448`) |
-| GRD-R10 | Built | `crates/cadence/src/guard/bash.rs:485-495` |
-| GRD-R11 | Partly built | Settings files and rendered stubs denied (`crates/cadence/src/guard/mod.rs:323-357`); `.planning` paths still listed (`mod.rs:358-385`); no lease check |
-| GRD-R12 | Not built | Claude Code form only (`crates/cadence/src/guard/mod.rs:223-244`) |
+| GRD-R2 | Partly built | Bash walks up to `.planning` (`crates/baley/src/guard/bash.rs:27-44`); Write/Edit has no discovery (`crates/baley/src/guard/mod.rs:116-126`) |
+| GRD-R3 | Built | `crates/baley/src/guard/bash.rs:47-151, 450-464` |
+| GRD-R4 | Built | `crates/baley/src/guard/bash.rs:475-480` |
+| GRD-R5 | Built | `crates/baley/src/guard/bash.rs:160-252, 363-429` |
+| GRD-R6 | Built | `crates/baley/src/guard/bash.rs:363-429` |
+| GRD-R7 | Built | `crates/baley/src/guard/audit.rs:150-195` |
+| GRD-R8 | Built | `crates/baley/src/guard/audit.rs:9-127` |
+| GRD-R9 | Not built | An unrecordable ask becomes allow (`crates/baley/src/guard/bash.rs:438-448`) |
+| GRD-R10 | Built | `crates/baley/src/guard/bash.rs:485-495` |
+| GRD-R11 | Partly built | Settings files and rendered stubs denied (`crates/baley/src/guard/mod.rs:323-357`); `.planning` paths still listed (`mod.rs:358-385`); no lease check |
+| GRD-R12 | Not built | Claude Code form only (`crates/baley/src/guard/mod.rs:223-244`) |
 | GRD-R13 | Not built | No doctor; the sandbox probe is a spike (`spikes/host-matrix`) |
-| GRD-R14 | Built | `crates/cadence/src/guard/mod.rs:14, 105-130`, `crates/cadence/src/guard/bash.rs:254-361` |
+| GRD-R14 | Built | `crates/baley/src/guard/mod.rs:14, 105-130`, `crates/baley/src/guard/bash.rs:254-361` |
 
 ## 12. Open questions
 

@@ -260,25 +260,25 @@ sequenceDiagram
 
 ## 11. Build status
 
-The code today is the Cadence engine crate awaiting rename; its verification path is close to this design.
+The binary crate holds the inherited engine; its verification path is close to this design.
 
 | Requirement | Status | Where |
 |---|---|---|
-| VER-R1 | Built | `crates/cadence/src/verification/inputs.rs:51-95, 145-221` |
-| VER-R2 | Built | `crates/cadence/src/verification/model.rs:32-47`, `crates/cadence/src/verification_service.rs:162-201` |
-| VER-R3 | Partly built | Identities and route answered, no prompt (`crates/cadence/src/verification_service.rs:251-273`); output by digest (D-177) |
-| VER-R4 | Built | `crates/cadence/src/verification/verdicts.rs:98-160` |
-| VER-R5 | Partly built | Independent run required (`crates/cadence/src/verification/verdicts.rs:136-153`, `crates/cadence/src/verification/runner.rs:136-200`); only cargo, nextest and "Ran N" summaries count (`runner.rs:48-64`), no exit-code rule |
-| VER-R6 | Built as instruction | `crates/cadence/src/verification/instructions.rs` |
-| VER-R7 | Partly built | Status reduction (`crates/cadence/src/verification/status.rs:50-59`); no overrule or observation record in the reduction |
-| VER-R8 | Built | `crates/cadence/src/verification/status.rs:115-126` |
-| VER-R9 | Partly built | Human results as owner-approved passed/failed/skipped bound to a rendered `UAT.md` (`crates/cadence/src/verification/human.rs:97-160, 233-247`); a passed result resolves the item but does not make the truth met |
+| VER-R1 | Built | `crates/baley/src/verification/inputs.rs:51-95, 145-221` |
+| VER-R2 | Built | `crates/baley/src/verification/model.rs:32-47`, `crates/baley/src/verification_service.rs:162-201` |
+| VER-R3 | Partly built | Identities and route answered, no prompt (`crates/baley/src/verification_service.rs:251-273`); output by digest (D-177) |
+| VER-R4 | Built | `crates/baley/src/verification/verdicts.rs:98-160` |
+| VER-R5 | Partly built | Independent run required (`crates/baley/src/verification/verdicts.rs:136-153`, `crates/baley/src/verification/runner.rs:136-200`); only cargo, nextest and "Ran N" summaries count (`runner.rs:48-64`), no exit-code rule |
+| VER-R6 | Built as instruction | `crates/baley/src/verification/instructions.rs` |
+| VER-R7 | Partly built | Status reduction (`crates/baley/src/verification/status.rs:50-59`); no overrule or observation record in the reduction |
+| VER-R8 | Built | `crates/baley/src/verification/status.rs:115-126` |
+| VER-R9 | Partly built | Human results as owner-approved passed/failed/skipped bound to a rendered `UAT.md` (`crates/baley/src/verification/human.rs:97-160, 233-247`); a passed result resolves the item but does not make the truth met |
 | VER-R10 | Not built | |
-| VER-R11 | Built | `crates/cadence/src/verification/waivers.rs:105-257`, `crates/cadence/src/verification/status.rs:128-191` |
-| VER-R12 | Partly built | Completion gate (`crates/cadence/src/verification/completion.rs:209-302`); carries no owner or time; ticks `ROADMAP.md` and edits `REQUIREMENTS.md` (`completion.rs:281-302`) |
-| VER-R13 | Built | `crates/cadence/src/verification/completion.rs:79-129` |
-| VER-R14 | Built over Markdown | `crates/cadence/src/verification/audit.rs:84-240`; parses `REQUIREMENTS.md` bold spans (#93) |
-| VER-R15 | Partly built | Route resolved with attempt `None` (`crates/cadence/src/verification_service.rs:187`) |
+| VER-R11 | Built | `crates/baley/src/verification/waivers.rs:105-257`, `crates/baley/src/verification/status.rs:128-191` |
+| VER-R12 | Partly built | Completion gate (`crates/baley/src/verification/completion.rs:209-302`); carries no owner or time; ticks `ROADMAP.md` and edits `REQUIREMENTS.md` (`completion.rs:281-302`) |
+| VER-R13 | Built | `crates/baley/src/verification/completion.rs:79-129` |
+| VER-R14 | Built over Markdown | `crates/baley/src/verification/audit.rs:84-240`; parses `REQUIREMENTS.md` bold spans (#93) |
+| VER-R15 | Partly built | Route resolved with attempt `None` (`crates/baley/src/verification_service.rs:187`) |
 
 ## 12. Open questions
 

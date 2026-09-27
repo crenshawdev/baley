@@ -215,7 +215,7 @@ flowchart TB
 
 *Figure 3. Only the binary and the adapter know the engine exists. `baley-core` cannot import rusqlite, so domain code cannot reach SQL.*
 
-The binary wires one adapter into the core at start-up. Tests of the domain run against the real SQLite adapter in a temporary directory or in memory; no fake store exists.
+The binary wires one adapter into the core at start-up. The binary crate also holds the inherited engine until each build replaces it. Tests of the domain run against the real SQLite adapter in a temporary directory or in memory; no fake store exists.
 
 #### The storage port
 

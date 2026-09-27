@@ -181,18 +181,18 @@ Not applicable. This area reads no setting of its own; `workflow.skip_discuss` i
 
 ## 11. Build status
 
-The code today is the Cadence engine crate awaiting rename; its next action derives from `ROADMAP.md` and a memo it writes back.
+The binary crate holds the inherited engine; its next action derives from `ROADMAP.md` and a memo it writes back.
 
 | Requirement | Status | Where |
 |---|---|---|
-| NXT-R1 | Not built as designed | A read writes the lifecycle memo into `state.json` (`crates/cadence/src/derivation_service.rs:139-167`) |
-| NXT-R2 | Not built | Derivation parses `ROADMAP.md` and lists phase directories (`crates/cadence/src/derivation/capture.rs:120-168`) |
-| NXT-R3 | Partly built | Rule order over phases, lowest number first (`crates/cadence/src/next_action/select.rs:54-119, 141-148`); no sprint, story or landing rules |
-| NXT-R4 | Partly built | The resolve action tells the owner to hand-edit a roadmap tick (`crates/cadence/src/next_action/select.rs:27`) and points at a `/cad-phase add` that does not exist (`select.rs:36`) |
-| NXT-R5 | Built | `derivation-conflict` and `state-conflict` (`crates/cadence/src/derivation/memo.rs:280-326`, `crates/cadence/src/derivation/consistency.rs:14-70`) |
-| NXT-R6 | Partly built | Phase rows, record counts, capture bound, next action (`crates/cadence/src/progress/render.rs:14-73`, `crates/cadence/src/progress_service.rs:31-114`); bounded at 24,576 bytes with a refusal instead of parts |
-| NXT-R7 | Built | `crates/cadence/src/suggest/rules.rs:4-67`, `crates/cadence/src/suggest_service.rs:91-116` |
-| NXT-R8 | Built over Markdown | `why` in `crates/cadence/src/recall` ([0014](0014-support-families.md)) |
+| NXT-R1 | Not built as designed | A read writes the lifecycle memo into `state.json` (`crates/baley/src/derivation_service.rs:139-167`) |
+| NXT-R2 | Not built | Derivation parses `ROADMAP.md` and lists phase directories (`crates/baley/src/derivation/capture.rs:120-168`) |
+| NXT-R3 | Partly built | Rule order over phases, lowest number first (`crates/baley/src/next_action/select.rs:54-119, 141-148`); no sprint, story or landing rules |
+| NXT-R4 | Partly built | The resolve action tells the owner to hand-edit a roadmap tick (`crates/baley/src/next_action/select.rs:27`) and points at a `/bal-phase add` that does not exist (`select.rs:36`) |
+| NXT-R5 | Built | `derivation-conflict` and `state-conflict` (`crates/baley/src/derivation/memo.rs:280-326`, `crates/baley/src/derivation/consistency.rs:14-70`) |
+| NXT-R6 | Partly built | Phase rows, record counts, capture bound, next action (`crates/baley/src/progress/render.rs:14-73`, `crates/baley/src/progress_service.rs:31-114`); bounded at 24,576 bytes with a refusal instead of parts |
+| NXT-R7 | Built | `crates/baley/src/suggest/rules.rs:4-67`, `crates/baley/src/suggest_service.rs:91-116` |
+| NXT-R8 | Built over Markdown | `why` in `crates/baley/src/recall` ([0014](0014-support-families.md)) |
 
 ## 12. Open questions
 
