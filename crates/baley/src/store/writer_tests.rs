@@ -17,8 +17,10 @@ fn drain_limit_diagnostic_names_the_open_write_and_bound() {
         open_write: Some("drain-02".into()),
         bound: std::time::Duration::from_secs(10),
     };
-    assert_eq!(super::writer::drain_limit_diagnostic(&limit),
-        "baley: shutdown drain reached 10 seconds; open admitted write drain-02 left to journal recovery.");
+    assert_eq!(
+        super::writer::drain_limit_diagnostic(&limit),
+        "baley: shutdown drain reached 10 seconds; open admitted write drain-02 left to journal recovery."
+    );
 }
 
 #[test]
@@ -27,28 +29,50 @@ fn drain_limit_diagnostic_names_the_open_write_and_bound_without_inventing_a_wri
         open_write: None,
         bound: std::time::Duration::from_secs(10),
     };
-    assert_eq!(super::writer::drain_limit_diagnostic(&limit),
-        "baley: shutdown drain reached 10 seconds while joining writers; any open intent is left to journal recovery.");
+    assert_eq!(
+        super::writer::drain_limit_diagnostic(&limit),
+        "baley: shutdown drain reached 10 seconds while joining writers; any open intent is left to journal recovery."
+    );
 }
 
 #[test]
 fn serve_drains_admitted_writes_on_transport_end() {
     let admissions = [
-        super::writer::Admission { sequence: 1, id: "drain-01".into() },
-        super::writer::Admission { sequence: 2, id: "drain-02".into() },
+        super::writer::Admission {
+            sequence: 1,
+            id: "drain-01".into(),
+        },
+        super::writer::Admission {
+            sequence: 2,
+            id: "drain-02".into(),
+        },
     ];
     for (elapsed, expected) in [
-        (std::time::Duration::from_millis(9_999), super::writer::DrainAction::Wait),
-        (std::time::Duration::from_secs(10), super::writer::DrainAction::DrainLimit(super::writer::DrainLimit {
-            open_write: Some("drain-02".into()), bound: std::time::Duration::from_secs(10),
-        })),
-        (std::time::Duration::from_secs(11), super::writer::DrainAction::DrainLimit(super::writer::DrainLimit {
-            open_write: Some("drain-02".into()), bound: std::time::Duration::from_secs(10),
-        })),
+        (
+            std::time::Duration::from_millis(9_999),
+            super::writer::DrainAction::Wait,
+        ),
+        (
+            std::time::Duration::from_secs(10),
+            super::writer::DrainAction::DrainLimit(super::writer::DrainLimit {
+                open_write: Some("drain-02".into()),
+                bound: std::time::Duration::from_secs(10),
+            }),
+        ),
+        (
+            std::time::Duration::from_secs(11),
+            super::writer::DrainAction::DrainLimit(super::writer::DrainLimit {
+                open_write: Some("drain-02".into()),
+                bound: std::time::Duration::from_secs(10),
+            }),
+        ),
     ] {
         let drain = super::writer::Drain {
-            admission_closed: true, admissions: &admissions, completed_prefix: 1,
-            open_write: Some("drain-02"), elapsed,
+            admission_closed: true,
+            admissions: &admissions,
+            completed_prefix: 1,
+            open_write: Some("drain-02"),
+            elapsed,
         };
         assert_eq!(drain.step(None), expected);
     }
@@ -57,31 +81,55 @@ fn serve_drains_admitted_writes_on_transport_end() {
 #[test]
 fn requests_after_transport_end_are_refused() {
     let drain = super::writer::Drain {
-        admission_closed: true, admissions: &[], completed_prefix: 0,
-        open_write: None, elapsed: std::time::Duration::ZERO,
+        admission_closed: true,
+        admissions: &[],
+        completed_prefix: 0,
+        open_write: None,
+        elapsed: std::time::Duration::ZERO,
     };
-    assert_eq!(drain.step(Some("late-01")), super::writer::DrainAction::Refuse);
+    assert_eq!(
+        drain.step(Some("late-01")),
+        super::writer::DrainAction::Refuse
+    );
 }
 
 #[test]
 fn next_write_is_earliest_pending_admission() {
     let admissions = [
-        super::writer::Admission { sequence: 3, id: "drain-03".into() },
-        super::writer::Admission { sequence: 1, id: "drain-01".into() },
-        super::writer::Admission { sequence: 2, id: "drain-02".into() },
+        super::writer::Admission {
+            sequence: 3,
+            id: "drain-03".into(),
+        },
+        super::writer::Admission {
+            sequence: 1,
+            id: "drain-01".into(),
+        },
+        super::writer::Admission {
+            sequence: 2,
+            id: "drain-02".into(),
+        },
     ];
     let drain = super::writer::Drain {
-        admission_closed: true, admissions: &admissions, completed_prefix: 1,
-        open_write: None, elapsed: std::time::Duration::ZERO,
+        admission_closed: true,
+        admissions: &admissions,
+        completed_prefix: 1,
+        open_write: None,
+        elapsed: std::time::Duration::ZERO,
     };
-    assert_eq!(drain.step(None), super::writer::DrainAction::Next("drain-02".into()));
+    assert_eq!(
+        drain.step(None),
+        super::writer::DrainAction::Next("drain-02".into())
+    );
 }
 
 #[test]
 fn nothing_pending_requests_normal_join() {
     let drain = super::writer::Drain {
-        admission_closed: true, admissions: &[], completed_prefix: 2,
-        open_write: None, elapsed: std::time::Duration::from_secs(11),
+        admission_closed: true,
+        admissions: &[],
+        completed_prefix: 2,
+        open_write: None,
+        elapsed: std::time::Duration::from_secs(11),
     };
     assert_eq!(drain.step(None), super::writer::DrainAction::Join);
 }
@@ -96,7 +144,10 @@ fn item(id: &str) -> ItemRecord {
         version: VERSION,
         id: id.into(),
         revision: 1,
-        origin: Origin { source: "capture".into(), original: Evidence::Missing },
+        origin: Origin {
+            source: "capture".into(),
+            original: Evidence::Missing,
+        },
         text: id.into(),
         kind: "todo".into(),
         phase: None,
@@ -106,11 +157,19 @@ fn item(id: &str) -> ItemRecord {
 }
 
 fn file(bytes: &[u8], directory: &str) -> Observed {
-    Observed { bytes: Some(bytes.to_vec()), identity: "file".into(), directory_identity: directory.into() }
+    Observed {
+        bytes: Some(bytes.to_vec()),
+        identity: "file".into(),
+        directory_identity: directory.into(),
+    }
 }
 
 fn absent() -> Observed {
-    Observed { bytes: None, identity: "missing".into(), directory_identity: "store".into() }
+    Observed {
+        bytes: None,
+        identity: "missing".into(),
+        directory_identity: "store".into(),
+    }
 }
 
 /// A store's three files at `generation` holding `items`, in `directory`.
@@ -138,7 +197,10 @@ fn snapshot(data: serde_json::Value) -> Snapshot {
 #[test]
 fn the_current_generation_and_integrity_meet_the_precondition() {
     let current = snapshot(json!({"answer": 1}));
-    assert_eq!(precondition(&current, 4, &current.integrity.clone()), Ok(()));
+    assert_eq!(
+        precondition(&current, 4, &current.integrity.clone()),
+        Ok(())
+    );
 }
 
 #[test]
@@ -155,14 +217,28 @@ fn an_integrity_changed_by_a_snapshot_rewrite_at_the_same_generation_is_stale() 
     let current = snapshot(json!({"answer": 1}));
     let expected = snapshot(json!({"answer": 2})).integrity;
     assert_ne!(expected, current.integrity);
-    assert_eq!(precondition(&current, 4, &expected), Err(Error::Conflict(STALE_SNAPSHOT.into())));
+    assert_eq!(
+        precondition(&current, 4, &expected),
+        Err(Error::Conflict(STALE_SNAPSHOT.into()))
+    );
 }
 
 #[test]
 fn three_absent_files_are_a_new_store_at_generation_0() {
-    let files = BTreeMap::from([(ITEMS.into(), absent()), (DECISIONS.into(), absent()), (STATE.into(), absent())]);
+    let files = BTreeMap::from([
+        (ITEMS.into(), absent()),
+        (DECISIONS.into(), absent()),
+        (STATE.into(), absent()),
+    ]);
     let new = view(&files).unwrap();
-    assert_eq!((new.snapshot.generation, new.items.len(), new.decisions.len()), (0, 0, 0));
+    assert_eq!(
+        (
+            new.snapshot.generation,
+            new.items.len(),
+            new.decisions.len()
+        ),
+        (0, 0, 0)
+    );
 }
 
 #[test]
@@ -182,23 +258,37 @@ fn a_state_file_without_its_items_or_decisions_is_refused() {
 fn records_without_a_state_file_are_refused() {
     let mut files = store(1, &[item("a")]);
     files.insert(STATE.into(), absent());
-    assert_eq!(view(&files).map(|_| ()), Err(Error::Conflict("owned records lack a snapshot".into())));
+    assert_eq!(
+        view(&files).map(|_| ()),
+        Err(Error::Conflict("owned records lack a snapshot".into()))
+    );
 }
 
 #[test]
 fn a_state_file_that_does_not_match_its_items_is_refused() {
     let mut files = store(1, &[]);
-    files.insert(ITEMS.into(), file(&render_lines(&[item("a")]).unwrap(), "store"));
+    files.insert(
+        ITEMS.into(),
+        file(&render_lines(&[item("a")]).unwrap(), "store"),
+    );
     assert_eq!(
         view(&files).map(|_| ()),
-        Err(Error::Conflict("snapshot integrity or version mismatch".into()))
+        Err(Error::Conflict(
+            "snapshot integrity or version mismatch".into()
+        ))
     );
 }
 
 #[test]
 fn the_view_holds_the_items_in_file_order_and_the_snapshot_generation() {
     let read = view(&store(2, &[item("a"), item("b")])).unwrap();
-    assert_eq!(read.items.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+    assert_eq!(
+        read.items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
     assert_eq!(read.snapshot.data, json!({"generation": 2}));
 }
 
@@ -210,7 +300,10 @@ fn read(files: &BTreeMap<String, Observed>) -> View {
 fn a_later_generation_that_only_appends_replaces_the_view() {
     let before = store(1, &[item("a")]);
     let after = store(2, &[item("a"), item("b")]);
-    assert_eq!(later_generation(&read(&before), &before, &read(&after), &after), Ok(()));
+    assert_eq!(
+        later_generation(&read(&before), &before, &read(&after), &after),
+        Ok(())
+    );
 }
 
 #[test]
@@ -220,7 +313,9 @@ fn files_that_do_not_move_the_generation_on_are_an_external_change() {
         let after = store(generation, &[item("a"), item("b")]);
         assert_eq!(
             later_generation(&read(&before), &before, &read(&after), &after),
-            Err(Error::Conflict("externally changed store generation".into())),
+            Err(Error::Conflict(
+                "externally changed store generation".into()
+            )),
             "{generation}"
         );
     }
@@ -233,7 +328,9 @@ fn a_later_generation_that_drops_or_replaces_an_item_is_an_external_change() {
         let after = store(2, &items);
         assert_eq!(
             later_generation(&read(&before), &before, &read(&after), &after),
-            Err(Error::Conflict("externally changed store generation".into()))
+            Err(Error::Conflict(
+                "externally changed store generation".into()
+            ))
         );
     }
 }
@@ -244,7 +341,9 @@ fn a_later_generation_in_a_replaced_store_directory_is_an_external_change() {
     let after = store_in(2, &[item("a"), item("b")], "replaced");
     assert_eq!(
         later_generation(&read(&before), &before, &read(&after), &after),
-        Err(Error::Conflict("externally changed store generation".into()))
+        Err(Error::Conflict(
+            "externally changed store generation".into()
+        ))
     );
 }
 
@@ -264,13 +363,26 @@ fn admitted_execution() -> baley::execution::model::ExecutionSnapshot {
     .unwrap();
     let set = plan_set_fingerprint(std::slice::from_ref(&plan)).unwrap();
     let candidate = build_dispatch(&plan, &set, 0, &"1".repeat(40)).unwrap();
-    assert!(!candidate.body.is_empty(), "the fixture's dispatch carries its body");
+    assert!(
+        !candidate.body.is_empty(),
+        "the fixture's dispatch carries its body"
+    );
     let occurrence = ExecutionOccurrence {
-        phase: 6, undone: None, plan_set_fingerprint: set, version: 0, active: None,
-        plans: vec![], terminal: None, receipts: BTreeMap::new(), issues: BTreeMap::new(),
+        phase: 6,
+        undone: None,
+        plan_set_fingerprint: set,
+        version: 0,
+        active: None,
+        plans: vec![],
+        terminal: None,
+        receipts: BTreeMap::new(),
+        issues: BTreeMap::new(),
     };
     let (occurrence, _) = admit_dispatch(&occurrence, candidate).unwrap();
-    ExecutionSnapshot { schema: EXECUTION_SCHEMA, occurrences: BTreeMap::from([("6".into(), occurrence)]) }
+    ExecutionSnapshot {
+        schema: EXECUTION_SCHEMA,
+        occurrences: BTreeMap::from([("6".into(), occurrence)]),
+    }
 }
 
 #[test]
@@ -290,7 +402,11 @@ fn installing_execution_keeps_the_plan_body_out_of_the_snapshot() {
     let mut data = json!({});
     install_execution(&mut data, admitted_execution()).unwrap();
     assert!(data["execution"]["occurrences"]["6"]["active"].is_object());
-    assert!(data["execution"]["occurrences"]["6"]["active"].get("body").is_none());
+    assert!(
+        data["execution"]["occurrences"]["6"]["active"]
+            .get("body")
+            .is_none()
+    );
 }
 
 /// A decision record in the legacy boundary class, as the pre-v1 writer left it.
@@ -320,18 +436,28 @@ fn legacy_snapshot() -> Vec<u8> {
     use super::writer::install_execution;
     let mut data = json!({"other": true});
     install_execution(&mut data, admitted_execution()).unwrap();
-    Snapshot::sealed(1, b"", b"", data, BTreeMap::new()).unwrap().1
+    Snapshot::sealed(1, b"", b"", data, BTreeMap::new())
+        .unwrap()
+        .1
 }
 
 #[test]
 fn a_legacy_execution_snapshot_writes_back_byte_identically() {
     let bytes = legacy_snapshot();
-    assert_eq!(Snapshot::parse(&bytes, b"", b"").unwrap().render().unwrap(), bytes);
+    assert_eq!(
+        Snapshot::parse(&bytes, b"", b"").unwrap().render().unwrap(),
+        bytes
+    );
 }
 
 #[test]
 fn reading_a_legacy_execution_snapshot_repairs_nothing() {
-    assert!(Snapshot::parse(&legacy_snapshot(), b"", b"").unwrap().repaired.is_empty());
+    assert!(
+        Snapshot::parse(&legacy_snapshot(), b"", b"")
+            .unwrap()
+            .repaired
+            .is_empty()
+    );
 }
 
 mod boundaries {
@@ -360,7 +486,10 @@ mod boundaries {
             version: VERSION,
             id: id.clone(),
             revision: 1,
-            origin: Origin { source: "execution-boundary".into(), original: Evidence::Missing },
+            origin: Origin {
+                source: "execution-boundary".into(),
+                original: Evidence::Missing,
+            },
             decision: Decision::Boundary {
                 phase,
                 tool: "baley-apply".into(),
@@ -378,16 +507,31 @@ mod boundaries {
     }
 
     fn log(phase: u32, count: usize) -> Vec<DecisionRecord> {
-        (0..count).map(|index| logged(phase, index, false)).collect()
+        (0..count)
+            .map(|index| logged(phase, index, false))
+            .collect()
     }
 
     /// The boundary fields of an admitted record: phase, outcome, generation,
     /// whether it is terminal, and its time.
     fn fields(record: &DecisionRecord) -> (u32, &str, u64, bool, Option<u64>) {
-        let Decision::Boundary { phase, outcome, store_generation, terminal, .. } = &record.decision else {
+        let Decision::Boundary {
+            phase,
+            outcome,
+            store_generation,
+            terminal,
+            ..
+        } = &record.decision
+        else {
             panic!("not a boundary decision: {record:?}")
         };
-        (*phase, outcome.as_str(), *store_generation, *terminal, record.at)
+        (
+            *phase,
+            outcome.as_str(),
+            *store_generation,
+            *terminal,
+            record.at,
+        )
     }
 
     #[test]
@@ -446,8 +590,15 @@ mod boundaries {
 
     fn view_with(decisions: Vec<DecisionRecord>, operations: &[(&str, &str)]) -> View {
         let mut snapshot = Snapshot::new(1, b"", b"", serde_json::Value::Null).unwrap();
-        snapshot.operations = operations.iter().map(|(id, fingerprint)| (id.to_string(), fingerprint.to_string())).collect();
-        View { items: vec![], decisions, snapshot }
+        snapshot.operations = operations
+            .iter()
+            .map(|(id, fingerprint)| (id.to_string(), fingerprint.to_string()))
+            .collect();
+        View {
+            items: vec![],
+            decisions,
+            snapshot,
+        }
     }
 
     #[test]
@@ -494,10 +645,17 @@ mod boundaries {
         let mut view = View {
             items: vec![],
             decisions: log(3, 2),
-            snapshot: Snapshot::new(3, b"", b"", json!({"execution": {"schema": 1}, "other": true})).unwrap(),
+            snapshot: Snapshot::new(
+                3,
+                b"",
+                b"",
+                json!({"execution": {"schema": 1}, "other": true}),
+            )
+            .unwrap(),
         };
         let data = view.snapshot.data.clone();
-        let admitted = boundary_admission(&view.decisions, &request(3, "refused"), 4, Some(7)).unwrap();
+        let admitted =
+            boundary_admission(&view.decisions, &request(3, "refused"), 4, Some(7)).unwrap();
         append_admitted_boundary(&mut view, admitted).unwrap();
         assert_eq!((view.decisions.len(), &view.snapshot.data), (3, &data));
     }
@@ -514,8 +672,19 @@ mod scoped {
     const PHASE: BoundaryScope = BoundaryScope::Execution { phase: 3 };
 
     fn boundary(scope: BoundaryScope, operation: &str, name: &str) -> BoundaryV1 {
-        let answer = PreparedAnswer::new(Envelope::Refused { code: "refused".into(), reason: name.into() }).unwrap();
-        BoundaryV1::new(scope, BoundaryTool::BaleyApply, operation.into(), digest(name.as_bytes()), None, &answer)
+        let answer = PreparedAnswer::new(Envelope::Refused {
+            code: "refused".into(),
+            reason: name.into(),
+        })
+        .unwrap();
+        BoundaryV1::new(
+            scope,
+            BoundaryTool::BaleyApply,
+            operation.into(),
+            digest(name.as_bytes()),
+            None,
+            &answer,
+        )
     }
 
     /// A scoped decision already in the log, written by hand.
@@ -524,7 +693,10 @@ mod scoped {
             version: VERSION,
             id: digest(format!("logged {scope:?} {operation} {index}").as_bytes()),
             revision: 1,
-            origin: Origin { source: "execution-boundary-v1".into(), original: Evidence::Missing },
+            origin: Origin {
+                source: "execution-boundary-v1".into(),
+                original: Evidence::Missing,
+            },
             decision: Decision::BoundaryV1(BoundaryRecordV1 {
                 boundary: boundary(scope, operation, &format!("logged {index}")),
                 store_generation: index as u64 + 1,
@@ -535,21 +707,37 @@ mod scoped {
     }
 
     fn log(scope: BoundaryScope, operation: &str, count: usize) -> Vec<DecisionRecord> {
-        (0..count).map(|index| logged(scope.clone(), operation, index)).collect()
+        (0..count)
+            .map(|index| logged(scope.clone(), operation, index))
+            .collect()
     }
 
     fn admit(decisions: &[DecisionRecord], decision: &BoundaryV1) -> ScopedAdmission {
-        scoped_admission(decisions, "new-decision", decision, &BoundaryChange::Observe, 300, Some(9)).unwrap()
+        scoped_admission(
+            decisions,
+            "new-decision",
+            decision,
+            &BoundaryChange::Observe,
+            300,
+            Some(9),
+        )
+        .unwrap()
     }
 
     fn view_of(decisions: Vec<DecisionRecord>, data: serde_json::Value) -> View {
-        View { items: vec![], decisions, snapshot: Snapshot::new(1, b"", b"", data).unwrap() }
+        View {
+            items: vec![],
+            decisions,
+            snapshot: Snapshot::new(1, b"", b"", data).unwrap(),
+        }
     }
 
     /// The terminal log-bound decision of `scope`, written by hand.
     fn terminal(scope: BoundaryScope) -> DecisionRecord {
         let mut record = logged(scope, "log-bound", 256);
-        let Decision::BoundaryV1(value) = &mut record.decision else { unreachable!() };
+        let Decision::BoundaryV1(value) = &mut record.decision else {
+            unreachable!()
+        };
         value.terminal = true;
         record
     }
@@ -561,9 +749,18 @@ mod scoped {
         decisions.push(terminal(PHASE));
         let id = decisions[256].id.clone();
         let view = view_of(decisions, serde_json::Value::Null);
-        assert_eq!(terminal_v1(&view, &PHASE).map(|found| found.id), Some(id.as_str()));
+        assert_eq!(
+            terminal_v1(&view, &PHASE).map(|found| found.id),
+            Some(id.as_str())
+        );
         assert!(terminal_v1(&view, &BoundaryScope::Execution { phase: 4 }).is_none());
-        assert!(terminal_v1(&view_of(log(PHASE, "executor", 256), serde_json::Value::Null), &PHASE).is_none());
+        assert!(
+            terminal_v1(
+                &view_of(log(PHASE, "executor", 256), serde_json::Value::Null),
+                &PHASE
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -571,25 +768,53 @@ mod scoped {
         use super::super::writer::require_current_execution;
         use baley::execution::boundary::Failure;
         let data = json!({"execution": {"occurrences": {"3": {"active": null}}}});
-        assert_eq!(require_current_execution(&view_of(vec![], data.clone())), Err(Failure::LegacyExecution));
-        assert_eq!(require_current_execution(&view_of(log(BoundaryScope::Execution { phase: 4 }, "executor", 1), data.clone())), Err(Failure::LegacyExecution));
-        assert_eq!(require_current_execution(&view_of(log(PHASE, "executor", 1), data)), Ok(()));
+        assert_eq!(
+            require_current_execution(&view_of(vec![], data.clone())),
+            Err(Failure::LegacyExecution)
+        );
+        assert_eq!(
+            require_current_execution(&view_of(
+                log(BoundaryScope::Execution { phase: 4 }, "executor", 1),
+                data.clone()
+            )),
+            Err(Failure::LegacyExecution)
+        );
+        assert_eq!(
+            require_current_execution(&view_of(log(PHASE, "executor", 1), data)),
+            Ok(())
+        );
     }
 
     #[test]
     fn a_scope_under_its_limit_proceeds() {
-        assert_eq!(admit(&log(PHASE, "executor", 255), &boundary(PHASE, "executor", "next")), ScopedAdmission::Proceed);
+        assert_eq!(
+            admit(
+                &log(PHASE, "executor", 255),
+                &boundary(PHASE, "executor", "next")
+            ),
+            ScopedAdmission::Proceed
+        );
     }
 
     #[test]
     fn the_write_after_a_scope_uses_256_is_its_terminal_log_bound_decision() {
-        let ScopedAdmission::Terminal(record) = admit(&log(PHASE, "executor", 256), &boundary(PHASE, "executor", "next"))
-        else {
+        let ScopedAdmission::Terminal(record) = admit(
+            &log(PHASE, "executor", 256),
+            &boundary(PHASE, "executor", "next"),
+        ) else {
             panic!("not terminal")
         };
-        let Decision::BoundaryV1(value) = &record.decision else { panic!("not scoped: {record:?}") };
+        let Decision::BoundaryV1(value) = &record.decision else {
+            panic!("not scoped: {record:?}")
+        };
         assert_eq!(
-            (&value.boundary.scope, value.boundary.operation.as_str(), value.store_generation, value.terminal, record.at),
+            (
+                &value.boundary.scope,
+                value.boundary.operation.as_str(),
+                value.store_generation,
+                value.terminal,
+                record.at
+            ),
             (&PHASE, "log-bound", 300, true, Some(9))
         );
     }
@@ -600,13 +825,19 @@ mod scoped {
         decisions.extend(log(BoundaryScope::RootRefusal, "executor", 10));
         decisions.extend(log(BoundaryScope::Execution { phase: 4 }, "executor", 10));
         decisions.extend(log(PHASE, "native-refusal", 10));
-        assert_eq!(admit(&decisions, &boundary(PHASE, "executor", "next")), ScopedAdmission::Proceed);
+        assert_eq!(
+            admit(&decisions, &boundary(PHASE, "executor", "next")),
+            ScopedAdmission::Proceed
+        );
     }
 
     #[test]
     fn a_native_refusal_is_never_limited() {
         assert_eq!(
-            admit(&log(PHASE, "executor", 256), &boundary(PHASE, "native-refusal", "next")),
+            admit(
+                &log(PHASE, "executor", 256),
+                &boundary(PHASE, "native-refusal", "next")
+            ),
             ScopedAdmission::Proceed
         );
     }
@@ -617,13 +848,25 @@ mod scoped {
         let decision = boundary(PHASE, "executor", "logged 1");
         let id = decisions[1].id.clone();
         assert_eq!(
-            scoped_admission(&decisions, &id, &decision, &BoundaryChange::Observe, 3, Some(9)),
+            scoped_admission(
+                &decisions,
+                &id,
+                &decision,
+                &BoundaryChange::Observe,
+                3,
+                Some(9)
+            ),
             Ok(ScopedAdmission::Replay)
         );
-        let change = BoundaryChange::FinalizeRisk { phase: 3, requirements: vec![] };
+        let change = BoundaryChange::FinalizeRisk {
+            phase: 3,
+            requirements: vec![],
+        };
         assert_eq!(
             scoped_admission(&decisions, &id, &decision, &change, 3, Some(9)),
-            Err(Error::Conflict("boundary decision already admitted under another operation".into()))
+            Err(Error::Conflict(
+                "boundary decision already admitted under another operation".into()
+            ))
         );
     }
 
@@ -631,7 +874,10 @@ mod scoped {
     fn the_root_refusal_scope_reaches_its_own_limit() {
         let root = BoundaryScope::RootRefusal;
         assert!(matches!(
-            admit(&log(root.clone(), "executor", 256), &boundary(root, "executor", "next")),
+            admit(
+                &log(root.clone(), "executor", 256),
+                &boundary(root, "executor", "next")
+            ),
             ScopedAdmission::Terminal(_)
         ));
     }
@@ -639,7 +885,10 @@ mod scoped {
     #[test]
     fn a_store_with_no_execution_records_is_not_legacy() {
         use super::super::writer::require_current_execution;
-        assert_eq!(require_current_execution(&view_of(vec![], json!({"import": {"complete": true}}))), Ok(()));
+        assert_eq!(
+            require_current_execution(&view_of(vec![], json!({"import": {"complete": true}}))),
+            Ok(())
+        );
     }
 
     #[test]
@@ -647,7 +896,9 @@ mod scoped {
         use super::super::writer::require_current_execution;
         let data = json!({"execution": {"occurrences": {"3": {"active": null}}}});
         assert_eq!(
-            require_current_execution(&view_of(vec![], data)).unwrap_err().to_string(),
+            require_current_execution(&view_of(vec![], data))
+                .unwrap_err()
+                .to_string(),
             "cross-format native execution resume is unsupported"
         );
     }
@@ -656,14 +907,31 @@ mod scoped {
     fn a_confirmed_boundary_answers_its_compact_envelope_only_under_its_canonical_digest() {
         use super::super::writer::ConfirmedBoundary;
         let record = logged(PHASE, "executor", 1);
-        let Decision::BoundaryV1(value) = &record.decision else { unreachable!() };
+        let Decision::BoundaryV1(value) = &record.decision else {
+            unreachable!()
+        };
         assert_eq!(
-            ConfirmedBoundary { id: &record.id, value }.envelope(None).unwrap(),
-            Envelope::Refused { code: "refused".into(), reason: "logged 1".into() }
+            ConfirmedBoundary {
+                id: &record.id,
+                value
+            }
+            .envelope(None)
+            .unwrap(),
+            Envelope::Refused {
+                code: "refused".into(),
+                reason: "logged 1".into()
+            }
         );
         let mut tampered = value.clone();
         tampered.boundary.response_digest = digest(b"another answer");
-        assert!(ConfirmedBoundary { id: &record.id, value: &tampered }.envelope(None).is_err());
+        assert!(
+            ConfirmedBoundary {
+                id: &record.id,
+                value: &tampered
+            }
+            .envelope(None)
+            .is_err()
+        );
     }
 
     #[test]
@@ -674,7 +942,8 @@ mod scoped {
         let id = decisions[256].id.clone();
         let view = view_of(decisions, serde_json::Value::Null);
         assert_eq!(
-            confirmed_boundary(&view, &boundary(PHASE, "executor", "later")).map(|found| found.id.to_string()),
+            confirmed_boundary(&view, &boundary(PHASE, "executor", "later"))
+                .map(|found| found.id.to_string()),
             Ok(id)
         );
     }
@@ -698,19 +967,48 @@ mod scoped {
     fn a_risk_pending_patch_is_accepted_only_while_it_leaves_the_phase_open() {
         use super::super::writer::patch_boundary_valid;
         use baley::execution::model::{ExecutorPatch, PatchKind, PlanDisposition};
-        let answer = PreparedAnswer::new(Envelope::Refused { code: "risk-pending".into(), reason: "review pending".into() }).unwrap();
-        let decision = BoundaryV1::new(PHASE, BoundaryTool::BaleyApply, "executor".into(), digest(b"patch"), Some("d-1".into()), &answer);
+        let answer = PreparedAnswer::new(Envelope::Refused {
+            code: "risk-pending".into(),
+            reason: "review pending".into(),
+        })
+        .unwrap();
+        let decision = BoundaryV1::new(
+            PHASE,
+            BoundaryTool::BaleyApply,
+            "executor".into(),
+            digest(b"patch"),
+            Some("d-1".into()),
+            &answer,
+        );
         let patch = ExecutorPatch {
-            schema: 1, kind: PatchKind::Executor, dispatch_id: "d-1".into(), expected_execution_version: 1,
-            outcome: PlanDisposition::Complete, tasks: vec![], deviations: vec![], blockers: vec![],
+            schema: 1,
+            kind: PatchKind::Executor,
+            dispatch_id: "d-1".into(),
+            expected_execution_version: 1,
+            outcome: PlanDisposition::Complete,
+            tasks: vec![],
+            deviations: vec![],
+            blockers: vec![],
         };
         let render = baley::execution::render::SUMMARY_RENDER_VERSION;
         assert!(patch_boundary_valid(&decision, &patch, render, false));
         assert!(!patch_boundary_valid(&decision, &patch, render, true));
     }
 
-    fn step(view: &View, operation: &str, decision: &BoundaryV1) -> super::super::writer::BoundaryStep {
-        super::super::writer::boundary_step(view, operation, decision, &BoundaryChange::Observe, 300, Some(9)).unwrap()
+    fn step(
+        view: &View,
+        operation: &str,
+        decision: &BoundaryV1,
+    ) -> super::super::writer::BoundaryStep {
+        super::super::writer::boundary_step(
+            view,
+            operation,
+            decision,
+            &BoundaryChange::Observe,
+            300,
+            Some(9),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -719,14 +1017,24 @@ mod scoped {
         let mut decisions = log(PHASE, "executor", 256);
         decisions.push(terminal(PHASE));
         let view = view_of(decisions, serde_json::Value::Null);
-        assert_eq!(step(&view, "later", &boundary(PHASE, "executor", "later")), BoundaryStep::Replay);
+        assert_eq!(
+            step(&view, "later", &boundary(PHASE, "executor", "later")),
+            BoundaryStep::Replay
+        );
     }
 
     #[test]
     fn an_operation_already_recorded_with_the_same_content_is_answered_without_a_write() {
         use super::super::writer::{BoundaryStep, boundary_operation};
         let decision = boundary(PHASE, "executor", "again");
-        let fingerprint = boundary_operation(&BTreeMap::new(), "op-1", &decision, &BoundaryChange::Observe).unwrap().unwrap();
+        let fingerprint = boundary_operation(
+            &BTreeMap::new(),
+            "op-1",
+            &decision,
+            &BoundaryChange::Observe,
+        )
+        .unwrap()
+        .unwrap();
         let mut view = view_of(vec![], serde_json::Value::Null);
         view.snapshot.operations.insert("op-1".into(), fingerprint);
         assert_eq!(step(&view, "op-1", &decision), BoundaryStep::Replay);
@@ -736,7 +1044,10 @@ mod scoped {
     fn the_write_after_a_scope_uses_256_is_its_terminal_step() {
         use super::super::writer::BoundaryStep;
         let view = view_of(log(PHASE, "executor", 256), serde_json::Value::Null);
-        assert!(matches!(step(&view, "next", &boundary(PHASE, "executor", "next")), BoundaryStep::Terminal(_)));
+        assert!(matches!(
+            step(&view, "next", &boundary(PHASE, "executor", "next")),
+            BoundaryStep::Terminal(_)
+        ));
     }
 
     #[test]
@@ -750,20 +1061,33 @@ mod scoped {
                     version: VERSION,
                     id: boundary.identity().unwrap(),
                     revision: 1,
-                    origin: Origin { source: "execution-boundary-v1".into(), original: Evidence::Missing },
-                    decision: Decision::BoundaryV1(BoundaryRecordV1 { boundary, store_generation: index as u64 + 1, terminal: false }),
+                    origin: Origin {
+                        source: "execution-boundary-v1".into(),
+                        original: Evidence::Missing,
+                    },
+                    decision: Decision::BoundaryV1(BoundaryRecordV1 {
+                        boundary,
+                        store_generation: index as u64 + 1,
+                        terminal: false,
+                    }),
                     at: Some(1),
                 }
             })
             .collect();
         let mut view = view_of(valid, json!({"execution": {"schema": 1}}));
         view.snapshot.operations.insert("op-1".into(), "fp".into());
-        let BoundaryStep::Terminal(record) = step(&view, "next", &boundary(PHASE, "executor", "next")) else {
+        let BoundaryStep::Terminal(record) =
+            step(&view, "next", &boundary(PHASE, "executor", "next"))
+        else {
             panic!("no terminal step")
         };
         let next = terminal_next(&view, *record).unwrap();
         assert_eq!(
-            (&next.snapshot.data, &next.snapshot.operations, next.decisions.len()),
+            (
+                &next.snapshot.data,
+                &next.snapshot.operations,
+                next.decisions.len()
+            ),
             (&view.snapshot.data, &view.snapshot.operations, 257)
         );
     }
@@ -773,9 +1097,14 @@ mod scoped {
         use super::super::writer::boundary_tail;
         let view = view_of(vec![], json!({"execution": {"schema": 1}, "other": true}));
         let refusal = boundary(BoundaryScope::RootRefusal, "executor", "refused");
-        let (next, operations) = boundary_tail(view.clone(), refusal, "op-1", "fp".into(), 2, Some(9)).unwrap();
+        let (next, operations) =
+            boundary_tail(view.clone(), refusal, "op-1", "fp".into(), 2, Some(9)).unwrap();
         assert_eq!(
-            (&next.snapshot.data, operations.get("op-1").map(String::as_str), next.decisions.len()),
+            (
+                &next.snapshot.data,
+                operations.get("op-1").map(String::as_str),
+                next.decisions.len()
+            ),
             (&view.snapshot.data, Some("fp"), 1)
         );
     }
@@ -784,13 +1113,25 @@ mod scoped {
     fn a_boundary_write_on_a_legacy_store_keeps_its_data_operations_and_decision_bytes() {
         use super::super::writer::boundary_tail;
         let legacy: DecisionRecord = serde_json::from_str(&super::legacy_boundary_line()).unwrap();
-        let mut view = view_of(vec![legacy], json!({"execution": {"schema": 1}, "other": true}));
-        view.snapshot.operations.insert("earlier".into(), "fp-earlier".into());
+        let mut view = view_of(
+            vec![legacy],
+            json!({"execution": {"schema": 1}, "other": true}),
+        );
+        view.snapshot
+            .operations
+            .insert("earlier".into(), "fp-earlier".into());
         let refusal = boundary(BoundaryScope::RootRefusal, "executor", "refused");
-        let (next, operations) = boundary_tail(view.clone(), refusal, "op-1", "fp".into(), 2, Some(9)).unwrap();
+        let (next, operations) =
+            boundary_tail(view.clone(), refusal, "op-1", "fp".into(), 2, Some(9)).unwrap();
         assert_eq!(next.snapshot.data, view.snapshot.data);
-        assert_eq!(operations.get("earlier").map(String::as_str), Some("fp-earlier"));
-        assert_eq!(serde_json::to_string(&next.decisions[0]).unwrap(), super::legacy_boundary_line());
+        assert_eq!(
+            operations.get("earlier").map(String::as_str),
+            Some("fp-earlier")
+        );
+        assert_eq!(
+            serde_json::to_string(&next.decisions[0]).unwrap(),
+            super::legacy_boundary_line()
+        );
     }
 }
 
@@ -805,7 +1146,10 @@ mod writes {
             version: VERSION,
             id: id.into(),
             revision: 1,
-            origin: Origin { source: "worker".into(), original: Evidence::Missing },
+            origin: Origin {
+                source: "worker".into(),
+                original: Evidence::Missing,
+            },
             decision: Decision::Routing {
                 choice: "worker-a".into(),
                 config_provenance: BTreeMap::new(),
@@ -843,42 +1187,99 @@ mod writes {
     #[test]
     fn a_transaction_appends_its_items_and_decisions_after_the_existing_ones() {
         let mut next = current();
-        transact(&mut next, &mut BTreeMap::new(), transaction(None), "fp".into()).unwrap();
-        assert_eq!(next.items.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
-        assert_eq!(next.decisions.iter().map(|record| record.id.as_str()).collect::<Vec<_>>(), ["first", "second"]);
+        transact(
+            &mut next,
+            &mut BTreeMap::new(),
+            transaction(None),
+            "fp".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            next.items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert_eq!(
+            next.decisions
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
     }
 
     #[test]
     fn a_transaction_records_its_identity_with_its_fingerprint() {
         let mut operations = BTreeMap::from([("tx-0".to_string(), "older".to_string())]);
-        transact(&mut current(), &mut operations, transaction(None), "fp".into()).unwrap();
+        transact(
+            &mut current(),
+            &mut operations,
+            transaction(None),
+            "fp".into(),
+        )
+        .unwrap();
         assert_eq!(
             operations,
-            BTreeMap::from([("tx-0".to_string(), "older".to_string()), ("tx-1".to_string(), "fp".to_string())])
+            BTreeMap::from([
+                ("tx-0".to_string(), "older".to_string()),
+                ("tx-1".to_string(), "fp".to_string())
+            ])
         );
     }
 
     #[test]
     fn a_transactions_decisions_are_normalized_as_they_are_appended() {
         let mut next = current();
-        transact(&mut next, &mut BTreeMap::new(), transaction(None), "fp".into()).unwrap();
+        transact(
+            &mut next,
+            &mut BTreeMap::new(),
+            transaction(None),
+            "fp".into(),
+        )
+        .unwrap();
         assert_eq!(next.decisions[1], routing("second", Evidence::Missing));
     }
 
     #[test]
     fn snapshot_data_in_a_transaction_replaces_the_data_and_its_absence_keeps_it() {
         let mut replaced = current();
-        transact(&mut replaced, &mut BTreeMap::new(), transaction(Some(json!({"new": 1}))), "fp".into()).unwrap();
+        transact(
+            &mut replaced,
+            &mut BTreeMap::new(),
+            transaction(Some(json!({"new": 1}))),
+            "fp".into(),
+        )
+        .unwrap();
         assert_eq!(replaced.snapshot.data, json!({"new": 1}));
         let mut kept = current();
-        transact(&mut kept, &mut BTreeMap::new(), transaction(None), "fp".into()).unwrap();
+        transact(
+            &mut kept,
+            &mut BTreeMap::new(),
+            transaction(None),
+            "fp".into(),
+        )
+        .unwrap();
         assert_eq!(kept.snapshot.data, json!({"kept": true}));
     }
 
     #[test]
     fn a_transaction_answers_the_external_participants_it_brings() {
-        let external = transact(&mut current(), &mut BTreeMap::new(), transaction(None), "fp".into()).unwrap();
-        assert_eq!(external.iter().map(|change| change.target.as_str()).collect::<Vec<_>>(), ["global-config"]);
+        let external = transact(
+            &mut current(),
+            &mut BTreeMap::new(),
+            transaction(None),
+            "fp".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            external
+                .iter()
+                .map(|change| change.target.as_str())
+                .collect::<Vec<_>>(),
+            ["global-config"]
+        );
     }
 
     #[test]
@@ -888,16 +1289,25 @@ mod writes {
         skipped.items[0].revision = 3;
         assert_eq!(
             transact(&mut current(), &mut BTreeMap::new(), skipped, "fp".into()).map(|_| ()),
-            Err(Error::Invalid("unsupported version, empty identity, or inconsistent revision".into()))
+            Err(Error::Invalid(
+                "unsupported version, empty identity, or inconsistent revision".into()
+            ))
         );
     }
 
     fn observed() -> BTreeMap<String, Observed> {
-        [ITEMS, DECISIONS, STATE].into_iter().map(|name| (name.to_string(), file(name.as_bytes(), "store"))).collect()
+        [ITEMS, DECISIONS, STATE]
+            .into_iter()
+            .map(|name| (name.to_string(), file(name.as_bytes(), "store")))
+            .collect()
     }
 
     fn own() -> Vec<super::super::transaction::Participant> {
-        vec![ExternalChange { target: "phase-summary:3".into(), expected: absent(), bytes: b"# Summary\n".to_vec() }]
+        vec![ExternalChange {
+            target: "phase-summary:3".into(),
+            expected: absent(),
+            bytes: b"# Summary\n".to_vec(),
+        }]
     }
 
     #[test]
@@ -905,26 +1315,40 @@ mod writes {
         let operations = BTreeMap::from([("tx-1".to_string(), "fp".to_string())]);
         let (next, _) = sealed(current(), operations.clone(), own(), 5, &observed()).unwrap();
         assert_eq!(
-            (next.snapshot.generation, &next.snapshot.operations, &next.snapshot.data),
+            (
+                next.snapshot.generation,
+                &next.snapshot.operations,
+                &next.snapshot.data
+            ),
             (5, &operations, &json!({"kept": true}))
         );
     }
 
     #[test]
-    fn the_store_files_follow_the_writes_own_participants_with_the_state_last_each_expected_as_observed() {
+    fn the_store_files_follow_the_writes_own_participants_with_the_state_last_each_expected_as_observed()
+     {
         let (_, participants) = sealed(current(), BTreeMap::new(), own(), 5, &observed()).unwrap();
         assert_eq!(
-            participants.iter().map(|p| p.target.as_str()).collect::<Vec<_>>(),
+            participants
+                .iter()
+                .map(|p| p.target.as_str())
+                .collect::<Vec<_>>(),
             ["phase-summary:3", ITEMS, DECISIONS, STATE]
         );
         for participant in &participants[1..] {
-            assert_eq!(participant.expected, observed()[&participant.target], "{}", participant.target);
+            assert_eq!(
+                participant.expected,
+                observed()[&participant.target],
+                "{}",
+                participant.target
+            );
         }
     }
 
     #[test]
     fn the_sealed_files_read_back_as_the_sealed_view() {
-        let (next, participants) = sealed(current(), BTreeMap::new(), vec![], 5, &observed()).unwrap();
+        let (next, participants) =
+            sealed(current(), BTreeMap::new(), vec![], 5, &observed()).unwrap();
         let files = participants
             .iter()
             .map(|p| (p.target.clone(), file(&p.bytes, "store")))
@@ -951,12 +1375,21 @@ mod checked {
     fn checked(check: Result<()>) -> (CheckedPolicy<Recording>, Arc<Mutex<usize>>) {
         let calls = Arc::new(Mutex::new(0));
         let check = Box::new(move || check.clone());
-        (CheckedPolicy { policy: Recording(calls.clone()), check: Some(check) }, calls)
+        (
+            CheckedPolicy {
+                policy: Recording(calls.clone()),
+                check: Some(check),
+            },
+            calls,
+        )
     }
 
     fn validate(policy: &mut CheckedPolicy<Recording>) -> Result<()> {
         let snapshot = Snapshot::new(1, b"", b"", serde_json::Value::Null).unwrap();
-        policy.validate(&MutationContext { operation: "store", snapshot: &snapshot })
+        policy.validate(&MutationContext {
+            operation: "store",
+            snapshot: &snapshot,
+        })
     }
 
     #[test]
@@ -981,12 +1414,22 @@ mod checked {
         let (mut policy, calls) = checked(Err(changed.clone()));
         let snapshot = Snapshot::new(1, b"", b"", serde_json::Value::Null).unwrap();
         let inputs = baley::execution::model::ConfigInputs {
-            repo: baley::execution::model::ConfigInput { identity: "/project/config.v4.json".into(), content: None, stamp: None },
+            repo: baley::execution::model::ConfigInput {
+                identity: "/project/config.v4.json".into(),
+                content: None,
+                stamp: None,
+            },
             global: None,
             global_alias: false,
         };
         assert_eq!(
-            policy.validate_routing_admission(&MutationContext { operation: "store", snapshot: &snapshot }, &inputs),
+            policy.validate_routing_admission(
+                &MutationContext {
+                    operation: "store",
+                    snapshot: &snapshot
+                },
+                &inputs
+            ),
             Err(changed)
         );
         assert_eq!(*calls.lock().unwrap(), 0);

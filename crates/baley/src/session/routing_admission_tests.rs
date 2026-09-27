@@ -34,8 +34,7 @@ fn policy() -> SessionPolicy<InputIo> {
 
 #[test]
 fn new_admission_refuses_a_different_captured_input() {
-    let snapshot =
-        baley::store::model::Snapshot::new(1, b"", b"", serde_json::json!({})).unwrap();
+    let snapshot = baley::store::model::Snapshot::new(1, b"", b"", serde_json::json!({})).unwrap();
     let inputs = ConfigInputs {
         repo: ConfigInput {
             identity: "/project/config.json".into(),

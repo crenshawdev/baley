@@ -251,7 +251,10 @@ fn read_policy(
     )
 }
 
-fn branch_observation(cwd: &Path, process: &mut dyn Process) -> (Option<String>, Vec<audit::Unavailable>) {
+fn branch_observation(
+    cwd: &Path,
+    process: &mut dyn Process,
+) -> (Option<String>, Vec<audit::Unavailable>) {
     let observed = baley::git_process::run(
         &baley::git_process::launch(baley::git_process::Caller::GuardBranch)
             .cwd(cwd)
@@ -259,16 +262,19 @@ fn branch_observation(cwd: &Path, process: &mut dyn Process) -> (Option<String>,
             .unset("GIT_WORK_TREE")
             .unset("GIT_COMMON_DIR")
             .unset("GIT_NAMESPACE")
-            .args(["symbolic-ref", "--quiet", "--short", "HEAD"]), process,
+            .args(["symbolic-ref", "--quiet", "--short", "HEAD"]),
+        process,
     );
     branch_answer(observed)
 }
 
-fn branch_answer(observed: Result<baley::process::Output, baley::git_process::Error>) -> (Option<String>, Vec<audit::Unavailable>) {
+fn branch_answer(
+    observed: Result<baley::process::Output, baley::git_process::Error>,
+) -> (Option<String>, Vec<audit::Unavailable>) {
     match observed {
-        Err(baley::git_process::Error::Limit(limit)) => (
-            None, vec![unavailable("Git", limit.to_string())],
-        ),
+        Err(baley::git_process::Error::Limit(limit)) => {
+            (None, vec![unavailable("Git", limit.to_string())])
+        }
         Ok(output) if output.success() => {
             if let Ok(name) = String::from_utf8(output.stdout) {
                 let name = name.trim_end_matches('\n');
@@ -528,7 +534,10 @@ mod tests {
         assert_eq!(branch, None);
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].input, "Git");
-        assert_eq!(failures[0].reason, "git symbolic-ref --quiet --short HEAD exceeded git deadline of 9 seconds");
+        assert_eq!(
+            failures[0].reason,
+            "git symbolic-ref --quiet --short HEAD exceeded git deadline of 9 seconds"
+        );
     }
 
     use super::{Verb, verb};

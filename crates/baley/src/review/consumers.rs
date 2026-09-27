@@ -145,18 +145,35 @@ pub async fn unruled_members(store: &Store) -> Result<Vec<crate::milestone::pref
     let mut members = std::collections::BTreeMap::new();
     for member in inventory.members {
         let input = saved_input(store, &member.references.attempt).await?;
-        if input.admission.fire != member.member || input.admission.home != member.home
+        if input.admission.fire != member.member
+            || input.admission.home != member.home
             || input.admission.artifact != member.references.manifest
-            || input.attempt.original != member.references.original {
+            || input.attempt.original != member.references.original
+        {
             return Err(Error::Invalid("unruled member binding mismatch".into()));
         }
         let phase = if member.home.kind == super::model::HomeKind::Phase {
-            Some(member.home.id.parse::<std::num::NonZeroU32>()
-                .map_err(|_| Error::Invalid(format!("unruled phase home is invalid: {}", member.member)))?.get())
-        } else { None };
-        members.insert(member.member.clone(), crate::milestone::preflight::Unsettled {
-            kind: "deferred".into(), phase, identity: member.member,
-        });
+            Some(
+                member
+                    .home
+                    .id
+                    .parse::<std::num::NonZeroU32>()
+                    .map_err(|_| {
+                        Error::Invalid(format!("unruled phase home is invalid: {}", member.member))
+                    })?
+                    .get(),
+            )
+        } else {
+            None
+        };
+        members.insert(
+            member.member.clone(),
+            crate::milestone::preflight::Unsettled {
+                kind: "deferred".into(),
+                phase,
+                identity: member.member,
+            },
+        );
     }
     let mut result = members.into_values().collect();
     crate::milestone::preflight::order(&mut result);

@@ -1,5 +1,4 @@
 //! Internal pause request. Durable answers precede dependent Git operations.
-use baley::process::Process;
 use super::derivation_service::{self, Driver};
 use crate::{
     config::{
@@ -8,6 +7,7 @@ use crate::{
     },
     session::{Session, SessionFactory},
 };
+use baley::process::Process;
 use baley::{
     evidence::{
         self, Fact, Record, Scope,
@@ -68,8 +68,7 @@ pub async fn modern_admission(
 ) -> super::review_service::Answer {
     use super::review_service::{Apply, Command};
     use baley::envelope::Envelope;
-    let target =
-        serde_json::from_value::<baley::review::model::Target>(request["target"].clone());
+    let target = serde_json::from_value::<baley::review::model::Target>(request["target"].clone());
     if request["caller"] != "pause"
         || request["trigger"] != "risk_surface"
         || !request["specialist"].is_null()
@@ -425,20 +424,37 @@ async fn prepare_wip<I: ConfigIo>(
     process: &mut (dyn Process + Send),
 ) -> Result<Option<git::WipIndex>> {
     let mut ignored = receipt_paths(session, root)?;
-    if let Some(path) =
-        surface_config_receipt(view, &captured.scope, config, root, &captured.observed.head, process)?
-    {
+    if let Some(path) = surface_config_receipt(
+        view,
+        &captured.scope,
+        config,
+        root,
+        &captured.observed.head,
+        process,
+    )? {
         ignored.insert(path);
     }
     let planning = planning
         .strip_prefix(root)
         .map_err(|_| Error::Conflict("planning root escaped the repository".into()))?;
-    let stage_paths = stage_paths(&captured.authorized, &ignored, planning, commit_planning_docs(config)?);
+    let stage_paths = stage_paths(
+        &captured.authorized,
+        &ignored,
+        planning,
+        commit_planning_docs(config)?,
+    );
     let root = root.to_path_buf();
     let expected = captured.observed.clone();
     let authorized = captured.authorized.clone();
     tokio::task::spawn_blocking(move || {
-        git::stage_authorized(&root, &expected, &authorized, &ignored, &stage_paths, &mut baley::process::System)
+        git::stage_authorized(
+            &root,
+            &expected,
+            &authorized,
+            &ignored,
+            &stage_paths,
+            &mut baley::process::System,
+        )
     })
     .await
     .map_err(|_| Error::Closed)?
@@ -634,7 +650,14 @@ async fn stage_final<I: ConfigIo>(
     .map_err(|_| Error::Closed)??;
     let expected = observed.clone();
     let staged = tokio::task::spawn_blocking(move || {
-        git::stage_authorized(&root, &expected, &paths, &BTreeSet::new(), &paths, &mut baley::process::System)
+        git::stage_authorized(
+            &root,
+            &expected,
+            &paths,
+            &BTreeSet::new(),
+            &paths,
+            &mut baley::process::System,
+        )
     })
     .await
     .map_err(|_| Error::Closed)??;
@@ -712,7 +735,12 @@ async fn finalize_pause<I: ConfigIo>(
         let subject = format!("docs: pause at phase {}", captured.phase.identity);
         let root_for_commit = root.to_path_buf();
         let committed = tokio::task::spawn_blocking(move || {
-            git::commit_guarded(&root_for_commit, &latest, &subject, &mut baley::process::System)
+            git::commit_guarded(
+                &root_for_commit,
+                &latest,
+                &subject,
+                &mut baley::process::System,
+            )
         })
         .await
         .map_err(|_| Error::Closed)??;
@@ -861,11 +889,9 @@ fn override_value(scope: &Scope, gate: &Gate, review: &Review) -> Result<Overrid
         .adjustment
         .clone()
         .unwrap_or_else(|| answer.actual_response.clone());
-    if !baley::rail::receipts::consequence_permits(
-        &baley::rail::receipts::Consequence::Override {
-            reason: reason.clone(),
-        },
-    ) {
+    if !baley::rail::receipts::consequence_permits(&baley::rail::receipts::Consequence::Override {
+        reason: reason.clone(),
+    }) {
         return Err(Error::Invalid(
             "risk override requires a nonblank reason".into(),
         ));
@@ -957,12 +983,20 @@ struct Arm {
 
 impl Arm {
     fn first(head: &str) -> Self {
-        Self { round: 1, base: head.into(), force_review: false }
+        Self {
+            round: 1,
+            base: head.into(),
+            force_review: false,
+        }
     }
 
     /// The prior blocking review's staged index is still what is staged.
     fn repeat(prior: &Review) -> Self {
-        Self { round: prior.fire.round, base: prior.fire.base.clone(), force_review: true }
+        Self {
+            round: prior.fire.round,
+            base: prior.fire.base.clone(),
+            force_review: true,
+        }
     }
 }
 
@@ -983,7 +1017,11 @@ fn rearm(prior: &Review, state: &State, head: &str) -> Rearm {
                 && answer.disposition != Disposition::Stop
                 && prior.fire.round == 1 =>
         {
-            Rearm::Arm(Arm { round: 2, base: prior.fire.index_id.clone(), force_review: true })
+            Rearm::Arm(Arm {
+                round: 2,
+                base: prior.fire.index_id.clone(),
+                force_review: true,
+            })
         }
         State::Answered(answer)
             if answer.selected_option.as_deref() == Some("override")
@@ -1194,9 +1232,11 @@ async fn risk_gate<I: ConfigIo>(
 }
 
 async fn observe(root: PathBuf, planning: PathBuf, policy: Policy) -> Result<branch::Observed> {
-    tokio::task::spawn_blocking(move || branch::observe(&root, &planning, &policy, &mut baley::process::System))
-        .await
-        .map_err(|_| Error::Closed)?
+    tokio::task::spawn_blocking(move || {
+        branch::observe(&root, &planning, &policy, &mut baley::process::System)
+    })
+    .await
+    .map_err(|_| Error::Closed)?
 }
 
 async fn create<I: ConfigIo>(
@@ -1216,8 +1256,16 @@ async fn create<I: ConfigIo>(
     }
     let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        git::run(&root, ["check-ref-format", "--branch", &name], &mut baley::process::System)?;
-        git::run(&root, ["checkout", "-b", &name], &mut baley::process::System)?;
+        git::run(
+            &root,
+            ["check-ref-format", "--branch", &name],
+            &mut baley::process::System,
+        )?;
+        git::run(
+            &root,
+            ["checkout", "-b", &name],
+            &mut baley::process::System,
+        )?;
         Ok(())
     })
     .await
@@ -1234,9 +1282,10 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
     let planning = PathBuf::from(&input.scope.planning_root);
     // Capture Git before first-touch migration, lifecycle memo or question writes.
     let git_root = root.clone();
-    let original = tokio::task::spawn_blocking(move || git::observe(&git_root, &mut baley::process::System))
-        .await
-        .map_err(|_| Error::Closed)??;
+    let original =
+        tokio::task::spawn_blocking(move || git::observe(&git_root, &mut baley::process::System))
+            .await
+            .map_err(|_| Error::Closed)??;
     let (_, mut view) = derivation_service::checked_query(factory, &planning, driver)
         .await
         .map_err(|e| Error::Conflict(format!("pause lifecycle: {e}")))?;
@@ -1273,7 +1322,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
             Choice::Stop => return Ok(Response::Refused("pause branch choice stopped".into())),
             Choice::Create(name) => {
                 create(
-                    &session, &config, &root, &planning, &policy, &observed, name
+                    &session, &config, &root, &planning, &policy, &observed, name,
                 )
                 .await?;
                 observed = observe(root.clone(), planning.clone(), policy.clone()).await?;
@@ -1287,7 +1336,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
             Choice::Stop => return Ok(Response::Refused("pause base choice stopped".into())),
             Choice::Create(name) => {
                 create(
-                    &session, &config, &root, &planning, &policy, &observed, name
+                    &session, &config, &root, &planning, &policy, &observed, name,
                 )
                 .await?;
                 // A new branch requires a new observation before other questions.
@@ -1315,7 +1364,7 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
     };
     if let Some(name) = create_name {
         create(
-            &session, &config, &root, &planning, &policy, &observed, name
+            &session, &config, &root, &planning, &policy, &observed, name,
         )
         .await?;
         observed = observe(root.clone(), planning.clone(), policy.clone()).await?;
@@ -1328,7 +1377,10 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
         ));
     }
     captured.observed.branch = observed.branch.into_bytes();
-    let wip = prepare_wip(&session, &view, &captured, &config, &root, &planning, process).await?;
+    let wip = prepare_wip(
+        &session, &view, &captured, &config, &root, &planning, process,
+    )
+    .await?;
     let response = risk_gate(
         &session,
         &mut view,
@@ -1351,10 +1403,11 @@ pub async fn execute<I: ConfigIo + Clone + Sync>(
         }
         let root = root.clone();
         let description = ready.phase.name.clone();
-        let committed =
-            tokio::task::spawn_blocking(move || git::commit_wip(&root, &wip, &description, &mut baley::process::System))
-                .await
-                .map_err(|_| Error::Closed)??;
+        let committed = tokio::task::spawn_blocking(move || {
+            git::commit_wip(&root, &wip, &description, &mut baley::process::System)
+        })
+        .await
+        .map_err(|_| Error::Closed)??;
         ready.wip = Some(committed);
     }
     if session.config()? != config {
@@ -1421,7 +1474,10 @@ mod gate_tests {
             question: "Pause on a protected branch?".into(),
             need: "Pause on a protected branch?".into(),
             options: ["create", "proceed", "abort"]
-                .map(|id| OptionChoice { id: id.into(), text: id.into() })
+                .map(|id| OptionChoice {
+                    id: id.into(),
+                    text: id.into(),
+                })
                 .into(),
             state: State::Unanswered,
         }
@@ -1446,7 +1502,11 @@ mod gate_tests {
             .iter()
             .enumerate()
             .map(|(key, (occurrence, gate))| {
-                let record = Record { version: 1, scope: scope(occurrence), fact: Fact::Gate(gate.clone()) };
+                let record = Record {
+                    version: 1,
+                    scope: scope(occurrence),
+                    fact: Fact::Gate(gate.clone()),
+                };
                 (key.to_string(), record)
             })
             .collect()
@@ -1454,13 +1514,18 @@ mod gate_tests {
 
     #[test]
     fn an_unanswered_question_waits_on_itself() {
-        let Ok(Choice::Wait(gate)) = choice(question(), None) else { panic!("a wait") };
+        let Ok(Choice::Wait(gate)) = choice(question(), None) else {
+            panic!("a wait")
+        };
         assert_eq!(*gate, question());
     }
 
     #[test]
     fn a_superseded_question_stops() {
-        let gate = Gate { state: State::Superseded { by: "later".into() }, ..question() };
+        let gate = Gate {
+            state: State::Superseded { by: "later".into() },
+            ..question()
+        };
         assert!(matches!(choice(gate, None), Ok(Choice::Stop)));
     }
 
@@ -1473,9 +1538,13 @@ mod gate_tests {
     #[test]
     fn create_takes_the_callers_name_before_the_operators() {
         let gate = answered(Some("create"), Some("operator/branch"), Disposition::Adjust);
-        let Ok(Choice::Create(name)) = choice(gate.clone(), Some("baley/v1.3.0")) else { panic!("a create") };
+        let Ok(Choice::Create(name)) = choice(gate.clone(), Some("baley/v1.3.0")) else {
+            panic!("a create")
+        };
         assert_eq!(name, "baley/v1.3.0");
-        let Ok(Choice::Create(name)) = choice(gate, None) else { panic!("a create") };
+        let Ok(Choice::Create(name)) = choice(gate, None) else {
+            panic!("a create")
+        };
         assert_eq!(name, "operator/branch");
     }
 
@@ -1483,7 +1552,10 @@ mod gate_tests {
     fn create_without_a_branch_name_is_refused() {
         for adjustment in [None, Some("  ")] {
             let gate = answered(Some("create"), adjustment, Disposition::Adjust);
-            assert!(matches!(choice(gate, None), Err(Error::Invalid(_))), "{adjustment:?}");
+            assert!(
+                matches!(choice(gate, None), Err(Error::Invalid(_))),
+                "{adjustment:?}"
+            );
         }
     }
 
@@ -1496,7 +1568,10 @@ mod gate_tests {
             answered(Some("configure"), None, Disposition::Approve),
             answered(None, None, Disposition::Approve),
         ] {
-            assert!(matches!(choice(gate.clone(), None), Ok(Choice::Stop)), "{gate:?}");
+            assert!(
+                matches!(choice(gate.clone(), None), Ok(Choice::Stop)),
+                "{gate:?}"
+            );
         }
     }
 
@@ -1505,23 +1580,48 @@ mod gate_tests {
     #[test]
     fn a_question_recorded_only_in_another_occurrence_is_not_found() {
         let answered = answered(Some("proceed"), None, Disposition::Approve);
-        assert_eq!(existing_gate(&records(&[]), &scope("pause-2"), &question()), Ok(None));
-        assert_eq!(existing_gate(&records(&[("pause-1", answered)]), &scope("pause-2"), &question()), Ok(None));
+        assert_eq!(
+            existing_gate(&records(&[]), &scope("pause-2"), &question()),
+            Ok(None)
+        );
+        assert_eq!(
+            existing_gate(
+                &records(&[("pause-1", answered)]),
+                &scope("pause-2"),
+                &question()
+            ),
+            Ok(None)
+        );
     }
 
     #[test]
     fn the_recorded_question_comes_back_with_its_answer_or_still_unanswered() {
         let answered = answered(Some("proceed"), None, Disposition::Approve);
-        let found = existing_gate(&records(&[("pause-1", answered.clone())]), &scope("pause-1"), &question());
+        let found = existing_gate(
+            &records(&[("pause-1", answered.clone())]),
+            &scope("pause-1"),
+            &question(),
+        );
         assert_eq!(found, Ok(Some(answered)));
-        let found = existing_gate(&records(&[("pause-1", question())]), &scope("pause-1"), &question());
+        let found = existing_gate(
+            &records(&[("pause-1", question())]),
+            &scope("pause-1"),
+            &question(),
+        );
         assert_eq!(found, Ok(Some(question())));
     }
 
     #[test]
     fn a_recorded_question_that_now_reads_differently_is_refused() {
-        let changed = Gate { need: "A different need".into(), ..question() };
-        let found = existing_gate(&records(&[("pause-1", changed)]), &scope("pause-1"), &question());
+        let changed = Gate {
+            need: "A different need".into(),
+            ..question()
+        };
+        let found = existing_gate(
+            &records(&[("pause-1", changed)]),
+            &scope("pause-1"),
+            &question(),
+        );
         assert!(matches!(found, Err(Error::Conflict(_))), "{found:?}");
     }
 }
@@ -1529,15 +1629,17 @@ mod gate_tests {
 #[cfg(test)]
 mod risk_tests {
     use super::{
-        Arm, Disposed, Rearm, Settle, clears, deferred_artifacts, disposed, narrows, override_recorded,
-        override_value, rearm, settle, surfaces_from_answer,
+        Arm, Disposed, Rearm, Settle, clears, deferred_artifacts, disposed, narrows,
+        override_recorded, override_value, rearm, settle, surfaces_from_answer,
     };
     use baley::evidence::{
         Fact, Record, Scope,
         gates::{Answer, Disposition, Gate, OptionChoice, Purpose, State},
         overrides::{Authorization, Meaning},
     };
-    use baley::pause::risk::{CATEGORIES, CommitKind, Consequence, Finding, Fire, Outcome, Review, Severity};
+    use baley::pause::risk::{
+        CATEGORIES, CommitKind, Consequence, Finding, Fire, Outcome, Review, Severity,
+    };
     use baley::rail::risk_diff::{Match, Scan};
     use baley::store::Error;
     use std::collections::BTreeMap;
@@ -1564,7 +1666,10 @@ mod risk_tests {
             checked: true,
             categories: vec!["destructive".into()],
             matches: (0..matches)
-                .map(|_| Match { category: "destructive".into(), signal: "changed line: a DROP statement".into() })
+                .map(|_| Match {
+                    category: "destructive".into(),
+                    signal: "changed line: a DROP statement".into(),
+                })
                 .collect(),
             inconclusive,
             empty: false,
@@ -1598,7 +1703,12 @@ mod risk_tests {
     }
 
     fn review(round: u32, findings: Vec<Finding>) -> Review {
-        Review { version: 1, fire: fire(round, &["src/db.rs", "src/api.rs"]), finding_record: "record-1".into(), findings }
+        Review {
+            version: 1,
+            fire: fire(round, &["src/db.rs", "src/api.rs"]),
+            finding_record: "record-1".into(),
+            findings,
+        }
     }
 
     fn answered(option: &str, adjustment: Option<&str>, disposition: Disposition) -> State {
@@ -1619,7 +1729,13 @@ mod risk_tests {
             checkpoint_id: None,
             question: "q".into(),
             need: "n".into(),
-            options: options.iter().map(|id| OptionChoice { id: (*id).into(), text: (*id).into() }).collect(),
+            options: options
+                .iter()
+                .map(|id| OptionChoice {
+                    id: (*id).into(),
+                    text: (*id).into(),
+                })
+                .collect(),
             state,
         }
     }
@@ -1627,21 +1743,44 @@ mod risk_tests {
     #[test]
     fn fix_on_a_first_round_rearms_once_as_round_two_from_its_index() {
         assert_eq!(
-            rearm(&review(1, vec![]), &answered("fix", None, Disposition::Approve), HEAD),
-            Rearm::Arm(Arm { round: 2, base: INDEX.into(), force_review: true })
+            rearm(
+                &review(1, vec![]),
+                &answered("fix", None, Disposition::Approve),
+                HEAD
+            ),
+            Rearm::Arm(Arm {
+                round: 2,
+                base: INDEX.into(),
+                force_review: true
+            })
         );
     }
 
     #[test]
     fn fix_after_the_rearm_is_spent_refuses() {
-        assert_eq!(rearm(&review(2, vec![]), &answered("fix", None, Disposition::Approve), HEAD), Rearm::Refused);
+        assert_eq!(
+            rearm(
+                &review(2, vec![]),
+                &answered("fix", None, Disposition::Approve),
+                HEAD
+            ),
+            Rearm::Refused
+        );
     }
 
     #[test]
     fn an_override_answer_starts_a_first_round_fire_from_head() {
         assert_eq!(
-            rearm(&review(1, vec![]), &answered("override", None, Disposition::Approve), HEAD),
-            Rearm::Arm(Arm { round: 1, base: HEAD.into(), force_review: false })
+            rearm(
+                &review(1, vec![]),
+                &answered("override", None, Disposition::Approve),
+                HEAD
+            ),
+            Rearm::Arm(Arm {
+                round: 1,
+                base: HEAD.into(),
+                force_review: false
+            })
         );
     }
 
@@ -1653,18 +1792,32 @@ mod risk_tests {
             answered("abort", None, Disposition::Approve),
             State::Superseded { by: "later".into() },
         ] {
-            assert_eq!(rearm(&review(1, vec![]), &state, HEAD), Rearm::Refused, "{state:?}");
+            assert_eq!(
+                rearm(&review(1, vec![]), &state, HEAD),
+                Rearm::Refused,
+                "{state:?}"
+            );
         }
     }
 
     #[test]
     fn an_unanswered_disposition_waits() {
-        assert_eq!(rearm(&review(1, vec![]), &State::Unanswered, HEAD), Rearm::Wait);
+        assert_eq!(
+            rearm(&review(1, vec![]), &State::Unanswered, HEAD),
+            Rearm::Wait
+        );
     }
 
     #[test]
     fn the_same_staged_index_is_reviewed_again_as_its_round() {
-        assert_eq!(Arm::repeat(&review(2, vec![])), Arm { round: 2, base: BASE.into(), force_review: true });
+        assert_eq!(
+            Arm::repeat(&review(2, vec![])),
+            Arm {
+                round: 2,
+                base: BASE.into(),
+                force_review: true
+            }
+        );
     }
 
     #[test]
@@ -1677,7 +1830,10 @@ mod risk_tests {
 
     #[test]
     fn only_an_unforced_conclusive_scan_with_no_match_clears() {
-        let with = |matches, inconclusive| Fire { scan: scan(matches, inconclusive), ..fire(1, &["a"]) };
+        let with = |matches, inconclusive| Fire {
+            scan: scan(matches, inconclusive),
+            ..fire(1, &["a"])
+        };
         assert!(clears(&with(0, false), false));
         assert!(!clears(&with(1, false), false));
         assert!(!clears(&with(0, true), false));
@@ -1687,21 +1843,36 @@ mod risk_tests {
     #[test]
     fn off_and_advisory_continue_with_the_review_reported() {
         let blocking = review(1, vec![finding(1, Severity::Blocker)]);
-        assert_eq!(settle(Consequence::Off, blocking.clone()), Settle::Ready(Outcome::Off));
-        assert_eq!(settle(Consequence::Advisory, blocking.clone()), Settle::Ready(Outcome::Advisory(blocking)));
+        assert_eq!(
+            settle(Consequence::Off, blocking.clone()),
+            Settle::Ready(Outcome::Off)
+        );
+        assert_eq!(
+            settle(Consequence::Advisory, blocking.clone()),
+            Settle::Ready(Outcome::Advisory(blocking))
+        );
     }
 
     #[test]
     fn deferred_writes_the_review_to_the_queue() {
         let blocking = review(1, vec![finding(1, Severity::Blocker)]);
-        assert_eq!(settle(Consequence::Deferred, blocking.clone()), Settle::Defer(blocking));
+        assert_eq!(
+            settle(Consequence::Deferred, blocking.clone()),
+            Settle::Defer(blocking)
+        );
     }
 
     #[test]
     fn blocking_clears_on_a_review_without_blocker_or_high_findings() {
-        for findings in [vec![], vec![finding(1, Severity::Medium), finding(2, Severity::Low)]] {
+        for findings in [
+            vec![],
+            vec![finding(1, Severity::Medium), finding(2, Severity::Low)],
+        ] {
             let review = review(1, findings);
-            assert_eq!(settle(Consequence::Blocking, review.clone()), Settle::Ready(Outcome::BlockingCleared(review)));
+            assert_eq!(
+                settle(Consequence::Blocking, review.clone()),
+                Settle::Ready(Outcome::BlockingCleared(review))
+            );
         }
     }
 
@@ -1709,27 +1880,45 @@ mod risk_tests {
     fn blocking_findings_wait_on_a_disposition() {
         for severity in [Severity::Blocker, Severity::High] {
             let review = review(1, vec![finding(1, severity)]);
-            assert_eq!(settle(Consequence::Blocking, review.clone()), Settle::Dispose(review));
+            assert_eq!(
+                settle(Consequence::Blocking, review.clone()),
+                Settle::Dispose(review)
+            );
         }
     }
 
     #[test]
     fn adjudicated_clears_only_a_review_with_no_findings() {
         let clean = review(1, vec![]);
-        assert_eq!(settle(Consequence::Adjudicated, clean.clone()), Settle::Ready(Outcome::Adjudicated(clean)));
+        assert_eq!(
+            settle(Consequence::Adjudicated, clean.clone()),
+            Settle::Ready(Outcome::Adjudicated(clean))
+        );
         let low = review(1, vec![finding(1, Severity::Low)]);
-        assert_eq!(settle(Consequence::Adjudicated, low.clone()), Settle::Dispose(low));
+        assert_eq!(
+            settle(Consequence::Adjudicated, low.clone()),
+            Settle::Dispose(low)
+        );
     }
 
     #[test]
     fn a_disposition_not_yet_answered_waits() {
-        assert_eq!(disposed(&State::Unanswered, &review(1, vec![])), Disposed::Wait);
+        assert_eq!(
+            disposed(&State::Unanswered, &review(1, vec![])),
+            Disposed::Wait
+        );
     }
 
     #[test]
     fn a_stopped_or_aborted_disposition_refuses_as_stopped() {
-        for state in [answered("override", None, Disposition::Stop), answered("abort", None, Disposition::Approve)] {
-            assert_eq!(disposed(&state, &review(1, vec![])), Disposed::Refused("pause risk choice stopped"));
+        for state in [
+            answered("override", None, Disposition::Stop),
+            answered("abort", None, Disposition::Approve),
+        ] {
+            assert_eq!(
+                disposed(&state, &review(1, vec![])),
+                Disposed::Refused("pause risk choice stopped")
+            );
         }
     }
 
@@ -1740,26 +1929,46 @@ mod risk_tests {
             disposed(&fix, &review(1, vec![])),
             Disposed::Refused("risk fix requested; stage the narrowed fix and repeat pause")
         );
-        assert_eq!(disposed(&fix, &review(2, vec![])), Disposed::Refused("pause risk choice is not actionable"));
+        assert_eq!(
+            disposed(&fix, &review(2, vec![])),
+            Disposed::Refused("pause risk choice is not actionable")
+        );
     }
 
     #[test]
     fn override_records_an_override() {
-        assert_eq!(disposed(&answered("override", None, Disposition::Approve), &review(1, vec![])), Disposed::Override);
+        assert_eq!(
+            disposed(
+                &answered("override", None, Disposition::Approve),
+                &review(1, vec![])
+            ),
+            Disposed::Override
+        );
     }
 
     #[test]
     fn an_override_is_a_review_receipt_whose_head_names_the_staged_index() {
-        let review = review(1, vec![finding(1, Severity::High), finding(2, Severity::Low)]);
-        let gate = gate(&["fix", "override", "abort"], answered("override", Some("accepted risk"), Disposition::Adjust));
+        let review = review(
+            1,
+            vec![finding(1, Severity::High), finding(2, Severity::Low)],
+        );
+        let gate = gate(
+            &["fix", "override", "abort"],
+            answered("override", Some("accepted risk"), Disposition::Adjust),
+        );
         let value = override_value(&scope("pause-1"), &gate, &review).unwrap();
         assert_eq!(value.id, "pause-risk-override-pause-risk-f");
         assert_eq!(value.reason, "accepted risk");
         assert_eq!(
             value.authorization,
-            Authorization::Answer { id: "auth-1".into(), question_id: "pause-risk-f-disposition".into() }
+            Authorization::Answer {
+                id: "auth-1".into(),
+                question_id: "pause-risk-f-disposition".into()
+            }
         );
-        let Meaning::Review(receipt) = value.meaning else { panic!("a review receipt") };
+        let Meaning::Review(receipt) = value.meaning else {
+            panic!("a review receipt")
+        };
         assert_eq!(receipt.head, format!("index:{INDEX}"));
         assert_eq!(receipt.base, BASE);
         assert_eq!(receipt.trigger, "risk_surface");
@@ -1771,10 +1980,15 @@ mod risk_tests {
 
     #[test]
     fn a_second_round_override_names_its_round_and_takes_the_answer_as_its_reason() {
-        let gate = gate(&["override", "abort"], answered("override", None, Disposition::Approve));
+        let gate = gate(
+            &["override", "abort"],
+            answered("override", None, Disposition::Approve),
+        );
         let value = override_value(&scope("pause-1"), &gate, &review(2, vec![])).unwrap();
         assert_eq!(value.reason, "as answered");
-        let Meaning::Review(receipt) = value.meaning else { panic!("a review receipt") };
+        let Meaning::Review(receipt) = value.meaning else {
+            panic!("a review receipt")
+        };
         assert_eq!(receipt.round, Some(2));
     }
 
@@ -1788,7 +2002,13 @@ mod risk_tests {
         }
         let blank = gate(&[], answered("override", Some("  "), Disposition::Adjust));
         for gate in [unanswered, unauthorized, blank] {
-            assert!(matches!(override_value(&scope("pause-1"), &gate, &review), Err(Error::Invalid(_))), "{gate:?}");
+            assert!(
+                matches!(
+                    override_value(&scope("pause-1"), &gate, &review),
+                    Err(Error::Invalid(_))
+                ),
+                "{gate:?}"
+            );
         }
     }
 
@@ -1797,42 +2017,88 @@ mod risk_tests {
             .iter()
             .enumerate()
             .map(|(key, (occurrence, value))| {
-                (key.to_string(), Record { version: 1, scope: scope(occurrence), fact: Fact::Override(value.clone()) })
+                (
+                    key.to_string(),
+                    Record {
+                        version: 1,
+                        scope: scope(occurrence),
+                        fact: Fact::Override(value.clone()),
+                    },
+                )
             })
             .collect()
     }
 
     #[test]
     fn an_override_belongs_to_its_occurrence() {
-        let gate = gate(&["override"], answered("override", Some("why"), Disposition::Adjust));
+        let gate = gate(
+            &["override"],
+            answered("override", Some("why"), Disposition::Adjust),
+        );
         let value = override_value(&scope("pause-1"), &gate, &review(1, vec![])).unwrap();
-        assert_eq!(override_recorded(&overrides(&[]), &scope("pause-1"), &value), Ok(false));
-        assert_eq!(override_recorded(&overrides(&[("pause-1", value.clone())]), &scope("pause-1"), &value), Ok(true));
-        assert_eq!(override_recorded(&overrides(&[("pause-1", value.clone())]), &scope("pause-2"), &value), Ok(false));
+        assert_eq!(
+            override_recorded(&overrides(&[]), &scope("pause-1"), &value),
+            Ok(false)
+        );
+        assert_eq!(
+            override_recorded(
+                &overrides(&[("pause-1", value.clone())]),
+                &scope("pause-1"),
+                &value
+            ),
+            Ok(true)
+        );
+        assert_eq!(
+            override_recorded(
+                &overrides(&[("pause-1", value.clone())]),
+                &scope("pause-2"),
+                &value
+            ),
+            Ok(false)
+        );
     }
 
     #[test]
     fn a_different_override_under_the_same_id_is_refused() {
-        let gate = gate(&["override"], answered("override", Some("why"), Disposition::Adjust));
+        let gate = gate(
+            &["override"],
+            answered("override", Some("why"), Disposition::Adjust),
+        );
         let value = override_value(&scope("pause-1"), &gate, &review(1, vec![])).unwrap();
-        let changed = super::Override { reason: "another reason".into(), ..value.clone() };
-        let found = override_recorded(&overrides(&[("pause-1", changed)]), &scope("pause-1"), &value);
+        let changed = super::Override {
+            reason: "another reason".into(),
+            ..value.clone()
+        };
+        let found = override_recorded(
+            &overrides(&[("pause-1", changed)]),
+            &scope("pause-1"),
+            &value,
+        );
         assert!(matches!(found, Err(Error::Conflict(_))), "{found:?}");
     }
 
     fn surfaces(option: &str, adjustment: Option<&str>) -> Gate {
-        gate(&["all", "surfaces:auth,billing", "choose", "abort"], answered(option, adjustment, Disposition::Approve))
+        gate(
+            &["all", "surfaces:auth,billing", "choose", "abort"],
+            answered(option, adjustment, Disposition::Approve),
+        )
     }
 
     #[test]
     fn an_unanswered_surfaces_question_names_no_surfaces() {
-        assert_eq!(surfaces_from_answer(&gate(&["all"], State::Unanswered)), Ok(None));
+        assert_eq!(
+            surfaces_from_answer(&gate(&["all"], State::Unanswered)),
+            Ok(None)
+        );
     }
 
     #[test]
     fn all_is_every_category() {
         let every: Vec<String> = CATEGORIES.iter().map(|value| (*value).into()).collect();
-        assert_eq!(surfaces_from_answer(&surfaces("all", None)), Ok(Some(every)));
+        assert_eq!(
+            surfaces_from_answer(&surfaces("all", None)),
+            Ok(Some(every))
+        );
     }
 
     #[test]
@@ -1867,16 +2133,29 @@ mod risk_tests {
     fn abort_or_a_stop_is_a_stopped_surfaces_choice() {
         let stopped = gate(&["all"], answered("all", None, Disposition::Stop));
         for gate in [surfaces("abort", None), stopped] {
-            assert!(matches!(surfaces_from_answer(&gate), Err(Error::Policy(_))), "{gate:?}");
+            assert!(
+                matches!(surfaces_from_answer(&gate), Err(Error::Policy(_))),
+                "{gate:?}"
+            );
         }
     }
 
     #[test]
     fn a_deferred_review_is_one_queue_member_with_its_finding_count() {
-        let review = review(1, vec![finding(1, Severity::High), finding(2, Severity::Low)]);
-        let [(review_path, _), (queue_path, bytes)] = deferred_artifacts(Path::new("/project/.planning"), "3", &review).unwrap();
-        assert_eq!(review_path, Path::new("/project/.planning/phases/3/REVIEW-risk_surface-pause-abcdef012345.md"));
-        assert_eq!(queue_path, Path::new("/project/.planning/phases/3/DEFERRED-risk_surface-pause-abcdef012345.json"));
+        let review = review(
+            1,
+            vec![finding(1, Severity::High), finding(2, Severity::Low)],
+        );
+        let [(review_path, _), (queue_path, bytes)] =
+            deferred_artifacts(Path::new("/project/.planning"), "3", &review).unwrap();
+        assert_eq!(
+            review_path,
+            Path::new("/project/.planning/phases/3/REVIEW-risk_surface-pause-abcdef012345.md")
+        );
+        assert_eq!(
+            queue_path,
+            Path::new("/project/.planning/phases/3/DEFERRED-risk_surface-pause-abcdef012345.json")
+        );
         let name = queue_path.file_name().unwrap().to_str().unwrap();
         let member = baley::next_action::observations::queue_member(
             queue_path.clone(),
@@ -1885,15 +2164,24 @@ mod risk_tests {
             serde_json::from_slice(&bytes).unwrap(),
         )
         .expect("the queue observation accepts it");
-        assert_eq!((member.trigger.as_str(), member.round, member.findings), ("risk_surface", 1, 2));
+        assert_eq!(
+            (member.trigger.as_str(), member.round, member.findings),
+            ("risk_surface", 1, 2)
+        );
     }
 
     #[test]
     fn a_second_round_deferral_carries_its_round_in_both_names() {
         let [(review_path, _), (queue_path, bytes)] =
             deferred_artifacts(Path::new("/p/.planning"), "3", &review(2, vec![])).unwrap();
-        assert!(review_path.ends_with("REVIEW-risk_surface-pause-abcdef012345-r2.md"), "{review_path:?}");
-        assert!(queue_path.ends_with("DEFERRED-risk_surface-pause-abcdef012345-r2.json"), "{queue_path:?}");
+        assert!(
+            review_path.ends_with("REVIEW-risk_surface-pause-abcdef012345-r2.md"),
+            "{review_path:?}"
+        );
+        assert!(
+            queue_path.ends_with("DEFERRED-risk_surface-pause-abcdef012345-r2.json"),
+            "{queue_path:?}"
+        );
         let name = queue_path.file_name().unwrap().to_str().unwrap();
         let member = baley::next_action::observations::queue_member(
             queue_path.clone(),
@@ -1907,11 +2195,26 @@ mod risk_tests {
 
     #[test]
     fn a_deferral_needs_a_hex_index_and_a_round() {
-        let short = Review { fire: Fire { index_id: "abc".into(), ..fire(1, &["a"]) }, ..review(1, vec![]) };
-        let not_hex = Review { fire: Fire { index_id: "z".repeat(40), ..fire(1, &["a"]) }, ..review(1, vec![]) };
+        let short = Review {
+            fire: Fire {
+                index_id: "abc".into(),
+                ..fire(1, &["a"])
+            },
+            ..review(1, vec![])
+        };
+        let not_hex = Review {
+            fire: Fire {
+                index_id: "z".repeat(40),
+                ..fire(1, &["a"])
+            },
+            ..review(1, vec![])
+        };
         let no_round = review(0, vec![]);
         for review in [short, not_hex, no_round] {
-            assert!(deferred_artifacts(Path::new("/p/.planning"), "3", &review).is_err(), "{review:?}");
+            assert!(
+                deferred_artifacts(Path::new("/p/.planning"), "3", &review).is_err(),
+                "{review:?}"
+            );
         }
     }
 }
@@ -1919,7 +2222,10 @@ mod risk_tests {
 #[cfg(test)]
 mod record_tests {
     use super::{config_identity, recorded_resume, resume_record, stage_paths};
-    use crate::config::{merge, reload::{Generation, Input}};
+    use crate::config::{
+        merge,
+        reload::{Generation, Input},
+    };
     use baley::evidence::{
         Fact, Scope,
         overrides::{Authorization, Meaning},
@@ -1939,15 +2245,26 @@ mod record_tests {
 
     #[test]
     fn an_ignored_receipt_is_never_staged() {
-        let staged = stage_paths(&set(&["src/lib.rs", ".planning/state.json"]), &set(&[".planning/state.json"]), Path::new(".planning"), false);
+        let staged = stage_paths(
+            &set(&["src/lib.rs", ".planning/state.json"]),
+            &set(&[".planning/state.json"]),
+            Path::new(".planning"),
+            false,
+        );
         assert_eq!(staged, set(&["src/lib.rs"]));
     }
 
     #[test]
     fn planning_documents_stay_out_of_the_wip_when_they_are_committed_separately() {
         let authorized = set(&["src/lib.rs", ".planning/phases/3/NOTES.md"]);
-        assert_eq!(stage_paths(&authorized, &set(&[]), Path::new(".planning"), true), set(&["src/lib.rs"]));
-        assert_eq!(stage_paths(&authorized, &set(&[]), Path::new(".planning"), false), authorized);
+        assert_eq!(
+            stage_paths(&authorized, &set(&[]), Path::new(".planning"), true),
+            set(&["src/lib.rs"])
+        );
+        assert_eq!(
+            stage_paths(&authorized, &set(&[]), Path::new(".planning"), false),
+            authorized
+        );
     }
 
     fn scope(occurrence: &str) -> Scope {
@@ -1963,10 +2280,20 @@ mod record_tests {
     }
 
     fn capture(occurrence: &str, sentence: &str, phase: &str) -> Capture {
-        let observed = Observation { head: HEAD.into(), branch: b"work".to_vec(), index: vec![], changes: vec![] };
+        let observed = Observation {
+            head: HEAD.into(),
+            branch: b"work".to_vec(),
+            index: vec![],
+            changes: vec![],
+        };
         Capture {
             scope: scope(occurrence),
-            phase: Phase { identity: "3".into(), name: phase.into(), total: 7, provenance: "roadmap".into() },
+            phase: Phase {
+                identity: "3".into(),
+                name: phase.into(),
+                total: 7,
+                provenance: "roadmap".into(),
+            },
             sentence: sentence.into(),
             authorized: BTreeSet::new(),
             observed,
@@ -1976,7 +2303,11 @@ mod record_tests {
     }
 
     fn config(repo: &[u8], global: Option<&[u8]>) -> Generation {
-        let input = |path: &str, bytes: &[u8]| Input { identity: path.into(), bytes: Some(bytes.to_vec()), stamp: None };
+        let input = |path: &str, bytes: &[u8]| Input {
+            identity: path.into(),
+            bytes: Some(bytes.to_vec()),
+            stamp: None,
+        };
         Generation {
             number: 1,
             global: global.map(|bytes| input("/home/u/.claude/baley/config.v4.json", bytes)),
@@ -1986,22 +2317,44 @@ mod record_tests {
     }
 
     fn observed_after_wip() -> Observation {
-        Observation { head: "2".repeat(40), branch: b"work".to_vec(), index: vec![], changes: vec![] }
+        Observation {
+            head: "2".repeat(40),
+            branch: b"work".to_vec(),
+            index: vec![],
+            changes: vec![],
+        }
     }
 
     #[test]
     fn the_resume_record_carries_the_exact_note_and_its_invocation() {
         let config = config(b"{}", None);
-        let record = resume_record(&capture("pause-1", NOTE, "Work"), &observed_after_wip(), &config).unwrap();
+        let record = resume_record(
+            &capture("pause-1", NOTE, "Work"),
+            &observed_after_wip(),
+            &config,
+        )
+        .unwrap();
         assert_eq!(record.scope, scope("pause-1"));
-        let Fact::Override(value) = record.fact else { panic!("an override") };
+        let Fact::Override(value) = record.fact else {
+            panic!("an override")
+        };
         assert_eq!(value.id, "pause-resume");
         assert_eq!(value.reason, NOTE);
-        assert_eq!(value.meaning, Meaning::PausedNext { sentence: NOTE.into() });
-        let Authorization::Invocation { id, invocation } = value.authorization else { panic!("an invocation") };
+        assert_eq!(
+            value.meaning,
+            Meaning::PausedNext {
+                sentence: NOTE.into()
+            }
+        );
+        let Authorization::Invocation { id, invocation } = value.authorization else {
+            panic!("an invocation")
+        };
         assert_eq!(id, "pause:pause-1");
         let invocation: ResumeInvocation = serde_json::from_str(&invocation).unwrap();
-        assert_eq!((invocation.version, invocation.action.as_str()), (1, "pause"));
+        assert_eq!(
+            (invocation.version, invocation.action.as_str()),
+            (1, "pause")
+        );
         assert_eq!(invocation.phase, capture("pause-1", NOTE, "Work").phase);
         assert_eq!(invocation.preserved_head, "2".repeat(40));
         assert_eq!(invocation.branch, b"work");
@@ -2010,20 +2363,35 @@ mod record_tests {
 
     #[test]
     fn the_config_identity_changes_with_either_layers_bytes() {
-        let identity = |repo: &[u8], global: Option<&[u8]>| config_identity(&config(repo, global)).unwrap();
+        let identity =
+            |repo: &[u8], global: Option<&[u8]>| config_identity(&config(repo, global)).unwrap();
         assert_eq!(identity(b"{}", None), identity(b"{}", None));
         assert_ne!(identity(b"{}", None), identity(b"{\"a\":1}", None));
         assert_ne!(identity(b"{}", None), identity(b"{}", Some(b"{}")));
-        assert_ne!(identity(b"{}", Some(b"{}")), identity(b"{}", Some(b"{\"b\":2}")));
+        assert_ne!(
+            identity(b"{}", Some(b"{}")),
+            identity(b"{}", Some(b"{\"b\":2}"))
+        );
     }
 
     fn recorded(records: &[baley::evidence::Record]) -> BTreeMap<String, baley::evidence::Record> {
-        records.iter().enumerate().map(|(key, record)| (key.to_string(), record.clone())).collect()
+        records
+            .iter()
+            .enumerate()
+            .map(|(key, record)| (key.to_string(), record.clone()))
+            .collect()
     }
 
     #[test]
     fn nothing_recorded_is_no_resume() {
-        assert_eq!(recorded_resume(recorded(&[]), &capture("pause-1", NOTE, "Work"), &config(b"{}", None)), Ok(None));
+        assert_eq!(
+            recorded_resume(
+                recorded(&[]),
+                &capture("pause-1", NOTE, "Work"),
+                &config(b"{}", None)
+            ),
+            Ok(None)
+        );
     }
 
     // A retry after the record landed finds it and goes on to the final commit
@@ -2033,7 +2401,9 @@ mod record_tests {
         let config = config(b"{}", None);
         let captured = capture("pause-1", NOTE, "Work");
         let record = resume_record(&captured, &observed_after_wip(), &config).unwrap();
-        let Some((found, invocation)) = recorded_resume(recorded(std::slice::from_ref(&record)), &captured, &config).unwrap() else {
+        let Some((found, invocation)) =
+            recorded_resume(recorded(std::slice::from_ref(&record)), &captured, &config).unwrap()
+        else {
             panic!("the recorded resume")
         };
         assert_eq!(found, record);
@@ -2043,20 +2413,41 @@ mod record_tests {
     #[test]
     fn a_resume_recorded_in_another_occurrence_is_not_this_ones() {
         let config = config(b"{}", None);
-        let other = resume_record(&capture("pause-2", NOTE, "Work"), &observed_after_wip(), &config).unwrap();
-        assert_eq!(recorded_resume(recorded(&[other]), &capture("pause-1", NOTE, "Work"), &config), Ok(None));
+        let other = resume_record(
+            &capture("pause-2", NOTE, "Work"),
+            &observed_after_wip(),
+            &config,
+        )
+        .unwrap();
+        assert_eq!(
+            recorded_resume(
+                recorded(&[other]),
+                &capture("pause-1", NOTE, "Work"),
+                &config
+            ),
+            Ok(None)
+        );
     }
 
     #[test]
     fn a_recorded_resume_that_no_longer_matches_is_refused() {
         let recorded_config = config(b"{}", None);
-        let record = resume_record(&capture("pause-1", NOTE, "Work"), &observed_after_wip(), &recorded_config).unwrap();
+        let record = resume_record(
+            &capture("pause-1", NOTE, "Work"),
+            &observed_after_wip(),
+            &recorded_config,
+        )
+        .unwrap();
         for (captured, current) in [
-            (capture("pause-1", "another note", "Work"), recorded_config.clone()),
+            (
+                capture("pause-1", "another note", "Work"),
+                recorded_config.clone(),
+            ),
             (capture("pause-1", NOTE, "Renamed"), recorded_config.clone()),
             (capture("pause-1", NOTE, "Work"), config(b"{\"a\":1}", None)),
         ] {
-            let found = recorded_resume(recorded(std::slice::from_ref(&record)), &captured, &current);
+            let found =
+                recorded_resume(recorded(std::slice::from_ref(&record)), &captured, &current);
             assert!(matches!(found, Err(Error::Conflict(_))), "{found:?}");
         }
     }

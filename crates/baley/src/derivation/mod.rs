@@ -7,10 +7,14 @@ mod parse;
 mod query;
 pub use capture::{ArtifactFiles, ArtifactIo, capture_inputs};
 pub use consistency::{check_consistency, roadmap_conflicts};
-pub use memo::{DOMAIN, ENCODING_VERSION, SEMANTICS_VERSION, encode_inputs, input_key, input_key_with};
+pub use memo::{
+    DOMAIN, ENCODING_VERSION, SEMANTICS_VERSION, encode_inputs, input_key, input_key_with,
+};
 pub use model::*;
 pub use parse::parse_roadmap;
-pub use query::{PreparedLifecycle, RecheckedLifecycle, prepare_query, prepare_progress, query, recheck_query};
+pub use query::{
+    PreparedLifecycle, RecheckedLifecycle, prepare_progress, prepare_query, query, recheck_query,
+};
 
 fn validate_observation_failures(capture: &CapturedInputs) -> Result<(), DerivationError> {
     fn check<T>(observation: &Observation<T>) -> Result<(), DerivationError> {
@@ -51,7 +55,10 @@ pub(crate) fn validate_inputs(capture: &CapturedInputs) -> Result<&ParsedRoadmap
 }
 
 fn store_failure(error: crate::store::Error) -> DerivationError {
-    DerivationError::Store { kind: "invalid".into(), detail: error.to_string() }
+    DerivationError::Store {
+        kind: "invalid".into(),
+        detail: error.to_string(),
+    }
 }
 
 /// The native acceptance authority in one snapshot (D-131). A phase is native
@@ -60,31 +67,76 @@ fn store_failure(error: crate::store::Error) -> DerivationError {
 /// and task has its completion; it is complete only through an applicable
 /// completion record. Nothing here reads SUMMARY.md or UAT.md.
 pub fn acceptance_overlay(data: &serde_json::Value) -> Result<AcceptanceOverlay, DerivationError> {
-    use crate::{execution::{admission, history}, plan::persistence, verification::completion};
+    use crate::{
+        execution::{admission, history},
+        plan::persistence,
+        verification::completion,
+    };
     let mut overlay = AcceptanceOverlay::default();
-    let mut keys: std::collections::BTreeSet<String> = data.get("context").and_then(|c| c.get("phases"))
-        .and_then(|p| p.as_object()).map(|p| p.keys().cloned().collect()).unwrap_or_default();
-    keys.extend(crate::undo::model::records(data).map_err(store_failure)?.values()
-        .filter(|r| r.state == "committed").map(|r| r.manifest.phase.to_string()));
+    let mut keys: std::collections::BTreeSet<String> = data
+        .get("context")
+        .and_then(|c| c.get("phases"))
+        .and_then(|p| p.as_object())
+        .map(|p| p.keys().cloned().collect())
+        .unwrap_or_default();
+    keys.extend(
+        crate::undo::model::records(data)
+            .map_err(store_failure)?
+            .values()
+            .filter(|r| r.state == "committed")
+            .map(|r| r.manifest.phase.to_string()),
+    );
     for key in &keys {
-        let Ok(phase) = key.parse::<u32>() else { continue };
-        if phase == 0 || phase.to_string() != *key { continue }
+        let Ok(phase) = key.parse::<u32>() else {
+            continue;
+        };
+        if phase == 0 || phase.to_string() != *key {
+            continue;
+        }
         let native = (|| -> crate::store::Result<AcceptancePhase> {
             if crate::undo::model::undone(data, phase)? {
-                return Ok(AcceptancePhase { published: true, executed: false, completion: None,
-                    label: None, met: 0, waived: 0, disagreement: None });
+                return Ok(AcceptancePhase {
+                    published: true,
+                    executed: false,
+                    completion: None,
+                    label: None,
+                    met: 0,
+                    waived: 0,
+                    disagreement: None,
+                });
             }
             let occurrence = persistence::saved(data, phase)?;
-            let published = occurrence.as_ref().is_some_and(|o| !o.publications.is_empty());
+            let published = occurrence
+                .as_ref()
+                .is_some_and(|o| !o.publications.is_empty());
             let admissions = admission::records(data, phase)?;
-            let mut executed = published && !admissions.is_empty()
+            let mut executed = published
+                && !admissions.is_empty()
                 && !data["execution"]["occurrences"][key]["active"].is_object();
             if executed {
                 let latest = admissions.last().expect("nonempty");
-                let current: Vec<_> = occurrence.as_ref().map(|o| o.publications.iter()
-                    .map(|(n, p)| (*n, p.revision.clone(), p.map_revision.clone())).collect()).unwrap_or_default();
-                let admitted: Vec<_> = latest.request.contract.plans.iter()
-                    .map(|b| (b.plan, b.content_revision.clone(), Some(b.map_revision.clone()))).collect();
+                let current: Vec<_> = occurrence
+                    .as_ref()
+                    .map(|o| {
+                        o.publications
+                            .iter()
+                            .map(|(n, p)| (*n, p.revision.clone(), p.map_revision.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let admitted: Vec<_> = latest
+                    .request
+                    .contract
+                    .plans
+                    .iter()
+                    .map(|b| {
+                        (
+                            b.plan,
+                            b.content_revision.clone(),
+                            Some(b.map_revision.clone()),
+                        )
+                    })
+                    .collect();
                 executed = current == admitted;
             }
             if executed {
@@ -94,26 +146,54 @@ pub fn acceptance_overlay(data: &serde_json::Value) -> Result<AcceptanceOverlay,
                 let outcomes = history::plan_outcomes(data, phase)?;
                 executed = !admitted.is_empty() && history::phase_complete(data, phase)?;
                 for (identity, _) in &admitted {
-                    if !executed { break }
-                    if !outcomes.iter().any(|outcome| outcome.plan == identity.plan
-                        && outcome.disposition == crate::execution::model::PlanDisposition::Complete) {
+                    if !executed {
+                        break;
+                    }
+                    if !outcomes.iter().any(|outcome| {
+                        outcome.plan == identity.plan
+                            && outcome.disposition
+                                == crate::execution::model::PlanDisposition::Complete
+                    }) {
                         continue;
                     }
                     executed = history::plan_project(&plan_events, identity).completed
-                        && history::plan_task_views(data, &events, phase, identity.plan)?.iter()
+                        && history::plan_task_views(data, &events, phase, identity.plan)?
+                            .iter()
                             .all(|t| t.state.completed && t.state.unknown_runs.is_empty());
                 }
             }
-            let (completion, label, met, waived, disagreement) = match completion::applicable(data, phase)? {
-                Some((record, true, _)) => {
-                    let count = |status: &str| record.truths.iter().filter(|t| t["status"] == status).count();
-                    (Some(record.id.clone()), Some(record.label.clone()), count("met"), count("waived"), None)
-                }
-                Some((_, false, reason)) => (None, None, 0, 0, Some(reason)),
-                None => (None, None, 0, 0, None),
-            };
-            Ok(AcceptancePhase { published, executed: executed || completion.is_some(), completion, label, met, waived, disagreement })
-        })().map_err(store_failure)?;
+            let (completion, label, met, waived, disagreement) =
+                match completion::applicable(data, phase)? {
+                    Some((record, true, _)) => {
+                        let count = |status: &str| {
+                            record
+                                .truths
+                                .iter()
+                                .filter(|t| t["status"] == status)
+                                .count()
+                        };
+                        (
+                            Some(record.id.clone()),
+                            Some(record.label.clone()),
+                            count("met"),
+                            count("waived"),
+                            None,
+                        )
+                    }
+                    Some((_, false, reason)) => (None, None, 0, 0, Some(reason)),
+                    None => (None, None, 0, 0, None),
+                };
+            Ok(AcceptancePhase {
+                published,
+                executed: executed || completion.is_some(),
+                completion,
+                label,
+                met,
+                waived,
+                disagreement,
+            })
+        })()
+        .map_err(store_failure)?;
         overlay.phases.insert(key.clone(), native);
     }
     Ok(overlay)
@@ -137,7 +217,10 @@ pub fn derive(capture: &CapturedInputs) -> Result<Lifecycle, DerivationError> {
 /// The lifecycle with native acceptance overlaid: a phase in the overlay takes
 /// Planned, Executed and Complete from it, and its counts are its met and
 /// waived truths; every other phase is Planned or Unplanned by its plan files.
-pub fn derive_with(capture: &CapturedInputs, overlay: &AcceptanceOverlay) -> Result<Lifecycle, DerivationError> {
+pub fn derive_with(
+    capture: &CapturedInputs,
+    overlay: &AcceptanceOverlay,
+) -> Result<Lifecycle, DerivationError> {
     let parsed = validate_inputs(capture)?;
     let mut phases = Vec::with_capacity(parsed.phases.len());
     for declaration in &parsed.phases {
@@ -160,14 +243,24 @@ pub fn derive_with(capture: &CapturedInputs, overlay: &AcceptanceOverlay) -> Res
         let (status, uat) = match native {
             Some(native) if native.completion.is_some() => (
                 LifecycleStatus::Complete,
-                Some(UatCounts { pass: native.met, skipped: native.waived, ..UatCounts::default() }),
+                Some(UatCounts {
+                    pass: native.met,
+                    skipped: native.waived,
+                    ..UatCounts::default()
+                }),
             ),
             Some(native) if native.executed => (LifecycleStatus::Executed, None),
             Some(native) if native.published => (LifecycleStatus::Planned, None),
             _ if !plans.is_empty() => (LifecycleStatus::Planned, None),
             _ => (LifecycleStatus::Unplanned, None),
         };
-        phases.push(PhaseRecord { id: declaration.id, name: declaration.name.clone(), plans, status, uat });
+        phases.push(PhaseRecord {
+            id: declaration.id,
+            name: declaration.name.clone(),
+            plans,
+            status,
+            uat,
+        });
     }
     Ok(Lifecycle {
         cycle: parsed.cycle,
@@ -190,17 +283,33 @@ mod overlay_tests {
     fn native_capture() -> CapturedInputs {
         let text = "## Phases\n- [x] **Phase 13: Native**\n- [ ] **Phase 14: Other**\n";
         let parsed = parse_roadmap(text).unwrap();
-        let phases = parsed.phases.iter().map(|p| PhaseObservation {
-            relative_path: p.relative_path.clone(),
-            plans: Observation::Present(vec!["PLAN-1.md".into()]),
-        }).collect();
-        CapturedInputs { root: "/planning".into(), root_probe: Observation::Present(()),
-            roadmap: Observation::Present(text.as_bytes().into()), declarations: Some(Ok(parsed)), phases }
+        let phases = parsed
+            .phases
+            .iter()
+            .map(|p| PhaseObservation {
+                relative_path: p.relative_path.clone(),
+                plans: Observation::Present(vec!["PLAN-1.md".into()]),
+            })
+            .collect();
+        CapturedInputs {
+            root: "/planning".into(),
+            root_probe: Observation::Present(()),
+            roadmap: Observation::Present(text.as_bytes().into()),
+            declarations: Some(Ok(parsed)),
+            phases,
+        }
     }
 
     fn native(completion: Option<&str>, executed: bool) -> AcceptancePhase {
-        AcceptancePhase { published: true, executed, completion: completion.map(str::to_owned),
-            label: completion.map(|_| "complete-with-waivers".to_owned()), met: 1, waived: 1, disagreement: None }
+        AcceptancePhase {
+            published: true,
+            executed,
+            completion: completion.map(str::to_owned),
+            label: completion.map(|_| "complete-with-waivers".to_owned()),
+            met: 1,
+            waived: 1,
+            disagreement: None,
+        }
     }
 
     #[test]
@@ -210,26 +319,49 @@ mod overlay_tests {
         overlay.phases.insert("13".into(), native(Some("c1"), true));
         let answer = derive_with(&capture, &overlay).unwrap();
         assert_eq!(answer.phases[0].status, LifecycleStatus::Complete);
-        assert_eq!(answer.phases[0].uat, Some(UatCounts { pass: 1, skipped: 1, ..UatCounts::default() }));
-        assert_eq!(answer.phases[1].status, LifecycleStatus::Planned, "a phase without native authority is planned by its plan files");
+        assert_eq!(
+            answer.phases[0].uat,
+            Some(UatCounts {
+                pass: 1,
+                skipped: 1,
+                ..UatCounts::default()
+            })
+        );
+        assert_eq!(
+            answer.phases[1].status,
+            LifecycleStatus::Planned,
+            "a phase without native authority is planned by its plan files"
+        );
         assert_eq!(answer.current.map(|p| p.address()), Some("14".to_owned()));
         overlay.phases.insert("13".into(), native(None, true));
-        assert_eq!(derive_with(&capture, &overlay).unwrap().phases[0].status, LifecycleStatus::Executed);
+        assert_eq!(
+            derive_with(&capture, &overlay).unwrap().phases[0].status,
+            LifecycleStatus::Executed
+        );
         overlay.phases.insert("13".into(), native(None, false));
-        assert_eq!(derive_with(&capture, &overlay).unwrap().phases[0].status, LifecycleStatus::Planned);
+        assert_eq!(
+            derive_with(&capture, &overlay).unwrap().phases[0].status,
+            LifecycleStatus::Planned
+        );
         let mut unpublished = native(None, false);
         unpublished.published = false;
         let mut capture = capture;
         capture.phases[0].plans = Observation::Present(vec![]);
         overlay.phases.insert("13".into(), unpublished);
-        assert_eq!(derive_with(&capture, &overlay).unwrap().phases[0].status, LifecycleStatus::Unplanned);
+        assert_eq!(
+            derive_with(&capture, &overlay).unwrap().phases[0].status,
+            LifecycleStatus::Unplanned
+        );
     }
 
     #[test]
     fn the_memo_key_changes_with_the_overlay_and_keeps_the_plain_key_without_one() {
         let capture = native_capture();
         let plain = input_key(&capture).unwrap();
-        assert_eq!(input_key_with(&capture, &AcceptanceOverlay::default()).unwrap(), plain);
+        assert_eq!(
+            input_key_with(&capture, &AcceptanceOverlay::default()).unwrap(),
+            plain
+        );
         let mut overlay = AcceptanceOverlay::default();
         overlay.phases.insert("13".into(), native(None, false));
         let planned = input_key_with(&capture, &overlay).unwrap();

@@ -137,10 +137,16 @@ pub fn risk_review_action(gate: &Gate, observation: &DetectorObservation) -> Ris
 
 /// Debug alone dispatches a checked inconclusive scan. Missing acquisition,
 /// stale evidence and unanswered configuration retain the ordinary policy.
-pub fn debug_risk_review_action(gate: &Gate, observation: &DetectorObservation, checked: bool) -> RiskAction {
+pub fn debug_risk_review_action(
+    gate: &Gate,
+    observation: &DetectorObservation,
+    checked: bool,
+) -> RiskAction {
     if *gate != Gate::Off && checked && *observation == DetectorObservation::Inconclusive {
         RiskAction::Dispatch
-    } else { risk_review_action(gate, observation) }
+    } else {
+        risk_review_action(gate, observation)
+    }
 }
 
 /// Only an independently supplied settlement can change this state. Delivery
@@ -312,7 +318,9 @@ mod gap154_tests {
             head_id: "h1".into(),
         };
         let mut foreign = observation();
-        let risk::Scope::Phase { occurrence, .. } = &mut foreign.scope else { panic!("phase fixture"); };
+        let risk::Scope::Phase { occurrence, .. } = &mut foreign.scope else {
+            panic!("phase fixture");
+        };
         *occurrence = "foreign".into();
         assert_eq!(
             detector_observation(

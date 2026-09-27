@@ -93,13 +93,21 @@ pub fn input_key(capture: &CapturedInputs) -> Result<String, DerivationError> {
 /// The memo identity with native acceptance authority included: a legacy
 /// tree keeps its key, and any change to a native phase's published,
 /// executed or completion inputs is a different key, never a stale hit.
-pub fn input_key_with(capture: &CapturedInputs, overlay: &AcceptanceOverlay) -> Result<String, DerivationError> {
+pub fn input_key_with(
+    capture: &CapturedInputs,
+    overlay: &AcceptanceOverlay,
+) -> Result<String, DerivationError> {
     if overlay.phases.is_empty() {
         return input_key(capture);
     }
     let mut out = encode_inputs(capture)?;
     bytes(&mut out, b"acceptance-overlay-1");
-    bytes(&mut out, &serde_json::to_vec(overlay).map_err(|e| DerivationError::InvalidRoadmap { detail: e.to_string() })?);
+    bytes(
+        &mut out,
+        &serde_json::to_vec(overlay).map_err(|e| DerivationError::InvalidRoadmap {
+            detail: e.to_string(),
+        })?,
+    );
     Ok(digest(&out))
 }
 
@@ -215,7 +223,10 @@ fn validate_structure(answer: &Lifecycle) -> Result<(), String> {
     }
     for (i, phase) in phases.iter().enumerate() {
         if phase.plans.windows(2).any(|p| p[0] >= p[1])
-            || phase.plans.iter().any(|name| !super::capture::admitted(name))
+            || phase
+                .plans
+                .iter()
+                .any(|name| !super::capture::admitted(name))
         {
             return Err(format!("phases[{i}].plans"));
         }
@@ -341,7 +352,10 @@ impl RecheckedLifecycle {
     /// The snapshot with this answer's memo installed under
     /// `derivation.memo`. Only the freshly checked typed memo is accepted.
     pub fn with_memo(&self, data: &Value, memo: &LifecycleMemo) -> Result<Value, DerivationError> {
-        let invalid = |detail: String| DerivationError::Store { kind: "invalid".into(), detail };
+        let invalid = |detail: String| DerivationError::Store {
+            kind: "invalid".into(),
+            detail,
+        };
         let raw = serde_json::to_value(memo).map_err(|e| invalid(e.to_string()))?;
         let key = input_key_with(self.capture(), self.overlay())?;
         if check_memo(Some(&raw), &key, self.answer())? != MemoDisposition::Hit {
@@ -349,7 +363,11 @@ impl RecheckedLifecycle {
         }
         memo_from_data(data, &key)?;
         let mut object = data.as_object().cloned().unwrap_or_default();
-        let mut namespace = object.get("derivation").and_then(Value::as_object).cloned().unwrap_or_default();
+        let mut namespace = object
+            .get("derivation")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
         namespace.insert("memo".into(), raw);
         object.insert("derivation".into(), Value::Object(namespace));
         Ok(Value::Object(object))

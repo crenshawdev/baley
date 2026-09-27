@@ -130,7 +130,10 @@ a successful receipt.
 pub fn contract_markdown() -> String {
     let schema = serde_json::to_string_pretty(&schemars::schema_for!(super::model::CompactPatch))
         .expect("static verifier schema");
-    format!("---\nname: bal-verifier-contract\ndescription: \"Native verifier contract: inspect every dispatched evidence item and return one complete patch.\"\nuser-invocable: false\n---\n\n<role>\nYou are the native verifier. Consume the retained binary dispatch.\n</role>\n\n<instructions>\n{}\n\n{VERIFIER}\n\n{PROTOCOL}\n## Strict item patch schema\n\n```json\n{schema}\n```\n</instructions>\n", crate::read::instructions::CONTRACT)
+    format!(
+        "---\nname: bal-verifier-contract\ndescription: \"Native verifier contract: inspect every dispatched evidence item and return one complete patch.\"\nuser-invocable: false\n---\n\n<role>\nYou are the native verifier. Consume the retained binary dispatch.\n</role>\n\n<instructions>\n{}\n\n{VERIFIER}\n\n{PROTOCOL}\n## Strict item patch schema\n\n```json\n{schema}\n```\n</instructions>\n",
+        crate::read::instructions::CONTRACT
+    )
 }
 
 /// The thin `/bal-audit` front door, or its read-only `/bal-coverage` alias
@@ -138,17 +141,22 @@ pub fn contract_markdown() -> String {
 pub fn audit_frontdoor_markdown(coverage: bool) -> String {
     let read_contract = crate::read::instructions::CONTRACT;
     let (name, description, note) = if coverage {
-        ("bal-coverage",
-         crate::help::table::description("bal-coverage"),
-         "This alias keeps the old name for the read-only view only. It never\ngenerates tests, never authors a gap plan and never edits status; a\nrequirement without failing-capable evidence appears as a broken or unmet\ntrace for the owner to act on through planning.")
+        (
+            "bal-coverage",
+            crate::help::table::description("bal-coverage"),
+            "This alias keeps the old name for the read-only view only. It never\ngenerates tests, never authors a gap plan and never edits status; a\nrequirement without failing-capable evidence appears as a broken or unmet\ntrace for the owner to act on through planning.",
+        )
     } else {
-        ("bal-audit",
-         crate::help::table::description("bal-audit"),
-         "The audit is the binary's join over the retained records and the owner's\ndocuments as they are. It never repairs a status, seeds a row, infers a\nrequirement-to-truth edge or completes a phase.")
+        (
+            "bal-audit",
+            crate::help::table::description("bal-audit"),
+            "The audit is the binary's join over the retained records and the owner's\ndocuments as they are. It never repairs a status, seeds a row, infers a\nrequirement-to-truth edge or completes a phase.",
+        )
     };
     // The worked example above uses phase 13; the note reads the same way.
     let note_body = super::audit::association_note(13);
-    format!(r#"---
+    format!(
+        r#"---
 name: {name}
 description: "{description}"
 argument-hint: "<phase>"
@@ -191,12 +199,14 @@ naming the requirement), plan->truths (the phase's approved truth set,
 phase-scoped), truth->evidence (the current typed map) and evidence->verdict
 (the current complete verification). Read-only: no status, map, UAT or store
 record is written or repaired.
-"#)
+"#
+    )
 }
 
 pub fn frontdoor_markdown() -> String {
     let description = crate::help::table::description("bal-verify");
-    format!(r#"---
+    format!(
+        r#"---
 name: bal-verify
 description: "{description}"
 argument-hint: "<phase>"
@@ -228,5 +238,7 @@ Never assign a findings-file path or update UAT or ROADMAP.
 
 {VERIFIER}
 
-{PROTOCOL}"#, crate::read::instructions::CONTRACT)
+{PROTOCOL}"#,
+        crate::read::instructions::CONTRACT
+    )
 }

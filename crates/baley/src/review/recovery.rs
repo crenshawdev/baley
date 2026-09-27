@@ -33,7 +33,10 @@ pub enum Recovery {
     Settled(RecoveredAttempt),
     /// The attempt is marked interrupted: the records with that written, and
     /// the answer once they are committed.
-    Interrupt { records: serde_json::Value, recovered: RecoveredAttempt },
+    Interrupt {
+        records: serde_json::Value,
+        recovered: RecoveredAttempt,
+    },
 }
 
 /// An attempt with an original or an end stays as it is; one still in flight
@@ -59,7 +62,10 @@ pub fn decide_recovery(
     attempt.state = AttemptState::Interrupted;
     persistence::put(&mut records, "attempts", id, &attempt)?;
     persistence::insert(&mut records, "recovered_at", id, &clock.now())?;
-    Ok(Recovery::Interrupt { records, recovered: recovered(attempt) })
+    Ok(Recovery::Interrupt {
+        records,
+        recovered: recovered(attempt),
+    })
 }
 
 pub async fn recover_attempt(

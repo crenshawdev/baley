@@ -143,10 +143,7 @@ fn history_refuses_a_fire_bound_to_an_unchecked_observation() {
 }
 
 fn gate_pass(fired: &Fire, evidence_id: &str) -> Receipt {
-    receipt(
-        fired,
-        json!({"kind":"gate-pass","evidence_id":evidence_id}),
-    )
+    receipt(fired, json!({"kind":"gate-pass","evidence_id":evidence_id}))
 }
 
 #[test]
@@ -213,7 +210,18 @@ fn scope_run_signoff_and_scan_generation_are_required_before_material() {
     let original = wanted(&record);
     for change in 0..9 {
         let mut wanted = original.clone();
-        let baley::rail::risk::Scope::Phase { project, planning_root, cycle, occurrence, phase, worker, plan } = &mut wanted.boundary.scope else { panic!("phase fixture"); };
+        let baley::rail::risk::Scope::Phase {
+            project,
+            planning_root,
+            cycle,
+            occurrence,
+            phase,
+            worker,
+            plan,
+        } = &mut wanted.boundary.scope
+        else {
+            panic!("phase fixture");
+        };
         match change {
             0 => project.push('x'),
             1 => planning_root.push('x'),
@@ -526,26 +534,45 @@ fn an_identical_recorded_receipt_request_is_answered_from_the_view() {
     use baley::store::writer::{rail_fact_record, rail_receipt_replays};
     let fire = fire(&observation(3, false));
     let record = receipts::RecordedFact::new(
-        receipts::Apply::Fire { request_id: "fire-request".into(), fire: Box::new(fire) },
+        receipts::Apply::Fire {
+            request_id: "fire-request".into(),
+            fire: Box::new(fire),
+        },
         4,
     )
     .unwrap();
     let decisions = vec![rail_fact_record(&record).unwrap()];
-    assert_eq!(rail_receipt_replays(Some(&record), &record, &decisions), Ok(true));
+    assert_eq!(
+        rail_receipt_replays(Some(&record), &record, &decisions),
+        Ok(true)
+    );
 }
 
 #[test]
 fn projecting_a_receipt_changes_nothing_outside_its_namespace() {
     use baley::rail::risk;
     let observed = observation(3, false);
-    let data = risk::project(&json!({"execution": {"schema": 1}, "other": {"keep": true}}), &observed).unwrap();
+    let data = risk::project(
+        &json!({"execution": {"schema": 1}, "other": {"keep": true}}),
+        &observed,
+    )
+    .unwrap();
     let record = receipts::RecordedFact::new(
-        receipts::Apply::Fire { request_id: "fire-request".into(), fire: Box::new(fire(&observed)) },
+        receipts::Apply::Fire {
+            request_id: "fire-request".into(),
+            fire: Box::new(fire(&observed)),
+        },
         4,
     )
     .unwrap();
     let mut outside = receipts::project(&data, &record).unwrap();
-    assert!(outside.as_object_mut().unwrap().remove(receipts::NAMESPACE).is_some());
+    assert!(
+        outside
+            .as_object_mut()
+            .unwrap()
+            .remove(receipts::NAMESPACE)
+            .is_some()
+    );
     assert_eq!(outside, data);
 }
 
@@ -554,7 +581,11 @@ fn projecting_a_receipt_changes_nothing_outside_its_namespace() {
 const DISPATCH: &str = "d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7";
 
 fn execution_scan(generation: u64, head: &str, matched: bool) -> Recorded {
-    let matches = if matched { json!([{"category":"auth","signal":"path segment auth"}]) } else { json!([]) };
+    let matches = if matched {
+        json!([{"category":"auth","signal":"path segment auth"}])
+    } else {
+        json!([])
+    };
     let value = json!({
         "version":1, "request_id":format!("scan-{generation}"), "request_digest":"a".repeat(64),
         "scope":{"project":"/tmp/project","planning_root":"/tmp/project/.planning",
@@ -576,25 +607,57 @@ fn completed_phase(scans: &[Recorded]) -> Value {
     use std::collections::BTreeMap;
     let commit = "c".repeat(40);
     let outcome = PlanOutcome {
-        dispatch_id: DISPATCH.into(), phase: 7, plan: 1, disposition: PlanDisposition::Complete,
+        dispatch_id: DISPATCH.into(),
+        phase: 7,
+        plan: 1,
+        disposition: PlanDisposition::Complete,
         tasks: vec![TaskOutcome::Completed {
-            task_id: "T1".into(), commit: commit.clone(),
-            verification: VerificationReceipt { disposition: VerificationDisposition::Passed,
-                commands: vec![CommandReceipt { command: "cargo test".into(), exit_code: 0, output_digest: "3".repeat(64) }] },
-            evidence: vec![EvidenceReference::Commit { sha: commit.clone() }],
+            task_id: "T1".into(),
+            commit: commit.clone(),
+            verification: VerificationReceipt {
+                disposition: VerificationDisposition::Passed,
+                commands: vec![CommandReceipt {
+                    command: "cargo test".into(),
+                    exit_code: 0,
+                    output_digest: "3".repeat(64),
+                }],
+            },
+            evidence: vec![EvidenceReference::Commit {
+                sha: commit.clone(),
+            }],
         }],
-        deviations: vec![], blockers: vec![], commit_paths: BTreeMap::new(), transition_id: "e".repeat(64),
+        deviations: vec![],
+        blockers: vec![],
+        commit_paths: BTreeMap::new(),
+        transition_id: "e".repeat(64),
     };
     let execution = ExecutionSnapshot {
         schema: EXECUTION_SCHEMA,
-        occurrences: BTreeMap::from([("7".into(), ExecutionOccurrence {
-            phase: 7, undone: None, plan_set_fingerprint: "f".repeat(64), version: 2, active: None,
-            plans: vec![outcome], terminal: None, receipts: BTreeMap::new(), issues: BTreeMap::new(),
-        })]),
+        occurrences: BTreeMap::from([(
+            "7".into(),
+            ExecutionOccurrence {
+                phase: 7,
+                undone: None,
+                plan_set_fingerprint: "f".repeat(64),
+                version: 2,
+                active: None,
+                plans: vec![outcome],
+                terminal: None,
+                receipts: BTreeMap::new(),
+                issues: BTreeMap::new(),
+            },
+        )]),
     };
     let basis = ExecutionBasis {
-        version: 1, phase: 7, plan: 1, dispatch_id: DISPATCH.into(), plan_set_fingerprint: "f".repeat(64),
-        plan_fingerprint: "9".repeat(64), base_id: "b".repeat(40), commits: vec![commit], transition_id: "e".repeat(64),
+        version: 1,
+        phase: 7,
+        plan: 1,
+        dispatch_id: DISPATCH.into(),
+        plan_set_fingerprint: "f".repeat(64),
+        plan_fingerprint: "9".repeat(64),
+        base_id: "b".repeat(40),
+        commits: vec![commit],
+        transition_id: "e".repeat(64),
     };
     let mut data = risk::project_execution_basis(&json!({"execution": execution}), &basis).unwrap();
     for scan in scans {
@@ -606,7 +669,11 @@ fn completed_phase(scans: &[Recorded]) -> Value {
 fn phase_requirement() -> Requirement {
     let scan = execution_scan(2, &"c".repeat(40), false);
     Requirement {
-        boundary: Boundary { scope: scan.observation.scope.clone(), run_id: DISPATCH.into(), after_generation: 1 },
+        boundary: Boundary {
+            scope: scan.observation.scope.clone(),
+            run_id: DISPATCH.into(),
+            after_generation: 1,
+        },
         material: scan.observation.resolution.material().unwrap(),
         surfaces: scan.observation.surfaces.clone(),
     }
@@ -616,7 +683,10 @@ fn phase_requirement() -> Requirement {
 fn finalizing_completes_the_phase_once_its_current_scan_settles_it() {
     let data = completed_phase(&[execution_scan(2, &"c".repeat(40), false)]);
     let finalized = receipts::finalize_execution(&data, 7, &[phase_requirement()]).unwrap();
-    assert_eq!(finalized["execution"]["occurrences"]["7"]["terminal"], json!({"status":"complete","phase":7}));
+    assert_eq!(
+        finalized["execution"]["occurrences"]["7"]["terminal"],
+        json!({"status":"complete","phase":7})
+    );
 }
 
 #[test]
@@ -627,8 +697,9 @@ fn finalizing_refuses_while_a_requirement_is_not_settled() {
 
 #[test]
 fn finalizing_refuses_again_after_a_newer_scan_changes_the_material() {
-    let data = completed_phase(&[execution_scan(2, &"c".repeat(40), false), execution_scan(3, &"d".repeat(40), false)]);
+    let data = completed_phase(&[
+        execution_scan(2, &"c".repeat(40), false),
+        execution_scan(3, &"d".repeat(40), false),
+    ]);
     assert!(receipts::finalize_execution(&data, 7, &[phase_requirement()]).is_err());
 }
-
-

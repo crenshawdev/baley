@@ -17,10 +17,19 @@ pub fn installed_summaries(data: &Value) -> Result<std::collections::BTreeMap<St
     let mut installed = std::collections::BTreeMap::new();
     if let Some(summaries) = data[NATIVE_SUMMARIES]["phases"].as_object() {
         for (phase, summary) in summaries {
-            let number: u32 = phase.parse().map_err(|_| Error::Invalid("invalid summary phase".into()))?;
-            if number == 0 || number.to_string() != *phase { return Err(Error::Invalid("invalid summary phase".into())); }
-            let bytes = summary.as_str().ok_or_else(|| Error::Invalid("invalid installed summary".into()))?;
-            installed.insert(format!(".planning/phases/{phase}/SUMMARY.md"), bytes.as_bytes().to_vec());
+            let number: u32 = phase
+                .parse()
+                .map_err(|_| Error::Invalid("invalid summary phase".into()))?;
+            if number == 0 || number.to_string() != *phase {
+                return Err(Error::Invalid("invalid summary phase".into()));
+            }
+            let bytes = summary
+                .as_str()
+                .ok_or_else(|| Error::Invalid("invalid installed summary".into()))?;
+            installed.insert(
+                format!(".planning/phases/{phase}/SUMMARY.md"),
+                bytes.as_bytes().to_vec(),
+            );
         }
     }
     Ok(installed)
@@ -28,10 +37,15 @@ pub fn installed_summaries(data: &Value) -> Result<std::collections::BTreeMap<St
 
 pub fn project_native_summary(data: &mut Value, phase: u32, receipt: &str) -> Result<()> {
     let rendered = render_native_phase_summary(
-        &super::history::records(data, phase)?, &super::history::plan_records(data, phase)?,
-        &super::admission::records(data, phase)?, phase)?;
-    data[NATIVE_SUMMARIES]["receipts"][receipt] = json!({"revision":crate::store::model::digest(&rendered)});
-    data[NATIVE_SUMMARIES]["phases"][phase.to_string()] = Value::String(String::from_utf8(rendered).expect("rendered UTF-8"));
+        &super::history::records(data, phase)?,
+        &super::history::plan_records(data, phase)?,
+        &super::admission::records(data, phase)?,
+        phase,
+    )?;
+    data[NATIVE_SUMMARIES]["receipts"][receipt] =
+        json!({"revision":crate::store::model::digest(&rendered)});
+    data[NATIVE_SUMMARIES]["phases"][phase.to_string()] =
+        Value::String(String::from_utf8(rendered).expect("rendered UTF-8"));
     Ok(())
 }
 
@@ -39,25 +53,53 @@ pub fn project_native_summary(data: &mut Value, phase: u32, receipt: &str) -> Re
 pub fn project_debug(data: &Value, slug: &str) -> Result<(String, Vec<u8>)> {
     crate::debug::model::validate_slug(slug)?;
     let records = crate::debug::model::namespace(data)?;
-    let record = records.records.get(slug).ok_or_else(|| Error::Invalid("missing debug projection record".into()))?;
-    Ok((format!("debug:{slug}"), crate::debug::render::render(record).into_bytes()))
+    let record = records
+        .records
+        .get(slug)
+        .ok_or_else(|| Error::Invalid("missing debug projection record".into()))?;
+    Ok((
+        format!("debug:{slug}"),
+        crate::debug::render::render(record).into_bytes(),
+    ))
 }
 
 /// Only native-owned spike records contribute projections; history is never scanned.
 pub fn project_spike(data: &Value, slug: &str) -> Result<(String, Vec<u8>)> {
     crate::spike::model::validate_slug(slug)?;
     let records = crate::spike::model::namespace(data)?;
-    let record = records.records.get(slug).ok_or_else(|| Error::Invalid("missing spike projection record".into()))?;
-    Ok((format!("spike:{slug}"), crate::spike::render::render(record).into_bytes()))
+    let record = records
+        .records
+        .get(slug)
+        .ok_or_else(|| Error::Invalid("missing spike projection record".into()))?;
+    Ok((
+        format!("spike:{slug}"),
+        crate::spike::render::render(record).into_bytes(),
+    ))
 }
 pub fn installed_spikes(data: &Value) -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
-    Ok(crate::spike::model::namespace(data)?.records.into_iter().map(|(slug, record)|
-        (format!(".planning/spikes/{slug}/SPIKE.md"), crate::spike::render::render(&record).into_bytes())).collect())
+    Ok(crate::spike::model::namespace(data)?
+        .records
+        .into_iter()
+        .map(|(slug, record)| {
+            (
+                format!(".planning/spikes/{slug}/SPIKE.md"),
+                crate::spike::render::render(&record).into_bytes(),
+            )
+        })
+        .collect())
 }
 
 pub fn installed_debug(data: &Value) -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
-    Ok(crate::debug::model::namespace(data)?.records.into_iter().map(|(slug, record)|
-        (format!(".planning/debug/{slug}.md"), crate::debug::render::render(&record).into_bytes())).collect())
+    Ok(crate::debug::model::namespace(data)?
+        .records
+        .into_iter()
+        .map(|(slug, record)| {
+            (
+                format!(".planning/debug/{slug}.md"),
+                crate::debug::render::render(&record).into_bytes(),
+            )
+        })
+        .collect())
 }
 
 /// Only native-owned task records contribute projections; the authored
@@ -67,63 +109,122 @@ pub fn installed_tasks(data: &Value) -> Result<std::collections::BTreeMap<String
     let mut installed = std::collections::BTreeMap::new();
     for (slug, record) in crate::task::model::store_namespace(data)?.records {
         if record.plan.is_some() {
-            installed.insert(format!(".planning/tasks/{slug}/PLAN.md"), crate::task::render::plan_markdown(&record).into_bytes());
+            installed.insert(
+                format!(".planning/tasks/{slug}/PLAN.md"),
+                crate::task::render::plan_markdown(&record).into_bytes(),
+            );
         }
         if record.record.is_some() {
-            installed.insert(format!(".planning/tasks/{slug}/RECORD.md"), crate::task::render::record_markdown(&record).into_bytes());
+            installed.insert(
+                format!(".planning/tasks/{slug}/RECORD.md"),
+                crate::task::render::record_markdown(&record).into_bytes(),
+            );
         }
     }
     Ok(installed)
 }
 
 pub fn render_native_phase_summary(
-    records: &[super::history::Record], plan_records: &[super::history::PlanRecord],
-    admissions: &[super::admission::Record], phase: u32,
+    records: &[super::history::Record],
+    plan_records: &[super::history::PlanRecord],
+    admissions: &[super::admission::Record],
+    phase: u32,
 ) -> Result<Vec<u8>> {
     use super::history::{self, Event};
     let mut plans = std::collections::BTreeMap::new();
     for admission in admissions {
         for binding in &admission.request.contract.plans {
-            plans.entry(binding.plan).or_insert_with(|| history::PlanIdentity {
-                phase, occurrence: admission.request.contract.occurrence.clone(),
-                admission_digest: admission.request_digest.clone(), plan: binding.plan,
-            });
+            plans
+                .entry(binding.plan)
+                .or_insert_with(|| history::PlanIdentity {
+                    phase,
+                    occurrence: admission.request.contract.occurrence.clone(),
+                    admission_digest: admission.request_digest.clone(),
+                    plan: binding.plan,
+                });
         }
     }
-    let retired = records.iter().any(|r| matches!(r.request.event, Event::Retirement { .. }));
-    let complete = !plans.is_empty() && plans.values().all(|p| history::plan_project(plan_records, p).completed);
-    let blocked = retired || plans.values().any(|p| {
-        let state = history::plan_project(plan_records, p);
-        state.outcome == "failed" && state.repair.is_some()
-            || state.repair_answer.is_some_and(|a| a.disposition == history::SuiteRepairDisposition::Refuse)
-    });
-    let status = if complete { "complete" } else if blocked { "blocked" } else { "executing" };
+    let retired = records
+        .iter()
+        .any(|r| matches!(r.request.event, Event::Retirement { .. }));
+    let complete = !plans.is_empty()
+        && plans
+            .values()
+            .all(|p| history::plan_project(plan_records, p).completed);
+    let blocked = retired
+        || plans.values().any(|p| {
+            let state = history::plan_project(plan_records, p);
+            state.outcome == "failed" && state.repair.is_some()
+                || state
+                    .repair_answer
+                    .is_some_and(|a| a.disposition == history::SuiteRepairDisposition::Refuse)
+        });
+    let status = if complete {
+        "complete"
+    } else if blocked {
+        "blocked"
+    } else {
+        "executing"
+    };
     let mut rendered = format!("# Phase {phase} Execution Summary\n\nStatus: {status}\n");
     for (number, plan) in plans {
         let state = history::plan_project(plan_records, &plan);
-        writeln!(rendered, "\n## Plan {number}\n\nState: {}; version: {}\n", state.outcome, state.version).unwrap();
-        writeln!(rendered, "| Plan | Task | Status | Commit | Verification |\n|---|---|---|---|---|").unwrap();
+        writeln!(
+            rendered,
+            "\n## Plan {number}\n\nState: {}; version: {}\n",
+            state.outcome, state.version
+        )
+        .unwrap();
+        writeln!(
+            rendered,
+            "| Plan | Task | Status | Commit | Verification |\n|---|---|---|---|---|"
+        )
+        .unwrap();
         for record in records.iter().filter(|r| r.request.task.plan == number) {
             let task = &record.request.task;
             match &record.request.event {
                 Event::Close(proof) => {
-                    writeln!(rendered, "| {number} | {} | completed | {} | passed |", task.task, proof.submission.completion).unwrap();
+                    writeln!(
+                        rendered,
+                        "| {number} | {} | completed | {} | passed |",
+                        task.task, proof.submission.completion
+                    )
+                    .unwrap();
                 }
                 Event::Retirement { owner, at, reason } => {
-                    writeln!(rendered, "Retired task {}: {reason} (owner {owner}, at {at})", task.task).unwrap();
+                    writeln!(
+                        rendered,
+                        "Retired task {}: {reason} (owner {owner}, at {at})",
+                        task.task
+                    )
+                    .unwrap();
                 }
                 _ => {}
             }
         }
         for record in records.iter().filter(|r| r.request.task.plan == number) {
             let event = &record.request.event;
-            if matches!(event, Event::Deviation { .. } | Event::FailedAttempt { .. } | Event::Checkpoint { .. }) {
-                writeln!(rendered, "Task record {}: {}", record.request.request_id, serde_json::to_string(event)?).unwrap();
+            if matches!(
+                event,
+                Event::Deviation { .. } | Event::FailedAttempt { .. } | Event::Checkpoint { .. }
+            ) {
+                writeln!(
+                    rendered,
+                    "Task record {}: {}",
+                    record.request.request_id,
+                    serde_json::to_string(event)?
+                )
+                .unwrap();
             }
             if let Event::Close(proof) = event {
                 for (commit, paths) in &proof.source.out_of_lease {
                     for path in paths {
-                        writeln!(rendered, "Deviation out-of-lease:{}:{path}: commit {commit}", record.request.task.task).unwrap();
+                        writeln!(
+                            rendered,
+                            "Deviation out-of-lease:{}:{path}: commit {commit}",
+                            record.request.task.task
+                        )
+                        .unwrap();
                     }
                 }
             }
@@ -132,18 +233,47 @@ pub fn render_native_phase_summary(
             match &record.request.event {
                 history::PlanEvent::RoundRecord(statement) => {
                     let round = &statement.submission;
-                    let wire_bytes = round.wire_bytes.map_or_else(|| "unmeasured".into(), |n| n.to_string());
-                    writeln!(rendered, "Executor round tokens: {}; host {}; wire bytes {wire_bytes}", round.tokens, round.host).unwrap();
+                    let wire_bytes = round
+                        .wire_bytes
+                        .map_or_else(|| "unmeasured".into(), |n| n.to_string());
+                    writeln!(
+                        rendered,
+                        "Executor round tokens: {}; host {}; wire bytes {wire_bytes}",
+                        round.tokens, round.host
+                    )
+                    .unwrap();
                 }
                 history::PlanEvent::SuiteLaunch(launch) => {
-                    writeln!(rendered, "Suite launch {}: command {}; commit {}", launch.run_id, launch.material.command, launch.material.commit).unwrap();
+                    writeln!(
+                        rendered,
+                        "Suite launch {}: command {}; commit {}",
+                        launch.run_id, launch.material.command, launch.material.commit
+                    )
+                    .unwrap();
                 }
                 history::PlanEvent::SuiteResult(result) => {
-                    writeln!(rendered, "Suite result {}: {}; output {}", result.run_id,
-                        if history::suite_passed(result) { "passed" } else if history::suite_failed(result) { "failed" } else { "unknown" },
-                        result.output_identity()).unwrap();
+                    writeln!(
+                        rendered,
+                        "Suite result {}: {}; output {}",
+                        result.run_id,
+                        if history::suite_passed(result) {
+                            "passed"
+                        } else if history::suite_failed(result) {
+                            "failed"
+                        } else {
+                            "unknown"
+                        },
+                        result.output_identity()
+                    )
+                    .unwrap();
                 }
-                event => writeln!(rendered, "Plan record {}: {}", record.request.request_id, serde_json::to_string(event)?).unwrap(),
+                event => writeln!(
+                    rendered,
+                    "Plan record {}: {}",
+                    record.request.request_id,
+                    serde_json::to_string(event)?
+                )
+                .unwrap(),
             }
         }
     }
@@ -158,30 +288,102 @@ pub struct RenderedProjectFile {
 }
 
 pub const RENDERED_PROJECT_FILES: &[RenderedProjectFile] = &[
-    RenderedProjectFile { path: "skills/bal-help/SKILL.md", command: &["help-instructions"] },
-    RenderedProjectFile { path: "skills/bal-spike/SKILL.md", command: &["spike-instructions"] },
-    RenderedProjectFile { path: "skills/bal-debug/SKILL.md", command: &["debug-instructions"] },
-    RenderedProjectFile { path: "skills/bal-undo/SKILL.md", command: &["undo-instructions"] },
-    RenderedProjectFile { path: "skills/bal-land/SKILL.md", command: &["land-instructions"] },
-    RenderedProjectFile { path: "skills/bal-milestone/SKILL.md", command: &["milestone-instructions"] },
-    RenderedProjectFile { path: "skills/bal-suggest/SKILL.md", command: &["suggest-instructions"] },
-    RenderedProjectFile { path: "skills/bal-why/SKILL.md", command: &["why-instructions"] },
-    RenderedProjectFile { path: "skills/bal-progress/SKILL.md", command: &["progress-instructions"] },
-    RenderedProjectFile { path: "skills/bal-capture/SKILL.md", command: &["capture-instructions"] },
-    RenderedProjectFile { path: "skills/bal-context/SKILL.md", command: &["context-instructions"] },
-    RenderedProjectFile { path: "skills/bal-plan/SKILL.md", command: &["plan-instructions"] },
-    RenderedProjectFile { path: "skills/bal-executor-contract/SKILL.md", command: &["executor-instructions"] },
-    RenderedProjectFile { path: "skills/bal-execute/SKILL.md", command: &["executor-instructions", "--frontdoor"] },
-    RenderedProjectFile { path: "skills/bal-task/SKILL.md", command: &["task-instructions"] },
-    RenderedProjectFile { path: "skills/bal-verifier-contract/SKILL.md", command: &["verifier-instructions"] },
-    RenderedProjectFile { path: "skills/bal-verify/SKILL.md", command: &["verifier-instructions", "--frontdoor"] },
-    RenderedProjectFile { path: "skills/bal-review/SKILL.md", command: &["review-instructions"] },
-    RenderedProjectFile { path: "skills/bal-decision-review/SKILL.md", command: &["review-instructions", "--alias", "bal-decision-review"] },
-    RenderedProjectFile { path: "skills/bal-minimalism-review/SKILL.md", command: &["review-instructions", "--alias", "bal-minimalism-review"] },
-    RenderedProjectFile { path: "skills/bal-plan-review/SKILL.md", command: &["review-instructions", "--alias", "bal-plan-review"] },
-    RenderedProjectFile { path: "skills/bal-audit/SKILL.md", command: &["audit-instructions"] },
-    RenderedProjectFile { path: "skills/bal-coverage/SKILL.md", command: &["audit-instructions", "--coverage"] },
-    RenderedProjectFile { path: "skills/bal-read-contract/SKILL.md", command: &["read-instructions"] },
+    RenderedProjectFile {
+        path: "skills/bal-help/SKILL.md",
+        command: &["help-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-spike/SKILL.md",
+        command: &["spike-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-debug/SKILL.md",
+        command: &["debug-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-undo/SKILL.md",
+        command: &["undo-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-land/SKILL.md",
+        command: &["land-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-milestone/SKILL.md",
+        command: &["milestone-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-suggest/SKILL.md",
+        command: &["suggest-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-why/SKILL.md",
+        command: &["why-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-progress/SKILL.md",
+        command: &["progress-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-capture/SKILL.md",
+        command: &["capture-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-context/SKILL.md",
+        command: &["context-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-plan/SKILL.md",
+        command: &["plan-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-executor-contract/SKILL.md",
+        command: &["executor-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-execute/SKILL.md",
+        command: &["executor-instructions", "--frontdoor"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-task/SKILL.md",
+        command: &["task-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-verifier-contract/SKILL.md",
+        command: &["verifier-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-verify/SKILL.md",
+        command: &["verifier-instructions", "--frontdoor"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-review/SKILL.md",
+        command: &["review-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-decision-review/SKILL.md",
+        command: &["review-instructions", "--alias", "bal-decision-review"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-minimalism-review/SKILL.md",
+        command: &["review-instructions", "--alias", "bal-minimalism-review"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-plan-review/SKILL.md",
+        command: &["review-instructions", "--alias", "bal-plan-review"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-audit/SKILL.md",
+        command: &["audit-instructions"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-coverage/SKILL.md",
+        command: &["audit-instructions", "--coverage"],
+    },
+    RenderedProjectFile {
+        path: "skills/bal-read-contract/SKILL.md",
+        command: &["read-instructions"],
+    },
 ];
 
 pub fn render_phase_summary(execution: &ExecutionSnapshot, phase: u32) -> Result<Vec<u8>> {
@@ -305,11 +507,13 @@ pub fn render_native_task_row(
         })
         .collect::<Vec<_>>();
     if matches.len() > 1 {
-        return Err(crate::store::Error::Invalid("completed task identity is ambiguous".into()));
+        return Err(crate::store::Error::Invalid(
+            "completed task identity is ambiguous".into(),
+        ));
     }
-    Ok(matches.first().map(|commit| {
-        format!("| {plan} | {task} | completed | {commit} | passed |\n")
-    }))
+    Ok(matches
+        .first()
+        .map(|commit| format!("| {plan} | {task} | completed | {commit} | passed |\n")))
 }
 
 fn judgment_ids(outcomes: &[&PlanOutcome], deviations: bool) -> String {
@@ -418,46 +622,79 @@ mod summary_tests {
     const SHA1: &str = "1111111111111111111111111111111111111111";
     const SHA2: &str = "2222222222222222222222222222222222222222";
 
-    fn completed(task: &str, commit: &str, disposition: VerificationDisposition, evidence: Vec<EvidenceReference>) -> TaskOutcome {
+    fn completed(
+        task: &str,
+        commit: &str,
+        disposition: VerificationDisposition,
+        evidence: Vec<EvidenceReference>,
+    ) -> TaskOutcome {
         TaskOutcome::Completed {
             task_id: task.into(),
             commit: commit.into(),
-            verification: VerificationReceipt { disposition, commands: vec![] },
+            verification: VerificationReceipt {
+                disposition,
+                commands: vec![],
+            },
             evidence,
         }
     }
 
     fn passed(task: &str, commit: &str) -> TaskOutcome {
-        completed(task, commit, VerificationDisposition::Passed, vec![EvidenceReference::Commit { sha: commit.into() }])
+        completed(
+            task,
+            commit,
+            VerificationDisposition::Passed,
+            vec![EvidenceReference::Commit { sha: commit.into() }],
+        )
     }
 
-    fn outcome(plan: u32, dispatch: &str, tasks: Vec<TaskOutcome>, blockers: &[&str]) -> PlanOutcome {
+    fn outcome(
+        plan: u32,
+        dispatch: &str,
+        tasks: Vec<TaskOutcome>,
+        blockers: &[&str],
+    ) -> PlanOutcome {
         PlanOutcome {
             dispatch_id: dispatch.into(),
             phase: 3,
             plan,
-            disposition: if blockers.is_empty() { PlanDisposition::Complete } else { PlanDisposition::Blocked },
+            disposition: if blockers.is_empty() {
+                PlanDisposition::Complete
+            } else {
+                PlanDisposition::Blocked
+            },
             tasks,
             deviations: vec![],
             blockers: blockers
                 .iter()
-                .map(|id| Blocker { id: (*id).into(), text: "stuck".into(), evidence: vec![] })
+                .map(|id| Blocker {
+                    id: (*id).into(),
+                    text: "stuck".into(),
+                    evidence: vec![],
+                })
                 .collect(),
             commit_paths: BTreeMap::new(),
             transition_id: format!("transition {dispatch}"),
         }
     }
 
-    fn phase_3(plans: Vec<PlanOutcome>, terminal: Option<TerminalOutcome>, receipts: Vec<PlanOutcome>) -> ExecutionSnapshot {
+    fn phase_3(
+        plans: Vec<PlanOutcome>,
+        terminal: Option<TerminalOutcome>,
+        receipts: Vec<PlanOutcome>,
+    ) -> ExecutionSnapshot {
         let receipts = receipts
             .into_iter()
             .map(|outcome| {
-                (outcome.dispatch_id.clone(), AppliedReceipt {
-                    dispatch_id: outcome.dispatch_id.clone(),
-                    request_digest: "r".repeat(64),
-                    transition_id: outcome.transition_id.clone(),
-                    outcome,
-                })
+                (
+                    outcome.dispatch_id.clone(),
+                    AppliedReceipt {
+                        dispatch_id: outcome.dispatch_id.clone(),
+                        request_digest: "r".repeat(64),
+                        transition_id: outcome.transition_id.clone(),
+                        outcome,
+                    },
+                )
             })
             .collect();
         let occurrence = ExecutionOccurrence {
@@ -471,7 +708,10 @@ mod summary_tests {
             receipts,
             issues: BTreeMap::new(),
         };
-        ExecutionSnapshot { schema: super::super::model::EXECUTION_SCHEMA, occurrences: BTreeMap::from([("3".into(), occurrence)]) }
+        ExecutionSnapshot {
+            schema: super::super::model::EXECUTION_SCHEMA,
+            occurrences: BTreeMap::from([("3".into(), occurrence)]),
+        }
     }
 
     fn summary(execution: &ExecutionSnapshot) -> String {
@@ -481,13 +721,24 @@ mod summary_tests {
     #[test]
     fn a_completed_phase_is_complete_with_a_passed_row_per_task_carrying_its_commit() {
         let text = summary(&phase_3(
-            vec![outcome(1, "d1", vec![passed("T1", SHA1), passed("T2", SHA2)], &[])],
+            vec![outcome(
+                1,
+                "d1",
+                vec![passed("T1", SHA1), passed("T2", SHA2)],
+                &[],
+            )],
             Some(TerminalOutcome::Complete { phase: 3 }),
             vec![],
         ));
         assert!(text.contains("Status: complete\n"), "{text}");
-        assert!(text.contains(&format!("| 1 | T1 | completed | {SHA1} | passed |\n")), "{text}");
-        assert!(text.contains(&format!("| 1 | T2 | completed | {SHA2} | passed |\n")), "{text}");
+        assert!(
+            text.contains(&format!("| 1 | T1 | completed | {SHA1} | passed |\n")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("| 1 | T2 | completed | {SHA2} | passed |\n")),
+            "{text}"
+        );
         assert!(text.contains("Blocker references: none\n"), "{text}");
     }
 
@@ -496,23 +747,44 @@ mod summary_tests {
         let stopped = outcome(
             1,
             "d1",
-            vec![TaskOutcome::Blocked { task_id: "T1".into(), blocker_id: "B1".into() }, TaskOutcome::NotRun { task_id: "T2".into() }],
+            vec![
+                TaskOutcome::Blocked {
+                    task_id: "T1".into(),
+                    blocker_id: "B1".into(),
+                },
+                TaskOutcome::NotRun {
+                    task_id: "T2".into(),
+                },
+            ],
             &["B1"],
         );
         let text = summary(&phase_3(
             vec![],
-            Some(TerminalOutcome::JudgmentStop { dispatch_id: "d1".into(), blocker_ids: vec!["B1".into()] }),
+            Some(TerminalOutcome::JudgmentStop {
+                dispatch_id: "d1".into(),
+                blocker_ids: vec!["B1".into()],
+            }),
             vec![stopped],
         ));
         assert!(text.contains("Status: blocked\n"), "{text}");
-        assert!(text.contains("| 1 | T1 | blocked |  | not-passed |\n"), "{text}");
-        assert!(text.contains("| 1 | T2 | not-run |  | not-run |\n"), "{text}");
+        assert!(
+            text.contains("| 1 | T1 | blocked |  | not-passed |\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("| 1 | T2 | not-run |  | not-run |\n"),
+            "{text}"
+        );
         assert!(text.contains("Blocker references: B1\n"), "{text}");
     }
 
     #[test]
     fn a_phase_without_a_terminal_outcome_is_executing() {
-        let text = summary(&phase_3(vec![outcome(1, "d1", vec![passed("T1", SHA1)], &[])], None, vec![]));
+        let text = summary(&phase_3(
+            vec![outcome(1, "d1", vec![passed("T1", SHA1)], &[])],
+            None,
+            vec![],
+        ));
         assert!(text.contains("Status: executing\n"), "{text}");
     }
 
@@ -523,7 +795,14 @@ mod summary_tests {
                 1,
                 "d1",
                 vec![
-                    completed("T1", SHA1, VerificationDisposition::Passed, vec![EvidenceReference::Commit { sha: "short".into() }]),
+                    completed(
+                        "T1",
+                        SHA1,
+                        VerificationDisposition::Passed,
+                        vec![EvidenceReference::Commit {
+                            sha: "short".into(),
+                        }],
+                    ),
                     completed("T2", SHA2, VerificationDisposition::Failed, vec![]),
                 ],
                 &[],
@@ -531,14 +810,25 @@ mod summary_tests {
             None,
             vec![],
         ));
-        assert!(text.contains(&format!("| 1 | T1 | completed | {SHA1} | invalid-evidence |\n")), "{text}");
-        assert!(text.contains(&format!("| 1 | T2 | completed | {SHA2} | failed |\n")), "{text}");
+        assert!(
+            text.contains(&format!(
+                "| 1 | T1 | completed | {SHA1} | invalid-evidence |\n"
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("| 1 | T2 | completed | {SHA2} | failed |\n")),
+            "{text}"
+        );
     }
 
     #[test]
     fn rows_follow_plan_order_whatever_order_the_plans_were_recorded() {
         let text = summary(&phase_3(
-            vec![outcome(2, "d2", vec![passed("T9", SHA2)], &[]), outcome(1, "d1", vec![passed("T1", SHA1)], &[])],
+            vec![
+                outcome(2, "d2", vec![passed("T9", SHA2)], &[]),
+                outcome(1, "d1", vec![passed("T1", SHA1)], &[]),
+            ],
             None,
             vec![],
         ));

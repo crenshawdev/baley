@@ -1,6 +1,8 @@
 pub fn markdown() -> &'static str {
     static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        crate::help::table::render_description("bal-suggest", r#"---
+        crate::help::table::render_description(
+            "bal-suggest",
+            r#"---
 name: bal-suggest
 description: <compiled>
 argument-hint: "[phase]"
@@ -24,7 +26,9 @@ accept it. Send only the accepted `apply` payload unchanged through
 `mcp__baley__baley_apply`, then show the returned result. Send nothing on
 decline and nothing before asking. Never re-derive a value, alter a payload,
 combine proposals, or write configuration directly.
-"#).expect("compiled skill front matter")
+"#,
+        )
+        .expect("compiled skill front matter")
     });
     &MARKDOWN
 }

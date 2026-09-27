@@ -201,7 +201,10 @@ pub fn read(root: &Path, io: &mut impl ReadDocuments) -> Documents {
             };
             let next = match bounded_step(name, &seen, metadata.len()) {
                 Ok(next) => next,
-                Err(crossing) => { out.incomplete.push(crossing.to_string()); continue; }
+                Err(crossing) => {
+                    out.incomplete.push(crossing.to_string());
+                    continue;
+                }
             };
             match next {
                 Step::Refuse => out
@@ -325,10 +328,31 @@ pub fn snippets(path: &str, text: &str, commit: Option<&str>) -> Vec<Candidate> 
 mod tests {
     #[test]
     fn a_source_crossing_skips_the_document_with_its_name() {
-        let seen = super::Seen { link: false, contained: true, dir: false, file: true };
-        assert_eq!(super::bounded_step("PROJECT.md", &seen, 16_777_217),
-            Err(baley::acquisition::Crossing { file: "PROJECT.md".into(), size: 16_777_217, bound: 16_777_216 }));
-        assert_eq!(super::bounded_step("PROJECT.md", &seen, 16_777_216), Ok(super::Step::Read));
-        assert_eq!(super::bounded_step("PROJECT.md", &super::Seen { link: true, ..seen }, 16_777_217), Ok(super::Step::Refuse));
+        let seen = super::Seen {
+            link: false,
+            contained: true,
+            dir: false,
+            file: true,
+        };
+        assert_eq!(
+            super::bounded_step("PROJECT.md", &seen, 16_777_217),
+            Err(baley::acquisition::Crossing {
+                file: "PROJECT.md".into(),
+                size: 16_777_217,
+                bound: 16_777_216
+            })
+        );
+        assert_eq!(
+            super::bounded_step("PROJECT.md", &seen, 16_777_216),
+            Ok(super::Step::Read)
+        );
+        assert_eq!(
+            super::bounded_step(
+                "PROJECT.md",
+                &super::Seen { link: true, ..seen },
+                16_777_217
+            ),
+            Ok(super::Step::Refuse)
+        );
     }
 }

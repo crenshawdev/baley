@@ -82,10 +82,14 @@ impl Content {
         Execution {
             schema: 1,
             suite: self.suite.clone(),
-            tasks: self.tasks.iter().map(|task| TaskSpec {
-                id: task.id.clone(),
-                verify: task.verify.clone(),
-            }).collect(),
+            tasks: self
+                .tasks
+                .iter()
+                .map(|task| TaskSpec {
+                    id: task.id.clone(),
+                    verify: task.verify.clone(),
+                })
+                .collect(),
         }
     }
 
@@ -232,15 +236,27 @@ pub enum Answer {
         #[serde(skip_serializing_if = "Option::is_none")]
         part: Option<String>,
     },
-    Unknown { reason: String },
-    NotApplicable { reason: String },
+    Unknown {
+        reason: String,
+    },
+    NotApplicable {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Details {
-    CheckConflict { truth_id: String, truth_version: u32, checks: Vec<CheckConflict> },
-    LinkTruth { truth_id: String, truth_version: u32, association_slot: String },
+    CheckConflict {
+        truth_id: String,
+        truth_version: u32,
+        checks: Vec<CheckConflict>,
+    },
+    LinkTruth {
+        truth_id: String,
+        truth_version: u32,
+        association_slot: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -259,10 +275,16 @@ pub struct CheckOrigin {
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum Source { Proposed, Saved }
+pub enum Source {
+    Proposed,
+    Saved,
+}
 
 pub fn ok(operation: &str, data: Value) -> Answer {
-    Answer::Ok { operation: operation.into(), data: data.as_object().expect("plan output object").clone() }
+    Answer::Ok {
+        operation: operation.into(),
+        data: data.as_object().expect("plan output object").clone(),
+    }
 }
 
 pub fn refused(rule: &str, reason: impl Into<String>) -> Answer {
@@ -278,7 +300,12 @@ pub fn refused(rule: &str, reason: impl Into<String>) -> Answer {
     }
 }
 
-pub fn typed_refused(slot: impl Into<String>, phase: Option<u32>, entry: Option<usize>, reason: impl Into<String>) -> Answer {
+pub fn typed_refused(
+    slot: impl Into<String>,
+    phase: Option<u32>,
+    entry: Option<usize>,
+    reason: impl Into<String>,
+) -> Answer {
     Answer::Refused {
         code: "typed-content".into(),
         reason: reason.into(),
@@ -310,11 +337,22 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn error(self) -> baley::store::Error {
-        baley::store::Error::Invalid(format!("plan-refusal:{}", serde_json::to_string(&self).expect("diagnostic")))
+        baley::store::Error::Invalid(format!(
+            "plan-refusal:{}",
+            serde_json::to_string(&self).expect("diagnostic")
+        ))
     }
 
     pub fn answer(self) -> Answer {
-        Answer::Refused { code: "invalid-plan".into(), rule: self.rule, slot: self.slot,
-            phase: self.phase, entry: self.entry, id: self.id, reason: self.reason, details: self.details }
+        Answer::Refused {
+            code: "invalid-plan".into(),
+            rule: self.rule,
+            slot: self.slot,
+            phase: self.phase,
+            entry: self.entry,
+            id: self.id,
+            reason: self.reason,
+            details: self.details,
+        }
     }
 }

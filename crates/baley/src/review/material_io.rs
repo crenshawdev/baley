@@ -1,10 +1,10 @@
 //! Source acquisition adapters. Retention is supplied separately as Storage.
-use crate::process::Process;
 use super::io::{
     Clock, DirectoryMembers, DirectoryNode, DirectoryObservation, GitIo, GitObservation,
     MaterialIo, NodeKind,
 };
 use super::model::Target;
+use crate::process::Process;
 use baley::rail::git;
 use baley::store::{Error, Observed, Result};
 use std::fs;
@@ -174,7 +174,11 @@ impl GitIo for SourceGit {
                     ],
                     &mut *self.process,
                 )?)?;
-                (git::resolve_comparison(&self.root, base, &mut *self.process)?, None, Some(tree))
+                (
+                    git::resolve_comparison(&self.root, base, &mut *self.process)?,
+                    None,
+                    Some(tree),
+                )
             }
             _ => return Err(Error::Invalid("expected resolved Git target".into())),
         };

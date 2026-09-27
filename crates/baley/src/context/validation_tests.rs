@@ -55,7 +55,12 @@ fn seven_truths_are_allowed_and_an_eighth_is_refused() {
     eight.push(truth("truth/8"));
     let answer = refusal(validate(&context(eight)));
     assert_eq!(answer["rule"], "seven-truths");
-    assert!(answer["reason"].as_str().unwrap().contains("split the phase"));
+    assert!(
+        answer["reason"]
+            .as_str()
+            .unwrap()
+            .contains("split the phase")
+    );
 }
 
 #[test]
@@ -75,7 +80,10 @@ fn every_sentence_slot_has_to_be_a_nonblank_string() {
 // can be checked on its own.
 #[test]
 fn a_trigger_with_an_alternative_is_refused() {
-    let answer = refusal(validate(&spoiled("trigger", json!("the sender sends or cancels the parcel"))));
+    let answer = refusal(validate(&spoiled(
+        "trigger",
+        json!("the sender sends or cancels the parcel"),
+    )));
     assert_eq!(answer["rule"], "one-trigger");
 }
 
@@ -131,7 +139,10 @@ fn the_kind_is_literal_or_property() {
 // other. Anything other than a literal true is not an attestation.
 #[test]
 fn the_owner_attests_observability_and_a_fixed_oracle_separately() {
-    for (slot, rule) in [("observable", "unobservable"), ("fixed_oracle", "prose-oracle")] {
+    for (slot, rule) in [
+        ("observable", "unobservable"),
+        ("fixed_oracle", "prose-oracle"),
+    ] {
         for absent in [json!(false), json!(null), json!("true"), json!(1)] {
             let answer = refusal(validate(&spoiled(slot, absent.clone())));
             assert_eq!(answer["rule"], rule, "{slot} {absent}");
@@ -166,7 +177,8 @@ fn submission(truths: &[&str], durable: &[&str], decisions: &[&str]) -> Submissi
         "durable_decisions": durable.iter().map(|id| decision(id)).collect::<Vec<_>>(),
         "decisions": decisions.iter().map(|id| decision(id)).collect::<Vec<_>>(),
         "truths": truths.iter().map(|id| truth(id)).collect::<Vec<_>>(),
-    })).expect("a submission")
+    }))
+    .expect("a submission")
 }
 
 #[test]
@@ -184,7 +196,10 @@ fn an_identity_used_twice_in_one_submission_is_refused() {
         (vec![], vec!["D-1"], vec!["D-1"]),
     ] {
         let answer = refusal(identities(&submission(&truths, &durable, &decisions), None));
-        assert_eq!(answer["rule"], "identity-collision", "{truths:?} {durable:?} {decisions:?}");
+        assert_eq!(
+            answer["rule"], "identity-collision",
+            "{truths:?} {durable:?} {decisions:?}"
+        );
     }
 }
 
@@ -198,11 +213,24 @@ fn an_identity_already_approved_in_this_phase_cannot_be_reused() {
             "submission": serde_json::to_value(submission(&["truth/A"], &["D-1"], &[])).unwrap(),
             "submission_digest": null},
         "truths": [],
-    })).expect("an approved context");
+    }))
+    .expect("an approved context");
 
     assert!(identities(&submission(&["truth/B"], &[], &["D-2"]), Some(&approved)).is_none());
-    assert_eq!(refusal(identities(&submission(&["truth/A"], &[], &[]), Some(&approved)))["rule"], "identity-collision");
-    assert_eq!(refusal(identities(&submission(&["truth/B"], &["D-1"], &[]), Some(&approved)))["rule"], "identity-collision");
+    assert_eq!(
+        refusal(identities(
+            &submission(&["truth/A"], &[], &[]),
+            Some(&approved)
+        ))["rule"],
+        "identity-collision"
+    );
+    assert_eq!(
+        refusal(identities(
+            &submission(&["truth/B"], &["D-1"], &[]),
+            Some(&approved)
+        ))["rule"],
+        "identity-collision"
+    );
 }
 
 #[test]

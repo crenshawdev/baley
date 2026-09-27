@@ -54,7 +54,10 @@ pub fn prepare_query(
 }
 
 /// Only progress reports roadmap conflicts instead of refusing the read.
-pub fn prepare_progress(selected: &Path, io: &mut (impl ArtifactIo + ?Sized)) -> Result<PreparedLifecycle, DerivationError> {
+pub fn prepare_progress(
+    selected: &Path,
+    io: &mut (impl ArtifactIo + ?Sized),
+) -> Result<PreparedLifecycle, DerivationError> {
     prepare(selected, io, true)
 }
 
@@ -72,7 +75,11 @@ fn prepare(
     if !report_conflicts {
         check_consistency(validate_inputs(&capture)?, &answer)?;
     }
-    Ok(PreparedLifecycle { capture, overlay, answer })
+    Ok(PreparedLifecycle {
+        capture,
+        overlay,
+        answer,
+    })
 }
 
 pub fn recheck_query(

@@ -8,9 +8,13 @@ use serde_json::json;
 
 #[test]
 fn a_store_crossing_refuses_session_input() {
-    let error = store_input_error(baley::acquisition::Error::Crossing(baley::acquisition::Crossing {
-        file: ".planning/state.json".into(), size: 1_073_741_825, bound: 1_073_741_824,
-    }));
+    let error = store_input_error(baley::acquisition::Error::Crossing(
+        baley::acquisition::Crossing {
+            file: ".planning/state.json".into(),
+            size: 1_073_741_825,
+            bound: 1_073_741_824,
+        },
+    ));
     assert!(matches!(error, baley::store::Error::Invalid(reason)
         if reason == ".planning/state.json: size 1073741825 exceeds acquisition bound 1073741824"));
 }
@@ -56,7 +60,10 @@ fn a_derivation_may_not_change_import_or_layers() {
     for field in ["import", LAYERS] {
         let mut data = current.snapshot.data.clone();
         data[field] = Value::Null;
-        assert!(check_derivation(&current, &current, &data).is_err(), "{field}");
+        assert!(
+            check_derivation(&current, &current, &data).is_err(),
+            "{field}"
+        );
     }
 }
 
@@ -64,7 +71,8 @@ fn a_derivation_may_not_change_import_or_layers() {
 fn a_derivation_from_a_stale_view_is_refused() {
     let current = session_view();
     let mut stale = current.clone();
-    stale.snapshot = baley::store::model::Snapshot::new(6, b"", b"", current.snapshot.data.clone()).unwrap();
+    stale.snapshot =
+        baley::store::model::Snapshot::new(6, b"", b"", current.snapshot.data.clone()).unwrap();
     assert_eq!(
         check_derivation(&current, &stale, &current.snapshot.data),
         Err(Error::Conflict(baley::store::writer::STALE_SNAPSHOT.into()))
@@ -168,31 +176,53 @@ fn initialization_takes_its_effective_config_from_the_active_global() {
 #[test]
 fn an_existing_native_repo_config_is_the_repo_layer_and_not_created() {
     let root = Path::new("/fixture/project/.planning");
-    let active = Paths { repo: root.join("config.v4.json"), global: None };
+    let active = Paths {
+        repo: root.join("config.v4.json"),
+        global: None,
+    };
     let mut io = SuppliedConfig(
-        [(active.repo.clone(), br#"{"roles":{"bal-executor":{"model":"sonnet"}}}"#.to_vec())].into(),
+        [(
+            active.repo.clone(),
+            br#"{"roles":{"bal-executor":{"model":"sonnet"}}}"#.to_vec(),
+        )]
+        .into(),
     );
     let result = prepare_initialization(root, &active, &mut io).unwrap();
     assert_eq!(
         result.generation.effective.raw_repo,
         Some(json!({"roles":{"bal-executor":{"model":"sonnet"}}}))
     );
-    assert!(!result.manifest.created.contains(&active.repo), "{:?}", result.manifest.created);
+    assert!(
+        !result.manifest.created.contains(&active.repo),
+        "{:?}",
+        result.manifest.created
+    );
 }
 
 fn existing_repo(bytes: &[u8]) -> Generation {
     Generation {
         number: 0,
         global: None,
-        repo: Input { identity: "/p/.planning/config.v4.json".into(), bytes: Some(bytes.to_vec()), stamp: None },
-        effective: crate::config::merge::merge(None, Some(serde_json::from_slice(bytes).unwrap()), false),
+        repo: Input {
+            identity: "/p/.planning/config.v4.json".into(),
+            bytes: Some(bytes.to_vec()),
+            stamp: None,
+        },
+        effective: crate::config::merge::merge(
+            None,
+            Some(serde_json::from_slice(bytes).unwrap()),
+            false,
+        ),
     }
 }
 
 #[test]
 fn initialization_installs_an_existing_repo_config_byte_for_byte() {
     let bytes = b"{\"roles\": {}}\n";
-    assert_eq!(initial_repo_config(&existing_repo(bytes), Some(bytes)), Ok(bytes.to_vec()));
+    assert_eq!(
+        initial_repo_config(&existing_repo(bytes), Some(bytes)),
+        Ok(bytes.to_vec())
+    );
 }
 
 #[test]
@@ -201,7 +231,9 @@ fn initialization_refuses_a_repo_config_changed_since_it_was_observed() {
     for installed in [Some(b"{}".as_slice()), None] {
         assert_eq!(
             initial_repo_config(&generation, installed),
-            Err(Error::Conflict("repo config changed during initialization".into()))
+            Err(Error::Conflict(
+                "repo config changed during initialization".into()
+            ))
         );
     }
 }
@@ -292,14 +324,27 @@ fn snapshot_replacement_keeps_a_wrapped_import_manifest_at_its_original_location
 #[test]
 fn session_rewrite_returns_the_preserved_import_manifest() {
     let current = session_view();
-    let Operation::CompareRewriteSnapshot { expected_generation, data, .. } =
-        conditional(&current, Operation::RewriteSnapshot(json!({"answer":13}))).unwrap()
+    let Operation::CompareRewriteSnapshot {
+        expected_generation,
+        data,
+        ..
+    } = conditional(&current, Operation::RewriteSnapshot(json!({"answer":13}))).unwrap()
     else {
         panic!("a snapshot rewrite was not pinned to the current snapshot")
     };
     assert_eq!(
-        (expected_generation, data["import"].clone(), data["current"].clone(), data["unrelated"].clone()),
-        (7, current.snapshot.data["import"].clone(), json!({"answer":13}), json!({"keep":true}))
+        (
+            expected_generation,
+            data["import"].clone(),
+            data["current"].clone(),
+            data["unrelated"].clone()
+        ),
+        (
+            7,
+            current.snapshot.data["import"].clone(),
+            json!({"answer":13}),
+            json!({"keep":true})
+        )
     );
 }
 
@@ -313,15 +358,26 @@ fn session_transaction_snapshot_returns_the_preserved_import_manifest() {
         snapshot: Some(json!({"answer":13})),
         external: vec![],
     };
-    let Operation::CompareTransact { expected_generation, transaction, .. } =
-        conditional(&current, Operation::Transact(transaction)).unwrap()
+    let Operation::CompareTransact {
+        expected_generation,
+        transaction,
+        ..
+    } = conditional(&current, Operation::Transact(transaction)).unwrap()
     else {
         panic!("a transaction carrying a snapshot was not pinned to the current snapshot")
     };
     let data = transaction.snapshot.unwrap();
     assert_eq!(
-        (expected_generation, data["import"].clone(), data["current"].clone()),
-        (7, current.snapshot.data["import"].clone(), json!({"answer":13}))
+        (
+            expected_generation,
+            data["import"].clone(),
+            data["current"].clone()
+        ),
+        (
+            7,
+            current.snapshot.data["import"].clone(),
+            json!({"answer":13})
+        )
     );
 }
 
@@ -330,6 +386,8 @@ fn session_conditional_rewrite_returns_exact_stale_generation_refusal() {
     let current = session_view();
     assert_eq!(
         baley::store::writer::precondition(&current.snapshot, 6, "stale-generation"),
-        Err(Error::Conflict("conditional snapshot precondition changed".into()))
+        Err(Error::Conflict(
+            "conditional snapshot precondition changed".into()
+        ))
     );
 }

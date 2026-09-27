@@ -4,8 +4,10 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 fn input(name: &str) -> (model::Manifest, BTreeMap<String, Vec<u8>>) {
-    let fixture: Value =
-        serde_json::from_str(include_str!("../../tests/fixtures/phase9/material-sides.json")).unwrap();
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/phase9/material-sides.json"
+    ))
+    .unwrap();
     let case = &fixture["cases"][name];
     let entries = case["entries"]
         .as_array()

@@ -4,28 +4,58 @@ use serde_json::{Value, json};
 
 pub fn finding_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["findings"],
-        "properties":{"findings":{"type":"array","maxItems":100,"items":{
-            "type":"object","additionalProperties":false,
-            "required":["file","line","severity","claim","failure_scenario"],
-            "properties":{
-                "file":{"type":"string","minLength":1,"maxLength":1024},
-                "line":{"type":"integer","minimum":1,"maximum":9007199254740991u64},
-                "severity":{"type":"string","enum":["blocker","high","medium","low"]},
-                "claim":{"type":"string","minLength":1,"maxLength":2000},
-                "failure_scenario":{"type":"string","minLength":1,"maxLength":2000}
-            }
-        }}}})
+    "properties":{"findings":{"type":"array","maxItems":100,"items":{
+        "type":"object","additionalProperties":false,
+        "required":["file","line","severity","claim","failure_scenario"],
+        "properties":{
+            "file":{"type":"string","minLength":1,"maxLength":1024},
+            "line":{"type":"integer","minimum":1,"maximum":9007199254740991u64},
+            "severity":{"type":"string","enum":["blocker","high","medium","low"]},
+            "claim":{"type":"string","minLength":1,"maxLength":2000},
+            "failure_scenario":{"type":"string","minLength":1,"maxLength":2000}
+        }
+    }}}})
 }
 
 pub fn request(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key) -> Request {
-    request_with_schema(model, effort, system, user, key, "review_findings", finding_schema())
+    request_with_schema(
+        model,
+        effort,
+        system,
+        user,
+        key,
+        "review_findings",
+        finding_schema(),
+    )
 }
 
-pub fn consult_request(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key) -> Request {
-    request_with_schema(model, effort, system, user, key, "consult_angles", super::consult::schema())
+pub fn consult_request(
+    model: &str,
+    effort: Option<&str>,
+    system: &str,
+    user: &str,
+    key: &Key,
+) -> Request {
+    request_with_schema(
+        model,
+        effort,
+        system,
+        user,
+        key,
+        "consult_angles",
+        super::consult::schema(),
+    )
 }
 
-fn request_with_schema(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key, name: &str, schema: Value) -> Request {
+fn request_with_schema(
+    model: &str,
+    effort: Option<&str>,
+    system: &str,
+    user: &str,
+    key: &Key,
+    name: &str,
+    schema: Value,
+) -> Request {
     let mut body = json!({"model":model,
         "input":[{"role":"system","content":system},{"role":"user","content":user}],
         "text":{"format":{"type":"json_schema","name":name,"strict":true,"schema":schema}}});
@@ -40,12 +70,19 @@ fn request_with_schema(model: &str, effort: Option<&str>, system: &str, user: &s
 }
 
 pub fn extract(response: &Value) -> Extracted {
-    let mut text = response["output_text"].as_str().filter(|text| !text.is_empty()).map(str::to_owned);
+    let mut text = response["output_text"]
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned);
     if text.is_none() {
         for item in response["output"].as_array().into_iter().flatten() {
-            if item["type"] != "message" { continue; }
+            if item["type"] != "message" {
+                continue;
+            }
             for content in item["content"].as_array().into_iter().flatten() {
-                if content["type"] == "output_text" && let Some(value) = content["text"].as_str() {
+                if content["type"] == "output_text"
+                    && let Some(value) = content["text"].as_str()
+                {
                     text = Some(value.into());
                 }
             }

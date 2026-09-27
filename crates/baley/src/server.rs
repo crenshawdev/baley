@@ -44,37 +44,37 @@ mod evidence_service_tests;
 #[path = "next_action_service.rs"]
 pub mod next_action_service;
 
-#[path = "progress_service.rs"]
-pub mod progress_service;
-#[path = "suggest_service.rs"]
-pub mod suggest_service;
-#[path = "why_service.rs"]
-pub mod why_service;
-#[path = "milestone_service.rs"]
-pub mod milestone_service;
-#[path = "landing_service.rs"]
-pub mod landing_service;
-#[path = "undo_service.rs"]
-pub mod undo_service;
 #[path = "debug_service.rs"]
 pub mod debug_service;
-#[path = "spike_service.rs"]
-pub mod spike_service;
-#[path = "task_service.rs"]
-pub mod task_service;
+#[path = "landing_service.rs"]
+pub mod landing_service;
+#[path = "milestone_service.rs"]
+pub mod milestone_service;
 #[cfg(test)]
 #[path = "next_action_service_tests.rs"]
 mod next_action_service_tests;
+#[path = "progress_service.rs"]
+pub mod progress_service;
+#[path = "spike_service.rs"]
+pub mod spike_service;
+#[path = "suggest_service.rs"]
+pub mod suggest_service;
+#[path = "task_service.rs"]
+pub mod task_service;
+#[path = "undo_service.rs"]
+pub mod undo_service;
+#[path = "why_service.rs"]
+pub mod why_service;
 
 #[allow(dead_code)]
 #[path = "pause_service.rs"]
 pub mod pause_service;
 
+#[path = "execution_runner_service.rs"]
+pub mod execution_runner_service;
 #[allow(dead_code)]
 #[path = "execution_service.rs"]
 pub mod execution_service;
-#[path = "execution_runner_service.rs"]
-pub mod execution_runner_service;
 #[cfg(test)]
 #[path = "execution_service_tests.rs"]
 mod execution_service_tests;
@@ -91,14 +91,14 @@ pub mod review_service;
 #[path = "context_service.rs"]
 pub mod context_service;
 
-#[path = "plan_service.rs"]
-pub mod plan_service;
-#[path = "verification_service.rs"]
-pub mod verification_service;
 #[path = "capture_service.rs"]
 pub mod capture_service;
+#[path = "plan_service.rs"]
+pub mod plan_service;
 #[path = "read_service.rs"]
 pub mod read_service;
+#[path = "verification_service.rs"]
+pub mod verification_service;
 
 /// What `baley_version` reports on success.
 ///
@@ -205,7 +205,9 @@ impl BaleyServer {
         phase: u32,
         plan: Option<NonZeroU32>,
     ) -> execution_service::Answer {
-        self.service.query_selected_execution(root, phase, plan).await
+        self.service
+            .query_selected_execution(root, phase, plan)
+            .await
     }
 
     pub async fn apply_executor_patch(
@@ -261,7 +263,11 @@ enum QueryArguments {
     #[serde(rename = "help")]
     Help { name: Option<String> },
     #[serde(rename = "recall")]
-    Recall { query: String, limit: Option<std::num::NonZeroU32>, phase: Option<NonZeroU32> },
+    Recall {
+        query: String,
+        limit: Option<std::num::NonZeroU32>,
+        phase: Option<NonZeroU32>,
+    },
     #[serde(rename = "debug-list")]
     DebugList {},
     #[serde(rename = "debug-status")]
@@ -271,7 +277,10 @@ enum QueryArguments {
     #[serde(rename = "undo-read")]
     UndoRead { phase: NonZeroU32 },
     #[serde(rename = "milestone-read")]
-    MilestoneRead { occurrence: String, selection: baley::milestone::model::Selection },
+    MilestoneRead {
+        occurrence: String,
+        selection: baley::milestone::model::Selection,
+    },
     #[serde(rename = "land-read")]
     LandRead { landing: String },
     #[serde(rename = "progress")]
@@ -294,11 +303,20 @@ enum QueryArguments {
     #[serde(rename = "document-search")]
     DocumentSearch(baley::read::model::DocumentSearchRequest),
     #[serde(rename = "verify-next")]
-    VerifyNext { phase: NonZeroU32, request_id: Option<String> },
+    VerifyNext {
+        phase: NonZeroU32,
+        request_id: Option<String>,
+    },
     #[serde(rename = "verification-read")]
-    VerificationRead { phase: NonZeroU32, attempt: Option<String> },
+    VerificationRead {
+        phase: NonZeroU32,
+        attempt: Option<String>,
+    },
     #[serde(rename = "verification-audit")]
-    VerificationAudit { phase: NonZeroU32, command: Option<String> },
+    VerificationAudit {
+        phase: NonZeroU32,
+        command: Option<String>,
+    },
     #[serde(rename = "execution-history")]
     ExecutionHistory {
         phase: NonZeroU32,
@@ -339,7 +357,10 @@ enum QueryArguments {
     #[serde(rename = "detect-surfaces")]
     DetectSurfaces { answered: Option<Vec<String>> },
     #[serde(rename = "execute-next")]
-    ExecuteNext { phase: NonZeroU32, plan: Option<NonZeroU32> },
+    ExecuteNext {
+        phase: NonZeroU32,
+        plan: Option<NonZeroU32>,
+    },
     #[serde(rename = "risk-status")]
     RiskStatus {
         scope: baley::rail::risk::ScopeSelection,
@@ -451,10 +472,16 @@ struct ApplyOperations {
 }
 
 static APPLY_OPERATIONS: LazyLock<ApplyOperations> = LazyLock::new(|| {
-    let schema =
-        serde_json::to_value(schemars::schema_for!(ApplyArguments)).expect("apply schema");
-    let groups = schema["anyOf"].as_array().expect("untagged variants").clone();
-    assert_eq!(groups.len(), APPLY_GROUPS.len(), "one group per apply variant");
+    let schema = serde_json::to_value(schemars::schema_for!(ApplyArguments)).expect("apply schema");
+    let groups = schema["anyOf"]
+        .as_array()
+        .expect("untagged variants")
+        .clone();
+    assert_eq!(
+        groups.len(),
+        APPLY_GROUPS.len(),
+        "one group per apply variant"
+    );
     let mut names = Vec::new();
     let mut schemas = Vec::new();
     for (entry, group) in groups.iter().zip(APPLY_GROUPS) {
@@ -540,8 +567,14 @@ fn operation_schema(root: &Value, mut variant: Value) -> Value {
     if let Some(definitions) = root.get("$defs") {
         variant["$defs"] = definitions.clone();
         prune_definitions(&mut variant);
-        if variant["$defs"].as_object().is_some_and(|defs| defs.is_empty()) {
-            variant.as_object_mut().expect("operation schema").remove("$defs");
+        if variant["$defs"]
+            .as_object()
+            .is_some_and(|defs| defs.is_empty())
+        {
+            variant
+                .as_object_mut()
+                .expect("operation schema")
+                .remove("$defs");
         }
     }
     variant
@@ -555,7 +588,9 @@ fn plain_types(root: &Value, property: &Value) -> BTreeSet<String> {
     let mut pending = vec![property];
     while let Some(node) = pending.pop() {
         match &node["type"] {
-            Value::String(kind) => { types.insert(kind.clone()); }
+            Value::String(kind) => {
+                types.insert(kind.clone());
+            }
             Value::Array(kinds) => {
                 types.extend(kinds.iter().filter_map(Value::as_str).map(str::to_owned));
             }
@@ -563,12 +598,16 @@ fn plain_types(root: &Value, property: &Value) -> BTreeSet<String> {
         }
         if let Some(reference) = node.get("$ref").and_then(Value::as_str)
             && references.insert(reference)
-            && let Some(definition) = reference.strip_prefix('#').and_then(|path| root.pointer(path))
+            && let Some(definition) = reference
+                .strip_prefix('#')
+                .and_then(|path| root.pointer(path))
         {
             pending.push(definition);
         }
         for keyword in ["oneOf", "anyOf", "allOf"] {
-            if let Some(variants) = node[keyword].as_array() { pending.extend(variants); }
+            if let Some(variants) = node[keyword].as_array() {
+                pending.extend(variants);
+            }
         }
     }
     types.remove("null");
@@ -590,9 +629,17 @@ fn minimal_schema<'a>(
     });
     let mut types_by_name = BTreeMap::<String, BTreeSet<String>>::new();
     for operation in schemas {
-        for (name, property) in operation["properties"].as_object().expect("operation properties") {
-            if name == "operation" { continue; }
-            types_by_name.entry(name.clone()).or_default().extend(plain_types(operation, property));
+        for (name, property) in operation["properties"]
+            .as_object()
+            .expect("operation properties")
+        {
+            if name == "operation" {
+                continue;
+            }
+            types_by_name
+                .entry(name.clone())
+                .or_default()
+                .extend(plain_types(operation, property));
         }
     }
     let mut properties = BTreeMap::new();
@@ -603,10 +650,15 @@ fn minimal_schema<'a>(
         } else if !types.is_empty() {
             property["type"] = serde_json::json!(types);
         }
-        if types.contains("object") { property["additionalProperties"] = Value::Bool(true); }
+        if types.contains("object") {
+            property["additionalProperties"] = Value::Bool(true);
+        }
         properties.insert(name, property);
     }
-    properties.insert("operation".to_owned(), schema["properties"]["operation"].take());
+    properties.insert(
+        "operation".to_owned(),
+        schema["properties"]["operation"].take(),
+    );
     schema["properties"] = serde_json::to_value(properties).expect("plain properties");
     schema
 }
@@ -626,7 +678,9 @@ fn prune_definitions(schema: &mut Value) {
             _ => {}
         }
     }
-    let Some(defs) = schema.get("$defs").and_then(Value::as_object).cloned() else { return };
+    let Some(defs) = schema.get("$defs").and_then(Value::as_object).cloned() else {
+        return;
+    };
     let mut reached = std::collections::BTreeSet::new();
     let mut todo = Vec::new();
     for (key, value) in schema.as_object().expect("schema object") {
@@ -635,12 +689,16 @@ fn prune_definitions(schema: &mut Value) {
         }
     }
     while let Some(name) = todo.pop() {
-        if reached.insert(name.clone()) && let Some(def) = defs.get(&name) {
+        if reached.insert(name.clone())
+            && let Some(def) = defs.get(&name)
+        {
             refs(def, &mut todo);
         }
     }
-    let kept: serde_json::Map<String, Value> =
-        defs.into_iter().filter(|(name, _)| reached.contains(name)).collect();
+    let kept: serde_json::Map<String, Value> = defs
+        .into_iter()
+        .filter(|(name, _)| reached.contains(name))
+        .collect();
     schema["$defs"] = Value::Object(kept);
 }
 
@@ -651,9 +709,13 @@ static QUERY_OPERATIONS: LazyLock<Vec<(String, Value)>> = LazyLock::new(|| {
         serde_json::to_value(schemars::schema_for!(review_service::Query)).expect("review schema"),
     ] {
         for variant in root["oneOf"].as_array().expect("query variants") {
-            let name = variant["properties"]["operation"]["const"].as_str().expect("query name");
-            assert!(!operations.iter().any(|(known, _)| known == name),
-                "query operation {name} is claimed twice");
+            let name = variant["properties"]["operation"]["const"]
+                .as_str()
+                .expect("query name");
+            assert!(
+                !operations.iter().any(|(known, _)| known == name),
+                "query operation {name} is claimed twice"
+            );
             operations.push((name.to_owned(), operation_schema(&root, variant.clone())));
         }
     }
@@ -690,16 +752,28 @@ const SCHEMA_PART_BOUND: usize = 24_576;
 
 fn schema_answer(tool: &str, operation: &str, part: Option<usize>) -> Value {
     let schema = match tool {
-        "apply" => APPLY_OPERATIONS.names.iter().position(|(name, _)| name == operation)
+        "apply" => APPLY_OPERATIONS
+            .names
+            .iter()
+            .position(|(name, _)| name == operation)
             .map(|index| &APPLY_OPERATIONS.schemas[index]),
-        "query" => QUERY_OPERATIONS.iter().find(|(name, _)| name == operation)
+        "query" => QUERY_OPERATIONS
+            .iter()
+            .find(|(name, _)| name == operation)
             .map(|(_, schema)| schema),
-        _ => return Refusal::new("unknown-tool", "schema tool must be apply or query")
-            .slot("tool").value(),
+        _ => {
+            return Refusal::new("unknown-tool", "schema tool must be apply or query")
+                .slot("tool")
+                .value();
+        }
     };
     let Some(schema) = schema else {
-        return Refusal::new("unknown-operation", format!("no baley_{tool} operation is named `{operation}`"))
-            .slot("for").value();
+        return Refusal::new(
+            "unknown-operation",
+            format!("no baley_{tool} operation is named `{operation}`"),
+        )
+        .slot("for")
+        .value();
     };
     schema_part(tool, operation, schema, part)
 }
@@ -710,14 +784,20 @@ fn schema_part(tool: &str, operation: &str, schema: &Value, part: Option<usize>)
     let mut parts = Vec::new();
     while !remaining.is_empty() {
         let mut end = remaining.len().min(SCHEMA_PART_BOUND);
-        while !remaining.is_char_boundary(end) { end -= 1; }
+        while !remaining.is_char_boundary(end) {
+            end -= 1;
+        }
         parts.push(&remaining[..end]);
         remaining = &remaining[end..];
     }
     let part = part.unwrap_or(1);
     let Some(body) = part.checked_sub(1).and_then(|index| parts.get(index)) else {
-        return Refusal::new("schema-part-not-found", "the requested schema part is absent")
-            .slot("part").value();
+        return Refusal::new(
+            "schema-part-not-found",
+            "the requested schema part is absent",
+        )
+        .slot("part")
+        .value();
     };
     if serialized.len() <= SCHEMA_PART_BOUND {
         return serde_json::json!({"status":"ok","tool":tool,"operation":operation,"schema":schema});
@@ -789,11 +869,7 @@ impl PublicServer {
     }
 }
 
-fn tool(
-    name: &'static str,
-    description: impl Into<Cow<'static, str>>,
-    input: Value,
-) -> Tool {
+fn tool(name: &'static str, description: impl Into<Cow<'static, str>>, input: Value) -> Tool {
     let mut tool = Tool::new(
         name,
         description,
@@ -801,8 +877,7 @@ fn tool(
     );
     // MCP hosts require an explicit object root. Tagged enums derive a root
     // oneOf; keep its variants and constraints intact alongside the root type.
-    Arc::make_mut(&mut tool.input_schema)
-        .insert("type".into(), Value::String("object".into()));
+    Arc::make_mut(&mut tool.input_schema).insert("type".into(), Value::String("object".into()));
     // Empty structs omit properties in schemars; hosts still need the field.
     Arc::make_mut(&mut tool.input_schema)
         .entry("properties")
@@ -868,10 +943,15 @@ where
     let envelope = answer.map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
     let mut value = serde_json::to_value(QueryOutput::Execution(envelope))
         .map_err(|_| ErrorData::internal_error("execution answer encoding is invalid", None))?;
-    if value["status"] == "ok" && value["outcome"] == "dispatch"
+    if value["status"] == "ok"
+        && value["outcome"] == "dispatch"
         && let Some(prompt) = value["prompt"].as_str()
-        && let Some(start) = prompt.find("Operational input:\n").map(|at| at + "Operational input:\n".len())
-        && let Some(end) = prompt[start..].find("\n\nInstructions:").map(|at| start + at)
+        && let Some(start) = prompt
+            .find("Operational input:\n")
+            .map(|at| at + "Operational input:\n".len())
+        && let Some(end) = prompt[start..]
+            .find("\n\nInstructions:")
+            .map(|at| start + at)
         && let Ok(operational) = serde_json::from_str::<Value>(&prompt[start..end])
     {
         value["dispatch"]["operational"] = operational;
@@ -892,8 +972,7 @@ pub(crate) fn tools() -> Vec<Tool> {
         tool(
             "baley_version",
             "Report this binary's version, OS and architecture without changing state.",
-            serde_json::to_value(schemars::schema_for!(VersionArguments))
-                .expect("version schema"),
+            serde_json::to_value(schemars::schema_for!(VersionArguments)).expect("version schema"),
         ),
         tool(
             "baley_query",
@@ -931,10 +1010,14 @@ impl ServerHandler for PublicServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        if let Some(reply) = context.extensions.get::<crate::review_ingress::AdmittedReply>() {
+        if let Some(reply) = context
+            .extensions
+            .get::<crate::review_ingress::AdmittedReply>()
+        {
             return reply.receive().await;
         }
-        self.call(request.name.as_ref(), request.arguments.map(Value::Object)).await
+        self.call(request.name.as_ref(), request.arguments.map(Value::Object))
+            .await
     }
 }
 
@@ -965,142 +1048,366 @@ impl PublicServer {
                 .into())
             }
             "baley_query" => {
-                if raw.as_ref().is_some_and(|value| value["operation"] == "help") {
+                if raw
+                    .as_ref()
+                    .is_some_and(|value| value["operation"] == "help")
+                {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::Help { name }) => baley::help::table::answer(name.as_deref()),
-                        Err(error) => Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value(),
+                        Ok(QueryArguments::Help { name }) => {
+                            baley::help::table::answer(name.as_deref())
+                        }
+                        Err(error) => Refusal::new("invalid-arguments", error.to_string())
+                            .slot("arguments")
+                            .value(),
                         Ok(_) => unreachable!("help operation selected"),
                     };
                     return structured_result(Ok(QueryOutput::Read(answer)));
                 }
-                if raw.as_ref().is_some_and(|value| value["operation"] == "recall") {
+                if raw
+                    .as_ref()
+                    .is_some_and(|value| value["operation"] == "recall")
+                {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::Recall { query, limit, phase }) => match self.server.service.recall_phase(
-                            &self.root, &query, limit.map(|value| i64::from(value.get())), phase.map(NonZeroU32::get)).await {
+                        Ok(QueryArguments::Recall {
+                            query,
+                            limit,
+                            phase,
+                        }) => match self
+                            .server
+                            .service
+                            .recall_phase(
+                                &self.root,
+                                &query,
+                                limit.map(|value| i64::from(value.get())),
+                                phase.map(NonZeroU32::get),
+                            )
+                            .await
+                        {
                             Ok(answer) => serde_json::to_value(answer).expect("recall answer"),
-                            Err(error) => Refusal::new("recall-unavailable", error.to_string()).slot("recall").value(),
+                            Err(error) => Refusal::new("recall-unavailable", error.to_string())
+                                .slot("recall")
+                                .value(),
                         },
-                        Err(error) => Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value(),
+                        Err(error) => Refusal::new("invalid-arguments", error.to_string())
+                            .slot("arguments")
+                            .value(),
                         Ok(_) => unreachable!("recall operation selected"),
                     };
                     return structured_result(Ok(QueryOutput::Read(answer)));
                 }
-                if raw.as_ref().and_then(|v| v["operation"].as_str()).is_some_and(|op| matches!(op, "debug-list" | "debug-status" | "debug-continue")) {
+                if raw
+                    .as_ref()
+                    .and_then(|v| v["operation"].as_str())
+                    .is_some_and(|op| {
+                        matches!(op, "debug-list" | "debug-status" | "debug-continue")
+                    })
+                {
                     let command = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
                         Ok(QueryArguments::DebugList {}) => debug_service::Command::List,
-                        Ok(QueryArguments::DebugStatus { slug } | QueryArguments::DebugContinue { slug }) => debug_service::Command::Read { slug },
-                        Err(error) => return structured_result(Ok(QueryOutput::Read(Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value()))),
+                        Ok(
+                            QueryArguments::DebugStatus { slug }
+                            | QueryArguments::DebugContinue { slug },
+                        ) => debug_service::Command::Read { slug },
+                        Err(error) => {
+                            return structured_result(Ok(QueryOutput::Read(
+                                Refusal::new("invalid-arguments", error.to_string())
+                                    .slot("arguments")
+                                    .value(),
+                            )));
+                        }
                         Ok(_) => unreachable!("selected debug query"),
                     };
-                    return structured_result(self.server.service.debug(&self.root, command).await.map(QueryOutput::Read));
+                    return structured_result(
+                        self.server
+                            .service
+                            .debug(&self.root, command)
+                            .await
+                            .map(QueryOutput::Read),
+                    );
                 }
-                if raw.as_ref().and_then(|v| v["operation"].as_str()).is_some_and(|op| matches!(op, "milestone-read" | "land-read" | "undo-read")) {
+                if raw
+                    .as_ref()
+                    .and_then(|v| v["operation"].as_str())
+                    .is_some_and(|op| matches!(op, "milestone-read" | "land-read" | "undo-read"))
+                {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::UndoRead { phase }) => self.server.service.undo(&self.root,
-                            undo_service::Command::Read { phase: phase.get() }).await,
-                        Ok(QueryArguments::MilestoneRead { occurrence, selection }) => self.server.service.milestone(&self.root,
-                            milestone_service::Command::Read { occurrence, selection }).await,
-                        Ok(QueryArguments::LandRead { landing }) => self.server.service.landing(&self.root,
-                            landing_service::Command::Read { landing }).await,
-                        Err(error) => Ok(Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value()),
+                        Ok(QueryArguments::UndoRead { phase }) => {
+                            self.server
+                                .service
+                                .undo(
+                                    &self.root,
+                                    undo_service::Command::Read { phase: phase.get() },
+                                )
+                                .await
+                        }
+                        Ok(QueryArguments::MilestoneRead {
+                            occurrence,
+                            selection,
+                        }) => {
+                            self.server
+                                .service
+                                .milestone(
+                                    &self.root,
+                                    milestone_service::Command::Read {
+                                        occurrence,
+                                        selection,
+                                    },
+                                )
+                                .await
+                        }
+                        Ok(QueryArguments::LandRead { landing }) => {
+                            self.server
+                                .service
+                                .landing(&self.root, landing_service::Command::Read { landing })
+                                .await
+                        }
+                        Err(error) => Ok(Refusal::new("invalid-arguments", error.to_string())
+                            .slot("arguments")
+                            .value()),
                         Ok(_) => unreachable!("selected milestone/landing query"),
                     };
                     return structured_result(answer.map(QueryOutput::Read));
                 }
-                if raw.as_ref().is_some_and(|value| value["operation"] == "suggest") {
+                if raw
+                    .as_ref()
+                    .is_some_and(|value| value["operation"] == "suggest")
+                {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::Suggest { phase }) => match self.server.service.suggest(&self.root, phase.map(NonZeroU32::get)).await {
+                        Ok(QueryArguments::Suggest { phase }) => match self
+                            .server
+                            .service
+                            .suggest(&self.root, phase.map(NonZeroU32::get))
+                            .await
+                        {
                             Ok(answer) => answer,
-                            Err(error) => Refusal::new("suggest-unavailable", error.to_string()).slot("suggest").value(),
+                            Err(error) => Refusal::new("suggest-unavailable", error.to_string())
+                                .slot("suggest")
+                                .value(),
                         },
-                        Err(error) => Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value(),
+                        Err(error) => Refusal::new("invalid-arguments", error.to_string())
+                            .slot("arguments")
+                            .value(),
                         Ok(_) => unreachable!("suggest operation selected"),
                     };
                     return structured_result(Ok(QueryOutput::Read(answer)));
                 }
-                if raw.as_ref().is_some_and(|value| value["operation"] == "why") {
+                if raw
+                    .as_ref()
+                    .is_some_and(|value| value["operation"] == "why")
+                {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::Why { path, line, top, phase, part }) => match self.server.service.why(&self.root,
-                            why_service::Request { path, line: line.map(NonZeroU32::get), top: top.map(NonZeroU32::get),
-                                phase: phase.map(NonZeroU32::get), part }).await {
+                        Ok(QueryArguments::Why {
+                            path,
+                            line,
+                            top,
+                            phase,
+                            part,
+                        }) => match self
+                            .server
+                            .service
+                            .why(
+                                &self.root,
+                                why_service::Request {
+                                    path,
+                                    line: line.map(NonZeroU32::get),
+                                    top: top.map(NonZeroU32::get),
+                                    phase: phase.map(NonZeroU32::get),
+                                    part,
+                                },
+                            )
+                            .await
+                        {
                             Ok(answer) => answer,
-                            Err(error) => Refusal::new("why-unavailable", error.to_string()).slot("why").value(),
+                            Err(error) => Refusal::new("why-unavailable", error.to_string())
+                                .slot("why")
+                                .value(),
                         },
-                        Err(error) => Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value(),
+                        Err(error) => Refusal::new("invalid-arguments", error.to_string())
+                            .slot("arguments")
+                            .value(),
                         Ok(_) => unreachable!("why operation selected"),
                     };
                     return structured_result(Ok(QueryOutput::Read(answer)));
                 }
-                if raw.as_ref().is_some_and(|value| value["operation"] == "progress") {
+                if raw
+                    .as_ref()
+                    .is_some_and(|value| value["operation"] == "progress")
+                {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::Progress {}) => match self.server.service.progress(&self.root).await {
-                            Ok(answer) => answer,
-                            Err(error) => Refusal::new(error.code(), error.to_string())
-                                .details(serde_json::json!(error)).value(),
-                        },
-                        Err(error) => Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value(),
+                        Ok(QueryArguments::Progress {}) => {
+                            match self.server.service.progress(&self.root).await {
+                                Ok(answer) => answer,
+                                Err(error) => Refusal::new(error.code(), error.to_string())
+                                    .details(serde_json::json!(error))
+                                    .value(),
+                            }
+                        }
+                        Err(error) => Refusal::new("invalid-arguments", error.to_string())
+                            .slot("arguments")
+                            .value(),
                         Ok(_) => unreachable!("progress operation selected"),
                     };
                     return structured_result(Ok(QueryOutput::Read(answer)));
                 }
-                if raw.as_ref().is_some_and(|value| value["operation"] == "schema") {
+                if raw
+                    .as_ref()
+                    .is_some_and(|value| value["operation"] == "schema")
+                {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::Schema { tool, operation, part }) => schema_answer(&tool, &operation, part),
-                        Err(error) => Refusal::new("invalid-arguments", error.to_string()).slot("arguments").value(),
+                        Ok(QueryArguments::Schema {
+                            tool,
+                            operation,
+                            part,
+                        }) => schema_answer(&tool, &operation, part),
+                        Err(error) => Refusal::new("invalid-arguments", error.to_string())
+                            .slot("arguments")
+                            .value(),
                         Ok(_) => unreachable!("schema operation selected"),
                     };
                     return structured_result(Ok(QueryOutput::Read(answer)));
                 }
-                if raw.as_ref().and_then(|value| value["operation"].as_str()).is_some_and(|operation| matches!(operation, "document" | "document-search")) {
+                if raw
+                    .as_ref()
+                    .and_then(|value| value["operation"].as_str())
+                    .is_some_and(|operation| matches!(operation, "document" | "document-search"))
+                {
                     let query = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::Document(request)) => baley::read::Query::Document(request),
-                        Ok(QueryArguments::DocumentSearch(request)) => baley::read::Query::DocumentSearch(request),
+                        Ok(QueryArguments::Document(request)) => {
+                            baley::read::Query::Document(request)
+                        }
+                        Ok(QueryArguments::DocumentSearch(request)) => {
+                            baley::read::Query::DocumentSearch(request)
+                        }
                         // D-148: process records are reached by identity, never by path.
-                        Err(error) => return structured_result(Ok(QueryOutput::Read(Refusal::new("read-contract", error.to_string()).rule("record-identity").slot("arguments").value()))),
+                        Err(error) => {
+                            return structured_result(Ok(QueryOutput::Read(
+                                Refusal::new("read-contract", error.to_string())
+                                    .rule("record-identity")
+                                    .slot("arguments")
+                                    .value(),
+                            )));
+                        }
                         Ok(_) => unreachable!("read operation selected before generic query"),
                     };
-                    return structured_result(Ok(QueryOutput::Read(self.server.service.read(&self.root, query).await)));
+                    return structured_result(Ok(QueryOutput::Read(
+                        self.server.service.read(&self.root, query).await,
+                    )));
                 }
-                if raw.as_ref().and_then(|v| v["operation"].as_str()).is_some_and(|op| matches!(op, "verify-next" | "verification-read" | "verification-audit")) {
+                if raw
+                    .as_ref()
+                    .and_then(|v| v["operation"].as_str())
+                    .is_some_and(|op| {
+                        matches!(
+                            op,
+                            "verify-next" | "verification-read" | "verification-audit"
+                        )
+                    })
+                {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::VerifyNext { phase, request_id }) => self.server.service.verification(&self.root,
-                            baley::verification::model::Query::Next { phase: phase.get(), request_id }).await,
-                        Ok(QueryArguments::VerificationRead { phase, attempt }) => self.server.service.verification(&self.root,
-                            baley::verification::model::Query::Read { phase: phase.get(), attempt }).await,
-                        Ok(QueryArguments::VerificationAudit { phase, command }) => self.server.service.verification(&self.root,
-                            baley::verification::model::Query::Audit { phase: phase.get(), command }).await,
+                        Ok(QueryArguments::VerifyNext { phase, request_id }) => {
+                            self.server
+                                .service
+                                .verification(
+                                    &self.root,
+                                    baley::verification::model::Query::Next {
+                                        phase: phase.get(),
+                                        request_id,
+                                    },
+                                )
+                                .await
+                        }
+                        Ok(QueryArguments::VerificationRead { phase, attempt }) => {
+                            self.server
+                                .service
+                                .verification(
+                                    &self.root,
+                                    baley::verification::model::Query::Read {
+                                        phase: phase.get(),
+                                        attempt,
+                                    },
+                                )
+                                .await
+                        }
+                        Ok(QueryArguments::VerificationAudit { phase, command }) => {
+                            self.server
+                                .service
+                                .verification(
+                                    &self.root,
+                                    baley::verification::model::Query::Audit {
+                                        phase: phase.get(),
+                                        command,
+                                    },
+                                )
+                                .await
+                        }
                         Ok(_) => unreachable!("selected verification operation"),
-                        Err(error) => Ok(Refusal::new("invalid-verification", error.to_string()).rule("verification-shape").slot("arguments").value()),
+                        Err(error) => Ok(Refusal::new("invalid-verification", error.to_string())
+                            .rule("verification-shape")
+                            .slot("arguments")
+                            .value()),
                     };
                     return structured_result(answer.map(QueryOutput::NativeExecution));
                 }
-                if raw.as_ref().is_some_and(|v| v["operation"] == "execution-history") {
+                if raw
+                    .as_ref()
+                    .is_some_and(|v| v["operation"] == "execution-history")
+                {
                     let answer = match serde_json::from_value::<QueryArguments>(raw.unwrap()) {
-                        Ok(QueryArguments::ExecutionHistory { phase, run, plan, task }) => {
+                        Ok(QueryArguments::ExecutionHistory {
+                            phase,
+                            run,
+                            plan,
+                            task,
+                        }) => {
                             let phase = phase.get();
                             let one_run = run.is_some();
-                            let mut history = self.server.service
-                                .native_execution_history(&self.root, phase, run, plan.map(NonZeroU32::get), task).await
-                                .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+                            let mut history = self
+                                .server
+                                .service
+                                .native_execution_history(
+                                    &self.root,
+                                    phase,
+                                    run,
+                                    plan.map(NonZeroU32::get),
+                                    task,
+                                )
+                                .await
+                                .map_err(|error| {
+                                    ErrorData::internal_error(error.to_string(), None)
+                                })?;
                             if one_run {
-                                return structured_result(Ok(QueryOutput::NativeExecution(history)));
+                                return structured_result(Ok(QueryOutput::NativeExecution(
+                                    history,
+                                )));
                             }
                             let root = self.root.clone();
                             let lifecycle = tokio::task::spawn_blocking(move || {
                                 let mut io = baley::derivation::ArtifactFiles;
                                 baley::derivation::query(&root, &mut io)
                                     .map(|checked| checked.answer().clone())
-                            }).await.map_err(|error| ErrorData::internal_error(error.to_string(), None))?
-                                .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-                            let status = lifecycle.phases.iter()
+                            })
+                            .await
+                            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?
+                            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+                            let status = lifecycle
+                                .phases
+                                .iter()
                                 .find(|record| record.id.number() == f64::from(phase))
-                                .ok_or_else(|| ErrorData::internal_error(
-                                    "lifecycle does not contain requested phase", None))?.status;
+                                .ok_or_else(|| {
+                                    ErrorData::internal_error(
+                                        "lifecycle does not contain requested phase",
+                                        None,
+                                    )
+                                })?
+                                .status;
                             history["phase_status"] = serde_json::to_value(status)
                                 .expect("lifecycle status is serializable");
                             Ok(history)
                         }
-                        _ => Ok(Refusal::new("invalid-phase", "positive phase required").rule("task-history-shape").slot("phase").value()),
+                        _ => Ok(Refusal::new("invalid-phase", "positive phase required")
+                            .rule("task-history-shape")
+                            .slot("phase")
+                            .value()),
                     };
                     return structured_result(answer.map(QueryOutput::NativeExecution));
                 }
@@ -1129,16 +1436,29 @@ impl PublicServer {
                         answer.map(|answer| QueryOutput::Context(Box::new(answer))),
                     );
                 }
-                if raw.as_ref().and_then(|v| v["operation"].as_str()).is_some_and(|op| matches!(op, "plan-read" | "evidence-read")) {
+                if raw
+                    .as_ref()
+                    .and_then(|v| v["operation"].as_str())
+                    .is_some_and(|op| matches!(op, "plan-read" | "evidence-read"))
+                {
                     let raw = raw.unwrap();
                     if let Some(diagnostic) = baley::plan::associations::malformed_version(&raw)
                         .or_else(|| baley::plan::limits::malformed(&raw))
                     {
-                        return structured_result(Ok(QueryOutput::Plan(Box::new(diagnostic.answer()))));
+                        return structured_result(Ok(QueryOutput::Plan(Box::new(
+                            diagnostic.answer(),
+                        ))));
                     }
                     let answer = match serde_json::from_value::<QueryArguments>(raw) {
-                        Ok(QueryArguments::EvidenceRead { phase }) => self.server.service
-                            .plan(&self.root, plan_service::Command::EvidenceRead { phase: phase.get() }).await,
+                        Ok(QueryArguments::EvidenceRead { phase }) => {
+                            self.server
+                                .service
+                                .plan(
+                                    &self.root,
+                                    plan_service::Command::EvidenceRead { phase: phase.get() },
+                                )
+                                .await
+                        }
                         Ok(QueryArguments::PlanRead {
                             phase,
                             count,
@@ -1156,7 +1476,9 @@ impl PublicServer {
                                 )
                                 .await
                         }
-                        Err(error) => Ok(baley::plan::model::refused("arguments", error.to_string())),
+                        Err(error) => {
+                            Ok(baley::plan::model::refused("arguments", error.to_string()))
+                        }
                         _ => Ok(baley::plan::model::refused(
                             "arguments",
                             "plan-read needs a phase address and optional plan count or submission; evidence-read needs a canonical positive integer phase",
@@ -1213,15 +1535,37 @@ impl PublicServer {
                     Some(QueryArguments::ContextIntake { .. }) => {
                         unreachable!("context intake is decoded before execution fallback")
                     }
-                    Some(QueryArguments::Document(_) | QueryArguments::DocumentSearch(_)) => unreachable!("read operation routed before generic query"),
-                    Some(QueryArguments::Schema { .. }) => unreachable!("schema routed before generic query"),
-                    Some(QueryArguments::Help { .. }) => unreachable!("help routed before generic query"),
-                    Some(QueryArguments::Progress {}) => unreachable!("progress routed before generic query"),
-                    Some(QueryArguments::MilestoneRead { .. } | QueryArguments::LandRead { .. } | QueryArguments::UndoRead { .. }) => unreachable!("milestone/landing/undo routed before generic query"),
-                    Some(QueryArguments::Suggest { .. }) => unreachable!("suggest routed before generic query"),
-                    Some(QueryArguments::DebugList {} | QueryArguments::DebugStatus { .. } | QueryArguments::DebugContinue { .. }) => unreachable!("debug routed before generic query"),
-                    Some(QueryArguments::Why { .. }) => unreachable!("why routed before generic query"),
-                    Some(QueryArguments::ExecutionHistory { .. }) => unreachable!("native history decoded before execution fallback"),
+                    Some(QueryArguments::Document(_) | QueryArguments::DocumentSearch(_)) => {
+                        unreachable!("read operation routed before generic query")
+                    }
+                    Some(QueryArguments::Schema { .. }) => {
+                        unreachable!("schema routed before generic query")
+                    }
+                    Some(QueryArguments::Help { .. }) => {
+                        unreachable!("help routed before generic query")
+                    }
+                    Some(QueryArguments::Progress {}) => {
+                        unreachable!("progress routed before generic query")
+                    }
+                    Some(
+                        QueryArguments::MilestoneRead { .. }
+                        | QueryArguments::LandRead { .. }
+                        | QueryArguments::UndoRead { .. },
+                    ) => unreachable!("milestone/landing/undo routed before generic query"),
+                    Some(QueryArguments::Suggest { .. }) => {
+                        unreachable!("suggest routed before generic query")
+                    }
+                    Some(
+                        QueryArguments::DebugList {}
+                        | QueryArguments::DebugStatus { .. }
+                        | QueryArguments::DebugContinue { .. },
+                    ) => unreachable!("debug routed before generic query"),
+                    Some(QueryArguments::Why { .. }) => {
+                        unreachable!("why routed before generic query")
+                    }
+                    Some(QueryArguments::ExecutionHistory { .. }) => {
+                        unreachable!("native history decoded before execution fallback")
+                    }
                     Some(QueryArguments::PlanRead { .. } | QueryArguments::EvidenceRead { .. }) => {
                         unreachable!("plan read decoded before execution")
                     }
@@ -1295,7 +1639,10 @@ impl PublicServer {
                     Some(QueryArguments::ExecuteNext { phase, plan }) => {
                         let response = execute_next_handler(
                             || self.review_handoff(Some(phase.get()), None),
-                            || self.server.query_selected_execution(&self.root, phase.get(), plan),
+                            || {
+                                self.server
+                                    .query_selected_execution(&self.root, phase.get(), plan)
+                            },
                         )
                         .await?;
                         // The historical execution envelope stays byte-exact.
@@ -1303,16 +1650,27 @@ impl PublicServer {
                         // location beside that envelope at the wire boundary.
                         if let CallToolResponse::Complete(result) = &response
                             && let Some(value) = &result.structured_content
-                            && value["code"] == "continuation-refusal" {
-                            let view = self.server.service.store(&self.root, baley::store::writer::Operation::ReadVerified)
-                                .await.map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                            && value["code"] == "continuation-refusal"
+                        {
+                            let view = self
+                                .server
+                                .service
+                                .store(&self.root, baley::store::writer::Operation::ReadVerified)
+                                .await
+                                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
                             for record in view.decisions.iter().rev() {
-                                if let baley::store::model::Decision::BoundaryV1(saved) = &record.decision
-                                    && saved.boundary.scope == (baley::execution::boundary::BoundaryScope::Execution { phase: phase.get() })
-                                    && let baley::execution::boundary::Receipt::Compact { envelope } = &saved.boundary.receipt
+                                if let baley::store::model::Decision::BoundaryV1(saved) =
+                                    &record.decision
+                                    && saved.boundary.scope
+                                        == (baley::execution::boundary::BoundaryScope::Execution {
+                                            phase: phase.get(),
+                                        })
+                                    && let baley::execution::boundary::Receipt::Compact { envelope } =
+                                        &saved.boundary.receipt
                                     && serde_json::to_value(envelope).ok().as_ref() == Some(value)
                                     && let Some(located) = &saved.boundary.located
-                                    && located.rule.as_deref() == Some("interrupted") {
+                                    && located.rule.as_deref() == Some("interrupted")
+                                {
                                     let mut value = value.clone();
                                     value["located"] = serde_json::json!(located);
                                     return Ok(CallToolResult::structured(value).into());
@@ -1355,7 +1713,12 @@ impl PublicServer {
                             "risk-status arguments do not match the strict operation schema",
                         )));
                     }
-                    Some(QueryArguments::Recall { .. } | QueryArguments::VerifyNext { .. } | QueryArguments::VerificationRead { .. } | QueryArguments::VerificationAudit { .. }) => unreachable!("recall and verification routed before generic query"),
+                    Some(
+                        QueryArguments::Recall { .. }
+                        | QueryArguments::VerifyNext { .. }
+                        | QueryArguments::VerificationRead { .. }
+                        | QueryArguments::VerificationAudit { .. },
+                    ) => unreachable!("recall and verification routed before generic query"),
                     None => self.refuse_raw(BoundaryTool::BaleyQuery, raw).await,
                 };
                 let envelope = answer
@@ -1366,8 +1729,9 @@ impl PublicServer {
                 let observation = raw.clone().unwrap_or(Value::Null);
                 // Legacy executor patches retain their existing boundary contract.
                 // The shared native wrapper also sees early decode/shape returns.
-                let historical = raw.as_ref().is_some_and(|value|
-                    value["operation"].as_str().is_none() && value.get("dispatch_id").is_some());
+                let historical = raw.as_ref().is_some_and(|value| {
+                    value["operation"].as_str().is_none() && value.get("dispatch_id").is_some()
+                });
                 let response = async {
                 let operation = raw.as_ref().and_then(|v| v["operation"].as_str()).map(str::to_owned);
                 let group = match operation.as_deref() {
@@ -1548,9 +1912,14 @@ impl PublicServer {
                 if !historical
                     && let Ok(CallToolResponse::Complete(result)) = &response
                     && let Some(answer) = &result.structured_content
-                    && answer["status"] == "refused" {
+                    && answer["status"] == "refused"
+                {
                     // The answer is already decided; observation is best effort.
-                    let _ = self.server.service.record_native_refusal(&self.root, observation, answer.clone()).await;
+                    let _ = self
+                        .server
+                        .service
+                        .record_native_refusal(&self.root, observation, answer.clone())
+                        .await;
                 }
                 response
             }
@@ -1581,7 +1950,9 @@ mod schema_tests {
             let body = answer["body"].as_str().unwrap();
             assert!(!body.is_empty() && body.len() <= SCHEMA_PART_BOUND);
             combined.push_str(body);
-            if answer["next"].is_null() { break; }
+            if answer["next"].is_null() {
+                break;
+            }
             number += 1;
             assert_eq!(answer["next"], number);
             part = Some(number);
@@ -1594,9 +1965,14 @@ mod schema_tests {
     #[test]
     fn a_schema_at_the_bound_is_served_whole_and_one_byte_over_is_paged() {
         let schema = json!("x".repeat(SCHEMA_PART_BOUND - 2));
-        assert_eq!(serde_json::to_vec(&schema).unwrap().len(), SCHEMA_PART_BOUND);
-        assert_eq!(schema_part("query", "synthetic", &schema, None),
-            json!({"status":"ok","tool":"query","operation":"synthetic","schema":schema}));
+        assert_eq!(
+            serde_json::to_vec(&schema).unwrap().len(),
+            SCHEMA_PART_BOUND
+        );
+        assert_eq!(
+            schema_part("query", "synthetic", &schema, None),
+            json!({"status":"ok","tool":"query","operation":"synthetic","schema":schema})
+        );
         let oversized = json!("x".repeat(SCHEMA_PART_BOUND - 1));
         let first = schema_part("query", "synthetic", &oversized, None);
         assert_eq!(first["part"], 1);
@@ -1637,7 +2013,9 @@ mod wire_tests {
                     None,
                     std::sync::Arc::new(crate::config::planning_policy),
                 );
-                let server = BaleyServer::with_factory(factory).bind_project(project.path()).unwrap();
+                let server = BaleyServer::with_factory(factory)
+                    .bind_project(project.path())
+                    .unwrap();
                 server.call(tool, Some(json!({}))).await
             })
     }
@@ -1674,6 +2052,9 @@ mod wire_tests {
         };
         assert_ne!(result.is_error, Some(true));
         let structured = result.structured_content.expect("a structured answer");
-        assert_eq!((&structured["status"], &structured["code"]), (&json!("refused"), &json!("invalid-request")));
+        assert_eq!(
+            (&structured["status"], &structured["code"]),
+            (&json!("refused"), &json!("invalid-request"))
+        );
     }
 }

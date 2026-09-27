@@ -106,7 +106,9 @@ pub fn refused(reason: impl Into<String>) -> Envelope<Output> {
 
 /// Validate the supplied array before serde discards the indexed field path.
 pub fn typed_return_refusal(request: &Value) -> Option<Value> {
-    if request["operation"] != "review-return" { return None; }
+    if request["operation"] != "review-return" {
+        return None;
+    }
     let findings = request.get("findings")?;
     let bytes = serde_json::to_vec(&json!({"findings":findings})).ok()?;
     let error = review::contract::validate_findings(&bytes).err()?;
@@ -117,9 +119,13 @@ pub fn typed_return_refusal(request: &Value) -> Option<Value> {
         Some(index) => format!("findings[{index}]"),
         None => "findings".into(),
     };
-    Some(baley::envelope::Refusal::new("invalid-return", format!("{error:?}"))
-        // H4-1: review-return findings must satisfy the admitted contract.
-        .rule("return-shape").slot(slot).value())
+    Some(
+        baley::envelope::Refusal::new("invalid-return", format!("{error:?}"))
+            // H4-1: review-return findings must satisfy the admitted contract.
+            .rule("return-shape")
+            .slot(slot)
+            .value(),
+    )
 }
 fn output(operation: &str, result: impl Serialize) -> Answer {
     Ok(Envelope::Ok(Output {
@@ -388,14 +394,24 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
                         effort: if local {
                             Some(route.choice.rung.clone())
                         } else {
-                            trigger.as_ref().and_then(|name| route.policy.triggers.get(name))
+                            trigger
+                                .as_ref()
+                                .and_then(|name| route.policy.triggers.get(name))
                                 .map(|policy| policy.effort.clone())
                         },
                         routing: saved_routing.clone(),
                         selection_evidence: routing.evidence.clone(),
                     })
                 })?;
-                Ok(intended_attempt(&fire, index, choice, request.round, &manifest_id, &manifest, requested))
+                Ok(intended_attempt(
+                    &fire,
+                    index,
+                    choice,
+                    request.round,
+                    &manifest_id,
+                    &manifest,
+                    requested,
+                ))
             })
             .collect::<Result<Vec<_>>>()?;
         let admitted = Admission {
@@ -469,8 +485,17 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
         )
         .await
     };
-    if debug_dispatch { admission().await }
-    else { admit_with_policy(policy_trigger, policy_gate, observed.map(|(observation, _)| observation), admission).await }
+    if debug_dispatch {
+        admission().await
+    } else {
+        admit_with_policy(
+            policy_trigger,
+            policy_gate,
+            observed.map(|(observation, _)| observation),
+            admission,
+        )
+        .await
+    }
 }
 
 /// The provider settings an admission records from the config: the key file,
@@ -480,15 +505,23 @@ pub(super) async fn admit<I: ConfigIo + Clone + Sync>(
 fn provider_settings(values: &Value) -> Result<Value> {
     let defaults = review::provider::Settings::default();
     let settings = review::provider::Settings {
-        key_file: merge::get(values, "review.key_file").and_then(Value::as_str).map(str::to_owned),
+        key_file: merge::get(values, "review.key_file")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         max_prompt_tokens: merge::get(values, "review.max_prompt_tokens")
-            .and_then(Value::as_u64).filter(|value| *value > 0).unwrap_or(defaults.max_prompt_tokens),
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+            .unwrap_or(defaults.max_prompt_tokens),
         request_timeout_ms: merge::get(values, "review.request_timeout_ms")
-            .and_then(Value::as_u64).map(review::provider::transport::effective_timeout).unwrap_or(defaults.request_timeout_ms),
+            .and_then(Value::as_u64)
+            .map(review::provider::transport::effective_timeout)
+            .unwrap_or(defaults.request_timeout_ms),
     };
     let mut settings = serde_json::to_value(settings)?;
-    settings["provider_work_timeout_ms"] = json!(review::provider::transport::PROVIDER_WORK_TIMEOUT_MS);
-    settings["acknowledgment_budget_ms"] = json!(review::provider::transport::ACKNOWLEDGMENT_BUDGET_MS);
+    settings["provider_work_timeout_ms"] =
+        json!(review::provider::transport::PROVIDER_WORK_TIMEOUT_MS);
+    settings["acknowledgment_budget_ms"] =
+        json!(review::provider::transport::ACKNOWLEDGMENT_BUDGET_MS);
     settings["attempt_budget_ms"] = json!(review::provider::transport::ATTEMPT_BUDGET_MS);
     Ok(settings)
 }
@@ -721,28 +754,45 @@ fn admission_risk_observation(
     };
     let scope = if let Some(phase) = request.phase {
         risk::Scope::Phase {
-            project: request.project.clone(), planning_root: root.to_string_lossy().into(),
-            cycle: request.cycle.clone(), occurrence: request.discriminator.clone(),
-            phase, worker: request.plan.map(|n| n.to_string()), plan: request.plan,
+            project: request.project.clone(),
+            planning_root: root.to_string_lossy().into(),
+            cycle: request.cycle.clone(),
+            occurrence: request.discriminator.clone(),
+            phase,
+            worker: request.plan.map(|n| n.to_string()),
+            plan: request.plan,
         }
-    } else if request.caller == "debug" && request.home.kind == HomeKind::RootDebug
-        && request.home.id == request.discriminator && request.plan.is_none()
-        && matches!(request.target, Target::StagedTree { head: None, .. }) {
+    } else if request.caller == "debug"
+        && request.home.kind == HomeKind::RootDebug
+        && request.home.id == request.discriminator
+        && request.plan.is_none()
+        && matches!(request.target, Target::StagedTree { head: None, .. })
+    {
         let records = baley::debug::model::namespace(&view.snapshot.data)?;
-        let record = records.records.get(&request.discriminator)
+        let record = records
+            .records
+            .get(&request.discriminator)
             .ok_or_else(|| Error::Invalid("foreign-risk-evidence".into()))?;
         if record.root_binding != baley::verification::inputs::root_binding(root)?
-            || root.parent().is_none_or(|project| project.to_string_lossy() != request.project) {
+            || root
+                .parent()
+                .is_none_or(|project| project.to_string_lossy() != request.project)
+        {
             return Err(Error::Invalid("foreign-risk-evidence".into()));
         }
         risk::Scope::RootDebug {
-            project: request.project.clone(), planning_root: root.to_string_lossy().into(),
-            cycle: request.cycle.clone(), occurrence: request.discriminator.clone(),
+            project: request.project.clone(),
+            planning_root: root.to_string_lossy().into(),
+            cycle: request.cycle.clone(),
+            occurrence: request.discriminator.clone(),
             kind: risk::RootDebugKind::RootDebug,
         }
     } else {
-        return if request.risk_observation.is_some() { Err(Error::Invalid("foreign-risk-evidence".into())) }
-            else { Ok((DetectorObservation::Inconclusive, false)) };
+        return if request.risk_observation.is_some() {
+            Err(Error::Invalid("foreign-risk-evidence".into()))
+        } else {
+            Ok((DetectorObservation::Inconclusive, false))
+        };
     };
     let records = risk::read(&view.snapshot.data)?;
     let latest = records
@@ -774,12 +824,17 @@ fn admission_risk_observation(
             == Some(record),
         current: latest.is_some_and(|latest| latest.confirmation == record.confirmation),
     });
-    let checked_debug = matches!(scope, risk::Scope::RootDebug { .. }) && evidence.as_ref().is_some_and(|e|
-        e.confirmed && e.current && e.observation.surfaces == *surfaces
-        && e.observation.outcome == risk::ObservationOutcome::Checked
-        && e.observation.scan.as_ref().is_some_and(|scan| scan.checked));
-    let observed = review::policy::detector_observation(&scope, &material, Some(surfaces), evidence)
-        .map_err(|e| Error::Invalid(e.into()))?;
+    let checked_debug = matches!(scope, risk::Scope::RootDebug { .. })
+        && evidence.as_ref().is_some_and(|e| {
+            e.confirmed
+                && e.current
+                && e.observation.surfaces == *surfaces
+                && e.observation.outcome == risk::ObservationOutcome::Checked
+                && e.observation.scan.as_ref().is_some_and(|scan| scan.checked)
+        });
+    let observed =
+        review::policy::detector_observation(&scope, &material, Some(surfaces), evidence)
+            .map_err(|e| Error::Invalid(e.into()))?;
     Ok((observed, checked_debug))
 }
 
@@ -795,9 +850,13 @@ async fn commit_admission<C, V>(
 /// A review-select decision binding is re-resolved from the document at
 /// admission; a caller cannot substitute its own paragraph for the selection.
 fn validate_selection(root: &Path, request: &AdmissionRequest) -> Result<()> {
-    let Some(selection) = &request.selection else { return Ok(()) };
+    let Some(selection) = &request.selection else {
+        return Ok(());
+    };
     let Target::Decision { selected, .. } = &request.target else {
-        return Err(Error::Invalid("selection binds decision targets only".into()));
+        return Err(Error::Invalid(
+            "selection binds decision targets only".into(),
+        ));
     };
     let document = selection["document"]
         .as_str()
@@ -819,7 +878,8 @@ fn validate_selection(root: &Path, request: &AdmissionRequest) -> Result<()> {
     let (lines, text) = review::selection::decision_lines(&bytes, selected)
         .map_err(|refusal| Error::Invalid(refusal.reason))?;
     let utf8 = |bytes: Vec<u8>| {
-        String::from_utf8(bytes).map_err(|_| Error::Invalid("selected document is not UTF-8".into()))
+        String::from_utf8(bytes)
+            .map_err(|_| Error::Invalid("selected document is not UTF-8".into()))
     };
     let resolved = review::targets::DecisionMaterial {
         decision: selected.clone(),
@@ -853,14 +913,19 @@ fn acquire_target(
                 .strip_prefix("plan:")
                 .and_then(|n| n.parse::<u32>().ok())
                 .filter(|n| *n > 0)
-                .ok_or_else(|| Error::Invalid("inline text targets are selected through review-select".into()))?;
+                .ok_or_else(|| {
+                    Error::Invalid("inline text targets are selected through review-select".into())
+                })?;
             let entries = review::selection::plan_material(data, phase, source)
                 .map_err(|refusal| Error::Invalid(refusal.reason))?;
             retain_inline(
                 fire,
                 id,
                 target.clone(),
-                entries.into_iter().map(|(_, path, bytes)| (path, bytes)).collect(),
+                entries
+                    .into_iter()
+                    .map(|(_, path, bytes)| (path, bytes))
+                    .collect(),
                 clock,
             )
         }
@@ -1017,9 +1082,15 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(
             if let Some(raw) = &raw {
                 let view = persistence::read(store).await?;
                 let records = persistence::records(&view.snapshot.data)?;
-                let saved = records["attempts"][identity["attempt"].as_str().unwrap_or("")]["original"].as_str()
-                    .and_then(|id| persistence::get::<review::model::Original>(&records, "originals", id).ok());
-                if findings.is_some() || saved.is_none_or(|original| original.raw != raw.as_bytes()) {
+                let saved =
+                    records["attempts"][identity["attempt"].as_str().unwrap_or("")]["original"]
+                        .as_str()
+                        .and_then(|id| {
+                            persistence::get::<review::model::Original>(&records, "originals", id)
+                                .ok()
+                        });
+                if findings.is_some() || saved.is_none_or(|original| original.raw != raw.as_bytes())
+                {
                     return Ok(Envelope::Refused { code: "typed-content".into(),
                         reason: "review-return requires typed findings; raw is only accepted for an exact retained replay".into() });
                 }
@@ -1049,7 +1120,7 @@ async fn execute_inner<I: ConfigIo + Clone + Sync>(
                 Ok(receipt) => {
                     baley::debug::review::synchronize(store, root).await?;
                     output("review-return", receipt)
-                },
+                }
                 Err(error) => output("review-return", error),
             }
         }
@@ -1172,14 +1243,16 @@ async fn query_saved(store: &Store, root: &Path, query: Query) -> Answer {
         Query::Attempt { attempt } => {
             let view = persistence::read(store).await?;
             let records = persistence::records(&view.snapshot.data)?;
-            let mut saved = serde_json::to_value(persistence::get::<Attempt>(&records, "attempts", &attempt)?)?;
+            let mut saved =
+                serde_json::to_value(persistence::get::<Attempt>(&records, "attempts", &attempt)?)?;
             if let Some(evidence) = records["provider_evidence"].get(&attempt) {
                 saved["provider_evidence"] = evidence.clone();
             }
             output("review-attempt", saved)
         }
         Query::Original { original } => {
-            let mut value = serde_json::to_value(review::originals::read_original(store, &original).await?)?;
+            let mut value =
+                serde_json::to_value(review::originals::read_original(store, &original).await?)?;
             value["record"].as_object_mut().unwrap().remove("raw");
             output("review-original", value)
         }
@@ -1199,7 +1272,10 @@ async fn query_saved(store: &Store, root: &Path, query: Query) -> Answer {
             let view = persistence::read(store).await?;
             let records = persistence::records(&view.snapshot.data)?;
             let saved = material::authorized_entry(&records, &attempt, &entry)?;
-            material::read_material(&mut persistence::MaterialStorage::from_records(&records)?, &saved)?;
+            material::read_material(
+                &mut persistence::MaterialStorage::from_records(&records)?,
+                &saved,
+            )?;
             output(
                 "review-material",
                 json!({"entry":material::entry_metadata(&saved)?,"identity":{"kind":"review-entry","attempt":attempt,"entry":entry}}),
@@ -1332,7 +1408,9 @@ fn select(
     };
     let home = match selected.phase {
         Some(phase) => json!({"kind":"phase","id":phase.to_string()}),
-        None => json!({"kind":"root-inline","id":format!("select-{}", &selected.discriminator[..16])}),
+        None => {
+            json!({"kind":"root-inline","id":format!("select-{}", &selected.discriminator[..16])})
+        }
     };
     let admission = json!({
         "replay_key":replay_key.unwrap_or_else(|| format!("review-select:{}", selected.discriminator)),
@@ -1452,7 +1530,9 @@ pub(super) async fn next(store: &Store, fire: &str) -> Answer {
                 // A provider's fenced entries belong to that provider attempt.
                 // The local host receives the retained admission view, not
                 // another attempt's private transformed delivery.
-                if let Some(source) = records["provider_payloads"][&attempt.attempt].get("source_view") {
+                if let Some(source) =
+                    records["provider_payloads"][&attempt.attempt].get("source_view")
+                {
                     attempt.view = serde_json::from_value(source.clone())?;
                 }
                 let route: baley::execution::model::RoleResolution = serde_json::from_value({
@@ -1509,12 +1589,20 @@ pub(super) async fn next(store: &Store, fire: &str) -> Answer {
             let owned_store = store.clone();
             let attempt_id = attempt.attempt.clone();
             tokio::spawn(async move {
-                if let Err(error) = review::provider::delivery::run(owned_store, attempt_id, environment).await {
-                    eprintln!("provider delivery: {}", review::provider::diagnostics::excerpt(&error.to_string()));
+                if let Err(error) =
+                    review::provider::delivery::run(owned_store, attempt_id, environment).await
+                {
+                    eprintln!(
+                        "provider delivery: {}",
+                        review::provider::diagnostics::excerpt(&error.to_string())
+                    );
                 }
             });
-            return output("review-next", json!({"state":"pending","attempt":attempt,"admission":admission,
-                "guidance":PROVIDER_POLL_GUIDANCE}));
+            return output(
+                "review-next",
+                json!({"state":"pending","attempt":attempt,"admission":admission,
+                "guidance":PROVIDER_POLL_GUIDANCE}),
+            );
         }
         return output(
             "review-next",
@@ -1607,7 +1695,10 @@ fn historical_input(root: &Path, path: &str) -> Answer {
         }
     }
     let origin = review::history::read_pause_origin(&mut RetainedBytes(raw.clone()), path)?;
-    output("review-original", json!({"origin":origin,"content":baley::store::model::digest(&raw)}))
+    output(
+        "review-original",
+        json!({"origin":origin,"content":baley::store::model::digest(&raw)}),
+    )
 }
 
 #[cfg(test)]

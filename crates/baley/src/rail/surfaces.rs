@@ -248,7 +248,11 @@ pub enum Seen {
     /// One entry of a directory below the root could not be read.
     EntryUnlisted { dir: String, error: String },
     /// An entry, by its name and its path relative to the root.
-    Entry { name: String, label: String, kind: Kind },
+    Entry {
+        name: String,
+        label: String,
+        kind: Kind,
+    },
     /// A manifest-named regular file's text, or why it could not be read.
     Manifest {
         name: String,
@@ -280,7 +284,10 @@ pub fn opens(name: &str, kind: &Kind) -> bool {
 /// List the root and its children, reading only manifests. Every outcome is
 /// recorded as seen; no rule about what it means is applied here.
 pub fn walk(root: &Path, mut observe: impl FnMut(Access, &Path) -> io::Result<()>) -> Walk {
-    let refused = |error: io::Error| Walk { root: root.into(), seen: Err(error.to_string()) };
+    let refused = |error: io::Error| Walk {
+        root: root.into(),
+        seen: Err(error.to_string()),
+    };
     let mut seen = Vec::new();
     let mut levels = vec![root.to_path_buf()];
     let mut at = 0;
@@ -291,7 +298,10 @@ pub fn walk(root: &Path, mut observe: impl FnMut(Access, &Path) -> io::Result<()
             Ok(entries) => entries,
             Err(error) if at == 0 => return refused(error),
             Err(error) => {
-                seen.push(Seen::Unlisted { dir: relative, error: error.to_string() });
+                seen.push(Seen::Unlisted {
+                    dir: relative,
+                    error: error.to_string(),
+                });
                 at += 1;
                 continue;
             }
@@ -301,14 +311,21 @@ pub fn walk(root: &Path, mut observe: impl FnMut(Access, &Path) -> io::Result<()
             match entry {
                 Ok(entry) => collected.push(entry),
                 Err(error) if at == 0 => return refused(error),
-                Err(error) => seen.push(Seen::EntryUnlisted { dir: relative.clone(), error: error.to_string() }),
+                Err(error) => seen.push(Seen::EntryUnlisted {
+                    dir: relative.clone(),
+                    error: error.to_string(),
+                }),
             }
         }
         collected.sort_by_key(|e| e.file_name());
         for entry in collected {
             let name = entry.file_name().to_string_lossy().into_owned();
             let path = entry.path();
-            let label = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+            let label = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
             let kind = match entry.file_type() {
                 Ok(kind) if kind.is_dir() => Kind::Directory,
                 Ok(kind) if kind.is_file() => Kind::File,
@@ -319,7 +336,11 @@ pub fn walk(root: &Path, mut observe: impl FnMut(Access, &Path) -> io::Result<()
                 levels.push(path.clone());
             }
             let manifest = opens(&name, &kind);
-            seen.push(Seen::Entry { name: name.clone(), label: label.clone(), kind });
+            seen.push(Seen::Entry {
+                name: name.clone(),
+                label: label.clone(),
+                kind,
+            });
             if manifest {
                 let text = observe(Access::ReadManifest, &path)
                     .and_then(|()| fs::read_to_string(&path))
@@ -329,7 +350,10 @@ pub fn walk(root: &Path, mut observe: impl FnMut(Access, &Path) -> io::Result<()
         }
         at += 1;
     }
-    Walk { root: root.into(), seen: Ok(seen) }
+    Walk {
+        root: root.into(),
+        seen: Ok(seen),
+    }
 }
 
 /// The structural report for what a walk saw. A root that could not be listed
@@ -338,21 +362,32 @@ pub fn walk(root: &Path, mut observe: impl FnMut(Access, &Path) -> io::Result<()
 pub fn judge(walk: &Walk, answered: &[String]) -> Result<Report> {
     let root = &walk.root;
     let seen = walk.seen.as_ref().map_err(|error| {
-        Error::Invalid(format!("no-root: {} cannot be listed ({error})", root.display()))
+        Error::Invalid(format!(
+            "no-root: {} cannot be listed ({error})",
+            root.display()
+        ))
     })?;
     let mut tree = Tree::default();
     let mut manifests = Vec::new();
     let mut warnings = Vec::new();
     for event in seen {
         match event {
-            Seen::Unlisted { dir, error } => warnings.push(format!("{dir} could not be listed ({error})")),
+            Seen::Unlisted { dir, error } => {
+                warnings.push(format!("{dir} could not be listed ({error})"))
+            }
             Seen::EntryUnlisted { dir, error } => {
                 warnings.push(format!("{dir} entry could not be listed ({error})"))
             }
-            Seen::Entry { label, kind: Kind::Unknown(error), .. } => {
-                warnings.push(format!("{label} metadata unavailable ({error})"))
-            }
-            Seen::Entry { name, kind: Kind::Directory, .. } => {
+            Seen::Entry {
+                label,
+                kind: Kind::Unknown(error),
+                ..
+            } => warnings.push(format!("{label} metadata unavailable ({error})")),
+            Seen::Entry {
+                name,
+                kind: Kind::Directory,
+                ..
+            } => {
                 tree.dirs.insert(name.to_lowercase());
             }
             Seen::Entry { name, label, kind } => {
@@ -360,7 +395,8 @@ pub fn judge(walk: &Walk, answered: &[String]) -> Result<Report> {
                 if let Some((prefix, extension)) = name.rsplit_once('.')
                     && !prefix.is_empty()
                 {
-                    tree.extensions.insert(format!(".{}", extension.to_lowercase()));
+                    tree.extensions
+                        .insert(format!(".{}", extension.to_lowercase()));
                 }
                 if MANIFESTS.contains(&name.as_str()) {
                     manifests.push(label.clone());
@@ -369,10 +405,16 @@ pub fn judge(walk: &Walk, answered: &[String]) -> Result<Report> {
                     }
                 }
             }
-            Seen::Manifest { label, text: Err(error), .. } => {
-                warnings.push(format!("{label} could not be read ({error})"))
-            }
-            Seen::Manifest { name, label, text: Ok(text) } => match manifest_dependencies(name, text) {
+            Seen::Manifest {
+                label,
+                text: Err(error),
+                ..
+            } => warnings.push(format!("{label} could not be read ({error})")),
+            Seen::Manifest {
+                name,
+                label,
+                text: Ok(text),
+            } => match manifest_dependencies(name, text) {
                 Ok(deps) => {
                     for dep in deps {
                         let dep = dep.to_lowercase();

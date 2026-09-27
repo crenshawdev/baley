@@ -100,7 +100,11 @@ fn a_capture_whose_observation_has_no_changes_is_originally_clean() {
 fn unrelated_lists_every_changed_path_and_rename_source_outside_the_authorized_set() {
     let mut request = input(Path::new(PROJECT));
     request.authorized = ["a", "new"].map(PathBuf::from).into();
-    let changes = vec![change("a", None), change("new", Some("old")), change("c", None)];
+    let changes = vec![
+        change("a", None),
+        change("new", Some("old")),
+        change("c", None),
+    ];
     let captured = capture(request, observed(changes)).unwrap();
     assert_eq!(captured.unrelated(), ["c", "old"].map(PathBuf::from).into());
 }

@@ -99,29 +99,63 @@ const MARKER: &str = "baley.rail.observation.v1";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum ScopeSelection {
-    Phase { phase: NonZeroU32, occurrence: String, worker: Option<String> },
-    RootDebug { kind: RootDebugKind, occurrence: String },
+    Phase {
+        phase: NonZeroU32,
+        occurrence: String,
+        worker: Option<String>,
+    },
+    RootDebug {
+        kind: RootDebugKind,
+        occurrence: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum RootDebugKind { #[serde(rename = "root-debug")] RootDebug }
+pub enum RootDebugKind {
+    #[serde(rename = "root-debug")]
+    RootDebug,
+}
 
 impl ScopeSelection {
     pub fn occurrence(&self) -> &str {
-        match self { Self::Phase { occurrence, .. } | Self::RootDebug { occurrence, .. } => occurrence }
+        match self {
+            Self::Phase { occurrence, .. } | Self::RootDebug { occurrence, .. } => occurrence,
+        }
     }
     pub fn phase(&self) -> Option<NonZeroU32> {
-        match self { Self::Phase { phase, .. } => Some(*phase), Self::RootDebug { .. } => None }
+        match self {
+            Self::Phase { phase, .. } => Some(*phase),
+            Self::RootDebug { .. } => None,
+        }
     }
     pub fn worker(&self) -> Option<&str> {
-        match self { Self::Phase { worker, .. } => worker.as_deref(), Self::RootDebug { .. } => None }
+        match self {
+            Self::Phase { worker, .. } => worker.as_deref(),
+            Self::RootDebug { .. } => None,
+        }
     }
     pub fn bind(&self, project: String, planning_root: String) -> Scope {
         match self {
-            Self::Phase { phase, occurrence, worker } => Scope::Phase { project, planning_root,
-                cycle: "live".into(), occurrence: occurrence.clone(), phase: *phase, worker: worker.clone(), plan: None },
-            Self::RootDebug { kind, occurrence } => Scope::RootDebug { project, planning_root,
-                cycle: "live".into(), occurrence: occurrence.clone(), kind: kind.clone() },
+            Self::Phase {
+                phase,
+                occurrence,
+                worker,
+            } => Scope::Phase {
+                project,
+                planning_root,
+                cycle: "live".into(),
+                occurrence: occurrence.clone(),
+                phase: *phase,
+                worker: worker.clone(),
+                plan: None,
+            },
+            Self::RootDebug { kind, occurrence } => Scope::RootDebug {
+                project,
+                planning_root,
+                cycle: "live".into(),
+                occurrence: occurrence.clone(),
+                kind: kind.clone(),
+            },
         }
     }
 }
@@ -189,43 +223,88 @@ pub enum Scope {
 
 impl Scope {
     pub fn project(&self) -> &str {
-        match self { Self::Phase { project, .. } | Self::RootDebug { project, .. } => project }
+        match self {
+            Self::Phase { project, .. } | Self::RootDebug { project, .. } => project,
+        }
     }
     pub fn planning_root(&self) -> &str {
-        match self { Self::Phase { planning_root, .. } | Self::RootDebug { planning_root, .. } => planning_root }
+        match self {
+            Self::Phase { planning_root, .. } | Self::RootDebug { planning_root, .. } => {
+                planning_root
+            }
+        }
     }
     pub fn cycle(&self) -> &str {
-        match self { Self::Phase { cycle, .. } | Self::RootDebug { cycle, .. } => cycle }
+        match self {
+            Self::Phase { cycle, .. } | Self::RootDebug { cycle, .. } => cycle,
+        }
     }
     pub fn occurrence(&self) -> &str {
-        match self { Self::Phase { occurrence, .. } | Self::RootDebug { occurrence, .. } => occurrence }
+        match self {
+            Self::Phase { occurrence, .. } | Self::RootDebug { occurrence, .. } => occurrence,
+        }
     }
     pub fn phase(&self) -> Option<NonZeroU32> {
-        match self { Self::Phase { phase, .. } => Some(*phase), Self::RootDebug { .. } => None }
+        match self {
+            Self::Phase { phase, .. } => Some(*phase),
+            Self::RootDebug { .. } => None,
+        }
     }
     pub fn worker(&self) -> Option<&str> {
-        match self { Self::Phase { worker, .. } => worker.as_deref(), Self::RootDebug { .. } => None }
+        match self {
+            Self::Phase { worker, .. } => worker.as_deref(),
+            Self::RootDebug { .. } => None,
+        }
     }
     pub fn plan(&self) -> Option<NonZeroU32> {
-        match self { Self::Phase { plan, .. } => *plan, Self::RootDebug { .. } => None }
+        match self {
+            Self::Phase { plan, .. } => *plan,
+            Self::RootDebug { .. } => None,
+        }
     }
     pub fn selection(&self) -> ScopeSelection {
         match self {
-            Self::Phase { phase, occurrence, worker, .. } => ScopeSelection::Phase {
-                phase: *phase, occurrence: occurrence.clone(), worker: worker.clone() },
-            Self::RootDebug { kind, occurrence, .. } => ScopeSelection::RootDebug {
-                kind: kind.clone(), occurrence: occurrence.clone() },
+            Self::Phase {
+                phase,
+                occurrence,
+                worker,
+                ..
+            } => ScopeSelection::Phase {
+                phase: *phase,
+                occurrence: occurrence.clone(),
+                worker: worker.clone(),
+            },
+            Self::RootDebug {
+                kind, occurrence, ..
+            } => ScopeSelection::RootDebug {
+                kind: kind.clone(),
+                occurrence: occurrence.clone(),
+            },
         }
     }
     pub fn execution(&mut self, selected: NonZeroU32) -> Result<NonZeroU32> {
         match self {
-            Self::Phase { phase, plan, worker, .. } => {
-                if worker.as_deref().is_some_and(|worker| worker != selected.to_string()) {
-                    return Err(Error::Invalid("execution worker must name the selected plan".into()));
+            Self::Phase {
+                phase,
+                plan,
+                worker,
+                ..
+            } => {
+                if worker
+                    .as_deref()
+                    .is_some_and(|worker| worker != selected.to_string())
+                {
+                    return Err(Error::Invalid(
+                        "execution worker must name the selected plan".into(),
+                    ));
                 }
-                *plan = Some(selected); *worker = Some(selected.to_string()); Ok(*phase)
+                *plan = Some(selected);
+                *worker = Some(selected.to_string());
+                Ok(*phase)
             }
-            Self::RootDebug { .. } => Err(Error::Invalid("root-debug requires staged material".into())),
+            Self::RootDebug { .. } => {
+                Err(Error::Invalid("root-debug requires staged material".into()))
+            }
         }
     }
 }
@@ -361,13 +440,17 @@ impl Observation {
         if let Source::Execution { plan, .. } = &self.source
             && (self.scope.plan() != Some(*plan)
                 || self.scope.worker() != Some(plan.to_string().as_str())
-                || self.scope.phase().is_none_or(|phase| self.scope.occurrence() != format!("phase-{phase}-execution")))
+                || self.scope.phase().is_none_or(|phase| {
+                    self.scope.occurrence() != format!("phase-{phase}-execution")
+                }))
         {
             return Err(Error::Invalid(
                 "execution observation scope mismatch".into(),
             ));
         }
-        if matches!(self.scope, Scope::RootDebug { .. }) && !matches!(self.source, Source::Staged { .. }) {
+        if matches!(self.scope, Scope::RootDebug { .. })
+            && !matches!(self.source, Source::Staged { .. })
+        {
             return Err(Error::Invalid("root-debug requires staged material".into()));
         }
         let material = self.resolution.material();
@@ -542,49 +625,94 @@ pub struct NativeExecutionBasis {
 }
 
 impl NativeExecutionBasis {
-    pub fn new(active: &crate::execution::model::ActiveDispatch, task: crate::execution::history::Task,
-        source: crate::execution::receipts::SourceMaterial, transition_id: String) -> Result<Self> {
+    pub fn new(
+        active: &crate::execution::model::ActiveDispatch,
+        task: crate::execution::history::Task,
+        source: crate::execution::receipts::SourceMaterial,
+        transition_id: String,
+    ) -> Result<Self> {
         if active.phase != task.phase || active.plan != task.plan {
-            return Err(Error::Invalid("native material differs from active dispatch".into()));
+            return Err(Error::Invalid(
+                "native material differs from active dispatch".into(),
+            ));
         }
         let mut commits = source.evidence_commits.clone();
         commits.retain(|sha| sha != &source.completion);
         commits.push(source.completion.clone());
-        let execution = ExecutionBasis { version: 1, phase: active.phase, plan: active.plan, dispatch_id: active.id.clone(),
-            plan_set_fingerprint: active.plan_set_fingerprint.clone(), plan_fingerprint: active.plan_fingerprint.clone(),
-            base_id: active.base_sha.clone(), commits, transition_id };
+        let execution = ExecutionBasis {
+            version: 1,
+            phase: active.phase,
+            plan: active.plan,
+            dispatch_id: active.id.clone(),
+            plan_set_fingerprint: active.plan_set_fingerprint.clone(),
+            plan_fingerprint: active.plan_fingerprint.clone(),
+            base_id: active.base_sha.clone(),
+            commits,
+            transition_id,
+        };
         execution.validate()?;
-        Ok(Self { schema: "native-execution-material-1".into(), task, execution, source })
+        Ok(Self {
+            schema: "native-execution-material-1".into(),
+            task,
+            execution,
+            source,
+        })
     }
 
     pub fn material(&self) -> MaterialIdentity {
-        MaterialIdentity::Committed { base_id: self.execution.base_id.clone(), head_id: self.source.completion.clone() }
+        MaterialIdentity::Committed {
+            base_id: self.execution.base_id.clone(),
+            head_id: self.source.completion.clone(),
+        }
     }
 }
 
 pub fn native_execution_bases(data: &serde_json::Value) -> Result<Vec<NativeExecutionBasis>> {
-    let records: Vec<NativeExecutionBasis> = data.get(NATIVE_EXECUTION_MATERIAL).cloned().map(serde_json::from_value).transpose()?.unwrap_or_default();
+    let records: Vec<NativeExecutionBasis> = data
+        .get(NATIVE_EXECUTION_MATERIAL)
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
     let mut seen = BTreeSet::new();
     for record in &records {
         record.execution.validate()?;
-        if record.schema != "native-execution-material-1" || record.task.phase != record.execution.phase || record.task.plan != record.execution.plan
-            || record.execution.commits.last() != Some(&record.source.completion) || !seen.insert(&record.execution.transition_id) {
-            return Err(Error::Invalid("native material identity or encoding differs".into()));
+        if record.schema != "native-execution-material-1"
+            || record.task.phase != record.execution.phase
+            || record.task.plan != record.execution.plan
+            || record.execution.commits.last() != Some(&record.source.completion)
+            || !seen.insert(&record.execution.transition_id)
+        {
+            return Err(Error::Invalid(
+                "native material identity or encoding differs".into(),
+            ));
         }
     }
     Ok(records)
 }
 
-pub fn project_native_execution_basis(data: &serde_json::Value, basis: &NativeExecutionBasis) -> Result<serde_json::Value> {
+pub fn project_native_execution_basis(
+    data: &serde_json::Value,
+    basis: &NativeExecutionBasis,
+) -> Result<serde_json::Value> {
     let mut records = native_execution_bases(data)?;
-    if let Some(prior) = records.iter().find(|r| r.execution.transition_id == basis.execution.transition_id) {
-        if prior != basis { return Err(Error::Conflict("native material identity reused".into())); }
+    if let Some(prior) = records
+        .iter()
+        .find(|r| r.execution.transition_id == basis.execution.transition_id)
+    {
+        if prior != basis {
+            return Err(Error::Conflict("native material identity reused".into()));
+        }
         return Ok(data.clone());
     }
     records.push(basis.clone());
     let mut next = data.clone();
-    next.as_object_mut().ok_or_else(|| Error::Invalid("native material snapshot must be an object".into()))?
-        .insert(NATIVE_EXECUTION_MATERIAL.into(), serde_json::to_value(records)?);
+    next.as_object_mut()
+        .ok_or_else(|| Error::Invalid("native material snapshot must be an object".into()))?
+        .insert(
+            NATIVE_EXECUTION_MATERIAL.into(),
+            serde_json::to_value(records)?,
+        );
     native_execution_bases(&next)?;
     Ok(next)
 }

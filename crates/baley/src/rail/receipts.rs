@@ -196,7 +196,11 @@ pub fn validate_rearm(original: &Fire, next: &Fire) -> Result<()> {
 
 pub fn requires_review(record: &Recorded) -> bool {
     record.observation.outcome == ObservationOutcome::Checked
-        && record.observation.scan.as_ref().is_some_and(scan_requires_review)
+        && record
+            .observation
+            .scan
+            .as_ref()
+            .is_some_and(scan_requires_review)
 }
 
 /// The one rule for what fires: a checked scan that matched or could not
@@ -597,7 +601,9 @@ pub fn finalize_execution(
     requirements: &[Requirement],
 ) -> Result<serde_json::Value> {
     if !crate::execution::admission::records(data, phase)?.is_empty() {
-        return Err(invalid("native finalization requires the plan-close suite lifecycle"));
+        return Err(invalid(
+            "native finalization requires the plan-close suite lifecycle",
+        ));
     }
     use crate::execution::model::{ExecutionSnapshot, PlanDisposition, TerminalOutcome};
     let mut execution: ExecutionSnapshot = serde_json::from_value(

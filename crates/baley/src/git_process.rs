@@ -30,7 +30,9 @@ pub enum Caller {
 pub(crate) struct Registration(Caller);
 
 impl Registration {
-    pub(crate) fn caller(&self) -> Caller { self.0 }
+    pub(crate) fn caller(&self) -> Caller {
+        self.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,10 +47,20 @@ pub fn deadline(caller: Caller) -> Deadline {
             nominal: GUARD_GIT_DEADLINE,
             work: GUARD_GIT_DEADLINE - GUARD_REAP_RESERVE,
         },
-        Caller::ExecutionOutput | Caller::ExecutionStatus | Caller::PauseRead
-        | Caller::PauseIndex | Caller::WhyRead | Caller::WhyInput | Caller::ExecutionRunner
-        | Caller::PauseMergeBase | Caller::RailRead | Caller::RailCommitInput | Caller::RailConfig
-        | Caller::RecallHistory | Caller::ReadDocumentHead | Caller::LandingGit => Deadline {
+        Caller::ExecutionOutput
+        | Caller::ExecutionStatus
+        | Caller::PauseRead
+        | Caller::PauseIndex
+        | Caller::WhyRead
+        | Caller::WhyInput
+        | Caller::ExecutionRunner
+        | Caller::PauseMergeBase
+        | Caller::RailRead
+        | Caller::RailCommitInput
+        | Caller::RailConfig
+        | Caller::RecallHistory
+        | Caller::ReadDocumentHead
+        | Caller::LandingGit => Deadline {
             nominal: OTHER_GIT_DEADLINE,
             work: OTHER_GIT_DEADLINE,
         },
@@ -56,7 +68,9 @@ pub fn deadline(caller: Caller) -> Deadline {
 }
 
 pub fn launch(caller: Caller) -> Launch {
-    Launch::registered_git(Registration(caller)).timeout(deadline(caller).work).own_group()
+    Launch::registered_git(Registration(caller))
+        .timeout(deadline(caller).work)
+        .own_group()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,7 +81,12 @@ pub struct Limit {
 
 impl fmt::Display for Limit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} exceeded git deadline of {} seconds", self.command, self.bound.as_secs())
+        write!(
+            f,
+            "{} exceeded git deadline of {} seconds",
+            self.command,
+            self.bound.as_secs()
+        )
     }
 }
 
@@ -89,11 +108,21 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// Interpret one completion; only an explicit timeout observation is a limit.
-pub fn finish(caller: Caller, args: &[OsString], answer: io::Result<Output>) -> Result<Output, Error> {
+pub fn finish(
+    caller: Caller,
+    args: &[OsString],
+    answer: io::Result<Output>,
+) -> Result<Output, Error> {
     answer.map_err(|error| {
         if error.kind() == io::ErrorKind::TimedOut {
             Error::Limit(Limit {
-                command: format!("git {}", args.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>().join(" ")),
+                command: format!(
+                    "git {}",
+                    args.iter()
+                        .map(|arg| arg.to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
                 bound: deadline(caller).work,
             })
         } else {
@@ -103,9 +132,12 @@ pub fn finish(caller: Caller, args: &[OsString], answer: io::Result<Output>) -> 
 }
 
 pub fn run(launch: &Launch, process: &mut dyn Process) -> Result<Output, Error> {
-    let caller = launch.git_caller().ok_or_else(|| Error::Io(io::Error::new(
-        io::ErrorKind::InvalidInput, "git launch requires a registered caller",
-    )))?;
+    let caller = launch.git_caller().ok_or_else(|| {
+        Error::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "git launch requires a registered caller",
+        ))
+    })?;
     finish(caller, &launch.args, process.run(launch))
 }
 

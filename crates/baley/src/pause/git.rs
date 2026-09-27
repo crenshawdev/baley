@@ -64,7 +64,8 @@ where
             .cwd(root)
             .args(args)
             .env("GIT_OPTIONAL_LOCKS", "0")
-            .env("GIT_LITERAL_PATHSPECS", "1"), process,
+            .env("GIT_LITERAL_PATHSPECS", "1"),
+        process,
     )?;
     if !output.success() {
         return Err(Error::Invalid(format!(
@@ -341,7 +342,12 @@ fn authored_index_id(
             process,
         )?;
         if !entry.is_empty() {
-            index.run(root, ["update-index", "-z", "--index-info"], Some(&entry), process)?;
+            index.run(
+                root,
+                ["update-index", "-z", "--index-info"],
+                Some(&entry),
+                process,
+            )?;
         }
     }
     String::from_utf8(line(index.run(root, ["write-tree"], None, process)?))
@@ -359,7 +365,12 @@ pub fn authored(scope: &[PathBuf], receipts: &BTreeSet<PathBuf>) -> Vec<PathBuf>
 }
 
 /// Store receipts are supplied by provenance, not recognized by filename.
-pub fn staged(root: &Path, base: &str, receipts: &BTreeSet<PathBuf>, process: &mut dyn Process) -> Result<Staged> {
+pub fn staged(
+    root: &Path,
+    base: &str,
+    receipts: &BTreeSet<PathBuf>,
+    process: &mut dyn Process,
+) -> Result<Staged> {
     let head = shared_git::resolve_commit(root, "HEAD", process)?;
     let base = shared_git::resolve_comparison(root, base, process)?;
     let before = index_id(root, process)?;
@@ -383,7 +394,9 @@ pub fn staged(root: &Path, base: &str, receipts: &BTreeSet<PathBuf>, process: &m
         process,
     )?
     .body;
-    if before != index_id(root, process)? || head != shared_git::resolve_commit(root, "HEAD", process)? {
+    if before != index_id(root, process)?
+        || head != shared_git::resolve_commit(root, "HEAD", process)?
+    {
         return Err(Error::Conflict(
             "staged material changed during risk observation".into(),
         ));
@@ -419,7 +432,11 @@ pub fn unauthorized(
 
 /// Whether Git still shows the work pause captured: the same head, the same
 /// index, and the same changes apart from the ignored receipts.
-pub fn unchanged(current: &Observation, expected: &Observation, ignored: &BTreeSet<PathBuf>) -> bool {
+pub fn unchanged(
+    current: &Observation,
+    expected: &Observation,
+    ignored: &BTreeSet<PathBuf>,
+) -> bool {
     let authored = |observation: &Observation| {
         observation
             .changes
@@ -452,7 +469,10 @@ pub fn add_paths(expected: &Observation, stage_paths: &BTreeSet<PathBuf>) -> BTr
 
 /// The WIP commit's paths out of everything staged: none when nothing staged is
 /// WIP material, and a refusal when anything else is staged beside it.
-pub fn wip_paths(staged: Vec<PathBuf>, stage_paths: &BTreeSet<PathBuf>) -> Result<Option<Vec<PathBuf>>> {
+pub fn wip_paths(
+    staged: Vec<PathBuf>,
+    stage_paths: &BTreeSet<PathBuf>,
+) -> Result<Option<Vec<PathBuf>>> {
     let count = staged.len();
     let wip: Vec<_> = staged
         .into_iter()
@@ -540,7 +560,13 @@ pub fn commit_guarded(
         .map_err(|_| Error::Invalid("invalid Git HEAD".into()))?;
     let branch = line(run(root, ["branch", "--show-current"], process)?);
     let index = index_id(root, process)?;
-    if !guard_holds(expected, &head, &branch, &index, &unstaged(root, &expected.paths, process)?) {
+    if !guard_holds(
+        expected,
+        &head,
+        &branch,
+        &index,
+        &unstaged(root, &expected.paths, process)?,
+    ) {
         return Err(Error::Conflict(
             "guarded material changed before commit".into(),
         ));
@@ -556,7 +582,12 @@ pub fn commit_guarded(
         .map_err(|_| Error::Invalid("invalid WIP tree identity".into()))?;
     let parent = String::from_utf8(line(run(root, ["rev-parse", "HEAD^"], process)?))
         .map_err(|_| Error::Invalid("invalid WIP parent identity".into()))?;
-    if !committed_as_guarded(expected, &tree, &parent, &unstaged(root, &expected.paths, process)?) {
+    if !committed_as_guarded(
+        expected,
+        &tree,
+        &parent,
+        &unstaged(root, &expected.paths, process)?,
+    ) {
         return Err(Error::Conflict(
             "commit differs from the guarded staged tree".into(),
         ));
@@ -566,7 +597,13 @@ pub fn commit_guarded(
 
 /// Whether Git still shows the guarded index before its commit: its head, its
 /// branch, its tree, and nothing of its paths left unstaged.
-pub fn guard_holds(expected: &WipIndex, head: &str, branch: &[u8], index_id: &str, unstaged: &[PathBuf]) -> bool {
+pub fn guard_holds(
+    expected: &WipIndex,
+    head: &str,
+    branch: &[u8],
+    index_id: &str,
+    unstaged: &[PathBuf],
+) -> bool {
     head == expected.head
         && branch == expected.branch
         && index_id == expected.index_id
@@ -575,7 +612,12 @@ pub fn guard_holds(expected: &WipIndex, head: &str, branch: &[u8], index_id: &st
 
 /// Whether the new commit is the guarded tree on the guarded head, with
 /// nothing of its paths left unstaged.
-pub fn committed_as_guarded(expected: &WipIndex, tree: &str, parent: &str, unstaged: &[PathBuf]) -> bool {
+pub fn committed_as_guarded(
+    expected: &WipIndex,
+    tree: &str,
+    parent: &str,
+    unstaged: &[PathBuf],
+) -> bool {
     tree == expected.index_id && parent == expected.head && unstaged.is_empty()
 }
 
@@ -588,7 +630,12 @@ pub fn wip_subject(description: &str) -> Result<String> {
     Ok(format!("wip: {description}"))
 }
 
-pub fn commit_wip(root: &Path, expected: &WipIndex, description: &str, process: &mut dyn Process) -> Result<String> {
+pub fn commit_wip(
+    root: &Path,
+    expected: &WipIndex,
+    description: &str,
+    process: &mut dyn Process,
+) -> Result<String> {
     commit_guarded(root, expected, &wip_subject(description)?, process)
 }
 

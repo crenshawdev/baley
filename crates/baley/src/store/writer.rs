@@ -73,17 +73,29 @@ pub struct Drain<'a> {
 impl Drain<'_> {
     pub fn step(&self, incoming: Option<&str>) -> DrainAction {
         if incoming.is_some() {
-            return if self.admission_closed { DrainAction::Refuse } else { DrainAction::Admit };
+            return if self.admission_closed {
+                DrainAction::Refuse
+            } else {
+                DrainAction::Admit
+            };
         }
-        let pending = self.admissions.iter()
+        let pending = self
+            .admissions
+            .iter()
             .filter(|admission| admission.sequence > self.completed_prefix)
             .min_by_key(|admission| admission.sequence);
         if self.open_write.is_none() && pending.is_none() {
-            return if self.admission_closed { DrainAction::Join } else { DrainAction::Wait };
+            return if self.admission_closed {
+                DrainAction::Join
+            } else {
+                DrainAction::Wait
+            };
         }
         if self.admission_closed && self.elapsed >= SERVER_DRAIN_BOUND {
             return DrainAction::DrainLimit(DrainLimit {
-                open_write: self.open_write.map(str::to_owned)
+                open_write: self
+                    .open_write
+                    .map(str::to_owned)
                     .or_else(|| pending.map(|admission| admission.id.clone())),
                 bound: SERVER_DRAIN_BOUND,
             });
@@ -162,7 +174,9 @@ pub(crate) fn later_generation(
             after_files[name].directory_identity != previous.directory_identity
         })
     {
-        return Err(Error::Conflict("externally changed store generation".into()));
+        return Err(Error::Conflict(
+            "externally changed store generation".into(),
+        ));
     }
     Ok(())
 }
@@ -413,7 +427,10 @@ impl Store {
                     );
                 }
             })?;
-        let store = Self { requests, worker: Arc::new(tokio::sync::Mutex::new(Some(worker))) };
+        let store = Self {
+            requests,
+            worker: Arc::new(tokio::sync::Mutex::new(Some(worker))),
+        };
         if let Err(error) = completion.await.unwrap_or(Err(Error::Closed)) {
             store.shutdown().await?;
             return Err(error);
@@ -427,7 +444,9 @@ impl Store {
         if let Some(handle) = worker.take() {
             let _ = self.requests.send(None).await;
             tokio::task::spawn_blocking(move || handle.join())
-                .await.map_err(|_| Error::Closed)?.map_err(|_| Error::Closed)?;
+                .await
+                .map_err(|_| Error::Closed)?
+                .map_err(|_| Error::Closed)?;
         }
         Ok(())
     }
@@ -435,8 +454,16 @@ impl Store {
     pub async fn shared_view(&self) -> Result<Arc<View>> {
         let (reply, completion) = oneshot::channel();
         let (unused, _) = oneshot::channel();
-        self.requests.send(Some(Request { operation: Operation::ReadVerified, reply: unused,
-            shared: Some(reply), #[cfg(test)] id: String::new() })).await.map_err(|_| Error::Closed)?;
+        self.requests
+            .send(Some(Request {
+                operation: Operation::ReadVerified,
+                reply: unused,
+                shared: Some(reply),
+                #[cfg(test)]
+                id: String::new(),
+            }))
+            .await
+            .map_err(|_| Error::Closed)?;
         completion.await.map_err(|_| Error::Closed)?
     }
 
@@ -571,11 +598,20 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             return Ok(());
         }
         let mut operations = self.view.snapshot.operations.clone();
-        operations.insert(super::transaction::snapshot_repair_operation(self.next_generation()?),
-            model::digest(&serde_json::to_vec(&repaired)?));
+        operations.insert(
+            super::transaction::snapshot_repair_operation(self.next_generation()?),
+            model::digest(&serde_json::to_vec(&repaired)?),
+        );
         let next = self.view.as_ref().clone();
-        self.persist(next, operations, Vec::new(), "snapshot_repair",
-            super::transaction::IntentKind::SnapshotRepairV1 { repaired: repaired.clone() })?;
+        self.persist(
+            next,
+            operations,
+            Vec::new(),
+            "snapshot_repair",
+            super::transaction::IntentKind::SnapshotRepairV1 {
+                repaired: repaired.clone(),
+            },
+        )?;
         Arc::make_mut(&mut self.view).snapshot.repaired = repaired;
         Ok(())
     }
@@ -606,19 +642,33 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     }
 
     fn refresh_owned(&mut self) -> Result<()> {
-        if let Some(error) = &self.failed { return Err(error.clone()); }
-        if let Err(error) = super::transaction::recover(&mut self.storage, &mut self.policy, &mut *self.process) {
+        if let Some(error) = &self.failed {
+            return Err(error.clone());
+        }
+        if let Err(error) =
+            super::transaction::recover(&mut self.storage, &mut self.policy, &mut *self.process)
+        {
             // Recovery can install participants just like commit. A failed
             // attempt requires a replacement owner, not a retry on this writer.
             self.failed = Some(error.clone());
             return Err(error);
         }
-        let identity = self.storage.root().map(super::cache::identity).transpose()?;
+        let identity = self
+            .storage
+            .root()
+            .map(super::cache::identity)
+            .transpose()?;
         if identity.is_some() && identity == self.identity {
             return Ok(());
         }
         let observed = Self::read_files(&mut self.storage)?;
-        if identity != self.storage.root().map(super::cache::identity).transpose()? {
+        if identity
+            != self
+                .storage
+                .root()
+                .map(super::cache::identity)
+                .transpose()?
+        {
             return Err(Error::Conflict("store changed while reading".into()));
         }
         if observed != self.observed {
@@ -648,127 +698,295 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let _ownership = self.storage.acquire()?;
         self.refresh_owned()?;
         match operation {
-            Operation::DebugReviewV1 { expected_generation, expected_integrity, root_binding } => {
+            Operation::DebugReviewV1 {
+                expected_generation,
+                expected_integrity,
+                root_binding,
+            } => {
                 self.check_expected(expected_generation, &expected_integrity)?;
-                if self.storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(&root_binding) {
+                if self
+                    .storage
+                    .root()
+                    .map(crate::verification::inputs::root_binding)
+                    .transpose()?
+                    .as_ref()
+                    != Some(&root_binding)
+                {
                     return Err(Error::Invalid("debug review root binding changed".into()));
                 }
                 crate::rail::receipts::confirmed_history(&self.view)?;
                 let mut next = self.view.as_ref().clone();
-                next.snapshot.data = crate::debug::review::contribute(&next.snapshot.data, &root_binding)?;
+                next.snapshot.data =
+                    crate::debug::review::contribute(&next.snapshot.data, &root_binding)?;
                 let mut participants = Vec::new();
-                for slug in crate::debug::review::changed(&self.view.snapshot.data, &next.snapshot.data)? {
-                    let (target, bytes) = crate::execution::render::project_debug(&next.snapshot.data, &slug)?;
+                for slug in
+                    crate::debug::review::changed(&self.view.snapshot.data, &next.snapshot.data)?
+                {
+                    let (target, bytes) =
+                        crate::execution::render::project_debug(&next.snapshot.data, &slug)?;
                     let expected = self.storage.read(&target)?;
-                    participants.push(super::transaction::Participant { target, expected, bytes });
+                    participants.push(super::transaction::Participant {
+                        target,
+                        expected,
+                        bytes,
+                    });
                 }
                 let operations = next.snapshot.operations.clone();
-                self.persist(next, operations, participants, "debug_review",
-                    super::transaction::IntentKind::DebugReviewV1 { root_binding })
-            },
-            Operation::DebugV1 { expected_generation, expected_integrity, write } => {
+                self.persist(
+                    next,
+                    operations,
+                    participants,
+                    "debug_review",
+                    super::transaction::IntentKind::DebugReviewV1 { root_binding },
+                )
+            }
+            Operation::DebugV1 {
+                expected_generation,
+                expected_integrity,
+                write,
+            } => {
                 self.check_expected(expected_generation, &expected_integrity)?;
                 crate::rail::receipts::confirmed_history(&self.view)?;
-                if self.storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(&write.root_binding) {
+                if self
+                    .storage
+                    .root()
+                    .map(crate::verification::inputs::root_binding)
+                    .transpose()?
+                    .as_ref()
+                    != Some(&write.root_binding)
+                {
                     return Err(Error::Invalid("debug root binding changed".into()));
                 }
                 let mut next = self.view.as_ref().clone();
                 next.snapshot.data = crate::debug::model::contribute(&next.snapshot.data, &write)?;
                 let slug = write.apply.identity().1;
-                let participants = if crate::debug::model::outcome(&self.view.snapshot.data, &write).is_ok() {
-                    let (target, bytes) = crate::execution::render::project_debug(&next.snapshot.data, slug)?;
-                    let expected = self.storage.read(&target)?;
-                    vec![super::transaction::Participant { target, expected, bytes }]
-                } else { vec![] };
+                let participants =
+                    if crate::debug::model::outcome(&self.view.snapshot.data, &write).is_ok() {
+                        let (target, bytes) =
+                            crate::execution::render::project_debug(&next.snapshot.data, slug)?;
+                        let expected = self.storage.read(&target)?;
+                        vec![super::transaction::Participant {
+                            target,
+                            expected,
+                            bytes,
+                        }]
+                    } else {
+                        vec![]
+                    };
                 let operations = next.snapshot.operations.clone();
-                self.persist(next, operations, participants, "debug", super::transaction::IntentKind::DebugV1 { write })
-            },
-            Operation::SpikeV1 { expected_generation, expected_integrity, write } => {
+                self.persist(
+                    next,
+                    operations,
+                    participants,
+                    "debug",
+                    super::transaction::IntentKind::DebugV1 { write },
+                )
+            }
+            Operation::SpikeV1 {
+                expected_generation,
+                expected_integrity,
+                write,
+            } => {
                 self.check_expected(expected_generation, &expected_integrity)?;
-                if self.storage.root().map(crate::verification::inputs::root_binding).transpose()?.as_ref() != Some(&write.root_binding) {
+                if self
+                    .storage
+                    .root()
+                    .map(crate::verification::inputs::root_binding)
+                    .transpose()?
+                    .as_ref()
+                    != Some(&write.root_binding)
+                {
                     return Err(Error::Invalid("spike root binding changed".into()));
                 }
-                if self.storage.root().and_then(std::path::Path::parent).map(std::path::Path::canonicalize).transpose()?.as_ref() != Some(&write.project) {
+                if self
+                    .storage
+                    .root()
+                    .and_then(std::path::Path::parent)
+                    .map(std::path::Path::canonicalize)
+                    .transpose()?
+                    .as_ref()
+                    != Some(&write.project)
+                {
                     return Err(Error::Invalid("spike project binding changed".into()));
                 }
                 let mut next = self.view.as_ref().clone();
                 next.snapshot.data = crate::spike::model::contribute(&next.snapshot.data, &write)?;
                 let slug = write.apply.identity().1;
-                let participants = if crate::spike::model::outcome(&self.view.snapshot.data, &write).is_ok() {
-                    let (target, bytes) = crate::execution::render::project_spike(&next.snapshot.data, slug)?;
-                    let expected = self.storage.read(&target)?;
-                    if !crate::spike::model::namespace(&self.view.snapshot.data)?.records.contains_key(slug)
-                        && expected.bytes.is_some() {
-                        return Err(Error::Invalid("historical spike projection cannot be overwritten".into()));
-                    }
-                    vec![super::transaction::Participant { target, expected, bytes }]
-                } else { vec![] };
+                let participants =
+                    if crate::spike::model::outcome(&self.view.snapshot.data, &write).is_ok() {
+                        let (target, bytes) =
+                            crate::execution::render::project_spike(&next.snapshot.data, slug)?;
+                        let expected = self.storage.read(&target)?;
+                        if !crate::spike::model::namespace(&self.view.snapshot.data)?
+                            .records
+                            .contains_key(slug)
+                            && expected.bytes.is_some()
+                        {
+                            return Err(Error::Invalid(
+                                "historical spike projection cannot be overwritten".into(),
+                            ));
+                        }
+                        vec![super::transaction::Participant {
+                            target,
+                            expected,
+                            bytes,
+                        }]
+                    } else {
+                        vec![]
+                    };
                 let operations = next.snapshot.operations.clone();
-                self.persist(next, operations, participants, "spike", super::transaction::IntentKind::SpikeV1 { write })
-            },
-            Operation::TaskV1 { expected_generation, expected_integrity, write } => {
+                self.persist(
+                    next,
+                    operations,
+                    participants,
+                    "spike",
+                    super::transaction::IntentKind::SpikeV1 { write },
+                )
+            }
+            Operation::TaskV1 {
+                expected_generation,
+                expected_integrity,
+                write,
+            } => {
                 let root_binding = self.observed[STATE].directory_identity.clone();
                 if root_binding != write.root_binding {
                     return Err(Error::Invalid("task root binding changed".into()));
                 }
-                if self.storage.root().and_then(std::path::Path::parent).map(std::path::Path::canonicalize).transpose()?.as_ref() != Some(&write.project) {
+                if self
+                    .storage
+                    .root()
+                    .and_then(std::path::Path::parent)
+                    .map(std::path::Path::canonicalize)
+                    .transpose()?
+                    .as_ref()
+                    != Some(&write.project)
+                {
                     return Err(Error::Invalid("task project binding changed".into()));
                 }
-                if let Some(_answer) = crate::task::model::store_replay(&self.view.snapshot.data, &write)? {
+                if let Some(_answer) =
+                    crate::task::model::store_replay(&self.view.snapshot.data, &write)?
+                {
                     return Ok(self.view.as_ref().clone());
                 }
                 self.check_expected(expected_generation, &expected_integrity)?;
                 let slug = write.apply.slug().to_owned();
                 let mut next = self.view.as_ref().clone();
-                next.snapshot.data = crate::task::model::store_contribute(&next.snapshot.data, &write)?;
-                let record = crate::task::model::store_namespace(&next.snapshot.data)?.records
-                    .get(&slug).cloned().ok_or_else(|| Error::Invalid("task record disappeared".into()))?;
+                next.snapshot.data =
+                    crate::task::model::store_contribute(&next.snapshot.data, &write)?;
+                let record = crate::task::model::store_namespace(&next.snapshot.data)?
+                    .records
+                    .get(&slug)
+                    .cloned()
+                    .ok_or_else(|| Error::Invalid("task record disappeared".into()))?;
                 let (target, bytes) = crate::task::model::store_projection(&record)?;
                 let expected = self.storage.read(&target)?;
-                if !crate::task::model::store_namespace(&self.view.snapshot.data)?.records.contains_key(&slug)
-                    && expected.bytes.is_some() {
-                    return Err(Error::Invalid("historical task projection cannot be overwritten".into()));
+                if !crate::task::model::store_namespace(&self.view.snapshot.data)?
+                    .records
+                    .contains_key(&slug)
+                    && expected.bytes.is_some()
+                {
+                    return Err(Error::Invalid(
+                        "historical task projection cannot be overwritten".into(),
+                    ));
                 }
-                let participants = vec![super::transaction::Participant { target, expected, bytes }];
+                let participants = vec![super::transaction::Participant {
+                    target,
+                    expected,
+                    bytes,
+                }];
                 let operations = next.snapshot.operations.clone();
-                self.persist(next, operations, participants, "task",
-                    super::transaction::IntentKind::TaskV1 { write, root_binding })
-            },
-            Operation::UndoV1 { expected_generation, expected_integrity, write } => {
+                self.persist(
+                    next,
+                    operations,
+                    participants,
+                    "task",
+                    super::transaction::IntentKind::TaskV1 {
+                        write,
+                        root_binding,
+                    },
+                )
+            }
+            Operation::UndoV1 {
+                expected_generation,
+                expected_integrity,
+                write,
+            } => {
                 self.check_expected(expected_generation, &expected_integrity)?;
                 self.storage.validate_undo(&write, false)?;
                 let mut next = self.view.as_ref().clone();
                 next.snapshot.data = crate::undo::model::contribute(&next.snapshot.data, &write)?;
                 let operations = next.snapshot.operations.clone();
-                self.persist(next, operations, vec![], "phase_undo", super::transaction::IntentKind::UndoV1 { write })
-            },
-            Operation::MilestoneReleaseV1 { expected_generation, expected_integrity, write } => {
+                self.persist(
+                    next,
+                    operations,
+                    vec![],
+                    "phase_undo",
+                    super::transaction::IntentKind::UndoV1 { write },
+                )
+            }
+            Operation::MilestoneReleaseV1 {
+                expected_generation,
+                expected_integrity,
+                write,
+            } => {
                 self.check_expected(expected_generation, &expected_integrity)?;
                 self.storage.validate_release(&write, false)?;
                 let mut next = self.view.as_ref().clone();
-                next.snapshot.data = crate::milestone::release::contribute(&next.snapshot.data, &write)?;
+                next.snapshot.data =
+                    crate::milestone::release::contribute(&next.snapshot.data, &write)?;
                 let operations = next.snapshot.operations.clone();
-                self.persist(next, operations, vec![], "milestone_release", super::transaction::IntentKind::MilestoneReleaseV1 { write })
-            },
-            Operation::MilestonePruneV1 { expected_generation, expected_integrity, prune } => {
+                self.persist(
+                    next,
+                    operations,
+                    vec![],
+                    "milestone_release",
+                    super::transaction::IntentKind::MilestoneReleaseV1 { write },
+                )
+            }
+            Operation::MilestonePruneV1 {
+                expected_generation,
+                expected_integrity,
+                prune,
+            } => {
                 self.check_expected(expected_generation, &expected_integrity)?;
                 self.storage.validate_prune(&prune, false)?;
                 let mut next = self.view.as_ref().clone();
-                next.snapshot.data = crate::milestone::prune::contribute(&next.snapshot.data, &prune)?;
+                next.snapshot.data =
+                    crate::milestone::prune::contribute(&next.snapshot.data, &prune)?;
                 let operations = next.snapshot.operations.clone();
-                self.persist(next, operations, vec![], "milestone_prune",
-                    super::transaction::IntentKind::MilestonePruneV1 { prune })
-            },
-            Operation::VerificationRunV1 { expected_generation, expected_integrity, record } =>
-                self.verification_run(expected_generation, &expected_integrity, *record),
-            Operation::VerificationV1 { expected_generation, expected_integrity, request } =>
-                self.verification(expected_generation, &expected_integrity, *request),
-            Operation::NativeTaskV1 { expected_generation, expected_integrity, request } =>
-                self.native_task(expected_generation, &expected_integrity, *request),
-            Operation::NativePlanV1 { expected_generation, expected_integrity, request } =>
-                self.native_plan(expected_generation, &expected_integrity, *request),
-            Operation::NativeAdmissionV1 {expected_generation,expected_integrity,request} =>
-                self.native_admission(expected_generation,&expected_integrity,*request),
+                self.persist(
+                    next,
+                    operations,
+                    vec![],
+                    "milestone_prune",
+                    super::transaction::IntentKind::MilestonePruneV1 { prune },
+                )
+            }
+            Operation::VerificationRunV1 {
+                expected_generation,
+                expected_integrity,
+                record,
+            } => self.verification_run(expected_generation, &expected_integrity, *record),
+            Operation::VerificationV1 {
+                expected_generation,
+                expected_integrity,
+                request,
+            } => self.verification(expected_generation, &expected_integrity, *request),
+            Operation::NativeTaskV1 {
+                expected_generation,
+                expected_integrity,
+                request,
+            } => self.native_task(expected_generation, &expected_integrity, *request),
+            Operation::NativePlanV1 {
+                expected_generation,
+                expected_integrity,
+                request,
+            } => self.native_plan(expected_generation, &expected_integrity, *request),
+            Operation::NativeAdmissionV1 {
+                expected_generation,
+                expected_integrity,
+                request,
+            } => self.native_admission(expected_generation, &expected_integrity, *request),
             Operation::CheckedTransact {
                 mut check,
                 transaction,
@@ -910,7 +1128,11 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 data,
             } => {
                 self.revalidate()?;
-                precondition(&self.view.snapshot, expected_generation, &expected_integrity)?;
+                precondition(
+                    &self.view.snapshot,
+                    expected_generation,
+                    &expected_integrity,
+                )?;
                 next.snapshot.data = data;
                 "rewrite_snapshot"
             }
@@ -989,7 +1211,12 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                         "plan publication requires same-phase targets".into(),
                     ));
                 }
-                baley::plan::persistence::validate_old_document(&self.view.snapshot.data, phase, plan, change.expected.bytes.as_deref())?;
+                baley::plan::persistence::validate_old_document(
+                    &self.view.snapshot.data,
+                    phase,
+                    plan,
+                    change.expected.bytes.as_deref(),
+                )?;
                 plan_phase = Some(phase);
                 plan_documents.push((plan, change.bytes.clone()));
             }
@@ -1014,26 +1241,48 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     Some(super::transaction::IntentKind::VerificationHumanV1 { claim, .. })
                         if claim.request.submission.phase == uat_phase =>
                     {
-                        let rendered = baley::verification::projections::uat(&next.snapshot.data, uat_phase)?;
+                        let rendered =
+                            baley::verification::projections::uat(&next.snapshot.data, uat_phase)?;
                         if rendered.map(String::into_bytes).as_ref() != Some(&change.bytes) {
-                            return Err(Error::Invalid("UAT participant differs from the native render".into()));
+                            return Err(Error::Invalid(
+                                "UAT participant differs from the native render".into(),
+                            ));
                         }
                     }
-                    _ => return Err(Error::Invalid("UAT.md needs its human result intent".into())),
+                    _ => {
+                        return Err(Error::Invalid(
+                            "UAT.md needs its human result intent".into(),
+                        ));
+                    }
                 }
             }
             let projection = super::filesystem::projection_target(&change.target);
             if projection.is_some() {
                 match &verification_claim {
                     // Completion installs exactly its own rendered projections.
-                    Some(super::transaction::IntentKind::VerificationCompleteV1 { claim, .. }) => {
+                    Some(super::transaction::IntentKind::VerificationCompleteV1 {
+                        claim, ..
+                    }) => {
                         let installed = baley::verification::completion::installed(claim)?;
-                        if installed.iter().find(|(target, _)| *target == change.target).map(|(_, bytes)| bytes) != Some(&change.bytes) {
-                            return Err(Error::Invalid("projection participant differs from the completion render".into()));
+                        if installed
+                            .iter()
+                            .find(|(target, _)| *target == change.target)
+                            .map(|(_, bytes)| bytes)
+                            != Some(&change.bytes)
+                        {
+                            return Err(Error::Invalid(
+                                "projection participant differs from the completion render".into(),
+                            ));
                         }
                     }
-                    None if change.target == "requirements" && requirements.is_none() => requirements = Some(change.clone()),
-                    _ => return Err(Error::Invalid("projection participant needs its owning intent".into())),
+                    None if change.target == "requirements" && requirements.is_none() => {
+                        requirements = Some(change.clone())
+                    }
+                    _ => {
+                        return Err(Error::Invalid(
+                            "projection participant needs its owning intent".into(),
+                        ));
+                    }
                 }
             }
             if !caller_target(&change.target)? {
@@ -1076,11 +1325,19 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             if let Some(change) = &requirements
                 && change.expected != preimage
             {
-                return Err(Error::Conflict("pending participant changed: requirements".into()));
+                return Err(Error::Conflict(
+                    "pending participant changed: requirements".into(),
+                ));
             }
             let seeded = baley::plan::persistence::seeded_requirements(
-                &self.view.snapshot.data, &next.snapshot.data, phase, preimage.bytes.as_deref())?;
-            if requirements.as_ref().map(|c| c.bytes.as_slice()) != seeded.as_ref().map(|(bytes, _)| bytes.as_slice()) {
+                &self.view.snapshot.data,
+                &next.snapshot.data,
+                phase,
+                preimage.bytes.as_deref(),
+            )?;
+            if requirements.as_ref().map(|c| c.bytes.as_slice())
+                != seeded.as_ref().map(|(bytes, _)| bytes.as_slice())
+            {
                 return Err(Error::Invalid("requirements-projection: REQUIREMENTS.md participant differs from seeding the observed preimage".into()));
             }
             let seeded_ids = seeded.map(|(_, ids)| ids);
@@ -1121,10 +1378,12 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             operation_name,
             if let Some(intent) = verification_claim {
                 intent
-            } else { plan_intent.unwrap_or(match context_phase {
-                Some(phase) => super::transaction::IntentKind::ContextPublication { phase },
-                None => super::transaction::IntentKind::Store,
-            }) },
+            } else {
+                plan_intent.unwrap_or(match context_phase {
+                    Some(phase) => super::transaction::IntentKind::ContextPublication { phase },
+                    None => super::transaction::IntentKind::Store,
+                })
+            },
         )
     }
 
@@ -1132,16 +1391,30 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     /// source names its claim kind. The claim is recomputed on the committing
     /// snapshot, root, source and installed plans included, and a differing
     /// claim, transaction identity or fingerprint is a conflict, never a write.
-    fn verification_claim(&mut self, transaction: &super::transaction::Transaction) -> Result<Option<super::transaction::IntentKind>> {
-        use baley::verification::{completion, human, verdicts, waivers};
+    fn verification_claim(
+        &mut self,
+        transaction: &super::transaction::Transaction,
+    ) -> Result<Option<super::transaction::IntentKind>> {
         use super::transaction::{IntentKind, Transaction};
-        let Some(record) = transaction.decisions.iter().find(|d| matches!(d.origin.source.as_str(),
-            verdicts::SCHEMA | waivers::SCHEMA | human::SCHEMA | completion::SCHEMA)) else {
+        use baley::verification::{completion, human, verdicts, waivers};
+        let Some(record) = transaction.decisions.iter().find(|d| {
+            matches!(
+                d.origin.source.as_str(),
+                verdicts::SCHEMA | waivers::SCHEMA | human::SCHEMA | completion::SCHEMA
+            )
+        }) else {
             return Ok(None);
         };
-        let external: Vec<_> = transaction.external.iter().map(|c| c.target.as_str()).collect();
+        let external: Vec<_> = transaction
+            .external
+            .iter()
+            .map(|c| c.target.as_str())
+            .collect();
         let encoded_claim = match &record.decision {
-            model::Decision::Gate { evidence: model::Evidence::Text(encoded), .. } => encoded,
+            model::Decision::Gate {
+                evidence: model::Evidence::Text(encoded),
+                ..
+            } => encoded,
             _ => return Err(Error::Invalid("verification claim encoding invalid".into())),
         };
         let expected_external: Vec<String> = match record.origin.source.as_str() {
@@ -1151,166 +1424,363 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             }
             completion::SCHEMA => {
                 let claim: completion::Claim = serde_json::from_str(encoded_claim)?;
-                completion::installed(&claim)?.into_iter().map(|(target, _)| target).collect()
+                completion::installed(&claim)?
+                    .into_iter()
+                    .map(|(target, _)| target)
+                    .collect()
             }
             _ => vec![],
         };
-        if transaction.decisions.len() != 1 || !transaction.items.is_empty() || external != expected_external {
-            return Err(Error::Invalid("verification claim transaction carries exactly one claim and its own participants".into()));
+        if transaction.decisions.len() != 1
+            || !transaction.items.is_empty()
+            || external != expected_external
+        {
+            return Err(Error::Invalid(
+                "verification claim transaction carries exactly one claim and its own participants"
+                    .into(),
+            ));
         }
-        let model::Decision::Gate { evidence: model::Evidence::Text(encoded), .. } = &record.decision else {
+        let model::Decision::Gate {
+            evidence: model::Evidence::Text(encoded),
+            ..
+        } = &record.decision
+        else {
             return Err(Error::Invalid("verification claim encoding invalid".into()));
         };
         let root_binding = self.observed[STATE].directory_identity.clone();
         let data = &self.view.snapshot.data;
         let same = |expected: Transaction| -> Result<bool> {
-            Ok(transaction.fingerprint()? == expected.fingerprint()? && transaction.id == expected.id)
+            Ok(transaction.fingerprint()? == expected.fingerprint()?
+                && transaction.id == expected.id)
         };
         let intent = match record.origin.source.as_str() {
             verdicts::SCHEMA => {
                 let claim: verdicts::Claim = serde_json::from_str(encoded)?;
-                let current = verdicts::prepare(&claim.root, data, claim.patch.clone(), &mut *self.process)?;
-                if claim != current || !same(verdicts::transaction(data, &claim)?)? || claim.root_binding != root_binding {
-                    return Err(Error::Conflict("verification claim changed at committing snapshot".into()));
+                let current =
+                    verdicts::prepare(&claim.root, data, claim.patch.clone(), &mut *self.process)?;
+                if claim != current
+                    || !same(verdicts::transaction(data, &claim)?)?
+                    || claim.root_binding != root_binding
+                {
+                    return Err(Error::Conflict(
+                        "verification claim changed at committing snapshot".into(),
+                    ));
                 }
-                IntentKind::VerificationSubmitV1 { root_binding, claim: Box::new(claim) }
+                IntentKind::VerificationSubmitV1 {
+                    root_binding,
+                    claim: Box::new(claim),
+                }
             }
             waivers::SCHEMA => {
                 let claim: waivers::Claim = serde_json::from_str(encoded)?;
-                let current = waivers::prepare(&claim.root, data, claim.request.clone(), &mut *self.process)?;
-                if claim != current || !same(waivers::transaction(data, &claim)?)? || claim.root_binding != root_binding {
-                    return Err(Error::Conflict("waiver claim changed at committing snapshot".into()));
+                let current =
+                    waivers::prepare(&claim.root, data, claim.request.clone(), &mut *self.process)?;
+                if claim != current
+                    || !same(waivers::transaction(data, &claim)?)?
+                    || claim.root_binding != root_binding
+                {
+                    return Err(Error::Conflict(
+                        "waiver claim changed at committing snapshot".into(),
+                    ));
                 }
-                IntentKind::VerificationWaiverV1 { root_binding, claim: Box::new(claim) }
+                IntentKind::VerificationWaiverV1 {
+                    root_binding,
+                    claim: Box::new(claim),
+                }
             }
             human::SCHEMA => {
                 let claim: human::Claim = serde_json::from_str(encoded)?;
                 let current = human::prepare(&claim.root, data, claim.request.clone())?;
-                let expected = transaction.external.first().map(|c| c.expected.clone())
-                    .ok_or_else(|| Error::Invalid("human result lacks its UAT participant".into()))?;
-                if claim != current || !same(human::transaction(data, &claim, expected)?)? || claim.root_binding != root_binding {
-                    return Err(Error::Conflict("human result claim changed at committing snapshot".into()));
+                let expected = transaction
+                    .external
+                    .first()
+                    .map(|c| c.expected.clone())
+                    .ok_or_else(|| {
+                        Error::Invalid("human result lacks its UAT participant".into())
+                    })?;
+                if claim != current
+                    || !same(human::transaction(data, &claim, expected)?)?
+                    || claim.root_binding != root_binding
+                {
+                    return Err(Error::Conflict(
+                        "human result claim changed at committing snapshot".into(),
+                    ));
                 }
-                IntentKind::VerificationHumanV1 { root_binding, claim: Box::new(claim) }
+                IntentKind::VerificationHumanV1 {
+                    root_binding,
+                    claim: Box::new(claim),
+                }
             }
             completion::SCHEMA => {
                 let claim: completion::Claim = serde_json::from_str(encoded)?;
-                let current = completion::prepare(&claim.root, data, claim.request.clone(), &mut *self.process)?;
-                let expected: Vec<_> = transaction.external.iter().map(|c| c.expected.clone()).collect();
-                if claim != current || !same(completion::transaction(data, &claim, &expected)?)? || claim.root_binding != root_binding {
-                    return Err(Error::Conflict("completion claim changed at committing snapshot".into()));
+                let current = completion::prepare(
+                    &claim.root,
+                    data,
+                    claim.request.clone(),
+                    &mut *self.process,
+                )?;
+                let expected: Vec<_> = transaction
+                    .external
+                    .iter()
+                    .map(|c| c.expected.clone())
+                    .collect();
+                if claim != current
+                    || !same(completion::transaction(data, &claim, &expected)?)?
+                    || claim.root_binding != root_binding
+                {
+                    return Err(Error::Conflict(
+                        "completion claim changed at committing snapshot".into(),
+                    ));
                 }
-                IntentKind::VerificationCompleteV1 { root_binding, claim: Box::new(claim) }
+                IntentKind::VerificationCompleteV1 {
+                    root_binding,
+                    claim: Box::new(claim),
+                }
             }
             _ => unreachable!("matched claim sources"),
         };
         Ok(Some(intent))
     }
 
-    fn verification_run(&mut self, generation: u64, integrity: &str, record: baley::verification::runner::Record) -> Result<View> {
+    fn verification_run(
+        &mut self,
+        generation: u64,
+        integrity: &str,
+        record: baley::verification::runner::Record,
+    ) -> Result<View> {
         use baley::verification::runner;
         let binding = self.observed[STATE].directory_identity.clone();
-        if let Some(prior) = runner::records(&self.view.snapshot.data)?.iter().find(|r| r.id == record.id) {
-            return if prior == &record && model::retained(&self.view.decisions, &runner::decision(prior)?) { Ok(self.view.as_ref().clone()) }
-                else { Err(Error::Invalid("verification run request reused".into())) };
+        if let Some(prior) = runner::records(&self.view.snapshot.data)?
+            .iter()
+            .find(|r| r.id == record.id)
+        {
+            return if prior == &record
+                && model::retained(&self.view.decisions, &runner::decision(prior)?)
+            {
+                Ok(self.view.as_ref().clone())
+            } else {
+                Err(Error::Invalid("verification run request reused".into()))
+            };
         }
         self.check_expected(generation, integrity)?;
         runner::reobserve_launch(&self.view.snapshot.data, &record, &mut *self.process)?;
         let mut next = self.view.as_ref().clone();
         next.snapshot.data = runner::contribute(&next.snapshot.data, &binding, &record)?;
         next.decisions.push(runner::decision(&record)?);
-        self.persist(next, self.view.snapshot.operations.clone(), Vec::new(), "verification_run",
-            super::transaction::IntentKind::VerificationRunV1 { record: Box::new(record), root_binding: binding })
+        self.persist(
+            next,
+            self.view.snapshot.operations.clone(),
+            Vec::new(),
+            "verification_run",
+            super::transaction::IntentKind::VerificationRunV1 {
+                record: Box::new(record),
+                root_binding: binding,
+            },
+        )
     }
 
-    fn verification(&mut self, generation: u64, integrity: &str, request: baley::verification::persistence::Request) -> Result<View> {
+    fn verification(
+        &mut self,
+        generation: u64,
+        integrity: &str,
+        request: baley::verification::persistence::Request,
+    ) -> Result<View> {
         use baley::verification::{inputs, persistence};
         let root_binding = self.observed[STATE].directory_identity.clone();
-        if let Some(prior) = persistence::replay(&self.view.snapshot.data,
-            request.attempt.inputs.basis.phase, &request.attempt.request_id)? {
-            if prior != request.attempt || !model::retained(&self.view.decisions, &persistence::decision(&prior)?) {
-                return Err(Error::Invalid("verification replay differs from retained attempt or journal".into()));
+        if let Some(prior) = persistence::replay(
+            &self.view.snapshot.data,
+            request.attempt.inputs.basis.phase,
+            &request.attempt.request_id,
+        )? {
+            if prior != request.attempt
+                || !model::retained(&self.view.decisions, &persistence::decision(&prior)?)
+            {
+                return Err(Error::Invalid(
+                    "verification replay differs from retained attempt or journal".into(),
+                ));
             }
             return Ok(self.view.as_ref().clone());
         }
         self.check_expected(generation, integrity)?;
-        let current = inputs::observe(&request.root, &self.view.snapshot.data, request.attempt.inputs.basis.phase, &mut *self.process)?;
-        if current != request.attempt.inputs { return Err(Error::Conflict("verification inputs changed at committing snapshot".into())); }
+        let current = inputs::observe(
+            &request.root,
+            &self.view.snapshot.data,
+            request.attempt.inputs.basis.phase,
+            &mut *self.process,
+        )?;
+        if current != request.attempt.inputs {
+            return Err(Error::Conflict(
+                "verification inputs changed at committing snapshot".into(),
+            ));
+        }
         let mut next = self.view.as_ref().clone();
         next.snapshot.data = persistence::contribute(&next.snapshot.data, &root_binding, &request)?;
-        next.decisions.push(persistence::decision(&request.attempt)?);
-        self.persist(next, self.view.snapshot.operations.clone(), Vec::new(), "verification",
-            super::transaction::IntentKind::VerificationV1 { request: Box::new(request), root_binding })
+        next.decisions
+            .push(persistence::decision(&request.attempt)?);
+        self.persist(
+            next,
+            self.view.snapshot.operations.clone(),
+            Vec::new(),
+            "verification",
+            super::transaction::IntentKind::VerificationV1 {
+                request: Box::new(request),
+                root_binding,
+            },
+        )
     }
 
-    fn native_task(&mut self, generation: u64, integrity: &str, request: baley::execution::history::Request) -> Result<View> {
+    fn native_task(
+        &mut self,
+        generation: u64,
+        integrity: &str,
+        request: baley::execution::history::Request,
+    ) -> Result<View> {
         use baley::execution::history;
         let root_binding = self.observed[STATE].directory_identity.clone();
         if let Some(record) = history::replay(&self.view.snapshot.data, &request)? {
-            if !history::decisions(&record)?.iter().all(|decision| model::retained(&self.view.decisions, decision)) {
-                return Err(Error::Invalid("native task receipt lacks its immutable event".into()));
+            if !history::decisions(&record)?
+                .iter()
+                .all(|decision| model::retained(&self.view.decisions, decision))
+            {
+                return Err(Error::Invalid(
+                    "native task receipt lacks its immutable event".into(),
+                ));
             }
             return Ok(self.view.as_ref().clone());
         }
         self.check_expected(generation, integrity)?;
-        let (data, record) = history::contribute(&self.view.snapshot.data, &root_binding, &request, &mut *self.process)?;
+        let (data, record) = history::contribute(
+            &self.view.snapshot.data,
+            &root_binding,
+            &request,
+            &mut *self.process,
+        )?;
         let mut next = self.view.as_ref().clone();
         next.snapshot.data = data;
         next.decisions.extend(history::decisions(&record)?);
         let participants = self.native_summary_participants(&next, request.task.phase)?;
-        self.persist(next, self.view.snapshot.operations.clone(), participants, "native_task",
-            super::transaction::IntentKind::NativeTaskV1 { request: Box::new(request), root_binding })
+        self.persist(
+            next,
+            self.view.snapshot.operations.clone(),
+            participants,
+            "native_task",
+            super::transaction::IntentKind::NativeTaskV1 {
+                request: Box::new(request),
+                root_binding,
+            },
+        )
     }
 
-    fn native_plan(&mut self, generation: u64, integrity: &str, request: baley::execution::history::PlanRequest) -> Result<View> {
+    fn native_plan(
+        &mut self,
+        generation: u64,
+        integrity: &str,
+        request: baley::execution::history::PlanRequest,
+    ) -> Result<View> {
         use baley::execution::history;
         let root_binding = self.observed[STATE].directory_identity.clone();
         if let Some(record) = history::plan_replay(&self.view.snapshot.data, &request)? {
             if !model::retained(&self.view.decisions, &history::plan_decision(&record)?) {
-                return Err(Error::Invalid("native plan receipt lacks its immutable event".into()));
+                return Err(Error::Invalid(
+                    "native plan receipt lacks its immutable event".into(),
+                ));
             }
             return Ok(self.view.as_ref().clone());
         }
         self.check_expected(generation, integrity)?;
-        let (data, record) = history::plan_contribute(&self.view.snapshot.data, &root_binding, &request)?;
+        let (data, record) =
+            history::plan_contribute(&self.view.snapshot.data, &root_binding, &request)?;
         let mut next = self.view.as_ref().clone();
         next.snapshot.data = data;
         next.decisions.push(history::plan_decision(&record)?);
-        if let Some(outcome) = plan_routing_outcome(&self.view.snapshot.data, &self.view.decisions, &record) {
+        if let Some(outcome) =
+            plan_routing_outcome(&self.view.snapshot.data, &self.view.decisions, &record)
+        {
             next.decisions.push(outcome);
         }
         let participants = self.native_summary_participants(&next, request.plan.phase)?;
-        self.persist(next, self.view.snapshot.operations.clone(), participants, "native_plan",
-            super::transaction::IntentKind::NativePlanV1 { request: Box::new(request), root_binding })
+        self.persist(
+            next,
+            self.view.snapshot.operations.clone(),
+            participants,
+            "native_plan",
+            super::transaction::IntentKind::NativePlanV1 {
+                request: Box::new(request),
+                root_binding,
+            },
+        )
     }
 
-    fn native_summary_participants(&mut self, next: &View, phase: u32) -> Result<Vec<super::transaction::Participant>> {
+    fn native_summary_participants(
+        &mut self,
+        next: &View,
+        phase: u32,
+    ) -> Result<Vec<super::transaction::Participant>> {
         let key = baley::execution::render::NATIVE_SUMMARIES;
         let name = phase.to_string();
-        if next.snapshot.data[key]["phases"][&name] == self.view.snapshot.data[key]["phases"][&name] { return Ok(vec![]); }
-        let bytes = next.snapshot.data[key]["phases"][&name].as_str()
-            .ok_or_else(|| Error::Invalid("native summary is absent".into()))?.as_bytes().to_vec();
+        if next.snapshot.data[key]["phases"][&name] == self.view.snapshot.data[key]["phases"][&name]
+        {
+            return Ok(vec![]);
+        }
+        let bytes = next.snapshot.data[key]["phases"][&name]
+            .as_str()
+            .ok_or_else(|| Error::Invalid("native summary is absent".into()))?
+            .as_bytes()
+            .to_vec();
         let target = format!("phase-summary:{phase}");
-        Ok(vec![super::transaction::Participant { expected: self.storage.read(&target)?, target, bytes }])
+        Ok(vec![super::transaction::Participant {
+            expected: self.storage.read(&target)?,
+            target,
+            bytes,
+        }])
     }
 
-    fn native_admission(&mut self, generation:u64, integrity:&str, request:baley::execution::admission::Request) -> Result<View> {
+    fn native_admission(
+        &mut self,
+        generation: u64,
+        integrity: &str,
+        request: baley::execution::admission::Request,
+    ) -> Result<View> {
         use baley::execution::admission;
-        let root_binding=self.observed[STATE].directory_identity.clone();
-        if let Some(record)=admission::replay(&self.view.snapshot.data,&request)? {
+        let root_binding = self.observed[STATE].directory_identity.clone();
+        if let Some(record) = admission::replay(&self.view.snapshot.data, &request)? {
             if !model::retained(&self.view.decisions, &admission::decision(&record)?) {
-                return Err(Error::Invalid("native admission receipt lacks its immutable event".into()));
+                return Err(Error::Invalid(
+                    "native admission receipt lacks its immutable event".into(),
+                ));
             }
             return Ok(self.view.as_ref().clone());
         }
-        self.check_expected(generation,integrity)?;
-        let inventory=self.storage.read(&format!("phase-plan-inventory:{}",request.contract.phase))?;
-        let parsed:baley::plan::inventory::Inventory=serde_json::from_slice(inventory.bytes.as_deref()
-            .ok_or_else(||Error::Invalid("missing plan inventory".into()))?)?;
-        let (data,record)=admission::contribute(&self.view.snapshot.data,&parsed.documents,&root_binding,&request)?;
-        let mut next=self.view.as_ref().clone(); next.snapshot.data=data; next.decisions.push(admission::decision(&record)?);
-        self.persist(next,self.view.snapshot.operations.clone(),Vec::new(),"native_admission",
-            super::transaction::IntentKind::NativeAdmissionV1 {request:Box::new(request),root_binding,inventory})
+        self.check_expected(generation, integrity)?;
+        let inventory = self
+            .storage
+            .read(&format!("phase-plan-inventory:{}", request.contract.phase))?;
+        let parsed: baley::plan::inventory::Inventory = serde_json::from_slice(
+            inventory
+                .bytes
+                .as_deref()
+                .ok_or_else(|| Error::Invalid("missing plan inventory".into()))?,
+        )?;
+        let (data, record) = admission::contribute(
+            &self.view.snapshot.data,
+            &parsed.documents,
+            &root_binding,
+            &request,
+        )?;
+        let mut next = self.view.as_ref().clone();
+        next.snapshot.data = data;
+        next.decisions.push(admission::decision(&record)?);
+        self.persist(
+            next,
+            self.view.snapshot.operations.clone(),
+            Vec::new(),
+            "native_admission",
+            super::transaction::IntentKind::NativeAdmissionV1 {
+                request: Box::new(request),
+                root_binding,
+                inventory,
+            },
+        )
     }
 
     fn boundary_v1(
@@ -1331,14 +1801,28 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             snapshot: &self.view.snapshot,
         })?;
         require_current_execution(&self.view).map_err(boundary_error)?;
-        let native_inventory=if let BoundaryChange::Dispatch {dispatch,..}=&change
-            && baley::plan::persistence::saved(&self.view.snapshot.data,dispatch.phase)?.is_some_and(|o|!o.publications.is_empty())
+        let native_inventory = if let BoundaryChange::Dispatch { dispatch, .. } = &change
+            && baley::plan::persistence::saved(&self.view.snapshot.data, dispatch.phase)?
+                .is_some_and(|o| !o.publications.is_empty())
         {
-            let observed=self.storage.read(&format!("phase-plan-inventory:{}",dispatch.phase))?;
-            let inventory:baley::plan::inventory::Inventory=serde_json::from_slice(observed.bytes.as_deref().ok_or_else(||Error::Invalid("missing native inventory".into()))?)?;
-            baley::plan::persistence::require_execution_ready(&self.view.snapshot.data,dispatch.phase,&inventory.documents)?;
+            let observed = self
+                .storage
+                .read(&format!("phase-plan-inventory:{}", dispatch.phase))?;
+            let inventory: baley::plan::inventory::Inventory = serde_json::from_slice(
+                observed
+                    .bytes
+                    .as_deref()
+                    .ok_or_else(|| Error::Invalid("missing native inventory".into()))?,
+            )?;
+            baley::plan::persistence::require_execution_ready(
+                &self.view.snapshot.data,
+                dispatch.phase,
+                &inventory.documents,
+            )?;
             Some(observed)
-        } else {None};
+        } else {
+            None
+        };
         let (fingerprint, id) = match boundary_step(
             &self.view,
             operation_id,
@@ -1385,7 +1869,9 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let mut next = self.view.as_ref().clone();
         let mut participants = Vec::new();
         let kind = match change {
-            BoundaryChange::Issue { .. } => return Err(Error::Invalid("nested dispatch issue".into())),
+            BoundaryChange::Issue { .. } => {
+                return Err(Error::Invalid("nested dispatch issue".into()));
+            }
             BoundaryChange::FinalizeRisk {
                 phase,
                 requirements,
@@ -1436,8 +1922,15 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     super::model::stamped_at(),
                 )?;
                 match native_inventory {
-                    Some(inventory)=>super::transaction::IntentKind::NativeExecutionDispatchV1 {phase,decision_id:id.clone(),inventory},
-                    None=>super::transaction::IntentKind::ExecutionDispatchV1 {phase,decision_id:id.clone()},
+                    Some(inventory) => super::transaction::IntentKind::NativeExecutionDispatchV1 {
+                        phase,
+                        decision_id: id.clone(),
+                        inventory,
+                    },
+                    None => super::transaction::IntentKind::ExecutionDispatchV1 {
+                        phase,
+                        decision_id: id.clone(),
+                    },
                 }
             }
             BoundaryChange::Reissue {
@@ -1451,26 +1944,41 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                         != (Receipt::Dispatch {
                             dispatch_id: issue_dispatch_id.clone(),
                             prompt_bytes: None,
-                            prompt_digest: if issue.is_some() { String::new() } else { dispatch.prompt_digest.clone() },
+                            prompt_digest: if issue.is_some() {
+                                String::new()
+                            } else {
+                                dispatch.prompt_digest.clone()
+                            },
                         })
                     || dispatch.issue_digest.len() != 64
-                    || !dispatch.issue_digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    || (!dispatch.prompt_digest.is_empty() && crate::store::model::digest(dispatch.prompt.as_bytes()) != dispatch.prompt_digest)
+                    || !dispatch
+                        .issue_digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit())
+                    || (!dispatch.prompt_digest.is_empty()
+                        && crate::store::model::digest(dispatch.prompt.as_bytes())
+                            != dispatch.prompt_digest)
                 {
-                    return Err(Error::Invalid("dispatch re-issue boundary identity mismatch".into()));
+                    return Err(Error::Invalid(
+                        "dispatch re-issue boundary identity mismatch".into(),
+                    ));
                 }
                 let mut execution = execution_snapshot(&next.snapshot.data)?;
                 let active = execution
                     .occurrences
                     .get_mut(&phase.to_string())
                     .and_then(|occurrence| occurrence.active.as_mut())
-                    .ok_or_else(|| Error::Invalid("dispatch re-issue lacks an active dispatch".into()))?;
+                    .ok_or_else(|| {
+                        Error::Invalid("dispatch re-issue lacks an active dispatch".into())
+                    })?;
                 let mut expected = active.clone();
                 expected.prompt = dispatch.prompt.clone();
                 expected.prompt_digest = dispatch.prompt_digest.clone();
                 expected.issue_digest = dispatch.issue_digest.clone();
                 if expected != dispatch {
-                    return Err(Error::Invalid("dispatch re-issue changed admitted identity".into()));
+                    return Err(Error::Invalid(
+                        "dispatch re-issue changed admitted identity".into(),
+                    ));
                 }
                 *active = dispatch;
                 install_execution(&mut next.snapshot.data, execution)?;
@@ -1490,7 +1998,10 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 let BoundaryScope::Execution { phase } = decision.scope else {
                     return Err(Error::Invalid("patch lacks execution scope".into()));
                 };
-                baley::plan::persistence::require_legacy_execution(&self.view.snapshot.data,phase)?;
+                baley::plan::persistence::require_legacy_execution(
+                    &self.view.snapshot.data,
+                    phase,
+                )?;
                 if !patch_boundary_valid(&decision, &patch, render_version, complete_phase) {
                     return Err(Error::Invalid("invalid execution patch operation".into()));
                 }
@@ -1518,11 +2029,9 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                     .ok_or_else(|| {
                         Error::Invalid("accepted risk material lacks dispatch base".into())
                     })?;
-                let basis = baley::rail::risk::ExecutionBasis::from_accepted(
-                    &active,
-                    &application.outcome,
-                )
-                .map_err(rail_error)?;
+                let basis =
+                    baley::rail::risk::ExecutionBasis::from_accepted(&active, &application.outcome)
+                        .map_err(rail_error)?;
                 next.snapshot.data =
                     baley::rail::risk::project_execution_basis(&application.data, &basis)
                         .map_err(rail_error)?;
@@ -1544,7 +2053,9 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 install_execution(&mut next.snapshot.data, execution.clone())?;
                 // P9: a schema-1 patch answers the dispatch, so the routing
                 // decision's outcome edge names the boundary record that took it.
-                if let Some(outcome) = routing_outcome(&self.view.decisions, &patch.dispatch_id, &id) {
+                if let Some(outcome) =
+                    routing_outcome(&self.view.decisions, &patch.dispatch_id, &id)
+                {
                     next.decisions.push(outcome);
                 }
                 let target = format!("phase-summary:{phase}");
@@ -1564,19 +2075,28 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         };
         if let Some((issue_id, issue)) = issue {
             let BoundaryScope::Execution { phase } = decision.scope else {
-                return Err(Error::Invalid("dispatch issue lacks execution scope".into()));
+                return Err(Error::Invalid(
+                    "dispatch issue lacks execution scope".into(),
+                ));
             };
             let mut execution = execution_snapshot(&next.snapshot.data)?;
-            let occurrence = execution.occurrences.get_mut(&phase.to_string())
+            let occurrence = execution
+                .occurrences
+                .get_mut(&phase.to_string())
                 .ok_or_else(|| Error::Invalid("dispatch issue lacks occurrence".into()))?;
-            let active = occurrence.active.as_ref()
+            let active = occurrence
+                .active
+                .as_ref()
                 .ok_or_else(|| Error::Invalid("dispatch issue lacks active dispatch".into()))?;
-            if issue.binding != baley::execution::dispatch::issue_binding(&next.snapshot.data, active)?
+            if issue.binding
+                != baley::execution::dispatch::issue_binding(&next.snapshot.data, active)?
                 || issue.issue_digest != baley::execution::dispatch::binding_digest(&issue.binding)?
                 || issue.issue_digest != active.issue_digest
                 || issue.operational["dispatch_id"] != issue_id
                 || decision.subject_id.as_ref() != Some(&issue_id)
-            { return Err(Error::Invalid("dispatch issue binding mismatch".into())); }
+            {
+                return Err(Error::Invalid("dispatch issue binding mismatch".into()));
+            }
             if occurrence.issues.insert(issue_id, issue).is_some() {
                 return Err(Error::Conflict("dispatch issue already exists".into()));
             }
@@ -1631,7 +2151,10 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         if let Some(view) = self.execution_replay(operation_id, &fingerprint, decision.phase)? {
             return Ok(view);
         }
-        baley::plan::persistence::require_legacy_execution(&self.view.snapshot.data,decision.phase)?;
+        baley::plan::persistence::require_legacy_execution(
+            &self.view.snapshot.data,
+            decision.phase,
+        )?;
         let admission = self.boundary_admission(&decision)?;
         if matches!(admission, BoundaryAdmission::Replay) {
             self.revalidate()?;
@@ -1656,7 +2179,8 @@ impl<S: Storage, P: Policy> Writer<S, P> {
                 active: None,
                 plans: Vec::new(),
                 terminal: None,
-                receipts: BTreeMap::new(), issues: BTreeMap::new(),
+                receipts: BTreeMap::new(),
+                issues: BTreeMap::new(),
             });
         let (occurrence, _) = baley::execution::dispatch::admit_dispatch(occurrence, dispatch)
             .map_err(|error| Error::Conflict(error.to_string()))?;
@@ -1733,12 +2257,9 @@ impl<S: Storage, P: Policy> Writer<S, P> {
         let application =
             baley::execution::patch::apply_executor_patch(&self.view.snapshot.data, &patch)
                 .map_err(|error| Error::Invalid(error.to_string()))?;
-        let application = baley::execution::patch::attach_commit_paths(
-            application,
-            &commit_paths,
-            &staged_paths,
-        )
-        .map_err(|error| Error::Invalid(error.to_string()))?;
+        let application =
+            baley::execution::patch::attach_commit_paths(application, &commit_paths, &staged_paths)
+                .map_err(|error| Error::Invalid(error.to_string()))?;
         if application.disposition == baley::execution::patch::ApplicationDisposition::Replay {
             self.revalidate()?;
             return Ok(self.view.as_ref().clone());
@@ -1843,7 +2364,12 @@ impl<S: Storage, P: Policy> Writer<S, P> {
     }
 
     fn boundary_admission(&self, decision: &BoundaryDecision) -> Result<BoundaryAdmission> {
-        boundary_admission(&self.view.decisions, decision, self.next_generation()?, model::stamped_at())
+        boundary_admission(
+            &self.view.decisions,
+            decision,
+            self.next_generation()?,
+            model::stamped_at(),
+        )
     }
 
     fn persist_terminal(&mut self, admission: BoundaryAdmission, phase: u32) -> Result<View> {
@@ -1913,7 +2439,8 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             .map_err(rail_error)?
             .remove(&record.observation.key().map_err(rail_error)?)
         {
-            return if old == record && model::retained(&self.view.decisions, &rail_record(&record)?) {
+            return if old == record && model::retained(&self.view.decisions, &rail_record(&record)?)
+            {
                 Ok(self.view.as_ref().clone())
             } else {
                 Err(Error::Conflict("rail request identity reused".into()))
@@ -1977,8 +2504,13 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             operation: operation_name,
             snapshot: &self.view.snapshot,
         })?;
-        let (next, participants) =
-            sealed(next, operations, participants, self.next_generation()?, &self.observed)?;
+        let (next, participants) = sealed(
+            next,
+            operations,
+            participants,
+            self.next_generation()?,
+            &self.observed,
+        )?;
         if let Err(error) = super::transaction::commit(
             &mut self.storage,
             &mut self.policy,
@@ -1996,11 +2528,21 @@ impl<S: Storage, P: Policy> Writer<S, P> {
             }
             return Err(error);
         }
-        let identity = self.storage.root().map(super::cache::identity).transpose()?;
+        let identity = self
+            .storage
+            .root()
+            .map(super::cache::identity)
+            .transpose()?;
         for name in [ITEMS, DECISIONS, STATE] {
             self.observed.insert(name.into(), self.storage.read(name)?);
         }
-        if identity != self.storage.root().map(super::cache::identity).transpose()? {
+        if identity
+            != self
+                .storage
+                .root()
+                .map(super::cache::identity)
+                .transpose()?
+        {
             return Err(Error::Conflict("store changed after commit".into()));
         }
         self.identity = identity;
@@ -2045,14 +2587,14 @@ pub fn rail_receipt_replays(
 ) -> Result<bool> {
     match saved {
         None => Ok(false),
-        Some(old) if old == record && model::retained(decisions, &rail_fact_record(record)?) => Ok(true),
+        Some(old) if old == record && model::retained(decisions, &rail_fact_record(record)?) => {
+            Ok(true)
+        }
         Some(_) => Err(Error::Conflict("receipt request identity reused".into())),
     }
 }
 
-pub fn rail_fact_record(
-    record: &baley::rail::receipts::RecordedFact,
-) -> Result<DecisionRecord> {
+pub fn rail_fact_record(record: &baley::rail::receipts::RecordedFact) -> Result<DecisionRecord> {
     // The process-crash target compiles the writer in its own module. Decode the
     // shared record's wire shape just as the boundary adapter does for evidence.
     Ok(serde_json::from_value(serde_json::to_value(
@@ -2099,7 +2641,11 @@ pub(crate) fn boundary_admission(
         })
         .count();
     if count >= BOUNDARY_LIMIT {
-        return Ok(BoundaryAdmission::Terminal(terminal_record(decision.phase, store_generation, at)?));
+        return Ok(BoundaryAdmission::Terminal(terminal_record(
+            decision.phase,
+            store_generation,
+            at,
+        )?));
     }
     Ok(BoundaryAdmission::Proceed(record))
 }
@@ -2150,7 +2696,12 @@ pub(crate) fn patch_boundary_valid(
         && decision.tool == BoundaryTool::BaleyApply
         && decision.subject_id.as_ref() == Some(&patch.dispatch_id)
         && (risk_pending
-            || matches!(&decision.receipt, Receipt::Compact { envelope: Envelope::Ok(_) }))
+            || matches!(
+                &decision.receipt,
+                Receipt::Compact {
+                    envelope: Envelope::Ok(_)
+                }
+            ))
         && (!complete_phase || patch.outcome == PlanDisposition::Complete)
 }
 
@@ -2185,20 +2736,26 @@ pub(crate) fn boundary_step(
     }
     decision.validate(false).map_err(boundary_error)?;
     if decision.is_native_refusal() && !matches!(change, BoundaryChange::Observe) {
-        return Err(Error::Invalid("native refusal must be an observation".into()));
+        return Err(Error::Invalid(
+            "native refusal must be an observation".into(),
+        ));
     }
     if operation_id.trim().is_empty() {
         return Err(Error::Invalid("empty operation identity".into()));
     }
-    let Some(fingerprint) = boundary_operation(&view.snapshot.operations, operation_id, decision, change)? else {
+    let Some(fingerprint) =
+        boundary_operation(&view.snapshot.operations, operation_id, decision, change)?
+    else {
         return Ok(BoundaryStep::Replay);
     };
     let id = decision.identity().map_err(boundary_error)?;
-    Ok(match scoped_admission(&view.decisions, &id, decision, change, store_generation, at)? {
-        ScopedAdmission::Replay => BoundaryStep::Replay,
-        ScopedAdmission::Terminal(record) => BoundaryStep::Terminal(record),
-        ScopedAdmission::Proceed => BoundaryStep::Proceed { fingerprint, id },
-    })
+    Ok(
+        match scoped_admission(&view.decisions, &id, decision, change, store_generation, at)? {
+            ScopedAdmission::Replay => BoundaryStep::Replay,
+            ScopedAdmission::Terminal(record) => BoundaryStep::Terminal(record),
+            ScopedAdmission::Proceed => BoundaryStep::Proceed { fingerprint, id },
+        },
+    )
 }
 
 /// The view a scope's terminal decision leaves: the same data and operations,
@@ -2220,7 +2777,8 @@ pub(crate) fn boundary_tail(
     store_generation: u64,
     at: Option<u64>,
 ) -> Result<(View, BTreeMap<String, String>)> {
-    next.decisions.push(record_v1(decision, store_generation, false, at)?);
+    next.decisions
+        .push(record_v1(decision, store_generation, false, at)?);
     model::validate_decisions(&next.decisions)?;
     let mut operations = next.snapshot.operations.clone();
     operations.insert(operation_id.to_owned(), fingerprint);
@@ -2254,7 +2812,12 @@ pub(crate) fn scoped_admission(
         model::Decision::BoundaryV1(value) if value.boundary.scope == decision.scope && !value.terminal && !value.boundary.is_native_refusal())).count();
     if !decision.is_native_refusal() && count >= BOUNDARY_LIMIT {
         let terminal = BoundaryV1::terminal(decision.scope.clone()).map_err(boundary_error)?;
-        return Ok(ScopedAdmission::Terminal(Box::new(record_v1(terminal, store_generation, true, at)?)));
+        return Ok(ScopedAdmission::Terminal(Box::new(record_v1(
+            terminal,
+            store_generation,
+            true,
+            at,
+        )?)));
     }
     Ok(ScopedAdmission::Proceed)
 }
@@ -2272,7 +2835,12 @@ pub(crate) enum Prior {
     Reused,
 }
 
-pub(crate) fn prior(view: &View, operation_id: &str, fingerprint: &str, phase: u32) -> Result<Prior> {
+pub(crate) fn prior(
+    view: &View,
+    operation_id: &str,
+    fingerprint: &str,
+    phase: u32,
+) -> Result<Prior> {
     if terminal_boundary(&view.decisions, phase).is_some() && !operation_id.trim().is_empty() {
         return Ok(Prior::Replay);
     }
@@ -2308,7 +2876,12 @@ pub(crate) fn transact(
 ) -> Result<Vec<super::transaction::Participant>> {
     operations.insert(transaction.id, fingerprint);
     next.items.extend(transaction.items);
-    next.decisions.extend(transaction.decisions.into_iter().map(super::decisions::normalize));
+    next.decisions.extend(
+        transaction
+            .decisions
+            .into_iter()
+            .map(super::decisions::normalize),
+    );
     model::validate_items(&next.items)?;
     model::validate_decisions(&next.decisions)?;
     if let Some(data) = transaction.snapshot {
@@ -2336,7 +2909,13 @@ pub(crate) fn sealed(
 ) -> Result<(View, Vec<super::transaction::Participant>)> {
     let items = model::render_lines(&next.items)?;
     let decisions = model::render_lines(&next.decisions)?;
-    let (snapshot, state) = Snapshot::sealed(generation, &items, &decisions, next.snapshot.data, operations)?;
+    let (snapshot, state) = Snapshot::sealed(
+        generation,
+        &items,
+        &decisions,
+        next.snapshot.data,
+        operations,
+    )?;
     next.snapshot = snapshot;
     for (name, bytes) in [(ITEMS, items), (DECISIONS, decisions), (STATE, state)] {
         participants.push(super::transaction::Participant {
@@ -2348,7 +2927,10 @@ pub(crate) fn sealed(
     Ok((next, participants))
 }
 
-pub(crate) fn append_admitted_boundary(next: &mut View, admission: BoundaryAdmission) -> Result<()> {
+pub(crate) fn append_admitted_boundary(
+    next: &mut View,
+    admission: BoundaryAdmission,
+) -> Result<()> {
     let BoundaryAdmission::Proceed(record) = admission else {
         return Err(Error::Invalid("boundary decision was not admitted".into()));
     };
@@ -2356,7 +2938,11 @@ pub(crate) fn append_admitted_boundary(next: &mut View, admission: BoundaryAdmis
     model::validate_decisions(&next.decisions)
 }
 
-fn boundary_record(decision: &BoundaryDecision, store_generation: u64, at: Option<u64>) -> Result<DecisionRecord> {
+fn boundary_record(
+    decision: &BoundaryDecision,
+    store_generation: u64,
+    at: Option<u64>,
+) -> Result<DecisionRecord> {
     if decision.phase == 0 {
         return Err(Error::Invalid("boundary phase must be positive".into()));
     }
@@ -2493,7 +3079,8 @@ pub fn admit_boundary_dispatch(
             active: None,
             plans: Vec::new(),
             terminal: None,
-            receipts: BTreeMap::new(), issues: BTreeMap::new(),
+            receipts: BTreeMap::new(),
+            issues: BTreeMap::new(),
         });
     let (occurrence, _) = baley::execution::dispatch::admit_dispatch(occurrence, dispatch)
         .map_err(|error| Error::Conflict(error.to_string()))?;
@@ -2657,7 +3244,11 @@ impl ConfirmedBoundary<'_> {
                 let Some(envelope @ Envelope::Ok(Success::Dispatch { .. })) = dispatch else {
                     return Err(Failure::Confirmation);
                 };
-                if let Envelope::Ok(Success::Dispatch { dispatch_id: id, prompt_digest: digest, .. }) = &envelope
+                if let Envelope::Ok(Success::Dispatch {
+                    dispatch_id: id,
+                    prompt_digest: digest,
+                    ..
+                }) = &envelope
                     && (id != dispatch_id || digest.as_deref().unwrap_or_default() != prompt_digest)
                 {
                     return Err(Failure::Confirmation);
@@ -2673,21 +3264,34 @@ impl ConfirmedBoundary<'_> {
 
     /// Confirm the old prompt-bearing envelope against its original receipt,
     /// then project the public identities without rewriting historical bytes.
-    pub fn historical_dispatch(&self, dispatch: &ActiveDispatch, prompt: &str)
-        -> std::result::Result<ExecutionEnvelope, Failure>
-    {
+    pub fn historical_dispatch(
+        &self,
+        dispatch: &ActiveDispatch,
+        prompt: &str,
+    ) -> std::result::Result<ExecutionEnvelope, Failure> {
         self.value.boundary.validate(self.value.terminal)?;
-        let Receipt::Dispatch { dispatch_id, prompt_bytes, prompt_digest } = &self.value.boundary.receipt else {
+        let Receipt::Dispatch {
+            dispatch_id,
+            prompt_bytes,
+            prompt_digest,
+        } = &self.value.boundary.receipt
+        else {
             return Err(Failure::Confirmation);
         };
         if dispatch_id != &dispatch.id
             || prompt_bytes.is_some_and(|bytes| bytes != prompt.len() as u64)
-            || (!prompt_digest.is_empty() && (dispatch.prompt_digest != *prompt_digest
-                || crate::store::model::digest(prompt.as_bytes()) != *prompt_digest))
-        { return Err(Failure::Confirmation); }
+            || (!prompt_digest.is_empty()
+                && (dispatch.prompt_digest != *prompt_digest
+                    || crate::store::model::digest(prompt.as_bytes()) != *prompt_digest))
+        {
+            return Err(Failure::Confirmation);
+        }
         let retained = serde_json::json!({"status":"ok","outcome":"dispatch","dispatch":dispatch,"prompt":prompt});
         if crate::store::model::digest(&baley::execution::boundary::canonical_bytes(&retained)?)
-            != self.value.boundary.response_digest { return Err(Failure::Confirmation); }
+            != self.value.boundary.response_digest
+        {
+            return Err(Failure::Confirmation);
+        }
         Ok(Envelope::Ok(Success::dispatch(dispatch)))
     }
 }
@@ -2720,7 +3324,10 @@ pub fn confirmed_boundary<'a>(
 
 /// The routing record a dispatch must carry, stamped with `at`. The writer
 /// passes the time it writes; a comparison that ignores the stamp passes none.
-pub fn routing_decision(dispatch: &ActiveDispatch, at: Option<u64>) -> Result<Option<DecisionRecord>> {
+pub fn routing_decision(
+    dispatch: &ActiveDispatch,
+    at: Option<u64>,
+) -> Result<Option<DecisionRecord>> {
     use super::model::{Decision, DecisionRecord, Evidence, Origin};
     baley::execution::dispatch::validate_route_choice(dispatch)
         .map_err(|error| Error::Invalid(error.to_string()))?;
@@ -2759,8 +3366,10 @@ pub fn routing_decision(dispatch: &ActiveDispatch, at: Option<u64>) -> Result<Op
 
 pub fn validate_routing(dispatch: &ActiveDispatch, records: &[DecisionRecord]) -> Result<()> {
     if let Some(expected) = routing_decision(dispatch, None)? {
-        let saved: Vec<&DecisionRecord> =
-            records.iter().filter(|record| record.id == expected.id).collect();
+        let saved: Vec<&DecisionRecord> = records
+            .iter()
+            .filter(|record| record.id == expected.id)
+            .collect();
         let ok = match saved.as_slice() {
             [issued] => issued.same_record(&expected),
             [issued, outcome] => issued.same_record(&expected) && answers(outcome, &expected),
@@ -2817,7 +3426,11 @@ pub fn routing_outcome(
 ) -> Option<DecisionRecord> {
     use super::model::{Decision, Evidence};
     let id = format!("routing:{dispatch_id}");
-    let mut record = decisions.iter().rev().find(|record| record.id == id)?.clone();
+    let mut record = decisions
+        .iter()
+        .rev()
+        .find(|record| record.id == id)?
+        .clone();
     if record.revision != 1 || receipt.trim().is_empty() {
         return None;
     }

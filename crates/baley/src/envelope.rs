@@ -212,7 +212,12 @@ mod tests {
     #[test]
     fn a_refusal_carries_its_location_fields_only_when_set() {
         let full = Refusal::new("read-contract", "no such unit")
-            .rule("issued-location").slot("unit").phase(31).entry(2).id("T1").details(json!({"units": ["a"]}))
+            .rule("issued-location")
+            .slot("unit")
+            .phase(31)
+            .entry(2)
+            .id("T1")
+            .details(json!({"units": ["a"]}))
             .value();
         assert_eq!(
             full,
@@ -220,7 +225,10 @@ mod tests {
                 "slot": "unit", "phase": 31, "entry": 2, "id": "T1", "details": {"units": ["a"]}})
         );
         let bare = Refusal::new("no-phase-dir", "the phase has no CONTEXT.md").value();
-        assert_eq!(bare.as_object().unwrap().keys().collect::<Vec<_>>(), ["status", "code", "reason"]);
+        assert_eq!(
+            bare.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["status", "code", "reason"]
+        );
     }
 
     #[test]
@@ -275,5 +283,4 @@ mod tests {
             assert_eq!(back, arm, "round trip changed the envelope: {text}");
         }
     }
-
 }

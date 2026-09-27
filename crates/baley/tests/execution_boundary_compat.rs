@@ -211,7 +211,8 @@ fn post_d165_dispatch() -> (Value, String) {
 #[test]
 fn a_pre_d165_dispatch_round_trips_byte_identically_with_no_prompt() {
     let wire = pre_d165_dispatch();
-    let supplied: baley::execution::model::ActiveDispatch = serde_json::from_value(wire.clone()).unwrap();
+    let supplied: baley::execution::model::ActiveDispatch =
+        serde_json::from_value(wire.clone()).unwrap();
     assert!(supplied.prompt.is_empty() && supplied.prompt_digest.is_empty());
     assert_eq!(supplied.prompt_bytes, Some(512));
     assert_eq!(serde_json::to_value(&supplied).unwrap(), wire);
@@ -220,7 +221,8 @@ fn a_pre_d165_dispatch_round_trips_byte_identically_with_no_prompt() {
 #[test]
 fn a_post_d165_dispatch_round_trips_with_its_prompt_and_no_byte_count() {
     let (current, _) = post_d165_dispatch();
-    let supplied: baley::execution::model::ActiveDispatch = serde_json::from_value(current.clone()).unwrap();
+    let supplied: baley::execution::model::ActiveDispatch =
+        serde_json::from_value(current.clone()).unwrap();
     assert_eq!(supplied.prompt_bytes, None);
     assert_eq!(serde_json::to_value(&supplied).unwrap(), current);
 }
@@ -234,20 +236,30 @@ fn a_retained_dispatch_boundary_replays_the_fixed_historical_answer_unchanged() 
         let (raw, record) = historical_boundary(&dispatch, &prompt);
         let boundary: BoundaryV1 = serde_json::from_value(raw).unwrap();
         let before = serde_json::to_vec(&record).unwrap();
-        let Decision::BoundaryV1(value) = &record.decision else { panic!("historical boundary") };
-        let confirmed = ConfirmedBoundary { id: &record.id, value };
+        let Decision::BoundaryV1(value) = &record.decision else {
+            panic!("historical boundary")
+        };
+        let confirmed = ConfirmedBoundary {
+            id: &record.id,
+            value,
+        };
         let supplied: ActiveDispatch = serde_json::from_value(dispatch.clone()).unwrap();
         let mut expected = json!({"status":"ok","outcome":"dispatch","dispatch_id":"old-dispatch",
             "expected_execution_version":1,"route":null,
             "identities":{"dispatch":{"kind":"dispatch","id":"old-dispatch"},
                 "plan":{"kind":"phase-plan","phase":6,"plan":1},
                 "context":{"kind":"phase-context","phase":6}}});
-        if let Some(digest) = dispatch.get("prompt_digest") { expected["prompt_digest"] = digest.clone(); }
+        if let Some(digest) = dispatch.get("prompt_digest") {
+            expected["prompt_digest"] = digest.clone();
+        }
         for _ in 0..2 {
             let replay = confirmed.historical_dispatch(&supplied, &prompt).unwrap();
             assert_eq!(serde_json::to_value(replay).unwrap(), expected);
             assert_eq!(serde_json::to_vec(&record).unwrap(), before);
-            assert_eq!(value.boundary.identity().unwrap(), boundary.identity().unwrap());
+            assert_eq!(
+                value.boundary.identity().unwrap(),
+                boundary.identity().unwrap()
+            );
         }
     }
 }
@@ -259,10 +271,19 @@ fn the_historical_replay_refuses_a_prompt_that_differs_from_the_retained_one() {
     let (post, post_prompt) = post_d165_dispatch();
     for (dispatch, prompt) in [(pre_d165_dispatch(), "x".repeat(512)), (post, post_prompt)] {
         let (_, record) = historical_boundary(&dispatch, &prompt);
-        let Decision::BoundaryV1(value) = &record.decision else { panic!("historical boundary") };
-        let confirmed = ConfirmedBoundary { id: &record.id, value };
+        let Decision::BoundaryV1(value) = &record.decision else {
+            panic!("historical boundary")
+        };
+        let confirmed = ConfirmedBoundary {
+            id: &record.id,
+            value,
+        };
         let supplied: ActiveDispatch = serde_json::from_value(dispatch.clone()).unwrap();
-        assert!(confirmed.historical_dispatch(&supplied, &format!("{prompt}!")).is_err());
+        assert!(
+            confirmed
+                .historical_dispatch(&supplied, &format!("{prompt}!"))
+                .is_err()
+        );
     }
 }
 
@@ -270,7 +291,8 @@ fn the_historical_replay_refuses_a_prompt_that_differs_from_the_retained_one() {
 /// This fixture retains the historical prompt-bearing envelope. No fresh
 /// dispatch request or current PreparedAnswer creates its replay receipt.
 fn historical_boundary(dispatch: &Value, prompt: &str) -> (Value, DecisionRecord) {
-    let retained_envelope = json!({"status":"ok","outcome":"dispatch","dispatch":dispatch,"prompt":prompt});
+    let retained_envelope =
+        json!({"status":"ok","outcome":"dispatch","dispatch":dispatch,"prompt":prompt});
     let mut receipt = json!({"receipt":"dispatch","dispatch_id":dispatch["id"]});
     if let Some(bytes) = dispatch.get("prompt_bytes") {
         receipt["prompt_bytes"] = bytes.clone();
@@ -281,7 +303,8 @@ fn historical_boundary(dispatch: &Value, prompt: &str) -> (Value, DecisionRecord
         "tool":"baley-query","operation":"execute-next",
         "request_digest":"a".repeat(64),"outcome":"dispatch","subject_id":dispatch["id"],
         "response_digest":model::digest(&canonical(&retained_envelope)),"receipt":receipt});
-    let record: DecisionRecord = serde_json::from_value(wire_record(raw.clone(), 1, false)).unwrap();
+    let record: DecisionRecord =
+        serde_json::from_value(wire_record(raw.clone(), 1, false)).unwrap();
     (raw, record)
 }
 
@@ -327,8 +350,13 @@ fn the_historical_replay_refuses_a_boundary_whose_response_digest_differs() {
         if let Decision::BoundaryV1(value) = &mut record.decision {
             value.boundary.response_digest = baley::store::model::digest(b"another answer");
         }
-        let Decision::BoundaryV1(value) = &record.decision else { panic!("historical boundary") };
-        let confirmed = ConfirmedBoundary { id: &record.id, value };
+        let Decision::BoundaryV1(value) = &record.decision else {
+            panic!("historical boundary")
+        };
+        let confirmed = ConfirmedBoundary {
+            id: &record.id,
+            value,
+        };
         let supplied: ActiveDispatch = serde_json::from_value(dispatch.clone()).unwrap();
         assert!(confirmed.historical_dispatch(&supplied, &prompt).is_err());
     }

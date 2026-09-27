@@ -90,7 +90,10 @@ fn a_checkpoint_record_round_trips_through_json() {
 fn a_checkpoint_record_round_trips_through_its_history_decision() {
     for (_, value) in checkpoints() {
         assert_eq!(
-            persistence::decode_history(&persistence::history("op", &value, Some(1_700_000_000)).unwrap()).unwrap(),
+            persistence::decode_history(
+                &persistence::history("op", &value, Some(1_700_000_000)).unwrap()
+            )
+            .unwrap(),
             Some(value)
         );
     }
@@ -210,7 +213,12 @@ fn read_returns_each_occurrence_under_its_own_key_and_nothing_without_the_namesp
 
 #[test]
 fn decode_history_ignores_a_decision_without_the_native_marker() {
-    let mut legacy = persistence::history("legacy", &record(CheckpointType::Blocked), Some(1_700_000_000)).unwrap();
+    let mut legacy = persistence::history(
+        "legacy",
+        &record(CheckpointType::Blocked),
+        Some(1_700_000_000),
+    )
+    .unwrap();
     legacy.origin.source = "import".into();
     assert_eq!(persistence::decode_history(&legacy).unwrap(), None);
 }
@@ -259,7 +267,10 @@ fn a_review_receipt_round_trips_through_project_and_read() {
 fn a_review_receipt_round_trips_through_its_history_decision() {
     let value = review_override();
     assert_eq!(
-        persistence::decode_history(&persistence::history("range", &value, Some(1_700_000_000)).unwrap()).unwrap(),
+        persistence::decode_history(
+            &persistence::history("range", &value, Some(1_700_000_000)).unwrap()
+        )
+        .unwrap(),
         Some(value)
     );
 }
@@ -300,10 +311,16 @@ fn a_grant_applies_only_to_its_own_live_occurrence() {
     });
     let pending = persistence::project(&json!({}), &grant).unwrap();
     let records: Vec<_> = persistence::read(&pending).unwrap().into_values().collect();
-    assert_eq!(authority::permission(&records, &grant.scope, "pause"), Permission::Pending);
+    assert_eq!(
+        authority::permission(&records, &grant.scope, "pause"),
+        Permission::Pending
+    );
     let mut later = grant.scope.clone();
     later.occurrence = "another".into();
-    assert_eq!(authority::permission(&records, &later, "pause"), Permission::Absent);
+    assert_eq!(
+        authority::permission(&records, &later, "pause"),
+        Permission::Absent
+    );
     for state in [
         Occurrence::Fulfilled {
             completion: "done".into(),
@@ -345,11 +362,10 @@ fn an_old_verdict_applies_only_to_unchanged_material() {
         attempt: Attempt::Initial,
         revision_spent: false,
     });
-    let records: Vec<_> =
-        persistence::read(&persistence::project(&json!({}), &checked).unwrap())
-            .unwrap()
-            .into_values()
-            .collect();
+    let records: Vec<_> = persistence::read(&persistence::project(&json!({}), &checked).unwrap())
+        .unwrap()
+        .into_values()
+        .collect();
     for (observation, expected) in [
         (Observation::Read(original), true),
         (
@@ -359,7 +375,8 @@ fn an_old_verdict_applies_only_to_unchanged_material() {
         (Observation::Failed("PermissionDenied".into()), false),
     ] {
         let observed = Observations::from([(path.clone(), observation)]);
-        let result = authority::checker_applicability(&records, &checked.scope, "check", &observed).unwrap();
+        let result =
+            authority::checker_applicability(&records, &checked.scope, "check", &observed).unwrap();
         assert_eq!(result.verdict_applicable, expected);
         assert_eq!(result.continuation_allowed, expected);
     }

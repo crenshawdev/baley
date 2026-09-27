@@ -1,6 +1,8 @@
 //! Compiled query-only help front door.
 pub fn markdown() -> String {
-    super::table::render_description("bal-help", r#"---
+    super::table::render_description(
+        "bal-help",
+        r#"---
 name: bal-help
 description: ""
 argument-hint: "[command name]"
@@ -20,6 +22,7 @@ do not invent a command or treat the suggestions as an exact match.
 
 Help reads only the compiled command table. Read nothing else: no project
 files, command reference, search, or state. Help writes nothing.
-"#).expect("compiled help front matter")
+"#,
+    )
+    .expect("compiled help front matter")
 }
-

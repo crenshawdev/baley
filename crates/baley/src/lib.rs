@@ -9,21 +9,14 @@ pub mod capture;
 pub mod config;
 pub mod config_service;
 pub mod context;
+pub mod debug;
 pub mod derivation;
 pub mod envelope;
 pub mod evidence;
 pub mod execution;
 pub mod git_process;
 pub mod help;
-/// The session layer: first-touch store initialization, the config layers and
-/// guarded snapshot writes.
-pub mod session;
 pub mod landing;
-pub mod undo;
-pub mod debug;
-pub mod spike;
-/// The off-roadmap task: explicit identity, shared branch and risk policy, a record whose home the root decides.
-pub mod task;
 pub mod milestone;
 pub mod next_action;
 pub mod pause;
@@ -33,10 +26,17 @@ pub mod plan;
 pub mod process;
 pub mod progress;
 pub mod rail;
-pub mod review;
 pub mod read;
+pub mod review;
+/// The session layer: first-touch store initialization, the config layers and
+/// guarded snapshot writes.
+pub mod session;
+pub mod spike;
 pub mod store;
 pub mod suggest;
+/// The off-roadmap task: explicit identity, shared branch and risk policy, a record whose home the root decides.
+pub mod task;
+pub mod undo;
 pub mod verification;
 /// Why a file line is as it is: the git chain joined to the record.
 pub mod why;

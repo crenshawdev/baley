@@ -150,7 +150,9 @@ pub fn operation_id(context: &ApprovedContext) -> Result<String> {
 }
 
 /// Read a verified shared snapshot without acquiring ownership or recovering.
-pub fn read_snapshot(root: &std::path::Path) -> Result<Option<baley::store::cache::SharedSnapshot>> {
+pub fn read_snapshot(
+    root: &std::path::Path,
+) -> Result<Option<baley::store::cache::SharedSnapshot>> {
     baley::store::cache::read(root)
 }
 

@@ -118,19 +118,28 @@ pub fn admitted_checks(
     basis: &super::admission::Record,
     executable: &[super::history::TaskView],
 ) -> crate::store::Result<Vec<serde_json::Value>> {
-    use crate::{plan::{evidence::Item, map_view::checked_map, persistence::saved}, store::Error};
+    use crate::{
+        plan::{evidence::Item, map_view::checked_map, persistence::saved},
+        store::Error,
+    };
     let publications = saved(data, phase)?
         .ok_or_else(|| Error::Invalid("admitted plan publications missing".into()))?
         .publications;
     let mut specs = std::collections::BTreeMap::new();
     for binding in &basis.request.contract.plans {
-        let published = publications
-            .get(&binding.plan)
-            .ok_or_else(|| Error::Invalid(format!("admitted plan {} publication missing", binding.plan)))?;
+        let published = publications.get(&binding.plan).ok_or_else(|| {
+            Error::Invalid(format!(
+                "admitted plan {} publication missing",
+                binding.plan
+            ))
+        })?;
         let map = checked_map(data, phase, published)?;
         for item in &map.items {
             if let Item::Check { id, spec, .. } = item {
-                specs.insert((id.clone(), map.item_revisions[id].clone()), serde_json::to_value(spec)?);
+                specs.insert(
+                    (id.clone(), map.item_revisions[id].clone()),
+                    serde_json::to_value(spec)?,
+                );
             }
         }
     }
@@ -139,7 +148,12 @@ pub fn admitted_checks(
         for check in &task.checks {
             let spec = specs
                 .get(&(check.id.clone(), check.item_revision.clone()))
-                .ok_or_else(|| Error::Invalid(format!("admitted check {} revision is not in the retained map", check.id)))?;
+                .ok_or_else(|| {
+                    Error::Invalid(format!(
+                        "admitted check {} revision is not in the retained map",
+                        check.id
+                    ))
+                })?;
             checks.push(serde_json::json!({"id": check.id, "item_revision": check.item_revision, "task": task.task.task, "spec": spec}));
         }
     }
@@ -175,39 +189,73 @@ pub fn native_operational(state: &NativeState<'_>) -> serde_json::Value {
     operational
 }
 
-pub fn issue_binding(data: &serde_json::Value, admitted: &ActiveDispatch) -> crate::store::Result<serde_json::Value> {
+pub fn issue_binding(
+    data: &serde_json::Value,
+    admitted: &ActiveDispatch,
+) -> crate::store::Result<serde_json::Value> {
     use super::{admission, history};
     let records = history::records(data, admitted.phase)?;
     let admissions = admission::records(data, admitted.phase)?;
-    let basis = admissions.iter().find(|record| record.request.contract.plans.iter().any(|plan| plan.plan == admitted.plan))
+    let basis = admissions
+        .iter()
+        .find(|record| {
+            record
+                .request
+                .contract
+                .plans
+                .iter()
+                .any(|plan| plan.plan == admitted.plan)
+        })
         .ok_or_else(|| crate::store::Error::Invalid("dispatch admission is absent".into()))?;
     let publication = crate::plan::persistence::saved(data, admitted.phase)?
         .and_then(|plans| plans.publications.get(&admitted.plan).cloned())
         .ok_or_else(|| crate::store::Error::Invalid("dispatch publication is absent".into()))?;
-    let tasks = history::plan_task_views(data, &records, admitted.phase, admitted.plan)?.into_iter()
-        .filter(|task| !task.state.completed && !records.iter().any(|record| record.request.task == task.task
-            && matches!(record.request.event, history::Event::Retirement { .. })))
-        .map(|task| serde_json::json!({"id":task.task.task,"checks":task.checks})).collect::<Vec<_>>();
-    Ok(serde_json::json!({"plan":admitted.plan,"content_revision":publication.revision,
+    let tasks = history::plan_task_views(data, &records, admitted.phase, admitted.plan)?
+        .into_iter()
+        .filter(|task| {
+            !task.state.completed
+                && !records.iter().any(|record| {
+                    record.request.task == task.task
+                        && matches!(record.request.event, history::Event::Retirement { .. })
+                })
+        })
+        .map(|task| serde_json::json!({"id":task.task.task,"checks":task.checks}))
+        .collect::<Vec<_>>();
+    Ok(
+        serde_json::json!({"plan":admitted.plan,"content_revision":publication.revision,
         "admission_digest":basis.request_digest,"set_version":admissions.last().map(|record| record.set_version),
-        "base_sha":admitted.base_sha,"tasks":tasks}))
+        "base_sha":admitted.base_sha,"tasks":tasks}),
+    )
 }
 
 pub fn binding_digest(binding: &serde_json::Value) -> crate::store::Result<String> {
-    Ok(crate::store::model::digest(&super::boundary::canonical_bytes(binding)
-        .map_err(|error| crate::store::Error::Invalid(error.to_string()))?))
+    Ok(crate::store::model::digest(
+        &super::boundary::canonical_bytes(binding)
+            .map_err(|error| crate::store::Error::Invalid(error.to_string()))?,
+    ))
 }
 
 pub fn changed_part(previous: &serde_json::Value, current: &serde_json::Value) -> Option<String> {
-    for slot in ["content_revision", "admission_digest", "set_version", "base_sha", "plan"] {
-        if previous[slot] != current[slot] { return Some(slot.into()); }
+    for slot in [
+        "content_revision",
+        "admission_digest",
+        "set_version",
+        "base_sha",
+        "plan",
+    ] {
+        if previous[slot] != current[slot] {
+            return Some(slot.into());
+        }
     }
     let old = previous["tasks"].as_array()?;
     let new = current["tasks"].as_array()?;
-    old.iter().chain(new).find(|task| {
-        old.iter().find(|value| value["id"] == task["id"])
-            != new.iter().find(|value| value["id"] == task["id"])
-    }).map(|task| format!("task:{}", task["id"].as_str().unwrap_or_default()))
+    old.iter()
+        .chain(new)
+        .find(|task| {
+            old.iter().find(|value| value["id"] == task["id"])
+                != new.iter().find(|value| value["id"] == task["id"])
+        })
+        .map(|task| format!("task:{}", task["id"].as_str().unwrap_or_default()))
 }
 
 /// A fresh dispatch carries the admitted identity; a resumed one is a linked
@@ -222,8 +270,12 @@ pub fn native_dispatch(
     if fresh {
         operational["dispatch_id"] = serde_json::json!(admitted.id);
     } else {
-        let bytes = super::boundary::canonical_bytes(&("native-resumed-dispatch-1", &admitted.id, &operational))
-            .map_err(|failure| error("dispatch-identity", failure.to_string()))?;
+        let bytes = super::boundary::canonical_bytes(&(
+            "native-resumed-dispatch-1",
+            &admitted.id,
+            &operational,
+        ))
+        .map_err(|failure| error("dispatch-identity", failure.to_string()))?;
         dispatch.id = digest(&bytes);
         operational["dispatch_id"] = serde_json::json!(dispatch.id);
     }
@@ -249,7 +301,10 @@ pub fn admit_dispatch(
     // plan with no retained outcome; that plan reopens the occurrence (D-162).
     // A judgment stop still ends it.
     let reopened = matches!(occurrence.terminal, Some(TerminalOutcome::Complete { .. }))
-        && !occurrence.plans.iter().any(|outcome| outcome.plan == candidate.plan);
+        && !occurrence
+            .plans
+            .iter()
+            .any(|outcome| outcome.plan == candidate.plan);
     if occurrence.terminal.is_some() && !reopened {
         return Err(error(
             "dispatch-terminal",
@@ -309,12 +364,7 @@ pub fn build_routed_dispatch(
     base_sha: &str,
     route: super::model::DispatchRoute,
 ) -> Result<ActiveDispatch, PlanError> {
-    let mut dispatch = build_dispatch(
-        plan,
-        plan_set_fingerprint,
-        execution_version,
-        base_sha,
-    )?;
+    let mut dispatch = build_dispatch(plan, plan_set_fingerprint, execution_version, base_sha)?;
     dispatch.policy.rung = routed_rung(&route.choice.rung)?;
     dispatch.route = Some(Box::new(route));
     validate_route_choice(&dispatch)?;

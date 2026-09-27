@@ -16,8 +16,13 @@ fn capture_retains_result_lines_past_prefix() {
     let capture = super::runner::capture(output.as_slice());
     assert_eq!(capture.bytes.len(), 65_536);
     assert!(!capture.complete);
-    assert_eq!(capture.result_lines, vec!["test oversized::late ... FAILED",
-        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"]);
+    assert_eq!(
+        capture.result_lines,
+        vec![
+            "test oversized::late ... FAILED",
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"
+        ]
+    );
 }
 
 // D-168 and the run classifier both read cargo test's own lines. nextest, which
@@ -26,26 +31,49 @@ fn capture_retains_result_lines_past_prefix() {
 // every nextest run came back Unknown and cost the owner a classification.
 #[test]
 fn classify_reads_nextest_and_cargo_summaries_as_a_pass_or_failure() {
-    use super::{receipts::{Observation, Summary}, runner::{capture, classify}};
+    use super::{
+        receipts::{Observation, Summary},
+        runner::{capture, classify},
+    };
     let empty = capture(&b""[..]);
     let green = capture(&b"    Starting 1 test across 1 binary (1 test skipped)\n        PASS [   0.062s] (1/1) baley::phase32_typed_authoring phase32_plan_body_is_refused\n     Summary [   0.062s] 1 test run: 1 passed, 1 skipped\n"[..]);
-    assert_eq!(classify(&empty, &green), Observation::ResultsObserved { summary: Summary::Cargo { failed: false } });
+    assert_eq!(
+        classify(&empty, &green),
+        Observation::ResultsObserved {
+            summary: Summary::Cargo { failed: false }
+        }
+    );
     let red = capture(&b"        FAIL [   0.065s] (1/1) baley::phase32_typed_authoring phase32_plan_body_is_refused\n    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.06s\n     Summary [   0.066s] 1 test run: 0 passed, 1 failed, 1 skipped\nerror: test run failed\n"[..]);
-    assert_eq!(classify(&empty, &red), Observation::ResultsObserved { summary: Summary::Cargo { failed: true } });
-    let summary_only_red = capture(&b"     Summary [   0.066s] 2 tests run: 1 passed, 1 failed\n"[..]);
-    assert_eq!(classify(&empty, &summary_only_red), Observation::ResultsObserved { summary: Summary::Cargo { failed: true } });
+    assert_eq!(
+        classify(&empty, &red),
+        Observation::ResultsObserved {
+            summary: Summary::Cargo { failed: true }
+        }
+    );
+    let summary_only_red =
+        capture(&b"     Summary [   0.066s] 2 tests run: 1 passed, 1 failed\n"[..]);
+    assert_eq!(
+        classify(&empty, &summary_only_red),
+        Observation::ResultsObserved {
+            summary: Summary::Cargo { failed: true }
+        }
+    );
 }
 
 #[test]
 fn nextest_and_cargo_result_lines_are_valid_and_progress_lines_are_not() {
     use super::runner::valid_result_line;
-    for line in ["     Summary [   0.062s] 1 test run: 1 passed, 1 skipped",
+    for line in [
+        "     Summary [   0.062s] 1 test run: 1 passed, 1 skipped",
         "        PASS [   0.062s] (1/1) baley::phase32_typed_authoring phase32_plan_body_is_refused",
         "        FAIL [   0.065s] (1/1) baley::phase32_typed_authoring phase32_plan_body_is_refused",
-        "    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.06s"] {
+        "    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.06s",
+    ] {
         assert!(valid_result_line(line), "{line}");
     }
-    assert!(!valid_result_line("    Starting 1 test across 1 binary (1 test skipped)"));
+    assert!(!valid_result_line(
+        "    Starting 1 test across 1 binary (1 test skipped)"
+    ));
     assert!(!valid_result_line("error: test run failed"));
 }
 
@@ -54,13 +82,24 @@ fn nextest_and_cargo_result_lines_are_valid_and_progress_lines_are_not() {
 // refuse the record; a retained result that claims more than the bytes say still is.
 #[test]
 fn retained_unknown_observation_stays_valid_when_the_classifier_learns_its_lines() {
-    use super::{receipts::{Observation, Summary}, runner::{capture, observation_consistent}};
+    use super::{
+        receipts::{Observation, Summary},
+        runner::{capture, observation_consistent},
+    };
     let empty = capture(&b""[..]);
     let green = capture(&b"     Summary [   0.062s] 1 test run: 1 passed, 1 skipped\n"[..]);
-    assert!(observation_consistent(&Observation::Unknown, &empty, &green));
-    let observed = Observation::ResultsObserved { summary: Summary::Cargo { failed: false } };
+    assert!(observation_consistent(
+        &Observation::Unknown,
+        &empty,
+        &green
+    ));
+    let observed = Observation::ResultsObserved {
+        summary: Summary::Cargo { failed: false },
+    };
     assert!(observation_consistent(&observed, &empty, &green));
-    let claimed = Observation::ResultsObserved { summary: Summary::Cargo { failed: true } };
+    let claimed = Observation::ResultsObserved {
+        summary: Summary::Cargo { failed: true },
+    };
     assert!(!observation_consistent(&claimed, &empty, &green));
     let custom = capture(&b"custom output\n"[..]);
     assert!(!observation_consistent(&observed, &empty, &custom));
@@ -68,46 +107,124 @@ fn retained_unknown_observation_stays_valid_when_the_classifier_learns_its_lines
 
 #[test]
 fn later_answered_launch_supersedes_only_matching_unanswered_runs() {
-    use super::{allocation::Check, history::{self, Event, Record, Request, Task}, receipts::*, runner::capture};
-    let task = Task { phase: 33, occurrence: "active-cycle:phase:33".into(), admission_digest: "admitted".into(),
-        plan: 3, task: "P33-3-T3".into() };
-    let launch = |id: &str| Launch { run_id: id.into(), check: None, stage: Stage::Verify,
-        material: Material { command: "cargo nextest run -p baley --test mcp".into(), commit: "f74d252d".into(),
-            tree: "material-tree".into(), test_file: String::new(), test_digest: String::new() }, launched_at: 1 };
-    let result = |id: &str| Event::Result(RunResult { run_id: id.into(), disposition: Disposition::Exited { code: 0 },
-        stdout: capture(&b""[..]), stderr: capture(&b""[..]), observed_at: 2,
-        observation: Observation::Unknown, material_unchanged: true });
-    let record = |version: u64, event: Event| {
-        let request = Request { request_id: format!("event-{version}"), task: task.clone(), attempt: "attempt".into(),
-            expected_version: version - 1, event };
-        Record { schema: "native-task-event-1".into(), root_binding: "fixture".into(), version,
-            request_digest: history::request_digest(&request).unwrap(), request }
+    use super::{
+        allocation::Check,
+        history::{self, Event, Record, Request, Task},
+        receipts::*,
+        runner::capture,
     };
-    let check = Check { id: "check/mcp".into(), item_revision: "revision-1".into() };
-    for case in ["different command", "different stage", "different check", "different check revision", "different attempt",
-        "different task", "unanswered retry", "older result", "matching null check", "matching check"] {
+    let task = Task {
+        phase: 33,
+        occurrence: "active-cycle:phase:33".into(),
+        admission_digest: "admitted".into(),
+        plan: 3,
+        task: "P33-3-T3".into(),
+    };
+    let launch = |id: &str| Launch {
+        run_id: id.into(),
+        check: None,
+        stage: Stage::Verify,
+        material: Material {
+            command: "cargo nextest run -p baley --test mcp".into(),
+            commit: "f74d252d".into(),
+            tree: "material-tree".into(),
+            test_file: String::new(),
+            test_digest: String::new(),
+        },
+        launched_at: 1,
+    };
+    let result = |id: &str| {
+        Event::Result(RunResult {
+            run_id: id.into(),
+            disposition: Disposition::Exited { code: 0 },
+            stdout: capture(&b""[..]),
+            stderr: capture(&b""[..]),
+            observed_at: 2,
+            observation: Observation::Unknown,
+            material_unchanged: true,
+        })
+    };
+    let record = |version: u64, event: Event| {
+        let request = Request {
+            request_id: format!("event-{version}"),
+            task: task.clone(),
+            attempt: "attempt".into(),
+            expected_version: version - 1,
+            event,
+        };
+        Record {
+            schema: "native-task-event-1".into(),
+            root_binding: "fixture".into(),
+            version,
+            request_digest: history::request_digest(&request).unwrap(),
+            request,
+        }
+    };
+    let check = Check {
+        id: "check/mcp".into(),
+        item_revision: "revision-1".into(),
+    };
+    for case in [
+        "different command",
+        "different stage",
+        "different check",
+        "different check revision",
+        "different attempt",
+        "different task",
+        "unanswered retry",
+        "older result",
+        "matching null check",
+        "matching check",
+    ] {
         let mut first = launch("dead-launch");
         let mut second = launch("resumed-launch");
         match case {
-            "different command" => second.material.command = "cargo nextest run -p baley --test phase33_verification".into(),
+            "different command" => {
+                second.material.command =
+                    "cargo nextest run -p baley --test phase33_verification".into()
+            }
             "different stage" => second.stage = Stage::Green,
             "different check" => second.check = Some(check.clone()),
             "different check revision" | "matching check" => {
                 first.check = Some(check.clone());
                 second.check = Some(check.clone());
-                if case == "different check revision" { second.check.as_mut().unwrap().item_revision = "revision-2".into(); }
+                if case == "different check revision" {
+                    second.check.as_mut().unwrap().item_revision = "revision-2".into();
+                }
             }
             _ => {}
         }
-        let mut records = vec![record(1, Event::Launch(first)), record(2, Event::Launch(second))];
-        assert_eq!(history::project(&records[..1], &task).unknown_runs, ["dead-launch"], "{case}");
-        assert_eq!(history::project(&records, &task).unknown_runs, ["dead-launch", "resumed-launch"], "{case}");
+        let mut records = vec![
+            record(1, Event::Launch(first)),
+            record(2, Event::Launch(second)),
+        ];
+        assert_eq!(
+            history::project(&records[..1], &task).unknown_runs,
+            ["dead-launch"],
+            "{case}"
+        );
+        assert_eq!(
+            history::project(&records, &task).unknown_runs,
+            ["dead-launch", "resumed-launch"],
+            "{case}"
+        );
         if case != "unanswered retry" {
-            records.push(record(3, result(if case == "older result" { "dead-launch" } else { "resumed-launch" })));
+            records.push(record(
+                3,
+                result(if case == "older result" {
+                    "dead-launch"
+                } else {
+                    "resumed-launch"
+                }),
+            ));
         }
         for record in &mut records[1..] {
-            if case == "different attempt" { record.request.attempt = "another-attempt".into(); }
-            if case == "different task" { record.request.task.task = "another-task".into(); }
+            if case == "different attempt" {
+                record.request.attempt = "another-attempt".into();
+            }
+            if case == "different task" {
+                record.request.task.task = "another-task".into();
+            }
             record.request_digest = history::request_digest(&record.request).unwrap();
         }
         let expected = match case {
@@ -116,7 +233,11 @@ fn later_answered_launch_supersedes_only_matching_unanswered_runs() {
             "older result" => vec!["resumed-launch"],
             _ => vec!["dead-launch"],
         };
-        assert_eq!(history::project(&records, &task).unknown_runs, expected, "{case}");
+        assert_eq!(
+            history::project(&records, &task).unknown_runs,
+            expected,
+            "{case}"
+        );
     }
 }
 
@@ -126,43 +247,93 @@ fn later_answered_launch_supersedes_only_matching_unanswered_runs() {
 // carried no names from nineteen failures.
 #[test]
 fn failing_tests_reads_nextest_fail_lines_once_each() {
-    use super::{history::failing_tests, receipts::{Disposition, Observation, RunResult}, runner::capture};
+    use super::{
+        history::failing_tests,
+        receipts::{Disposition, Observation, RunResult},
+        runner::capture,
+    };
     let stderr = capture(&b"        FAIL [   0.299s] ( 351/1065) baley::phase12_execution phase12_acknowledged_progress_survives_restart\n    test phase12_acknowledged_progress_survives_restart ... FAILED\n        FAIL [   0.268s] ( 362/1065) baley::phase13_close phase13_rules_gate_retirement_rehearsal\n     Summary [ 120.000s] 1065 tests run: 1046 passed, 19 failed, 2 skipped\n        FAIL [   0.299s] ( 351/1065) baley::phase12_execution phase12_acknowledged_progress_survives_restart\n        FAIL [   0.268s] ( 362/1065) baley::phase13_close phase13_rules_gate_retirement_rehearsal\nerror: test run failed\n"[..]);
-    let result = RunResult { run_id: "suite".into(), disposition: Disposition::Exited { code: 100 }, stdout: capture(&b""[..]),
-        stderr, observed_at: 1, observation: Observation::Unknown, material_unchanged: true };
-    assert_eq!(failing_tests(&result), vec![
-        "phase12_execution phase12_acknowledged_progress_survives_restart".to_owned(),
-        "phase13_close phase13_rules_gate_retirement_rehearsal".to_owned()]);
+    let result = RunResult {
+        run_id: "suite".into(),
+        disposition: Disposition::Exited { code: 100 },
+        stdout: capture(&b""[..]),
+        stderr,
+        observed_at: 1,
+        observation: Observation::Unknown,
+        material_unchanged: true,
+    };
+    assert_eq!(
+        failing_tests(&result),
+        vec![
+            "phase12_execution phase12_acknowledged_progress_survives_restart".to_owned(),
+            "phase13_close phase13_rules_gate_retirement_rehearsal".to_owned()
+        ]
+    );
 }
 
 // Constructed unit authority, not a claim of approval through the public API.
 // The acceptance check separately supplies that boundary with real stdio calls.
-fn native_unit_contract(command: &str) -> (serde_json::Value, std::collections::BTreeMap<String, String>, super::admission::Contract) {
-    use crate::{plan::{model::*, evidence::Map}, store::model::digest};
-    let truths = ["truth/A", "truth/B"].map(|id| json!({"id":id,"trigger":"the sender sends the parcel",
+fn native_unit_contract(
+    command: &str,
+) -> (
+    serde_json::Value,
+    std::collections::BTreeMap<String, String>,
+    super::admission::Contract,
+) {
+    use crate::{
+        plan::{evidence::Map, model::*},
+        store::model::digest,
+    };
+    let truths = ["truth/A", "truth/B"].map(|id| {
+        json!({"id":id,"trigger":"the sender sends the parcel",
         "observer":"the recipient","verb":"gets","outcome":"a receipt","kind":"property",
-        "observable":true,"fixed_oracle":true}));
+        "observable":true,"fixed_oracle":true})
+    });
     let submission = json!({"phase":12,"title":"Delivery","scope":"Approved delivery.","decisions":[],
         "durable_decisions":[],"assumptions":[],"truths":truths});
     let approval = json!({"approved":true,"owner":"Fixture Owner","at":"2026-09-10T14:00:00Z","submission":submission});
-    let context = crate::context::persistence::approved(serde_json::from_value(submission).unwrap(), serde_json::from_value(approval).unwrap()).unwrap();
-    let edges = ["truth/A", "truth/B"].map(|id| json!({"truth_id":id,"truth_version":1,"reason":"Delivery provides the receipt."}));
+    let context = crate::context::persistence::approved(
+        serde_json::from_value(submission).unwrap(),
+        serde_json::from_value(approval).unwrap(),
+    )
+    .unwrap();
+    let edges = ["truth/A", "truth/B"].map(
+        |id| json!({"truth_id":id,"truth_version":1,"reason":"Delivery provides the receipt."}),
+    );
     let map: Map = serde_json::from_value(json!({"mode":"attached","items":[{
         "kind":"check","id":"check/shared","spec":{"command":command,"expected":{"kind":"literal","value":"receipt"},
         "test":{"file":"tests/not_yet_written.rs","function":"delivery"},"setup":"","call":"","boundary":"","fakes":[]},
         "reason":"Removing delivery loses the receipt.","associations":edges},
         {"kind":"artifact","id":"artifact/delivery","spec":{"locators":["src/delivery.rs"],"substance":"Delivery exists."},
         "reason":"Delivery needs an implementation.","associations":edges}]})).unwrap();
-    let body = format!("# Delivery\n## Evidence map\n\n```json\n{}\n```\n\n", serde_json::to_string_pretty(&map).unwrap());
+    let body = format!(
+        "# Delivery\n## Evidence map\n\n```json\n{}\n```\n\n",
+        serde_json::to_string_pretty(&map).unwrap()
+    );
     // Blank check commands must reach admission with valid task metadata.
-    let verify = if command.is_empty() { "printf verified" } else { command };
+    let verify = if command.is_empty() {
+        "printf verified"
+    } else {
+        command
+    };
     let entries = (1..=2).map(|n| serde_json::from_value(json!({"target":{"phase":12,"plan":n},"content":{
         "phase":12,"plan":n,"requirements":["truth/A","truth/B"],"files":["src/delivery.rs"],"directories":[],
         "execution":{"schema":1,"suite":"printf suite","tasks":[{"id":"deliver","verify":[verify]},
         {"id":"document","verify":["printf documented"]}]},"body":body,"evidence_map":map}})).unwrap()).collect();
-    let submission = Submission { phase: 12.try_into().unwrap(), occurrence:"active-cycle:phase:12".into(),
-        request_id:"unit-publication".into(), inventory_basis:"unit-inventory".into(), plans:entries };
-    let approval = Approval { approved:true, owner:Some("Fixture Owner".into()), at:Some("2026-09-10T14:00:00Z".into()), submission:Some(submission.clone()), submission_digest:None };
+    let submission = Submission {
+        phase: 12.try_into().unwrap(),
+        occurrence: "active-cycle:phase:12".into(),
+        request_id: "unit-publication".into(),
+        inventory_basis: "unit-inventory".into(),
+        plans: entries,
+    };
+    let approval = Approval {
+        approved: true,
+        owner: Some("Fixture Owner".into()),
+        at: Some("2026-09-10T14:00:00Z".into()),
+        submission: Some(submission.clone()),
+        submission_digest: None,
+    };
     let mut documents = std::collections::BTreeMap::new();
     let mut publications = std::collections::BTreeMap::new();
     let mut revisions = Vec::new();
@@ -172,36 +343,111 @@ fn native_unit_contract(command: &str) -> (serde_json::Value, std::collections::
         let bytes = crate::plan::render::document(&entry.content).unwrap();
         let content_revision = digest(&bytes);
         let map_revision = crate::plan::map_history::event_id(&submission, &entry.target).unwrap();
-        let Map::Attached { items } = &map else { unreachable!() };
-        let item_revisions = items.iter().map(|i| (i.id().into(), digest(&serde_json::to_vec(&crate::plan::map_history::definition(i).unwrap()).unwrap()))).collect();
-        revisions.push(crate::plan::map_history::Revision { revision:map_revision.clone(), occurrence:submission.occurrence.clone(),
-            request_id:submission.request_id.clone(), payload_digest:payload.clone(), identity:entry.target.clone(),
-            content_revision:content_revision.clone(),items:items.clone(),item_revisions });
-        publications.insert(entry.target.plan.get(), Publication { identity:entry.target.clone(), occurrence:submission.occurrence.clone(),
-            revision:content_revision.clone(),content:entry.content.clone(),approval:approval.clone(),readiness:Readiness::ProvisionalAuthoring,
-            history:vec![content_revision.clone()],map_revision:Some(map_revision.clone()) });
-        documents.insert(format!("phases/12/PLAN-{}.md",entry.target.plan), String::from_utf8(bytes).unwrap());
-        bindings.push(super::admission::Binding {plan:entry.target.plan.get(),publication_request:submission.request_id.clone(),content_revision,map_revision});
+        let Map::Attached { items } = &map else {
+            unreachable!()
+        };
+        let item_revisions = items
+            .iter()
+            .map(|i| {
+                (
+                    i.id().into(),
+                    digest(
+                        &serde_json::to_vec(&crate::plan::map_history::definition(i).unwrap())
+                            .unwrap(),
+                    ),
+                )
+            })
+            .collect();
+        revisions.push(crate::plan::map_history::Revision {
+            revision: map_revision.clone(),
+            occurrence: submission.occurrence.clone(),
+            request_id: submission.request_id.clone(),
+            payload_digest: payload.clone(),
+            identity: entry.target.clone(),
+            content_revision: content_revision.clone(),
+            items: items.clone(),
+            item_revisions,
+        });
+        publications.insert(
+            entry.target.plan.get(),
+            Publication {
+                identity: entry.target.clone(),
+                occurrence: submission.occurrence.clone(),
+                revision: content_revision.clone(),
+                content: entry.content.clone(),
+                approval: approval.clone(),
+                readiness: Readiness::ProvisionalAuthoring,
+                history: vec![content_revision.clone()],
+                map_revision: Some(map_revision.clone()),
+            },
+        );
+        documents.insert(
+            format!("phases/12/PLAN-{}.md", entry.target.plan),
+            String::from_utf8(bytes).unwrap(),
+        );
+        bindings.push(super::admission::Binding {
+            plan: entry.target.plan.get(),
+            publication_request: submission.request_id.clone(),
+            content_revision,
+            map_revision,
+        });
     }
-    let receipt = Receipt {payload_digest:payload,results:publications.values().cloned().collect()};
-    let occurrence = Occurrence {id:submission.occurrence.clone(),phase:12,cycle:"active".into(),high_water:2,consumed:vec![1,2],
-        provenance:Default::default(),publications,receipts:std::collections::BTreeMap::from([(submission.request_id,receipt)])};
-    let allocation = (1..=2).flat_map(|plan| ["deliver","document"].map(|task| super::allocation::Assignment {
-        plan,task:task.into(),checks:if plan == 1 && task == "deliver" {vec![super::allocation::Check {
-            id:"check/shared".into(),item_revision:revisions[0].item_revisions["check/shared"].clone()}]} else {vec![]}
-    })).collect();
+    let receipt = Receipt {
+        payload_digest: payload,
+        results: publications.values().cloned().collect(),
+    };
+    let occurrence = Occurrence {
+        id: submission.occurrence.clone(),
+        phase: 12,
+        cycle: "active".into(),
+        high_water: 2,
+        consumed: vec![1, 2],
+        provenance: Default::default(),
+        publications,
+        receipts: std::collections::BTreeMap::from([(submission.request_id, receipt)]),
+    };
+    let allocation = (1..=2)
+        .flat_map(|plan| {
+            ["deliver", "document"].map(|task| super::allocation::Assignment {
+                plan,
+                task: task.into(),
+                checks: if plan == 1 && task == "deliver" {
+                    vec![super::allocation::Check {
+                        id: "check/shared".into(),
+                        item_revision: revisions[0].item_revisions["check/shared"].clone(),
+                    }]
+                } else {
+                    vec![]
+                },
+            })
+        })
+        .collect();
     let data = json!({"context":{"schema":"context-1","phases":{"12":context}},
         "plan_publications":{"schema":"plan-1","phases":{"12":occurrence}},
         "acceptance_maps":{"schema":"acceptance-map-1","phases":{"12":{"occurrence":submission.occurrence,"revisions":revisions}}}});
-    (data, documents, super::admission::Contract {phase:12,occurrence:submission.occurrence,plans:bindings,allocation})
+    (
+        data,
+        documents,
+        super::admission::Contract {
+            phase: 12,
+            occurrence: submission.occurrence,
+            plans: bindings,
+            allocation,
+        },
+    )
 }
 
 fn assert_admission_refusal(error: crate::store::Error, rule: &str, slot: &str, id: &str) {
-    let crate::store::Error::Invalid(message) = error else {panic!("expected located invalid: {error}")};
-    let diagnostic:crate::plan::model::Diagnostic = serde_json::from_str(message.strip_prefix("plan-refusal:").unwrap()).unwrap();
-    assert_eq!(diagnostic.rule,rule);
-    assert_eq!(diagnostic.slot,slot);
-    if !id.is_empty() {assert_eq!(diagnostic.id.as_deref(),Some(id));}
+    let crate::store::Error::Invalid(message) = error else {
+        panic!("expected located invalid: {error}")
+    };
+    let diagnostic: crate::plan::model::Diagnostic =
+        serde_json::from_str(message.strip_prefix("plan-refusal:").unwrap()).unwrap();
+    assert_eq!(diagnostic.rule, rule);
+    assert_eq!(diagnostic.slot, slot);
+    if !id.is_empty() {
+        assert_eq!(diagnostic.id.as_deref(), Some(id));
+    }
 }
 
 /// Validation of `data` with one JSON pointer set to `value`, or with the
@@ -209,11 +455,19 @@ fn assert_admission_refusal(error: crate::store::Error, rule: &str, slot: &str, 
 fn assert_changed_data_refused(rows: &[(&str, serde_json::Value, &str, &str)]) {
     use super::admission::validate;
     let (data, documents, contract) = native_unit_contract("custom-delivery-check");
-    for (pointer,value,rule,slot) in rows {
-        let mut changed=data.clone();
-        if *pointer=="/context" {changed.as_object_mut().unwrap().remove("context");}
-        else {*changed.pointer_mut(pointer).unwrap()=value.clone();}
-        assert_admission_refusal(validate(&changed,&documents,&contract).unwrap_err(),rule,slot,"");
+    for (pointer, value, rule, slot) in rows {
+        let mut changed = data.clone();
+        if *pointer == "/context" {
+            changed.as_object_mut().unwrap().remove("context");
+        } else {
+            *changed.pointer_mut(pointer).unwrap() = value.clone();
+        }
+        assert_admission_refusal(
+            validate(&changed, &documents, &contract).unwrap_err(),
+            rule,
+            slot,
+            "",
+        );
     }
 }
 
@@ -221,39 +475,90 @@ fn assert_changed_data_refused(rows: &[(&str, serde_json::Value, &str, &str)]) {
 fn a_valid_native_contract_admits_its_plans_tasks_and_maps() {
     use super::admission::validate;
     let (data, documents, contract) = native_unit_contract("custom-delivery-check");
-    let valid = validate(&data,&documents,&contract).unwrap();
-    assert_eq!(valid.plans.iter().map(|p| p.plan).collect::<Vec<_>>(), vec![1,2]);
-    assert_eq!(valid.plans[0].tasks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["deliver","document"]);
-    assert_eq!(valid.maps.len(),2);
-    assert_eq!(contract.allocation[1].checks,vec![]);
+    let valid = validate(&data, &documents, &contract).unwrap();
+    assert_eq!(
+        valid.plans.iter().map(|p| p.plan).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    assert_eq!(
+        valid.plans[0]
+            .tasks
+            .iter()
+            .map(|t| t.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["deliver", "document"]
+    );
+    assert_eq!(valid.maps.len(), 2);
+    assert_eq!(contract.allocation[1].checks, vec![]);
 }
 
 #[test]
 fn decode_refuses_a_contract_missing_a_required_field() {
     use super::admission::decode;
     let (_, _, contract) = native_unit_contract("custom-delivery-check");
-    for field in ["phase","occurrence","plans","allocation"] {
-        let mut raw=serde_json::to_value(&contract).unwrap(); raw.as_object_mut().unwrap().remove(field);
-        assert_admission_refusal(decode(raw).unwrap_err(),"admission-shape",&format!("contract.{field}"),"");
+    for field in ["phase", "occurrence", "plans", "allocation"] {
+        let mut raw = serde_json::to_value(&contract).unwrap();
+        raw.as_object_mut().unwrap().remove(field);
+        assert_admission_refusal(
+            decode(raw).unwrap_err(),
+            "admission-shape",
+            &format!("contract.{field}"),
+            "",
+        );
     }
 }
 
 #[test]
 fn admission_refuses_absent_unapproved_or_drifted_context_truths() {
     assert_changed_data_refused(&[
-        ("/context",serde_json::Value::Null,"native-approved-truths","context"),
-        ("/context/phases/12/approval/approved",json!(false),"native-approved-truths","context.approval"),
-        ("/context/phases/12/truths/0/version",json!(2),"native-approved-truths","context.approval"),
-        ("/context/phases/12/submission/truths/0/outcome",json!("another outcome"),"native-approved-truths","context.approval"),
+        (
+            "/context",
+            serde_json::Value::Null,
+            "native-approved-truths",
+            "context",
+        ),
+        (
+            "/context/phases/12/approval/approved",
+            json!(false),
+            "native-approved-truths",
+            "context.approval",
+        ),
+        (
+            "/context/phases/12/truths/0/version",
+            json!(2),
+            "native-approved-truths",
+            "context.approval",
+        ),
+        (
+            "/context/phases/12/submission/truths/0/outcome",
+            json!("another outcome"),
+            "native-approved-truths",
+            "context.approval",
+        ),
     ]);
 }
 
 #[test]
 fn admission_refuses_a_stale_publication_receipt_or_map_revision() {
     assert_changed_data_refused(&[
-        ("/plan_publications/phases/12/receipts/unit-publication/payload_digest",json!("stale"),"publication-authority","current.plans[1].receipt"),
-        ("/acceptance_maps/phases/12/revisions/0/item_revisions/check~1shared",json!("stale"),"map-authority","current.plans[1].item_revision"),
-        ("/acceptance_maps/phases/12/revisions/0/content_revision",json!("stale"),"map-authority","current.plans[1].map_revision"),
+        (
+            "/plan_publications/phases/12/receipts/unit-publication/payload_digest",
+            json!("stale"),
+            "publication-authority",
+            "current.plans[1].receipt",
+        ),
+        (
+            "/acceptance_maps/phases/12/revisions/0/item_revisions/check~1shared",
+            json!("stale"),
+            "map-authority",
+            "current.plans[1].item_revision",
+        ),
+        (
+            "/acceptance_maps/phases/12/revisions/0/content_revision",
+            json!("stale"),
+            "map-authority",
+            "current.plans[1].map_revision",
+        ),
     ]);
 }
 
@@ -261,39 +566,82 @@ fn admission_refuses_a_stale_publication_receipt_or_map_revision() {
 fn admission_refuses_installed_plan_bytes_that_differ_from_the_publication() {
     use super::admission::validate;
     let (data, documents, contract) = native_unit_contract("custom-delivery-check");
-    let mut drift=documents.clone(); drift.get_mut("phases/12/PLAN-1.md").unwrap().push('\n');
-    assert_admission_refusal(validate(&data,&drift,&contract).unwrap_err(),"installed-plan","phases/12/PLAN-1.md","1");
+    let mut drift = documents.clone();
+    drift.get_mut("phases/12/PLAN-1.md").unwrap().push('\n');
+    assert_admission_refusal(
+        validate(&data, &drift, &contract).unwrap_err(),
+        "installed-plan",
+        "phases/12/PLAN-1.md",
+        "1",
+    );
 }
 
 #[test]
 fn admission_refuses_a_blank_check_command() {
     use super::admission::validate;
-    let (blank_data,blank_docs,blank_contract)=native_unit_contract("");
-    assert_admission_refusal(validate(&blank_data,&blank_docs,&blank_contract).unwrap_err(),"check-command","current.plans[1].evidence_map.items[0].spec.command","check/shared");
+    let (blank_data, blank_docs, blank_contract) = native_unit_contract("");
+    assert_admission_refusal(
+        validate(&blank_data, &blank_docs, &blank_contract).unwrap_err(),
+        "check-command",
+        "current.plans[1].evidence_map.items[0].spec.command",
+        "check/shared",
+    );
 }
 
 #[test]
 fn admission_refuses_an_empty_partial_unknown_stale_or_doubly_owned_allocation() {
     use super::admission::validate;
     let (data, documents, contract) = native_unit_contract("custom-delivery-check");
-    for (n,rule,slot,id) in [
-        (0,"allocation-task","contract.allocation","deliver"),
-        (1,"allocation-task","contract.allocation","document"),
-        (2,"allocation-task","contract.allocation[0]","unknown"),
-        (3,"allocation-item","contract.allocation[0].checks[0].id","unknown"),
-        (4,"allocation-kind","contract.allocation[0].checks[0].id","artifact/delivery"),
-        (5,"allocation-revision","contract.allocation[0].checks[0].item_revision","check/shared"),
-        (6,"allocation-check","contract.allocation","check/shared"),
-        (7,"allocation-owner","contract.allocation[2].checks[0]","check/shared"),
+    for (n, rule, slot, id) in [
+        (0, "allocation-task", "contract.allocation", "deliver"),
+        (1, "allocation-task", "contract.allocation", "document"),
+        (2, "allocation-task", "contract.allocation[0]", "unknown"),
+        (
+            3,
+            "allocation-item",
+            "contract.allocation[0].checks[0].id",
+            "unknown",
+        ),
+        (
+            4,
+            "allocation-kind",
+            "contract.allocation[0].checks[0].id",
+            "artifact/delivery",
+        ),
+        (
+            5,
+            "allocation-revision",
+            "contract.allocation[0].checks[0].item_revision",
+            "check/shared",
+        ),
+        (6, "allocation-check", "contract.allocation", "check/shared"),
+        (
+            7,
+            "allocation-owner",
+            "contract.allocation[2].checks[0]",
+            "check/shared",
+        ),
     ] {
-        let mut changed=contract.clone();
+        let mut changed = contract.clone();
         match n {
-            0=>changed.allocation.clear(),1=>{changed.allocation.remove(1);},2=>changed.allocation[0].task="unknown".into(),
-            3=>changed.allocation[0].checks[0].id="unknown".into(),4=>changed.allocation[0].checks[0].id="artifact/delivery".into(),
-            5=>changed.allocation[0].checks[0].item_revision="stale".into(),6=>changed.allocation[0].checks.clear(),
-            7=>changed.allocation[2].checks=changed.allocation[0].checks.clone(),_=>unreachable!(),
+            0 => changed.allocation.clear(),
+            1 => {
+                changed.allocation.remove(1);
+            }
+            2 => changed.allocation[0].task = "unknown".into(),
+            3 => changed.allocation[0].checks[0].id = "unknown".into(),
+            4 => changed.allocation[0].checks[0].id = "artifact/delivery".into(),
+            5 => changed.allocation[0].checks[0].item_revision = "stale".into(),
+            6 => changed.allocation[0].checks.clear(),
+            7 => changed.allocation[2].checks = changed.allocation[0].checks.clone(),
+            _ => unreachable!(),
         }
-        assert_admission_refusal(validate(&data,&documents,&changed).unwrap_err(),rule,slot,id);
+        assert_admission_refusal(
+            validate(&data, &documents, &changed).unwrap_err(),
+            rule,
+            slot,
+            id,
+        );
     }
 }
 
@@ -307,13 +655,20 @@ fn native_admission_refuses_check_command_outside_task_verify() {
     // exists on another task, but cannot launch under this closing owner.
     contract.allocation[1].checks = std::mem::take(&mut contract.allocation[0].checks);
     let error = validate(&data, &documents, &contract).unwrap_err();
-    let crate::store::Error::Invalid(message) = error else { panic!("expected located invalid: {error}") };
-    let diagnostic: crate::plan::model::Diagnostic = serde_json::from_str(message.strip_prefix("plan-refusal:").unwrap()).unwrap();
+    let crate::store::Error::Invalid(message) = error else {
+        panic!("expected located invalid: {error}")
+    };
+    let diagnostic: crate::plan::model::Diagnostic =
+        serde_json::from_str(message.strip_prefix("plan-refusal:").unwrap()).unwrap();
     assert_eq!(diagnostic.rule, "check-command-verify");
     assert_eq!(diagnostic.slot, "contract.allocation");
     assert_eq!(diagnostic.phase, Some(12));
     assert_eq!(diagnostic.id.as_deref(), Some("document"));
-    assert!(diagnostic.reason.contains("check/shared"), "{}", diagnostic.reason);
+    assert!(
+        diagnostic.reason.contains("check/shared"),
+        "{}",
+        diagnostic.reason
+    );
     assert!(diagnostic.reason.contains(command), "{}", diagnostic.reason);
 }
 
@@ -324,19 +679,43 @@ fn native_records_outlive_the_directory_identity_they_were_stamped_with() {
     // same path. The records a store retains were stamped under the old
     // identity; the identity is provenance, never a key the next process must
     // reproduce, so admissions, task events and plan events still bind.
-    use super::{admission, history::{self, Event, Request, Task}};
+    use super::{
+        admission,
+        history::{self, Event, Request, Task},
+    };
     let (data, documents, contract) = native_unit_contract("custom-delivery-check");
     let before_reboot = "46:302462;46:302461;46:1;36:256;";
     let after_reboot = "46:302568;46:302566;46:1;36:256;";
-    let admit = admission::Request { request_id: "admit".into(), expected_set_version: 0, contract };
+    let admit = admission::Request {
+        request_id: "admit".into(),
+        expected_set_version: 0,
+        contract,
+    };
     let (data, basis) = admission::contribute(&data, &documents, before_reboot, &admit).unwrap();
     assert_eq!(basis.root_binding, before_reboot);
-    assert_eq!(admission::replay(&data, &admit).unwrap(), Some(basis.clone()));
-    let task = Task { phase: 12, occurrence: "active-cycle:phase:12".into(), admission_digest: basis.request_digest.clone(),
-        plan: 1, task: "deliver".into() };
+    assert_eq!(
+        admission::replay(&data, &admit).unwrap(),
+        Some(basis.clone())
+    );
+    let task = Task {
+        phase: 12,
+        occurrence: "active-cycle:phase:12".into(),
+        admission_digest: basis.request_digest.clone(),
+        plan: 1,
+        task: "deliver".into(),
+    };
     let check = basis.request.contract.allocation[0].checks[0].clone();
-    let start = Request { request_id: "event-0".into(), task: task.clone(), attempt: "attempt-1".into(), expected_version: 0,
-        event: Event::Attempt { predecessor: None, checks: vec![check], base_commit: "unit-base".into() } };
+    let start = Request {
+        request_id: "event-0".into(),
+        task: task.clone(),
+        attempt: "attempt-1".into(),
+        expected_version: 0,
+        event: Event::Attempt {
+            predecessor: None,
+            checks: vec![check],
+            base_commit: "unit-base".into(),
+        },
+    };
     let (data, event) = history::contribute(&data, after_reboot, &start, process).unwrap();
     assert_eq!(event.root_binding, after_reboot);
     assert_eq!(history::replay(&data, &start).unwrap(), Some(event));
@@ -453,14 +832,27 @@ fn executor_never_requests_the_gates_the_orchestrator_owns() {
     // the lease is retained as a deviation, never refused.
     let executor = crate::execution::instructions::dispatch_text();
     let frontdoor = crate::execution::instructions::frontdoor_markdown();
-    assert!(executor.contains("The executor never requests `execution-suite` or `execution-plan-complete`"),
-        "the compiled executor text must hand the gates to the orchestrator");
-    assert!(!executor.contains("Every path in an evidence or completion commit"),
-        "D-170: the lease paragraph still promises a refusal");
-    assert!(executor.contains("retained as a deviation on the plan record"),
-        "D-170: the lease paragraph must name the retained deviation");
-    assert!(frontdoor.contains("request `execution-suite`"), "the front door must request the suite itself");
-    assert!(frontdoor.contains("then request `execution-plan-complete`"), "the front door must complete the plan itself");
+    assert!(
+        executor
+            .contains("The executor never requests `execution-suite` or `execution-plan-complete`"),
+        "the compiled executor text must hand the gates to the orchestrator"
+    );
+    assert!(
+        !executor.contains("Every path in an evidence or completion commit"),
+        "D-170: the lease paragraph still promises a refusal"
+    );
+    assert!(
+        executor.contains("retained as a deviation on the plan record"),
+        "D-170: the lease paragraph must name the retained deviation"
+    );
+    assert!(
+        frontdoor.contains("request `execution-suite`"),
+        "the front door must request the suite itself"
+    );
+    assert!(
+        frontdoor.contains("then request `execution-plan-complete`"),
+        "the front door must complete the plan itself"
+    );
 }
 
 #[test]
@@ -473,13 +865,17 @@ fn suite_repair_is_plan_level_single_use_and_retains_deviations() {
     assert_eq!(serde_json::to_value(event).unwrap(), question);
     let answer = json!({"kind":"suite-repair-answer","question_id":"suite-repair:run-1",
         "owner":"Fixture Owner","at":"2026-09-15T18:00:00Z","disposition":"approve"});
-    assert!(serde_json::from_value::<super::history::PlanEvent>(answer).is_ok(),
-        "the owner answer must be a plan event, never a task checkpoint");
+    assert!(
+        serde_json::from_value::<super::history::PlanEvent>(answer).is_ok(),
+        "the owner answer must be a plan event, never a task checkpoint"
+    );
     let repair = json!({"kind":"suite-repair","question_id":"suite-repair:run-1",
         "commits":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
         "changed_paths":{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":["docs/outside.md"]}});
-    assert!(serde_json::from_value::<super::history::PlanEvent>(repair).is_ok(),
-        "the Git-observed repair must be retained at plan level");
+    assert!(
+        serde_json::from_value::<super::history::PlanEvent>(repair).is_ok(),
+        "the Git-observed repair must be retained at plan level"
+    );
 }
 
 fn overlap_plan_source(plan: u32, files: &str, body: &str) -> String {
@@ -490,14 +886,29 @@ fn overlap_plan_source(plan: u32, files: &str, body: &str) -> String {
 
 #[test]
 fn parse_plan_keeps_the_body_bytes_verbatim() {
-    let first = parse_plan(overlap_plan_source(1, "src/a.rs", "opaque 日本語\n").as_bytes(), 6, 1).unwrap();
+    let first = parse_plan(
+        overlap_plan_source(1, "src/a.rs", "opaque 日本語\n").as_bytes(),
+        6,
+        1,
+    )
+    .unwrap();
     assert_eq!(first.body, "opaque 日本語\n");
 }
 
 #[test]
 fn a_plan_sharing_a_file_with_an_earlier_plan_is_ready_only_after_it_completes() {
-    let first = parse_plan(overlap_plan_source(1, "src/a.rs", "opaque 日本語\n").as_bytes(), 6, 1).unwrap();
-    let second = parse_plan(overlap_plan_source(2, "src/a.rs", "second\n").as_bytes(), 6, 2).unwrap();
+    let first = parse_plan(
+        overlap_plan_source(1, "src/a.rs", "opaque 日本語\n").as_bytes(),
+        6,
+        1,
+    )
+    .unwrap();
+    let second = parse_plan(
+        overlap_plan_source(2, "src/a.rs", "second\n").as_bytes(),
+        6,
+        2,
+    )
+    .unwrap();
     let graph = PlanGraph::build(&[first, second]).unwrap();
     assert_eq!(graph.ready(&BTreeSet::new()), [1]);
     assert_eq!(graph.ready(&BTreeSet::from([1])), [2]);
@@ -526,32 +937,63 @@ fn ac5_unknown_patch_keys_are_executable_evidence() {
 
 const ROOT: &str = "46:1;";
 
-fn admit(id: &str, expected: u64, contract: &super::admission::Contract) -> super::admission::Request {
-    super::admission::Request { request_id: id.into(), expected_set_version: expected, contract: contract.clone() }
+fn admit(
+    id: &str,
+    expected: u64,
+    contract: &super::admission::Contract,
+) -> super::admission::Request {
+    super::admission::Request {
+        request_id: id.into(),
+        expected_set_version: expected,
+        contract: contract.clone(),
+    }
 }
 
 /// The fixture's phase as it stood with only plan 1 published, before plan 2
 /// was added at a new gap identity.
-fn native_unit_contract_before_plan_2() -> (serde_json::Value, std::collections::BTreeMap<String, String>, super::admission::Contract) {
+fn native_unit_contract_before_plan_2() -> (
+    serde_json::Value,
+    std::collections::BTreeMap<String, String>,
+    super::admission::Contract,
+) {
     let (mut data, mut documents, mut contract) = native_unit_contract("custom-delivery-check");
     let occurrence = data.pointer_mut("/plan_publications/phases/12").unwrap();
-    occurrence["publications"].as_object_mut().unwrap().remove("2");
+    occurrence["publications"]
+        .as_object_mut()
+        .unwrap()
+        .remove("2");
     occurrence["high_water"] = json!(1);
     occurrence["consumed"] = json!([1]);
-    occurrence["receipts"]["unit-publication"]["results"].as_array_mut().unwrap().retain(|r| r["identity"]["plan"] != 2);
-    data.pointer_mut("/acceptance_maps/phases/12/revisions").unwrap().as_array_mut().unwrap().retain(|r| r["identity"]["plan"] != 2);
+    occurrence["receipts"]["unit-publication"]["results"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|r| r["identity"]["plan"] != 2);
+    data.pointer_mut("/acceptance_maps/phases/12/revisions")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .retain(|r| r["identity"]["plan"] != 2);
     documents.remove("phases/12/PLAN-2.md");
     contract.plans.retain(|binding| binding.plan == 1);
-    contract.allocation.retain(|assignment| assignment.plan == 1);
+    contract
+        .allocation
+        .retain(|assignment| assignment.plan == 1);
     (data, documents, contract)
 }
 
 /// The whole fixture phase with plan 1 already admitted, its admission record
 /// changed by `edit` first.
-fn plan_1_admitted(edit: impl FnOnce(&mut serde_json::Value)) -> (serde_json::Value, std::collections::BTreeMap<String, String>, super::admission::Contract) {
+fn plan_1_admitted(
+    edit: impl FnOnce(&mut serde_json::Value),
+) -> (
+    serde_json::Value,
+    std::collections::BTreeMap<String, String>,
+    super::admission::Contract,
+) {
     use super::admission::{NAMESPACE, contribute};
     let (before, before_documents, first) = native_unit_contract_before_plan_2();
-    let (mut admitted, _) = contribute(&before, &before_documents, ROOT, &admit("admit", 0, &first)).unwrap();
+    let (mut admitted, _) =
+        contribute(&before, &before_documents, ROOT, &admit("admit", 0, &first)).unwrap();
     edit(&mut admitted[NAMESPACE]["phases"]["12"][0]);
     let (mut data, documents, contract) = native_unit_contract("custom-delivery-check");
     data[NAMESPACE] = admitted[NAMESPACE].clone();
@@ -574,7 +1016,10 @@ fn an_identical_admission_request_replays_without_changing_the_store() {
     let (data, documents, contract) = native_unit_contract("custom-delivery-check");
     let request = admit("admit", 0, &contract);
     let (after, record) = contribute(&data, &documents, ROOT, &request).unwrap();
-    assert_eq!(contribute(&after, &documents, ROOT, &request).unwrap(), (after, record));
+    assert_eq!(
+        contribute(&after, &documents, ROOT, &request).unwrap(),
+        (after, record)
+    );
 }
 
 #[test]
@@ -586,7 +1031,9 @@ fn a_reused_admission_request_id_naming_another_contract_is_refused() {
     other.allocation.pop();
     assert_admission_refusal(
         contribute(&after, &documents, ROOT, &admit("admit", 0, &other)).unwrap_err(),
-        "admission-request-reuse", "request_id", "admit",
+        "admission-request-reuse",
+        "request_id",
+        "admit",
     );
 }
 
@@ -596,12 +1043,16 @@ fn an_admission_must_name_the_current_set_version() {
     let (data, documents, contract) = native_unit_contract("custom-delivery-check");
     assert_admission_refusal(
         contribute(&data, &documents, ROOT, &admit("early", 1, &contract)).unwrap_err(),
-        "admission-set-version", "expected_set_version", "early",
+        "admission-set-version",
+        "expected_set_version",
+        "early",
     );
     let (after, _) = contribute(&data, &documents, ROOT, &admit("admit", 0, &contract)).unwrap();
     assert_admission_refusal(
         contribute(&after, &documents, ROOT, &admit("stale", 0, &contract)).unwrap_err(),
-        "admission-set-version", "expected_set_version", "stale",
+        "admission-set-version",
+        "expected_set_version",
+        "stale",
     );
 }
 
@@ -610,7 +1061,12 @@ fn an_admission_must_cover_every_current_publication() {
     use super::admission::validate;
     let (data, documents, mut contract) = native_unit_contract("custom-delivery-check");
     contract.plans.retain(|binding| binding.plan == 1);
-    assert_admission_refusal(validate(&data, &documents, &contract).unwrap_err(), "admission-plan-set", "contract.plans", "");
+    assert_admission_refusal(
+        validate(&data, &documents, &contract).unwrap_err(),
+        "admission-plan-set",
+        "contract.plans",
+        "",
+    );
 }
 
 #[test]
@@ -618,8 +1074,12 @@ fn an_extension_is_appended_at_the_next_set_version_leaving_the_first_record_as_
     use super::admission::{NAMESPACE, contribute, records};
     let (data, documents, contract) = plan_1_admitted(|_| {});
     let first = data[NAMESPACE]["phases"]["12"][0].clone();
-    let (after, extension) = contribute(&data, &documents, ROOT, &admit("extend", 1, &contract)).unwrap();
-    assert_eq!((extension.set_version, &extension.request.contract), (2, &contract));
+    let (after, extension) =
+        contribute(&data, &documents, ROOT, &admit("extend", 1, &contract)).unwrap();
+    assert_eq!(
+        (extension.set_version, &extension.request.contract),
+        (2, &contract)
+    );
     assert_eq!(after[NAMESPACE]["phases"]["12"][0], first);
     assert_eq!(records(&after, 12).unwrap().len(), 2);
 }
@@ -627,22 +1087,28 @@ fn an_extension_is_appended_at_the_next_set_version_leaving_the_first_record_as_
 #[test]
 fn an_extension_must_keep_each_admitted_plan_binding() {
     use super::admission::contribute;
-    let (data, documents, contract) =
-        plan_1_admitted(|record| record["request"]["contract"]["plans"][0]["content_revision"] = json!("earlier"));
+    let (data, documents, contract) = plan_1_admitted(|record| {
+        record["request"]["contract"]["plans"][0]["content_revision"] = json!("earlier")
+    });
     assert_admission_refusal(
         contribute(&data, &documents, ROOT, &admit("extend", 1, &contract)).unwrap_err(),
-        "admitted-plan", "contract.plans", "1",
+        "admitted-plan",
+        "contract.plans",
+        "1",
     );
 }
 
 #[test]
 fn an_extension_cannot_move_an_admitted_check() {
     use super::admission::contribute;
-    let (data, documents, contract) =
-        plan_1_admitted(|record| record["request"]["contract"]["allocation"][0]["checks"] = json!([]));
+    let (data, documents, contract) = plan_1_admitted(|record| {
+        record["request"]["contract"]["allocation"][0]["checks"] = json!([])
+    });
     assert_admission_refusal(
         contribute(&data, &documents, ROOT, &admit("extend", 1, &contract)).unwrap_err(),
-        "admission-reassignment", "contract.allocation", "deliver",
+        "admission-reassignment",
+        "contract.allocation",
+        "deliver",
     );
 }
 
@@ -653,7 +1119,9 @@ fn an_extension_must_add_a_plan() {
     let (after, _) = contribute(&data, &documents, ROOT, &admit("admit", 0, &contract)).unwrap();
     assert_admission_refusal(
         contribute(&after, &documents, ROOT, &admit("again", 1, &contract)).unwrap_err(),
-        "admission-extension", "contract.plans", "",
+        "admission-extension",
+        "contract.plans",
+        "",
     );
 }
 
@@ -671,18 +1139,46 @@ fn only_a_plan_an_admission_names_is_admitted() {
 fn native_task_started() -> (serde_json::Value, super::history::Request) {
     use super::history::{Event, Request, Task};
     let (data, documents, contract) = native_unit_contract("custom-delivery-check");
-    let (data, basis) = super::admission::contribute(&data, &documents, ROOT, &admit("admit", 0, &contract)).unwrap();
-    let task = Task { phase: 12, occurrence: "active-cycle:phase:12".into(), admission_digest: basis.request_digest.clone(),
-        plan: 1, task: "deliver".into() };
+    let (data, basis) =
+        super::admission::contribute(&data, &documents, ROOT, &admit("admit", 0, &contract))
+            .unwrap();
+    let task = Task {
+        phase: 12,
+        occurrence: "active-cycle:phase:12".into(),
+        admission_digest: basis.request_digest.clone(),
+        plan: 1,
+        task: "deliver".into(),
+    };
     let checks = basis.request.contract.allocation[0].checks.clone();
-    let start = Request { request_id: "event-0".into(), task, attempt: "attempt-1".into(), expected_version: 0,
-        event: Event::Attempt { predecessor: None, checks, base_commit: "unit-base".into() } };
+    let start = Request {
+        request_id: "event-0".into(),
+        task,
+        attempt: "attempt-1".into(),
+        expected_version: 0,
+        event: Event::Attempt {
+            predecessor: None,
+            checks,
+            base_commit: "unit-base".into(),
+        },
+    };
     (data, start)
 }
 
-fn progress(start: &super::history::Request, id: &str, expected_version: u64) -> super::history::Request {
-    super::history::Request { request_id: id.into(), expected_version, event: super::history::Event::AcknowledgedProgress {
-        text: "delivered the parcel".into(), evidence: vec![], commit: "a".repeat(40) }, ..start.clone() }
+fn progress(
+    start: &super::history::Request,
+    id: &str,
+    expected_version: u64,
+) -> super::history::Request {
+    super::history::Request {
+        request_id: id.into(),
+        expected_version,
+        event: super::history::Event::AcknowledgedProgress {
+            text: "delivered the parcel".into(),
+            evidence: vec![],
+            commit: "a".repeat(40),
+        },
+        ..start.clone()
+    }
 }
 
 #[test]
@@ -693,7 +1189,15 @@ fn each_task_event_is_recorded_at_the_next_version_with_its_request() {
     let (data, first) = contribute(&data, ROOT, &start, process).unwrap();
     let next = progress(&start, "event-1", 1);
     let (data, second) = contribute(&data, ROOT, &next, process).unwrap();
-    assert_eq!((first.version, &first.request, second.version, &second.request), (1, &start, 2, &next));
+    assert_eq!(
+        (
+            first.version,
+            &first.request,
+            second.version,
+            &second.request
+        ),
+        (1, &start, 2, &next)
+    );
     assert_eq!(records(&data, 12).unwrap(), [first, second]);
 }
 
@@ -705,7 +1209,9 @@ fn a_reused_task_request_id_naming_another_event_is_refused() {
     let (data, _) = contribute(&data, ROOT, &start, process).unwrap();
     assert_admission_refusal(
         contribute(&data, ROOT, &progress(&start, "event-0", 1), process).unwrap_err(),
-        "task-request-reuse", "request_id", "event-0",
+        "task-request-reuse",
+        "request_id",
+        "event-0",
     );
 }
 
@@ -718,7 +1224,9 @@ fn a_task_event_naming_a_stale_version_is_refused() {
     for stale in [0, 2] {
         assert_admission_refusal(
             contribute(&data, ROOT, &progress(&start, "event-1", stale), process).unwrap_err(),
-            "task-version", "task", "deliver",
+            "task-version",
+            "task",
+            "deliver",
         );
     }
 }
@@ -727,40 +1235,89 @@ fn a_task_event_naming_a_stale_version_is_refused() {
 /// and state, each with the bytes it replaces. `edit` changes the recorded
 /// state data first. Answers the intent, what storage holds before any of it
 /// landed, and the three participants' recorded bytes.
-fn native_task_intent(edit: impl FnOnce(&mut serde_json::Value)) -> (Vec<u8>, std::collections::BTreeMap<String, crate::store::Observed>, Vec<Vec<u8>>) {
+fn native_task_intent(
+    edit: impl FnOnce(&mut serde_json::Value),
+) -> (
+    Vec<u8>,
+    std::collections::BTreeMap<String, crate::store::Observed>,
+    Vec<Vec<u8>>,
+) {
     use crate::store::model::{DECISIONS, ITEMS, STATE, Snapshot, digest, render_lines};
     let (data, start) = native_task_started();
-    let (mut next, record) = super::history::contribute(&data, ROOT, &start, &mut baley::process::Recorded::new()).unwrap();
+    let (mut next, record) =
+        super::history::contribute(&data, ROOT, &start, &mut baley::process::Recorded::new())
+            .unwrap();
     edit(&mut next);
     let decisions = render_lines(&super::history::decisions(&record).unwrap()).unwrap();
     let before = serde_json::to_vec(&Snapshot::new(1, b"", b"", data).unwrap()).unwrap();
     let after = serde_json::to_vec(&Snapshot::new(2, b"", &decisions, next).unwrap()).unwrap();
-    let rows = [(ITEMS, Vec::new(), Vec::new()), (DECISIONS, Vec::new(), decisions), (STATE, before, after)];
+    let rows = [
+        (ITEMS, Vec::new(), Vec::new()),
+        (DECISIONS, Vec::new(), decisions),
+        (STATE, before, after),
+    ];
     let participants: Vec<_> = rows.iter().map(|(target, old, new)| json!({"target":target,
         "expected":{"bytes":old,"identity":format!("{target} before"),"directory_identity":ROOT},"bytes":new})).collect();
     let kind = json!({"operation":"native-task-v1","request":start,"root_binding":ROOT});
     let integrity = digest(&serde_json::to_vec(&json!([1, kind, participants])).unwrap());
-    let intent = serde_json::to_vec(&json!({"version":1,"kind":kind,"participants":participants,"integrity":integrity})).unwrap();
-    let current = rows.iter().map(|(target, old, _)| (target.to_string(), crate::store::Observed {
-        bytes: Some(old.clone()), identity: format!("{target} before"), directory_identity: ROOT.into() })).collect();
-    (intent, current, rows.into_iter().map(|(_, _, new)| new).collect())
+    let intent = serde_json::to_vec(
+        &json!({"version":1,"kind":kind,"participants":participants,"integrity":integrity}),
+    )
+    .unwrap();
+    let current = rows
+        .iter()
+        .map(|(target, old, _)| {
+            (
+                target.to_string(),
+                crate::store::Observed {
+                    bytes: Some(old.clone()),
+                    identity: format!("{target} before"),
+                    directory_identity: ROOT.into(),
+                },
+            )
+        })
+        .collect();
+    (
+        intent,
+        current,
+        rows.into_iter().map(|(_, _, new)| new).collect(),
+    )
 }
 
 #[test]
 fn a_task_event_whose_confirmation_failed_is_completed_from_its_recorded_intent() {
     use crate::store::transaction::{Pending, recovery};
     let (intent, current, recorded) = native_task_intent(|_| {});
-    let unit = recovery(Pending::parse(&intent).unwrap(), &current, &mut baley::process::Recorded::new()).unwrap();
-    assert_eq!(unit.participants().iter().map(|participant| participant.bytes.clone()).collect::<Vec<_>>(), recorded);
+    let unit = recovery(
+        Pending::parse(&intent).unwrap(),
+        &current,
+        &mut baley::process::Recorded::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        unit.participants()
+            .iter()
+            .map(|participant| participant.bytes.clone())
+            .collect::<Vec<_>>(),
+        recorded
+    );
 }
 
 #[test]
 fn a_task_intent_whose_state_is_not_the_events_transition_is_refused() {
     use crate::store::transaction::{Pending, recovery};
-    let (intent, current, _) = native_task_intent(|next| next["native_tasks"]["phases"]["12"][0]["version"] = json!(5));
+    let (intent, current, _) =
+        native_task_intent(|next| next["native_tasks"]["phases"]["12"][0]["version"] = json!(5));
     assert_eq!(
-        recovery(Pending::parse(&intent).unwrap(), &current, &mut baley::process::Recorded::new()).map(|_| ()),
-        Err(crate::store::Error::Invalid("native task intent differs from validated immutable transition".into()))
+        recovery(
+            Pending::parse(&intent).unwrap(),
+            &current,
+            &mut baley::process::Recorded::new()
+        )
+        .map(|_| ()),
+        Err(crate::store::Error::Invalid(
+            "native task intent differs from validated immutable transition".into()
+        ))
     );
 }
 

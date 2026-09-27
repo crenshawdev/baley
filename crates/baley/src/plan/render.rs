@@ -11,7 +11,10 @@ pub struct Part {
 
 fn finish_document(content: &Content, execution: &Execution, body: &str) -> Result<Vec<u8>> {
     if normalize(content)? != content.body {
-        return Err(Error::Invalid("evidence-map-section: approve the complete previewed document before publication".into()));
+        return Err(Error::Invalid(
+            "evidence-map-section: approve the complete previewed document before publication"
+                .into(),
+        ));
     }
     // JSON field values are also YAML values. Block keys preserve the native
     // reader's canonical-number span checks without a second schema dialect.
@@ -34,14 +37,18 @@ fn finish_document(content: &Content, execution: &Execution, body: &str) -> Resu
 
 pub fn document(content: &Content) -> Result<Vec<u8>> {
     if content.execution.is_empty() || content.body.is_empty() {
-        return Err(Error::Invalid("typed plan content has not been bound to its rendered document".into()));
+        return Err(Error::Invalid(
+            "typed plan content has not been bound to its rendered document".into(),
+        ));
     }
     finish_document(content, &content.execution, &content.body)
 }
 
 fn push_slot(text: &mut String, value: &str) {
     text.push_str(value);
-    if !value.ends_with('\n') { text.push('\n'); }
+    if !value.ends_with('\n') {
+        text.push('\n');
+    }
     text.push('\n');
 }
 
@@ -78,7 +85,9 @@ pub fn body(content: &Content, truths: &[(String, String)]) -> Result<String> {
     }
     text.push_str("## Notes\n\n");
     text.push_str(&content.notes);
-    if !text.ends_with('\n') { text.push('\n'); }
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
     Ok(text)
 }
 
@@ -111,11 +120,14 @@ fn headings(body: &str) -> Vec<(usize, String)> {
             let bytes = text.as_bytes();
             if let Some(&(marker, size)) = fence.as_ref() {
                 let count = bytes.iter().take_while(|b| **b == marker).count();
-                if count >= size && text[count..].trim().is_empty() { fence = None; }
+                if count >= size && text[count..].trim().is_empty() {
+                    fence = None;
+                }
             } else {
                 let marker = bytes.first().copied().unwrap_or(0);
                 let size = bytes.iter().take_while(|b| **b == marker).count();
-                if matches!(marker, b'`' | b'~') && size >= 3
+                if matches!(marker, b'`' | b'~')
+                    && size >= 3
                     && (marker != b'`' || !text[size..].contains('`'))
                 {
                     fence = Some((marker, size));
@@ -124,7 +136,11 @@ fn headings(body: &str) -> Vec<(usize, String)> {
                 {
                     let title = rest.trim();
                     let without_hashes = title.trim_end_matches('#');
-                    let title = if without_hashes.ends_with([' ', '\t']) { without_hashes.trim_end() } else { title };
+                    let title = if without_hashes.ends_with([' ', '\t']) {
+                        without_hashes.trim_end()
+                    } else {
+                        title
+                    };
                     found.push((offset, title.to_owned()));
                 }
             }
@@ -153,7 +169,8 @@ fn task_headings(body: &str) -> Vec<(usize, String)> {
             } else {
                 let marker = bytes.first().copied().unwrap_or(0);
                 let size = bytes.iter().take_while(|byte| **byte == marker).count();
-                if matches!(marker, b'`' | b'~') && size >= 3
+                if matches!(marker, b'`' | b'~')
+                    && size >= 3
                     && (marker != b'`' || !text[size..].contains('`'))
                 {
                     fence = Some((marker, size));
@@ -167,7 +184,10 @@ fn task_headings(body: &str) -> Vec<(usize, String)> {
                     && !rest.starts_with('#')
                     && (rest.is_empty() || rest.starts_with([' ', '\t']))
                 {
-                    found.push((offset, rest.trim().trim_end_matches('#').trim_end().to_owned()));
+                    found.push((
+                        offset,
+                        rest.trim().trim_end_matches('#').trim_end().to_owned(),
+                    ));
                 }
             }
         }
@@ -179,11 +199,16 @@ fn task_headings(body: &str) -> Vec<(usize, String)> {
 /// Fence-aware task spans aligned to the plan's retained execution task ids.
 pub fn task_parts(content: &Content) -> Result<Vec<Part>> {
     if !content.tasks.is_empty() {
-        return Ok(content.tasks.iter().enumerate().map(|(index, task)| Part {
-            selector: format!("task:{}", task.id),
-            title: task.title.clone(),
-            body: task_section(index + 1, task),
-        }).collect());
+        return Ok(content
+            .tasks
+            .iter()
+            .enumerate()
+            .map(|(index, task)| Part {
+                selector: format!("task:{}", task.id),
+                title: task.title.clone(),
+                body: task_section(index + 1, task),
+            })
+            .collect());
     }
     let headings = task_headings(&content.body);
     if headings.len() != content.execution.tasks.len() {
@@ -199,18 +224,27 @@ pub fn task_parts(content: &Content) -> Result<Vec<Part>> {
         .map(|(index, (start, title))| Part {
             selector: format!("task:{}", content.execution.tasks[index].id),
             title: title.clone(),
-            body: content.body[*start..headings.get(index + 1).map_or(content.body.len(), |next| next.0)].to_owned(),
+            body: content.body[*start
+                ..headings
+                    .get(index + 1)
+                    .map_or(content.body.len(), |next| next.0)]
+                .to_owned(),
         })
         .collect())
 }
 
 fn map_span(body: &str) -> Result<Option<std::ops::Range<usize>>> {
     let headings = headings(body);
-    let mut spans = headings.iter().enumerate().filter(|(_, (_, title))| title == "Evidence map")
+    let mut spans = headings
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, title))| title == "Evidence map")
         .map(|(i, (start, _))| *start..headings.get(i + 1).map_or(body.len(), |h| h.0));
     let first = spans.next();
     if spans.next().is_some() {
-        return Err(Error::Invalid("evidence-map-section: ambiguous duplicate Evidence map sections".into()));
+        return Err(Error::Invalid(
+            "evidence-map-section: ambiguous duplicate Evidence map sections".into(),
+        ));
     }
     Ok(first)
 }
@@ -220,7 +254,10 @@ pub fn old_section(body: &str) -> Result<Option<String>> {
 }
 
 pub fn section(map: &super::evidence::Map) -> Result<String> {
-    Ok(format!("## Evidence map\n\n```json\n{}\n```\n\n", serde_json::to_string_pretty(map)?))
+    Ok(format!(
+        "## Evidence map\n\n```json\n{}\n```\n\n",
+        serde_json::to_string_pretty(map)?
+    ))
 }
 
 /// Only the unapproved preview inserts text. The commit path compares the
@@ -232,14 +269,20 @@ pub fn normalize(content: &Content) -> Result<String> {
     let rendered = section(map)?;
     if let Some(span) = map_span(&content.body)? {
         if content.body[span] != rendered {
-            return Err(Error::Invalid("evidence-map-section: typed map disagrees with authored section".into()));
+            return Err(Error::Invalid(
+                "evidence-map-section: typed map disagrees with authored section".into(),
+            ));
         }
         return Ok(content.body.clone());
     }
-    let at = headings(&content.body).iter().find(|(_, title)| title == "Tasks")
+    let at = headings(&content.body)
+        .iter()
+        .find(|(_, title)| title == "Tasks")
         .map_or(content.body.len(), |(offset, _)| *offset);
     let mut body = content.body[..at].to_owned();
-    if !body.is_empty() && !body.ends_with('\n') { body.push('\n'); }
+    if !body.is_empty() && !body.ends_with('\n') {
+        body.push('\n');
+    }
     body.push_str(&rendered);
     body.push_str(&content.body[at..]);
     Ok(body)

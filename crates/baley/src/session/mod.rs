@@ -85,7 +85,11 @@ struct GuardedDocuments<'a, I: ConfigIo> {
 }
 
 impl<I: ConfigIo> ArtifactIo for GuardedDocuments<'_, I> {
-    fn acceptance(&mut self, root: &Path) -> std::result::Result<baley::derivation::AcceptanceOverlay, baley::derivation::DerivationError> {
+    fn acceptance(
+        &mut self,
+        root: &Path,
+    ) -> std::result::Result<baley::derivation::AcceptanceOverlay, baley::derivation::DerivationError>
+    {
         self.files.acceptance(root)
     }
     fn resolve_root(&mut self, selected: &Path) -> std::result::Result<PathBuf, InputFailure> {
@@ -125,7 +129,12 @@ pub fn observe_documents<I: ConfigIo>(
     root: &Path,
     io: &mut I,
 ) -> Result<(derivation::CapturedInputs, Vec<SourceGuard>)> {
-    let mut documents = GuardedDocuments { io, files: ArtifactFiles, guards: Vec::new(), failure: None };
+    let mut documents = GuardedDocuments {
+        io,
+        files: ArtifactFiles,
+        guards: Vec::new(),
+        failure: None,
+    };
     let capture = derivation::capture_inputs(root, &mut documents)
         .map_err(|error| Error::Io(format!("legacy documents unavailable: {error}")))?;
     if let Some(error) = documents.failure {
@@ -143,7 +152,8 @@ fn observe<I: ConfigIo>(io: &mut I, path: &Path) -> Result<Input> {
 use baley::acquisition::store_error as store_input_error;
 
 fn observe_store<I: ConfigIo>(io: &mut I, path: &Path) -> Result<Input> {
-    io.read_store(&reload::identity(path)?).map_err(store_input_error)
+    io.read_store(&reload::identity(path)?)
+        .map_err(store_input_error)
 }
 fn guard(path: PathBuf, input: &Input) -> SourceGuard {
     SourceGuard {
@@ -245,7 +255,11 @@ fn prepare_initialization<I: ConfigIo>(
     };
     let reused = shared.as_ref().filter(|input| input.bytes.is_some());
     // An existing native repo config is the repo layer; initialization keeps it.
-    let effective = merge::merge(reused.map(parse_input).transpose()?.flatten(), parse_input(&repo)?, false);
+    let effective = merge::merge(
+        reused.map(parse_input).transpose()?.flatten(),
+        parse_input(&repo)?,
+        false,
+    );
     reload::validate_effective(&effective)?;
     let generation = Generation {
         number: 0,
@@ -307,9 +321,13 @@ fn prepare_initialization<I: ConfigIo>(
 /// since initialization observed it.
 fn initial_repo_config(generation: &Generation, installed: Option<&[u8]>) -> Result<Vec<u8>> {
     match (&generation.repo.bytes, installed) {
-        (Some(observed), Some(installed)) if observed.as_slice() == installed => Ok(observed.clone()),
+        (Some(observed), Some(installed)) if observed.as_slice() == installed => {
+            Ok(observed.clone())
+        }
         (None, None) => Ok(serde_json::to_vec_pretty(&generation.effective.repo)?),
-        _ => Err(Error::Conflict("repo config changed during initialization".into())),
+        _ => Err(Error::Conflict(
+            "repo config changed during initialization".into(),
+        )),
     }
 }
 
@@ -411,7 +429,9 @@ pub fn drafts(root: &Path) -> Result<Arc<Mutex<Drafts>>> {
     type Registry = std::collections::BTreeMap<PathBuf, Arc<Mutex<Drafts>>>;
     static DRAFTS: std::sync::OnceLock<Mutex<Registry>> = std::sync::OnceLock::new();
     let root = reload::identity(root)?;
-    let mut registry = DRAFTS.get_or_init(Mutex::default).lock()
+    let mut registry = DRAFTS
+        .get_or_init(Mutex::default)
+        .lock()
         .map_err(|_| Error::Invalid("draft registry unavailable".into()))?;
     Ok(registry.entry(root).or_default().clone())
 }
@@ -428,7 +448,9 @@ pub fn replays_evidence(
     match decisions.iter().find(|prior| prior.id == decision.id) {
         None => Ok(false),
         Some(prior) if prior.same_record(decision) => Ok(true),
-        Some(_) => Err(Error::Conflict("operation identity reused for different content".into())),
+        Some(_) => Err(Error::Conflict(
+            "operation identity reused for different content".into(),
+        )),
     }
 }
 
@@ -442,7 +464,9 @@ pub fn evidence_write(
     record: &baley::evidence::Record,
 ) -> Result<Operation> {
     if expected.snapshot.data.get("import") != Some(manifest) {
-        return Err(Error::Invalid("evidence proposal must preserve import manifest".into()));
+        return Err(Error::Invalid(
+            "evidence proposal must preserve import manifest".into(),
+        ));
     }
     let data = baley::evidence::persistence::project(&expected.snapshot.data, record)?;
     Ok(Operation::CompareTransact {
@@ -526,7 +550,8 @@ impl<I: ConfigIo> Session<I> {
     ) -> Result<View> {
         use baley::evidence::persistence;
         self.config()?;
-        let decision = persistence::history(operation_id, record, baley::store::model::stamped_at())?;
+        let decision =
+            persistence::history(operation_id, record, baley::store::model::stamped_at())?;
         let current = self.store.request(Operation::ReadVerified).await?;
         if replays_evidence(&current.decisions, &decision)? {
             return Ok(current);
@@ -626,9 +651,7 @@ pub fn check_derivation(current: &View, expected: &View, data: &Value) -> Result
     if current.snapshot.generation != expected.snapshot.generation
         || current.snapshot.integrity != expected.snapshot.integrity
     {
-        return Err(Error::Conflict(
-            baley::store::writer::STALE_SNAPSHOT.into(),
-        ));
+        return Err(Error::Conflict(baley::store::writer::STALE_SNAPSHOT.into()));
     }
     if !data.is_object() || data.get("import") != current.snapshot.data.get("import") {
         return Err(Error::Invalid(
@@ -783,7 +806,8 @@ impl<I: ConfigIo + Clone> SessionFactory<I> {
                 .ok_or_else(|| Error::Conflict("pending intent lacks snapshot".into()))?;
             let bytes = baley::store::transaction::intent_bytes(&participant["bytes"])?;
             let snapshot: Snapshot = serde_json::from_slice(&bytes)?;
-            let previous = baley::store::transaction::intent_bytes_option(&participant["expected"]["bytes"])?;
+            let previous =
+                baley::store::transaction::intent_bytes_option(&participant["expected"]["bytes"])?;
             // A prune requires an already imported store. Its digest-encoded
             // preimage omits bytes; that omission is not an import transition.
             intent["kind"]["operation"] != "milestone-prune-v1"

@@ -71,10 +71,16 @@ pub fn parts(context: &ApprovedContext) -> Vec<Part> {
         title: truth.id.clone(),
         body: format!("{}\n", truth.text),
     }));
-    parts.extend(input.assumptions.iter().enumerate().map(|(index, assumption)| Part {
-        selector: format!("assumption:{}", index + 1),
-        title: format!("Assumption {}", index + 1),
-        body: format!("{assumption}\n"),
-    }));
+    parts.extend(
+        input
+            .assumptions
+            .iter()
+            .enumerate()
+            .map(|(index, assumption)| Part {
+                selector: format!("assumption:{}", index + 1),
+                title: format!("Assumption {}", index + 1),
+                body: format!("{assumption}\n"),
+            }),
+    );
     parts
 }

@@ -1,5 +1,4 @@
 //! Resident-owned risk observations. Detection and confirmed persistence are separate.
-use baley::process::Process;
 use crate::{
     config::{
         merge,
@@ -7,6 +6,7 @@ use crate::{
     },
     session::SessionFactory,
 };
+use baley::process::Process;
 use baley::{
     envelope::Envelope,
     rail::{
@@ -32,7 +32,8 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
     } = &request;
     if risk::validate_name(request_id).is_err()
         || risk::validate_name(selection.occurrence()).is_err()
-        || selection.worker()
+        || selection
+            .worker()
             .is_some_and(|worker| risk::validate_name(worker).is_err())
     {
         return Ok(refused(
@@ -79,7 +80,10 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
         .parent()
         .ok_or_else(|| Error::Invalid("planning root lacks project".into()))?
         .to_path_buf();
-    let mut scope = selection.bind(project.to_string_lossy().into_owned(), root.to_string_lossy().into_owned());
+    let mut scope = selection.bind(
+        project.to_string_lossy().into_owned(),
+        root.to_string_lossy().into_owned(),
+    );
     let material_source = if let risk::Source::Execution { plan, dispatch_id } = source {
         let phase = match scope.execution(*plan) {
             Ok(phase) => phase,
@@ -116,7 +120,8 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
     }
     let source = source.clone();
     let observation = tokio::task::spawn_blocking(move || {
-        let (resolution, mut diagnostics) = git::resolve(&project, &material_source, &mut baley::process::System);
+        let (resolution, mut diagnostics) =
+            git::resolve(&project, &material_source, &mut baley::process::System);
         let material = resolution.material();
         let scan = if material
             .as_ref()
@@ -125,13 +130,15 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             None
         } else {
             Some(match material {
-                Some(material) => match git::scan(&project, &material, &surfaces, &mut baley::process::System) {
-                    Ok(scan) => scan,
-                    Err(error) => {
-                        diagnostics.push(error.to_string());
-                        baley::rail::risk_diff::scan(None, &[], &surfaces)?
+                Some(material) => {
+                    match git::scan(&project, &material, &surfaces, &mut baley::process::System) {
+                        Ok(scan) => scan,
+                        Err(error) => {
+                            diagnostics.push(error.to_string());
+                            baley::rail::risk_diff::scan(None, &[], &surfaces)?
+                        }
                     }
-                },
+                }
                 None => baley::rail::risk_diff::scan(None, &[], &surfaces)?,
             })
         };
@@ -238,7 +245,10 @@ pub fn receipt_boundary(
 ) -> Result<receipts::Boundary> {
     let (run_id, after_generation) = match source {
         risk::Source::Execution { dispatch_id, .. } => {
-            let phase = scope.phase().ok_or_else(|| Error::Invalid("execution requires a phase scope".into()))?.get();
+            let phase = scope
+                .phase()
+                .ok_or_else(|| Error::Invalid("execution requires a phase scope".into()))?
+                .get();
             let generation = view.decisions.iter().filter_map(|record| match &record.decision {
                 baley::store::model::Decision::BoundaryV1(value)
                     if value.boundary.scope == (baley::execution::boundary::BoundaryScope::Execution {phase})
@@ -338,7 +348,10 @@ pub async fn receipt<I: ConfigIo + Clone + Sync>(
         }
         Err(error) => return Ok(refused("invalid-surfaces", &error.to_string())),
     };
-    let mut scope = query.scope.bind(project.to_string_lossy().into_owned(), root.to_string_lossy().into_owned());
+    let mut scope = query.scope.bind(
+        project.to_string_lossy().into_owned(),
+        root.to_string_lossy().into_owned(),
+    );
     let material = match &query.source {
         risk::Source::Execution { plan, dispatch_id } => {
             let phase = match scope.execution(*plan) {
@@ -529,20 +542,38 @@ pub fn execution_requirements(
     }).collect()
 }
 
-fn validate_scope(root: &Path, view: &View, selection: &risk::ScopeSelection, source: &risk::Source) -> Result<()> {
+fn validate_scope(
+    root: &Path,
+    view: &View,
+    selection: &risk::ScopeSelection,
+    source: &risk::Source,
+) -> Result<()> {
     risk::validate_name(selection.occurrence())?;
-    if let Some(worker) = selection.worker() { risk::validate_name(worker)?; }
+    if let Some(worker) = selection.worker() {
+        risk::validate_name(worker)?;
+    }
     match selection {
-        risk::ScopeSelection::Phase { phase, .. } if root.join(format!("phases/{phase}")).is_dir() => Ok(()),
-        risk::ScopeSelection::RootDebug { occurrence, .. } if matches!(source, risk::Source::Staged { .. }) => {
+        risk::ScopeSelection::Phase { phase, .. }
+            if root.join(format!("phases/{phase}")).is_dir() =>
+        {
+            Ok(())
+        }
+        risk::ScopeSelection::RootDebug { occurrence, .. }
+            if matches!(source, risk::Source::Staged { .. }) =>
+        {
             let records = baley::debug::model::namespace(&view.snapshot.data)?;
-            let record = records.records.get(occurrence)
-                .ok_or_else(|| Error::Invalid("root-debug scope requires an existing debug record".into()))?;
+            let record = records.records.get(occurrence).ok_or_else(|| {
+                Error::Invalid("root-debug scope requires an existing debug record".into())
+            })?;
             if record.root_binding != baley::verification::inputs::root_binding(root)? {
-                return Err(Error::Invalid("root-debug scope belongs to another root".into()));
+                return Err(Error::Invalid(
+                    "root-debug scope belongs to another root".into(),
+                ));
             }
             Ok(())
         }
-        _ => Err(Error::Invalid("requested scope is unavailable or requires staged material".into())),
+        _ => Err(Error::Invalid(
+            "requested scope is unavailable or requires staged material".into(),
+        )),
     }
 }

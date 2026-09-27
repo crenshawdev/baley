@@ -592,9 +592,13 @@ pub struct AdmittedReply(Arc<tokio::sync::Mutex<Option<ToolReceiver>>>);
 
 impl AdmittedReply {
     pub async fn receive(&self) -> ToolAnswer {
-        let receiver = self.0.lock().await.take().ok_or_else(||
-            rmcp::ErrorData::internal_error("admitted reply already taken", None))?;
-        receiver.await.map_err(|_| rmcp::ErrorData::internal_error("admitted worker stopped", None))?
+        let receiver =
+            self.0.lock().await.take().ok_or_else(|| {
+                rmcp::ErrorData::internal_error("admitted reply already taken", None)
+            })?;
+        receiver
+            .await
+            .map_err(|_| rmcp::ErrorData::internal_error("admitted worker stopped", None))?
     }
 }
 
@@ -615,16 +619,27 @@ struct AdmissionState {
 }
 
 impl AdmissionState {
-    fn step(&self, now: std::time::Instant, incoming: Option<&str>) -> baley::store::writer::DrainAction {
-        let admissions: Vec<_> = self.open.iter().cloned()
-            .chain(self.pending.iter().map(|call| call.admission.clone())).collect();
+    fn step(
+        &self,
+        now: std::time::Instant,
+        incoming: Option<&str>,
+    ) -> baley::store::writer::DrainAction {
+        let admissions: Vec<_> = self
+            .open
+            .iter()
+            .cloned()
+            .chain(self.pending.iter().map(|call| call.admission.clone()))
+            .collect();
         baley::store::writer::Drain {
             admission_closed: self.cutoff.is_some(),
             admissions: &admissions,
             completed_prefix: self.completed_prefix,
             open_write: self.open.as_ref().map(|admission| admission.id.as_str()),
-            elapsed: self.cutoff.map_or(std::time::Duration::ZERO, |cutoff| now.duration_since(cutoff)),
-        }.step(incoming)
+            elapsed: self.cutoff.map_or(std::time::Duration::ZERO, |cutoff| {
+                now.duration_since(cutoff)
+            }),
+        }
+        .step(incoming)
     }
 }
 
@@ -661,7 +676,10 @@ impl AdmissionQueue {
                     let mut state = worker_inner.state.lock().expect("admission state");
                     match state.step(std::time::Instant::now(), None) {
                         DrainAction::Next(id) => {
-                            let at = state.pending.iter().position(|call| call.admission.id == id)
+                            let at = state
+                                .pending
+                                .iter()
+                                .position(|call| call.admission.id == id)
                                 .expect("selected admitted call");
                             let call = state.pending.remove(at).expect("pending call");
                             state.open = Some(call.admission.clone());
@@ -670,13 +688,19 @@ impl AdmissionQueue {
                         DrainAction::Join => return Ok(()),
                         DrainAction::DrainLimit(limit) => return Err(limit),
                         DrainAction::Wait => None,
-                        DrainAction::Admit | DrainAction::Refuse => unreachable!("no incoming request"),
+                        DrainAction::Admit | DrainAction::Refuse => {
+                            unreachable!("no incoming request")
+                        }
                     }
                 };
                 if let Some(call) = call {
                     drop(call.capacity);
-                    let answer = handler.call(call.request.name.as_ref(),
-                        call.request.arguments.map(serde_json::Value::Object)).await;
+                    let answer = handler
+                        .call(
+                            call.request.name.as_ref(),
+                            call.request.arguments.map(serde_json::Value::Object),
+                        )
+                        .await;
                     let _ = call.reply.send(answer);
                     let mut state = worker_inner.state.lock().expect("admission state");
                     state.completed_prefix = call.admission.sequence;
@@ -686,23 +710,40 @@ impl AdmissionQueue {
                 }
             }
         });
-        Self { inner, worker: Arc::new(tokio::sync::Mutex::new(Some(worker))) }
+        Self {
+            inner,
+            worker: Arc::new(tokio::sync::Mutex::new(Some(worker))),
+        }
     }
 
-    fn admit(&self, id: &str, request: rmcp::model::CallToolRequestParams,
-        capacity: tokio::sync::OwnedSemaphorePermit) -> Option<AdmittedReply> {
+    fn admit(
+        &self,
+        id: &str,
+        request: rmcp::model::CallToolRequestParams,
+        capacity: tokio::sync::OwnedSemaphorePermit,
+    ) -> Option<AdmittedReply> {
         let (reply, receiver) = tokio::sync::oneshot::channel();
         let mut state = self.inner.state.lock().expect("admission state");
-        if state.step(std::time::Instant::now(), Some(id)) == baley::store::writer::DrainAction::Refuse {
+        if state.step(std::time::Instant::now(), Some(id))
+            == baley::store::writer::DrainAction::Refuse
+        {
             return None;
         }
         state.sequence += 1;
         let admission = baley::store::writer::Admission {
-            sequence: state.sequence, id: format!("{}:{id}", state.sequence),
+            sequence: state.sequence,
+            id: format!("{}:{id}", state.sequence),
         };
-        state.pending.push_back(AdmittedCall { admission, request, reply, capacity });
+        state.pending.push_back(AdmittedCall {
+            admission,
+            request,
+            reply,
+            capacity,
+        });
         self.inner.changed.notify_one();
-        Some(AdmittedReply(Arc::new(tokio::sync::Mutex::new(Some(receiver)))))
+        Some(AdmittedReply(Arc::new(tokio::sync::Mutex::new(Some(
+            receiver,
+        )))))
     }
 
     pub fn close(&self) {
@@ -715,7 +756,10 @@ impl AdmissionQueue {
 
     pub async fn closed(&self) -> std::time::Instant {
         let mut closed = self.inner.closed.subscribe();
-        let cutoff = *closed.wait_for(Option::is_some).await.expect("admission sender retained");
+        let cutoff = *closed
+            .wait_for(Option::is_some)
+            .await
+            .expect("admission sender retained");
         cutoff.expect("closed admission")
     }
 
@@ -725,7 +769,10 @@ impl AdmissionQueue {
         let deadline = tokio::time::Instant::from_std(cutoff + SERVER_DRAIN_BOUND);
         let finish = async {
             if let Some(worker) = self.worker.lock().await.take() {
-                worker.await.map_err(|_| ShutdownError::Worker)?.map_err(ShutdownError::Limit)?;
+                worker
+                    .await
+                    .map_err(|_| ShutdownError::Worker)?
+                    .map_err(ShutdownError::Limit)?;
             }
             handler.shutdown().await.map_err(|_| ShutdownError::Worker)
         };
@@ -736,7 +783,10 @@ impl AdmissionQueue {
                 let limit = match state.step(std::time::Instant::now(), None) {
                     DrainAction::DrainLimit(limit) => limit,
                     // Handlers finished, but a resident/writer join did not.
-                    _ => DrainLimit { open_write: None, bound: SERVER_DRAIN_BOUND },
+                    _ => DrainLimit {
+                        open_write: None,
+                        bound: SERVER_DRAIN_BOUND,
+                    },
                 };
                 Err(ShutdownError::Limit(limit))
             }
@@ -820,7 +870,14 @@ where
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
         // Reserve before decoding: cancellation while waiting for capacity must
         // not drop a complete frame that has already left BoundedInput.
-        let capacity = self.admission.inner.capacity.clone().acquire_owned().await.ok()?;
+        let capacity = self
+            .admission
+            .inner
+            .capacity
+            .clone()
+            .acquire_owned()
+            .await
+            .ok()?;
         let frame = tokio::select! {
             biased;
             _ = self.admission.closed() => return None,
@@ -842,9 +899,14 @@ where
         match received {
             Ok(mut message) => {
                 if let Some(rmcp::model::JsonRpcMessage::Request(envelope)) = &mut message
-                    && let rmcp::model::ClientRequest::CallToolRequest(request) = &mut envelope.request
+                    && let rmcp::model::ClientRequest::CallToolRequest(request) =
+                        &mut envelope.request
                 {
-                    let reply = self.admission.admit(&envelope.id.to_string(), request.params.clone(), capacity)?;
+                    let reply = self.admission.admit(
+                        &envelope.id.to_string(),
+                        request.params.clone(),
+                        capacity,
+                    )?;
                     request.extensions.insert(reply);
                 }
                 message
@@ -899,7 +961,6 @@ mod tests {
         }
         assert_eq!(TEST_IN_FLIGHT.load(Ordering::Acquire), 0);
     }
-
 
     const PREFIX: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"baley_apply","arguments":{"operation":"review-return","raw":""#;
     const SUFFIX: &[u8] = b"\"}}}\n";

@@ -74,7 +74,10 @@ fn queue_member(findings: usize) -> QueueMember {
 
 #[test]
 fn a_queue_needs_triage_when_a_member_has_findings_or_something_is_unreadable() {
-    let with = |members, unreadable| Queue { members, unreadable };
+    let with = |members, unreadable| Queue {
+        members,
+        unreadable,
+    };
     assert!(with(vec![queue_member(1)], vec![]).needs_triage());
     assert!(with(vec![], vec!["deferred/link".into()]).needs_triage());
     assert!(!with(vec![queue_member(0)], vec![]).needs_triage());
@@ -122,7 +125,11 @@ fn a_symlinked_member_file_is_unreadable() {
     let name = "DEFERRED-diff-plan-1.json";
     member(root, "phases/1", name, valid("1"));
     fs::create_dir_all(root.join("deferred/1")).unwrap();
-    symlink("../../phases/1/DEFERRED-diff-plan-1.json", root.join("deferred/1").join(name)).unwrap();
+    symlink(
+        "../../phases/1/DEFERRED-diff-plan-1.json",
+        root.join("deferred/1").join(name),
+    )
+    .unwrap();
     let life = lifecycle(root, true);
     let q = capture(root, &life).unwrap().queue;
     assert_eq!(q.unreadable, [Path::new("deferred/1").join(name)]);
@@ -143,10 +150,21 @@ fn a_plain_file_directly_in_a_home_is_ignored() {
 fn absent_homes_are_empty_unreadable_homes_are_explicit() {
     use std::io::ErrorKind;
     assert_eq!(unlisted_home("phases", ErrorKind::NotFound), None);
-    for error in [ErrorKind::NotADirectory, ErrorKind::PermissionDenied, ErrorKind::Other] {
-        assert_eq!(unlisted_home("deferred", error), Some("deferred".into()), "{error:?}");
+    for error in [
+        ErrorKind::NotADirectory,
+        ErrorKind::PermissionDenied,
+        ErrorKind::Other,
+    ] {
+        assert_eq!(
+            unlisted_home("deferred", error),
+            Some("deferred".into()),
+            "{error:?}"
+        );
     }
-    let unreadable = Queue { members: vec![], unreadable: vec!["phases".into(), "deferred".into()] };
+    let unreadable = Queue {
+        members: vec![],
+        unreadable: vec!["phases".into(), "deferred".into()],
+    };
     assert!(unreadable.needs_triage());
     assert!(!Queue::default().needs_triage());
 }
@@ -154,8 +172,10 @@ fn absent_homes_are_empty_unreadable_homes_are_explicit() {
 #[test]
 fn closed_residue_uses_legal_names_and_live_directories_are_not_residue() {
     let names = || {
-        ["1", "1.10", "1.1", "2", "02", "0", "1.0", "1.2.3", "archive"]
-            .map(String::from)
+        [
+            "1", "1.10", "1.1", "2", "02", "0", "1.0", "1.2.3", "archive",
+        ]
+        .map(String::from)
     };
     assert_eq!(residue(Cycle::Closed, names()), ["1", "1.1", "1.10", "2"]);
     assert!(residue(Cycle::Live, names()).is_empty());

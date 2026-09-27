@@ -15,15 +15,27 @@ fn execute_next_decodes_an_optional_owner_selected_plan() {
 #[test]
 fn select_ready_plan_picks_the_named_plan_else_the_lowest_ready_one() {
     let selected = std::num::NonZeroU32::new(2);
-    assert_eq!(execution_service::select_ready_plan(&[1,2], &[], selected), Ok(2));
-    assert_eq!(execution_service::select_ready_plan(&[1,2], &[], None), Ok(1));
+    assert_eq!(
+        execution_service::select_ready_plan(&[1, 2], &[], selected),
+        Ok(2)
+    );
+    assert_eq!(
+        execution_service::select_ready_plan(&[1, 2], &[], None),
+        Ok(1)
+    );
 }
 
 #[test]
 fn select_ready_plan_refuses_a_plan_not_admitted_or_already_completed() {
     let selected = std::num::NonZeroU32::new(2);
-    assert_eq!(execution_service::select_ready_plan(&[1], &[], selected), Err("plan-not-admitted"));
-    assert_eq!(execution_service::select_ready_plan(&[1,2], &[2], selected), Err("plan-completed"));
+    assert_eq!(
+        execution_service::select_ready_plan(&[1], &[], selected),
+        Err("plan-not-admitted")
+    );
+    assert_eq!(
+        execution_service::select_ready_plan(&[1, 2], &[2], selected),
+        Err("plan-completed")
+    );
 }
 
 #[test]
@@ -34,17 +46,32 @@ fn suite_repair_answer_requires_owner() {
         "question_id":"suite-repair:run-1","owner":"Fixture Owner",
         "at":"2026-09-15T18:00:00Z","disposition":"approve"}});
     let baley::execution::runner::PlanApply::RepairAnswer { request } =
-        serde_json::from_value::<baley::execution::runner::PlanApply>(attributed).unwrap() else { unreachable!() };
-    assert!(request.plan_request().is_ok(), "an attributed answer is a plan request");
+        serde_json::from_value::<baley::execution::runner::PlanApply>(attributed).unwrap()
+    else {
+        unreachable!()
+    };
+    assert!(
+        request.plan_request().is_ok(),
+        "an attributed answer is a plan request"
+    );
     let blank = serde_json::json!({"operation":"execution-suite-repair-answer","request":{
         "request_id":"answer-blank","plan":{"phase":6,"occurrence":"phase-6-execution",
             "admission_digest":"admission","plan":1},"expected_version":3,
         "question_id":"suite-repair:run-1","owner":"","at":"2026-09-15T18:00:00Z",
         "disposition":"approve"}});
     let baley::execution::runner::PlanApply::RepairAnswer { request } =
-        serde_json::from_value::<baley::execution::runner::PlanApply>(blank).unwrap() else { unreachable!() };
-    assert!(request.plan_request().unwrap_err().to_string().contains("suite-repair-answer"),
-        "blank owner attribution must be refused at the public boundary");
+        serde_json::from_value::<baley::execution::runner::PlanApply>(blank).unwrap()
+    else {
+        unreachable!()
+    };
+    assert!(
+        request
+            .plan_request()
+            .unwrap_err()
+            .to_string()
+            .contains("suite-repair-answer"),
+        "blank owner attribution must be refused at the public boundary"
+    );
 }
 
 #[test]

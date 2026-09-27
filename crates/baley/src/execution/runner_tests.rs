@@ -56,7 +56,10 @@ fn a_rename_or_copy_keeps_only_its_destination() {
         output.extend_from_slice(b"src/new.rs\0src/old.rs\0 M src/other.rs\0");
         assert_eq!(
             entries(&output),
-            [(code.to_owned(), "src/new.rs".to_owned()), (" M ".to_owned(), "src/other.rs".to_owned())],
+            [
+                (code.to_owned(), "src/new.rs".to_owned()),
+                (" M ".to_owned(), "src/other.rs".to_owned())
+            ],
             "{code}"
         );
     }
@@ -81,14 +84,21 @@ fn a_staging_name_elsewhere_or_tracked_is_still_a_difference() {
     );
     assert_eq!(
         entries(b" M .planning/.state.json.1234.7.tmp\0"),
-        [(" M ".to_owned(), ".planning/.state.json.1234.7.tmp".to_owned())]
+        [(
+            " M ".to_owned(),
+            ".planning/.state.json.1234.7.tmp".to_owned()
+        )]
     );
 }
 
 // A name that only looks like a staging file is the owner's.
 #[test]
 fn a_name_that_is_not_the_stores_staging_form_is_a_difference() {
-    for name in [".planning/.state.json.tmp", ".planning/.state.json.abc.7.tmp", ".planning/state.json.1.2.tmp"] {
+    for name in [
+        ".planning/.state.json.tmp",
+        ".planning/.state.json.abc.7.tmp",
+        ".planning/state.json.1.2.tmp",
+    ] {
         let output = [b"?? ", name.as_bytes(), b"\0"].concat();
         assert_eq!(entries(&output).len(), 1, "{name}");
     }
@@ -118,7 +128,11 @@ fn no_commits_and_a_clean_tree_is_nothing_to_reconcile() {
 #[test]
 fn commits_since_the_baseline_require_reconciliation() {
     assert_eq!(
-        uncertain(&view(false, Some("attempt")), &[RED.to_owned(), GREEN.to_owned()], false),
+        uncertain(
+            &view(false, Some("attempt")),
+            &[RED.to_owned(), GREEN.to_owned()],
+            false
+        ),
         json!({"requires_reconciliation": true, "commits": [RED, GREEN]})
     );
 }

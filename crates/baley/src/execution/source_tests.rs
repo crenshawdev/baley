@@ -22,7 +22,8 @@ fn dispatch() -> ActiveDispatch {
         "files": [OWNED], "directories": ["crates/baley/src/execution"],
         "policy": {"rung": "medium", "branch": "current", "reviews": "disabled"},
         "base_sha": RED,
-    })).expect("a dispatch record")
+    }))
+    .expect("a dispatch record")
 }
 
 /// Everything Git would have said about an honest delivery.
@@ -35,8 +36,16 @@ fn honest() -> SourceObservation {
         .staged(b"", &[])
 }
 
-fn judged(observation: &SourceObservation) -> crate::store::Result<super::receipts::SourceMaterial> {
-    judge_source(&dispatch(), "deliver", DONE, &[GREEN.to_owned()], observation)
+fn judged(
+    observation: &SourceObservation,
+) -> crate::store::Result<super::receipts::SourceMaterial> {
+    judge_source(
+        &dispatch(),
+        "deliver",
+        DONE,
+        &[GREEN.to_owned()],
+        observation,
+    )
 }
 
 #[test]
@@ -53,14 +62,38 @@ fn a_signed_conventional_completion_inside_the_lease_is_accepted() {
 #[test]
 fn an_evidence_commit_that_is_the_dispatch_base_is_refused() {
     let observation = honest().commit(RED, &[OWNED]);
-    let error = judge_source(&dispatch(), "deliver", DONE, &[RED.to_owned()], &observation).unwrap_err();
-    assert!(error.to_string().contains("strictly after the dispatch base"), "{error}");
+    let error = judge_source(
+        &dispatch(),
+        "deliver",
+        DONE,
+        &[RED.to_owned()],
+        &observation,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("strictly after the dispatch base"),
+        "{error}"
+    );
 }
 
 #[test]
 fn an_evidence_commit_that_is_not_a_full_object_id_is_refused() {
-    let error = judge_source(&dispatch(), "deliver", DONE, &["abc123".to_owned()], &honest()).unwrap_err();
-    assert!(error.to_string().contains("strictly after the dispatch base"), "{error}");
+    let error = judge_source(
+        &dispatch(),
+        "deliver",
+        DONE,
+        &["abc123".to_owned()],
+        &honest(),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("strictly after the dispatch base"),
+        "{error}"
+    );
 }
 
 // These three were what a failed Git call used to mean. Each is now a fact
@@ -102,7 +135,10 @@ fn a_completion_subject_that_does_not_name_its_task_is_refused() {
         "feat(execution): ",
     ] {
         let error = judged(&honest().completion_subject(subject)).unwrap_err();
-        assert!(error.to_string().contains("conventionally"), "{subject}: {error}");
+        assert!(
+            error.to_string().contains("conventionally"),
+            "{subject}: {error}"
+        );
     }
 }
 
@@ -113,7 +149,10 @@ fn a_conventional_subject_naming_the_task_is_accepted() {
         "fix: repair deliver",
         "refactor(execution)!: move deliver out",
     ] {
-        assert!(judged(&honest().completion_subject(subject)).is_ok(), "{subject}");
+        assert!(
+            judged(&honest().completion_subject(subject)).is_ok(),
+            "{subject}"
+        );
     }
 }
 
@@ -139,7 +178,10 @@ fn a_path_under_a_leased_directory_is_inside_the_lease() {
 #[test]
 fn an_out_of_lease_staged_path_is_refused() {
     let error = judged(&honest().staged(b"raw", &[OUTSIDE])).unwrap_err();
-    assert!(error.to_string().contains("out-of-lease staged path"), "{error}");
+    assert!(
+        error.to_string().contains("out-of-lease staged path"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -152,24 +194,32 @@ fn a_staged_path_inside_the_lease_is_carried_into_the_material() {
 #[test]
 fn a_retained_source_stands_when_a_fresh_observation_finds_the_same_material() {
     let retained = judged(&honest()).expect("an accepted close");
-    assert_eq!(super::receipts::source_unchanged(&retained.clone(), &retained), Ok(()));
+    assert_eq!(
+        super::receipts::source_unchanged(&retained.clone(), &retained),
+        Ok(())
+    );
 }
 
 #[test]
 fn a_retained_source_is_in_conflict_when_a_fresh_observation_differs() {
     let retained = judged(&honest()).expect("an accepted close");
-    let moved = judged(&SourceObservation::new()
-        .commit(GREEN, &[OWNED, OUTSIDE])
-        .commit(DONE, &[OWNED])
-        .signed(true)
-        .completion_subject(SUBJECT)
-        .staged(b"", &[])).expect("an accepted close");
+    let moved = judged(
+        &SourceObservation::new()
+            .commit(GREEN, &[OWNED, OUTSIDE])
+            .commit(DONE, &[OWNED])
+            .signed(true)
+            .completion_subject(SUBJECT)
+            .staged(b"", &[]),
+    )
+    .expect("an accepted close");
     let mut staged = retained.clone();
     staged.staged_paths = vec![OWNED.to_owned()];
     for fresh in [moved, staged] {
         assert_eq!(
             super::receipts::source_unchanged(&fresh, &retained),
-            Err(crate::store::Error::Conflict("native source or staged inputs changed".into()))
+            Err(crate::store::Error::Conflict(
+                "native source or staged inputs changed".into()
+            ))
         );
     }
 }

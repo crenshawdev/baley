@@ -46,9 +46,11 @@ fn admission_replay_ac49() {
     let basis = view(saved(&input), 2);
     let mut transaction = persistence::transaction(&basis, "caller:k1");
     let contribution =
-        admission::contribute_admission(&basis, &mut transaction, pending(&input), &mut FixedClock).unwrap();
+        admission::contribute_admission(&basis, &mut transaction, pending(&input), &mut FixedClock)
+            .unwrap();
     assert_eq!(
-        serde_json::to_value(admission::acknowledge_admission(&basis, contribution).unwrap()).unwrap(),
+        serde_json::to_value(admission::acknowledge_admission(&basis, contribution).unwrap())
+            .unwrap(),
         json!({"fire":"f1","attempt":"a1","replayed":true})
     );
 }
@@ -70,11 +72,13 @@ fn admission_fresh_commit() {
     let basis = view(input["fresh"].clone(), 1);
     let mut transaction = persistence::transaction(&basis, "caller:k1");
     let contribution =
-        admission::contribute_admission(&basis, &mut transaction, pending(&input), &mut FixedClock).unwrap();
+        admission::contribute_admission(&basis, &mut transaction, pending(&input), &mut FixedClock)
+            .unwrap();
     // The view the commit would return: the transaction's snapshot, installed.
     let committed = view(transaction.snapshot.clone().unwrap(), 2);
     assert_eq!(
-        serde_json::to_value(admission::acknowledge_admission(&committed, contribution).unwrap()).unwrap(),
+        serde_json::to_value(admission::acknowledge_admission(&committed, contribution).unwrap())
+            .unwrap(),
         json!({"fire":"f1","attempt":"a1","replayed":false})
     );
 }
@@ -112,7 +116,8 @@ fn an_admission_records_the_supplied_time() {
     let input = fixture();
     let basis = view(input["fresh"].clone(), 1);
     let mut transaction = persistence::transaction(&basis, "caller:k1");
-    admission::contribute_admission(&basis, &mut transaction, pending(&input), &mut FixedClock).unwrap();
+    admission::contribute_admission(&basis, &mut transaction, pending(&input), &mut FixedClock)
+        .unwrap();
     let replay_key = input["H"]["replay_key"].as_str().unwrap();
     assert_eq!(
         transaction.snapshot.unwrap()["review"]["replays"][replay_key]["admitted_at"],

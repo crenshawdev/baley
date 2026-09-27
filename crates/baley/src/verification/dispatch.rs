@@ -1,17 +1,32 @@
 use super::{inputs::Inputs, instructions};
-use crate::execution::{history::{self, Event, PlanEvent, PlanIdentity, PlanRecord, Record, Task}, receipts::{Capture, Material, RunResult}};
+use crate::execution::{
+    history::{self, Event, PlanEvent, PlanIdentity, PlanRecord, Record, Task},
+    receipts::{Capture, Material, RunResult},
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-pub fn prompt(inputs: &Inputs, documents: &BTreeMap<String, String>) -> crate::store::Result<String> {
-    let authored: BTreeMap<_, _> = inputs.basis.publications.iter().filter_map(|p| {
-        let path = format!("phases/{}/PLAN-{}.md", inputs.basis.phase, p.plan);
-        documents.get(&path).map(|body| (path, body))
-    }).collect();
+pub fn prompt(
+    inputs: &Inputs,
+    documents: &BTreeMap<String, String>,
+) -> crate::store::Result<String> {
+    let authored: BTreeMap<_, _> = inputs
+        .basis
+        .publications
+        .iter()
+        .filter_map(|p| {
+            let path = format!("phases/{}/PLAN-{}.md", inputs.basis.phase, p.plan);
+            documents.get(&path).map(|body| (path, body))
+        })
+        .collect();
     let mut rendered = serde_json::to_value(inputs)?;
     rendered["execution"] = execution_view(inputs)?;
-    Ok(format!("{}\n<operational-input>\n{}\n</operational-input>\n<authored-material>\n{}\n</authored-material>\n",
-        instructions::contract_markdown(), serde_json::to_string_pretty(&rendered)?, serde_json::to_string_pretty(&authored)?))
+    Ok(format!(
+        "{}\n<operational-input>\n{}\n</operational-input>\n<authored-material>\n{}\n</authored-material>\n",
+        instructions::contract_markdown(),
+        serde_json::to_string_pretty(&rendered)?,
+        serde_json::to_string_pretty(&authored)?
+    ))
 }
 
 /// GH-263: the prompt's execution block is a view of the retained history,
@@ -23,60 +38,123 @@ pub fn prompt(inputs: &Inputs, documents: &BTreeMap<String, String>) -> crate::s
 /// is untouched.
 pub fn execution_view(inputs: &Inputs) -> crate::store::Result<Value> {
     let events: Vec<Record> = serde_json::from_value(inputs.execution["events"].clone())?;
-    let plan_events: Vec<PlanRecord> = serde_json::from_value(inputs.execution["plan_events"].clone())?;
-    let outcomes = inputs.execution["outcomes"].as_array().cloned().unwrap_or_default();
+    let plan_events: Vec<PlanRecord> =
+        serde_json::from_value(inputs.execution["plan_events"].clone())?;
+    let outcomes = inputs.execution["outcomes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let mut plans: BTreeMap<u32, PlanIdentity> = BTreeMap::new();
     for record in &events {
         let task = &record.request.task;
-        plans.entry(task.plan).or_insert_with(|| PlanIdentity { phase: task.phase, occurrence: task.occurrence.clone(),
-            admission_digest: task.admission_digest.clone(), plan: task.plan });
+        plans.entry(task.plan).or_insert_with(|| PlanIdentity {
+            phase: task.phase,
+            occurrence: task.occurrence.clone(),
+            admission_digest: task.admission_digest.clone(),
+            plan: task.plan,
+        });
     }
     for record in &plan_events {
-        plans.entry(record.request.plan.plan).or_insert_with(|| record.request.plan.clone());
+        plans
+            .entry(record.request.plan.plan)
+            .or_insert_with(|| record.request.plan.clone());
     }
-    let mut items: BTreeMap<String, Value> = inputs.checks.iter().filter_map(|c| c["id"].as_str())
-        .map(|id| (id.to_owned(), json!({"pairs":[],"owner_statements":[],"classifications":[]}))).collect();
+    let mut items: BTreeMap<String, Value> = inputs
+        .checks
+        .iter()
+        .filter_map(|c| c["id"].as_str())
+        .map(|id| {
+            (
+                id.to_owned(),
+                json!({"pairs":[],"owner_statements":[],"classifications":[]}),
+            )
+        })
+        .collect();
     let mut rendered = Vec::new();
     for (number, identity) in &plans {
         let mut tasks: Vec<&Task> = Vec::new();
         for record in &events {
-            if record.request.task.plan == *number && !tasks.contains(&&record.request.task) { tasks.push(&record.request.task); }
-        }
-        let tasks = tasks.iter().map(|task| task_view(task, &events, &mut items)).collect::<crate::store::Result<Vec<_>>>()?;
-        let suite_runs = plan_events.iter().filter(|r| r.request.plan == *identity).filter_map(|r| match &r.request.event {
-            PlanEvent::SuiteLaunch(launch) => {
-                let result = plan_events.iter().find_map(|r| match &r.request.event {
-                    PlanEvent::SuiteResult(result) if r.request.plan == *identity && result.run_id == launch.run_id => Some(result), _ => None });
-                let mut run = run_view(&launch.run_id, json!("suite"), Value::Null, &launch.material, launch.launched_at, result);
-                if !launch.proposed_paths.is_empty() { run["proposed_paths"] = json!(launch.proposed_paths); }
-                Some(run)
+            if record.request.task.plan == *number && !tasks.contains(&&record.request.task) {
+                tasks.push(&record.request.task);
             }
-            _ => None,
-        }).collect::<Vec<_>>();
-        let outcome = outcomes.iter().find(|o| o["plan"] == *number).cloned().unwrap_or(Value::Null);
+        }
+        let tasks = tasks
+            .iter()
+            .map(|task| task_view(task, &events, &mut items))
+            .collect::<crate::store::Result<Vec<_>>>()?;
+        let suite_runs = plan_events
+            .iter()
+            .filter(|r| r.request.plan == *identity)
+            .filter_map(|r| match &r.request.event {
+                PlanEvent::SuiteLaunch(launch) => {
+                    let result = plan_events.iter().find_map(|r| match &r.request.event {
+                        PlanEvent::SuiteResult(result)
+                            if r.request.plan == *identity && result.run_id == launch.run_id =>
+                        {
+                            Some(result)
+                        }
+                        _ => None,
+                    });
+                    let mut run = run_view(
+                        &launch.run_id,
+                        json!("suite"),
+                        Value::Null,
+                        &launch.material,
+                        launch.launched_at,
+                        result,
+                    );
+                    if !launch.proposed_paths.is_empty() {
+                        run["proposed_paths"] = json!(launch.proposed_paths);
+                    }
+                    Some(run)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let outcome = outcomes
+            .iter()
+            .find(|o| o["plan"] == *number)
+            .cloned()
+            .unwrap_or(Value::Null);
         rendered.push(json!({"plan": identity, "suite": history::plan_project(&plan_events, identity), "outcome": outcome,
             "suite_runs": suite_runs, "tasks": tasks}));
     }
-    Ok(json!({"schema": "verifier-execution-view-1", "digest": inputs.basis.execution_digest,
+    Ok(
+        json!({"schema": "verifier-execution-view-1", "digest": inputs.basis.execution_digest,
         "read": {"operation": "execution-history", "phase": inputs.basis.phase, "run": "<run id>"},
-        "plans": rendered, "items": items}))
+        "plans": rendered, "items": items}),
+    )
 }
 
-fn task_view(task: &Task, events: &[Record], items: &mut BTreeMap<String, Value>) -> crate::store::Result<Value> {
+fn task_view(
+    task: &Task,
+    events: &[Record],
+    items: &mut BTreeMap<String, Value>,
+) -> crate::store::Result<Value> {
     let own: Vec<&Record> = events.iter().filter(|r| r.request.task == *task).collect();
     let mut runs = Vec::new();
     let mut close = Value::Null;
     let mut owner_statements = Vec::new();
     let mut classifications = Vec::new();
     let mut others = Vec::new();
-    let where_ = |request_id: &str| json!({"plan": task.plan, "task": task.task, "request_id": request_id});
+    let where_ =
+        |request_id: &str| json!({"plan": task.plan, "task": task.task, "request_id": request_id});
     for record in &own {
         let request_id = &record.request.request_id;
         match &record.request.event {
             Event::Launch(launch) => {
                 let result = own.iter().find_map(|r| match &r.request.event {
-                    Event::Result(result) if result.run_id == launch.run_id => Some(result), _ => None });
-                runs.push(run_view(&launch.run_id, json!(launch.stage), json!(launch.check), &launch.material, launch.launched_at, result));
+                    Event::Result(result) if result.run_id == launch.run_id => Some(result),
+                    _ => None,
+                });
+                runs.push(run_view(
+                    &launch.run_id,
+                    json!(launch.stage),
+                    json!(launch.check),
+                    &launch.material,
+                    launch.launched_at,
+                    result,
+                ));
             }
             Event::Result(_) => {}
             Event::Close(proof) => {
@@ -90,27 +168,47 @@ fn task_view(task: &Task, events: &[Record], items: &mut BTreeMap<String, Value>
                     "verification": submission.verification});
             }
             Event::OwnerStatement(statement) => {
-                item(items, &statement.submission.check.id)["owner_statements"].as_array_mut().expect("owner_statements").push(where_(request_id));
+                item(items, &statement.submission.check.id)["owner_statements"]
+                    .as_array_mut()
+                    .expect("owner_statements")
+                    .push(where_(request_id));
                 owner_statements.push(json!({"request_id": request_id, "statement": statement}));
             }
             Event::OwnerClassification(classification) => {
-                item(items, &classification.submission.check.id)["classifications"].as_array_mut().expect("classifications").push(where_(request_id));
-                classifications.push(json!({"request_id": request_id, "statement": classification}));
+                item(items, &classification.submission.check.id)["classifications"]
+                    .as_array_mut()
+                    .expect("classifications")
+                    .push(where_(request_id));
+                classifications
+                    .push(json!({"request_id": request_id, "statement": classification}));
             }
             Event::Checkpoint { .. } => {}
-            event => others.push(json!({"request_id": request_id, "kind": serde_json::to_value(event)?["kind"]})),
+            event => others.push(
+                json!({"request_id": request_id, "kind": serde_json::to_value(event)?["kind"]}),
+            ),
         }
     }
-    Ok(json!({"task": task, "state": history::project(events, task), "runs": runs, "close": close,
+    Ok(
+        json!({"task": task, "state": history::project(events, task), "runs": runs, "close": close,
         "owner_statements": owner_statements, "classifications": classifications,
-        "checkpoints": history::task_checkpoints(events, task), "events": others}))
+        "checkpoints": history::task_checkpoints(events, task), "events": others}),
+    )
 }
 
 fn item<'a>(items: &'a mut BTreeMap<String, Value>, id: &str) -> &'a mut Value {
-    items.entry(id.to_owned()).or_insert_with(|| json!({"pairs":[],"owner_statements":[],"classifications":[]}))
+    items
+        .entry(id.to_owned())
+        .or_insert_with(|| json!({"pairs":[],"owner_statements":[],"classifications":[]}))
 }
 
-fn run_view(run_id: &str, stage: Value, check: Value, material: &Material, launched_at: u64, result: Option<&RunResult>) -> Value {
+fn run_view(
+    run_id: &str,
+    stage: Value,
+    check: Value,
+    material: &Material,
+    launched_at: u64,
+    result: Option<&RunResult>,
+) -> Value {
     let capture = |capture: &Capture| json!({"digest": capture.digest, "byte_length": capture.bytes.len(), "complete": capture.complete});
     json!({"run_id": run_id, "stage": stage, "check": check, "material": material, "launched_at": launched_at,
         "result": result.map(|result| json!({"disposition": result.disposition, "observation": result.observation,
@@ -120,17 +218,35 @@ fn run_view(run_id: &str, stage: Value, check: Value, material: &Material, launc
 
 #[cfg(test)]
 mod tests {
-    use super::super::model::{Basis, Source};
     use super::super::inputs::Inputs;
+    use super::super::model::{Basis, Source};
     use serde_json::json;
 
     fn inputs(execution: serde_json::Value) -> Inputs {
         Inputs {
-            basis: Basis { project: "/p".into(), root_binding: "1:1;".into(), phase: 6, occurrence: "active-cycle:phase:6".into(),
-                context_digest: "c".repeat(64), truths: vec![], publications: vec![], map_digest: "m".repeat(64),
-                admission_digests: vec![], execution_digest: "e".repeat(64),
-                source: Source { head: "h".repeat(40), tree: "t".repeat(40), index_digest: "i".repeat(64), material_digest: "d".repeat(64) } },
-            map: json!({}), admissions: vec![], execution, checks: vec![json!({"id":"check/one"})], authority_digest: "a".repeat(64),
+            basis: Basis {
+                project: "/p".into(),
+                root_binding: "1:1;".into(),
+                phase: 6,
+                occurrence: "active-cycle:phase:6".into(),
+                context_digest: "c".repeat(64),
+                truths: vec![],
+                publications: vec![],
+                map_digest: "m".repeat(64),
+                admission_digests: vec![],
+                execution_digest: "e".repeat(64),
+                source: Source {
+                    head: "h".repeat(40),
+                    tree: "t".repeat(40),
+                    index_digest: "i".repeat(64),
+                    material_digest: "d".repeat(64),
+                },
+            },
+            map: json!({}),
+            admissions: vec![],
+            execution,
+            checks: vec![json!({"id":"check/one"})],
+            authority_digest: "a".repeat(64),
         }
     }
 
@@ -165,14 +281,29 @@ mod tests {
         assert!(view.get("events").is_none(), "{view}");
         let task_view = &view["plans"][0]["tasks"][0];
         assert_eq!(task_view["task"], task());
-        assert_eq!(task_view["runs"], json!([{"run_id":"r1","stage":"green","check":{"id":"check/one","item_revision":"5".repeat(64)},
+        assert_eq!(
+            task_view["runs"],
+            json!([{"run_id":"r1","stage":"green","check":{"id":"check/one","item_revision":"5".repeat(64)},
             "material":material,"launched_at":10,"result":{"disposition":{"kind":"exited","code":0},
             "observation":{"class":"results-observed","summary":{"runner":"cargo","failed":false}},"observed_at":11,"material_unchanged":true,
-            "stdout":{"digest":"f".repeat(64),"byte_length":16,"complete":true},"stderr":{"digest":"0".repeat(64),"byte_length":0,"complete":true}}}]));
-        assert_eq!(task_view["events"], json!([{"request_id":"start-1","kind":"attempt"}]));
+            "stdout":{"digest":"f".repeat(64),"byte_length":16,"complete":true},"stderr":{"digest":"0".repeat(64),"byte_length":0,"complete":true}}}])
+        );
+        assert_eq!(
+            task_view["events"],
+            json!([{"request_id":"start-1","kind":"attempt"}])
+        );
         assert_eq!(task_view["close"], json!(null));
-        assert_eq!(view["items"], json!({"check/one":{"pairs":[],"owner_statements":[],"classifications":[]}}));
-        assert!(!prompt.contains("116,"), "capture bytes leaked into the prompt");
-        assert!(!prompt.contains("result_lines"), "recognized lines leaked into the prompt");
+        assert_eq!(
+            view["items"],
+            json!({"check/one":{"pairs":[],"owner_statements":[],"classifications":[]}})
+        );
+        assert!(
+            !prompt.contains("116,"),
+            "capture bytes leaked into the prompt"
+        );
+        assert!(
+            !prompt.contains("result_lines"),
+            "recognized lines leaked into the prompt"
+        );
     }
 }

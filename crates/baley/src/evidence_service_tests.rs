@@ -1,7 +1,4 @@
-use super::{
-    BaleyServer,
-    evidence_service::Command,
-};
+use super::{BaleyServer, evidence_service::Command};
 use crate::session::SessionFactory;
 use baley::store::Error;
 use std::sync::Arc;
@@ -27,4 +24,3 @@ fn closed_resident_returns_closed() {
         Err(Error::Closed)
     );
 }
-

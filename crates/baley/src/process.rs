@@ -76,7 +76,9 @@ impl Launch {
     }
 
     pub(crate) fn git_caller(&self) -> Option<crate::git_process::Caller> {
-        self.git_registration.as_ref().map(|registration| registration.caller())
+        self.git_registration
+            .as_ref()
+            .map(|registration| registration.caller())
     }
 
     pub fn arg(mut self, arg: impl AsRef<OsStr>) -> Self {
@@ -89,12 +91,14 @@ impl Launch {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.args.extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
+        self.args
+            .extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
         self
     }
 
     pub fn env(mut self, key: &str, value: impl AsRef<OsStr>) -> Self {
-        self.env.push((key.to_owned(), Some(value.as_ref().to_owned())));
+        self.env
+            .push((key.to_owned(), Some(value.as_ref().to_owned())));
         self
     }
 
@@ -148,7 +152,9 @@ impl Launch {
 pub struct ValidatedLaunch<'a>(&'a Launch);
 
 impl ValidatedLaunch<'_> {
-    pub fn descriptor(&self) -> &Launch { self.0 }
+    pub fn descriptor(&self) -> &Launch {
+        self.0
+    }
 }
 
 /// Validate borrowed launch material before a Command or recorded observation
@@ -157,15 +163,27 @@ pub fn validate_launch(launch: &Launch) -> std::io::Result<ValidatedLaunch<'_>> 
     let is_git = Path::new(&launch.program).file_name() == Some(OsStr::new("git"));
     match (is_git, launch.git_caller()) {
         (true, Some(caller)) => {
-            if launch.timeout != Some(crate::git_process::deadline(caller).work) || !launch.own_group {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,
-                    "registered git launch requires its caller deadline and owned process group"));
+            if launch.timeout != Some(crate::git_process::deadline(caller).work)
+                || !launch.own_group
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "registered git launch requires its caller deadline and owned process group",
+                ));
             }
         }
-        (true, None) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,
-            "git launch requires a registered caller")),
-        (false, Some(_)) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,
-            "registered git launch cannot change executable identity")),
+        (true, None) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "git launch requires a registered caller",
+            ));
+        }
+        (false, Some(_)) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "registered git launch cannot change executable identity",
+            ));
+        }
         (false, None) => {}
     }
     Ok(ValidatedLaunch(launch))
@@ -231,7 +249,9 @@ pub trait Process {
     /// offers this; a fake refuses it unless it scripts children of its own.
     fn start(&mut self, launch: &Launch) -> std::io::Result<Box<dyn Child>> {
         let _ = launch;
-        Err(std::io::Error::other("this process does not start children"))
+        Err(std::io::Error::other(
+            "this process does not start children",
+        ))
     }
 }
 
@@ -263,10 +283,17 @@ impl System {
             };
         }
         if launch.inherit {
-            command.stdin(Stdio::inherit()).stdout(Stdio::inherit()).stderr(Stdio::inherit());
+            command
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit());
         } else {
             command
-                .stdin(if launch.stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+                .stdin(if launch.stdin.is_some() {
+                    Stdio::piped()
+                } else {
+                    Stdio::null()
+                })
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
         }
@@ -305,12 +332,22 @@ impl Process for System {
             let err = err_stream.map(|stream| scope.spawn(move || bounded(stream, limit)));
             let status = child.wait();
             // Always join the drains after cleanup, including on timeout.
-            let stdout = out.map(|handle| handle.join().expect("stdout reader")).transpose();
-            let stderr = err.map(|handle| handle.join().expect("stderr reader")).transpose();
+            let stdout = out
+                .map(|handle| handle.join().expect("stdout reader"))
+                .transpose();
+            let stderr = err
+                .map(|handle| handle.join().expect("stderr reader"))
+                .transpose();
             let status = status?;
             let (stdout, stdout_complete) = stdout?.unwrap_or((Vec::new(), true));
             let (stderr, stderr_complete) = stderr?.unwrap_or((Vec::new(), true));
-            Ok(Output { status, stdout, stderr, stdout_complete, stderr_complete })
+            Ok(Output {
+                status,
+                stdout,
+                stderr,
+                stdout_complete,
+                stderr_complete,
+            })
         })
     }
 
@@ -321,7 +358,10 @@ impl Process for System {
 
 /// Signaling and waiting remain observations gathered by SystemChild.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeadlineAction { Wait, KillAndReap }
+pub enum DeadlineAction {
+    Wait,
+    KillAndReap,
+}
 
 pub fn deadline_action(timeout: Option<Duration>, elapsed: Duration) -> DeadlineAction {
     if timeout.is_some_and(|limit| elapsed >= limit) {
@@ -348,10 +388,18 @@ impl SystemChild {
         // Includes spawn and all stdin delivery, not just the wait.
         let started = Instant::now();
         let mut child = command.spawn()?;
-        let input = child.stdin.take().zip(launch.stdin.clone()).map(|(mut stdin, bytes)| {
-            std::thread::spawn(move || stdin.write_all(&bytes))
-        });
-        Ok(Self { child, started, timeout: launch.timeout, own_group: launch.own_group, input })
+        let input = child
+            .stdin
+            .take()
+            .zip(launch.stdin.clone())
+            .map(|(mut stdin, bytes)| std::thread::spawn(move || stdin.write_all(&bytes)));
+        Ok(Self {
+            child,
+            started,
+            timeout: launch.timeout,
+            own_group: launch.own_group,
+            input,
+        })
     }
 
     fn kill_group(&self) {
@@ -366,7 +414,8 @@ impl SystemChild {
             if let Some(status) = self.child.try_wait()? {
                 return Ok(status);
             }
-            if deadline_action(self.timeout, self.started.elapsed()) == DeadlineAction::KillAndReap {
+            if deadline_action(self.timeout, self.started.elapsed()) == DeadlineAction::KillAndReap
+            {
                 return Err(std::io::ErrorKind::TimedOut.into());
             }
             if self.timeout.is_none() {
@@ -379,11 +428,17 @@ impl SystemChild {
 
 impl Child for SystemChild {
     fn stdout(&mut self) -> Option<Box<dyn Read + Send>> {
-        self.child.stdout.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>)
+        self.child
+            .stdout
+            .take()
+            .map(|stream| Box::new(stream) as Box<dyn Read + Send>)
     }
 
     fn stderr(&mut self) -> Option<Box<dyn Read + Send>> {
-        self.child.stderr.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>)
+        self.child
+            .stderr
+            .take()
+            .map(|stream| Box::new(stream) as Box<dyn Read + Send>)
     }
 
     fn wait(&mut self) -> std::io::Result<ExitStatus> {
@@ -395,7 +450,11 @@ impl Child for SystemChild {
             let _ = self.child.kill();
             self.child.wait()?;
         }
-        let input = self.input.take().map(|handle| handle.join().expect("stdin writer")).transpose();
+        let input = self
+            .input
+            .take()
+            .map(|handle| handle.join().expect("stdin writer"))
+            .transpose();
         // The timeout observation takes precedence over cleanup's broken pipe.
         let status = status?;
         input?;
@@ -466,7 +525,12 @@ impl Recorded {
     /// The one launch this fake was given; panics when it was given any other
     /// number, which is the assertion a check usually wants.
     pub fn launch(&self) -> &Launch {
-        assert_eq!(self.launches.len(), 1, "expected one launch: {:?}", self.launches);
+        assert_eq!(
+            self.launches.len(),
+            1,
+            "expected one launch: {:?}",
+            self.launches
+        );
         &self.launches[0]
     }
 
@@ -475,7 +539,11 @@ impl Recorded {
         self.launches
             .iter()
             .map(|launch| {
-                launch.args.iter().map(|arg| arg.to_string_lossy().into_owned()).collect()
+                launch
+                    .args
+                    .iter()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect()
             })
             .collect()
     }
@@ -486,9 +554,12 @@ impl Process for Recorded {
         let validated = validate_launch(launch)?;
         let launch = validated.descriptor();
         self.launches.push(launch.clone());
-        self.scripted
-            .pop_front()
-            .unwrap_or_else(|| panic!("no scripted answer for {:?} {:?}", launch.program, launch.args))
+        self.scripted.pop_front().unwrap_or_else(|| {
+            panic!(
+                "no scripted answer for {:?} {:?}",
+                launch.program, launch.args
+            )
+        })
     }
 }
 

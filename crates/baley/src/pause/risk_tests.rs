@@ -1,7 +1,7 @@
 //! The questions a pause risk review asks, and what counts as this fire's
 //! contracted review. Values in, values out.
 use super::risk::{
-    CONTRACT, CommitKind, Fire, Finding, Review, Severity, disposition_question, surfaces_question,
+    CONTRACT, CommitKind, Finding, Fire, Review, Severity, disposition_question, surfaces_question,
 };
 use crate::evidence::{Scope, results::AcceptedResult};
 use crate::rail::{risk_diff::Scan, surfaces};
@@ -17,7 +17,13 @@ fn fire(id: &str, round: u32) -> Fire {
         index_id: "2".repeat(40),
         scope: vec!["src/db.rs".into()],
         authored: vec!["src/db.rs".into()],
-        scan: Scan { checked: true, categories: vec!["destructive".into()], matches: vec![], inconclusive: false, empty: false },
+        scan: Scan {
+            checked: true,
+            categories: vec!["destructive".into()],
+            matches: vec![],
+            inconclusive: false,
+            empty: false,
+        },
     }
 }
 
@@ -49,12 +55,18 @@ fn result(review: &Review) -> AcceptedResult {
 }
 
 fn options(gate: &crate::evidence::gates::Gate) -> Vec<&str> {
-    gate.options.iter().map(|option| option.id.as_str()).collect()
+    gate.options
+        .iter()
+        .map(|option| option.id.as_str())
+        .collect()
 }
 
 #[test]
 fn a_first_round_review_offers_fix_override_or_abort() {
-    assert_eq!(options(&disposition_question(&review(fire("f", 1)))), ["fix", "override", "abort"]);
+    assert_eq!(
+        options(&disposition_question(&review(fire("f", 1)))),
+        ["fix", "override", "abort"]
+    );
 }
 
 #[test]
@@ -84,8 +96,14 @@ fn the_surfaces_question_offers_all_then_each_detected_set_then_choose_or_abort(
         inconclusive: false,
         recommended: vec!["auth".into(), "migrations".into()],
         options: vec![
-            surfaces::Choice { surfaces: vec!["auth".into(), "migrations".into()], reason: "detected".into() },
-            surfaces::Choice { surfaces: vec!["auth".into()], reason: "narrower".into() },
+            surfaces::Choice {
+                surfaces: vec!["auth".into(), "migrations".into()],
+                reason: "detected".into(),
+            },
+            surfaces::Choice {
+                surfaces: vec!["auth".into()],
+                reason: "narrower".into(),
+            },
         ],
         warnings: vec![],
     };
@@ -100,7 +118,11 @@ fn the_surfaces_question_offers_all_then_each_detected_set_then_choose_or_abort(
     };
     let gate = surfaces_question(&scope, &report).unwrap();
     assert_eq!(options(&gate), ["all", "surfaces:auth", "choose", "abort"]);
-    assert!(gate.need.contains("Silent: billing") && gate.need.contains("unspeakable: destructive"), "{}", gate.need);
+    assert!(
+        gate.need.contains("Silent: billing") && gate.need.contains("unspeakable: destructive"),
+        "{}",
+        gate.need
+    );
 }
 
 #[test]
@@ -119,7 +141,11 @@ fn a_result_that_is_not_this_fires_contracted_review_is_unusable() {
     let mut not_a_review = result(&review);
     not_a_review.evidence_text = "{\"findings\":[]}".into();
     let mut other_fire = result(&review);
-    other_fire.evidence_text = serde_json::to_string(&Review { fire: fire("f", 2), ..review.clone() }).unwrap();
+    other_fire.evidence_text = serde_json::to_string(&Review {
+        fire: fire("f", 2),
+        ..review.clone()
+    })
+    .unwrap();
     for (name, recorded) in [
         ("contract", other_contract),
         ("result", not_reviewed),

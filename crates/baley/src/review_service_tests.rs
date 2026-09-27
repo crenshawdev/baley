@@ -98,16 +98,28 @@ fn a_supplied_resolution_is_used_as_given() {
 #[test]
 fn a_supplied_gate_is_recorded_over_the_triggers_own_gate() {
     let (_, route) = advisory_route();
-    let recorded =
-        ordinary(&execute_diff(), Some(&route), Some(Gate::Deferred), "f1", &phase_home()).unwrap();
+    let recorded = ordinary(
+        &execute_diff(),
+        Some(&route),
+        Some(Gate::Deferred),
+        "f1",
+        &phase_home(),
+    )
+    .unwrap();
     assert_eq!(recorded.gate, Some(Gate::Deferred));
 }
 
 #[test]
 fn the_route_answer_is_recorded_with_its_evidence_under_the_fire() {
     let (_, route) = advisory_route();
-    let recorded =
-        ordinary(&execute_diff(), Some(&route), Some(Gate::Deferred), "f1", &phase_home()).unwrap();
+    let recorded = ordinary(
+        &execute_diff(),
+        Some(&route),
+        Some(Gate::Deferred),
+        "f1",
+        &phase_home(),
+    )
+    .unwrap();
     assert_eq!(
         recorded.saved_routing,
         Some(Routing {
@@ -143,13 +155,25 @@ fn a_new_attempt_keeps_its_requested_model_and_has_no_observed_model() {
 
 #[test]
 fn provider_settings_record_the_capped_request_timeout_and_the_fixed_budgets() {
-    for (configured, request) in [(json!({}), 540_000), (json!({"review":{"request_timeout_ms":1_000}}), 1_000),
-        (json!({"review":{"request_timeout_ms":999_999}}), 540_000)]
-    {
+    for (configured, request) in [
+        (json!({}), 540_000),
+        (json!({"review":{"request_timeout_ms":1_000}}), 1_000),
+        (json!({"review":{"request_timeout_ms":999_999}}), 540_000),
+    ] {
         let settings = provider_settings(&configured).unwrap();
         assert_eq!(
-            [&settings["request_timeout_ms"], &settings["provider_work_timeout_ms"], &settings["acknowledgment_budget_ms"], &settings["attempt_budget_ms"]],
-            [&json!(request), &json!(570_000), &json!(30_000), &json!(600_000)],
+            [
+                &settings["request_timeout_ms"],
+                &settings["provider_work_timeout_ms"],
+                &settings["acknowledgment_budget_ms"],
+                &settings["attempt_budget_ms"]
+            ],
+            [
+                &json!(request),
+                &json!(570_000),
+                &json!(30_000),
+                &json!(600_000)
+            ],
             "{configured}"
         );
     }

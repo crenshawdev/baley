@@ -139,7 +139,11 @@ fn explicit_values_keep_their_source_and_all_thirty_agent_names_are_literal() {
                 ));
                 let answer = resolve(&request).unwrap();
                 assert_eq!(
-                    (answer.agent.as_str(), answer.rung.as_str(), answer.model.as_deref()),
+                    (
+                        answer.agent.as_str(),
+                        answer.rung.as_str(),
+                        answer.model.as_deref()
+                    ),
                     (agent, rung, Some("sonnet"))
                 );
                 assert_eq!(
@@ -241,9 +245,7 @@ fn resolve_refuses_a_zero_attempt_phase_or_plan_or_a_plan_without_a_phase() {
 fn resolve_refuses_an_unknown_routing_role() {
     assert_eq!(
         resolve(&input("executor", "high")),
-        Err(baley::store::Error::Invalid(
-            "unknown routing role".into()
-        ))
+        Err(baley::store::Error::Invalid("unknown routing role".into()))
     );
 }
 
@@ -545,7 +547,11 @@ impl Failure {
 }
 
 fn entry(kind: Kind, len: usize) -> Meta {
-    Meta { kind, len: len as u64, stamp: [0; 7] }
+    Meta {
+        kind,
+        len: len as u64,
+        stamp: [0; 7],
+    }
 }
 
 /// Scripted filesystem answers for the floor, keyed by path. Nothing is worked
@@ -573,7 +579,11 @@ struct Opened {
 
 impl Scripted {
     fn fail(&self, step: Step, path: &Path) -> io::Result<()> {
-        match self.failures.iter().find(|(at, suffix, _)| *at == step && path.ends_with(suffix)) {
+        match self
+            .failures
+            .iter()
+            .find(|(at, suffix, _)| *at == step && path.ends_with(suffix))
+        {
             Some((_, _, failure)) => Err(failure.error()),
             None => Ok(()),
         }
@@ -597,13 +607,24 @@ impl Scripted {
     /// A regular file at `relative` under the project, holding `bytes`.
     fn file(&mut self, relative: &str, bytes: &[u8]) -> PathBuf {
         let path = Path::new(PROJECT).join(relative);
-        let parent = path.parent().unwrap().strip_prefix(PROJECT).unwrap().to_str().unwrap().to_owned();
+        let parent = path
+            .parent()
+            .unwrap()
+            .strip_prefix(PROJECT)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
         self.directory(&parent);
-        let listing = self.listings.entry(path.parent().unwrap().into()).or_default();
+        let listing = self
+            .listings
+            .entry(path.parent().unwrap().into())
+            .or_default();
         if !listing.contains(&path) {
             listing.push(path.clone());
         }
-        self.metadata.insert(path.clone(), entry(Kind::File, bytes.len()));
+        self.metadata
+            .insert(path.clone(), entry(Kind::File, bytes.len()));
         self.bodies.insert(path.clone(), bytes.to_vec());
         path
     }
@@ -613,7 +634,10 @@ impl FloorIo for Scripted {
     type Body = Opened;
     fn metadata(&mut self, path: &Path) -> io::Result<Meta> {
         self.fail(Step::Metadata, path)?;
-        self.metadata.get(path).copied().ok_or_else(|| io::ErrorKind::NotFound.into())
+        self.metadata
+            .get(path)
+            .copied()
+            .ok_or_else(|| io::ErrorKind::NotFound.into())
     }
     fn canonicalize(&mut self, path: &Path) -> io::Result<PathBuf> {
         self.fail(Step::Canonicalize, path)?;
@@ -625,22 +649,46 @@ impl FloorIo for Scripted {
     }
     fn list(&mut self, path: &Path, bound: usize) -> io::Result<Vec<PathBuf>> {
         self.fail(Step::List, path)?;
-        Ok(self.listings.get(path).into_iter().flatten().take(bound + 1).cloned().collect())
+        Ok(self
+            .listings
+            .get(path)
+            .into_iter()
+            .flatten()
+            .take(bound + 1)
+            .cloned()
+            .collect())
     }
     fn open(&mut self, _: &Path, real: &Path) -> io::Result<Opened> {
         self.opens.push(real.into());
-        Ok(Opened { path: real.into(), stamps: Cell::new(0) })
+        Ok(Opened {
+            path: real.into(),
+            stamps: Cell::new(0),
+        })
     }
     fn stamp(&mut self, body: &Opened) -> io::Result<Meta> {
         let calls = body.stamps.replace(body.stamps.get() + 1);
-        let scripted = if calls == 0 { &self.opened } else { &self.after_read };
-        Ok(scripted.get(&body.path).copied().unwrap_or(self.metadata[&body.path]))
+        let scripted = if calls == 0 {
+            &self.opened
+        } else {
+            &self.after_read
+        };
+        Ok(scripted
+            .get(&body.path)
+            .copied()
+            .unwrap_or(self.metadata[&body.path]))
     }
     fn read(&mut self, body: &mut Opened, limit: usize) -> (Vec<u8>, io::Result<()>) {
         if let Err(error) = self.fail(Step::Read, &body.path) {
             return (vec![], Err(error));
         }
-        (self.bodies[&body.path].iter().take(limit).copied().collect(), Ok(()))
+        (
+            self.bodies[&body.path]
+                .iter()
+                .take(limit)
+                .copied()
+                .collect(),
+            Ok(()),
+        )
     }
 }
 
@@ -737,9 +785,16 @@ fn floor_preplan_roles_and_no_phase_do_no_filesystem_access() {
         ("bal-executor", None, State::NotComputed),
     ] {
         assert_eq!(
-            floor::read_with(planning(), role, phase, Some(1), &categories(), &mut Forbidden)
-                .unwrap()
-                .state,
+            floor::read_with(
+                planning(),
+                role,
+                phase,
+                Some(1),
+                &categories(),
+                &mut Forbidden
+            )
+            .unwrap()
+            .state,
             expected
         );
     }
@@ -770,13 +825,19 @@ fn floor_missing_named_plan_does_not_fall_back_to_a_sibling() {
 #[test]
 fn floor_native_parser_refuses_malformed_and_empty_leases() {
     for (bytes, reason) in [
-        (native_plan(1, &["plain.rs/"], &[]), "plan parse: invalid-path"),
+        (
+            native_plan(1, &["plain.rs/"], &[]),
+            "plan parse: invalid-path",
+        ),
         (native_plan(1, &[], &[]), "plan parse: empty-lease"),
     ] {
         let mut io = scripted(&[], &[]);
         io.file(".planning/phases/8/PLAN-1.md", bytes.as_bytes());
         let result = read(&mut io, "bal-executor", Some(1));
-        assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, reason));
+        assert_eq!(
+            (result.state.clone(), first_reason(&result)),
+            (State::Incomplete, reason)
+        );
     }
 }
 
@@ -785,7 +846,9 @@ fn floor_plan_identity_cannot_cross_the_named_phase() {
     let mut io = scripted(&[], &[]);
     io.file(
         ".planning/phases/8/PLAN-1.md",
-        native_plan(1, &["plain.rs"], &[]).replace("phase: 8", "phase: 9").as_bytes(),
+        native_plan(1, &["plain.rs"], &[])
+            .replace("phase: 8", "phase: 9")
+            .as_bytes(),
     );
     let result = read(&mut io, "bal-executor", Some(1));
     assert_eq!(first_reason(&result), "plan parse: identity-mismatch");
@@ -794,19 +857,35 @@ fn floor_plan_identity_cannot_cross_the_named_phase() {
 #[test]
 fn floor_unreadable_sibling_keeps_union_incomplete() {
     let mut io = scripted(&[(1, &["plain.rs"], &[]), (2, &["auth/new.rs"], &[])], &[]);
-    io.failures.push((Step::Read, "PLAN-2.md", Failure::Other("injected plan read")));
+    io.failures.push((
+        Step::Read,
+        "PLAN-2.md",
+        Failure::Other("injected plan read"),
+    ));
     let result = read(&mut io, "bal-verifier", None);
     assert_eq!(
-        (result.state.clone(), result.paths.clone(), first_reason(&result)),
-        (State::Incomplete, vec!["plain.rs".into()], "plan read: injected plan read")
+        (
+            result.state.clone(),
+            result.paths.clone(),
+            first_reason(&result)
+        ),
+        (
+            State::Incomplete,
+            vec!["plain.rs".into()],
+            "plan read: injected plan read"
+        )
     );
 }
 
 #[test]
 fn floor_neutral_path_metadata_failures_never_become_new_files() {
     for code in [libc::EACCES, libc::ELOOP, libc::ENOTDIR] {
-        let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", b"jwt.verify(token)")]);
-        io.failures.push((Step::Metadata, "plain.rs", Failure::Os(code)));
+        let mut io = scripted(
+            &[(1, &["plain.rs"], &[])],
+            &[("plain.rs", b"jwt.verify(token)")],
+        );
+        io.failures
+            .push((Step::Metadata, "plain.rs", Failure::Os(code)));
         let result = read(&mut io, "bal-executor", Some(1));
         assert_eq!(
             (result.state, result.matches, result.diagnostics),
@@ -815,7 +894,10 @@ fn floor_neutral_path_metadata_failures_never_become_new_files() {
                 vec![],
                 vec![floor::Diagnostic {
                     path: "plain.rs".into(),
-                    reason: format!("metadata or containment: {}", io::Error::from_raw_os_error(code))
+                    reason: format!(
+                        "metadata or containment: {}",
+                        io::Error::from_raw_os_error(code)
+                    )
                 }]
             )
         );
@@ -826,12 +908,22 @@ fn floor_neutral_path_metadata_failures_never_become_new_files() {
 fn floor_source_read_and_canonicalization_failures_are_incomplete() {
     for (step, expected) in [
         (Step::Read, "body read: injected failure"),
-        (Step::Canonicalize, "metadata or containment: injected failure"),
+        (
+            Step::Canonicalize,
+            "metadata or containment: injected failure",
+        ),
     ] {
-        let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", b"jwt.verify(token)")]);
-        io.failures.push((step, "plain.rs", Failure::Other("injected failure")));
+        let mut io = scripted(
+            &[(1, &["plain.rs"], &[])],
+            &[("plain.rs", b"jwt.verify(token)")],
+        );
+        io.failures
+            .push((step, "plain.rs", Failure::Other("injected failure")));
         let result = read(&mut io, "bal-executor", Some(1));
-        assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, expected));
+        assert_eq!(
+            (result.state.clone(), first_reason(&result)),
+            (State::Incomplete, expected)
+        );
     }
 }
 
@@ -839,16 +931,23 @@ fn floor_source_read_and_canonicalization_failures_are_incomplete() {
 fn floor_outside_symlinked_parent_refuses_existing_and_missing_leaves() {
     for exists in [false, true] {
         let mut io = scripted(&[(1, &["link/plain.rs"], &[])], &[]);
-        io.metadata.insert("/p/link".into(), entry(Kind::Symlink, 0));
+        io.metadata
+            .insert("/p/link".into(), entry(Kind::Symlink, 0));
         io.canonical.insert("/p/link".into(), "/outside".into());
         if exists {
-            io.metadata.insert("/p/link/plain.rs".into(), entry(Kind::File, 17));
-            io.canonical.insert("/p/link/plain.rs".into(), "/outside/plain.rs".into());
+            io.metadata
+                .insert("/p/link/plain.rs".into(), entry(Kind::File, 17));
+            io.canonical
+                .insert("/p/link/plain.rs".into(), "/outside/plain.rs".into());
         }
         let result = read(&mut io, "bal-executor", Some(1));
         assert_eq!(
             (result.state.clone(), result.bytes, first_reason(&result)),
-            (State::Incomplete, 0, "metadata or containment: path resolves outside the project")
+            (
+                State::Incomplete,
+                0,
+                "metadata or containment: path resolves outside the project"
+            )
         );
     }
 }
@@ -856,32 +955,57 @@ fn floor_outside_symlinked_parent_refuses_existing_and_missing_leaves() {
 #[test]
 fn floor_final_symlink_and_fifo_are_rejected_before_open() {
     for (kind, expected) in [
-        (Kind::Symlink, "metadata or containment: final symlink is not declared evidence"),
+        (
+            Kind::Symlink,
+            "metadata or containment: final symlink is not declared evidence",
+        ),
         (Kind::Other, "body read: not a regular file"),
     ] {
         let mut io = scripted(&[(1, &["plain.rs"], &[])], &[]);
         io.metadata.insert("/p/plain.rs".into(), entry(kind, 0));
         let result = read(&mut io, "bal-executor", Some(1));
-        assert_eq!((result.state.clone(), result.bytes, first_reason(&result)), (State::Incomplete, 0, expected));
-        assert!(!io.opens.iter().any(|path| path.ends_with("plain.rs")), "{kind:?} body opened");
+        assert_eq!(
+            (result.state.clone(), result.bytes, first_reason(&result)),
+            (State::Incomplete, 0, expected)
+        );
+        assert!(
+            !io.opens.iter().any(|path| path.ends_with("plain.rs")),
+            "{kind:?} body opened"
+        );
     }
 }
 
 #[test]
 fn floor_a_body_replaced_before_open_is_incomplete() {
     let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", b"safe")]);
-    io.opened.insert("/p/plain.rs".into(), Meta { stamp: [1; 7], ..entry(Kind::File, 4) });
+    io.opened.insert(
+        "/p/plain.rs".into(),
+        Meta {
+            stamp: [1; 7],
+            ..entry(Kind::File, 4)
+        },
+    );
     let result = read(&mut io, "bal-executor", Some(1));
-    assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, "body read: body replaced before open"));
+    assert_eq!(
+        (result.state.clone(), first_reason(&result)),
+        (State::Incomplete, "body read: body replaced before open")
+    );
 }
 
 #[test]
 fn floor_a_body_that_changes_while_it_is_read_is_incomplete() {
     let grew = |io: &mut Scripted| {
-        io.bodies.insert("/p/plain.rs".into(), b"jwt.verify(token)".to_vec());
+        io.bodies
+            .insert("/p/plain.rs".into(), b"jwt.verify(token)".to_vec());
     };
     let restamped = |io: &mut Scripted| {
-        io.after_read.insert("/p/plain.rs".into(), Meta { stamp: [1; 7], ..entry(Kind::File, 4) });
+        io.after_read.insert(
+            "/p/plain.rs".into(),
+            Meta {
+                stamp: [1; 7],
+                ..entry(Kind::File, 4)
+            },
+        );
     };
     for change in [grew, restamped] {
         let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", b"safe")]);
@@ -889,18 +1013,27 @@ fn floor_a_body_that_changes_while_it_is_read_is_incomplete() {
         let result = read(&mut io, "bal-executor", Some(1));
         assert_eq!(
             (result.state.clone(), first_reason(&result)),
-            (State::Incomplete, "body read: body replaced or grew during read")
+            (
+                State::Incomplete,
+                "body read: body replaced or grew during read"
+            )
         );
     }
 }
 
 #[test]
 fn floor_a_body_over_the_size_bound_is_incomplete() {
-    let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", &vec![b'x'; floor::MAX_BODY_BYTES + 1])]);
+    let mut io = scripted(
+        &[(1, &["plain.rs"], &[])],
+        &[("plain.rs", &vec![b'x'; floor::MAX_BODY_BYTES + 1])],
+    );
     let result = read(&mut io, "bal-executor", Some(1));
     assert_eq!(
         (result.state.clone(), first_reason(&result)),
-        (State::Incomplete, "body read: body size or total read budget exceeded")
+        (
+            State::Incomplete,
+            "body read: body size or total read budget exceeded"
+        )
     );
 }
 
@@ -908,16 +1041,26 @@ fn floor_a_body_over_the_size_bound_is_incomplete() {
 fn floor_a_body_that_is_not_utf8_is_incomplete() {
     let mut io = scripted(&[(1, &["plain.rs"], &[])], &[("plain.rs", &[255])]);
     let result = read(&mut io, "bal-executor", Some(1));
-    assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, "body is not UTF-8"));
+    assert_eq!(
+        (result.state.clone(), first_reason(&result)),
+        (State::Incomplete, "body is not UTF-8")
+    );
 }
 
 #[test]
 fn floor_directory_walk_reads_every_entry_whatever_an_ignore_file_says() {
-    let mut io = scripted(&[(1, &[], &["src"])], &[("src/plain.rs", b"safe"), ("src/.gitignore", b"*")]);
+    let mut io = scripted(
+        &[(1, &[], &["src"])],
+        &[("src/plain.rs", b"safe"), ("src/.gitignore", b"*")],
+    );
     let result = read(&mut io, "bal-executor", Some(1));
     assert_eq!(
         (result.state, result.paths, result.bytes),
-        (State::Complete, vec!["src".into(), "src/.gitignore".into(), "src/plain.rs".into()], 5)
+        (
+            State::Complete,
+            vec!["src".into(), "src/.gitignore".into(), "src/plain.rs".into()],
+            5
+        )
     );
 }
 
@@ -932,7 +1075,12 @@ fn floor_directory_walk_reads_an_overlapping_declaration_once() {
         (result.state, result.paths, result.bytes),
         (
             State::Complete,
-            vec!["src".into(), "src/auth".into(), "src/auth/new.rs".into(), "src/plain.rs".into()],
+            vec![
+                "src".into(),
+                "src/auth".into(),
+                "src/auth/new.rs".into(),
+                "src/plain.rs".into()
+            ],
             8
         )
     );
@@ -945,9 +1093,13 @@ fn floor_directory_and_phase_enumeration_failures_are_incomplete() {
         ("phases/8", None, "phase listing: injected listing"),
     ] {
         let mut io = scripted(&[(1, &[], &["src"])], &[("src/plain.rs", b"safe")]);
-        io.failures.push((Step::List, suffix, Failure::Other("injected listing")));
+        io.failures
+            .push((Step::List, suffix, Failure::Other("injected listing")));
         let result = read(&mut io, "bal-executor", plan);
-        assert_eq!((result.state.clone(), first_reason(&result)), (State::Incomplete, reason));
+        assert_eq!(
+            (result.state.clone(), first_reason(&result)),
+            (State::Incomplete, reason)
+        );
     }
 }
 
@@ -955,9 +1107,15 @@ fn floor_directory_and_phase_enumeration_failures_are_incomplete() {
 fn floor_directory_walk_entry_bound_reports_incomplete() {
     let mut io = scripted(&[(1, &[], &["src"])], &[]);
     let src = io.directory("src");
-    io.listings.insert(src.clone(), (0..4097).map(|i| src.join(i.to_string())).collect());
+    io.listings.insert(
+        src.clone(),
+        (0..4097).map(|i| src.join(i.to_string())).collect(),
+    );
     let result = read(&mut io, "bal-executor", Some(1));
-    assert_eq!(first_reason(&result), "directory enumeration: directory exceeds 4096 entry bound");
+    assert_eq!(
+        first_reason(&result),
+        "directory enumeration: directory exceeds 4096 entry bound"
+    );
 }
 
 #[test]

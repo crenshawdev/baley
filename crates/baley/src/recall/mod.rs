@@ -133,10 +133,7 @@ pub fn live(view: &View, root: &std::path::Path) -> (Corpus, Vec<String>) {
     let documents = documents::read(root, &mut documents::Files);
     let mut candidates = current(view);
     candidates.extend(documents.candidates);
-    (
-        Corpus::new(candidates),
-        documents.incomplete,
-    )
+    (Corpus::new(candidates), documents.incomplete)
 }
 impl Corpus {
     pub fn new(candidates: Vec<Candidate>) -> Self {
@@ -147,8 +144,16 @@ impl Corpus {
         self.query_phase(query, limit, backend, None)
     }
 
-    pub fn query_phase(&self, query: &str, limit: Option<i64>, backend: &str, phase: Option<u32>) -> Result<Answer, String> {
-        if phase == Some(0) { return Err("phase must be a positive integer".into()); }
+    pub fn query_phase(
+        &self,
+        query: &str,
+        limit: Option<i64>,
+        backend: &str,
+        phase: Option<u32>,
+    ) -> Result<Answer, String> {
+        if phase == Some(0) {
+            return Err("phase must be a positive integer".into());
+        }
         let limit = limit.unwrap_or(5);
         if limit < 1 {
             return Err("limit must be a positive integer".into());
@@ -168,8 +173,13 @@ impl Corpus {
         if backend != "builtin" {
             return Err(format!("unknown recall backend: {backend}"));
         }
-        let matched: Vec<_> = self.index.search(query).into_iter()
-            .filter(|(i, _)| phase.is_none_or(|phase| self.candidates[*i].provenance.phase() == Some(phase)))
+        let matched: Vec<_> = self
+            .index
+            .search(query)
+            .into_iter()
+            .filter(|(i, _)| {
+                phase.is_none_or(|phase| self.candidates[*i].provenance.phase() == Some(phase))
+            })
             .collect();
         answer.total = matched.len();
         answer.results = matched
@@ -413,7 +423,11 @@ pub(crate) mod resident {
                 documents: docs.identities,
                 file_ids,
                 history: history.identities,
-                incomplete: docs.incomplete.into_iter().chain(history.incomplete).collect(),
+                incomplete: docs
+                    .incomplete
+                    .into_iter()
+                    .chain(history.incomplete)
+                    .collect(),
             }
         }
     }
@@ -445,7 +459,10 @@ pub(crate) mod resident {
         candidates.extend(std::mem::take(&mut docs.candidates));
         let mut history = history::read(root, view, &candidates, &mut baley::process::System);
         candidates.extend(std::mem::take(&mut history.candidates));
-        (Inputs::new(view, config.number, docs, file_ids, history), candidates)
+        (
+            Inputs::new(view, config.number, docs, file_ids, history),
+            candidates,
+        )
     }
 
     /// The backend recall answers with, as the config reloaded for this
@@ -472,7 +489,9 @@ pub(crate) mod resident {
         let backend = backend(&config.effective.values)?;
         // Validate arguments and backend before any expensive corpus read.
         let empty = Corpus::new(vec![]);
-        let disabled = empty.query_phase(query, limit, backend, phase).map_err(Error::Invalid)?;
+        let disabled = empty
+            .query_phase(query, limit, backend, phase)
+            .map_err(Error::Invalid)?;
         if backend == "none" {
             *cache = None;
             return Ok(disabled);
@@ -492,7 +511,10 @@ pub(crate) mod resident {
                 "recall inputs changed during preparation; retry with current generation".into(),
             ));
         }
-        if cache.as_ref().is_none_or(|cached| !cached.answers(&inputs, phase)) {
+        if cache
+            .as_ref()
+            .is_none_or(|cached| !cached.answers(&inputs, phase))
+        {
             *cache = Some(Cached {
                 inputs,
                 corpus: Corpus::new(candidates),
@@ -527,44 +549,120 @@ pub(crate) mod resident {
                 while let Some(request) = receiver.recv().await {
                     match request {
                         Request::Shutdown => receiver.close(),
-                        Request::Milestone { root, command, reply } => {
-                            let _ = reply.send(crate::server::milestone_service::execute(&factory, &root, command, &mut baley::process::System).await);
-                        }
-                        Request::Landing { root, command, reply } => {
-                            let _ = reply.send(crate::server::landing_service::execute(&factory, &root, command, &mut baley::process::System).await);
-                        }
-                        Request::Undo { root, command, reply } => {
-                            let _ = reply.send(crate::server::undo_service::execute(
+                        Request::Milestone {
+                            root,
+                            command,
+                            reply,
+                        } => {
+                            let _ = reply.send(
+                                crate::server::milestone_service::execute(
                                     &factory,
                                     &root,
                                     command,
                                     &mut baley::process::System,
                                 )
-                                .await);
+                                .await,
+                            );
                         }
-                        Request::Debug { root, command, reply } => {
-                            let _ = reply.send(crate::server::debug_service::execute(&factory, &root, command, &mut baley::process::System).await);
+                        Request::Landing {
+                            root,
+                            command,
+                            reply,
+                        } => {
+                            let _ = reply.send(
+                                crate::server::landing_service::execute(
+                                    &factory,
+                                    &root,
+                                    command,
+                                    &mut baley::process::System,
+                                )
+                                .await,
+                            );
                         }
-                        Request::Spike { root, command, reply } => {
-                            let _ = reply.send(crate::server::spike_service::execute(&factory, &root, command).await);
+                        Request::Undo {
+                            root,
+                            command,
+                            reply,
+                        } => {
+                            let _ = reply.send(
+                                crate::server::undo_service::execute(
+                                    &factory,
+                                    &root,
+                                    command,
+                                    &mut baley::process::System,
+                                )
+                                .await,
+                            );
                         }
-                        Request::Task { root, command, reply } => {
-                            let _ = reply.send(crate::server::task_service::execute(&factory, &root, command, &mut task_episodes).await);
+                        Request::Debug {
+                            root,
+                            command,
+                            reply,
+                        } => {
+                            let _ = reply.send(
+                                crate::server::debug_service::execute(
+                                    &factory,
+                                    &root,
+                                    command,
+                                    &mut baley::process::System,
+                                )
+                                .await,
+                            );
+                        }
+                        Request::Spike {
+                            root,
+                            command,
+                            reply,
+                        } => {
+                            let _ = reply.send(
+                                crate::server::spike_service::execute(&factory, &root, command)
+                                    .await,
+                            );
+                        }
+                        Request::Task {
+                            root,
+                            command,
+                            reply,
+                        } => {
+                            let _ = reply.send(
+                                crate::server::task_service::execute(
+                                    &factory,
+                                    &root,
+                                    command,
+                                    &mut task_episodes,
+                                )
+                                .await,
+                            );
                         }
                         Request::Suggest { root, phase, reply } => {
-                            let result = crate::server::suggest_service::query(&factory, &root, phase).await;
+                            let result =
+                                crate::server::suggest_service::query(&factory, &root, phase).await;
                             let _ = reply.send(result);
                         }
-                        Request::Why { root, request, reply } => {
+                        Request::Why {
+                            root,
+                            request,
+                            reply,
+                        } => {
                             if request.phase.is_some() || request.part.is_some() {
-                                let result = if request.path.is_some() || request.line.is_some() || request.top.is_some()
-                                    || request.phase.is_none() || request.part.as_deref() != Some("refusals") {
+                                let result = if request.path.is_some()
+                                    || request.line.is_some()
+                                    || request.top.is_some()
+                                    || request.phase.is_none()
+                                    || request.part.as_deref() != Some("refusals")
+                                {
                                     Ok(baley::envelope::Refusal::new("invalid-arguments",
                                         "why takes either path/line/top or phase with part=refusals").slot("arguments").value())
                                 } else {
                                     match factory.first_touch(&root).await {
-                                        Ok(session) => session.derivation_view().await.map(|view|
-                                            crate::server::why_service::refusals(&view, request.phase.unwrap())),
+                                        Ok(session) => {
+                                            session.derivation_view().await.map(|view| {
+                                                crate::server::why_service::refusals(
+                                                    &view,
+                                                    request.phase.unwrap(),
+                                                )
+                                            })
+                                        }
                                         Err(error) => Err(error),
                                     }
                                 };
@@ -574,17 +672,26 @@ pub(crate) mod resident {
                             // git and the record are read on a blocking thread
                             // so a long chain never holds the resident's loop.
                             let result = tokio::task::spawn_blocking(move || {
-                                crate::server::why_service::query(&root, &request, &mut baley::process::System)
+                                crate::server::why_service::query(
+                                    &root,
+                                    &request,
+                                    &mut baley::process::System,
+                                )
                             })
-                                .await.map_err(|_| Error::Closed);
+                            .await
+                            .map_err(|_| Error::Closed);
                             let _ = reply.send(result);
                         }
                         Request::Progress { root, reply } => {
-                            let result = crate::server::progress_service::query(&factory, &root, &driver).await;
+                            let result =
+                                crate::server::progress_service::query(&factory, &root, &driver)
+                                    .await;
                             let _ = reply.send(result);
                         }
                         Request::Capture { root, apply, reply } => {
-                            let result = crate::server::capture_service::execute(&factory, &root, apply).await;
+                            let result =
+                                crate::server::capture_service::execute(&factory, &root, apply)
+                                    .await;
                             let _ = reply.send(result);
                         }
                         Request::Read { root, query, reply } => {
@@ -596,8 +703,18 @@ pub(crate) mod resident {
                             );
                             let _ = reply.send(result);
                         }
-                        Request::Verification { root, command, reply } => {
-                            let result = crate::server::verification_service::execute(&factory, &root, command, &mut baley::process::System).await;
+                        Request::Verification {
+                            root,
+                            command,
+                            reply,
+                        } => {
+                            let result = crate::server::verification_service::execute(
+                                &factory,
+                                &root,
+                                command,
+                                &mut baley::process::System,
+                            )
+                            .await;
                             let _ = reply.send(result);
                         }
                         Request::Plan {
@@ -625,16 +742,29 @@ pub(crate) mod resident {
                             mut command,
                             reply,
                         } => {
-                            if let crate::server::review_service::Command::Apply(crate::server::review_service::Apply::MaterialAppend {
-                                path, bytes, ..
-                            }) = command.as_mut() {
-                                let acquired = path.as_deref()
-                                    .ok_or_else(|| "review-material-append names no path".to_string())
+                            if let crate::server::review_service::Command::Apply(
+                                crate::server::review_service::Apply::MaterialAppend {
+                                    path,
+                                    bytes,
+                                    ..
+                                },
+                            ) = command.as_mut()
+                            {
+                                let acquired = path
+                                    .as_deref()
+                                    .ok_or_else(|| {
+                                        "review-material-append names no path".to_string()
+                                    })
                                     .and_then(|relative| project_source(&root, relative));
                                 match acquired {
-                                    Ok((issued_path, issued_bytes)) => { *path = Some(issued_path); *bytes = issued_bytes; }
+                                    Ok((issued_path, issued_bytes)) => {
+                                        *path = Some(issued_path);
+                                        *bytes = issued_bytes;
+                                    }
                                     Err(reason) => {
-                                        let _ = reply.send(Ok(crate::server::review_service::refused(reason)));
+                                        let _ = reply.send(Ok(
+                                            crate::server::review_service::refused(reason),
+                                        ));
                                         continue;
                                     }
                                 }
@@ -659,9 +789,13 @@ pub(crate) mod resident {
                             command,
                             reply,
                         } => {
-                            let result =
-                                crate::server::rail_service::receipt(&factory, &root, *command, &mut baley::process::System)
-                                    .await;
+                            let result = crate::server::rail_service::receipt(
+                                &factory,
+                                &root,
+                                *command,
+                                &mut baley::process::System,
+                            )
+                            .await;
                             let _ = reply.send(result);
                         }
                         Request::RailApply {
@@ -670,14 +804,17 @@ pub(crate) mod resident {
                             reply,
                         } => {
                             let result =
-                                crate::server::rail_service::apply(&factory, &root, *request)
-                                    .await;
+                                crate::server::rail_service::apply(&factory, &root, *request).await;
                             let _ = reply.send(result);
                         }
                         Request::Pause { input, reply } => {
-                            let result =
-                                crate::server::pause_service::execute(&factory, input, &driver, &mut baley::process::System)
-                                    .await;
+                            let result = crate::server::pause_service::execute(
+                                &factory,
+                                input,
+                                &driver,
+                                &mut baley::process::System,
+                            )
+                            .await;
                             let _ = reply.send(result);
                         }
                         Request::NextAction { root, reply } => {
@@ -707,33 +844,78 @@ pub(crate) mod resident {
                             .await;
                             let _ = reply.send(result);
                         }
-                        Request::ExecutionQuery { root, phase, plan, reply } => {
-                            let result =
-                                execution_service::query_selected(&factory, &root, phase, plan, &driver, &mut baley::process::System).await;
+                        Request::ExecutionQuery {
+                            root,
+                            phase,
+                            plan,
+                            reply,
+                        } => {
+                            let result = execution_service::query_selected(
+                                &factory,
+                                &root,
+                                phase,
+                                plan,
+                                &driver,
+                                &mut baley::process::System,
+                            )
+                            .await;
                             let _ = reply.send(result);
                         }
-                        Request::NativeExecutionApply {root,raw,reply} => {
-                            let _=reply.send(execution_service::native_apply(&factory, &root, raw, &mut baley::process::System)
-                                    .await);
+                        Request::NativeExecutionApply { root, raw, reply } => {
+                            let _ = reply.send(
+                                execution_service::native_apply(
+                                    &factory,
+                                    &root,
+                                    raw,
+                                    &mut baley::process::System,
+                                )
+                                .await,
+                            );
                         }
-                        Request::NativeRefusal { root, raw, answer, reply } => {
-                            let _ = reply.send(execution_service::record_native_refusal(&factory, &root, &raw, &answer).await);
+                        Request::NativeRefusal {
+                            root,
+                            raw,
+                            answer,
+                            reply,
+                        } => {
+                            let _ = reply.send(
+                                execution_service::record_native_refusal(
+                                    &factory, &root, &raw, &answer,
+                                )
+                                .await,
+                            );
                         }
-                        Request::NativeExecutionHistory { root, phase, run, plan, task, reply } => {
+                        Request::NativeExecutionHistory {
+                            root,
+                            phase,
+                            run,
+                            plan,
+                            task,
+                            reply,
+                        } => {
                             let _ = reply.send(match run {
-                                Some(run) => crate::server::execution_runner_service::read_run(&factory, &root, phase, &run).await,
-                                None => crate::server::execution_runner_service::read(&factory, &root, phase, plan, task, &mut baley::process::System).await,
+                                Some(run) => {
+                                    crate::server::execution_runner_service::read_run(
+                                        &factory, &root, phase, &run,
+                                    )
+                                    .await
+                                }
+                                None => {
+                                    crate::server::execution_runner_service::read(
+                                        &factory,
+                                        &root,
+                                        phase,
+                                        plan,
+                                        task,
+                                        &mut baley::process::System,
+                                    )
+                                    .await
+                                }
                             });
                         }
                         Request::ExecutionApply { root, patch, reply } => {
                             let result =
-                                execution_service::apply(
-                                    &factory,
-                                    &root,
-                                    patch,
-                                    &driver
-                                )
-                                .await;
+                                execution_service::apply(&factory, &root, patch, &driver).await;
                             let _ = reply.send(result);
                         }
                         Request::Lifecycle { root, reply } => {
@@ -763,7 +945,8 @@ pub(crate) mod resident {
                                     let cache = caches.entry(root.clone()).or_default();
                                     let result = match factory.first_touch(&root).await {
                                         Ok(session) => {
-                                            answer(&session, &root, &query, limit, phase, cache).await
+                                            answer(&session, &root, &query, limit, phase, cache)
+                                                .await
                                         }
                                         Err(e) => Err(e),
                                     };
@@ -781,7 +964,10 @@ pub(crate) mod resident {
                 // Every accepted request has finished; now close and join all writers.
                 factory.shutdown().await
             });
-            Self { requests, worker: std::sync::Arc::new(tokio::sync::Mutex::new(Some(worker))) }
+            Self {
+                requests,
+                worker: std::sync::Arc::new(tokio::sync::Mutex::new(Some(worker))),
+            }
         }
 
         pub async fn shutdown(&self) -> Result<()> {
@@ -810,15 +996,37 @@ pub(crate) mod resident {
             receive.await.map_err(|_| Error::Closed)?
         }
 
-        pub async fn verification(&self, root: &Path, query: baley::verification::model::Query) -> Result<serde_json::Value> {
+        pub async fn verification(
+            &self,
+            root: &Path,
+            query: baley::verification::model::Query,
+        ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
-            self.requests.send(Request::Verification { root: root.into(), command: crate::server::verification_service::Command::Query(query), reply }).await.map_err(|_| Error::Closed)?;
+            self.requests
+                .send(Request::Verification {
+                    root: root.into(),
+                    command: crate::server::verification_service::Command::Query(query),
+                    reply,
+                })
+                .await
+                .map_err(|_| Error::Closed)?;
             receive.await.map_err(|_| Error::Closed)?
         }
 
-        pub async fn verification_apply(&self, root: &Path, input: baley::verification::model::Apply) -> Result<serde_json::Value> {
+        pub async fn verification_apply(
+            &self,
+            root: &Path,
+            input: baley::verification::model::Apply,
+        ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
-            self.requests.send(Request::Verification { root: root.into(), command: crate::server::verification_service::Command::Apply(input), reply }).await.map_err(|_| Error::Closed)?;
+            self.requests
+                .send(Request::Verification {
+                    root: root.into(),
+                    command: crate::server::verification_service::Command::Apply(input),
+                    reply,
+                })
+                .await
+                .map_err(|_| Error::Closed)?;
             receive.await.map_err(|_| Error::Closed)?
         }
 
@@ -944,65 +1152,168 @@ pub(crate) mod resident {
             completion.await.map_err(|_| Error::Closed)?
         }
 
-        pub async fn progress(&self, root: &Path) -> std::result::Result<serde_json::Value, DerivationError> {
+        pub async fn progress(
+            &self,
+            root: &Path,
+        ) -> std::result::Result<serde_json::Value, DerivationError> {
             let (reply, completion) = oneshot::channel();
-            self.requests.send(Request::Progress { root: root.into(), reply }).await
+            self.requests
+                .send(Request::Progress {
+                    root: root.into(),
+                    reply,
+                })
+                .await
                 .map_err(|_| derivation_service::store_error(Error::Closed))?;
-            completion.await.map_err(|_| derivation_service::store_error(Error::Closed))?
+            completion
+                .await
+                .map_err(|_| derivation_service::store_error(Error::Closed))?
         }
 
         pub async fn suggest(&self, root: &Path, phase: Option<u32>) -> Result<serde_json::Value> {
             let (reply, completion) = oneshot::channel();
-            self.requests.send(Request::Suggest { root: root.into(), phase, reply }).await
+            self.requests
+                .send(Request::Suggest {
+                    root: root.into(),
+                    phase,
+                    reply,
+                })
+                .await
                 .map_err(|_| Error::Closed)?;
             completion.await.map_err(|_| Error::Closed)?
         }
 
-        pub async fn milestone(&self, root: &Path, command: crate::server::milestone_service::Command) -> Result<serde_json::Value> {
+        pub async fn milestone(
+            &self,
+            root: &Path,
+            command: crate::server::milestone_service::Command,
+        ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
-            self.requests.send(Request::Milestone { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
+            self.requests
+                .send(Request::Milestone {
+                    root: root.into(),
+                    command,
+                    reply,
+                })
+                .await
+                .map_err(|_| Error::Closed)?;
             receive.await.map_err(|_| Error::Closed)?
         }
 
-        pub async fn landing(&self, root: &Path, command: crate::server::landing_service::Command) -> Result<serde_json::Value> {
+        pub async fn landing(
+            &self,
+            root: &Path,
+            command: crate::server::landing_service::Command,
+        ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
-            self.requests.send(Request::Landing { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
+            self.requests
+                .send(Request::Landing {
+                    root: root.into(),
+                    command,
+                    reply,
+                })
+                .await
+                .map_err(|_| Error::Closed)?;
             receive.await.map_err(|_| Error::Closed)?
         }
 
-        pub async fn undo(&self, root: &Path, command: crate::server::undo_service::Command) -> Result<serde_json::Value> {
+        pub async fn undo(
+            &self,
+            root: &Path,
+            command: crate::server::undo_service::Command,
+        ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
-            self.requests.send(Request::Undo { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
+            self.requests
+                .send(Request::Undo {
+                    root: root.into(),
+                    command,
+                    reply,
+                })
+                .await
+                .map_err(|_| Error::Closed)?;
             receive.await.map_err(|_| Error::Closed)?
         }
 
-        pub async fn debug(&self, root: &Path, command: crate::server::debug_service::Command) -> Result<serde_json::Value> {
+        pub async fn debug(
+            &self,
+            root: &Path,
+            command: crate::server::debug_service::Command,
+        ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
-            self.requests.send(Request::Debug { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
+            self.requests
+                .send(Request::Debug {
+                    root: root.into(),
+                    command,
+                    reply,
+                })
+                .await
+                .map_err(|_| Error::Closed)?;
             receive.await.map_err(|_| Error::Closed)?
         }
 
-        pub async fn spike(&self, root: &Path, command: crate::server::spike_service::Command) -> Result<serde_json::Value> {
+        pub async fn spike(
+            &self,
+            root: &Path,
+            command: crate::server::spike_service::Command,
+        ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
-            self.requests.send(Request::Spike { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
+            self.requests
+                .send(Request::Spike {
+                    root: root.into(),
+                    command,
+                    reply,
+                })
+                .await
+                .map_err(|_| Error::Closed)?;
             receive.await.map_err(|_| Error::Closed)?
         }
-        pub async fn task(&self, root: &Path, command: crate::server::task_service::Command) -> Result<serde_json::Value> {
+        pub async fn task(
+            &self,
+            root: &Path,
+            command: crate::server::task_service::Command,
+        ) -> Result<serde_json::Value> {
             let (reply, receive) = oneshot::channel();
-            self.requests.send(Request::Task { root: root.into(), command, reply }).await.map_err(|_| Error::Closed)?;
+            self.requests
+                .send(Request::Task {
+                    root: root.into(),
+                    command,
+                    reply,
+                })
+                .await
+                .map_err(|_| Error::Closed)?;
             receive.await.map_err(|_| Error::Closed)?
         }
 
-        pub async fn why(&self, root: &Path, request: crate::server::why_service::Request) -> Result<serde_json::Value> {
+        pub async fn why(
+            &self,
+            root: &Path,
+            request: crate::server::why_service::Request,
+        ) -> Result<serde_json::Value> {
             let (reply, completion) = oneshot::channel();
-            self.requests.send(Request::Why { root: root.into(), request, reply }).await
+            self.requests
+                .send(Request::Why {
+                    root: root.into(),
+                    request,
+                    reply,
+                })
+                .await
                 .map_err(|_| Error::Closed)?;
             completion.await.map_err(|_| Error::Closed)?
         }
 
-        pub async fn capture(&self, root: &Path, apply: crate::server::capture_service::Apply) -> Result<serde_json::Value> {
+        pub async fn capture(
+            &self,
+            root: &Path,
+            apply: crate::server::capture_service::Apply,
+        ) -> Result<serde_json::Value> {
             let (reply, completion) = oneshot::channel();
-            self.requests.send(Request::Capture { root: root.into(), apply, reply }).await.map_err(|_| Error::Closed)?;
+            self.requests
+                .send(Request::Capture {
+                    root: root.into(),
+                    apply,
+                    reply,
+                })
+                .await
+                .map_err(|_| Error::Closed)?;
             completion.await.map_err(|_| Error::Closed)?
         }
 
@@ -1055,7 +1366,13 @@ pub(crate) mod resident {
             self.recall_phase(root, query, limit, None).await
         }
 
-        pub async fn recall_phase(&self, root: &Path, query: &str, limit: Option<i64>, phase: Option<u32>) -> Result<Answer> {
+        pub async fn recall_phase(
+            &self,
+            root: &Path,
+            query: &str,
+            limit: Option<i64>,
+            phase: Option<u32>,
+        ) -> Result<Answer> {
             let (reply, completion) = oneshot::channel();
             self.requests
                 .send(Request::Recall {
@@ -1072,10 +1389,21 @@ pub(crate) mod resident {
 
         pub async fn read(&self, root: &Path, query: baley::read::Query) -> serde_json::Value {
             let (reply, completion) = oneshot::channel();
-            if self.requests.send(Request::Read { root: root.into(), query, reply }).await.is_err() {
+            if self
+                .requests
+                .send(Request::Read {
+                    root: root.into(),
+                    query,
+                    reply,
+                })
+                .await
+                .is_err()
+            {
                 return crate::server::read_service::unavailable("resident closed");
             }
-            completion.await.unwrap_or_else(|_| crate::server::read_service::unavailable("resident closed"))
+            completion
+                .await
+                .unwrap_or_else(|_| crate::server::read_service::unavailable("resident closed"))
         }
 
         pub async fn refuse_execution_arguments(
@@ -1105,8 +1433,12 @@ pub(crate) mod resident {
             self.query_selected_execution(root, phase, None).await
         }
 
-        pub async fn query_selected_execution(&self, root: &Path, phase: u32,
-            plan: Option<std::num::NonZeroU32>) -> execution_service::Answer {
+        pub async fn query_selected_execution(
+            &self,
+            root: &Path,
+            phase: u32,
+            plan: Option<std::num::NonZeroU32>,
+        ) -> execution_service::Answer {
             let (reply, completion) = oneshot::channel();
             if self
                 .requests
@@ -1124,21 +1456,62 @@ pub(crate) mod resident {
             completion.await.unwrap_or_else(|_| resident_closed())
         }
 
-        pub async fn native_execution_apply(&self,root:&Path,raw:serde_json::Value) -> Result<serde_json::Value> {
-            let (reply,result)=oneshot::channel();
-            self.requests.send(Request::NativeExecutionApply {root:root.to_path_buf(),raw,reply}).await.map_err(|_|Error::Closed)?;
-            result.await.map_err(|_|Error::Closed)?
-        }
-
-        pub async fn record_native_refusal(&self, root: &Path, raw: serde_json::Value, answer: serde_json::Value) -> Result<()> {
+        pub async fn native_execution_apply(
+            &self,
+            root: &Path,
+            raw: serde_json::Value,
+        ) -> Result<serde_json::Value> {
             let (reply, result) = oneshot::channel();
-            self.requests.send(Request::NativeRefusal { root: root.into(), raw, answer, reply }).await.map_err(|_| Error::Closed)?;
+            self.requests
+                .send(Request::NativeExecutionApply {
+                    root: root.to_path_buf(),
+                    raw,
+                    reply,
+                })
+                .await
+                .map_err(|_| Error::Closed)?;
             result.await.map_err(|_| Error::Closed)?
         }
 
-        pub async fn native_execution_history(&self, root: &Path, phase: u32, run: Option<String>, plan: Option<u32>, task: Option<String>) -> Result<serde_json::Value> {
+        pub async fn record_native_refusal(
+            &self,
+            root: &Path,
+            raw: serde_json::Value,
+            answer: serde_json::Value,
+        ) -> Result<()> {
             let (reply, result) = oneshot::channel();
-            self.requests.send(Request::NativeExecutionHistory { root: root.to_path_buf(), phase, run, plan, task, reply }).await.map_err(|_| Error::Closed)?;
+            self.requests
+                .send(Request::NativeRefusal {
+                    root: root.into(),
+                    raw,
+                    answer,
+                    reply,
+                })
+                .await
+                .map_err(|_| Error::Closed)?;
+            result.await.map_err(|_| Error::Closed)?
+        }
+
+        pub async fn native_execution_history(
+            &self,
+            root: &Path,
+            phase: u32,
+            run: Option<String>,
+            plan: Option<u32>,
+            task: Option<String>,
+        ) -> Result<serde_json::Value> {
+            let (reply, result) = oneshot::channel();
+            self.requests
+                .send(Request::NativeExecutionHistory {
+                    root: root.to_path_buf(),
+                    phase,
+                    run,
+                    plan,
+                    task,
+                    reply,
+                })
+                .await
+                .map_err(|_| Error::Closed)?;
             result.await.map_err(|_| Error::Closed)?
         }
 
@@ -1170,15 +1543,23 @@ pub(crate) mod resident {
 
     /// The canonical path and bytes of one project source file named relative to
     /// the project; a path outside the project or inside the planning root is refused.
-    pub(super) fn project_source(planning_root: &Path, relative: &str) -> std::result::Result<(String, Vec<u8>), String> {
-        let project = planning_root.parent().and_then(|project| std::fs::canonicalize(project).ok())
+    pub(super) fn project_source(
+        planning_root: &Path,
+        relative: &str,
+    ) -> std::result::Result<(String, Vec<u8>), String> {
+        let project = planning_root
+            .parent()
+            .and_then(|project| std::fs::canonicalize(project).ok())
             .ok_or_else(|| "planning root has no project parent".to_string())?;
-        let path = std::fs::canonicalize(project.join(relative)).map_err(|error| format!("{relative}: {error}"))?;
-        let records = std::fs::canonicalize(planning_root).unwrap_or_else(|_| planning_root.to_path_buf());
+        let path = std::fs::canonicalize(project.join(relative))
+            .map_err(|error| format!("{relative}: {error}"))?;
+        let records =
+            std::fs::canonicalize(planning_root).unwrap_or_else(|_| planning_root.to_path_buf());
         if !path.starts_with(&project) || path.starts_with(&records) {
             return Err(format!("{relative} is not a project source file"));
         }
-        let text = baley::acquisition::text(&path, baley::acquisition::Class::Source).map_err(|error| error.to_string())?;
+        let text = baley::acquisition::text(&path, baley::acquisition::Class::Source)
+            .map_err(|error| error.to_string())?;
         Ok((path.to_string_lossy().into_owned(), text.into_bytes()))
     }
 }

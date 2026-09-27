@@ -50,17 +50,33 @@ impl ConfigIo for Layers {
     }
     fn read(&mut self, path: &Path) -> Result<Input> {
         if *self.failing.lock().unwrap() {
-            return Err(Error::Io(format!("config {} is unreadable", path.display())));
+            return Err(Error::Io(format!(
+                "config {} is unreadable",
+                path.display()
+            )));
         }
-        let bytes = self.files.lock().unwrap().iter().find(|(held, _)| held == path).map(|(_, bytes)| bytes.clone());
-        Ok(Input { identity: path.into(), bytes, stamp: None })
+        let bytes = self
+            .files
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(held, _)| held == path)
+            .map(|(_, bytes)| bytes.clone());
+        Ok(Input {
+            identity: path.into(),
+            bytes,
+            stamp: None,
+        })
     }
 }
 
 const REPO: &str = "/project/.planning/config.v4.json";
 
 fn paths() -> Paths {
-    Paths { repo: REPO.into(), global: Some("/global/config.v4.json".into()) }
+    Paths {
+        repo: REPO.into(),
+        global: Some("/global/config.v4.json".into()),
+    }
 }
 
 fn verifier(generation: &Generation) -> Option<Value> {
@@ -98,7 +114,12 @@ fn a_failed_read_discards_the_cached_generation_so_the_next_read_is_a_new_one() 
     assert!(matches!(reload.refresh(), Err(Error::Io(_))));
     layers.fail(false);
     let next = reload.refresh().unwrap();
-    assert!(next.number > first.number, "{} after {}", next.number, first.number);
+    assert!(
+        next.number > first.number,
+        "{} after {}",
+        next.number,
+        first.number
+    );
 }
 
 #[test]
@@ -117,16 +138,23 @@ fn snapshot() -> Snapshot {
 
 /// A policy over `layers` whose evaluator records the verifier value and
 /// generation number it was handed, and allows everything.
-fn policy(
-    layers: Layers,
-) -> (ConfigPolicy<Layers, Evaluate>, Seen) {
+fn policy(layers: Layers) -> (ConfigPolicy<Layers, Evaluate>, Seen) {
     let seen = Seen::default();
     let record = seen.clone();
     let evaluate: Evaluate = Box::new(move |_: &MutationContext<'_>, generation: &Generation| {
-        record.lock().unwrap().push((verifier(generation), generation.number));
+        record
+            .lock()
+            .unwrap()
+            .push((verifier(generation), generation.number));
         Ok(())
     });
-    (ConfigPolicy { config: Arc::new(Mutex::new(Reload::new(paths(), layers))), evaluate }, seen)
+    (
+        ConfigPolicy {
+            config: Arc::new(Mutex::new(Reload::new(paths(), layers))),
+            evaluate,
+        },
+        seen,
+    )
 }
 
 #[test]
@@ -135,12 +163,20 @@ fn each_policy_check_hands_the_evaluator_the_config_as_it_is_now() {
     layers.write(REPO, json!({"workflow":{"verifier":true}}));
     let (mut policy, seen) = policy(layers.clone());
     let snapshot = snapshot();
-    let context = MutationContext { operation: "store", snapshot: &snapshot };
+    let context = MutationContext {
+        operation: "store",
+        snapshot: &snapshot,
+    };
     policy.validate(&context).unwrap();
     layers.write(REPO, json!({"workflow":{"verifier":false}}));
     policy.validate(&context).unwrap();
     let seen = seen.lock().unwrap();
-    assert_eq!(seen.iter().map(|(value, _)| value.clone()).collect::<Vec<_>>(), [Some(json!(true)), Some(json!(false))]);
+    assert_eq!(
+        seen.iter()
+            .map(|(value, _)| value.clone())
+            .collect::<Vec<_>>(),
+        [Some(json!(true)), Some(json!(false))]
+    );
     assert!(seen[1].1 > seen[0].1);
 }
 
@@ -152,7 +188,10 @@ fn a_policy_check_whose_config_cannot_be_read_fails_without_evaluating() {
     let (mut policy, seen) = policy(layers);
     let snapshot = snapshot();
     assert!(matches!(
-        policy.validate(&MutationContext { operation: "store", snapshot: &snapshot }),
+        policy.validate(&MutationContext {
+            operation: "store",
+            snapshot: &snapshot
+        }),
         Err(Error::Io(_))
     ));
     assert!(seen.lock().unwrap().is_empty());

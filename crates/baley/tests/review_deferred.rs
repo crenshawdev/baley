@@ -79,7 +79,13 @@ fn written(records: Value) -> (deferred::QueuedMember, Value) {
 }
 #[test]
 fn a_new_member_records_its_home_one_reference_per_attempt_the_time_and_the_contract() {
-    for home in ["phase", "task", "root-inline", "root-debug", "root-diagnosis"] {
+    for home in [
+        "phase",
+        "task",
+        "root-inline",
+        "root-debug",
+        "root-diagnosis",
+    ] {
         let input = fixture(home);
         let (member, _) = written(two_attempts(&input));
         let admission = &input["records"]["admissions"]["f1"];
@@ -103,7 +109,8 @@ fn a_new_member_records_its_home_one_reference_per_attempt_the_time_and_the_cont
 #[test]
 fn a_committed_member_replies_unruled_with_continuation_allowed() {
     let (member, committed) = written(records(&fixture("phase")));
-    let reply = deferred::settle("f1", &member, persistence::Outcome::Committed(committed)).unwrap();
+    let reply =
+        deferred::settle("f1", &member, persistence::Outcome::Committed(committed)).unwrap();
     assert_eq!(
         serde_json::to_value(reply).unwrap(),
         json!({"member":"f1","state":"unruled","continuation":"allowed"})

@@ -11,8 +11,14 @@ use serde_json::{Value, json};
 use std::path::Path;
 
 pub enum Command {
-    EvidenceRead { phase: u32 },
-    Read { phase: String, count: Option<u32>, submission: Option<Box<model::Submission>> },
+    EvidenceRead {
+        phase: u32,
+    },
+    Read {
+        phase: String,
+        count: Option<u32>,
+        submission: Option<Box<model::Submission>>,
+    },
     Apply(Value),
 }
 
@@ -29,10 +35,17 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
     let data = observed.as_ref().map(|s| &s.data).unwrap_or(&empty);
     match command {
         Command::EvidenceRead { .. } => unreachable!("evidence read observes its own inputs"),
-        Command::Read { phase, count, submission } => {
+        Command::Read {
+            phase,
+            count,
+            submission,
+        } => {
             if let Some(submission) = submission {
                 if count.is_some() || submission.phase.to_string() != phase {
-                    return Ok(model::refused("preview-scope", "complete submission must match phase and cannot accompany count"));
+                    return Ok(model::refused(
+                        "preview-scope",
+                        "complete submission must match phase and cannot accompany count",
+                    ));
                 }
                 return match complete_preview(root, data, *submission) {
                     Ok(answer) => Ok(answer),
@@ -59,8 +72,10 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let occurrence = native
                 .map(|n| persistence::occurrence(data, n.get()))
                 .transpose()?;
-            let map_history = native.map(|n| baley::plan::map_history::view(data, n.get()))
-                .transpose()?.unwrap_or_default();
+            let map_history = native
+                .map(|n| baley::plan::map_history::view(data, n.get()))
+                .transpose()?
+                .unwrap_or_default();
             let plans = inventory.occupied.iter().filter_map(|number| {
                 let document = inventory.documents.get(&format!("phases/{phase}/PLAN-{number}.md"))?;
                 let publication = saved.as_ref().and_then(|o| o.publications.get(number));
@@ -145,61 +160,114 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 Ok(value) => value,
                 Err(error) => return Ok(model::refused("submission", error.to_string())),
             };
-            let held = if submission.is_none() || approval.as_ref().is_some_and(|value|
-                value.approved && value.submission_digest.is_some()) {
-                let Some(phase) = phase.or_else(|| submission.as_ref().map(|value| value.phase)) else {
+            let held = if submission.is_none()
+                || approval
+                    .as_ref()
+                    .is_some_and(|value| value.approved && value.submission_digest.is_some())
+            {
+                let Some(phase) = phase.or_else(|| submission.as_ref().map(|value| value.phase))
+                else {
                     return Ok(model::refused("submission", "digest approval needs phase"));
                 };
-                let Some(digest) = approval.as_ref().and_then(|value| value.submission_digest.as_ref()) else {
-                    return Ok(model::refused("submission", "missing submission needs approval.submission_digest"));
+                let Some(digest) = approval
+                    .as_ref()
+                    .and_then(|value| value.submission_digest.as_ref())
+                else {
+                    return Ok(model::refused(
+                        "submission",
+                        "missing submission needs approval.submission_digest",
+                    ));
                 };
                 let drafts = baley::session::drafts(root)?;
-                let drafts = drafts.lock()
+                let drafts = drafts
+                    .lock()
                     .map_err(|_| baley::store::Error::Invalid("drafts unavailable".into()))?;
                 let held = drafts.plans.get(&(phase.get(), digest.clone()));
                 if let Some(held) = held {
                     if approval.as_ref().is_some_and(|value| value.approved)
-                        && let Some(newest_digest) = drafts.newest_plan.get(&phase.get()).filter(|newest| *newest != digest)
-                        && let Some(newest) = drafts.plans.get(&(phase.get(), newest_digest.clone()))
+                        && let Some(newest_digest) = drafts
+                            .newest_plan
+                            .get(&phase.get())
+                            .filter(|newest| *newest != digest)
+                        && let Some(newest) =
+                            drafts.plans.get(&(phase.get(), newest_digest.clone()))
                     {
-                        let targets = newest.submission.plans.iter().chain(&held.submission.plans)
-                            .map(|entry| entry.target.plan).collect::<std::collections::BTreeSet<_>>();
+                        let targets = newest
+                            .submission
+                            .plans
+                            .iter()
+                            .chain(&held.submission.plans)
+                            .map(|entry| entry.target.plan)
+                            .collect::<std::collections::BTreeSet<_>>();
                         for plan in &targets {
-                            let current = newest.submission.plans.iter().zip(&newest.documents)
-                                .find(|(entry, _)| entry.target.plan == *plan).map(|(_, document)| document);
-                            let previous = held.submission.plans.iter().zip(&held.documents)
-                                .find(|(entry, _)| entry.target.plan == *plan).map(|(_, document)| document);
+                            let current = newest
+                                .submission
+                                .plans
+                                .iter()
+                                .zip(&newest.documents)
+                                .find(|(entry, _)| entry.target.plan == *plan)
+                                .map(|(_, document)| document);
+                            let previous = held
+                                .submission
+                                .plans
+                                .iter()
+                                .zip(&held.documents)
+                                .find(|(entry, _)| entry.target.plan == *plan)
+                                .map(|(_, document)| document);
                             let part = match (current, previous) {
-                                (Some(current), Some(previous)) => current.first_difference(previous),
-                                (Some(document), None) | (None, Some(document)) =>
-                                    document.parts.first().map(|part| part.selector.clone()),
+                                (Some(current), Some(previous)) => {
+                                    current.first_difference(previous)
+                                }
+                                (Some(document), None) | (None, Some(document)) => {
+                                    document.parts.first().map(|part| part.selector.clone())
+                                }
                                 (None, None) => None,
                             };
                             if part.is_some() {
-                                return Ok(Answer::DraftRefused { code: "stale-draft".into(),
+                                return Ok(Answer::DraftRefused {
+                                    code: "stale-draft".into(),
                                     identity: json!({"kind":"plan-draft","phase":phase,
-                                        "plan":plan,"digest":newest_digest}), part });
+                                        "plan":plan,"digest":newest_digest}),
+                                    part,
+                                });
                             }
                         }
                         // Submission metadata can change without changing any rendered part.
-                        return Ok(Answer::DraftRefused { code: "stale-draft".into(),
+                        return Ok(Answer::DraftRefused {
+                            code: "stale-draft".into(),
                             identity: newest.documents.first().map_or_else(
                                 || json!({"kind":"phase-plan","phase":phase}),
-                                |document| json!(document.identity)), part: None });
+                                |document| json!(document.identity),
+                            ),
+                            part: None,
+                        });
                     }
                 } else if submission.is_none() {
-                    return Ok(Answer::DraftRefused { code: "unknown-draft".into(),
-                        identity: json!({"kind":"phase-plan","phase":phase}), part: None });
+                    return Ok(Answer::DraftRefused {
+                        code: "unknown-draft".into(),
+                        identity: json!({"kind":"phase-plan","phase":phase}),
+                        part: None,
+                    });
                 }
                 held.cloned()
-            } else { None };
-            let Some(submission) = submission.or_else(|| held.as_ref().map(|draft| draft.submission.clone())) else {
+            } else {
+                None
+            };
+            let Some(submission) =
+                submission.or_else(|| held.as_ref().map(|draft| draft.submission.clone()))
+            else {
                 return Ok(model::refused("unknown-draft", "held plan draft is absent"));
             };
             if phase.is_some_and(|phase| phase != submission.phase) {
-                return Ok(model::refused("submission", "phase must match submission.phase"));
+                return Ok(model::refused(
+                    "submission",
+                    "phase must match submission.phase",
+                ));
             }
-            let approval = match approval.map(|a| persistence::bound(data, &submission, a)).transpose() {
+            let approval = match approval
+                .map(|a| persistence::bound(data, &submission, a))
+                .transpose()
+            {
                 Ok(value) => value,
                 Err(error) => return path_error(error),
             };
@@ -216,7 +284,11 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                     return Ok(refusal);
                 }
                 for entry in &submission.plans {
-                    if let Err(error) = baley::store::filesystem::validate_plan_path(root, entry.target.phase.get(), entry.target.plan.get()) {
+                    if let Err(error) = baley::store::filesystem::validate_plan_path(
+                        root,
+                        entry.target.phase.get(),
+                        entry.target.plan.get(),
+                    ) {
                         return path_error(error);
                     }
                 }
@@ -225,7 +297,12 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 Ok(value) => value,
                 Err(error) => return Ok(model::refused("inventory", error.to_string())),
             };
-            if let Err(error) = baley::plan::validation::replacement(data, &submission, approval.as_ref(), &inventory) {
+            if let Err(error) = baley::plan::validation::replacement(
+                data,
+                &submission,
+                approval.as_ref(),
+                &inventory,
+            ) {
                 return path_error(error);
             }
             let Some(approval) = approval.filter(|a| a.approved) else {
@@ -280,10 +357,11 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 Ok(None) => {}
                 Err(error) => return path_error(error),
             }
-            let inventory = match inventory::read(root, &submission.phase.to_string(), &view.snapshot.data) {
-                Ok(value) => value,
-                Err(error) => return Ok(model::refused("inventory", error.to_string())),
-            };
+            let inventory =
+                match inventory::read(root, &submission.phase.to_string(), &view.snapshot.data) {
+                    Ok(value) => value,
+                    Err(error) => return Ok(model::refused("inventory", error.to_string())),
+                };
             let (proposed, results) = match persistence::contribute(
                 &view.snapshot.data,
                 &submission,
@@ -307,7 +385,12 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                     Ok(value) => value,
                     Err(error) => return path_error(error),
                 };
-                if let Err(error) = persistence::validate_old_document(&view.snapshot.data, result.identity.phase.get(), result.identity.plan.get(), expected.bytes.as_deref()) {
+                if let Err(error) = persistence::validate_old_document(
+                    &view.snapshot.data,
+                    result.identity.phase.get(),
+                    result.identity.plan.get(),
+                    expected.bytes.as_deref(),
+                ) {
                     return path_error(error);
                 }
                 external.push(baley::store::transaction::ExternalChange {
@@ -329,15 +412,24 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let mut seeded = Vec::new();
             {
                 use baley::store::Storage;
-                let expected = match baley::store::filesystem::Filesystem::new(root)?.read("requirements") {
-                    Ok(observed) => observed,
-                    Err(error) => return path_error(error),
-                };
+                let expected =
+                    match baley::store::filesystem::Filesystem::new(root)?.read("requirements") {
+                        Ok(observed) => observed,
+                        Err(error) => return path_error(error),
+                    };
                 let declared = persistence::declared_requirements(&results);
-                match baley::verification::projections::seeded_requirements(expected.bytes.as_deref(), submission.phase.get(), &declared) {
+                match baley::verification::projections::seeded_requirements(
+                    expected.bytes.as_deref(),
+                    submission.phase.get(),
+                    &declared,
+                ) {
                     Ok(Some((bytes, ids))) => {
                         seeded = ids;
-                        external.push(baley::store::transaction::ExternalChange { target: "requirements".into(), expected, bytes });
+                        external.push(baley::store::transaction::ExternalChange {
+                            target: "requirements".into(),
+                            expected,
+                            bytes,
+                        });
                     }
                     Ok(None) => {}
                     Err(error) => return path_error(error),
@@ -382,10 +474,14 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
 }
 
 fn documents(data: &Value, submission: &model::Submission) -> Result<Vec<Value>> {
-    submission.plans.iter().map(|entry| {
-        let bytes = persistence::rendered_document(data, &entry.content)?;
-        Ok(json!({"identity":entry.target,"revision":baley::store::model::digest(&bytes)}))
-    }).collect()
+    submission
+        .plans
+        .iter()
+        .map(|entry| {
+            let bytes = persistence::rendered_document(data, &entry.content)?;
+            Ok(json!({"identity":entry.target,"revision":baley::store::model::digest(&bytes)}))
+        })
+        .collect()
 }
 
 fn publication_answers(publications: &[model::Publication]) -> Result<Vec<Value>> {
@@ -404,14 +500,22 @@ fn publication_answers(publications: &[model::Publication]) -> Result<Vec<Value>
 
 fn hold(root: &Path, data: &Value, submission: &model::Submission) -> Result<()> {
     let digest = persistence::submission_digest(submission)?;
-    let documents = submission.plans.iter().map(|entry|
-        baley::read::document::plan_draft(data, &entry.content, &digest)).collect::<Result<Vec<_>>>()?;
+    let documents = submission
+        .plans
+        .iter()
+        .map(|entry| baley::read::document::plan_draft(data, &entry.content, &digest))
+        .collect::<Result<Vec<_>>>()?;
     let drafts = baley::session::drafts(root)?;
-    let mut drafts = drafts.lock()
+    let mut drafts = drafts
+        .lock()
         .map_err(|_| baley::store::Error::Invalid("drafts unavailable".into()))?;
-    drafts.plans.insert((submission.phase.get(), digest.clone()), baley::session::PlanDraft {
-        submission: submission.clone(), documents,
-    });
+    drafts.plans.insert(
+        (submission.phase.get(), digest.clone()),
+        baley::session::PlanDraft {
+            submission: submission.clone(),
+            documents,
+        },
+    );
     drafts.newest_plan.insert(submission.phase.get(), digest);
     Ok(())
 }
@@ -420,20 +524,30 @@ fn complete_preview(root: &Path, data: &Value, submission: model::Submission) ->
     use baley::plan::validation;
     let inventory = inventory::read(root, &submission.phase.to_string(), data)?;
     for entry in &submission.plans {
-        baley::store::filesystem::validate_plan_path(root, entry.target.phase.get(), entry.target.plan.get())?;
+        baley::store::filesystem::validate_plan_path(
+            root,
+            entry.target.phase.get(),
+            entry.target.plan.get(),
+        )?;
         if let Some(replacement) = &entry.replacement
             && replacement.content != entry.content
         {
-            return Ok(model::refused("replacement-authorization", "replacement must name the same proposed content"));
+            return Ok(model::refused(
+                "replacement-authorization",
+                "replacement must name the same proposed content",
+            ));
         }
     }
     validation::replacement_preview(data, &submission, &inventory)?;
     persistence::validate_candidate(data, &submission, &inventory)?;
     let coverage = baley::plan::associations::validate(data, &submission)?;
     hold(root, data, &submission)?;
-    Ok(model::ok("plan-read", json!({"persisted":false,
+    Ok(model::ok(
+        "plan-read",
+        json!({"persisted":false,
         "submission_digest":persistence::submission_digest(&submission)?,"documents":documents(data, &submission)?,
-        "readiness":"provisional-authoring","coverage":coverage})))
+        "readiness":"provisional-authoring","coverage":coverage}),
+    ))
 }
 
 fn replay_answer(root: &Path, data: &Value, receipt: model::Receipt) -> Result<Answer> {
@@ -451,7 +565,11 @@ fn replay_answer(root: &Path, data: &Value, receipt: model::Receipt) -> Result<A
                 Err(error) => return Err(error.into()),
                 Ok(bytes) => match current {
                     Some(current) if baley::store::model::digest(&bytes) == current.revision => {
-                        if current.revision == historical.revision { "installed" } else { "newer-authorized" }
+                        if current.revision == historical.revision {
+                            "installed"
+                        } else {
+                            "newer-authorized"
+                        }
                     }
                     _ => "drifted",
                 },
@@ -460,8 +578,11 @@ fn replay_answer(root: &Path, data: &Value, receipt: model::Receipt) -> Result<A
         projections.push(json!({"identity":historical.identity,"status":status,
             "current_revision":current.map(|p| &p.revision)}));
     }
-    Ok(model::ok("plan-submit", json!({"persisted":true,"replayed":true,
-        "payload_digest":receipt.payload_digest,"results":publication_answers(&receipt.results)?,"projections":projections})))
+    Ok(model::ok(
+        "plan-submit",
+        json!({"persisted":true,"replayed":true,
+        "payload_digest":receipt.payload_digest,"results":publication_answers(&receipt.results)?,"projections":projections}),
+    ))
 }
 
 fn path_error(error: baley::store::Error) -> Result<Answer> {

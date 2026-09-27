@@ -3,7 +3,9 @@
 //! These three guard what reaches a Git command line and what a caller may
 //! claim about a change. All take a string or a JSON value and answer over it,
 //! so every check here is a comparison.
-use super::risk::{CATEGORIES, configured_surfaces, valid_object_id, validate_name, validate_surfaces};
+use super::risk::{
+    CATEGORIES, configured_surfaces, valid_object_id, validate_name, validate_surfaces,
+};
 use serde_json::json;
 
 fn surfaces(values: &[&str]) -> Vec<String> {
@@ -66,7 +68,10 @@ fn an_empty_surface_list_is_refused() {
 #[test]
 fn a_surface_outside_the_vocabulary_is_refused() {
     for surface in ["performance", "AUTH", "auth ", "", "auth,secrets"] {
-        assert!(validate_surfaces(surfaces(&[surface])).is_err(), "{surface:?}");
+        assert!(
+            validate_surfaces(surfaces(&[surface])).is_err(),
+            "{surface:?}"
+        );
     }
 }
 
@@ -82,12 +87,21 @@ fn a_repeated_surface_is_refused() {
 fn absent_configuration_is_no_answer_and_an_empty_list_is_refused() {
     assert_eq!(configured_surfaces(&json!(null)).unwrap(), None);
     assert!(configured_surfaces(&json!([])).is_err());
-    assert_eq!(configured_surfaces(&json!(["auth"])).unwrap(), Some(surfaces(&["auth"])));
+    assert_eq!(
+        configured_surfaces(&json!(["auth"])).unwrap(),
+        Some(surfaces(&["auth"]))
+    );
 }
 
 #[test]
 fn configuration_that_is_not_a_list_of_strings_is_refused() {
-    for value in [json!("auth"), json!({"auth": true}), json!([7]), json!([["auth"]]), json!(3)] {
+    for value in [
+        json!("auth"),
+        json!({"auth": true}),
+        json!([7]),
+        json!([["auth"]]),
+        json!(3),
+    ] {
         assert!(configured_surfaces(&value).is_err(), "{value}");
     }
 }

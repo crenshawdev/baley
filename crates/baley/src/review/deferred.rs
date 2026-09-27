@@ -118,7 +118,10 @@ pub enum Enqueue {
     /// Nothing to write: the reply is final.
     Answered(EnqueueReply),
     /// A new member, and the records with it inserted, to commit.
-    Write { member: Box<QueuedMember>, records: Value },
+    Write {
+        member: Box<QueuedMember>,
+        records: Value,
+    },
 }
 
 /// Decide an enqueue from the records alone. A fire not gated deferred is
@@ -166,7 +169,10 @@ pub fn decide_enqueue(
         state: InitialState::Unruled,
     };
     persistence::insert(&mut records, "deferred", fire, &member).map_err(|_| refused(fire))?;
-    Ok(Enqueue::Write { member: Box::new(member), records })
+    Ok(Enqueue::Write {
+        member: Box::new(member),
+        records,
+    })
 }
 
 /// This acknowledges durable enqueue only. Delivery and settlement retain their
@@ -184,7 +190,8 @@ pub async fn enqueue_deferred(
     };
     // One generic contribution commits member, references and the existing index
     // in the same snapshot. No separate queue file participates.
-    let outcome = persistence::commit_records(store, &view, &format!("enqueue:{fire}"), records).await;
+    let outcome =
+        persistence::commit_records(store, &view, &format!("enqueue:{fire}"), records).await;
     settle(fire, &member, outcome)
 }
 

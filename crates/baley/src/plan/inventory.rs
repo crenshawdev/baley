@@ -131,7 +131,9 @@ pub fn with_records(input: Inventory, phase: &str, data: &Value) -> Result<Inven
     let mut high_water = input.high_water;
     let documents = input.documents;
     let mut provenance = input.provenance;
-    if let Ok(number) = phase.parse::<u32>() && number.to_string() == phase {
+    if let Ok(number) = phase.parse::<u32>()
+        && number.to_string() == phase
+    {
         let phase = number;
         if let Some(saved) = persistence::saved(data, phase)? {
             high_water = high_water.max(saved.high_water);
@@ -144,7 +146,11 @@ pub fn with_records(input: Inventory, phase: &str, data: &Value) -> Result<Inven
         if let Some(execution) = data.get("execution") {
             let execution: baley::execution::model::ExecutionSnapshot =
                 serde_json::from_value(execution.clone())?;
-            for (id, occurrence) in execution.occurrences.iter().filter(|(_, o)| o.phase == phase) {
+            for (id, occurrence) in execution
+                .occurrences
+                .iter()
+                .filter(|(_, o)| o.phase == phase)
+            {
                 let mut numbers: BTreeSet<_> = occurrence.plans.iter().map(|p| p.plan).collect();
                 numbers.extend(occurrence.receipts.values().map(|r| r.outcome.plan));
                 if let Some(active) = &occurrence.active {
@@ -152,7 +158,10 @@ pub fn with_records(input: Inventory, phase: &str, data: &Value) -> Result<Inven
                 }
                 for number in numbers {
                     occupied.insert(number);
-                    provenance.entry(number).or_default().insert(format!("execution:{id}:plan:{number}"));
+                    provenance
+                        .entry(number)
+                        .or_default()
+                        .insert(format!("execution:{id}:plan:{number}"));
                 }
             }
         }
@@ -178,7 +187,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let phase = temp.path().join("phases/1");
         std::fs::create_dir_all(phase.join("reports")).unwrap();
-        for name in ["PLAN.md", "SUMMARY-2.md", "UAT-3.md", "reports/plan-4.md", "PLAN-5.md"] {
+        for name in [
+            "PLAN.md",
+            "SUMMARY-2.md",
+            "UAT-3.md",
+            "reports/plan-4.md",
+            "PLAN-5.md",
+        ] {
             std::fs::write(phase.join(name), "text\n").unwrap();
         }
         let inventory = read(temp.path(), "1", &Value::Null).unwrap();

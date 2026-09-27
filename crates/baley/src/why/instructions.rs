@@ -1,6 +1,8 @@
 pub fn markdown() -> &'static str {
     static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        crate::help::table::render_description("bal-why", r#"---
+        crate::help::table::render_description(
+            "bal-why",
+            r#"---
 name: bal-why
 description: <compiled>
 argument-hint: "<path>[:<line>] | <phase> refusals"
@@ -30,7 +32,9 @@ commentary after it, no reformatting. `text` is already the whole answer,
 quoted from the record in its own words; a reader checks it byte for byte
 against the binary's own output, and any change here makes that identity
 false.
-"#).expect("compiled skill front matter")
+"#,
+        )
+        .expect("compiled skill front matter")
     });
     &MARKDOWN
 }

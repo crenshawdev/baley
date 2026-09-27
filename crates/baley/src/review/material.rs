@@ -132,11 +132,19 @@ pub fn read_material<S: Storage>(store: &mut S, entry: &MaterialEntry) -> Result
 }
 
 /// Both public entry reads use this retained delivery membership gate.
-pub fn authorized_entry(records: &serde_json::Value, attempt_id: &str, entry_id: &str) -> Result<MaterialEntry> {
+pub fn authorized_entry(
+    records: &serde_json::Value,
+    attempt_id: &str,
+    entry_id: &str,
+) -> Result<MaterialEntry> {
     use super::{model::Attempt, persistence};
     let attempt: Attempt = persistence::get(records, "attempts", attempt_id)?;
     let manifest: Manifest = persistence::get(records, "manifests", &attempt.view.manifest)?;
-    let entry = manifest.entries.iter().find(|entry| entry.entry == entry_id).cloned()
+    let entry = manifest
+        .entries
+        .iter()
+        .find(|entry| entry.entry == entry_id)
+        .cloned()
         .or_else(|| persistence::get(records, "appended", entry_id).ok())
         .ok_or_else(|| Error::Invalid("unknown retained entry".into()))?;
     if attempt.attempt != attempt_id {
@@ -146,8 +154,12 @@ pub fn authorized_entry(records: &serde_json::Value, attempt_id: &str, entry_id:
     Ok(entry)
 }
 
-pub fn authorize_material_read(records: &serde_json::Value, attempt: &super::model::Attempt,
-    manifest: &Manifest, entry: &MaterialEntry) -> Result<()> {
+pub fn authorize_material_read(
+    records: &serde_json::Value,
+    attempt: &super::model::Attempt,
+    manifest: &Manifest,
+    entry: &MaterialEntry,
+) -> Result<()> {
     use super::model::DeliveryRecord;
     if manifest.fire != attempt.fire || manifest.manifest != attempt.view.manifest {
         return Err(Error::Invalid("foreign material manifest".into()));
@@ -155,13 +167,18 @@ pub fn authorize_material_read(records: &serde_json::Value, attempt: &super::mod
     if attempt.view.entries.contains(&entry.entry) && manifest.entries.contains(entry) {
         return Ok(());
     }
-    let deliveries: std::collections::BTreeMap<String, DeliveryRecord> = records.get("deliveries")
-        .cloned().map(serde_json::from_value).transpose()?.unwrap_or_default();
+    let deliveries: std::collections::BTreeMap<String, DeliveryRecord> = records
+        .get("deliveries")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
     for record in deliveries.into_values() {
         if record.attempt == attempt.attempt
             && record.delivery.view.manifest == manifest.manifest
             && record.delivery.view.entries.contains(&entry.entry)
-            && record.delivery.contents.get(&entry.entry) == entry.content.as_ref() {
+            && record.delivery.contents.get(&entry.entry) == entry.content.as_ref()
+        {
             super::attempts::delivered_view(records, attempt, &record.delivery.view)?;
             return Ok(());
         }
@@ -583,7 +600,10 @@ pub fn retain_staged<S: Storage>(
 /// The target a Git observation resolves `target` to, with the tip object and
 /// the side it is read as. A staged tree needs the index and no head; a range
 /// needs a head.
-pub fn resolve_git_target(target: &Target, observed: &super::io::GitObservation) -> Result<(Target, String, Side)> {
+pub fn resolve_git_target(
+    target: &Target,
+    observed: &super::io::GitObservation,
+) -> Result<(Target, String, Side)> {
     Ok(match target {
         Target::StagedTree { .. } => {
             let index = observed
@@ -625,7 +645,11 @@ pub fn resolve_git_target(target: &Target, observed: &super::io::GitObservation)
 
 /// The objects to read for a Git observation, in order: each changed path once,
 /// its base object and then its tip object.
-pub fn git_reads(observed: &super::io::GitObservation, tip: &str, tip_side: &Side) -> Vec<(String, String, Side)> {
+pub fn git_reads(
+    observed: &super::io::GitObservation,
+    tip: &str,
+    tip_side: &Side,
+) -> Vec<(String, String, Side)> {
     let mut paths = observed.paths.clone();
     paths.sort();
     paths.dedup();

@@ -169,7 +169,10 @@ impl<I: ConfigIo> ConfigWriter<I> {
             .snapshot
             .generation;
         let transaction = transaction(change, store_generation);
-        let view = self.store.request(request(Some(transaction), check)).await?;
+        let view = self
+            .store
+            .request(request(Some(transaction), check))
+            .await?;
         Ok(written(view, plan, layer))
     }
 }
@@ -177,7 +180,10 @@ impl<I: ConfigIo> ConfigWriter<I> {
 /// The store request that carries a batch: a plain read when the plan changes
 /// nothing, so no generation is spent, else its transaction, under the
 /// captured-input check when there is one.
-pub fn request(transaction: Option<Transaction>, check: Option<baley::store::writer::InputCheck>) -> Operation {
+pub fn request(
+    transaction: Option<Transaction>,
+    check: Option<baley::store::writer::InputCheck>,
+) -> Operation {
     match (transaction, check) {
         (None, None) => Operation::Read,
         (transaction, Some(check)) => Operation::CheckedTransact { check, transaction },
@@ -188,7 +194,12 @@ pub fn request(transaction: Option<Transaction>, check: Option<baley::store::wri
 /// What a batch reports: the store view after it, the keys it changed, the
 /// file it wrote to and the layer it was asked for.
 pub fn written(view: View, plan: Plan, layer: Layer) -> Written {
-    Written { view, changed_keys: plan.changed_keys, destination: plan.destination, requested_layer: layer }
+    Written {
+        view,
+        changed_keys: plan.changed_keys,
+        destination: plan.destination,
+        requested_layer: layer,
+    }
 }
 
 /// A config read that failed refuses the write as a policy error.
@@ -216,7 +227,12 @@ pub struct Plan {
 /// when the global path is the repo file itself. The file must still be the
 /// one the session bound, and the layer it makes must leave a valid effective
 /// config.
-pub fn plan(generation: &Generation, active: &Paths, layer: Layer, updates: &[Update]) -> Result<Plan> {
+pub fn plan(
+    generation: &Generation,
+    active: &Paths,
+    layer: Layer,
+    updates: &[Update],
+) -> Result<Plan> {
     let (target, path, input) = match layer {
         Layer::Repo => ("repo-config", &active.repo, &generation.repo),
         Layer::Global => {
@@ -289,9 +305,15 @@ impl Plan {
             .clone()
             .ok_or_else(|| Error::Invalid("config plan changes nothing".into()))?;
         if expected.bytes != self.prepared_against {
-            return Err(Error::Conflict("config changed while preparing update".into()));
+            return Err(Error::Conflict(
+                "config changed while preparing update".into(),
+            ));
         }
-        Ok(ExternalChange { target: self.target.into(), expected, bytes })
+        Ok(ExternalChange {
+            target: self.target.into(),
+            expected,
+            bytes,
+        })
     }
 }
 
@@ -299,7 +321,11 @@ impl Plan {
 /// store generation it follows and its bytes.
 pub fn transaction(change: ExternalChange, store_generation: u64) -> Transaction {
     Transaction {
-        id: format!("config:{}:{store_generation}:{}", change.target, digest(&change.bytes)),
+        id: format!(
+            "config:{}:{store_generation}:{}",
+            change.target,
+            digest(&change.bytes)
+        ),
         items: vec![],
         decisions: vec![],
         snapshot: None,

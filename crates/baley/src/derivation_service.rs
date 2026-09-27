@@ -96,7 +96,9 @@ pub async fn checked_query<I: ConfigIo + Clone + Sync>(
 }
 
 pub async fn checked_progress<I: ConfigIo + Clone + Sync>(
-    factory: &SessionFactory<I>, root: &Path, driver: &Driver,
+    factory: &SessionFactory<I>,
+    root: &Path,
+    driver: &Driver,
 ) -> Result<(RecheckedLifecycle, baley::store::writer::View), DerivationError> {
     checked(factory, root, driver, true).await
 }
@@ -104,7 +106,9 @@ pub async fn checked_progress<I: ConfigIo + Clone + Sync>(
 /// One observation of the artifacts on the blocking pool; the test event
 /// fires for the request's first observation only.
 async fn observe(
-    selected: std::path::PathBuf, driver: Driver, report_conflicts: bool,
+    selected: std::path::PathBuf,
+    driver: Driver,
+    report_conflicts: bool,
 ) -> Result<(PreparedLifecycle, Box<dyn ArtifactIo + Send>), DerivationError> {
     tokio::task::spawn_blocking(move || {
         let mut io = (driver.artifacts)();
@@ -122,7 +126,10 @@ async fn observe(
 }
 
 async fn checked<I: ConfigIo + Clone + Sync>(
-    factory: &SessionFactory<I>, root: &Path, driver: &Driver, report_conflicts: bool,
+    factory: &SessionFactory<I>,
+    root: &Path,
+    driver: &Driver,
+    report_conflicts: bool,
 ) -> Result<(RecheckedLifecycle, baley::store::writer::View), DerivationError> {
     let (prepared, mut io) = observe(root.to_path_buf(), driver.clone(), report_conflicts).await?;
     // A missing root or inconsistent ROADMAP refuses before import can create it.
@@ -144,8 +151,8 @@ async fn checked<I: ConfigIo + Clone + Sync>(
     let disposition = check_memo(raw, &key, prepared.answer())?;
     let memo = LifecycleMemo::fresh(key, prepared.answer().clone());
     let rechecked = tokio::task::spawn_blocking(move || recheck_query(&prepared, io.as_mut()))
-    .await
-    .map_err(|_| store_error(Error::Closed))??;
+        .await
+        .map_err(|_| store_error(Error::Closed))??;
     let latest = session.derivation_view().await.map_err(store_error)?;
     let writes = publish(&view.snapshot, &latest.snapshot, disposition)?;
     let published = if writes {
@@ -175,13 +182,16 @@ mod publish_tests {
 
     #[test]
     fn a_git_deadline_has_a_distinct_store_classification() {
-        assert_eq!(store_error(Error::GitLimit(baley::git_process::Limit {
-            command: "git status".into(),
-            bound: std::time::Duration::from_secs(60),
-        })), DerivationError::Store {
-            kind: "git-limit".into(),
-            detail: "git status exceeded git deadline of 60 seconds".into(),
-        });
+        assert_eq!(
+            store_error(Error::GitLimit(baley::git_process::Limit {
+                command: "git status".into(),
+                bound: std::time::Duration::from_secs(60),
+            })),
+            DerivationError::Store {
+                kind: "git-limit".into(),
+                detail: "git status exceeded git deadline of 60 seconds".into(),
+            }
+        );
     }
 
     /// A store snapshot holding `data` at `generation`.
@@ -196,19 +206,28 @@ mod publish_tests {
     #[test]
     fn a_memo_miss_is_published() {
         let checked = snapshot(3, data());
-        assert_eq!(publish(&checked, &checked.clone(), MemoDisposition::Miss), Ok(true));
+        assert_eq!(
+            publish(&checked, &checked.clone(), MemoDisposition::Miss),
+            Ok(true)
+        );
     }
 
     #[test]
     fn a_memo_hit_answers_without_writing() {
         let checked = snapshot(3, data());
-        assert_eq!(publish(&checked, &checked.clone(), MemoDisposition::Hit), Ok(false));
+        assert_eq!(
+            publish(&checked, &checked.clone(), MemoDisposition::Hit),
+            Ok(false)
+        );
     }
 
     #[test]
     fn a_store_that_moved_on_since_the_check_refuses_as_inputs_changed() {
         let checked = snapshot(3, data());
-        for latest in [snapshot(4, data()), snapshot(3, json!({"context": {"phases": {}}, "other": 1}))] {
+        for latest in [
+            snapshot(4, data()),
+            snapshot(3, json!({"context": {"phases": {}}, "other": 1})),
+        ] {
             assert_eq!(
                 publish(&checked, &latest, MemoDisposition::Miss),
                 Err(DerivationError::InputsChanged)
@@ -218,7 +237,10 @@ mod publish_tests {
 
     #[test]
     fn a_publication_refused_as_stale_is_inputs_changed() {
-        assert_eq!(publication_error(Error::Conflict(STALE_SNAPSHOT.into())), DerivationError::InputsChanged);
+        assert_eq!(
+            publication_error(Error::Conflict(STALE_SNAPSHOT.into())),
+            DerivationError::InputsChanged
+        );
     }
 
     #[test]
@@ -232,7 +254,10 @@ mod publish_tests {
         ] {
             assert_eq!(
                 publication_error(error.clone()),
-                DerivationError::Store { kind: kind.into(), detail: error.to_string() }
+                DerivationError::Store {
+                    kind: kind.into(),
+                    detail: error.to_string()
+                }
             );
         }
     }

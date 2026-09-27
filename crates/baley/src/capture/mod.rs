@@ -63,7 +63,11 @@ pub fn id(request_id: &str, kind: Kind, text: &str, phase: Option<u32>) -> Strin
     field(request_id.as_bytes());
     field(kind.word().as_bytes());
     field(text.as_bytes());
-    field(phase.map_or(String::new(), |phase| phase.to_string()).as_bytes());
+    field(
+        phase
+            .map_or(String::new(), |phase| phase.to_string())
+            .as_bytes(),
+    );
     model::digest(&out)
 }
 

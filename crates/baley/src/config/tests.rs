@@ -214,7 +214,11 @@ impl reload::ConfigIo for CountedIo {
 /// A repo config and a global path linked to it, read through a counted seam.
 fn aliased(
     dir: &std::path::Path,
-) -> (reload::Reload<CountedIo>, std::sync::Arc<std::sync::atomic::AtomicUsize>, reload::Paths) {
+) -> (
+    reload::Reload<CountedIo>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    reload::Paths,
+) {
     use std::os::unix::fs::symlink;
     let paths = config_paths(dir);
     write_json(
@@ -223,7 +227,12 @@ fn aliased(
     );
     symlink(&paths.repo, paths.global.as_ref().unwrap()).unwrap();
     let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let reader = reload::Reload::new(paths.clone(), CountedIo { reads: count.clone() });
+    let reader = reload::Reload::new(
+        paths.clone(),
+        CountedIo {
+            reads: count.clone(),
+        },
+    );
     (reader, count, paths)
 }
 
@@ -303,15 +312,24 @@ fn a_layer_that_cannot_be_read_is_unavailable_until_it_reads_again() {
         }
         fn read(&mut self, path: &std::path::Path) -> baley::store::Result<reload::Input> {
             if self.denied.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(baley::store::Error::Io(format!("config {} is unreadable", path.display())));
+                return Err(baley::store::Error::Io(format!(
+                    "config {} is unreadable",
+                    path.display()
+                )));
             }
-            Ok(reload::Input { identity: path.into(), bytes: Some(br#"{"workflow":{"verifier":true}}"#.to_vec()), stamp: None })
+            Ok(reload::Input {
+                identity: path.into(),
+                bytes: Some(br#"{"workflow":{"verifier":true}}"#.to_vec()),
+                stamp: None,
+            })
         }
     }
     let denied = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let mut reader = reload::Reload::new(
         config_paths(std::path::Path::new("/project")),
-        Denied { denied: denied.clone() },
+        Denied {
+            denied: denied.clone(),
+        },
     );
     assert!(reader.refresh().is_err());
     denied.store(false, std::sync::atomic::Ordering::SeqCst);

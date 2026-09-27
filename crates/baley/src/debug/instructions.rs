@@ -1,7 +1,9 @@
 //! Compiled debug role; the installed skill is only its rendering.
 pub fn markdown() -> &'static str {
     static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        crate::help::table::render_description("bal-debug", r#"---
+        crate::help::table::render_description(
+            "bal-debug",
+            r#"---
 name: bal-debug
 description: ""
 argument-hint: "[list | status <slug> | continue <slug> | --diagnose] [symptom]"
@@ -233,7 +235,9 @@ On an uncertain write, retry its identical request ID and inputs; never invent
 a successful result. On a pending journal or unavailable record, report the
 located refusal and preserve the stopped state for recovery.
 </recovery>
-"#).expect("compiled skill front matter")
+"#,
+        )
+        .expect("compiled skill front matter")
     });
     &MARKDOWN
 }

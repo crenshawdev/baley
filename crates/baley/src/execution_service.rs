@@ -2,12 +2,12 @@
 //!
 //! The resident calls these functions directly. They never send another
 //! resident request, so the single owner cannot deadlock itself.
-use baley::process::Process;
 use super::derivation_service::{self, Driver};
 use crate::{
     config::reload::ConfigIo,
     session::{Session, SessionFactory},
 };
+use baley::process::Process;
 use baley::{
     derivation::{Cycle, LifecycleStatus},
     evidence::Scope,
@@ -51,23 +51,33 @@ struct Plans {
     fingerprint: String,
 }
 
-pub(super) fn native_error(error:Error) -> Value {
+pub(super) fn native_error(error: Error) -> Value {
     if let Error::Invalid(message) = &error
         && let Some(encoded) = message.strip_prefix("native-task-refusal:")
         && let Ok(answer) = serde_json::from_str::<Value>(encoded)
-    { return answer; }
-    if let Error::Invalid(message)|Error::Conflict(message)=&error
-        && let Some(encoded)=message.strip_prefix("plan-refusal:")
-        && let Ok(diagnostic)=serde_json::from_str::<baley::plan::model::Diagnostic>(encoded)
-    {return serde_json::to_value(diagnostic.answer()).expect("diagnostic");}
-    Refusal::new("invalid-request", error.to_string()).rule("native-admission").slot("request").value()
+    {
+        return answer;
+    }
+    if let Error::Invalid(message) | Error::Conflict(message) = &error
+        && let Some(encoded) = message.strip_prefix("plan-refusal:")
+        && let Ok(diagnostic) = serde_json::from_str::<baley::plan::model::Diagnostic>(encoded)
+    {
+        return serde_json::to_value(diagnostic.answer()).expect("diagnostic");
+    }
+    Refusal::new("invalid-request", error.to_string())
+        .rule("native-admission")
+        .slot("request")
+        .value()
 }
 
-pub async fn native_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value, process: &mut (dyn Process + Send)) -> baley::store::Result<Value> {
+pub async fn native_apply<I: ConfigIo + Clone + Sync>(
+    factory: &SessionFactory<I>,
+    root: &Path,
+    raw: Value,
+    process: &mut (dyn Process + Send),
+) -> baley::store::Result<Value> {
     native_answer(factory, root, raw, process).await
 }
-
-
 
 /// The phase a refused native request was about: the diagnostic's own phase
 /// where it has one, otherwise the phase the request named.
@@ -107,14 +117,19 @@ pub async fn record_native_refusal<I: ConfigIo + Clone + Sync>(
     let located = Located {
         rule: answer["rule"].as_str().map(str::to_owned),
         slot: answer["slot"].as_str().map(str::to_owned),
-        id: answer["id"].as_str().filter(|id| !id.is_empty()).map(str::to_owned),
+        id: answer["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned),
         ..Located::default()
     };
     let response = Response::Refused {
         phase,
         code: code.to_owned(),
-        reason: baley::execution::boundary::native_refusal_reason(
-            &stable_reason(code, answer["reason"].as_str().unwrap_or_default())),
+        reason: baley::execution::boundary::native_refusal_reason(&stable_reason(
+            code,
+            answer["reason"].as_str().unwrap_or_default(),
+        )),
     };
     let encoding = || Error::Invalid("native refusal has no recordable boundary".to_owned());
     let mut decision = boundary(
@@ -135,7 +150,10 @@ pub async fn record_native_refusal<I: ConfigIo + Clone + Sync>(
         .request(Operation::BoundaryV1 {
             expected_generation: view.snapshot.generation,
             expected_integrity: view.snapshot.integrity.clone(),
-            operation_id: format!("execution-observation:{}", decision.identity().map_err(|_| encoding())?),
+            operation_id: format!(
+                "execution-observation:{}",
+                decision.identity().map_err(|_| encoding())?
+            ),
             decision,
             change: Box::new(BoundaryChange::Observe),
         })
@@ -143,7 +161,12 @@ pub async fn record_native_refusal<I: ConfigIo + Clone + Sync>(
     Ok(())
 }
 
-async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value, process: &mut (dyn Process + Send)) -> baley::store::Result<Value> {
+async fn native_answer<I: ConfigIo + Clone + Sync>(
+    factory: &SessionFactory<I>,
+    root: &Path,
+    raw: Value,
+    process: &mut (dyn Process + Send),
+) -> baley::store::Result<Value> {
     if raw["operation"] == "execution-worker-exit" {
         let report = match serde_json::from_value(raw) {
             Ok(baley::execution::runner::PlanApply::WorkerExit { report }) => report,
@@ -152,12 +175,22 @@ async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&P
         };
         let session = factory.first_touch(root).await?;
         session.config()?;
-        return Ok(baley::execution::runner::worker_exit(session.review_store(), report).await.unwrap_or_else(native_error));
+        return Ok(
+            baley::execution::runner::worker_exit(session.review_store(), report)
+                .await
+                .unwrap_or_else(native_error),
+        );
     }
-    if matches!(raw["operation"].as_str(), Some("execution-task-progress" | "execution-task-checkpoint" | "execution-task-answer")) {
+    if matches!(
+        raw["operation"].as_str(),
+        Some("execution-task-progress" | "execution-task-checkpoint" | "execution-task-answer")
+    ) {
         return native_progress_apply(factory, root, raw, process).await;
     }
-    if matches!(raw["operation"].as_str(), Some("execution-task-close" | "execution-classify-run")) {
+    if matches!(
+        raw["operation"].as_str(),
+        Some("execution-task-close" | "execution-classify-run")
+    ) {
         return native_close_apply(factory, root, raw, process).await;
     }
     if raw["operation"] == "execution-owner-attest" {
@@ -168,12 +201,27 @@ async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&P
         };
         let session = factory.first_touch(root).await?;
         session.config()?;
-        let result = runner::append(session.review_store(), history::Request { request_id: input.request_id, task: input.task,
-            attempt: input.attempt, expected_version: input.expected_version, event: history::Event::OwnerStatement(input.statement) }).await;
-        return Ok(match result { Ok(receipt) => json!({"status":"ok","receipt":receipt}), Err(error) => native_error(error) });
+        let result = runner::append(
+            session.review_store(),
+            history::Request {
+                request_id: input.request_id,
+                task: input.task,
+                attempt: input.attempt,
+                expected_version: input.expected_version,
+                event: history::Event::OwnerStatement(input.statement),
+            },
+        )
+        .await;
+        return Ok(match result {
+            Ok(receipt) => json!({"status":"ok","receipt":receipt}),
+            Err(error) => native_error(error),
+        });
     }
     if raw["operation"] == "execution-task-retire" {
-        use baley::execution::{history::{self, RetirementApply}, runner};
+        use baley::execution::{
+            history::{self, RetirementApply},
+            runner,
+        };
         let input = match serde_json::from_value::<RetirementApply>(raw) {
             Ok(RetirementApply::Retire { request }) => request,
             Err(error) => return Ok(native_error(Error::Invalid(error.to_string()))),
@@ -182,84 +230,195 @@ async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&P
         session.config()?;
         let phase = input.task.phase;
         let plan = input.task.plan;
-        let result = runner::append(session.review_store(), history::Request {
-            request_id: input.request_id,
-            task: input.task,
-            attempt: input.attempt,
-            expected_version: input.expected_version,
-            event: history::Event::Retirement { owner: input.owner, at: input.at, reason: input.reason },
-        }).await;
+        let result = runner::append(
+            session.review_store(),
+            history::Request {
+                request_id: input.request_id,
+                task: input.task,
+                attempt: input.attempt,
+                expected_version: input.expected_version,
+                event: history::Event::Retirement {
+                    owner: input.owner,
+                    at: input.at,
+                    reason: input.reason,
+                },
+            },
+        )
+        .await;
         return Ok(match result {
             Ok(receipt) => {
                 let view = session.derivation_view().await?;
-                let outcome = view.snapshot.data["execution"]["occurrences"][phase.to_string()]["plans"]
-                    .as_array().and_then(|plans| plans.iter().find(|outcome| {
-                        outcome["plan"] == plan && outcome["transition_id"] == receipt.request_digest
-                    })).cloned().ok_or_else(|| Error::Invalid("confirmed retirement outcome missing".into()))?;
+                let outcome =
+                    view.snapshot.data["execution"]["occurrences"][phase.to_string()]["plans"]
+                        .as_array()
+                        .and_then(|plans| {
+                            plans.iter().find(|outcome| {
+                                outcome["plan"] == plan
+                                    && outcome["transition_id"] == receipt.request_digest
+                            })
+                        })
+                        .cloned()
+                        .ok_or_else(|| {
+                            Error::Invalid("confirmed retirement outcome missing".into())
+                        })?;
                 json!({"status":"ok","receipt":receipt,"outcome":outcome})
             }
             Err(error) => native_error(error),
         });
     }
-    if matches!(raw["operation"].as_str(), Some("execution-task-start" | "execution-run")) {
+    if matches!(
+        raw["operation"].as_str(),
+        Some("execution-task-start" | "execution-run")
+    ) {
         return super::execution_runner_service::apply(factory, root, raw, process).await;
     }
-    if matches!(raw["operation"].as_str(), Some("execution-suite" | "execution-suite-repair-answer" |
-        "execution-suite-repair" | "execution-suite-relaunch" | "execution-plan-complete" | "execution-round-record")) {
+    if matches!(
+        raw["operation"].as_str(),
+        Some(
+            "execution-suite"
+                | "execution-suite-repair-answer"
+                | "execution-suite-repair"
+                | "execution-suite-relaunch"
+                | "execution-plan-complete"
+                | "execution-round-record"
+        )
+    ) {
         return super::execution_runner_service::plan_apply(factory, root, raw, process).await;
     }
-    use baley::execution::{admission,boundary::NativeApply};
-    if matches!(raw["operation"].as_str(),Some("execution-admit"|"execution-extend")) {
-        for field in ["request_id","expected_set_version","contract"] {
-            let valid=match field {
-                "request_id"=>raw["request"][field].is_string(),
-                "expected_set_version"=>raw["request"][field].as_u64().is_some(),
-                _=>raw["request"][field].is_object(),
+    use baley::execution::{admission, boundary::NativeApply};
+    if matches!(
+        raw["operation"].as_str(),
+        Some("execution-admit" | "execution-extend")
+    ) {
+        for field in ["request_id", "expected_set_version", "contract"] {
+            let valid = match field {
+                "request_id" => raw["request"][field].is_string(),
+                "expected_set_version" => raw["request"][field].as_u64().is_some(),
+                _ => raw["request"][field].is_object(),
             };
-            if !valid {return Ok(native_error(admission::refuse(0,"admission-shape",&format!("request.{field}"),"","missing or malformed typed request field")));}
+            if !valid {
+                return Ok(native_error(admission::refuse(
+                    0,
+                    "admission-shape",
+                    &format!("request.{field}"),
+                    "",
+                    "missing or malformed typed request field",
+                )));
+            }
         }
     }
-    if matches!(raw["operation"].as_str(),Some("execution-admit"|"execution-extend"))
-        && let Err(error)=admission::decode(raw["request"]["contract"].clone())
-    {return Ok(native_error(error));}
-    let command=match serde_json::from_value::<NativeApply>(raw.clone()) {
-        Ok(command)=>command,
-        Err(error)=>return Ok(native_error(admission::refuse(0,"admission-shape","request","",error.to_string()))),
+    if matches!(
+        raw["operation"].as_str(),
+        Some("execution-admit" | "execution-extend")
+    ) && let Err(error) = admission::decode(raw["request"]["contract"].clone())
+    {
+        return Ok(native_error(error));
+    }
+    let command = match serde_json::from_value::<NativeApply>(raw.clone()) {
+        Ok(command) => command,
+        Err(error) => {
+            return Ok(native_error(admission::refuse(
+                0,
+                "admission-shape",
+                "request",
+                "",
+                error.to_string(),
+            )));
+        }
     };
-    let session=factory.first_touch(root).await?;
-    let before=session.derivation_view().await?;
+    let session = factory.first_touch(root).await?;
+    let before = session.derivation_view().await?;
     match command {
-        NativeApply::Admit {request}|NativeApply::Extend {request} => {
-            if (raw["operation"]=="execution-admit") != (request.expected_set_version==0) {
-                return Ok(native_error(admission::refuse(request.contract.phase,"admission-set-version","expected_set_version",&request.request_id,"initial admission requires zero; extension requires an explicit current set version")));
+        NativeApply::Admit { request } | NativeApply::Extend { request } => {
+            if (raw["operation"] == "execution-admit") != (request.expected_set_version == 0) {
+                return Ok(native_error(admission::refuse(
+                    request.contract.phase,
+                    "admission-set-version",
+                    "expected_set_version",
+                    &request.request_id,
+                    "initial admission requires zero; extension requires an explicit current set version",
+                )));
             }
-            let phase=request.contract.phase;let request_id=request.request_id.clone();
-            let replayed=admission::records(&before.snapshot.data,phase)?.iter().any(|r|r.request.request_id==request_id);
-            let written=match session.request(Operation::NativeAdmissionV1 {expected_generation:before.snapshot.generation,
-                expected_integrity:before.snapshot.integrity,request:Box::new(request)}).await {
-                Ok(written)=>written,Err(error)=>return Ok(native_error(error)),
+            let phase = request.contract.phase;
+            let request_id = request.request_id.clone();
+            let replayed = admission::records(&before.snapshot.data, phase)?
+                .iter()
+                .any(|r| r.request.request_id == request_id);
+            let written = match session
+                .request(Operation::NativeAdmissionV1 {
+                    expected_generation: before.snapshot.generation,
+                    expected_integrity: before.snapshot.integrity,
+                    request: Box::new(request),
+                })
+                .await
+            {
+                Ok(written) => written,
+                Err(error) => return Ok(native_error(error)),
             };
-            let receipt=admission::records(&written.snapshot.data,phase)?.into_iter().find(|r|r.request.request_id==request_id)
-                .ok_or_else(||Error::Invalid("confirmed admission receipt missing".into()))?;
+            let receipt = admission::records(&written.snapshot.data, phase)?
+                .into_iter()
+                .find(|r| r.request.request_id == request_id)
+                .ok_or_else(|| Error::Invalid("confirmed admission receipt missing".into()))?;
             Ok(json!({"status":"ok","receipt":receipt,"replayed":replayed}))
         }
-        NativeApply::Authorize {phase,request_id,owner,at,response,checkpoint,dispatch,disposition} => {
-            use baley::evidence::{Record,Fact,gates::{Gate,State,Purpose,Answer,Disposition},persistence};
-            if phase==0 || [&request_id,&owner,&at,&response].iter().any(|s|s.trim().is_empty()) {
-                return Ok(native_error(admission::refuse(phase,"authorization-answer","response",&request_id,"actual owner, time and response required")));
+        NativeApply::Authorize {
+            phase,
+            request_id,
+            owner,
+            at,
+            response,
+            checkpoint,
+            dispatch,
+            disposition,
+        } => {
+            use baley::evidence::{
+                Fact, Record,
+                gates::{Answer, Disposition, Gate, Purpose, State},
+                persistence,
+            };
+            if phase == 0
+                || [&request_id, &owner, &at, &response]
+                    .iter()
+                    .any(|s| s.trim().is_empty())
+            {
+                return Ok(native_error(admission::refuse(
+                    phase,
+                    "authorization-answer",
+                    "response",
+                    &request_id,
+                    "actual owner, time and response required",
+                )));
             }
-            if admission::records(&before.snapshot.data,phase)?.is_empty() {
-                return Ok(native_error(admission::refuse(phase,"admission-required","phase","","admit the native contract before authorizing execution")));
+            if admission::records(&before.snapshot.data, phase)?.is_empty() {
+                return Ok(native_error(admission::refuse(
+                    phase,
+                    "admission-required",
+                    "phase",
+                    "",
+                    "admit the native contract before authorizing execution",
+                )));
             }
-            let disposition=disposition.unwrap_or(Disposition::Approve);
-            if disposition==Disposition::Adjust {
-                return Ok(native_error(admission::refuse(phase,"authorization-answer","disposition",&request_id,"a continuation answer approves or stops; adjustments are task checkpoint answers")));
+            let disposition = disposition.unwrap_or(Disposition::Approve);
+            if disposition == Disposition::Adjust {
+                return Ok(native_error(admission::refuse(
+                    phase,
+                    "authorization-answer",
+                    "disposition",
+                    &request_id,
+                    "a continuation answer approves or stops; adjustments are task checkpoint answers",
+                )));
             }
-            let scope=continuation_scope(root,phase);
+            let scope = continuation_scope(root, phase);
             let mut need = raw.clone();
             if let Some(id) = &dispatch {
                 if checkpoint.is_some() {
-                    return Ok(native_error(admission::refuse(phase,"continuation-target","dispatch",id,"a continuation names either a dispatch or a checkpoint")));
+                    return Ok(native_error(admission::refuse(
+                        phase,
+                        "continuation-target",
+                        "dispatch",
+                        id,
+                        "a continuation names either a dispatch or a checkpoint",
+                    )));
                 }
                 // Replay the owner's exact answer before checking whether it
                 // already settled this interruption.
@@ -272,156 +431,383 @@ async fn native_answer<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&P
                     if original == raw { return Ok(json!({"status":"ok","authorization":record})); }
                     return Ok(native_error(admission::refuse(phase,"authorization-answer","request_id",&request_id,"request already names another owner answer")));
                 }
-                let Some(exit) = baley::execution::history::unanswered_worker_exit(&before.snapshot.data,phase,id)? else {
-                    return Ok(native_error(admission::refuse(phase,"continuation-target","dispatch",id,"dispatch has no unanswered interruption")));
+                let Some(exit) = baley::execution::history::unanswered_worker_exit(
+                    &before.snapshot.data,
+                    phase,
+                    id,
+                )?
+                else {
+                    return Ok(native_error(admission::refuse(
+                        phase,
+                        "continuation-target",
+                        "dispatch",
+                        id,
+                        "dispatch has no unanswered interruption",
+                    )));
                 };
                 need["exit_request_id"] = json!(exit.request.request_id);
             }
             // A linked answer continues or declines exactly one retained Stop.
-            if let Some(checkpoint)=&checkpoint {
-                let records=persistence::read(&before.snapshot.data)?;
+            if let Some(checkpoint) = &checkpoint {
+                let records = persistence::read(&before.snapshot.data)?;
                 let stopped=records.values().any(|r|r.scope==scope && matches!(&r.fact,Fact::Gate(gate)
                     if gate.checkpoint_id.as_deref()==Some(checkpoint.as_str())
                         && matches!(&gate.state,State::Answered(answer) if answer.disposition==Disposition::Stop)));
                 if checkpoint.trim().is_empty() || !stopped {
-                    return Ok(native_error(admission::refuse(phase,"continuation-target","checkpoint",checkpoint,"continuation must name a retained checkpoint whose answer stopped execution")));
+                    return Ok(native_error(admission::refuse(
+                        phase,
+                        "continuation-target",
+                        "checkpoint",
+                        checkpoint,
+                        "continuation must name a retained checkpoint whose answer stopped execution",
+                    )));
                 }
             }
-            let id=format!("execution-authorization:{request_id}");
-            let mut gate=Gate {id:id.clone(),purpose:Purpose::Progress,checkpoint_id:checkpoint,
-                question:"Continue native execution?".into(),need:serde_json::to_string(&need)?,options:vec![],state:State::Unanswered};
-            let record=Record {version:1,scope:scope.clone(),fact:Fact::Gate(gate.clone())};
-            let pending=session.commit_evidence(&before,&format!("{id}:question"),&record).await?;
-            gate.state=State::Answered(Answer {question_id:id.clone(),actual_response:response,selected_option:None,adjustment:None,
-                disposition,authorization_id:Some(digest(&serde_json::to_vec(&raw)?))});
-            let answered=Record {version:1,scope,fact:Fact::Gate(gate)};
-            session.commit_evidence(&pending,&format!("{id}:answer"),&answered).await?;
+            let id = format!("execution-authorization:{request_id}");
+            let mut gate = Gate {
+                id: id.clone(),
+                purpose: Purpose::Progress,
+                checkpoint_id: checkpoint,
+                question: "Continue native execution?".into(),
+                need: serde_json::to_string(&need)?,
+                options: vec![],
+                state: State::Unanswered,
+            };
+            let record = Record {
+                version: 1,
+                scope: scope.clone(),
+                fact: Fact::Gate(gate.clone()),
+            };
+            let pending = session
+                .commit_evidence(&before, &format!("{id}:question"), &record)
+                .await?;
+            gate.state = State::Answered(Answer {
+                question_id: id.clone(),
+                actual_response: response,
+                selected_option: None,
+                adjustment: None,
+                disposition,
+                authorization_id: Some(digest(&serde_json::to_vec(&raw)?)),
+            });
+            let answered = Record {
+                version: 1,
+                scope,
+                fact: Fact::Gate(gate),
+            };
+            session
+                .commit_evidence(&pending, &format!("{id}:answer"), &answered)
+                .await?;
             Ok(json!({"status":"ok","authorization":answered}))
         }
     }
 }
 
-async fn native_close_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value, process: &mut (dyn Process + Send)) -> baley::store::Result<Value> {
-    use baley::execution::{history::{self,Event}, receipts::{self,CloseApply,CloseProof}, runner};
-    let session=factory.first_touch(root).await?;
-    let view=session.derivation_view().await?;
-    let input=match serde_json::from_value::<CloseApply>(raw.clone()) {
-        Ok(input)=>input,
-        Err(error)=>{
-            if raw["operation"]=="execution-task-close"
-                && let Ok(task)=serde_json::from_value::<history::Task>(raw["request"]["task"].clone()) {
-                let checks=receipts::allocated(&view.snapshot.data,&task).unwrap_or_default();
-                return Ok(native_error(receipts::unsatisfied(&task,"red-green",checks,&format!("malformed close evidence: {error}"))));
+async fn native_close_apply<I: ConfigIo + Clone + Sync>(
+    factory: &SessionFactory<I>,
+    root: &Path,
+    raw: Value,
+    process: &mut (dyn Process + Send),
+) -> baley::store::Result<Value> {
+    use baley::execution::{
+        history::{self, Event},
+        receipts::{self, CloseApply, CloseProof},
+        runner,
+    };
+    let session = factory.first_touch(root).await?;
+    let view = session.derivation_view().await?;
+    let input = match serde_json::from_value::<CloseApply>(raw.clone()) {
+        Ok(input) => input,
+        Err(error) => {
+            if raw["operation"] == "execution-task-close"
+                && let Ok(task) =
+                    serde_json::from_value::<history::Task>(raw["request"]["task"].clone())
+            {
+                let checks = receipts::allocated(&view.snapshot.data, &task).unwrap_or_default();
+                return Ok(native_error(receipts::unsatisfied(
+                    &task,
+                    "red-green",
+                    checks,
+                    &format!("malformed close evidence: {error}"),
+                )));
             }
             return Ok(native_error(Error::Invalid(error.to_string())));
         }
     };
-    let result=match input {
-        CloseApply::Classify {request}=>runner::append(session.review_store(),history::Request {request_id:request.request_id,task:request.task,
-            attempt:request.attempt,expected_version:request.expected_version,event:Event::OwnerClassification(request.statement)}).await,
-        CloseApply::Close {request}=>{
-            let records=history::records(&view.snapshot.data,request.task.phase)?;
-            if let Some(prior)=records.iter().find(|r|r.request.request_id==request.request_id) {
+    let result = match input {
+        CloseApply::Classify { request } => {
+            runner::append(
+                session.review_store(),
+                history::Request {
+                    request_id: request.request_id,
+                    task: request.task,
+                    attempt: request.attempt,
+                    expected_version: request.expected_version,
+                    event: Event::OwnerClassification(request.statement),
+                },
+            )
+            .await
+        }
+        CloseApply::Close { request } => {
+            let records = history::records(&view.snapshot.data, request.task.phase)?;
+            if let Some(prior) = records
+                .iter()
+                .find(|r| r.request.request_id == request.request_id)
+            {
                 return Ok(match &prior.request.event {
-                    Event::Close(proof) if proof.submission==request=>native_close_answer(&view.snapshot.data, prior),
-                    _=>native_error(baley::execution::admission::refuse(request.task.phase,"task-request-reuse","request_id",&request.request_id,"request already names another close payload")),
+                    Event::Close(proof) if proof.submission == request => {
+                        native_close_answer(&view.snapshot.data, prior)
+                    }
+                    _ => native_error(baley::execution::admission::refuse(
+                        request.task.phase,
+                        "task-request-reuse",
+                        "request_id",
+                        &request.request_id,
+                        "request already names another close payload",
+                    )),
                 });
             }
-            if history::project(&records,&request.task).completed {
-                return Ok(native_error(baley::execution::admission::refuse(request.task.phase,"task-completed","task",&request.task.task,"task already completed")));
+            if history::project(&records, &request.task).completed {
+                return Ok(native_error(baley::execution::admission::refuse(
+                    request.task.phase,
+                    "task-completed",
+                    "task",
+                    &request.task.task,
+                    "task already completed",
+                )));
             }
-            let project=root.parent().ok_or_else(||Error::Invalid("project root missing".into()))?;
-            let facts=receipts::observe_pairs(project,&records,&request, process);
-            if let Err(error)=receipts::validate_pairs(&view.snapshot.data,&records,&request,&facts) {return Ok(native_error(error));}
-            let active:ActiveDispatch=match serde_json::from_value(view.snapshot.data["execution"]["occurrences"][request.task.phase.to_string()]["active"].clone()) {
-                Ok(active)=>active,Err(error)=>return Ok(native_error(Error::Invalid(error.to_string()))),
-            };
+            let project = root
+                .parent()
+                .ok_or_else(|| Error::Invalid("project root missing".into()))?;
+            let facts = receipts::observe_pairs(project, &records, &request, process);
+            if let Err(error) =
+                receipts::validate_pairs(&view.snapshot.data, &records, &request, &facts)
+            {
+                return Ok(native_error(error));
+            }
+            let active: ActiveDispatch =
+                match serde_json::from_value(
+                    view.snapshot.data["execution"]["occurrences"][request.task.phase.to_string()]
+                        ["active"]
+                        .clone(),
+                ) {
+                    Ok(active) => active,
+                    Err(error) => return Ok(native_error(Error::Invalid(error.to_string()))),
+                };
             if records.iter().any(|r|matches!(&r.request.event,Event::Close(proof) if proof.submission.completion==request.completion)) {
                 return Ok(native_error(Error::Invalid("completion commit already closes another task".into())));
             }
-            let mut evidence=Vec::new();
-            for pair in &request.checks {for commit in [&pair.red_commit,&pair.green_commit] {if !evidence.contains(commit) {evidence.push(commit.clone());}}}
-            let source=match receipts::observe_source(project,&active,&request.task.task,&request.completion,&evidence, process) {
-                Ok(source)=>source,Err(error)=>return Ok(native_error(error)),
+            let mut evidence = Vec::new();
+            for pair in &request.checks {
+                for commit in [&pair.red_commit, &pair.green_commit] {
+                    if !evidence.contains(commit) {
+                        evidence.push(commit.clone());
+                    }
+                }
+            }
+            let source = match receipts::observe_source(
+                project,
+                &active,
+                &request.task.task,
+                &request.completion,
+                &evidence,
+                process,
+            ) {
+                Ok(source) => source,
+                Err(error) => return Ok(native_error(error)),
             };
-            let event=Event::Close(Box::new(CloseProof {submission:request.clone(),project:project.to_path_buf(),planning_root:root.to_path_buf(),dispatch:active,source}));
-            runner::append(session.review_store(),history::Request {request_id:request.request_id,task:request.task,attempt:request.attempt,
-                expected_version:request.expected_version,event}).await
+            let event = Event::Close(Box::new(CloseProof {
+                submission: request.clone(),
+                project: project.to_path_buf(),
+                planning_root: root.to_path_buf(),
+                dispatch: active,
+                source,
+            }));
+            runner::append(
+                session.review_store(),
+                history::Request {
+                    request_id: request.request_id,
+                    task: request.task,
+                    attempt: request.attempt,
+                    expected_version: request.expected_version,
+                    event,
+                },
+            )
+            .await
         }
     };
     Ok(match result {
-        Ok(receipt) => native_close_answer(&session.derivation_view().await?.snapshot.data, &receipt),
+        Ok(receipt) => {
+            native_close_answer(&session.derivation_view().await?.snapshot.data, &receipt)
+        }
         Err(error) => native_error(error),
     })
 }
 
 fn native_close_answer(data: &Value, receipt: &baley::execution::history::Record) -> Value {
     let mut answer = json!({"status":"ok","receipt":receipt});
-    if let Some(summary) = data[baley::execution::render::NATIVE_SUMMARIES]["receipts"].get(&receipt.request_digest) {
+    if let Some(summary) =
+        data[baley::execution::render::NATIVE_SUMMARIES]["receipts"].get(&receipt.request_digest)
+    {
         answer["summary"] = summary.clone();
     }
     answer
 }
 
-async fn native_progress_apply<I:ConfigIo+Clone+Sync>(factory:&SessionFactory<I>,root:&Path,raw:Value, process: &mut (dyn Process + Send)) -> baley::store::Result<Value> {
-    use baley::{execution::{history::{self,Event,ProgressApply,ProgressEvent},runner},evidence::{self,Fact,gates,checkpoint}};
-    let input=match serde_json::from_value::<ProgressApply>(raw) {Ok(input)=>input,Err(error)=>return Ok(native_error(Error::Invalid(error.to_string())))};
-    let session=factory.first_touch(root).await?;let view=session.derivation_view().await?;
-    let project=root.parent().ok_or_else(||Error::Invalid("project root missing".into()))?;
-    let request=match input {
-        ProgressApply::Progress {request}=>{
-            let event=match request.event {
-                ProgressEvent::Progress {text,evidence}=>{
-                    let prior=history::records(&view.snapshot.data,request.task.phase)?.into_iter().find(|r|r.request.request_id==request.request_id);
-                    let commit=match prior.map(|r|r.request.event) {
-                        Some(Event::AcknowledgedProgress {commit,..})=>commit,
-                        _=>runner::git_text(project,&["rev-parse","HEAD"], process )?,
+async fn native_progress_apply<I: ConfigIo + Clone + Sync>(
+    factory: &SessionFactory<I>,
+    root: &Path,
+    raw: Value,
+    process: &mut (dyn Process + Send),
+) -> baley::store::Result<Value> {
+    use baley::{
+        evidence::{self, Fact, checkpoint, gates},
+        execution::{
+            history::{self, Event, ProgressApply, ProgressEvent},
+            runner,
+        },
+    };
+    let input = match serde_json::from_value::<ProgressApply>(raw) {
+        Ok(input) => input,
+        Err(error) => return Ok(native_error(Error::Invalid(error.to_string()))),
+    };
+    let session = factory.first_touch(root).await?;
+    let view = session.derivation_view().await?;
+    let project = root
+        .parent()
+        .ok_or_else(|| Error::Invalid("project root missing".into()))?;
+    let request = match input {
+        ProgressApply::Progress { request } => {
+            let event = match request.event {
+                ProgressEvent::Progress { text, evidence } => {
+                    let prior = history::records(&view.snapshot.data, request.task.phase)?
+                        .into_iter()
+                        .find(|r| r.request.request_id == request.request_id);
+                    let commit = match prior.map(|r| r.request.event) {
+                        Some(Event::AcknowledgedProgress { commit, .. }) => commit,
+                        _ => runner::git_text(project, &["rev-parse", "HEAD"], process)?,
                     };
-                    Event::AcknowledgedProgress {text,evidence,commit}
+                    Event::AcknowledgedProgress {
+                        text,
+                        evidence,
+                        commit,
+                    }
                 }
-                ProgressEvent::Deviation {text,evidence}=>Event::Deviation {text,evidence},
-                ProgressEvent::FailedAttempt {text,evidence}=>Event::FailedAttempt {reason:text,evidence},
+                ProgressEvent::Deviation { text, evidence } => Event::Deviation { text, evidence },
+                ProgressEvent::FailedAttempt { text, evidence } => Event::FailedAttempt {
+                    reason: text,
+                    evidence,
+                },
             };
-            history::Request {request_id:request.request_id,task:request.task,attempt:request.attempt,expected_version:request.expected_version,event}
-        }
-        ProgressApply::Checkpoint {request}=>{
-            if request.checkpoint.state!=checkpoint::State::Unresolved || request.checkpoint.task_name!=request.task.task {
-                return Ok(native_error(Error::Invalid("checkpoint must identify the unfinished task and an unresolved decision".into())));
+            history::Request {
+                request_id: request.request_id,
+                task: request.task,
+                attempt: request.attempt,
+                expected_version: request.expected_version,
+                event,
             }
-            let scope=continuation_scope(root,request.task.phase);
-            let purpose=match request.checkpoint.checkpoint_type {
-                checkpoint::CheckpointType::Structural=>gates::Purpose::Structural,
-                checkpoint::CheckpointType::HumanVerify=>gates::Purpose::HumanVerify,
-                checkpoint::CheckpointType::Decision=>gates::Purpose::Decision,
-                checkpoint::CheckpointType::Blocked=>gates::Purpose::Blocked,
-                checkpoint::CheckpointType::SuiteRed=>return Ok(native_error(Error::Invalid("native suite checkpoint requires the plan-close lifecycle".into()))),
-            };
-            let gate=gates::Gate {id:request.question_id,purpose,checkpoint_id:Some(request.checkpoint.id.clone()),question:request.question,
-                need:request.checkpoint.need.clone(),options:vec![],state:gates::State::Unanswered};
-            let records=vec![evidence::Record {version:1,scope:scope.clone(),fact:Fact::Checkpoint(request.checkpoint)},
-                evidence::Record {version:1,scope,fact:Fact::Gate(gate)}];
-            history::Request {request_id:request.request_id,task:request.task,attempt:request.attempt,expected_version:request.expected_version,
-                event:Event::Checkpoint {records,owner:None,at:None}}
         }
-        ProgressApply::Answer {request}=>{
-            if request.owner.trim().is_empty() || request.at.trim().is_empty() {return Ok(native_error(Error::Invalid("checkpoint answer requires actual owner attribution and time".into())));}
-            let scope=continuation_scope(root,request.task.phase);
-            let records=evidence::persistence::read(&view.snapshot.data)?;
-            let Some(mut record)=records.values().find(|r|r.scope==scope && matches!(&r.fact,Fact::Gate(gate) if gate.id==request.answer.question_id)).cloned() else {
-                return Ok(native_error(Error::Invalid("checkpoint answer lacks its retained question".into())));
+        ProgressApply::Checkpoint { request } => {
+            if request.checkpoint.state != checkpoint::State::Unresolved
+                || request.checkpoint.task_name != request.task.task
+            {
+                return Ok(native_error(Error::Invalid(
+                    "checkpoint must identify the unfinished task and an unresolved decision"
+                        .into(),
+                )));
+            }
+            let scope = continuation_scope(root, request.task.phase);
+            let purpose = match request.checkpoint.checkpoint_type {
+                checkpoint::CheckpointType::Structural => gates::Purpose::Structural,
+                checkpoint::CheckpointType::HumanVerify => gates::Purpose::HumanVerify,
+                checkpoint::CheckpointType::Decision => gates::Purpose::Decision,
+                checkpoint::CheckpointType::Blocked => gates::Purpose::Blocked,
+                checkpoint::CheckpointType::SuiteRed => {
+                    return Ok(native_error(Error::Invalid(
+                        "native suite checkpoint requires the plan-close lifecycle".into(),
+                    )));
+                }
             };
-            let Fact::Gate(gate)=&mut record.fact else {unreachable!("selected gate")};
-            gate.state=gates::State::Answered(request.answer);
-            history::Request {request_id:request.request_id,task:request.task,attempt:request.attempt,expected_version:request.expected_version,
-                event:Event::Checkpoint {records:vec![record],owner:Some(request.owner),at:Some(request.at)}}
+            let gate = gates::Gate {
+                id: request.question_id,
+                purpose,
+                checkpoint_id: Some(request.checkpoint.id.clone()),
+                question: request.question,
+                need: request.checkpoint.need.clone(),
+                options: vec![],
+                state: gates::State::Unanswered,
+            };
+            let records = vec![
+                evidence::Record {
+                    version: 1,
+                    scope: scope.clone(),
+                    fact: Fact::Checkpoint(request.checkpoint),
+                },
+                evidence::Record {
+                    version: 1,
+                    scope,
+                    fact: Fact::Gate(gate),
+                },
+            ];
+            history::Request {
+                request_id: request.request_id,
+                task: request.task,
+                attempt: request.attempt,
+                expected_version: request.expected_version,
+                event: Event::Checkpoint {
+                    records,
+                    owner: None,
+                    at: None,
+                },
+            }
+        }
+        ProgressApply::Answer { request } => {
+            if request.owner.trim().is_empty() || request.at.trim().is_empty() {
+                return Ok(native_error(Error::Invalid(
+                    "checkpoint answer requires actual owner attribution and time".into(),
+                )));
+            }
+            let scope = continuation_scope(root, request.task.phase);
+            let records = evidence::persistence::read(&view.snapshot.data)?;
+            let Some(mut record) = records
+                .values()
+                .find(|r| {
+                    r.scope == scope
+                        && matches!(&r.fact,Fact::Gate(gate) if gate.id==request.answer.question_id)
+                })
+                .cloned()
+            else {
+                return Ok(native_error(Error::Invalid(
+                    "checkpoint answer lacks its retained question".into(),
+                )));
+            };
+            let Fact::Gate(gate) = &mut record.fact else {
+                unreachable!("selected gate")
+            };
+            gate.state = gates::State::Answered(request.answer);
+            history::Request {
+                request_id: request.request_id,
+                task: request.task,
+                attempt: request.attempt,
+                expected_version: request.expected_version,
+                event: Event::Checkpoint {
+                    records: vec![record],
+                    owner: Some(request.owner),
+                    at: Some(request.at),
+                },
+            }
         }
     };
-    Ok(match runner::append(session.review_store(),request).await {Ok(receipt)=>json!({"status":"ok","receipt":receipt}),Err(error)=>native_error(error)})
+    Ok(
+        match runner::append(session.review_store(), request).await {
+            Ok(receipt) => json!({"status":"ok","receipt":receipt}),
+            Err(error) => native_error(error),
+        },
+    )
 }
 
-fn execution_ready(root:&Path,data:&Value,phase:u32) -> baley::store::Result<()> {
-    let inventory=baley::plan::inventory::read(root,&phase.to_string(),data)?;
-    baley::plan::persistence::require_execution_ready(data,phase,&inventory.documents)
+fn execution_ready(root: &Path, data: &Value, phase: u32) -> baley::store::Result<()> {
+    let inventory = baley::plan::inventory::read(root, &phase.to_string(), data)?;
+    baley::plan::persistence::require_execution_ready(data, phase, &inventory.documents)
 }
 
 pub fn continuation_scope(root: &Path, phase: u32) -> Scope {
@@ -492,12 +878,29 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
     };
     let lifecycle = checked.answer();
     if let Some(interruption) = baley::execution::history::interrupted_dispatch(
-        &view.snapshot.data, phase, view.snapshot.generation).map_err(store_failure)? {
+        &view.snapshot.data,
+        phase,
+        view.snapshot.generation,
+    )
+    .map_err(store_failure)?
+    {
         let located = Located::rule("interrupted", "dispatch").id(&interruption.id);
-        return record_located_refusal(&session, &view, phase, BoundaryTool::BaleyQuery,
-            "execute-next", &raw_request, "continuation-refusal",
-            format!("Continue dispatch {} with execution-authorize or retire it", interruption.id),
-            Some(interruption.id), Some(located)).await;
+        return record_located_refusal(
+            &session,
+            &view,
+            phase,
+            BoundaryTool::BaleyQuery,
+            "execute-next",
+            &raw_request,
+            "continuation-refusal",
+            format!(
+                "Continue dispatch {} with execution-authorize or retire it",
+                interruption.id
+            ),
+            Some(interruption.id),
+            Some(located),
+        )
+        .await;
     }
     let phase_record = match executable_phase(lifecycle, phase) {
         Ok(record) => record,
@@ -516,9 +919,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             .await;
         }
     };
-    if let Err(reason) =
-        execution_ready(&root,&view.snapshot.data, phase)
-    {
+    if let Err(reason) = execution_ready(&root, &view.snapshot.data, phase) {
         return record_refusal(
             &session,
             &view,
@@ -552,12 +953,25 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
     // Execution's historical grouping fingerprint stays bound to the original
     // basis. Explicit native extensions have their own set version and retain
     // all current plan bytes, without rekeying prior dispatch/risk receipts.
-    let admissions=baley::execution::admission::records(&view.snapshot.data,phase).map_err(store_failure)?;
-    if let Some(first)=admissions.first() {
-        let original=plans.values.iter().filter(|p|first.request.contract.plans.iter().any(|b|b.plan==p.plan)).cloned().collect::<Vec<_>>();
-        plans.fingerprint=plan_set_fingerprint(&original).map_err(|_|Failure::Encoding)?;
+    let admissions =
+        baley::execution::admission::records(&view.snapshot.data, phase).map_err(store_failure)?;
+    if let Some(first) = admissions.first() {
+        let original = plans
+            .values
+            .iter()
+            .filter(|p| {
+                first
+                    .request
+                    .contract
+                    .plans
+                    .iter()
+                    .any(|b| b.plan == p.plan)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        plans.fingerprint = plan_set_fingerprint(&original).map_err(|_| Failure::Encoding)?;
     }
-    let native=!admissions.is_empty();
+    let native = !admissions.is_empty();
     let execution = match execution_snapshot(&view) {
         Ok(value) => value,
         Err(error) => {
@@ -692,7 +1106,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
                 phase,
                 &phase_record.plans,
                 &plans,
-                Some(&head)
+                Some(&head),
             )
             .await
             {
@@ -749,14 +1163,23 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             if let Ok(confirmed) = confirmed_boundary(&view, &decision) {
                 return confirmed.envelope(Some(response.into_envelope()));
             }
-            let Response::Dispatch { dispatch, prompt } = &response else { unreachable!() };
-            let historical = view.decisions.iter().find_map(|record| match &record.decision {
-                baley::store::model::Decision::BoundaryV1(value)
-                    if value.boundary.request_digest == raw_request
-                        && value.boundary.subject_id.as_ref() == Some(&dispatch.id)
-                        && value.boundary.outcome == "dispatch" => Some(&value.boundary),
-                _ => None,
-            }).ok_or(Failure::Confirmation)?;
+            let Response::Dispatch { dispatch, prompt } = &response else {
+                unreachable!()
+            };
+            let historical = view
+                .decisions
+                .iter()
+                .find_map(|record| match &record.decision {
+                    baley::store::model::Decision::BoundaryV1(value)
+                        if value.boundary.request_digest == raw_request
+                            && value.boundary.subject_id.as_ref() == Some(&dispatch.id)
+                            && value.boundary.outcome == "dispatch" =>
+                    {
+                        Some(&value.boundary)
+                    }
+                    _ => None,
+                })
+                .ok_or(Failure::Confirmation)?;
             return confirmed_boundary(&view, historical)?.historical_dispatch(dispatch, prompt);
         }
     }
@@ -806,30 +1229,58 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
     };
     if native {
         let continuation_view = match &continuation.decision {
-            ContinuationDecision::Continue { answer, rerun_plans, .. } => {
+            ContinuationDecision::Continue {
+                answer,
+                rerun_plans,
+                ..
+            } => {
                 if !rerun_plans.is_empty() {
                     return record_refusal(&session, &view, phase, BoundaryTool::BaleyQuery, "execute-next", &raw_request,
                         "native-rerun", "native execution never reruns an admitted plan; publish and admit a linked gap plan", None).await;
                 }
                 match answer {
                     Some(answer) => {
-                        let checkpoint = baley::evidence::persistence::read(&view.snapshot.data).map_err(store_failure)?.into_values()
+                        let checkpoint = baley::evidence::persistence::read(&view.snapshot.data)
+                            .map_err(store_failure)?
+                            .into_values()
                             .find_map(|r| match &r.fact {
-                                baley::evidence::Fact::Gate(gate) if gate.id == answer.question_id => Some(gate.checkpoint_id.clone()),
+                                baley::evidence::Fact::Gate(gate)
+                                    if gate.id == answer.question_id =>
+                                {
+                                    Some(gate.checkpoint_id.clone())
+                                }
                                 _ => None,
-                            }).flatten();
+                            })
+                            .flatten();
                         json!({"question_id":answer.question_id,"authorization_id":answer.authorization_id,
                             "response":answer.actual_response,"checkpoint":checkpoint})
                     }
                     None => Value::Null,
                 }
             }
-            ContinuationDecision::RepairSuite { question_id, approved: true } => {
+            ContinuationDecision::RepairSuite {
+                question_id,
+                approved: true,
+            } => {
                 json!({"suite_repair":{"question_id":question_id,"approved":true}})
             }
             _ => unreachable!("checked above"),
         };
-        return native_query(&session, &view, &root, phase, selected_plan, &phase_record.plans, &plans, &admissions, continuation_view, &raw_request, driver, process).await;
+        return native_query(
+            &session,
+            &view,
+            &root,
+            phase,
+            selected_plan,
+            &phase_record.plans,
+            &plans,
+            &admissions,
+            continuation_view,
+            &raw_request,
+            driver,
+            process,
+        )
+        .await;
     }
     let execution = match execution_snapshot(&view) {
         Ok(value) => value,
@@ -860,7 +1311,8 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             active: None,
             plans: Vec::new(),
             terminal: None,
-            receipts: BTreeMap::new(), issues: BTreeMap::new(),
+            receipts: BTreeMap::new(),
+            issues: BTreeMap::new(),
         });
     if occurrence.plan_set_fingerprint != plans.fingerprint {
         return record_refusal(
@@ -926,7 +1378,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
             phase,
             &phase_record.plans,
             &plans,
-            None
+            None,
         )
         .await
         {
@@ -1108,7 +1560,7 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
         phase,
         &phase_record.plans,
         &plans,
-        Some(&base_sha)
+        Some(&base_sha),
     )
     .await
     {
@@ -1153,17 +1605,32 @@ pub async fn query_selected<I: ConfigIo + Clone + Sync>(
 /// Native dispatch is composed from confirmed state after continuation
 /// authority: the admitted plan's unfinished tasks are executable, completed
 /// tasks are history, and the immutable admitted dispatch is never rewritten.
-pub(crate) fn select_ready_plan(admitted: &[u32], outcomes: &[u32],
-    selected: Option<std::num::NonZeroU32>) -> Result<u32, &'static str> {
+pub(crate) fn select_ready_plan(
+    admitted: &[u32],
+    outcomes: &[u32],
+    selected: Option<std::num::NonZeroU32>,
+) -> Result<u32, &'static str> {
     if let Some(selected) = selected {
         let selected = selected.get();
-        if !admitted.contains(&selected) { return Err("plan-not-admitted") }
-        if outcomes.contains(&selected) { return Err("plan-completed") }
+        if !admitted.contains(&selected) {
+            return Err("plan-not-admitted");
+        }
+        if outcomes.contains(&selected) {
+            return Err("plan-completed");
+        }
         return Ok(selected);
     }
-    admitted.iter().copied().find(|plan| !outcomes.contains(plan)).ok_or({
-        if admitted.is_empty() { "empty-plan-set" } else { "suite-failed" }
-    })
+    admitted
+        .iter()
+        .copied()
+        .find(|plan| !outcomes.contains(plan))
+        .ok_or({
+            if admitted.is_empty() {
+                "empty-plan-set"
+            } else {
+                "suite-failed"
+            }
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1183,25 +1650,59 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
 ) -> Answer {
     use baley::execution::{
         dispatch::{NativeState, admitted_checks, native_dispatch, native_operational},
-        history, instructions, model::TaskSpec, runner,
+        history, instructions,
+        model::TaskSpec,
+        runner,
     };
     let refuse = |code: &'static str, reason: String, subject: Option<String>| {
-        record_refusal(session, view, phase, BoundaryTool::BaleyQuery, "execute-next", raw_request, code, reason, subject)
+        record_refusal(
+            session,
+            view,
+            phase,
+            BoundaryTool::BaleyQuery,
+            "execute-next",
+            raw_request,
+            code,
+            reason,
+            subject,
+        )
     };
     let execution = match execution_snapshot(view) {
         Ok(value) => value,
         Err(error) => return refuse("invalid-execution-store", error, None).await,
     };
-    let occurrence = execution.occurrences.get(&phase.to_string()).cloned().unwrap_or_else(|| ExecutionOccurrence {
-        phase, undone: None, plan_set_fingerprint: plans.fingerprint.clone(), version: 0, active: None, plans: Vec::new(), terminal: None, receipts: BTreeMap::new(), issues: BTreeMap::new(),
-    });
+    let occurrence = execution
+        .occurrences
+        .get(&phase.to_string())
+        .cloned()
+        .unwrap_or_else(|| ExecutionOccurrence {
+            phase,
+            undone: None,
+            plan_set_fingerprint: plans.fingerprint.clone(),
+            version: 0,
+            active: None,
+            plans: Vec::new(),
+            terminal: None,
+            receipts: BTreeMap::new(),
+            issues: BTreeMap::new(),
+        });
     if occurrence.plan_set_fingerprint != plans.fingerprint {
-        return refuse("plan-set-changed", "native plan inputs differ from the admitted execution occurrence".into(), None).await;
+        return refuse(
+            "plan-set-changed",
+            "native plan inputs differ from the admitted execution occurrence".into(),
+            None,
+        )
+        .await;
     }
     let data = &view.snapshot.data;
     let records = history::records(data, phase).map_err(store_failure)?;
     let Some(project) = root.parent().map(Path::to_path_buf) else {
-        return refuse("invalid-project-root", "planning root has no project parent".into(), None).await;
+        return refuse(
+            "invalid-project-root",
+            "planning root has no project parent".into(),
+            None,
+        )
+        .await;
     };
     let head = match git_head(&project).await {
         Ok(head) => head,
@@ -1212,16 +1713,28 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
     let (plan, admitted) = match &occurrence.active {
         Some(active) => {
             if selected_plan.is_some_and(|selected| selected.get() != active.plan) {
-                return refuse("active-plan-conflict", format!(
-                    "owner selected plan {} while plan {} has the active dispatch",
-                    selected_plan.expect("selected plan").get(), active.plan), Some(active.id.clone())).await;
+                return refuse(
+                    "active-plan-conflict",
+                    format!(
+                        "owner selected plan {} while plan {} has the active dispatch",
+                        selected_plan.expect("selected plan").get(),
+                        active.plan
+                    ),
+                    Some(active.id.clone()),
+                )
+                .await;
             }
             let plan = match active_plan(active, &plans.values) {
                 Ok(plan) => plan,
                 Err((code, reason)) => return refuse(code, reason, Some(active.id.clone())).await,
             };
             if active.expected_execution_version != occurrence.version || occurrence.version == 0 {
-                return refuse("invalid-active-dispatch", "active dispatch execution version is inconsistent".into(), Some(active.id.clone())).await;
+                return refuse(
+                    "invalid-active-dispatch",
+                    "active dispatch execution version is inconsistent".into(),
+                    Some(active.id.clone()),
+                )
+                .await;
             }
             (plan, active.clone())
         }
@@ -1229,8 +1742,15 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
             // The next plan is the first admitted plan without a retained outcome;
             // a failed plan is never rerun, and its repair is a later gap plan.
             let admitted_plans = history::admitted_plans(data, phase).map_err(store_failure)?;
-            let admitted_numbers = admitted_plans.iter().map(|(identity, _)| identity.plan).collect::<Vec<_>>();
-            let outcome_numbers = occurrence.plans.iter().map(|outcome| outcome.plan).collect::<Vec<_>>();
+            let admitted_numbers = admitted_plans
+                .iter()
+                .map(|(identity, _)| identity.plan)
+                .collect::<Vec<_>>();
+            let outcome_numbers = occurrence
+                .plans
+                .iter()
+                .map(|outcome| outcome.plan)
+                .collect::<Vec<_>>();
             let next = match select_ready_plan(&admitted_numbers, &outcome_numbers, selected_plan) {
                 Ok(next) => next,
                 Err("plan-not-admitted") => return refuse("plan-not-admitted", format!(
@@ -1240,20 +1760,41 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
                 Err("empty-plan-set") => return refuse("empty-plan-set", "the admitted set names no plan".into(), None).await,
                 Err(_) => return refuse("suite-failed", "every admitted plan has an outcome and a failed suite has no completed repair; publish and admit an explicitly linked gap plan through a versioned set extension (D-120)".into(), None).await,
             };
-            let plan = plans.values.iter().find(|plan| plan.plan == next).expect("admitted plans are observed");
+            let plan = plans
+                .values
+                .iter()
+                .find(|plan| plan.plan == next)
+                .expect("admitted plans are observed");
             let config = session.config().map_err(store_failure)?;
-            let choice = match super::config_service::route_at(&config, &super::config_service::RouteRequest {
-                role: "bal-executor".into(), phase: std::num::NonZeroU32::new(phase), plan: std::num::NonZeroU32::new(plan.plan), attempt: None,
-            }, root) {
+            let choice = match super::config_service::route_at(
+                &config,
+                &super::config_service::RouteRequest {
+                    role: "bal-executor".into(),
+                    phase: std::num::NonZeroU32::new(phase),
+                    plan: std::num::NonZeroU32::new(plan.plan),
+                    attempt: None,
+                },
+                root,
+            ) {
                 Ok(route) => route.choice,
                 Err(error) => return refuse("route-unavailable", error.to_string(), None).await,
             };
-            let route = baley::execution::model::DispatchRoute { choice, inputs: super::config_service::routing_inputs(&config) };
-            let mut built = match build_routed_dispatch(plan, &plans.fingerprint, occurrence.version, &head, route) {
+            let route = baley::execution::model::DispatchRoute {
+                choice,
+                inputs: super::config_service::routing_inputs(&config),
+            };
+            let mut built = match build_routed_dispatch(
+                plan,
+                &plans.fingerprint,
+                occurrence.version,
+                &head,
+                route,
+            ) {
                 Ok(value) => value,
                 Err(error) => return refuse(error.code, error.detail, None).await,
             };
-            built.owner_selection = selected_plan.map(|plan| baley::execution::model::OwnerSelection { plan });
+            built.owner_selection =
+                selected_plan.map(|plan| baley::execution::model::OwnerSelection { plan });
             let (_, provisional) = match admit_dispatch(&occurrence, built.clone()) {
                 Ok(value) => value,
                 Err(error) => return refuse(error.code, error.detail, Some(built.id)).await,
@@ -1262,10 +1803,20 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
             (plan, provisional)
         }
     };
-    let basis = admissions.iter().find(|r| r.request.contract.plans.iter().any(|b| b.plan == plan.plan)).expect("admitted plan has a basis");
+    let basis = admissions
+        .iter()
+        .find(|r| r.request.contract.plans.iter().any(|b| b.plan == plan.plan))
+        .expect("admitted plan has a basis");
     let views = match history::plan_task_views(data, &records, phase, plan.plan) {
         Ok(views) => views,
-        Err(error) => return refuse("invalid-execution-store", error.to_string(), Some(admitted.id.clone())).await,
+        Err(error) => {
+            return refuse(
+                "invalid-execution-store",
+                error.to_string(),
+                Some(admitted.id.clone()),
+            )
+            .await;
+        }
     };
     let mut tasks = Vec::new();
     let mut completed = Vec::new();
@@ -1278,7 +1829,8 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
             completed.push(done);
             continue;
         }
-        let uncertainty = runner::uncertainty(&project, &records, &task, process).map_err(store_failure)?;
+        let uncertainty =
+            runner::uncertainty(&project, &records, &task, process).map_err(store_failure)?;
         if uncertainty["requires_reconciliation"] == true {
             return refuse("reconciliation-required", format!(
                 "task {} has unacknowledged work (commits {}, dirty source {}); acknowledge it through execution-task-progress before continuing",
@@ -1286,63 +1838,126 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         }
         tasks.push(json!({"id":task.task.task,"verify":task.verify,"checks":task.checks,"state":task.state,
             "uncertainty":uncertainty,"checkpoints":history::task_checkpoints(&records, &task.task)}));
-        executable.push(TaskSpec { id: task.task.task.clone(), verify: task.verify.clone() });
+        executable.push(TaskSpec {
+            id: task.task.task.clone(),
+            verify: task.verify.clone(),
+        });
         unfinished.push(task);
     }
     let checks = match admitted_checks(data, phase, basis, &unfinished) {
         Ok(checks) => checks,
-        Err(error) => return refuse("invalid-execution-store", error.to_string(), Some(admitted.id.clone())).await,
+        Err(error) => {
+            return refuse(
+                "invalid-execution-store",
+                error.to_string(),
+                Some(admitted.id.clone()),
+            )
+            .await;
+        }
     };
     // Configured commands are provenance for proposals; the admitted commands
     // govern, and a manifest supplies vocabulary only, never a guessed runner.
     let config = session.config().map_err(store_failure)?;
-    let configured = ["workflow.test_command", "workflow.lint_command"].into_iter().map(|key| instructions::ConfiguredCommand {
-        key: key.into(),
-        value: crate::config::merge::get(&config.effective.values, key).and_then(Value::as_str).map(str::to_owned),
-        layer: config.effective.sources.get(key).and_then(|layer| serde_json::to_value(layer).ok()?.as_str().map(str::to_owned)),
-    }).collect::<Vec<_>>();
-    let present = instructions::MANIFESTS.iter().map(|(name, _)| *name).filter(|name| project.join(name).exists()).collect::<Vec<_>>();
+    let configured = ["workflow.test_command", "workflow.lint_command"]
+        .into_iter()
+        .map(|key| instructions::ConfiguredCommand {
+            key: key.into(),
+            value: crate::config::merge::get(&config.effective.values, key)
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            layer: config.effective.sources.get(key).and_then(|layer| {
+                serde_json::to_value(layer)
+                    .ok()?
+                    .as_str()
+                    .map(str::to_owned)
+            }),
+        })
+        .collect::<Vec<_>>();
+    let present = instructions::MANIFESTS
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| project.join(name).exists())
+        .collect::<Vec<_>>();
     let plan_events = history::plan_records(data, phase).map_err(store_failure)?;
-    let suite_state = history::plan_project(&plan_events, &history::PlanIdentity { phase, occurrence: basis.request.contract.occurrence.clone(),
-        admission_digest: basis.request_digest.clone(), plan: plan.plan });
-    let state = NativeState { admitted: &admitted, occurrence: &basis.request.contract.occurrence, admission_digest: &basis.request_digest,
-        set_version: latest.set_version, head: &head, tasks, checks, completed, continuation,
-        suite: json!({"command": admitted.suite, "state": suite_state}), commands: instructions::command_policy(&configured, &present) };
+    let suite_state = history::plan_project(
+        &plan_events,
+        &history::PlanIdentity {
+            phase,
+            occurrence: basis.request.contract.occurrence.clone(),
+            admission_digest: basis.request_digest.clone(),
+            plan: plan.plan,
+        },
+    );
+    let state = NativeState {
+        admitted: &admitted,
+        occurrence: &basis.request.contract.occurrence,
+        admission_digest: &basis.request_digest,
+        set_version: latest.set_version,
+        head: &head,
+        tasks,
+        checks,
+        completed,
+        continuation,
+        suite: json!({"command": admitted.suite, "state": suite_state}),
+        commands: instructions::command_policy(&configured, &present),
+    };
     let operational = native_operational(&state);
     // Historical unchanged requests are confirmed over their original prompt
     // envelope. Projection never changes that receipt's digest or identity.
-    if candidate.is_none() && occurrence.issues.is_empty() && !admitted.prompt.is_empty()
+    if candidate.is_none()
+        && occurrence.issues.is_empty()
+        && !admitted.prompt.is_empty()
         && baley::execution::boundary::canonical_bytes(&operational)
             .is_ok_and(|bytes| baley::store::model::digest(&bytes) == admitted.issue_digest)
     {
         let mut historical = admitted.clone();
         historical.body = plan.body.clone();
-        let decision = view.decisions.iter().find_map(|record| match &record.decision {
-            baley::store::model::Decision::BoundaryV1(value)
-                if value.boundary.request_digest == raw_request
-                    && value.boundary.subject_id.as_ref() == Some(&historical.id)
-                    && value.boundary.outcome == "dispatch" => Some(&value.boundary),
-            _ => None,
-        }).ok_or(Failure::Confirmation)?;
-        return confirmed_boundary(view, decision)?.historical_dispatch(&historical, &historical.prompt);
+        let decision = view
+            .decisions
+            .iter()
+            .find_map(|record| match &record.decision {
+                baley::store::model::Decision::BoundaryV1(value)
+                    if value.boundary.request_digest == raw_request
+                        && value.boundary.subject_id.as_ref() == Some(&historical.id)
+                        && value.boundary.outcome == "dispatch" =>
+                {
+                    Some(&value.boundary)
+                }
+                _ => None,
+            })
+            .ok_or(Failure::Confirmation)?;
+        return confirmed_boundary(view, decision)?
+            .historical_dispatch(&historical, &historical.prompt);
     }
-    let binding = baley::execution::dispatch::issue_binding(data, &admitted).map_err(store_failure)?;
-    let issue_digest = baley::execution::dispatch::binding_digest(&binding).map_err(store_failure)?;
-    let previous_issue = occurrence.issues.iter().find(|(_, issue)| issue.binding == binding);
-    let (mut dispatch, mut operational) = match native_dispatch(&admitted, operational, executable, candidate.is_some()) {
-        Ok(value) => value,
-        Err(error) => return refuse(error.code, error.detail, Some(admitted.id.clone())).await,
-    };
+    let binding =
+        baley::execution::dispatch::issue_binding(data, &admitted).map_err(store_failure)?;
+    let issue_digest =
+        baley::execution::dispatch::binding_digest(&binding).map_err(store_failure)?;
+    let previous_issue = occurrence
+        .issues
+        .iter()
+        .find(|(_, issue)| issue.binding == binding);
+    let (mut dispatch, mut operational) =
+        match native_dispatch(&admitted, operational, executable, candidate.is_some()) {
+            Ok(value) => value,
+            Err(error) => return refuse(error.code, error.detail, Some(admitted.id.clone())).await,
+        };
     if let Some((id, _)) = previous_issue {
         dispatch.id = id.clone();
     } else if candidate.is_none() {
-        dispatch.id = baley::store::model::digest(format!("native-issued-dispatch-1:{}:{issue_digest}", admitted.id).as_bytes());
+        dispatch.id = baley::store::model::digest(
+            format!("native-issued-dispatch-1:{}:{issue_digest}", admitted.id).as_bytes(),
+        );
     }
     operational["dispatch_id"] = json!(dispatch.id);
     operational["issued_generation"] = previous_issue.map_or_else(
-        || json!(view.snapshot.generation + 1), |(_, issue)| issue.operational["issued_generation"].clone());
+        || json!(view.snapshot.generation + 1),
+        |(_, issue)| issue.operational["issued_generation"].clone(),
+    );
     let issue = baley::execution::model::DispatchIssue {
-        issue_digest: issue_digest.clone(), binding, operational: operational.clone(),
+        issue_digest: issue_digest.clone(),
+        binding,
+        operational: operational.clone(),
     };
     let fresh = candidate.is_some();
     dispatch.prompt.clear();
@@ -1352,12 +1967,20 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
         Ok(value) => value,
         Err((code, reason)) => return refuse(code, reason, Some(dispatch.id.clone())).await,
     };
-    let response = Response::Dispatch { dispatch: Box::new(dispatch.clone()), prompt };
+    let response = Response::Dispatch {
+        dispatch: Box::new(dispatch.clone()),
+        prompt,
+    };
     #[cfg(test)]
     {
         if candidate.is_some() {
             let event = driver.event.clone();
-            if tokio::task::spawn_blocking(move || event(derivation_service::Event::RoutingObserved)).await.is_err() {
+            if tokio::task::spawn_blocking(move || {
+                event(derivation_service::Event::RoutingObserved)
+            })
+            .await
+            .is_err()
+            {
                 return store_refusal(phase, Error::Closed);
             }
         }
@@ -1367,31 +1990,63 @@ async fn native_query<I: ConfigIo + Clone + Sync>(
     if let Err(reason) = reobserve(session, view, root, phase, names, plans, Some(&head)).await {
         return refuse("inputs-changed", reason, Some(dispatch.id.clone())).await;
     }
-    let decision = boundary(phase, BoundaryTool::BaleyQuery, "execute-next", raw_request, &response, Some(dispatch.id.clone()), Some(dispatch.prompt_digest.clone()))?;
+    let decision = boundary(
+        phase,
+        BoundaryTool::BaleyQuery,
+        "execute-next",
+        raw_request,
+        &response,
+        Some(dispatch.id.clone()),
+        Some(dispatch.prompt_digest.clone()),
+    )?;
     let (operation_id, change) = match candidate {
         Some(mut candidate) => {
             candidate.prompt = dispatch.prompt.clone();
             candidate.prompt_digest = dispatch.prompt_digest.clone();
             candidate.issue_digest = dispatch.issue_digest.clone();
-            (format!("execution-dispatch:{}", dispatch.id), BoundaryChange::Dispatch { plan_set_fingerprint: plans.fingerprint.clone(), dispatch: candidate })
+            (
+                format!("execution-dispatch:{}", dispatch.id),
+                BoundaryChange::Dispatch {
+                    plan_set_fingerprint: plans.fingerprint.clone(),
+                    dispatch: candidate,
+                },
+            )
         }
         None if reissued => {
             let mut retained = admitted;
             retained.issue_digest = dispatch.issue_digest.clone();
-            (format!("execution-reissue:{}", dispatch.id), BoundaryChange::Reissue {
-                issue_dispatch_id: dispatch.id.clone(),
-                dispatch: retained,
-            })
+            (
+                format!("execution-reissue:{}", dispatch.id),
+                BoundaryChange::Reissue {
+                    issue_dispatch_id: dispatch.id.clone(),
+                    dispatch: retained,
+                },
+            )
         }
-        None => (format!("execution-observation:{}", decision.identity()?), BoundaryChange::Observe),
+        None => (
+            format!("execution-observation:{}", decision.identity()?),
+            BoundaryChange::Observe,
+        ),
     };
     let change = if previous_issue.is_none() {
-        BoundaryChange::Issue { change: Box::new(change), id: dispatch.id.clone(), issue }
-    } else { change };
-    let written = session.request(Operation::BoundaryV1 {
-        expected_generation: view.snapshot.generation, expected_integrity: view.snapshot.integrity.clone(),
-        operation_id, decision: decision.clone(), change: Box::new(change),
-    }).await.map_err(store_failure)?;
+        BoundaryChange::Issue {
+            change: Box::new(change),
+            id: dispatch.id.clone(),
+            issue,
+        }
+    } else {
+        change
+    };
+    let written = session
+        .request(Operation::BoundaryV1 {
+            expected_generation: view.snapshot.generation,
+            expected_integrity: view.snapshot.integrity.clone(),
+            operation_id,
+            decision: decision.clone(),
+            change: Box::new(change),
+        })
+        .await
+        .map_err(store_failure)?;
     confirmed_boundary(&written, &decision)?.envelope(Some(response.into_envelope()))
 }
 
@@ -1405,9 +2060,22 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
     let request = public_request_digest(BoundaryTool::BaleyApply, Some(&raw));
     let (root, session, initial) = begin(factory, selected_root).await?;
     let phase = dispatch_phase(&initial, &patch.dispatch_id)?.unwrap_or(0);
-    if !baley::execution::admission::records(&initial.snapshot.data,phase).map_err(store_failure)?.is_empty() {
-        return record_refusal(&session,&initial,phase,BoundaryTool::BaleyApply,"executor",&request,
-            "native-task-close-unavailable","native tasks cannot close through a schema-1 executor patch",Some(patch.dispatch_id.clone())).await;
+    if !baley::execution::admission::records(&initial.snapshot.data, phase)
+        .map_err(store_failure)?
+        .is_empty()
+    {
+        return record_refusal(
+            &session,
+            &initial,
+            phase,
+            BoundaryTool::BaleyApply,
+            "executor",
+            &request,
+            "native-task-close-unavailable",
+            "native tasks cannot close through a schema-1 executor patch",
+            Some(patch.dispatch_id.clone()),
+        )
+        .await;
     }
     if let Some(answer) = terminal_answer(&session, &initial, &scope(phase)).await? {
         return Ok(answer);
@@ -1429,14 +2097,8 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
     let (checked, view) = match checked_execution(&session, &root, driver).await {
         Ok(value) => value,
         Err(error) => {
-            return derivation_refusal(
-                &session,
-                phase,
-                BoundaryTool::BaleyApply,
-                &request,
-                error,
-            )
-            .await;
+            return derivation_refusal(&session, phase, BoundaryTool::BaleyApply, &request, error)
+                .await;
         }
     };
     let Some(phase_record) = checked
@@ -1583,7 +2245,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             phase,
             &phase_record.plans,
             &plans,
-            None
+            None,
         )
         .await
         {
@@ -1754,7 +2416,7 @@ pub async fn apply<I: ConfigIo + Clone + Sync>(
             phase,
             &phase_record.plans,
             &plans,
-            Some(&base_sha)
+            Some(&base_sha),
         )
         .await
     {
@@ -1895,28 +2557,51 @@ pub(super) fn native_settlement<I: ConfigIo>(
     use baley::rail::{receipts, risk};
     let config = session.config().map_err(|e| e.to_string())?;
     let pending = format!("phase-{phase}-execution");
-    let surfaces = crate::config::merge::get(&config.effective.values, "review.triggers.risk_surface.surfaces")
-        .ok_or_else(|| format!("{pending}: missing risk surface selection"))
-        .and_then(|v| risk::configured_surfaces(v).map_err(|e| format!("{pending}: {e}")))?
-        .ok_or_else(|| format!("{pending}: risk surfaces are unanswered"))?;
+    let surfaces = crate::config::merge::get(
+        &config.effective.values,
+        "review.triggers.risk_surface.surfaces",
+    )
+    .ok_or_else(|| format!("{pending}: missing risk surface selection"))
+    .and_then(|v| risk::configured_surfaces(v).map_err(|e| format!("{pending}: {e}")))?
+    .ok_or_else(|| format!("{pending}: risk surfaces are unanswered"))?;
     receipts::confirmed_history(view).map_err(|e| format!("{pending}: {e}"))?;
-    let (Some(phase_id), Some(plan_id)) = (std::num::NonZeroU32::new(phase), std::num::NonZeroU32::new(plan)) else {
+    let (Some(phase_id), Some(plan_id)) = (
+        std::num::NonZeroU32::new(phase),
+        std::num::NonZeroU32::new(plan),
+    ) else {
         return Err("settlement needs a positive phase and plan".into());
     };
     let scope = risk::Scope::Phase {
-        project: root.parent().ok_or("planning root lacks project")?.to_string_lossy().into_owned(),
-        planning_root: root.to_string_lossy().into_owned(), cycle: "live".into(), occurrence: pending.clone(),
-        phase: phase_id, worker: Some(plan.to_string()), plan: Some(plan_id),
+        project: root
+            .parent()
+            .ok_or("planning root lacks project")?
+            .to_string_lossy()
+            .into_owned(),
+        planning_root: root.to_string_lossy().into_owned(),
+        cycle: "live".into(),
+        occurrence: pending.clone(),
+        phase: phase_id,
+        worker: Some(plan.to_string()),
+        plan: Some(plan_id),
     };
-    let source = risk::Source::Execution { plan: plan_id, dispatch_id: dispatch_id.to_owned() };
+    let source = risk::Source::Execution {
+        plan: plan_id,
+        dispatch_id: dispatch_id.to_owned(),
+    };
     let material = risk_material(view, root, phase, &pending, plan, dispatch_id)?;
     let wanted = receipts::Requirement {
-        boundary: super::rail_service::receipt_boundary(view, scope, &source).map_err(|e| e.to_string())?, material, surfaces,
+        boundary: super::rail_service::receipt_boundary(view, scope, &source)
+            .map_err(|e| e.to_string())?,
+        material,
+        surfaces,
     };
     let status = receipts::assess(&wanted, &view.snapshot.data).map_err(|e| e.to_string())?;
     if !status.permits_continuation {
-        return Err(format!("{pending}, plan {plan}, dispatch {dispatch_id}: risk evidence is {:?}; pending fires: {}. Record an exact execution risk-check and any required fire/consequence, then request completion again.",
-            status.state, status.pending_fires.join(", ")));
+        return Err(format!(
+            "{pending}, plan {plan}, dispatch {dispatch_id}: risk evidence is {:?}; pending fires: {}. Record an exact execution risk-check and any required fire/consequence, then request completion again.",
+            status.state,
+            status.pending_fires.join(", ")
+        ));
     }
     Ok(wanted)
 }
@@ -1955,13 +2640,19 @@ fn dispatch_response(active: &ActiveDispatch, plan: &ExecutionPlan) -> Response 
     let mut dispatch = active.clone();
     dispatch.body = plan.body.clone();
     match retained_prompt(&dispatch) {
-        Ok(prompt) => Response::Dispatch { dispatch: Box::new(dispatch), prompt },
+        Ok(prompt) => Response::Dispatch {
+            dispatch: Box::new(dispatch),
+            prompt,
+        },
         Err((code, reason)) => refused(dispatch.phase, code, reason),
     }
 }
 
 fn retained_prompt(dispatch: &ActiveDispatch) -> Result<String, (&'static str, String)> {
-    if dispatch.prompt.is_empty() && dispatch.prompt_digest.is_empty() && dispatch.prompt_bytes.is_none() {
+    if dispatch.prompt.is_empty()
+        && dispatch.prompt_digest.is_empty()
+        && dispatch.prompt_bytes.is_none()
+    {
         return Ok(String::new());
     }
     if dispatch.prompt.is_empty() {
@@ -1989,7 +2680,11 @@ fn issue_prompt(
         return retained_prompt(dispatch).map(|prompt| (prompt, false));
     }
     let prompt = render();
-    dispatch.prompt_digest = if prompt.is_empty() { String::new() } else { baley::store::model::digest(prompt.as_bytes()) };
+    dispatch.prompt_digest = if prompt.is_empty() {
+        String::new()
+    } else {
+        baley::store::model::digest(prompt.as_bytes())
+    };
     dispatch.prompt = prompt.clone();
     dispatch.issue_digest = current_issue_digest.to_owned();
     Ok((prompt, !fresh))
@@ -2012,18 +2707,15 @@ mod issue_prompt_tests {
         })).unwrap();
         let (prompt, reissued) = issue_prompt(&mut dispatch, "state", false, || {
             panic!("an unchanged issue must not invoke the renderer")
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(prompt.as_bytes(), b"retained bytes");
         assert!(!reissued);
     }
 }
 
 fn render_prompt(dispatch: &ActiveDispatch) -> String {
-    baley::execution::render::render_dispatch_prompt(
-        dispatch,
-        &patch_schema(),
-        true,
-    )
+    baley::execution::render::render_dispatch_prompt(dispatch, &patch_schema(), true)
 }
 
 pub use baley::execution::model::patch_schema;
@@ -2106,7 +2798,9 @@ fn plan_number(name: &str) -> Option<u32> {
 fn admitted_plan_name(name: &str) -> bool {
     name.strip_prefix("PLAN-")
         .and_then(|number| number.strip_suffix(".md"))
-        .is_some_and(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
+        .is_some_and(|number| {
+            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 async fn reobserve<I: ConfigIo>(
@@ -2136,8 +2830,7 @@ async fn reobserve<I: ConfigIo>(
         .derivation_view()
         .await
         .map_err(|error| error.to_string())?;
-    execution_ready(root,&latest.snapshot.data, phase)
-        .map_err(|error| error.to_string())?;
+    execution_ready(root, &latest.snapshot.data, phase).map_err(|error| error.to_string())?;
     if latest.snapshot.generation != expected.snapshot.generation
         || latest.snapshot.integrity != expected.snapshot.integrity
     {
@@ -2188,8 +2881,8 @@ async fn validate_commits(
             &mut baley::process::System,
         )
     })
-        .await
-        .map_err(|_| ("git-validation", "Git validation task closed".into()))?
+    .await
+    .map_err(|_| ("git-validation", "Git validation task closed".into()))?
 }
 
 fn validate_commits_blocking(
@@ -2199,7 +2892,10 @@ fn validate_commits_blocking(
     head: &str,
     process: &mut (dyn Process + Send),
 ) -> Result<BTreeMap<String, Vec<String>>, (&'static str, String)> {
-    judge_commits(&active.base_sha, &observe_commits(project, active, patch, head, process))
+    judge_commits(
+        &active.base_sha,
+        &observe_commits(project, active, patch, head, process),
+    )
 }
 
 /// What Git reports about one completed task's commit, each answer as it
@@ -2231,15 +2927,30 @@ fn observe_commits(
     let mut prior = active.base_sha.clone();
     let mut facts = Vec::new();
     for task in &patch.tasks {
-        let baley::execution::model::TaskOutcome::Completed { task_id, commit, .. } = task else {
+        let baley::execution::model::TaskOutcome::Completed {
+            task_id, commit, ..
+        } = task
+        else {
             continue;
         };
         facts.push(CommitFacts {
             task_id: task_id.clone(),
             commit: commit.clone(),
-            exists: git_success(project, &["cat-file", "-e", &format!("{commit}^{{commit}}")], process),
-            follows_prior: git_status(project, &["merge-base", "--is-ancestor", &prior, commit], process),
-            under_head: git_status(project, &["merge-base", "--is-ancestor", commit, head], process),
+            exists: git_success(
+                project,
+                &["cat-file", "-e", &format!("{commit}^{{commit}}")],
+                process,
+            ),
+            follows_prior: git_status(
+                project,
+                &["merge-base", "--is-ancestor", &prior, commit],
+                process,
+            ),
+            under_head: git_status(
+                project,
+                &["merge-base", "--is-ancestor", commit, head],
+                process,
+            ),
             signature: git_success(project, &["verify-commit", commit], process),
             subject: git_output(project, &["show", "-s", "--format=%s", commit], process),
             paths: observe_commit_paths(project, commit, process),
@@ -2252,11 +2963,20 @@ fn observe_commits(
 /// Every path a commit changes against each of its parents. A combined merge
 /// diff omits paths changed against only one parent and is insufficient
 /// lease evidence, so every parent is compared explicitly.
-fn observe_commit_paths(project: &Path, commit: &str, process: &mut (dyn Process + Send)) -> Result<Vec<String>, String> {
+fn observe_commit_paths(
+    project: &Path,
+    commit: &str,
+    process: &mut (dyn Process + Send),
+) -> Result<Vec<String>, String> {
     let parents = git_output(project, &["show", "-s", "--format=%P", commit], process)?;
     let parents = parents.split_whitespace().collect::<Vec<_>>();
     let mut observed = BTreeSet::new();
-    for parent in parents.iter().copied().map(Some).chain(parents.is_empty().then_some(None)) {
+    for parent in parents
+        .iter()
+        .copied()
+        .map(Some)
+        .chain(parents.is_empty().then_some(None))
+    {
         let mut args = vec![
             "diff-tree",
             "--root",
@@ -2272,7 +2992,9 @@ fn observe_commit_paths(project: &Path, commit: &str, process: &mut (dyn Process
             args.push(parent);
         }
         args.extend([commit, "--"]);
-        observed.extend(read_name_status(&git_output_bytes(project, &args, process)?)?);
+        observed.extend(read_name_status(&git_output_bytes(
+            project, &args, process,
+        )?)?);
     }
     Ok(observed.into_iter().collect())
 }
@@ -2292,24 +3014,60 @@ pub(crate) fn judge_commits(
     for facts in commits {
         let commit = &facts.commit;
         if !seen.insert(commit) {
-            return Err(("reused-commit", "one commit cannot complete two tasks".into()));
+            return Err((
+                "reused-commit",
+                "one commit cannot complete two tasks".into(),
+            ));
         }
-        facts.exists.clone().map_err(|reason| ("missing-commit", reason))?;
-        if commit == prior || !facts.follows_prior.clone().map_err(|reason| ("git-order", reason))? {
-            return Err(("git-order", format!("commit {commit} is not strictly after {prior}")));
+        facts
+            .exists
+            .clone()
+            .map_err(|reason| ("missing-commit", reason))?;
+        if commit == prior
+            || !facts
+                .follows_prior
+                .clone()
+                .map_err(|reason| ("git-order", reason))?
+        {
+            return Err((
+                "git-order",
+                format!("commit {commit} is not strictly after {prior}"),
+            ));
         }
-        if !facts.under_head.clone().map_err(|reason| ("git-order", reason))? {
-            return Err(("git-order", format!("commit {commit} is not an ancestor of current HEAD")));
+        if !facts
+            .under_head
+            .clone()
+            .map_err(|reason| ("git-order", reason))?
+        {
+            return Err((
+                "git-order",
+                format!("commit {commit} is not an ancestor of current HEAD"),
+            ));
         }
-        facts.signature.clone().map_err(|reason| ("bad-signature", reason))?;
-        let subject = facts.subject.clone().map_err(|reason| ("commit-subject", reason))?;
+        facts
+            .signature
+            .clone()
+            .map_err(|reason| ("bad-signature", reason))?;
+        let subject = facts
+            .subject
+            .clone()
+            .map_err(|reason| ("commit-subject", reason))?;
         if !conventional_subject(subject.trim(), &facts.task_id) {
             return Err((
                 "commit-subject",
-                format!("commit {commit} subject is not conventional or does not name {}", facts.task_id),
+                format!(
+                    "commit {commit} subject is not conventional or does not name {}",
+                    facts.task_id
+                ),
             ));
         }
-        paths.insert(commit.clone(), facts.paths.clone().map_err(|reason| ("commit-paths", reason))?);
+        paths.insert(
+            commit.clone(),
+            facts
+                .paths
+                .clone()
+                .map_err(|reason| ("commit-paths", reason))?,
+        );
         prior = commit;
     }
     Ok(paths)
@@ -2385,7 +3143,11 @@ fn conventional_subject(subject: &str, task_id: &str) -> bool {
     baley::execution::receipts::conventional_subject(subject, task_id)
 }
 
-fn git_output(project: &Path, args: &[&str], process: &mut (dyn Process + Send)) -> Result<String, String> {
+fn git_output(
+    project: &Path,
+    args: &[&str],
+    process: &mut (dyn Process + Send),
+) -> Result<String, String> {
     String::from_utf8(git_output_bytes(project, args, process)?)
         .map_err(|_| "Git output is not valid UTF-8".into())
 }
@@ -2396,8 +3158,13 @@ fn git_output_bytes(
     process: &mut dyn Process,
 ) -> Result<Vec<u8>, String> {
     let output = baley::git_process::run(
-        &baley::git_process::launch(baley::git_process::Caller::ExecutionOutput).arg("-C").arg(project).args(args), process)
-        .map_err(|error| format!("cannot run git: {error}"))?;
+        &baley::git_process::launch(baley::git_process::Caller::ExecutionOutput)
+            .arg("-C")
+            .arg(project)
+            .args(args),
+        process,
+    )
+    .map_err(|error| format!("cannot run git: {error}"))?;
     if output.success() {
         Ok(output.stdout)
     } else {
@@ -2409,7 +3176,11 @@ fn git_output_bytes(
     }
 }
 
-fn git_success(project: &Path, args: &[&str], process: &mut (dyn Process + Send)) -> Result<(), String> {
+fn git_success(
+    project: &Path,
+    args: &[&str],
+    process: &mut (dyn Process + Send),
+) -> Result<(), String> {
     git_output_bytes(project, args, process).map(|_| ())
 }
 
@@ -2417,12 +3188,22 @@ fn git_success(project: &Path, args: &[&str], process: &mut (dyn Process + Send)
 /// has; nothing here reads the child's output.
 fn git_status(project: &Path, args: &[&str], process: &mut dyn Process) -> Result<bool, String> {
     let output = baley::git_process::run(
-        &baley::git_process::launch(baley::git_process::Caller::ExecutionStatus).arg("-C").arg(project).args(args).inherit(), process)
-        .map_err(|error| format!("cannot run git: {error}"))?;
+        &baley::git_process::launch(baley::git_process::Caller::ExecutionStatus)
+            .arg("-C")
+            .arg(project)
+            .args(args)
+            .inherit(),
+        process,
+    )
+    .map_err(|error| format!("cannot run git: {error}"))?;
     match output.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
-        _ => Err(format!("git {} failed with {}", args.join(" "), output.status)),
+        _ => Err(format!(
+            "git {} failed with {}",
+            args.join(" "),
+            output.status
+        )),
     }
 }
 
@@ -2492,7 +3273,16 @@ async fn record_refusal<I: ConfigIo>(
     // record_located_refusal instead.
     let located = Located::rule(code.clone(), operation).id(subject_id.clone().unwrap_or_default());
     record_located_refusal(
-        session, view, phase, tool, operation, request, code, reason, subject_id, Some(located),
+        session,
+        view,
+        phase,
+        tool,
+        operation,
+        request,
+        code,
+        reason,
+        subject_id,
+        Some(located),
     )
     .await
 }
@@ -2534,8 +3324,8 @@ async fn record_observation<I: ConfigIo>(
     subject_id: Option<String>,
     located: Option<Located>,
 ) -> Answer {
-    let decision =
-        boundary(phase, tool, operation, request, &response, subject_id, None)?.with_located(located);
+    let decision = boundary(phase, tool, operation, request, &response, subject_id, None)?
+        .with_located(located);
     let written = session
         .request(Operation::BoundaryV1 {
             expected_generation: view.snapshot.generation,
@@ -2617,16 +3407,38 @@ pub(crate) fn executable_phase(
     phase: u32,
 ) -> Result<baley::derivation::PhaseRecord, (&'static str, String)> {
     if lifecycle.cycle != Cycle::Live {
-        return Err(("closed-cycle", "execution requires the live planning cycle".into()));
+        return Err((
+            "closed-cycle",
+            "execution requires the live planning cycle".into(),
+        ));
     }
-    let Some(record) = lifecycle.phases.iter().find(|record| record.id.number() == f64::from(phase)) else {
-        return Err(("unknown-phase", "the lifecycle does not contain the requested phase".into()));
+    let Some(record) = lifecycle
+        .phases
+        .iter()
+        .find(|record| record.id.number() == f64::from(phase))
+    else {
+        return Err((
+            "unknown-phase",
+            "the lifecycle does not contain the requested phase".into(),
+        ));
     };
-    if lifecycle.current.is_none_or(|current| current.number() != f64::from(phase)) {
-        return Err(("phase-not-current", "the requested phase is not the derived current phase".into()));
+    if lifecycle
+        .current
+        .is_none_or(|current| current.number() != f64::from(phase))
+    {
+        return Err((
+            "phase-not-current",
+            "the requested phase is not the derived current phase".into(),
+        ));
     }
-    if !matches!(record.status, LifecycleStatus::Planned | LifecycleStatus::Executed) {
-        return Err(("lifecycle-refusal", format!("phase status {:?} cannot execute", record.status)));
+    if !matches!(
+        record.status,
+        LifecycleStatus::Planned | LifecycleStatus::Executed
+    ) {
+        return Err((
+            "lifecycle-refusal",
+            format!("phase status {:?} cannot execute", record.status),
+        ));
     }
     Ok(record.clone())
 }
@@ -2638,10 +3450,16 @@ pub(crate) fn active_plan<'a>(
     plans: &'a [ExecutionPlan],
 ) -> Result<&'a ExecutionPlan, (&'static str, String)> {
     let Some(plan) = plans.iter().find(|plan| plan.plan == active.plan) else {
-        return Err(("active-plan-missing", "the active dispatch plan is no longer admitted".into()));
+        return Err((
+            "active-plan-missing",
+            "the active dispatch plan is no longer admitted".into(),
+        ));
     };
     if active.plan_fingerprint != plan.fingerprint {
-        return Err(("plan-changed", "the active plan bytes differ from the admitted fingerprint".into()));
+        return Err((
+            "plan-changed",
+            "the active plan bytes differ from the admitted fingerprint".into(),
+        ));
     }
     Ok(plan)
 }
@@ -2649,7 +3467,11 @@ pub(crate) fn active_plan<'a>(
 /// Whether a continuation decision lets new work be dispatched: an accepted
 /// continuation, or an approved plan suite repair.
 pub(crate) fn may_continue(decision: &ContinuationDecision) -> bool {
-    matches!(decision, ContinuationDecision::Continue { .. } | ContinuationDecision::RepairSuite { approved: true, .. })
+    matches!(
+        decision,
+        ContinuationDecision::Continue { .. }
+            | ContinuationDecision::RepairSuite { approved: true, .. }
+    )
 }
 
 /// A continuation refusal names the answer that is missing and the call that
@@ -2713,11 +3535,18 @@ async fn begin<I: ConfigIo + Clone + Sync>(
 /// The phase whose scope records a malformed request: an apply naming a
 /// dispatch the store knows goes under that dispatch's phase, and anything
 /// else under the root refusal scope, phase 0.
-pub(crate) fn refusal_phase(view: &View, tool: BoundaryTool, raw: Option<&Value>) -> Result<u32, Failure> {
+pub(crate) fn refusal_phase(
+    view: &View,
+    tool: BoundaryTool,
+    raw: Option<&Value>,
+) -> Result<u32, Failure> {
     if tool != BoundaryTool::BaleyApply {
         return Ok(0);
     }
-    match raw.and_then(|value| value.get("dispatch_id")).and_then(Value::as_str) {
+    match raw
+        .and_then(|value| value.get("dispatch_id"))
+        .and_then(Value::as_str)
+    {
         Some(id) => Ok(dispatch_phase(view, id)?.unwrap_or(0)),
         None => Ok(0),
     }
@@ -2811,11 +3640,25 @@ async fn derivation_refusal<I: ConfigIo>(
     // Each variant's own fields, both as the reason a person reads and as the
     // typed object a later query joins to the line it names (D-140).
     let (detail, located) = match &error {
-        baley::derivation::DerivationError::StateConflict { source, field, declared, derived, entry } => (
-            json!({"source":source,"field":field,"declared":declared,"derived":derived}).to_string(),
+        baley::derivation::DerivationError::StateConflict {
+            source,
+            field,
+            declared,
+            derived,
+            entry,
+        } => (
+            json!({"source":source,"field":field,"declared":declared,"derived":derived})
+                .to_string(),
             match entry {
-                Some(entry) => Located::conflict(&entry.source, entry.line, entry.entry,
-                    &entry.phase, field, declared, &entry.status),
+                Some(entry) => Located::conflict(
+                    &entry.source,
+                    entry.line,
+                    entry.entry,
+                    &entry.phase,
+                    field,
+                    declared,
+                    &entry.status,
+                ),
                 None => Located::rule(code, field).id(source),
             },
         ),
@@ -2828,20 +3671,32 @@ async fn derivation_refusal<I: ConfigIo>(
             Located::input(code, "roadmap", planning_path(path)),
         ),
         baley::derivation::DerivationError::InputFailure(failure) => (
-            format!("{code}: {} is unreadable ({:?})", planning_path(&failure.path), failure.category),
+            format!(
+                "{code}: {} is unreadable ({:?})",
+                planning_path(&failure.path),
+                failure.category
+            ),
             Located::input(code, "input", planning_path(&failure.path)),
         ),
-        baley::derivation::DerivationError::InvalidRoadmap { detail } => (
-            format!("{code}: {detail}"),
-            Located::rule(code, "roadmap"),
-        ),
-        baley::derivation::DerivationError::DerivationConflict { requested_hash, stored_hash, fields } => (
-            format!("{code}: the memo for {requested_hash} (stored {}) disagrees at {}",
-                stored_hash.as_deref().unwrap_or("none"), fields.join(", ")),
+        baley::derivation::DerivationError::InvalidRoadmap { detail } => {
+            (format!("{code}: {detail}"), Located::rule(code, "roadmap"))
+        }
+        baley::derivation::DerivationError::DerivationConflict {
+            requested_hash,
+            stored_hash,
+            fields,
+        } => (
+            format!(
+                "{code}: the memo for {requested_hash} (stored {}) disagrees at {}",
+                stored_hash.as_deref().unwrap_or("none"),
+                fields.join(", ")
+            ),
             Located::rule(code, "memo").id(requested_hash),
         ),
         _ => (
-            format!("{code}: the controlling lifecycle inputs changed while the answer was prepared"),
+            format!(
+                "{code}: the controlling lifecycle inputs changed while the answer was prepared"
+            ),
             Located::rule(code, "inputs"),
         ),
     };
@@ -2920,8 +3775,7 @@ async fn checked_continuation<I: ConfigIo + Clone + Sync>(
     checked: &baley::derivation::RecheckedLifecycle,
     phase: u32,
     driver: &Driver,
-) -> Result<baley::next_action::continuation::Continuation, baley::derivation::DerivationError>
-{
+) -> Result<baley::next_action::continuation::Continuation, baley::derivation::DerivationError> {
     use baley::{
         derivation::*,
         evidence::{authority, material, persistence},
@@ -2993,13 +3847,22 @@ async fn checked_continuation<I: ConfigIo + Clone + Sync>(
         .map(|p| p.plans.as_slice())
         .unwrap_or_default();
     let mut selected = continuation::select(&records, &scope, applicability, plans);
-    if let Some(active) = view.snapshot.data["execution"]["occurrences"][phase.to_string()]["active"].as_object()
-        && let Some(plan) = active.get("plan").and_then(Value::as_u64).and_then(|plan| u32::try_from(plan).ok()) {
-        let plan_events = baley::execution::history::plan_records(&view.snapshot.data, phase).map_err(fail)?;
-        let admitted = baley::execution::history::admitted_plans(&view.snapshot.data, phase).map_err(fail)?;
+    if let Some(active) =
+        view.snapshot.data["execution"]["occurrences"][phase.to_string()]["active"].as_object()
+        && let Some(plan) = active
+            .get("plan")
+            .and_then(Value::as_u64)
+            .and_then(|plan| u32::try_from(plan).ok())
+    {
+        let plan_events =
+            baley::execution::history::plan_records(&view.snapshot.data, phase).map_err(fail)?;
+        let admitted =
+            baley::execution::history::admitted_plans(&view.snapshot.data, phase).map_err(fail)?;
         if let Some((identity, _)) = admitted.iter().find(|(identity, _)| identity.plan == plan)
             && let Some(decision) = continuation::plan_repair_decision(
-                &baley::execution::history::plan_project(&plan_events, identity)) {
+                &baley::execution::history::plan_project(&plan_events, identity),
+            )
+        {
             selected.checkpoint = None;
             selected.decision = decision;
         }
@@ -3016,14 +3879,28 @@ async fn checked_continuation<I: ConfigIo + Clone + Sync>(
 /// or a fresh HEAD. The base was retained atomically before completion cleared active.
 /// The last commit of the plan's confirmed suite repair, when it has one.
 fn confirmed_repair_head(view: &View, phase: u32, plan: u32) -> Result<Option<String>, String> {
-    let plan_records = baley::execution::history::plan_records(&view.snapshot.data, phase).map_err(|error| error.to_string())?;
-    let Some((identity, _)) = baley::execution::history::admitted_plans(&view.snapshot.data, phase).map_err(|error| error.to_string())?
-        .into_iter().find(|(identity, _)| identity.plan == plan) else { return Ok(None) };
+    let plan_records = baley::execution::history::plan_records(&view.snapshot.data, phase)
+        .map_err(|error| error.to_string())?;
+    let Some((identity, _)) = baley::execution::history::admitted_plans(&view.snapshot.data, phase)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|(identity, _)| identity.plan == plan)
+    else {
+        return Ok(None);
+    };
     let projection = baley::execution::history::plan_project(&plan_records, &identity);
-    let Some(repair) = projection.repair.as_ref() else { return Ok(None) };
-    let confirmed = plan_records.iter().any(|record| record.request.plan == identity
-        && matches!(&record.request.event, baley::execution::history::PlanEvent::SuiteRepair(_))
-        && baley::execution::history::plan_decision(record).is_ok_and(|decision| baley::store::model::retained(&view.decisions, &decision)));
+    let Some(repair) = projection.repair.as_ref() else {
+        return Ok(None);
+    };
+    let confirmed = plan_records.iter().any(|record| {
+        record.request.plan == identity
+            && matches!(
+                &record.request.event,
+                baley::execution::history::PlanEvent::SuiteRepair(_)
+            )
+            && baley::execution::history::plan_decision(record)
+                .is_ok_and(|decision| baley::store::model::retained(&view.decisions, &decision))
+    });
     if !confirmed {
         return Err("native risk source lacks a confirmed suite repair receipt".into());
     }
@@ -3044,47 +3921,95 @@ pub fn risk_material(
         return Err("risk source names a foreign execution occurrence".into());
     }
     let native = risk::native_execution_bases(&view.snapshot.data).map_err(|e| e.to_string())?;
-    if let Some(basis) = native.iter().rev().find(|b| b.execution.dispatch_id == dispatch_id) {
-        let records = baley::execution::history::records(&view.snapshot.data, phase).map_err(|e| e.to_string())?;
-        let confirmed = records.iter().any(|record| record.request.task == basis.task
-            && record.request_digest == basis.execution.transition_id
-            && baley::execution::history::decision(record).is_ok_and(|decision| baley::store::model::retained(&view.decisions, &decision)));
+    if let Some(basis) = native
+        .iter()
+        .rev()
+        .find(|b| b.execution.dispatch_id == dispatch_id)
+    {
+        let records = baley::execution::history::records(&view.snapshot.data, phase)
+            .map_err(|e| e.to_string())?;
+        let confirmed = records.iter().any(|record| {
+            record.request.task == basis.task
+                && record.request_digest == basis.execution.transition_id
+                && baley::execution::history::decision(record)
+                    .is_ok_and(|decision| baley::store::model::retained(&view.decisions, &decision))
+        });
         if basis.task.phase != phase || basis.task.plan != plan || !confirmed {
             return Err("native risk source lacks a confirmed task receipt".into());
         }
         // A plan that used its one repair (D-163) ends at the repair commit,
         // not at the last task's completion; completion demands that head.
         let material = match confirmed_repair_head(view, phase, plan)? {
-            Some(head_id) => baley::rail::risk::MaterialIdentity::Committed { base_id: basis.execution.base_id.clone(), head_id },
+            Some(head_id) => baley::rail::risk::MaterialIdentity::Committed {
+                base_id: basis.execution.base_id.clone(),
+                head_id,
+            },
             None => basis.material(),
         };
         return Ok(material);
     }
     let execution = execution_snapshot(view)?;
-    let active = execution.occurrences.get(&phase.to_string()).and_then(|occurrence| occurrence.active.as_ref());
-    let plan_bases = native.iter().filter(|basis| basis.task.phase == phase && basis.task.plan == plan).collect::<Vec<_>>();
-    if active.is_some_and(|active| active.id == dispatch_id && active.plan == plan) && !plan_bases.is_empty() {
-        let task_records = baley::execution::history::records(&view.snapshot.data, phase).map_err(|error| error.to_string())?;
-        if plan_bases.iter().any(|basis| !task_records.iter().any(|record| record.request.task == basis.task
-            && record.request_digest == basis.execution.transition_id
-            && baley::execution::history::decision(record).is_ok_and(|decision| baley::store::model::retained(&view.decisions, &decision)))) {
+    let active = execution
+        .occurrences
+        .get(&phase.to_string())
+        .and_then(|occurrence| occurrence.active.as_ref());
+    let plan_bases = native
+        .iter()
+        .filter(|basis| basis.task.phase == phase && basis.task.plan == plan)
+        .collect::<Vec<_>>();
+    if active.is_some_and(|active| active.id == dispatch_id && active.plan == plan)
+        && !plan_bases.is_empty()
+    {
+        let task_records = baley::execution::history::records(&view.snapshot.data, phase)
+            .map_err(|error| error.to_string())?;
+        if plan_bases.iter().any(|basis| {
+            !task_records.iter().any(|record| {
+                record.request.task == basis.task
+                    && record.request_digest == basis.execution.transition_id
+                    && baley::execution::history::decision(record).is_ok_and(|decision| {
+                        baley::store::model::retained(&view.decisions, &decision)
+                    })
+            })
+        }) {
             return Err("native risk source lacks a confirmed task receipt".into());
         }
-        let plan_records = baley::execution::history::plan_records(&view.snapshot.data, phase).map_err(|error| error.to_string())?;
-        let identity = baley::execution::history::admitted_plans(&view.snapshot.data, phase).map_err(|error| error.to_string())?
-            .into_iter().find(|(identity, _)| identity.plan == plan).map(|(identity, _)| identity)
+        let plan_records = baley::execution::history::plan_records(&view.snapshot.data, phase)
+            .map_err(|error| error.to_string())?;
+        let identity = baley::execution::history::admitted_plans(&view.snapshot.data, phase)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|(identity, _)| identity.plan == plan)
+            .map(|(identity, _)| identity)
             .ok_or("native risk source lacks an admitted plan")?;
         let projection = baley::execution::history::plan_project(&plan_records, &identity);
-        if projection.repair.is_some() && !plan_records.iter().any(|record| record.request.plan == identity
-            && matches!(&record.request.event, baley::execution::history::PlanEvent::SuiteRepair(_))
-            && baley::execution::history::plan_decision(record).is_ok_and(|decision| baley::store::model::retained(&view.decisions, &decision))) {
+        if projection.repair.is_some()
+            && !plan_records.iter().any(|record| {
+                record.request.plan == identity
+                    && matches!(
+                        &record.request.event,
+                        baley::execution::history::PlanEvent::SuiteRepair(_)
+                    )
+                    && baley::execution::history::plan_decision(record).is_ok_and(|decision| {
+                        baley::store::model::retained(&view.decisions, &decision)
+                    })
+            })
+        {
             return Err("native risk source lacks a confirmed suite repair receipt".into());
         }
-        let head_id = projection.repair.as_ref().and_then(|repair| repair.commits.last()).cloned()
-            .or_else(|| plan_bases.last().map(|basis| basis.source.completion.clone()))
+        let head_id = projection
+            .repair
+            .as_ref()
+            .and_then(|repair| repair.commits.last())
+            .cloned()
+            .or_else(|| {
+                plan_bases
+                    .last()
+                    .map(|basis| basis.source.completion.clone())
+            })
             .ok_or("native risk source lacks committed material")?;
         return Ok(risk::MaterialIdentity::Committed {
-            base_id: plan_bases[0].execution.base_id.clone(), head_id,
+            base_id: plan_bases[0].execution.base_id.clone(),
+            head_id,
         });
     }
     let occurrence = execution
@@ -3148,13 +4073,8 @@ mod schema_tests {
         let mut bytes = source.to_vec();
         bytes.extend_from_slice(OPAQUE_BODY.as_bytes());
         let plan = parse_plan(&bytes, 6, 1).unwrap();
-        baley::execution::dispatch::build_dispatch(
-            &plan,
-            &"a".repeat(64),
-            0,
-            &"b".repeat(40),
-        )
-        .unwrap()
+        baley::execution::dispatch::build_dispatch(&plan, &"a".repeat(64), 0, &"b".repeat(40))
+            .unwrap()
     }
 
     #[test]
@@ -3163,14 +4083,20 @@ mod schema_tests {
         let prompt = render_prompt(&dispatch);
         dispatch.prompt_digest = baley::store::model::digest(prompt.as_bytes());
         dispatch.prompt = prompt;
-        assert_eq!(baley::store::model::digest(render_prompt(&dispatch).as_bytes()), dispatch.prompt_digest);
+        assert_eq!(
+            baley::store::model::digest(render_prompt(&dispatch).as_bytes()),
+            dispatch.prompt_digest
+        );
     }
 
     #[test]
     fn the_prompt_ends_with_the_opaque_body_and_states_its_utf8_byte_count() {
         let prompt = render_prompt(&opaque_body_dispatch());
         assert!(prompt.ends_with(OPAQUE_BODY));
-        assert!(prompt.contains(&format!("Opaque plan body ({} UTF-8 bytes):", OPAQUE_BODY.len())));
+        assert!(prompt.contains(&format!(
+            "Opaque plan body ({} UTF-8 bytes):",
+            OPAQUE_BODY.len()
+        )));
     }
 
     #[test]
@@ -3196,14 +4122,9 @@ pub(crate) enum ExecutionReviewDecision {
     /// Nothing: the diff gate is off, so no material is gathered.
     Skip,
     /// Answer from the replay saved for this receipt.
-    Replay {
-        fire: String,
-        attempt: String,
-    },
+    Replay { fire: String, attempt: String },
     /// Gather the receipt's material and ask review to admit it at this gate.
-    Admit {
-        gate: baley::review::model::Gate,
-    },
+    Admit { gate: baley::review::model::Gate },
 }
 
 /// A saved replay answers first. Otherwise the resolved diff gate decides:
@@ -3226,7 +4147,9 @@ pub(crate) fn execution_review_decision(
         });
     }
     match gate {
-        Some(gate) if gate != baley::review::model::Gate::Off => Ok(ExecutionReviewDecision::Admit { gate }),
+        Some(gate) if gate != baley::review::model::Gate::Off => {
+            Ok(ExecutionReviewDecision::Admit { gate })
+        }
         _ => Ok(ExecutionReviewDecision::Skip),
     }
 }
@@ -3297,11 +4220,15 @@ pub async fn review_handoff<I: ConfigIo + Clone + Sync>(
                         .triggers
                         .get("diff")
                         .ok_or_else(|| Error::Policy("missing diff policy".into()))?;
-                    let gate: baley::review::model::Gate = serde_json::from_value(json!(policy.gate))?;
+                    let gate: baley::review::model::Gate =
+                        serde_json::from_value(json!(policy.gate))?;
                     Some((gate, generation, route))
                 }
             };
-            let fire = match execution_review_decision(resolved.as_ref().map(|(gate, ..)| gate.clone()), saved)? {
+            let fire = match execution_review_decision(
+                resolved.as_ref().map(|(gate, ..)| gate.clone()),
+                saved,
+            )? {
                 ExecutionReviewDecision::Skip => continue,
                 ExecutionReviewDecision::Replay { fire, .. } => fire,
                 ExecutionReviewDecision::Admit { gate } => {
@@ -3317,7 +4244,9 @@ pub async fn review_handoff<I: ConfigIo + Clone + Sync>(
                         &receipt.dispatch_id,
                     )
                     .map_err(Error::Invalid)?;
-                    let baley::rail::risk::MaterialIdentity::Committed { base_id, head_id } = material else {
+                    let baley::rail::risk::MaterialIdentity::Committed { base_id, head_id } =
+                        material
+                    else {
                         return Err(Error::Invalid(
                             "completed execution requires a committed range".into(),
                         ));
@@ -3392,7 +4321,9 @@ mod gap151_boundary_tests {
     fn gap151_a_completed_receipt_under_a_live_gate_is_admitted_at_that_gate() {
         assert_eq!(
             execution_review_decision(Some(Gate::Advisory), None).unwrap(),
-            ExecutionReviewDecision::Admit { gate: Gate::Advisory }
+            ExecutionReviewDecision::Admit {
+                gate: Gate::Advisory
+            }
         );
     }
 
@@ -3410,14 +4341,26 @@ mod gap151_boundary_tests {
 
     #[test]
     fn gap151_an_off_or_unresolved_gate_skips_the_receipt_before_any_material() {
-        assert_eq!(execution_review_decision(Some(Gate::Off), None).unwrap(), ExecutionReviewDecision::Skip);
-        assert_eq!(execution_review_decision(None, None).unwrap(), ExecutionReviewDecision::Skip);
+        assert_eq!(
+            execution_review_decision(Some(Gate::Off), None).unwrap(),
+            ExecutionReviewDecision::Skip
+        );
+        assert_eq!(
+            execution_review_decision(None, None).unwrap(),
+            ExecutionReviewDecision::Skip
+        );
     }
 
     #[test]
     fn a_saved_replay_without_its_fire_or_attempt_is_refused() {
         for saved in [json!({"attempt":"a1"}), json!({"fire":"f1"})] {
-            assert!(matches!(execution_review_decision(Some(Gate::Advisory), Some(&saved)), Err(Error::Invalid(_))), "{saved}");
+            assert!(
+                matches!(
+                    execution_review_decision(Some(Gate::Advisory), Some(&saved)),
+                    Err(Error::Invalid(_))
+                ),
+                "{saved}"
+            );
         }
     }
 }
@@ -3455,7 +4398,13 @@ mod commit_tests {
     fn commits_that_hold_up_answer_each_ones_changed_paths() {
         let (a, b) = (commit('a'), commit('b'));
         assert_eq!(
-            judge_commits(BASE, &[good("P1-T1", &a, &["src/a.rs"]), good("P1-T2", &b, &["src/b.rs", "src/c.rs"])]),
+            judge_commits(
+                BASE,
+                &[
+                    good("P1-T1", &a, &["src/a.rs"]),
+                    good("P1-T2", &b, &["src/b.rs", "src/c.rs"])
+                ]
+            ),
             Ok(BTreeMap::from([
                 (a, vec!["src/a.rs".to_string()]),
                 (b, vec!["src/b.rs".to_string(), "src/c.rs".to_string()]),
@@ -3468,7 +4417,10 @@ mod commit_tests {
         let a = commit('a');
         assert_eq!(
             refused(&[good("P1-T1", &a, &[]), good("P1-T2", &a, &[])]),
-            ("reused-commit", "one commit cannot complete two tasks".to_string())
+            (
+                "reused-commit",
+                "one commit cannot complete two tasks".to_string()
+            )
         );
     }
 
@@ -3476,7 +4428,10 @@ mod commit_tests {
     fn a_commit_git_cannot_read_is_missing() {
         let mut missing = good("P1-T1", &commit('a'), &[]);
         missing.exists = Err("git cat-file failed".into());
-        assert_eq!(refused(&[missing]), ("missing-commit", "git cat-file failed".to_string()));
+        assert_eq!(
+            refused(&[missing]),
+            ("missing-commit", "git cat-file failed".to_string())
+        );
     }
 
     #[test]
@@ -3484,10 +4439,19 @@ mod commit_tests {
         let a = commit('a');
         let mut late = good("P1-T2", &commit('b'), &[]);
         late.follows_prior = Ok(false);
-        assert_eq!(refused(&[good("P1-T1", BASE, &[])]), ("git-order", format!("commit {BASE} is not strictly after {BASE}")));
+        assert_eq!(
+            refused(&[good("P1-T1", BASE, &[])]),
+            (
+                "git-order",
+                format!("commit {BASE} is not strictly after {BASE}")
+            )
+        );
         assert_eq!(
             refused(&[good("P1-T1", &a, &[]), late]),
-            ("git-order", format!("commit {} is not strictly after {a}", commit('b')))
+            (
+                "git-order",
+                format!("commit {} is not strictly after {a}", commit('b'))
+            )
         );
     }
 
@@ -3495,24 +4459,42 @@ mod commit_tests {
     fn a_commit_not_under_the_current_head_is_out_of_order() {
         let mut detached = good("P1-T1", &commit('a'), &[]);
         detached.under_head = Ok(false);
-        assert_eq!(refused(&[detached]), ("git-order", format!("commit {} is not an ancestor of current HEAD", commit('a'))));
+        assert_eq!(
+            refused(&[detached]),
+            (
+                "git-order",
+                format!("commit {} is not an ancestor of current HEAD", commit('a'))
+            )
+        );
     }
 
     #[test]
     fn an_unsigned_commit_is_refused_with_gits_reason() {
         let mut unsigned = good("P1-T1", &commit('a'), &[]);
         unsigned.signature = Err("no signature found".into());
-        assert_eq!(refused(&[unsigned]), ("bad-signature", "no signature found".to_string()));
+        assert_eq!(
+            refused(&[unsigned]),
+            ("bad-signature", "no signature found".to_string())
+        );
     }
 
     #[test]
     fn a_subject_that_is_not_conventional_or_names_another_task_is_refused() {
-        for subject in ["did the work for P1-T1", "feat(exec): do the work for P1-T9"] {
+        for subject in [
+            "did the work for P1-T1",
+            "feat(exec): do the work for P1-T9",
+        ] {
             let mut wrong = good("P1-T1", &commit('a'), &[]);
             wrong.subject = Ok(subject.into());
             assert_eq!(
                 refused(&[wrong]),
-                ("commit-subject", format!("commit {} subject is not conventional or does not name P1-T1", commit('a'))),
+                (
+                    "commit-subject",
+                    format!(
+                        "commit {} subject is not conventional or does not name P1-T1",
+                        commit('a')
+                    )
+                ),
                 "{subject}"
             );
         }
@@ -3522,7 +4504,10 @@ mod commit_tests {
     fn paths_git_cannot_list_refuse_the_patch() {
         let mut unlisted = good("P1-T1", &commit('a'), &[]);
         unlisted.paths = Err("git diff-tree failed".into());
-        assert_eq!(refused(&[unlisted]), ("commit-paths", "git diff-tree failed".to_string()));
+        assert_eq!(
+            refused(&[unlisted]),
+            ("commit-paths", "git diff-tree failed".to_string())
+        );
     }
 
     #[test]
@@ -3567,21 +4552,32 @@ mod selection_tests {
 
     const TWO: &str = "## Phases\n- [ ] **Phase 3: Three**\n- [ ] **Phase 4: Four**";
 
-    fn refusal(result: Result<baley::derivation::PhaseRecord, (&'static str, String)>) -> (&'static str, String) {
+    fn refusal(
+        result: Result<baley::derivation::PhaseRecord, (&'static str, String)>,
+    ) -> (&'static str, String) {
         result.unwrap_err()
     }
 
     #[test]
     fn the_current_planned_phase_executes() {
         let record = executable_phase(&lifecycle(TWO, &[&["PLAN-1.md"], &[]]), 3).unwrap();
-        assert_eq!((record.id.address(), record.status), ("3".to_string(), LifecycleStatus::Planned));
+        assert_eq!(
+            (record.id.address(), record.status),
+            ("3".to_string(), LifecycleStatus::Planned)
+        );
     }
 
     #[test]
     fn a_closed_cycle_executes_nothing() {
         assert_eq!(
-            refusal(executable_phase(&lifecycle("## Phases\nNo active phases.", &[]), 3)),
-            ("closed-cycle", "execution requires the live planning cycle".to_string())
+            refusal(executable_phase(
+                &lifecycle("## Phases\nNo active phases.", &[]),
+                3
+            )),
+            (
+                "closed-cycle",
+                "execution requires the live planning cycle".to_string()
+            )
         );
     }
 
@@ -3589,15 +4585,24 @@ mod selection_tests {
     fn a_phase_the_lifecycle_does_not_hold_is_unknown() {
         assert_eq!(
             refusal(executable_phase(&lifecycle(TWO, &[&["PLAN-1.md"], &[]]), 9)),
-            ("unknown-phase", "the lifecycle does not contain the requested phase".to_string())
+            (
+                "unknown-phase",
+                "the lifecycle does not contain the requested phase".to_string()
+            )
         );
     }
 
     #[test]
     fn a_phase_after_the_current_one_is_not_current() {
         assert_eq!(
-            refusal(executable_phase(&lifecycle(TWO, &[&["PLAN-1.md"], &["PLAN-1.md"]]), 4)),
-            ("phase-not-current", "the requested phase is not the derived current phase".to_string())
+            refusal(executable_phase(
+                &lifecycle(TWO, &[&["PLAN-1.md"], &["PLAN-1.md"]]),
+                4
+            )),
+            (
+                "phase-not-current",
+                "the requested phase is not the derived current phase".to_string()
+            )
         );
     }
 
@@ -3605,7 +4610,10 @@ mod selection_tests {
     fn an_unplanned_current_phase_cannot_execute() {
         assert_eq!(
             refusal(executable_phase(&lifecycle(TWO, &[&[], &[]]), 3)),
-            ("lifecycle-refusal", "phase status Unplanned cannot execute".to_string())
+            (
+                "lifecycle-refusal",
+                "phase status Unplanned cannot execute".to_string()
+            )
         );
     }
 
@@ -3631,7 +4639,10 @@ mod selection_tests {
         let dispatched = plan(2, "cargo test");
         assert_eq!(
             active_plan(&active(&dispatched), &[plan(1, "cargo test")]).map(|_| ()),
-            Err(("active-plan-missing", "the active dispatch plan is no longer admitted".to_string()))
+            Err((
+                "active-plan-missing",
+                "the active dispatch plan is no longer admitted".to_string()
+            ))
         );
     }
 
@@ -3640,18 +4651,31 @@ mod selection_tests {
         let dispatched = plan(1, "cargo test");
         assert_eq!(
             active_plan(&active(&dispatched), &[plan(1, "cargo nextest run")]).map(|_| ()),
-            Err(("plan-changed", "the active plan bytes differ from the admitted fingerprint".to_string()))
+            Err((
+                "plan-changed",
+                "the active plan bytes differ from the admitted fingerprint".to_string()
+            ))
         );
     }
 
     #[test]
     fn only_an_accepted_continuation_or_an_approved_suite_repair_dispatches_work() {
         use ContinuationDecision as D;
-        assert!(may_continue(&D::Continue { answer: None, override_id: None, rerun_plans: vec![] }));
-        assert!(may_continue(&D::RepairSuite { question_id: "q1".into(), approved: true }));
+        assert!(may_continue(&D::Continue {
+            answer: None,
+            override_id: None,
+            rerun_plans: vec![]
+        }));
+        assert!(may_continue(&D::RepairSuite {
+            question_id: "q1".into(),
+            approved: true
+        }));
         for decision in [
             D::AwaitAcceptance,
-            D::RepairSuite { question_id: "q1".into(), approved: false },
+            D::RepairSuite {
+                question_id: "q1".into(),
+                approved: false,
+            },
             D::Revise,
             D::FreshCheck,
             D::OverrideRequired,
@@ -3671,7 +4695,8 @@ mod refusal_scope_tests {
             "---\nphase: {phase}\nplan: {plan}\nrequirements: [AC1]\nfiles: [src/a.rs]\nexecution:\n  schema: 1\n  suite: cargo test\n  tasks:\n    - id: T1\n      verify: [cargo test one]\n---\nbody\n"
         );
         let plan = parse_plan(source.as_bytes(), phase, plan).unwrap();
-        baley::execution::dispatch::build_dispatch(&plan, &"a".repeat(64), 0, &"b".repeat(40)).unwrap()
+        baley::execution::dispatch::build_dispatch(&plan, &"a".repeat(64), 0, &"b".repeat(40))
+            .unwrap()
     }
 
     fn occurrence(phase: u32, active: Option<ActiveDispatch>) -> ExecutionOccurrence {
@@ -3692,24 +4717,50 @@ mod refusal_scope_tests {
     fn view(occurrences: Vec<ExecutionOccurrence>) -> View {
         let execution = ExecutionSnapshot {
             schema: baley::execution::model::EXECUTION_SCHEMA,
-            occurrences: occurrences.into_iter().map(|o| (o.phase.to_string(), o)).collect(),
+            occurrences: occurrences
+                .into_iter()
+                .map(|o| (o.phase.to_string(), o))
+                .collect(),
         };
         let data = json!({"execution": serde_json::to_value(execution).unwrap()});
-        View { items: vec![], decisions: vec![], snapshot: baley::store::model::Snapshot::new(1, b"", b"", data).unwrap() }
+        View {
+            items: vec![],
+            decisions: vec![],
+            snapshot: baley::store::model::Snapshot::new(1, b"", b"", data).unwrap(),
+        }
     }
 
     #[test]
     fn a_malformed_apply_naming_an_active_dispatch_is_refused_under_its_phase() {
         let active = dispatch(5, 1);
-        let store = view(vec![occurrence(5, Some(active.clone())), occurrence(6, None)]);
-        assert_eq!(refusal_phase(&store, BoundaryTool::BaleyApply, Some(&json!({"dispatch_id": active.id}))), Ok(5));
+        let store = view(vec![
+            occurrence(5, Some(active.clone())),
+            occurrence(6, None),
+        ]);
+        assert_eq!(
+            refusal_phase(
+                &store,
+                BoundaryTool::BaleyApply,
+                Some(&json!({"dispatch_id": active.id}))
+            ),
+            Ok(5)
+        );
     }
 
     #[test]
     fn a_malformed_apply_naming_no_known_dispatch_is_refused_under_the_root_scope() {
         let store = view(vec![occurrence(5, Some(dispatch(5, 1)))]);
-        for raw in [Some(json!({"dispatch_id": "foreign"})), Some(json!({"phase": 5})), Some(json!({"dispatch_id": 7})), None] {
-            assert_eq!(refusal_phase(&store, BoundaryTool::BaleyApply, raw.as_ref()), Ok(0), "{raw:?}");
+        for raw in [
+            Some(json!({"dispatch_id": "foreign"})),
+            Some(json!({"phase": 5})),
+            Some(json!({"dispatch_id": 7})),
+            None,
+        ] {
+            assert_eq!(
+                refusal_phase(&store, BoundaryTool::BaleyApply, raw.as_ref()),
+                Ok(0),
+                "{raw:?}"
+            );
         }
     }
 
@@ -3733,13 +4784,23 @@ mod refusal_scope_tests {
             transition_id: "t1".into(),
             outcome,
         };
-        ExecutionOccurrence { receipts: BTreeMap::from([(dispatch.into(), receipt)]), ..occurrence(phase, None) }
+        ExecutionOccurrence {
+            receipts: BTreeMap::from([(dispatch.into(), receipt)]),
+            ..occurrence(phase, None)
+        }
     }
 
     #[test]
     fn a_malformed_apply_naming_a_dispatch_whose_patch_landed_is_refused_under_its_phase() {
         let store = view(vec![occurrence(5, Some(dispatch(5, 1))), received(6, "d1")]);
-        assert_eq!(refusal_phase(&store, BoundaryTool::BaleyApply, Some(&json!({"dispatch_id": "d1"}))), Ok(6));
+        assert_eq!(
+            refusal_phase(
+                &store,
+                BoundaryTool::BaleyApply,
+                Some(&json!({"dispatch_id": "d1"}))
+            ),
+            Ok(6)
+        );
     }
 
     #[test]
@@ -3756,10 +4817,19 @@ mod refusal_scope_tests {
     }
 
     #[test]
-    fn a_closed_resident_and_changed_routing_inputs_keep_their_own_failure_and_the_rest_are_store_failures() {
+    fn a_closed_resident_and_changed_routing_inputs_keep_their_own_failure_and_the_rest_are_store_failures()
+     {
         assert_eq!(store_failure(Error::Closed), Failure::Closed);
-        assert_eq!(store_failure(Error::Conflict("routing inputs changed before admission".into())), Failure::RoutingInputsChanged);
-        for other in [Error::Conflict("stale snapshot".into()), Error::Invalid("unreadable configuration".into())] {
+        assert_eq!(
+            store_failure(Error::Conflict(
+                "routing inputs changed before admission".into()
+            )),
+            Failure::RoutingInputsChanged
+        );
+        for other in [
+            Error::Conflict("stale snapshot".into()),
+            Error::Invalid("unreadable configuration".into()),
+        ] {
             assert_eq!(store_failure(other.clone()), Failure::Store, "{other:?}");
         }
     }
@@ -3768,14 +4838,27 @@ mod refusal_scope_tests {
     fn a_malformed_query_is_refused_under_the_root_scope_whatever_it_names() {
         let active = dispatch(5, 1);
         let store = view(vec![occurrence(5, Some(active.clone()))]);
-        assert_eq!(refusal_phase(&store, BoundaryTool::BaleyQuery, Some(&json!({"dispatch_id": active.id}))), Ok(0));
+        assert_eq!(
+            refusal_phase(
+                &store,
+                BoundaryTool::BaleyQuery,
+                Some(&json!({"dispatch_id": active.id}))
+            ),
+            Ok(0)
+        );
     }
 
     #[test]
     fn a_dispatch_held_by_two_occurrences_is_an_unsound_store() {
         let active = dispatch(5, 1);
-        let store = view(vec![occurrence(5, Some(active.clone())), occurrence(6, Some(active.clone()))]);
-        assert!(matches!(dispatch_phase(&store, &active.id), Err(Failure::Store)));
+        let store = view(vec![
+            occurrence(5, Some(active.clone())),
+            occurrence(6, Some(active.clone())),
+        ]);
+        assert!(matches!(
+            dispatch_phase(&store, &active.id),
+            Err(Failure::Store)
+        ));
     }
 }
 
@@ -3812,9 +4895,18 @@ mod reissue_tests {
         let Response::Dispatch { dispatch, prompt } = dispatch_response(&active, &plan()) else {
             panic!("a retained prompt re-issues the dispatch");
         };
-        assert_eq!(dispatch.route.as_ref().unwrap().choice.agent, "bal-executor-xhigh");
+        assert_eq!(
+            dispatch.route.as_ref().unwrap().choice.agent,
+            "bal-executor-xhigh"
+        );
         assert_eq!(prompt, "the admitted prompt");
-        assert_eq!(*dispatch, ActiveDispatch { body: "the plan body\n".into(), ..active });
+        assert_eq!(
+            *dispatch,
+            ActiveDispatch {
+                body: "the plan body\n".into(),
+                ..active
+            }
+        );
     }
 
     #[test]
@@ -3835,7 +4927,11 @@ mod reissue_tests {
         counted.prompt_digest.clear();
         counted.prompt_bytes = Some(12);
         for active in [digested, counted] {
-            assert_eq!(retained_prompt(&active).unwrap_err().0, "prompt-not-retained", "{active:?}");
+            assert_eq!(
+                retained_prompt(&active).unwrap_err().0,
+                "prompt-not-retained",
+                "{active:?}"
+            );
         }
     }
 
@@ -3848,13 +4944,25 @@ mod reissue_tests {
 
     #[test]
     fn a_full_hexadecimal_sha_is_the_head_without_its_line_end() {
-        assert_eq!(head_sha(&format!("{}\n", "0a".repeat(20))), Ok("0a".repeat(20)));
+        assert_eq!(
+            head_sha(&format!("{}\n", "0a".repeat(20))),
+            Ok("0a".repeat(20))
+        );
     }
 
     #[test]
     fn a_short_long_or_non_hexadecimal_answer_is_not_a_head() {
-        for output in ["a".repeat(39), "a".repeat(41), "g".repeat(40), String::new()] {
-            assert_eq!(head_sha(&output), Err("Git HEAD is not a full commit SHA".to_string()), "{output}");
+        for output in [
+            "a".repeat(39),
+            "a".repeat(41),
+            "g".repeat(40),
+            String::new(),
+        ] {
+            assert_eq!(
+                head_sha(&output),
+                Err("Git HEAD is not a full commit SHA".to_string()),
+                "{output}"
+            );
         }
     }
 }

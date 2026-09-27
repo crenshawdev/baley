@@ -1,16 +1,35 @@
-
 use baley::next_action::continuation::Decision;
 
 #[test]
 fn suite_repair_continuation_waits_on_plan_question() {
     use baley::execution::history::{PlanProjection, SuiteRepairQuestion};
-    let question = SuiteRepairQuestion { id: "suite-repair:run-1".into(), failed_run: "run-1".into(),
-        failing_tests: vec!["repair::alpha".into()], proposed_paths: vec!["src/value.rs".into()] };
-    let projection = PlanProjection { version: 3, worker_exits: vec![], round: None, completion: None, launches: vec!["run-1".into()], results: vec!["run-1".into()],
-        relaunch: None, repair_question: Some(question.clone()), repair_answer: None, repair: None,
-        outcome: "failed".into(), completed: false };
-    assert_eq!(baley::next_action::continuation::plan_repair_decision(&projection),
-        Some(Decision::RepairSuite { question_id: question.id, approved: false }));
+    let question = SuiteRepairQuestion {
+        id: "suite-repair:run-1".into(),
+        failed_run: "run-1".into(),
+        failing_tests: vec!["repair::alpha".into()],
+        proposed_paths: vec!["src/value.rs".into()],
+    };
+    let projection = PlanProjection {
+        version: 3,
+        worker_exits: vec![],
+        round: None,
+        completion: None,
+        launches: vec!["run-1".into()],
+        results: vec!["run-1".into()],
+        relaunch: None,
+        repair_question: Some(question.clone()),
+        repair_answer: None,
+        repair: None,
+        outcome: "failed".into(),
+        completed: false,
+    };
+    assert_eq!(
+        baley::next_action::continuation::plan_repair_decision(&projection),
+        Some(Decision::RepairSuite {
+            question_id: question.id,
+            approved: false
+        })
+    );
 }
 
 use super::next_action_service::{self, Consumed};
@@ -41,7 +60,11 @@ fn phase(number: f64) -> PhaseId {
 }
 
 fn record(occurrence: &str, fact: Fact) -> Record {
-    Record { version: VERSION, scope: scope(occurrence), fact }
+    Record {
+        version: VERSION,
+        scope: scope(occurrence),
+        fact,
+    }
 }
 
 fn progress(state: State) -> Gate {
@@ -91,7 +114,11 @@ fn generation(number: u64) -> Generation {
     Generation {
         number,
         global: None,
-        repo: Input { identity: "/project/.planning/config.v4.json".into(), bytes: None, stamp: None },
+        repo: Input {
+            identity: "/project/.planning/config.v4.json".into(),
+            bytes: None,
+            stamp: None,
+        },
         effective: crate::config::merge::merge(None, Some(json!({})), false),
     }
 }
@@ -129,9 +156,15 @@ fn an_answer_is_served_only_while_everything_it_consumed_reads_the_same() {
 fn a_continuation_whose_checked_material_changed_on_recheck_is_refused() {
     let capture = captured(b"# Roadmap");
     let read = |bytes: &[u8]| -> material::Observations {
-        [("phases/5/PLAN-1.md".to_string(), material::Observation::Read(baley::store::model::digest(bytes)))].into()
+        [(
+            "phases/5/PLAN-1.md".to_string(),
+            material::Observation::Read(baley::store::model::digest(bytes)),
+        )]
+        .into()
     };
-    assert!(next_action_service::recheck_holds(&capture, &capture, &read(b"v1"), &read(b"v1")).is_ok());
+    assert!(
+        next_action_service::recheck_holds(&capture, &capture, &read(b"v1"), &read(b"v1")).is_ok()
+    );
     assert!(matches!(
         next_action_service::recheck_holds(&capture, &capture, &read(b"v1"), &read(b"v2")),
         Err(DerivationError::InputsChanged)
@@ -142,7 +175,10 @@ fn granted(id: &str, meaning: Meaning) -> Fact {
     Fact::Override(Override {
         id: id.into(),
         reason: "the operator said so".into(),
-        authorization: Authorization::Invocation { id: "invoke".into(), invocation: "pause here".into() },
+        authorization: Authorization::Invocation {
+            id: "invoke".into(),
+            invocation: "pause here".into(),
+        },
         meaning,
     })
 }
@@ -150,13 +186,20 @@ fn granted(id: &str, meaning: Meaning) -> Fact {
 const SENTENCE: &str = "verify the fix on the device";
 
 fn paused() -> Fact {
-    granted("pause", Meaning::PausedNext { sentence: SENTENCE.into() })
+    granted(
+        "pause",
+        Meaning::PausedNext {
+            sentence: SENTENCE.into(),
+        },
+    )
 }
 
 /// A store view holding `records`, oldest first, in its history and its
 /// current evidence.
 fn store(records: &[Record]) -> View {
-    let data = records.iter().fold(json!({}), |data, record| persistence::project(&data, record).unwrap());
+    let data = records.iter().fold(json!({}), |data, record| {
+        persistence::project(&data, record).unwrap()
+    });
     View {
         items: vec![],
         decisions: records
@@ -172,17 +215,25 @@ fn store(records: &[Record]) -> View {
 fn an_active_pause_offers_its_exact_sentence_for_its_phase() {
     assert_eq!(
         next_action_service::pause(&store(&[record("run", paused())])).unwrap(),
-        Some(Pause { phase: phase(5.0), next: SENTENCE.into() })
+        Some(Pause {
+            phase: phase(5.0),
+            next: SENTENCE.into()
+        })
     );
 }
 
 #[test]
 fn an_ended_native_pause_offers_no_pause() {
     for ended in [
-        Occurrence::Fulfilled { completion: "resumed".into() },
+        Occurrence::Fulfilled {
+            completion: "resumed".into(),
+        },
         Occurrence::Superseded { by: "later".into() },
     ] {
-        let view = store(&[record("run", paused()), record("run", Fact::Occurrence(ended))]);
+        let view = store(&[
+            record("run", paused()),
+            record("run", Fact::Occurrence(ended)),
+        ]);
         assert_eq!(next_action_service::pause(&view).unwrap(), None);
     }
 }
@@ -197,11 +248,9 @@ fn another_occurrences_progress_gate_and_approval_offer_no_pause() {
         disposition: Disposition::Approve,
         authorization_id: None,
     };
-    let view = store(
-        &[
-            record("other", Fact::Gate(progress(State::Unanswered))),
-            record("other", Fact::Gate(progress(State::Answered(approve)))),
-        ],
-    );
+    let view = store(&[
+        record("other", Fact::Gate(progress(State::Unanswered))),
+        record("other", Fact::Gate(progress(State::Answered(approve)))),
+    ]);
     assert_eq!(next_action_service::pause(&view).unwrap(), None);
 }

@@ -35,13 +35,26 @@ struct Tree {
 }
 
 fn tree() -> Tree {
-    Tree { paths: BTreeMap::new(), failure: None, process_dir: "/".into() }
+    Tree {
+        paths: BTreeMap::new(),
+        failure: None,
+        process_dir: "/".into(),
+    }
 }
 
 impl Tree {
     fn add(mut self, path: &str, directory: bool) -> Self {
         let identity = (1, self.paths.len() as u64 + 1);
-        self.paths.insert(path.into(), Seen { canonical: path.into(), entry: Entry { directory, identity } });
+        self.paths.insert(
+            path.into(),
+            Seen {
+                canonical: path.into(),
+                entry: Entry {
+                    directory,
+                    identity,
+                },
+            },
+        );
         self
     }
 
@@ -56,14 +69,26 @@ impl Tree {
     /// A symlink at `path` to the listed `to`.
     fn link(mut self, path: &str, to: &str) -> Self {
         let entry = self.paths[Path::new(to)].entry;
-        self.paths.insert(path.into(), Seen { canonical: to.into(), entry });
+        self.paths.insert(
+            path.into(),
+            Seen {
+                canonical: to.into(),
+                entry,
+            },
+        );
         self
     }
 
     /// A second name for the listed file `of`.
     fn hard(mut self, path: &str, of: &str) -> Self {
         let entry = self.paths[Path::new(of)].entry;
-        self.paths.insert(path.into(), Seen { canonical: path.into(), entry });
+        self.paths.insert(
+            path.into(),
+            Seen {
+                canonical: path.into(),
+                entry,
+            },
+        );
         self
     }
 
@@ -73,10 +98,16 @@ impl Tree {
     }
 
     fn seen(&self, ask: Ask, path: &Path) -> Result<&Seen> {
-        if self.failure.as_ref().is_some_and(|(failing, at)| *failing == ask && at == path) {
+        if self
+            .failure
+            .as_ref()
+            .is_some_and(|(failing, at)| *failing == ask && at == path)
+        {
             return Err(Error::from(ErrorKind::PermissionDenied));
         }
-        self.paths.get(path).ok_or_else(|| Error::from(ErrorKind::NotFound))
+        self.paths
+            .get(path)
+            .ok_or_else(|| Error::from(ErrorKind::NotFound))
     }
 }
 
@@ -90,7 +121,8 @@ impl Lookup for Tree {
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
-        self.seen(Ask::Canonicalize, path).map(|seen| seen.canonical.clone())
+        self.seen(Ask::Canonicalize, path)
+            .map(|seen| seen.canonical.clone())
     }
 
     fn absolute(&self, path: &Path) -> Result<PathBuf> {
@@ -102,13 +134,17 @@ fn event(cwd: &str, target: &str) -> Event {
     Event {
         tool_name: "Write".into(),
         cwd: cwd.into(),
-        tool_input: ToolInput { file_path: target.into() },
+        tool_input: ToolInput {
+            file_path: target.into(),
+        },
         hook_event_name: Some("PreToolUse".into()),
     }
 }
 
 fn owned(path: &str) -> std::result::Result<(), String> {
-    Err(format!("Baley owns {path}; use the native execution boundary instead of Write/Edit"))
+    Err(format!(
+        "Baley owns {path}; use the native execution boundary instead of Write/Edit"
+    ))
 }
 
 fn denied(reason: &str) -> std::result::Result<PathBuf, String> {
@@ -192,7 +228,11 @@ fn a_write_or_edit_input_that_is_not_one_readable_event_is_denied() {
         br#"{"tool_name":"Write","cwd":"/","tool_input":{"file_path":"x"}} {}"#.to_vec(),
         [br#"{"tool_name":"Write","#.as_slice(), &[0xff]].concat(),
     ] {
-        assert!(is_denied(input(&bytes)), "{}", String::from_utf8_lossy(&bytes));
+        assert!(
+            is_denied(input(&bytes)),
+            "{}",
+            String::from_utf8_lossy(&bytes)
+        );
     }
 }
 
@@ -208,7 +248,11 @@ fn a_malformed_input_for_any_other_tool_is_silent() {
         br#"{"tool_name":"Writer", oops"#,
         b"not json",
     ] {
-        assert!(matches!(input(bytes), Input::Silent), "{}", String::from_utf8_lossy(bytes));
+        assert!(
+            matches!(input(bytes), Input::Silent),
+            "{}",
+            String::from_utf8_lossy(bytes)
+        );
     }
 }
 
@@ -230,29 +274,41 @@ fn an_oversized_input_for_another_tool_is_silent() {
 
 #[test]
 fn a_bash_event_goes_to_the_bash_guard_even_when_it_names_an_owned_file() {
-    let bytes = br#"{"tool_name":"Bash","cwd":"/p","tool_input":{"file_path":".planning/state.json"}}"#;
+    let bytes =
+        br#"{"tool_name":"Bash","cwd":"/p","tool_input":{"file_path":".planning/state.json"}}"#;
     assert!(matches!(input(bytes), Input::Bash));
 }
 
 #[test]
 fn other_tools_get_no_answer() {
     for bytes in [
-        br#"{"tool_name":"Read","cwd":"/p","tool_input":{"file_path":".planning/state.json"}}"#.as_slice(),
+        br#"{"tool_name":"Read","cwd":"/p","tool_input":{"file_path":".planning/state.json"}}"#
+            .as_slice(),
         br#"{"tool_name":"Glob","tool_input":{}}"#,
         br#"{"tool_name":7,"tool_input":{}}"#,
         br#"{"tool_input":{"file_path":".planning/state.json"}}"#,
     ] {
-        assert!(matches!(input(bytes), Input::Silent), "{}", String::from_utf8_lossy(bytes));
+        assert!(
+            matches!(input(bytes), Input::Silent),
+            "{}",
+            String::from_utf8_lossy(bytes)
+        );
     }
 }
 
 #[test]
 fn a_write_edit_event_for_another_hook_is_denied() {
     let hook = |name: &str| {
-        format!(r#"{{{name}"tool_name":"Edit","cwd":"/p","tool_input":{{"file_path":"x"}}}}"#).into_bytes()
+        format!(r#"{{{name}"tool_name":"Edit","cwd":"/p","tool_input":{{"file_path":"x"}}}}"#)
+            .into_bytes()
     };
-    assert!(is_denied(input(&hook(r#""hook_event_name":"PostToolUse","#))));
-    assert!(matches!(input(&hook(r#""hook_event_name":"PreToolUse","#)), Input::WriteEdit(_)));
+    assert!(is_denied(input(&hook(
+        r#""hook_event_name":"PostToolUse","#
+    ))));
+    assert!(matches!(
+        input(&hook(r#""hook_event_name":"PreToolUse","#)),
+        Input::WriteEdit(_)
+    ));
     assert!(matches!(input(&hook("")), Input::WriteEdit(_)));
 }
 
@@ -281,9 +337,11 @@ fn a_cwd_that_is_not_an_existing_directory_is_denied() {
         resolve_target("/p", "x", &tree().file("/p")),
         denied("Write/Edit cwd is not a directory")
     );
-    assert!(resolve_target("/p", "x", &tree())
-        .unwrap_err()
-        .starts_with("cannot resolve Write/Edit cwd: "));
+    assert!(
+        resolve_target("/p", "x", &tree())
+            .unwrap_err()
+            .starts_with("cannot resolve Write/Edit cwd: ")
+    );
 }
 
 #[test]
@@ -314,9 +372,18 @@ fn dots_resolve_against_the_spelled_path_when_nothing_is_a_link() {
 #[test]
 fn a_linked_name_resolves_to_its_target() {
     let fs = configured();
-    assert_eq!(resolve_target("/p", "alias/config.v4.json", &fs), Ok("/p/.planning/config.v4.json".into()));
-    assert_eq!(resolve_target("/p", "file-alias", &fs), Ok("/p/.planning/config.v4.json".into()));
-    assert_eq!(resolve_target("/p", "alias/new.md", &fs), Ok("/p/.planning/new.md".into()));
+    assert_eq!(
+        resolve_target("/p", "alias/config.v4.json", &fs),
+        Ok("/p/.planning/config.v4.json".into())
+    );
+    assert_eq!(
+        resolve_target("/p", "file-alias", &fs),
+        Ok("/p/.planning/config.v4.json".into())
+    );
+    assert_eq!(
+        resolve_target("/p", "alias/new.md", &fs),
+        Ok("/p/.planning/new.md".into())
+    );
 }
 
 #[test]
@@ -328,9 +395,15 @@ fn a_parent_step_after_a_linked_directory_leaves_the_link_target() {
         .file("/p/config.v4.json")
         .link("/p/jump", "/p/.planning/subdir");
     let expected = Ok("/p/.planning/config.v4.json".into());
-    assert_eq!(resolve_target("/p", "jump/../config.v4.json", &fs), expected);
+    assert_eq!(
+        resolve_target("/p", "jump/../config.v4.json", &fs),
+        expected
+    );
     let fs = fs.file("/p/.planning/config.v4.json");
-    assert_eq!(resolve_target("/p", "jump/../config.v4.json", &fs), expected);
+    assert_eq!(
+        resolve_target("/p", "jump/../config.v4.json", &fs),
+        expected
+    );
 }
 
 #[test]
@@ -351,7 +424,12 @@ fn a_path_through_a_file_is_denied() {
 
 #[test]
 fn a_lookup_that_fails_other_than_missing_denies() {
-    let fs = |ask| tree().dir("/p").dir("/p/.planning").failing(ask, "/p/.planning");
+    let fs = |ask| {
+        tree()
+            .dir("/p")
+            .dir("/p/.planning")
+            .failing(ask, "/p/.planning")
+    };
     for (ask, reason) in [
         (Ask::Metadata, "cannot inspect Write/Edit parent safely: "),
         (Ask::Present, "cannot inspect Write/Edit target safely: "),
@@ -381,7 +459,10 @@ fn without_a_global_setting_home_names_the_default() {
 
 #[test]
 fn an_empty_global_setting_turns_the_global_layer_off() {
-    assert_eq!(global_setting(Some(OsString::new()), Some("/home/u".into())), None);
+    assert_eq!(
+        global_setting(Some(OsString::new()), Some("/home/u".into())),
+        None
+    );
 }
 
 #[test]
@@ -389,9 +470,15 @@ fn the_destinations_are_the_repo_config_and_the_global_setting() {
     let fs = tree().dir("/p").dir("/p/.planning").dir("/g");
     assert_eq!(
         config_destinations("/p", global(), &fs),
-        Ok(vec!["/p/.planning/config.v4.json".into(), "/g/config.v4.json".into()])
+        Ok(vec![
+            "/p/.planning/config.v4.json".into(),
+            "/g/config.v4.json".into()
+        ])
     );
-    assert_eq!(config_destinations("/p", None, &fs), Ok(vec!["/p/.planning/config.v4.json".into()]));
+    assert_eq!(
+        config_destinations("/p", None, &fs),
+        Ok(vec!["/p/.planning/config.v4.json".into()])
+    );
 }
 
 #[test]
@@ -415,7 +502,10 @@ fn a_linked_global_setting_is_its_target() {
         .link("/g/config.v4.json", "/v/active");
     assert_eq!(
         config_destinations("/p", global(), &fs),
-        Ok(vec!["/p/.planning/config.v4.json".into(), "/v/active".into()])
+        Ok(vec![
+            "/p/.planning/config.v4.json".into(),
+            "/v/active".into()
+        ])
     );
 }
 
@@ -427,7 +517,10 @@ fn a_linked_v4_file_is_its_target() {
         .dir("/u")
         .file("/u/active")
         .link("/p/.planning/config.v4.json", "/u/active");
-    assert_eq!(config_destinations("/p", None, &fs), Ok(vec!["/u/active".into()]));
+    assert_eq!(
+        config_destinations("/p", None, &fs),
+        Ok(vec!["/u/active".into()])
+    );
 }
 
 #[test]
@@ -440,23 +533,40 @@ fn one_path_is_one_destination_without_any_lookup() {
 fn two_names_of_one_file_are_one_destination() {
     let fs = configured().file("/p/other.json");
     let repo = Path::new("/p/.planning/config.v4.json");
-    assert_eq!(same_destination(Path::new("/p/hard-link"), repo, &fs), Ok(true));
-    assert_eq!(same_destination(Path::new("/p/other.json"), repo, &fs), Ok(false));
+    assert_eq!(
+        same_destination(Path::new("/p/hard-link"), repo, &fs),
+        Ok(true)
+    );
+    assert_eq!(
+        same_destination(Path::new("/p/other.json"), repo, &fs),
+        Ok(false)
+    );
 }
 
 #[test]
 fn a_missing_side_is_never_the_same_destination() {
     let fs = tree().file("/p/present");
-    assert_eq!(same_destination(Path::new("/p/present"), Path::new("/p/missing"), &fs), Ok(false));
-    assert_eq!(same_destination(Path::new("/p/missing"), Path::new("/p/gone"), &fs), Ok(false));
+    assert_eq!(
+        same_destination(Path::new("/p/present"), Path::new("/p/missing"), &fs),
+        Ok(false)
+    );
+    assert_eq!(
+        same_destination(Path::new("/p/missing"), Path::new("/p/gone"), &fs),
+        Ok(false)
+    );
 }
 
 #[test]
 fn a_failed_identity_lookup_denies() {
-    let fs = tree().file("/p/a").file("/p/b").failing(Ask::Metadata, "/p/a");
-    assert!(same_destination(Path::new("/p/a"), Path::new("/p/b"), &fs)
-        .unwrap_err()
-        .starts_with("cannot inspect config destination safely: "));
+    let fs = tree()
+        .file("/p/a")
+        .file("/p/b")
+        .failing(Ask::Metadata, "/p/a");
+    assert!(
+        same_destination(Path::new("/p/a"), Path::new("/p/b"), &fs)
+            .unwrap_err()
+            .starts_with("cannot inspect config destination safely: ")
+    );
 }
 
 #[test]
@@ -493,14 +603,30 @@ fn an_owned_output_is_denied_however_its_path_is_spelled() {
     let fs = project();
     for (cwd, target, path) in [
         ("/p", ".planning/state.json", "/p/.planning/state.json"),
-        ("/p", ".planning/phases/0007/SUMMARY.md", "/p/.planning/phases/0007/SUMMARY.md"),
-        ("/p", "./.planning/phases/6/../6/SUMMARY.md", "/p/.planning/phases/6/SUMMARY.md"),
+        (
+            "/p",
+            ".planning/phases/0007/SUMMARY.md",
+            "/p/.planning/phases/0007/SUMMARY.md",
+        ),
+        (
+            "/p",
+            "./.planning/phases/6/../6/SUMMARY.md",
+            "/p/.planning/phases/6/SUMMARY.md",
+        ),
         ("/p", ".planning\\state.json", "/p/.planning/state.json"),
         ("/p", "/p/.planning/state.json", "/p/.planning/state.json"),
-        ("/p/nested", "../.planning/state.json", "/p/.planning/state.json"),
+        (
+            "/p/nested",
+            "../.planning/state.json",
+            "/p/.planning/state.json",
+        ),
         ("/p", "planning-alias/state.json", "/p/.planning/state.json"),
     ] {
-        assert_eq!(write_edit(&event(cwd, target), None, &fs), owned(path), "{cwd} {target}");
+        assert_eq!(
+            write_edit(&event(cwd, target), None, &fs),
+            owned(path),
+            "{cwd} {target}"
+        );
     }
 }
 
@@ -513,7 +639,11 @@ fn an_unowned_target_is_allowed() {
         ".planning/phases/6/PLAN-1.md",
         "/elsewhere/outside.rs",
     ] {
-        assert_eq!(write_edit(&event("/p", target), None, &fs), Ok(()), "{target}");
+        assert_eq!(
+            write_edit(&event("/p", target), None, &fs),
+            Ok(()),
+            "{target}"
+        );
     }
 }
 
@@ -534,7 +664,11 @@ fn a_config_destination_is_denied_however_it_is_reached() {
         "global-alias/config.v4.json",
         "global-file",
     ] {
-        assert_eq!(write_edit(&event("/p", target), global(), &fs), Err(CONFIG_DENIAL.into()), "{target}");
+        assert_eq!(
+            write_edit(&event("/p", target), global(), &fs),
+            Err(CONFIG_DENIAL.into()),
+            "{target}"
+        );
     }
 }
 
@@ -546,8 +680,16 @@ fn a_config_destination_that_does_not_exist_yet_is_denied() {
         .dir("/g")
         .link("/p/alias", "/p/.planning")
         .link("/p/global-alias", "/g");
-    for target in [".planning/config.v4.json", "alias/config.v4.json", "global-alias/config.v4.json"] {
-        assert_eq!(write_edit(&event("/p", target), global(), &fs), Err(CONFIG_DENIAL.into()), "{target}");
+    for target in [
+        ".planning/config.v4.json",
+        "alias/config.v4.json",
+        "global-alias/config.v4.json",
+    ] {
+        assert_eq!(
+            write_edit(&event("/p", target), global(), &fs),
+            Err(CONFIG_DENIAL.into()),
+            "{target}"
+        );
     }
 }
 
@@ -559,8 +701,15 @@ fn a_config_name_outside_both_destinations_is_allowed() {
         .dir("/server-project")
         .dir("/server-project/.planning")
         .file("/server-project/.planning/config.v4.json");
-    for target in ["../u/config.v4.json", "../server-project/.planning/config.v4.json"] {
-        assert_eq!(write_edit(&event("/p", target), global(), &fs), Ok(()), "{target}");
+    for target in [
+        "../u/config.v4.json",
+        "../server-project/.planning/config.v4.json",
+    ] {
+        assert_eq!(
+            write_edit(&event("/p", target), global(), &fs),
+            Ok(()),
+            "{target}"
+        );
     }
 }
 
@@ -570,5 +719,8 @@ fn the_native_spelling_is_judged_before_the_backslash_spelling() {
         .dir("/p/raw")
         .file("/p/raw/alias")
         .hard("/p/raw\\alias", "/p/.planning/config.v4.json");
-    assert_eq!(write_edit(&event("/p", "raw\\alias"), global(), &fs), Err(CONFIG_DENIAL.into()));
+    assert_eq!(
+        write_edit(&event("/p", "raw\\alias"), global(), &fs),
+        Err(CONFIG_DENIAL.into())
+    );
 }

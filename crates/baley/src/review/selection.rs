@@ -227,13 +227,28 @@ pub struct Refusal {
 }
 
 fn required(kind: Kind, missing: &str) -> Refusal {
-    Refusal { code: "review-target-required", reason: format!("{} needs {}; supply {missing}", kind.alias().trim_start_matches("bal-").trim_end_matches("-review"), kind.hint()) }
+    Refusal {
+        code: "review-target-required",
+        reason: format!(
+            "{} needs {}; supply {missing}",
+            kind.alias()
+                .trim_start_matches("bal-")
+                .trim_end_matches("-review"),
+            kind.hint()
+        ),
+    }
 }
 fn ambiguous(reason: String) -> Refusal {
-    Refusal { code: "review-target-ambiguous", reason }
+    Refusal {
+        code: "review-target-ambiguous",
+        reason,
+    }
 }
 fn unresolvable(reason: String) -> Refusal {
-    Refusal { code: "review-target-unresolvable", reason }
+    Refusal {
+        code: "review-target-unresolvable",
+        reason,
+    }
 }
 
 /// One retained source: where it came from, its one-based line span and digest.
@@ -262,10 +277,16 @@ pub struct Selected {
 pub fn command_kind(command: &str, arguments: &[String]) -> Result<(Kind, Vec<String>), Refusal> {
     if command == CANONICAL {
         let Some(first) = arguments.first() else {
-            return Err(Refusal { code: "review-kind-required", reason: "bal-review needs a kind first: decision, minimalism or plan".into() });
+            return Err(Refusal {
+                code: "review-kind-required",
+                reason: "bal-review needs a kind first: decision, minimalism or plan".into(),
+            });
         };
         let Some(kind) = Kind::parse(first) else {
-            return Err(Refusal { code: "review-kind-unknown", reason: format!("{first} is not a review kind; use decision, minimalism or plan") });
+            return Err(Refusal {
+                code: "review-kind-unknown",
+                reason: format!("{first} is not a review kind; use decision, minimalism or plan"),
+            });
         };
         return Ok((kind, arguments[1..].to_vec()));
     }
@@ -274,7 +295,12 @@ pub fn command_kind(command: &str, arguments: &[String]) -> Result<(Kind, Vec<St
             return Ok((kind, arguments.to_vec()));
         }
     }
-    Err(Refusal { code: "review-command-unknown", reason: format!("{command} is not a review command; use bal-review or one of its aliases bal-decision-review, bal-minimalism-review, bal-plan-review") })
+    Err(Refusal {
+        code: "review-command-unknown",
+        reason: format!(
+            "{command} is not a review command; use bal-review or one of its aliases bal-decision-review, bal-minimalism-review, bal-plan-review"
+        ),
+    })
 }
 
 fn line_count(bytes: &[u8]) -> u64 {
@@ -282,7 +308,12 @@ fn line_count(bytes: &[u8]) -> u64 {
 }
 
 fn material(label: &str, path: &str, bytes: &[u8]) -> Material {
-    Material { label: label.into(), path: path.into(), lines: [1, line_count(bytes)], digest: digest(bytes) }
+    Material {
+        label: label.into(),
+        path: path.into(),
+        lines: [1, line_count(bytes)],
+        digest: digest(bytes),
+    }
 }
 
 fn read_file(source: &mut impl MaterialIo, path: &str) -> Result<Option<Vec<u8>>, Refusal> {
@@ -297,28 +328,55 @@ fn read_file(source: &mut impl MaterialIo, path: &str) -> Result<Option<Vec<u8>>
 /// lines, with the one-based line span. Two bullets with the id are ambiguous.
 pub fn decision_lines(document: &[u8], id: &str) -> Result<([u64; 2], Vec<u8>), Refusal> {
     let lines: Vec<&[u8]> = document.split_inclusive(|b| *b == b'\n').collect();
-    let heads: Vec<usize> = lines.iter().enumerate().filter(|(_, line)| {
-        let Ok(text) = std::str::from_utf8(line) else { return false };
-        let text = text.trim_start();
-        let Some(rest) = text.strip_prefix("- ").or_else(|| text.strip_prefix("* ")) else { return false };
-        let rest = rest.trim_start();
-        let rest = rest.strip_prefix("**").unwrap_or(rest);
-        let Some(after) = rest.strip_prefix(id) else { return false };
-        matches!(after.chars().next(), None | Some('.' | ':' | '(' | ' ' | '*' | '\n' | '\r' | '\t'))
-    }).map(|(index, _)| index).collect();
+    let heads: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            let Ok(text) = std::str::from_utf8(line) else {
+                return false;
+            };
+            let text = text.trim_start();
+            let Some(rest) = text.strip_prefix("- ").or_else(|| text.strip_prefix("* ")) else {
+                return false;
+            };
+            let rest = rest.trim_start();
+            let rest = rest.strip_prefix("**").unwrap_or(rest);
+            let Some(after) = rest.strip_prefix(id) else {
+                return false;
+            };
+            matches!(
+                after.chars().next(),
+                None | Some('.' | ':' | '(' | ' ' | '*' | '\n' | '\r' | '\t')
+            )
+        })
+        .map(|(index, _)| index)
+        .collect();
     match heads.as_slice() {
-        [] => Err(unresolvable(format!("{id} is not a decision bullet in the document"))),
+        [] => Err(unresolvable(format!(
+            "{id} is not a decision bullet in the document"
+        ))),
         [head] => {
             let mut end = *head;
             while end + 1 < lines.len() {
                 let next = lines[end + 1];
                 let text = std::str::from_utf8(next).unwrap_or_default();
-                if text.trim().is_empty() || !text.starts_with([' ', '\t']) { break }
+                if text.trim().is_empty() || !text.starts_with([' ', '\t']) {
+                    break;
+                }
                 end += 1;
             }
-            Ok(([*head as u64 + 1, end as u64 + 1], lines[*head..=end].concat()))
+            Ok((
+                [*head as u64 + 1, end as u64 + 1],
+                lines[*head..=end].concat(),
+            ))
         }
-        many => Err(ambiguous(format!("{id} is declared more than once, at lines {}", many.iter().map(|i| (i + 1).to_string()).collect::<Vec<_>>().join(" and ")))),
+        many => Err(ambiguous(format!(
+            "{id} is declared more than once, at lines {}",
+            many.iter()
+                .map(|i| (i + 1).to_string())
+                .collect::<Vec<_>>()
+                .join(" and ")
+        ))),
     }
 }
 
@@ -328,14 +386,31 @@ fn directory_members(source: &mut impl MaterialIo, path: &str) -> Result<Vec<Str
     let mut pending = vec![String::new()];
     let mut files = std::collections::BTreeSet::new();
     while let Some(relative) = pending.pop() {
-        let full = if relative.is_empty() { path.to_owned() } else { format!("{path}/{relative}") };
-        let observed = source.members(&full).map_err(|e| unresolvable(format!("{full}: {e}")))?;
+        let full = if relative.is_empty() {
+            path.to_owned()
+        } else {
+            format!("{path}/{relative}")
+        };
+        let observed = source
+            .members(&full)
+            .map_err(|e| unresolvable(format!("{full}: {e}")))?;
         for member in observed.members {
-            let child = if relative.is_empty() { member.name.clone() } else { format!("{relative}/{}", member.name) };
+            let child = if relative.is_empty() {
+                member.name.clone()
+            } else {
+                format!("{relative}/{}", member.name)
+            };
             match member.kind {
-                NodeKind::File => { files.insert(child); }
+                NodeKind::File => {
+                    files.insert(child);
+                }
                 NodeKind::Directory => pending.push(child),
-                NodeKind::Symlink | NodeKind::Special => return Err(unresolvable(format!("{full}/{}: unsupported directory node", member.name))),
+                NodeKind::Symlink | NodeKind::Special => {
+                    return Err(unresolvable(format!(
+                        "{full}/{}: unsupported directory node",
+                        member.name
+                    )));
+                }
             }
         }
     }
@@ -346,35 +421,56 @@ fn directory_members(source: &mut impl MaterialIo, path: &str) -> Result<Vec<Str
 /// the last closed task's completion commit. No history, no range.
 pub fn phase_range(data: &Value, phase: u32) -> Result<(String, String), Refusal> {
     use baley::execution::history::{self, Event};
-    let records = history::records(data, phase).map_err(|e| unresolvable(format!("phase {phase}: {e}")))?;
-    let base = records.iter().find_map(|r| match &r.request.event { Event::Attempt { base_commit, .. } => Some(base_commit.clone()), _ => None });
-    let head = records.iter().rev().find_map(|r| match &r.request.event { Event::Close(proof) => Some(proof.submission.completion.clone()), _ => None });
+    let records =
+        history::records(data, phase).map_err(|e| unresolvable(format!("phase {phase}: {e}")))?;
+    let base = records.iter().find_map(|r| match &r.request.event {
+        Event::Attempt { base_commit, .. } => Some(base_commit.clone()),
+        _ => None,
+    });
+    let head = records.iter().rev().find_map(|r| match &r.request.event {
+        Event::Close(proof) => Some(proof.submission.completion.clone()),
+        _ => None,
+    });
     match (base, head) {
         (Some(base), Some(head)) => Ok((base, head)),
-        _ => Err(unresolvable(format!("phase {phase} has no closed native execution to bound a committed range"))),
+        _ => Err(unresolvable(format!(
+            "phase {phase} has no closed native execution to bound a committed range"
+        ))),
     }
 }
 
 /// The phase's approved locked context and every native plan slice, each as
 /// its exact installed bytes; a missing or drifted projection refuses.
-pub fn plan_material(data: &Value, phase: u32, source: &mut impl MaterialIo) -> Result<Vec<(String, String, Vec<u8>)>, Refusal> {
-    let context = baley::context::persistence::saved(data, phase).map_err(|e| unresolvable(e.to_string()))?
+pub fn plan_material(
+    data: &Value,
+    phase: u32,
+    source: &mut impl MaterialIo,
+) -> Result<Vec<(String, String, Vec<u8>)>, Refusal> {
+    let context = baley::context::persistence::saved(data, phase)
+        .map_err(|e| unresolvable(e.to_string()))?
         .ok_or_else(|| unresolvable(format!("phase {phase} has no native approved context")))?;
-    let occurrence = baley::plan::persistence::saved(data, phase).map_err(|e| unresolvable(e.to_string()))?
+    let occurrence = baley::plan::persistence::saved(data, phase)
+        .map_err(|e| unresolvable(e.to_string()))?
         .filter(|o| !o.publications.is_empty())
         .ok_or_else(|| unresolvable(format!("phase {phase} has no native plan publication")))?;
     let mut entries = Vec::new();
     let context_path = format!(".planning/phases/{phase}/CONTEXT.md");
-    let bytes = read_file(source, &context_path)?.ok_or_else(|| unresolvable(format!("{context_path} is absent")))?;
+    let bytes = read_file(source, &context_path)?
+        .ok_or_else(|| unresolvable(format!("{context_path} is absent")))?;
     if bytes != baley::context::render::document(&context).into_bytes() {
-        return Err(unresolvable(format!("{context_path} differs from the approved context")));
+        return Err(unresolvable(format!(
+            "{context_path} differs from the approved context"
+        )));
     }
     entries.push(("locked-context".to_owned(), context_path, bytes));
     for (number, publication) in &occurrence.publications {
         let path = format!(".planning/phases/{phase}/PLAN-{number}.md");
-        let bytes = read_file(source, &path)?.ok_or_else(|| unresolvable(format!("{path} is absent")))?;
+        let bytes =
+            read_file(source, &path)?.ok_or_else(|| unresolvable(format!("{path} is absent")))?;
         if digest(&bytes) != publication.revision {
-            return Err(unresolvable(format!("{path} differs from its native publication")));
+            return Err(unresolvable(format!(
+                "{path} differs from its native publication"
+            )));
         }
         entries.push(("plan".to_owned(), path, bytes));
     }
@@ -382,86 +478,200 @@ pub fn plan_material(data: &Value, phase: u32, source: &mut impl MaterialIo) -> 
 }
 
 fn phase_of_path(path: &str) -> Option<u32> {
-    path.split('/').collect::<Vec<_>>().windows(2)
+    path.split('/')
+        .collect::<Vec<_>>()
+        .windows(2)
         .find(|pair| pair[0] == "phases")
         .and_then(|pair| pair[1].parse::<u32>().ok().filter(|n| *n > 0))
 }
 
-fn finish(kind: Kind, target: Target, decision: Option<DecisionMaterial>, selection: Option<Value>, material: Vec<Material>, phase: Option<u32>) -> Selected {
+fn finish(
+    kind: Kind,
+    target: Target,
+    decision: Option<DecisionMaterial>,
+    selection: Option<Value>,
+    material: Vec<Material>,
+    phase: Option<u32>,
+) -> Selected {
     let identity = json!({"kind":kind,"target":target,"material":material.iter().map(|m| (&m.label, &m.path, &m.digest)).collect::<Vec<_>>()});
     let discriminator = digest(&serde_json::to_vec(&identity).expect("selection identity"));
-    Selected { kind, target, decision, selection, material, phase, discriminator }
+    Selected {
+        kind,
+        target,
+        decision,
+        selection,
+        material,
+        phase,
+        discriminator,
+    }
 }
 
 /// Resolve one explicit selection against the real files and the snapshot.
-pub fn select(command: &str, arguments: &[String], source: &mut impl MaterialIo, data: &Value) -> Result<Selected, Refusal> {
+pub fn select(
+    command: &str,
+    arguments: &[String],
+    source: &mut impl MaterialIo,
+    data: &Value,
+) -> Result<Selected, Refusal> {
     let (kind, arguments) = command_kind(command, arguments)?;
     match kind {
         Kind::Decision => {
-            let (document, id) = match arguments.as_slice() {
-                [] => return Err(required(kind, "the document path and the decision id")),
-                [_] => return Err(required(kind, "the decision id after the document: <decision-id>")),
-                [document, id] => (document, id),
-                _ => return Err(ambiguous("a decision selection names one document and one decision id; nothing else".into())),
-            };
-            let bytes = read_file(source, document)?.ok_or_else(|| unresolvable(format!("{document} does not exist")))?;
+            let (document, id) =
+                match arguments.as_slice() {
+                    [] => return Err(required(kind, "the document path and the decision id")),
+                    [_] => {
+                        return Err(required(
+                            kind,
+                            "the decision id after the document: <decision-id>",
+                        ));
+                    }
+                    [document, id] => (document, id),
+                    _ => return Err(ambiguous(
+                        "a decision selection names one document and one decision id; nothing else"
+                            .into(),
+                    )),
+                };
+            let bytes = read_file(source, document)?
+                .ok_or_else(|| unresolvable(format!("{document} does not exist")))?;
             let (lines, text) = decision_lines(&bytes, id)?;
-            let text = String::from_utf8(text).map_err(|_| unresolvable(format!("{document}: {id} is not UTF-8 text")))?;
-            let context = String::from_utf8(bytes.clone()).map_err(|_| unresolvable(format!("{document} is not UTF-8 text")))?;
+            let text = String::from_utf8(text)
+                .map_err(|_| unresolvable(format!("{document}: {id} is not UTF-8 text")))?;
+            let context = String::from_utf8(bytes.clone())
+                .map_err(|_| unresolvable(format!("{document} is not UTF-8 text")))?;
             let selection = json!({"kind":"decision","document":document,"digest":digest(&bytes),"lines":lines});
             let material = vec![
-                Material { label: "decision".into(), path: document.clone(), lines, digest: digest(text.as_bytes()) },
+                Material {
+                    label: "decision".into(),
+                    path: document.clone(),
+                    lines,
+                    digest: digest(text.as_bytes()),
+                },
                 material("context", document, &bytes),
             ];
-            Ok(finish(kind, Target::Decision { selected: id.clone(), context_entries: vec![document.clone()] },
-                Some(DecisionMaterial { decision: id.clone(), text, context }), Some(selection), material, phase_of_path(document)))
+            Ok(finish(
+                kind,
+                Target::Decision {
+                    selected: id.clone(),
+                    context_entries: vec![document.clone()],
+                },
+                Some(DecisionMaterial {
+                    decision: id.clone(),
+                    text,
+                    context,
+                }),
+                Some(selection),
+                material,
+                phase_of_path(document),
+            ))
         }
         Kind::Minimalism => {
-            let token = match arguments.as_slice() {
-                [] => return Err(required(kind, "one file, directory or phase")),
-                [token] => token,
-                _ => return Err(ambiguous("a minimalism selection names one file, directory or phase; nothing else".into())),
-            };
+            let token =
+                match arguments.as_slice() {
+                    [] => return Err(required(kind, "one file, directory or phase")),
+                    [token] => token,
+                    _ => return Err(ambiguous(
+                        "a minimalism selection names one file, directory or phase; nothing else"
+                            .into(),
+                    )),
+                };
             let (explicit, name) = match token.split_once(':') {
                 Some((prefix @ ("file" | "dir" | "phase"), rest)) => (Some(prefix), rest),
                 _ => (None, token.as_str()),
             };
             let mut candidates: Vec<(&str, String)> = Vec::new();
-            if explicit.is_none_or(|p| p == "phase") && !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
+            if explicit.is_none_or(|p| p == "phase")
+                && !name.is_empty()
+                && name.bytes().all(|b| b.is_ascii_digit())
+            {
                 candidates.push(("phase", name.to_owned()));
             }
-            if explicit.is_none_or(|p| p == "file") && source.read(name).ok().is_some_and(|o| o.bytes.is_some()) {
+            if explicit.is_none_or(|p| p == "file")
+                && source.read(name).ok().is_some_and(|o| o.bytes.is_some())
+            {
                 candidates.push(("file", name.to_owned()));
             }
             if explicit.is_none_or(|p| p == "dir") && source.members(name).is_ok() {
                 candidates.push(("dir", name.to_owned()));
             }
             let (class, name) = match candidates.as_slice() {
-                [] => return Err(unresolvable(format!("{token} is not a file, a directory or a native phase in this project"))),
+                [] => {
+                    return Err(unresolvable(format!(
+                        "{token} is not a file, a directory or a native phase in this project"
+                    )));
+                }
                 [one] => one.clone(),
-                many => return Err(ambiguous(format!("{token} resolves to more than one target ({}); select one with {}", many.iter().map(|(c, _)| *c).collect::<Vec<_>>().join(", "),
-                    many.iter().map(|(c, n)| format!("{c}:{n}")).collect::<Vec<_>>().join(" or ")))),
+                many => {
+                    return Err(ambiguous(format!(
+                        "{token} resolves to more than one target ({}); select one with {}",
+                        many.iter().map(|(c, _)| *c).collect::<Vec<_>>().join(", "),
+                        many.iter()
+                            .map(|(c, n)| format!("{c}:{n}"))
+                            .collect::<Vec<_>>()
+                            .join(" or ")
+                    )));
+                }
             };
             match class {
                 "file" => {
-                    let bytes = read_file(source, &name)?.ok_or_else(|| unresolvable(format!("{name} does not exist")))?;
-                    Ok(finish(kind, Target::NamedFile { path: name.clone(), head: None }, None, None, vec![material("file", &name, &bytes)], phase_of_path(&name)))
+                    let bytes = read_file(source, &name)?
+                        .ok_or_else(|| unresolvable(format!("{name} does not exist")))?;
+                    Ok(finish(
+                        kind,
+                        Target::NamedFile {
+                            path: name.clone(),
+                            head: None,
+                        },
+                        None,
+                        None,
+                        vec![material("file", &name, &bytes)],
+                        phase_of_path(&name),
+                    ))
                 }
                 "dir" => {
                     let members = directory_members(source, &name)?;
                     let mut material_rows = Vec::new();
                     for member in &members {
                         let path = format!("{name}/{member}");
-                        let bytes = read_file(source, &path)?.ok_or_else(|| unresolvable(format!("{path} vanished during selection")))?;
+                        let bytes = read_file(source, &path)?.ok_or_else(|| {
+                            unresolvable(format!("{path} vanished during selection"))
+                        })?;
                         material_rows.push(material("member", &path, &bytes));
                     }
-                    Ok(finish(kind, Target::Directory { path: name, members }, None, None, material_rows, None))
+                    Ok(finish(
+                        kind,
+                        Target::Directory {
+                            path: name,
+                            members,
+                        },
+                        None,
+                        None,
+                        material_rows,
+                        None,
+                    ))
                 }
                 _ => {
-                    let phase: u32 = name.parse().ok().filter(|n| *n > 0).ok_or_else(|| unresolvable(format!("{name} is not a positive phase number")))?;
+                    let phase: u32 = name.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
+                        unresolvable(format!("{name} is not a positive phase number"))
+                    })?;
                     let (base, head) = phase_range(data, phase)?;
-                    let material_rows = vec![Material { label: "range".into(), path: format!("{base}..{head}"), lines: [0, 0], digest: digest(format!("{base}..{head}").as_bytes()) }];
-                    Ok(finish(kind, Target::PhaseRange { phase: phase.to_string(), base, head }, None, None, material_rows, Some(phase)))
+                    let material_rows = vec![Material {
+                        label: "range".into(),
+                        path: format!("{base}..{head}"),
+                        lines: [0, 0],
+                        digest: digest(format!("{base}..{head}").as_bytes()),
+                    }];
+                    Ok(finish(
+                        kind,
+                        Target::PhaseRange {
+                            phase: phase.to_string(),
+                            base,
+                            head,
+                        },
+                        None,
+                        None,
+                        material_rows,
+                        Some(phase),
+                    ))
                 }
             }
         }
@@ -469,23 +679,56 @@ pub fn select(command: &str, arguments: &[String], source: &mut impl MaterialIo,
             let token = match arguments.as_slice() {
                 [] => return Err(required(kind, "one phase number or one plan document path")),
                 [token] => token,
-                _ => return Err(ambiguous("a plan selection names one phase or one plan path; nothing else".into())),
+                _ => {
+                    return Err(ambiguous(
+                        "a plan selection names one phase or one plan path; nothing else".into(),
+                    ));
+                }
             };
             let numeric = !token.is_empty() && token.bytes().all(|b| b.is_ascii_digit());
             let exists = source.read(token).ok().is_some_and(|o| o.bytes.is_some());
             match (numeric, exists) {
-                (true, true) => Err(ambiguous(format!("{token} is both a phase number and a file; rename the file or select the plan by its document path"))),
+                (true, true) => Err(ambiguous(format!(
+                    "{token} is both a phase number and a file; rename the file or select the plan by its document path"
+                ))),
                 (true, false) => {
-                    let phase: u32 = token.parse().ok().filter(|n| *n > 0).ok_or_else(|| unresolvable(format!("{token} is not a positive phase number")))?;
+                    let phase: u32 = token.parse().ok().filter(|n| *n > 0).ok_or_else(|| {
+                        unresolvable(format!("{token} is not a positive phase number"))
+                    })?;
                     let entries = plan_material(data, phase, source)?;
-                    let material_rows = entries.iter().map(|(label, path, bytes)| material(label, path, bytes)).collect();
-                    Ok(finish(kind, Target::InlineText { label: format!("plan:{phase}") }, None, None, material_rows, Some(phase)))
+                    let material_rows = entries
+                        .iter()
+                        .map(|(label, path, bytes)| material(label, path, bytes))
+                        .collect();
+                    Ok(finish(
+                        kind,
+                        Target::InlineText {
+                            label: format!("plan:{phase}"),
+                        },
+                        None,
+                        None,
+                        material_rows,
+                        Some(phase),
+                    ))
                 }
                 (false, true) => {
-                    let bytes = read_file(source, token)?.ok_or_else(|| unresolvable(format!("{token} does not exist")))?;
-                    Ok(finish(kind, Target::NamedFile { path: token.clone(), head: None }, None, None, vec![material("plan", token, &bytes)], phase_of_path(token)))
+                    let bytes = read_file(source, token)?
+                        .ok_or_else(|| unresolvable(format!("{token} does not exist")))?;
+                    Ok(finish(
+                        kind,
+                        Target::NamedFile {
+                            path: token.clone(),
+                            head: None,
+                        },
+                        None,
+                        None,
+                        vec![material("plan", token, &bytes)],
+                        phase_of_path(token),
+                    ))
                 }
-                (false, false) => Err(unresolvable(format!("{token} is neither a phase number nor an existing plan document"))),
+                (false, false) => Err(unresolvable(format!(
+                    "{token} is neither a phase number nor an existing plan document"
+                ))),
             }
         }
     }

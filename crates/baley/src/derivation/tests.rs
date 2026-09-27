@@ -27,10 +27,16 @@ fn captured(text: &str) -> CapturedInputs {
 fn without_native_authority_plan_files_alone_decide_planned() {
     let mut capture = captured("## Phases\n- [ ] **Phase 1: One**");
     let phase = &derive(&capture).unwrap().phases[0];
-    assert_eq!((phase.status, &phase.uat), (LifecycleStatus::Unplanned, &None));
+    assert_eq!(
+        (phase.status, &phase.uat),
+        (LifecycleStatus::Unplanned, &None)
+    );
     capture.phases[0].plans = Observation::Present(vec!["PLAN-1.md".into()]);
     let phase = &derive(&capture).unwrap().phases[0];
-    assert_eq!((phase.status, &phase.uat), (LifecycleStatus::Planned, &None));
+    assert_eq!(
+        (phase.status, &phase.uat),
+        (LifecycleStatus::Planned, &None)
+    );
 }
 
 #[test]
@@ -63,8 +69,18 @@ fn ac1_failures_cannot_derive_success() {
 /// completion with one met truth.
 fn complete(address: &str) -> AcceptanceOverlay {
     let mut overlay = AcceptanceOverlay::default();
-    overlay.phases.insert(address.into(), AcceptancePhase { published: true, executed: true,
-        completion: Some("c".into()), label: Some("complete".into()), met: 1, waived: 0, disagreement: None });
+    overlay.phases.insert(
+        address.into(),
+        AcceptancePhase {
+            published: true,
+            executed: true,
+            completion: Some("c".into()),
+            label: Some("complete".into()),
+            met: 1,
+            waived: 0,
+            disagreement: None,
+        },
+    );
     overlay
 }
 
@@ -93,7 +109,10 @@ fn ac2_current_follows_list_order_not_number() {
                 .collect::<Vec<_>>(),
             order.map(f64::from)
         );
-        assert_eq!(derive(&capture).unwrap().current, Some(PhaseId(f64::from(order[0]))));
+        assert_eq!(
+            derive(&capture).unwrap().current,
+            Some(PhaseId(f64::from(order[0])))
+        );
     }
 }
 
@@ -370,7 +389,11 @@ fn ac6_conflicts_both_checkbox_directions() {
             "## Phases\n- [{}] **Phase 3: Three**",
             if checked { "x" } else { " " }
         ));
-        let overlay = if checked { AcceptanceOverlay::default() } else { complete("3") };
+        let overlay = if checked {
+            AcceptanceOverlay::default()
+        } else {
+            complete("3")
+        };
         let answer = derive_with(&capture, &overlay).unwrap();
         let result = check_consistency(validate_inputs(&capture).unwrap(), &answer);
         let declared = checked.to_string();
@@ -397,7 +420,11 @@ fn ac6_conflicts_both_checkbox_directions() {
 /// A checked answer over one unticked phase 3, and the memo it would publish.
 fn checked_with_memo() -> (RecheckedLifecycle, LifecycleMemo) {
     let temp = tempfile::tempdir().unwrap();
-    std::fs::write(temp.path().join("ROADMAP.md"), "## Phases\n- [ ] **Phase 3: Three**").unwrap();
+    std::fs::write(
+        temp.path().join("ROADMAP.md"),
+        "## Phases\n- [ ] **Phase 3: Three**",
+    )
+    .unwrap();
     let checked = query(temp.path(), &mut ArtifactFiles).unwrap();
     let key = input_key_with(checked.capture(), checked.overlay()).unwrap();
     let memo = LifecycleMemo::fresh(key, checked.answer().clone());
@@ -411,15 +438,28 @@ fn installing_the_memo_keeps_unrelated_data_and_the_namespace() {
     let installed = checked.with_memo(&original, &memo).unwrap();
     assert_eq!(installed["unrelated"], original["unrelated"]);
     assert_eq!(installed["derivation"]["extension"], true);
-    assert_eq!(installed["derivation"]["memo"], serde_json::to_value(&memo).unwrap());
+    assert_eq!(
+        installed["derivation"]["memo"],
+        serde_json::to_value(&memo).unwrap()
+    );
 }
 
 #[test]
 fn installing_the_memo_into_empty_data_creates_only_the_derivation_namespace() {
     let (checked, memo) = checked_with_memo();
     let installed = checked.with_memo(&serde_json::Value::Null, &memo).unwrap();
-    assert_eq!(installed.as_object().unwrap().keys().collect::<Vec<_>>(), ["derivation"]);
-    assert_eq!(installed["derivation"].as_object().unwrap().keys().collect::<Vec<_>>(), ["memo"]);
+    assert_eq!(
+        installed.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["derivation"]
+    );
+    assert_eq!(
+        installed["derivation"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        ["memo"]
+    );
 }
 
 #[test]
@@ -431,7 +471,11 @@ fn a_malformed_derivation_namespace_is_refused_rather_than_overwritten() {
         serde_json::json!({"derivation":null}),
         serde_json::json!({"derivation":[]}),
     ] {
-        assert_eq!(checked.with_memo(&data, &memo).unwrap_err().code(), "derivation-conflict", "{data}");
+        assert_eq!(
+            checked.with_memo(&data, &memo).unwrap_err().code(),
+            "derivation-conflict",
+            "{data}"
+        );
     }
 }
 
@@ -820,12 +864,30 @@ fn each_io_error_is_the_failure_category_it_names_and_keeps_its_path() {
     use std::io::{Error, ErrorKind};
     let path = std::path::Path::new("/planning/phases/1/UAT.md");
     for (error, category) in [
-        (Error::from_raw_os_error(libc::ELOOP), InputFailureCategory::SymlinkLoop),
-        (Error::from_raw_os_error(libc::ENAMETOOLONG), InputFailureCategory::InvalidPath),
-        (Error::from(ErrorKind::InvalidInput), InputFailureCategory::InvalidPath),
-        (Error::from(ErrorKind::PermissionDenied), InputFailureCategory::PermissionDenied),
-        (Error::from(ErrorKind::NotADirectory), InputFailureCategory::NotDirectory),
-        (Error::other("artifact is not a regular readable file"), InputFailureCategory::OtherIo),
+        (
+            Error::from_raw_os_error(libc::ELOOP),
+            InputFailureCategory::SymlinkLoop,
+        ),
+        (
+            Error::from_raw_os_error(libc::ENAMETOOLONG),
+            InputFailureCategory::InvalidPath,
+        ),
+        (
+            Error::from(ErrorKind::InvalidInput),
+            InputFailureCategory::InvalidPath,
+        ),
+        (
+            Error::from(ErrorKind::PermissionDenied),
+            InputFailureCategory::PermissionDenied,
+        ),
+        (
+            Error::from(ErrorKind::NotADirectory),
+            InputFailureCategory::NotDirectory,
+        ),
+        (
+            Error::other("artifact is not a regular readable file"),
+            InputFailureCategory::OtherIo,
+        ),
     ] {
         let failure = capture::failure(path, error);
         assert_eq!((failure.path.as_path(), failure.category), (path, category));
@@ -837,7 +899,10 @@ fn not_found_is_absent_and_no_other_error_is_ever_taken_for_absence() {
     use std::io::{Error, ErrorKind};
     let path = std::path::Path::new("/planning/phases/1/SUMMARY.md");
     assert_eq!(capture::observation(path, Ok(())), Observation::Present(()));
-    assert_eq!(capture::observation::<()>(path, Err(Error::from(ErrorKind::NotFound))), Observation::Absent);
+    assert_eq!(
+        capture::observation::<()>(path, Err(Error::from(ErrorKind::NotFound))),
+        Observation::Absent
+    );
     assert!(matches!(
         capture::observation::<()>(path, Err(Error::from(ErrorKind::PermissionDenied))),
         Observation::Failed(failure) if failure.category == InputFailureCategory::PermissionDenied
@@ -849,7 +914,17 @@ fn only_plan_dash_ascii_digits_md_are_plans() {
     for name in ["PLAN-1.md", "PLAN-02.md", "PLAN-123.md"] {
         assert!(capture::admitted(name), "{name}");
     }
-    for name in ["PLAN.md", "plan.md", "PLAN-.md", "PLAN-1a.md", "PLAN-١.md", "PLAN-1.md.bak", "PLAN-1.MD", "PLAN-1", "SUMMARY.md"] {
+    for name in [
+        "PLAN.md",
+        "plan.md",
+        "PLAN-.md",
+        "PLAN-1a.md",
+        "PLAN-١.md",
+        "PLAN-1.md.bak",
+        "PLAN-1.MD",
+        "PLAN-1",
+        "SUMMARY.md",
+    ] {
         assert!(!capture::admitted(name), "{name}");
     }
 }
@@ -863,7 +938,11 @@ fn a_root_is_normalized_from_its_text_dropping_dot_and_popping_dot_dot() {
         ("/project/.planning/phases/..", "/project/.planning"),
         ("/..", "/"),
     ] {
-        assert_eq!(capture::normalize(Path::new(selected)), PathBuf::from(normalized), "{selected}");
+        assert_eq!(
+            capture::normalize(Path::new(selected)),
+            PathBuf::from(normalized),
+            "{selected}"
+        );
     }
 }
 
@@ -872,5 +951,8 @@ fn the_first_disagreeing_entry_is_refused_even_when_two_entries_share_an_address
     let capture = captured("## Phases\n- [ ] **Phase 3.0: First**\n- [x] **Phase 3: Second**");
     let answer = derive(&capture).unwrap();
     let result = check_consistency(validate_inputs(&capture).unwrap(), &answer);
-    assert!(conflict_only(&result, "ROADMAP.md:3 entry 1", "complete", "true", "false"), "{result:?}");
+    assert!(
+        conflict_only(&result, "ROADMAP.md:3 entry 1", "complete", "true", "false"),
+        "{result:?}"
+    );
 }

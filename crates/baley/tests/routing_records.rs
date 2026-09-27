@@ -89,7 +89,11 @@ fn routed_builder_binds_the_literal_model_agent_and_config_input_to_identity() {
             build_routed_dispatch(&plan(), &"2".repeat(64), 0, &"3".repeat(40), route).unwrap();
         let choice = &answer.route.as_ref().unwrap().choice;
         assert_eq!(
-            (choice.agent.as_str(), choice.model.as_deref(), answer.policy.rung),
+            (
+                choice.agent.as_str(),
+                choice.model.as_deref(),
+                answer.policy.rung
+            ),
             (
                 agent,
                 model,
@@ -101,13 +105,18 @@ fn routed_builder_binds_the_literal_model_agent_and_config_input_to_identity() {
             )
         );
         // The identity binds the route: no two different routes share one.
-        assert!(ids.insert(answer.id), "two different routes share an identity");
+        assert!(
+            ids.insert(answer.id),
+            "two different routes share an identity"
+        );
     }
 }
 
 #[test]
 fn routing_decision_returns_the_exact_record_without_observed_effort_or_receipt() {
-    let written = routing_decision(&dispatch(), Some(1_700_000_000)).unwrap().unwrap();
+    let written = routing_decision(&dispatch(), Some(1_700_000_000))
+        .unwrap()
+        .unwrap();
     assert_eq!(written.at, Some(1_700_000_000), "{written:?}");
     assert_eq!(undated(written), record());
 }
@@ -146,14 +155,17 @@ fn routing_validation_rejects_mismatched_evidence() {
 
 #[test]
 fn dispatch_envelope_has_an_independently_encoded_exact_digest() {
-    let answer = PreparedAnswer::new(baley::envelope::Envelope::Ok(Success::dispatch(&dispatch())))
+    let answer = PreparedAnswer::new(baley::envelope::Envelope::Ok(
+        Success::dispatch(&dispatch()),
+    ))
     .unwrap();
     assert_eq!(
         answer.receipt,
         Receipt::Dispatch {
             dispatch_id: DISPATCH_ID.into(),
             prompt_bytes: None,
-            prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into()
+            prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+                .into()
         }
     );
 }
@@ -243,10 +255,7 @@ impl baley::config::reload::ConfigIo for SuppliedConfig {
     fn identity(&mut self, path: &std::path::Path) -> baley::store::Result<std::path::PathBuf> {
         Ok(path.into())
     }
-    fn read(
-        &mut self,
-        _: &std::path::Path,
-    ) -> baley::store::Result<baley::config::reload::Input> {
+    fn read(&mut self, _: &std::path::Path) -> baley::store::Result<baley::config::reload::Input> {
         self.0.clone()
     }
 }
@@ -349,9 +358,7 @@ fn final_reload_preserves_failed_io_refusal() {
             repo: "/project/config.json".into(),
             global: None,
         },
-        SuppliedConfig(Err(baley::store::Error::Io(
-            "injected read denial".into(),
-        ))),
+        SuppliedConfig(Err(baley::store::Error::Io("injected read denial".into()))),
     );
     assert_eq!(
         reload.refresh_expected(&route.inputs),
@@ -444,7 +451,8 @@ fn admission() -> baley::store::writer::Operation {
             receipt: Receipt::Dispatch {
                 dispatch_id: DISPATCH_ID.into(),
                 prompt_bytes: None,
-                prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into(),
+                prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+                    .into(),
             },
             lease_refusal: None,
             located: None,
@@ -553,12 +561,24 @@ fn pending_unit(defect: &str, installed: usize) -> (Vec<u8>, Current, Vec<u8>, V
     )
     .unwrap();
     let mut current = Current::from([
-        ("items.jsonl".to_owned(), observed(b"", "items.jsonl before")),
-        ("decisions.jsonl".to_owned(), observed(b"", "decisions.jsonl before")),
-        ("state.json".to_owned(), observed(EMPTY_STATE, "state.json before")),
+        (
+            "items.jsonl".to_owned(),
+            observed(b"", "items.jsonl before"),
+        ),
+        (
+            "decisions.jsonl".to_owned(),
+            observed(b"", "decisions.jsonl before"),
+        ),
+        (
+            "state.json".to_owned(),
+            observed(EMPTY_STATE, "state.json before"),
+        ),
     ]);
     if installed >= 1 {
-        current.insert("decisions.jsonl".into(), observed(&decisions, "decisions.jsonl after"));
+        current.insert(
+            "decisions.jsonl".into(),
+            observed(&decisions, "decisions.jsonl after"),
+        );
     }
     if installed >= 2 {
         current.insert("state.json".into(), observed(&state, "state.json after"));
@@ -572,8 +592,12 @@ fn recovery_returns_the_exact_unit_from_independent_interruption_states() {
     use baley::store::transaction::{Pending, recovery};
     for installed in [0, 1, 2] {
         let (intent, current, decisions, state) = pending_unit("valid", installed);
-        let unit = recovery(Pending::parse(&intent).unwrap(), &current, &mut Recorded::new())
-            .unwrap();
+        let unit = recovery(
+            Pending::parse(&intent).unwrap(),
+            &current,
+            &mut Recorded::new(),
+        )
+        .unwrap();
         assert_eq!(
             unit.participants()
                 .iter()
@@ -606,8 +630,12 @@ fn recovery_refuses_semantically_incomplete_units_even_with_recomputed_digests()
     ] {
         let (intent, current, _, _) = pending_unit(defect, 0);
         assert_eq!(
-            recovery(Pending::parse(&intent).unwrap(), &current, &mut Recorded::new())
-                .map(|_| ()),
+            recovery(
+                Pending::parse(&intent).unwrap(),
+                &current,
+                &mut Recorded::new()
+            )
+            .map(|_| ()),
             Err(Error::Invalid(
                 "dispatch lacks its exact routing decision".into()
             )),
@@ -800,7 +828,8 @@ fn each_new_admission_returns_the_exact_saved_choice_and_missing_host_evidence()
         decision.receipt = Receipt::Dispatch {
             dispatch_id: case.id.into(),
             prompt_bytes: None,
-            prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d".into(),
+            prompt_digest: "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+                .into(),
         };
         let mut next = View {
             snapshot: serde_json::from_slice(EMPTY_STATE).unwrap(),
@@ -849,17 +878,31 @@ fn each_new_admission_returns_the_exact_saved_choice_and_missing_host_evidence()
 
 #[test]
 fn changed_content_under_a_recorded_operation_id_is_refused() {
-    use baley::store::{Error, model::digest, writer::{Operation, boundary_operation}};
-    let Operation::BoundaryV1 { operation_id, decision, change, .. } = admission() else {
+    use baley::store::{
+        Error,
+        model::digest,
+        writer::{Operation, boundary_operation},
+    };
+    let Operation::BoundaryV1 {
+        operation_id,
+        decision,
+        change,
+        ..
+    } = admission()
+    else {
         unreachable!()
     };
-    let recorded = boundary_operation(&Default::default(), &operation_id, &decision, &change).unwrap().unwrap();
+    let recorded = boundary_operation(&Default::default(), &operation_id, &decision, &change)
+        .unwrap()
+        .unwrap();
     let confirmed = std::collections::BTreeMap::from([(operation_id.clone(), recorded)]);
     let mut changed = decision.clone();
     changed.request_digest = digest(b"another request");
     assert_eq!(
         boundary_operation(&confirmed, &operation_id, &changed, &change),
-        Err(Error::Conflict("operation identity reused for different content".into()))
+        Err(Error::Conflict(
+            "operation identity reused for different content".into()
+        ))
     );
 }
 
@@ -889,8 +932,14 @@ fn routed_dispatch() -> baley::execution::model::ActiveDispatch {
 
 /// The prompt as specified, section by section, with `lease` as the lease
 /// paragraph when there is one.
-fn specified_prompt(dispatch: &baley::execution::model::ActiveDispatch, schema: &Value, lease: &str) -> String {
-    let operational = serde_json::to_string_pretty(&baley::execution::render::prompt_operational(dispatch)).unwrap();
+fn specified_prompt(
+    dispatch: &baley::execution::model::ActiveDispatch,
+    schema: &Value,
+    lease: &str,
+) -> String {
+    let operational =
+        serde_json::to_string_pretty(&baley::execution::render::prompt_operational(dispatch))
+            .unwrap();
     format!(
         "Baley native execution dispatch\n\nOperational input:\n{operational}\n\nExecutor patch schema:\n{}\n\nInstructions:\n{}\n\n\
 Complete tasks in listed order. Use one distinct signed commit per completed task. Run each task's exact verification commands and the suite. \
@@ -926,4 +975,3 @@ undeclared necessary file requires an operator planning correction; changing the
         specified_prompt(&dispatch, &schema, lease)
     );
 }
-

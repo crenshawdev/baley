@@ -74,7 +74,12 @@ pub struct Input {
 fn selection(role: &str, leaf: &str, stored: &Option<Stored>) -> Selection {
     match stored {
         Some(stored) => Selection {
-            kind: if stored.value.is_null() { "reset" } else { "role" }.into(),
+            kind: if stored.value.is_null() {
+                "reset"
+            } else {
+                "role"
+            }
+            .into(),
             key: stored.key.clone(),
             layer: stored.layer.clone(),
             stored: Some(stored.value.clone()),
@@ -82,7 +87,12 @@ fn selection(role: &str, leaf: &str, stored: &Option<Stored>) -> Selection {
         None => Selection {
             kind: "absent".into(),
             key: format!("roles.{role}.{leaf}"),
-            layer: if leaf == "model" { "session" } else { "defaults" }.into(),
+            layer: if leaf == "model" {
+                "session"
+            } else {
+                "defaults"
+            }
+            .into(),
             stored: None,
         },
     }

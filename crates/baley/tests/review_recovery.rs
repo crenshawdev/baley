@@ -20,7 +20,9 @@ fn records(review: Value) -> Value {
 fn interrupted(review: Value) -> Value {
     match recovery::decide_recovery(records(review), "a1", &mut FixedClock).unwrap() {
         recovery::Recovery::Interrupt { recovered, .. } => serde_json::to_value(recovered).unwrap(),
-        recovery::Recovery::Settled(recovered) => panic!("an in-flight attempt was left as {recovered:?}"),
+        recovery::Recovery::Settled(recovered) => {
+            panic!("an in-flight attempt was left as {recovered:?}")
+        }
     }
 }
 #[test]
@@ -106,18 +108,32 @@ fn saved_under(validator: &str) -> (Value, Value) {
 #[test]
 fn an_h4_original_yields_its_saved_findings_exactly() {
     let (review, input) = saved_under("H4-1");
-    let parsed = originals::saved_original(&review, "o1").unwrap().parsed.unwrap();
-    assert_eq!(serde_json::to_value(parsed.findings).unwrap(), input["parsed"]["findings"]);
+    let parsed = originals::saved_original(&review, "o1")
+        .unwrap()
+        .parsed
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(parsed.findings).unwrap(),
+        input["parsed"]["findings"]
+    );
 }
 #[test]
 fn an_original_under_another_contract_yields_no_findings() {
     let (review, _) = saved_under("historical-unknown");
-    assert!(originals::saved_original(&review, "o1").unwrap().parsed.is_none());
+    assert!(
+        originals::saved_original(&review, "o1")
+            .unwrap()
+            .parsed
+            .is_none()
+    );
 }
 #[test]
 fn reading_an_original_returns_its_exact_saved_raw_bytes() {
     let input = original_fixture()["Q"].clone();
     let saved: Vec<u8> = serde_json::from_value(input["raw"].clone()).unwrap();
     let review = records(json!({"schema":"review-1","originals":{"o1":input}}));
-    assert_eq!(originals::original_read(&review, "o1").unwrap().raw_bytes, saved);
+    assert_eq!(
+        originals::original_read(&review, "o1").unwrap().raw_bytes,
+        saved
+    );
 }

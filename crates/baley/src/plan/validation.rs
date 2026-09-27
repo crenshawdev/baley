@@ -44,20 +44,28 @@ fn replacement_inner(
         }
         let identity = format!("phase {phase} plan {number}");
         let authorized = entry.replacement.as_ref().filter(|a| {
-            a.target == entry.target && a.content == entry.content
-                && (preview || (a.approved
-                    && a.owner.as_ref().is_some_and(|s| !s.trim().is_empty())
-                    && a.at.as_ref().is_some_and(|s| !s.trim().is_empty())))
+            a.target == entry.target
+                && a.content == entry.content
+                && (preview
+                    || (a.approved
+                        && a.owner.as_ref().is_some_and(|s| !s.trim().is_empty())
+                        && a.at.as_ref().is_some_and(|s| !s.trim().is_empty())))
         });
         let initial = approval.is_some_and(|a| super::persistence::approve(submission, a).is_ok());
         let Some(authorized) = authorized.filter(|_| preview || initial) else {
-            return Err(Error::Invalid(format!("replacement-authorization: {identity} needs exact identified owner approval of target, old revision/bytes and new content")));
+            return Err(Error::Invalid(format!(
+                "replacement-authorization: {identity} needs exact identified owner approval of target, old revision/bytes and new content"
+            )));
         };
         if admitted(data, phase, number)? {
-            return Err(Error::Conflict(format!("admitted-plan: {identity} was admitted to execution; publish additional work at a new approved gap identity")));
+            return Err(Error::Conflict(format!(
+                "admitted-plan: {identity} was admitted to execution; publish additional work at a new approved gap identity"
+            )));
         }
         let Some(old) = saved.as_ref().and_then(|o| o.publications.get(&number)) else {
-            return Err(Error::Conflict(format!("legacy-read-only: {identity} has no eligible native publication; legacy inputs and consumed numbers require a new gap identity")));
+            return Err(Error::Conflict(format!(
+                "legacy-read-only: {identity} has no eligible native publication; legacy inputs and consumed numbers require a new gap identity"
+            )));
         };
         let bytes = super::render::document(&old.content)?;
         let path = format!("phases/{phase}/PLAN-{number}.md");
@@ -65,54 +73,80 @@ fn replacement_inner(
             || authorized.old_document.as_bytes() != bytes
             || inventory.documents.get(&path).map(String::as_bytes) != Some(bytes.as_slice())
         {
-            return Err(Error::Conflict(format!("stale-target: {identity} old revision or bytes changed; read the target and obtain fresh approval")));
+            return Err(Error::Conflict(format!(
+                "stale-target: {identity} old revision or bytes changed; read the target and obtain fresh approval"
+            )));
         }
     }
     Ok(())
 }
 
 pub fn admitted(data: &serde_json::Value, phase: u32, plan: u32) -> baley::store::Result<bool> {
-    if baley::execution::admission::records(data,phase)?.iter()
-        .any(|r|r.request.contract.plans.iter().any(|p|p.plan==plan)) {return Ok(true)}
-    let Some(execution) = data.get("execution") else { return Ok(false) };
-    let execution: baley::execution::model::ExecutionSnapshot = serde_json::from_value(execution.clone())?;
-    Ok(execution.occurrences.values().filter(|o| o.phase == phase).any(|o| {
-        o.active.as_ref().is_some_and(|a| a.plan == plan)
-            || o.plans.iter().any(|p| p.plan == plan)
-            || o.receipts.values().any(|r| r.outcome.plan == plan)
-    }))
+    if baley::execution::admission::records(data, phase)?
+        .iter()
+        .any(|r| r.request.contract.plans.iter().any(|p| p.plan == plan))
+    {
+        return Ok(true);
+    }
+    let Some(execution) = data.get("execution") else {
+        return Ok(false);
+    };
+    let execution: baley::execution::model::ExecutionSnapshot =
+        serde_json::from_value(execution.clone())?;
+    Ok(execution
+        .occurrences
+        .values()
+        .filter(|o| o.phase == phase)
+        .any(|o| {
+            o.active.as_ref().is_some_and(|a| a.plan == plan)
+                || o.plans.iter().any(|p| p.plan == plan)
+                || o.receipts.values().any(|r| r.outcome.plan == plan)
+        }))
 }
 
 /// The typed-content rule on the raw request (D-178): no body, no execution,
 /// every task path declared. It runs after replay has had its chance, so a
 /// request acknowledged before phase 32 still answers its receipt.
 pub fn typed_content(raw: &serde_json::Value) -> Option<Answer> {
-    let phase = raw["submission"]["phase"].as_u64().and_then(|value| u32::try_from(value).ok());
+    let phase = raw["submission"]["phase"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok());
     if let Some(plans) = raw["submission"]["plans"].as_array() {
         for (entry, plan) in plans.iter().enumerate() {
             let content = &plan["content"];
             if content.get("body").is_some() {
                 return Some(super::model::typed_refused(
-                    format!("submission.plans[{entry}].content.body"), phase, Some(entry),
+                    format!("submission.plans[{entry}].content.body"),
+                    phase,
+                    Some(entry),
                     "plan authoring accepts typed pieces and the binary renders the body",
                 ));
             }
             if content.get("execution").is_some() {
                 return Some(super::model::typed_refused(
-                    format!("submission.plans[{entry}].content.execution"), phase, Some(entry),
+                    format!("submission.plans[{entry}].content.execution"),
+                    phase,
+                    Some(entry),
                     "execution is derived from suite and typed task verify commands",
                 ));
             }
-            let files = content["files"].as_array().into_iter().flatten()
-                .filter_map(serde_json::Value::as_str).collect::<std::collections::BTreeSet<_>>();
+            let files = content["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<std::collections::BTreeSet<_>>();
             if let Some(tasks) = content["tasks"].as_array() {
                 for (task, value) in tasks.iter().enumerate() {
                     if let Some(task_files) = value["files"].as_array() {
                         for (file, path) in task_files.iter().enumerate() {
                             if path.as_str().is_some_and(|path| !files.contains(path)) {
                                 return Some(super::model::typed_refused(
-                                    format!("submission.plans[{entry}].content.tasks[{task}].files[{file}]"),
-                                    phase, Some(entry),
+                                    format!(
+                                        "submission.plans[{entry}].content.tasks[{task}].files[{file}]"
+                                    ),
+                                    phase,
+                                    Some(entry),
                                     "every task path must be declared in content.files",
                                 ));
                             }

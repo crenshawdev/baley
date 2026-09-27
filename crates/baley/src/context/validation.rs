@@ -4,7 +4,9 @@ use serde_json::Value;
 
 pub fn validate(raw: &Value) -> Option<Answer> {
     if raw.get("submission").is_none()
-        && raw["approval"]["submission_digest"].as_str().is_some_and(|value| !value.is_empty())
+        && raw["approval"]["submission_digest"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
     {
         return None;
     }

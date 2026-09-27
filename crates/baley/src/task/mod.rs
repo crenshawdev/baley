@@ -72,7 +72,8 @@ pub struct Range {
 }
 
 fn text(bytes: &[u8]) -> Result<String> {
-    String::from_utf8(bytes.to_vec()).map_err(|_| Error::Invalid("git answered non-UTF-8 text".into()))
+    String::from_utf8(bytes.to_vec())
+        .map_err(|_| Error::Invalid("git answered non-UTF-8 text".into()))
 }
 
 fn path_text(path: &Path) -> Result<String> {
@@ -86,19 +87,71 @@ fn path_text(path: &Path) -> Result<String> {
 pub fn observe_range(project: &Path, start: &str, process: &mut dyn Process) -> Result<Range> {
     let head = git::resolve_commit(project, "HEAD", process)?;
     if head == start {
-        return Ok(Range { head, commits: Vec::new(), files: Vec::new(), material: None, diff: Vec::new(), diff_paths: Vec::new() });
+        return Ok(Range {
+            head,
+            commits: Vec::new(),
+            files: Vec::new(),
+            material: None,
+            diff: Vec::new(),
+            diff_paths: Vec::new(),
+        });
     }
-    let material = MaterialIdentity::Committed { base_id: start.to_owned(), head_id: head.clone() };
-    let log = git::run(project, ["log", "--reverse", "--format=%H%x00%s", "--end-of-options", &format!("{start}..{head}")], process)?;
+    let material = MaterialIdentity::Committed {
+        base_id: start.to_owned(),
+        head_id: head.clone(),
+    };
+    let log = git::run(
+        project,
+        [
+            "log",
+            "--reverse",
+            "--format=%H%x00%s",
+            "--end-of-options",
+            &format!("{start}..{head}"),
+        ],
+        process,
+    )?;
     let mut commits = Vec::new();
     for line in text(&log)?.lines().filter(|line| !line.is_empty()) {
-        let (id, subject) = line.split_once('\0').ok_or_else(|| Error::Invalid("malformed git log record".into()))?;
-        let names = git::run(project, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--root", "--end-of-options", id], process)?;
-        let files = names.split(|byte| *byte == 0).filter(|name| !name.is_empty())
-            .map(text).collect::<Result<Vec<_>>>()?;
-        commits.push(model::Commit { id: id.to_owned(), subject: subject.to_owned(), files });
+        let (id, subject) = line
+            .split_once('\0')
+            .ok_or_else(|| Error::Invalid("malformed git log record".into()))?;
+        let names = git::run(
+            project,
+            [
+                "diff-tree",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                "-z",
+                "--root",
+                "--end-of-options",
+                id,
+            ],
+            process,
+        )?;
+        let files = names
+            .split(|byte| *byte == 0)
+            .filter(|name| !name.is_empty())
+            .map(text)
+            .collect::<Result<Vec<_>>>()?;
+        commits.push(model::Commit {
+            id: id.to_owned(),
+            subject: subject.to_owned(),
+            files,
+        });
     }
     let diff = git::diff(project, &material, process)?;
-    let files = git::changed_paths(project, &material, process)?.iter().map(|path| path_text(path)).collect::<Result<Vec<_>>>()?;
-    Ok(Range { head, commits, files, material: Some(material), diff: diff.body, diff_paths: diff.paths })
+    let files = git::changed_paths(project, &material, process)?
+        .iter()
+        .map(|path| path_text(path))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Range {
+        head,
+        commits,
+        files,
+        material: Some(material),
+        diff: diff.body,
+        diff_paths: diff.paths,
+    })
 }

@@ -23,16 +23,43 @@ pub struct DocumentRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum DocumentIdentity {
-    ReviewEntry { attempt: String, entry: String },
-    Dispatch { id: String },
-    RunOutput { phase: NonZeroU32, run: String },
-    VerificationAttempt { phase: NonZeroU32, attempt: String },
-    PlanDraft { phase: NonZeroU32, plan: NonZeroU32, digest: String },
-    ContextDraft { phase: NonZeroU32, digest: String },
-    PhaseContext { phase: NonZeroU32 },
-    PhasePlan { phase: NonZeroU32, plan: NonZeroU32 },
-    PhaseRoadmapRow { phase: NonZeroU32 },
-    TaskRecord { slug: String },
+    ReviewEntry {
+        attempt: String,
+        entry: String,
+    },
+    Dispatch {
+        id: String,
+    },
+    RunOutput {
+        phase: NonZeroU32,
+        run: String,
+    },
+    VerificationAttempt {
+        phase: NonZeroU32,
+        attempt: String,
+    },
+    PlanDraft {
+        phase: NonZeroU32,
+        plan: NonZeroU32,
+        digest: String,
+    },
+    ContextDraft {
+        phase: NonZeroU32,
+        digest: String,
+    },
+    PhaseContext {
+        phase: NonZeroU32,
+    },
+    PhasePlan {
+        phase: NonZeroU32,
+        plan: NonZeroU32,
+    },
+    PhaseRoadmapRow {
+        phase: NonZeroU32,
+    },
+    TaskRecord {
+        slug: String,
+    },
     TaskSummary {
         phase: NonZeroU32,
         occurrence: String,
@@ -45,5 +72,7 @@ pub enum DocumentIdentity {
         first_turn: String,
         last_turn: String,
     },
-    CodexRollout { session_id: String },
+    CodexRollout {
+        session_id: String,
+    },
 }

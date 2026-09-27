@@ -137,7 +137,10 @@ impl DecisionRecord {
     /// unchanged.
     #[must_use]
     pub fn unstamped(&self) -> Self {
-        Self { at: None, ..self.clone() }
+        Self {
+            at: None,
+            ..self.clone()
+        }
     }
 }
 
@@ -150,7 +153,10 @@ pub fn retained(records: &[DecisionRecord], record: &DecisionRecord) -> bool {
 /// validator rebuilt, so the comparison that follows is over everything else.
 /// Nothing else is copied: a length or content difference still fails it.
 pub fn adopt_stamps(expected: &mut [DecisionRecord], rendered: &[u8]) -> Result<()> {
-    for (record, observed) in expected.iter_mut().zip(parse_lines::<DecisionRecord>(rendered)?) {
+    for (record, observed) in expected
+        .iter_mut()
+        .zip(parse_lines::<DecisionRecord>(rendered)?)
+    {
         record.at = observed.at;
     }
     Ok(())
@@ -178,10 +184,12 @@ pub fn digest(bytes: &[u8]) -> String {
 /// Lowercase hex of a digest. sha2 0.11's output type has no `LowerHex`.
 pub fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
-    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
-        let _ = write!(out, "{byte:02x}");
-        out
-    })
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
 }
 
 impl Snapshot {
@@ -210,7 +218,13 @@ impl Snapshot {
     /// the content is serialized once with an empty integrity, digested, and
     /// the digest is written into that same rendering. `integrity` is the
     /// last field, so the rendering ends with it (GH-261).
-    pub fn sealed(generation: u64, items: &[u8], decisions: &[u8], data: Value, operations: BTreeMap<String, String>) -> Result<(Self, Vec<u8>)> {
+    pub fn sealed(
+        generation: u64,
+        items: &[u8],
+        decisions: &[u8],
+        data: Value,
+        operations: BTreeMap<String, String>,
+    ) -> Result<(Self, Vec<u8>)> {
         let mut snapshot = Self {
             version: VERSION,
             generation,
@@ -224,7 +238,9 @@ impl Snapshot {
         let mut rendered = snapshot.render()?;
         const TAIL: &[u8] = b",\"integrity\":\"\"}";
         if !rendered.ends_with(TAIL) {
-            return Err(Error::Invalid("snapshot rendering does not end with its integrity".into()));
+            return Err(Error::Invalid(
+                "snapshot rendering does not end with its integrity".into(),
+            ));
         }
         snapshot.integrity = digest(&rendered);
         rendered.truncate(rendered.len() - 2);
@@ -355,7 +371,9 @@ pub fn validate_decisions(records: &[DecisionRecord]) -> Result<()> {
             }
             let (count, terminal) = scopes.entry(&value.boundary.scope).or_insert((0, false));
             if !value.boundary.is_native_refusal()
-                && (*terminal || (value.terminal && *count != 256) || (!value.terminal && *count >= 256))
+                && (*terminal
+                    || (value.terminal && *count != 256)
+                    || (!value.terminal && *count >= 256))
             {
                 return Err(Error::Invalid("invalid boundary budget history".into()));
             }
@@ -394,7 +412,9 @@ pub fn validate_decisions(records: &[DecisionRecord]) -> Result<()> {
                 || subject_id
                     .as_ref()
                     .is_some_and(|value| value.trim().is_empty())
-                || prompt_digest.as_ref().is_some_and(|value| !is_digest(value))
+                || prompt_digest
+                    .as_ref()
+                    .is_some_and(|value| !is_digest(value))
                 || *terminal != (outcome == "log-bound"))
         {
             return Err(Error::Invalid("invalid boundary decision".into()));
@@ -478,11 +498,24 @@ mod tests {
         let mut operations = BTreeMap::new();
         operations.insert("op".to_owned(), "f".repeat(64));
         let data = serde_json::json!({"phase": {"integrity": ""}, "text": "\"integrity\":\"\"}"});
-        let (sealed, rendered) = Snapshot::sealed(7, b"items\n", b"decisions\n", data.clone(), operations.clone()).unwrap();
-        let stepped = Snapshot::new(7, b"items\n", b"decisions\n", data).unwrap().with_operations(operations).unwrap();
+        let (sealed, rendered) = Snapshot::sealed(
+            7,
+            b"items\n",
+            b"decisions\n",
+            data.clone(),
+            operations.clone(),
+        )
+        .unwrap();
+        let stepped = Snapshot::new(7, b"items\n", b"decisions\n", data)
+            .unwrap()
+            .with_operations(operations)
+            .unwrap();
         assert_eq!(sealed, stepped);
         assert_eq!(rendered, stepped.render().unwrap());
-        assert_eq!(Snapshot::parse(&rendered, b"items\n", b"decisions\n").unwrap(), sealed);
+        assert_eq!(
+            Snapshot::parse(&rendered, b"items\n", b"decisions\n").unwrap(),
+            sealed
+        );
     }
 
     #[test]
@@ -535,6 +568,9 @@ mod tests {
 
     #[test]
     fn digest_is_the_lowercase_hex_sha256() {
-        assert_eq!(digest(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(
+            digest(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 }

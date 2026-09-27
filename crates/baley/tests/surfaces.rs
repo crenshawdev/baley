@@ -25,10 +25,17 @@ fn categories(report: &Report) -> Vec<&str> {
 }
 /// A walk that saw exactly `seen` under a root.
 fn walked(seen: Vec<Seen>) -> Walk {
-    Walk { root: "/project".into(), seen: Ok(seen) }
+    Walk {
+        root: "/project".into(),
+        seen: Ok(seen),
+    }
 }
 fn file(name: &str) -> Seen {
-    Seen::Entry { name: name.into(), label: name.into(), kind: Kind::File }
+    Seen::Entry {
+        name: name.into(),
+        label: name.into(),
+        kind: Kind::File,
+    }
 }
 fn manifest(name: &str, text: Result<&str, &str>) -> Seen {
     Seen::Manifest {
@@ -40,7 +47,11 @@ fn manifest(name: &str, text: Result<&str, &str>) -> Seen {
 /// An entry named by the last part of its path relative to the root.
 fn entry(label: &str, kind: Kind) -> Seen {
     let name = label.rsplit('/').next().unwrap();
-    Seen::Entry { name: name.into(), label: label.into(), kind }
+    Seen::Entry {
+        name: name.into(),
+        label: label.into(),
+        kind,
+    }
 }
 /// What a walk lists for a project with source, credentials and a proto at
 /// the root, a database directory, a nested package, every skipped tree, and
@@ -91,7 +102,8 @@ fn each_manifest_family_extracts_dependency_names_without_metadata_or_substrings
             vec!["secrets", "untrusted_input"],
         ),
     ] {
-        let report = surfaces::judge(&walked(vec![file(name), manifest(name, Ok(text))]), &[]).unwrap();
+        let report =
+            surfaces::judge(&walked(vec![file(name), manifest(name, Ok(text))]), &[]).unwrap();
         assert!(report.warnings.is_empty(), "{report:?}");
         assert_eq!(categories(&report), expected, "{name}");
     }
@@ -157,12 +169,27 @@ fn a_manifest_dependency_adds_its_category() {
 }
 #[test]
 fn root_refuses_but_child_and_manifest_failures_warn_and_retain_evidence() {
-    let refused = Walk { root: "/project".into(), seen: Err("permission denied".into()) };
-    assert!(surfaces::judge(&refused, &[]).unwrap_err().to_string().contains("no-root"));
+    let refused = Walk {
+        root: "/project".into(),
+        seen: Err("permission denied".into()),
+    };
+    assert!(
+        surfaces::judge(&refused, &[])
+            .unwrap_err()
+            .to_string()
+            .contains("no-root")
+    );
     let report = surfaces::judge(
         &walked(vec![
-            Seen::Entry { name: "auth".into(), label: "auth".into(), kind: Kind::Directory },
-            Seen::Unlisted { dir: "auth".into(), error: "permission denied".into() },
+            Seen::Entry {
+                name: "auth".into(),
+                label: "auth".into(),
+                kind: Kind::Directory,
+            },
+            Seen::Unlisted {
+                dir: "auth".into(),
+                error: "permission denied".into(),
+            },
             file("package.json"),
             manifest("package.json", Ok("{")),
             file("requirements.txt"),

@@ -1,21 +1,37 @@
 //! Shared verified store views. Metadata checks never acquire ownership or recover
 //! an intent; a cold read verifies the exact bytes before publishing its view.
-use super::{Error, Result, model::{self, Snapshot}, writer::View};
-use std::{collections::VecDeque, path::{Path, PathBuf}, sync::{Arc, Mutex, OnceLock}};
+use super::{
+    Error, Result,
+    model::{self, Snapshot},
+    writer::View,
+};
 use std::os::unix::fs::MetadataExt;
+use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity(Vec<Option<(FileIdentity, FileIdentity)>>);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FileIdentity {
-    device: u64, inode: u64, length: u64,
-    modified: (i64, i64), changed: (i64, i64),
+    device: u64,
+    inode: u64,
+    length: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
 }
 impl FileIdentity {
     pub(crate) fn new(m: &std::fs::Metadata) -> Self {
-        Self { device: m.dev(), inode: m.ino(), length: m.len(),
-            modified: (m.mtime(), m.mtime_nsec()), changed: (m.ctime(), m.ctime_nsec()) }
+        Self {
+            device: m.dev(),
+            inode: m.ino(),
+            length: m.len(),
+            modified: (m.mtime(), m.mtime_nsec()),
+            changed: (m.ctime(), m.ctime_nsec()),
+        }
     }
 }
 
@@ -27,16 +43,24 @@ pub fn identity(root: &Path) -> Result<Identity> {
             Ok(link) => {
                 let target = std::fs::metadata(&path)?;
                 if !name.is_empty() {
-                    crate::acquisition::permit(&path.to_string_lossy(), crate::acquisition::Class::Store, target.len())
-                        .map_err(crate::acquisition::store_error)?;
+                    crate::acquisition::permit(
+                        &path.to_string_lossy(),
+                        crate::acquisition::Class::Store,
+                        target.len(),
+                    )
+                    .map_err(crate::acquisition::store_error)?;
                 }
                 let normalize = |m: &std::fs::Metadata| {
                     let mut identity = FileIdentity::new(m);
-                    if name.is_empty() { identity.length = 0; identity.modified = (0, 0); identity.changed = (0, 0); }
+                    if name.is_empty() {
+                        identity.length = 0;
+                        identity.modified = (0, 0);
+                        identity.changed = (0, 0);
+                    }
                     identity
                 };
                 Some((normalize(&link), normalize(&target)))
-            },
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e.into()),
         });
@@ -44,7 +68,11 @@ pub fn identity(root: &Path) -> Result<Identity> {
     Ok(Identity(files))
 }
 
-struct Entry { root: PathBuf, identity: Identity, view: Arc<View> }
+struct Entry {
+    root: PathBuf,
+    identity: Identity,
+    view: Arc<View>,
+}
 
 /// The views kept for recently read stores, least recently used first.
 #[derive(Default)]
@@ -76,8 +104,14 @@ impl Views {
         if identity.0[1].is_none() {
             return;
         }
-        while self.0.len() >= Self::KEPT { self.0.pop_front(); }
-        self.0.push_back(Entry { root, identity, view });
+        while self.0.len() >= Self::KEPT {
+            self.0.pop_front();
+        }
+        self.0.push_back(Entry {
+            root,
+            identity,
+            view,
+        });
     }
 
     pub(crate) fn forget(&mut self, root: &Path) {
@@ -87,7 +121,10 @@ impl Views {
 
 static VIEWS: OnceLock<Mutex<Views>> = OnceLock::new();
 fn views() -> std::sync::MutexGuard<'static, Views> {
-    VIEWS.get_or_init(Mutex::default).lock().unwrap_or_else(|e| e.into_inner())
+    VIEWS
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 /// A snapshot handle borrows the writer's view without copying its JSON tree.
@@ -95,7 +132,9 @@ fn views() -> std::sync::MutexGuard<'static, Views> {
 pub struct SharedSnapshot(pub Arc<View>);
 impl std::ops::Deref for SharedSnapshot {
     type Target = Snapshot;
-    fn deref(&self) -> &Snapshot { &self.0.snapshot }
+    fn deref(&self) -> &Snapshot {
+        &self.0.snapshot
+    }
 }
 
 pub fn invalidate(root: &Path) {
@@ -115,15 +154,24 @@ pub fn read(root: &Path) -> Result<Option<SharedSnapshot>> {
     if let Some(view) = views().reuse(&root, &before) {
         return Ok(Some(SharedSnapshot(view)));
     }
-    let bytes = match crate::acquisition::read(&root.join(model::STATE), crate::acquisition::Class::Store) {
+    let bytes = match crate::acquisition::read(
+        &root.join(model::STATE),
+        crate::acquisition::Class::Store,
+    ) {
         Ok(bytes) => bytes,
-        Err(crate::acquisition::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(crate::acquisition::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(None);
+        }
         Err(e) => return Err(crate::acquisition::store_error(e)),
     };
-    let items = crate::acquisition::read(&root.join(model::ITEMS), crate::acquisition::Class::Store)
-        .map_err(crate::acquisition::store_error)?;
-    let decisions = crate::acquisition::read(&root.join(model::DECISIONS), crate::acquisition::Class::Store)
-        .map_err(crate::acquisition::store_error)?;
+    let items =
+        crate::acquisition::read(&root.join(model::ITEMS), crate::acquisition::Class::Store)
+            .map_err(crate::acquisition::store_error)?;
+    let decisions = crate::acquisition::read(
+        &root.join(model::DECISIONS),
+        crate::acquisition::Class::Store,
+    )
+    .map_err(crate::acquisition::store_error)?;
     #[cfg(test)]
     crate::context::persistence::READ_PARSES.with(|count| count.set(count.get() + 1));
     let snapshot = Snapshot::parse(&bytes, &items, &decisions)?;
@@ -132,9 +180,15 @@ pub fn read(root: &Path) -> Result<Option<SharedSnapshot>> {
     model::validate_items(&items)?;
     model::validate_decisions(&decisions)?;
     if identity(&root)? != before {
-        return Err(Error::Conflict("store changed while reading snapshot".into()));
+        return Err(Error::Conflict(
+            "store changed while reading snapshot".into(),
+        ));
     }
-    let view = Arc::new(View { snapshot, items, decisions });
+    let view = Arc::new(View {
+        snapshot,
+        items,
+        decisions,
+    });
     publish(&root, before, view.clone())?;
     Ok(Some(SharedSnapshot(view)))
 }
@@ -144,7 +198,13 @@ mod tests {
     use super::*;
 
     fn file(inode: u64) -> Option<(FileIdentity, FileIdentity)> {
-        let identity = FileIdentity { device: 1, inode, length: 10, modified: (1, 0), changed: (1, 0) };
+        let identity = FileIdentity {
+            device: 1,
+            inode,
+            length: 10,
+            modified: (1, 0),
+            changed: (1, 0),
+        };
         Some((identity.clone(), identity))
     }
 
@@ -178,7 +238,10 @@ mod tests {
         let mut views = Views::default();
         let kept = view(1);
         views.keep(root("a"), store(), kept.clone());
-        assert!(Arc::ptr_eq(&views.reuse(&root("a"), &store()).unwrap(), &kept));
+        assert!(Arc::ptr_eq(
+            &views.reuse(&root("a"), &store()).unwrap(),
+            &kept
+        ));
     }
 
     #[test]
@@ -186,8 +249,14 @@ mod tests {
         for index in 0..4 {
             let mut views = Views::default();
             views.keep(root("a"), store(), view(1));
-            assert!(views.reuse(&root("a"), &changed(index)).is_none(), "file {index}");
-            assert!(views.reuse(&root("a"), &store()).is_none(), "file {index} is dropped");
+            assert!(
+                views.reuse(&root("a"), &changed(index)).is_none(),
+                "file {index}"
+            );
+            assert!(
+                views.reuse(&root("a"), &store()).is_none(),
+                "file {index} is dropped"
+            );
         }
     }
 
@@ -198,7 +267,10 @@ mod tests {
         let later = view(2);
         views.keep(root("a"), changed(1), later.clone());
         assert_eq!(views.0.len(), 1);
-        assert!(Arc::ptr_eq(&views.reuse(&root("a"), &changed(1)).unwrap(), &later));
+        assert!(Arc::ptr_eq(
+            &views.reuse(&root("a"), &changed(1)).unwrap(),
+            &later
+        ));
     }
 
     #[test]

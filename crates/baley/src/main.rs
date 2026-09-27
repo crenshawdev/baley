@@ -1,13 +1,13 @@
 #[path = "config/binary.rs"]
 pub mod config;
 mod guard;
-#[path = "session/binary.rs"]
-pub mod session;
 #[cfg(test)]
 mod instruction_lint;
 mod instruction_surfaces;
 mod review_ingress;
 mod server;
+#[path = "session/binary.rs"]
+pub mod session;
 
 use clap::{Parser, Subcommand};
 use rmcp::ServiceExt;
@@ -128,11 +128,17 @@ fn run_command(command: Command) -> std::process::ExitCode {
         Command::ReadInstructions => vec!["read-instructions"],
         Command::TaskInstructions => vec!["task-instructions"],
         Command::ExecutorInstructions { frontdoor: false } => vec!["executor-instructions"],
-        Command::ExecutorInstructions { frontdoor: true } => vec!["executor-instructions", "--frontdoor"],
+        Command::ExecutorInstructions { frontdoor: true } => {
+            vec!["executor-instructions", "--frontdoor"]
+        }
         Command::VerifierInstructions { frontdoor: false } => vec!["verifier-instructions"],
-        Command::VerifierInstructions { frontdoor: true } => vec!["verifier-instructions", "--frontdoor"],
+        Command::VerifierInstructions { frontdoor: true } => {
+            vec!["verifier-instructions", "--frontdoor"]
+        }
         Command::ReviewInstructions { alias: None } => vec!["review-instructions"],
-        Command::ReviewInstructions { alias: Some(alias) } => vec!["review-instructions", "--alias", alias],
+        Command::ReviewInstructions { alias: Some(alias) } => {
+            vec!["review-instructions", "--alias", alias]
+        }
         Command::AuditInstructions { coverage: false } => vec!["audit-instructions"],
         Command::AuditInstructions { coverage: true } => vec!["audit-instructions", "--coverage"],
     };
@@ -163,13 +169,14 @@ fn run_serve(project_root: Option<std::path::PathBuf>) -> std::process::ExitCode
         };
         let admission = review_ingress::AdmissionQueue::new(handler.clone());
         #[cfg(unix)]
-        let mut terminate = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(signal) => signal,
-            Err(error) => {
-                eprintln!("baley: cannot listen for SIGTERM: {error}");
-                return std::process::ExitCode::FAILURE;
-            }
-        };
+        let mut terminate =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(signal) => signal,
+                Err(error) => {
+                    eprintln!("baley: cannot listen for SIGTERM: {error}");
+                    return std::process::ExitCode::FAILURE;
+                }
+            };
         #[cfg(unix)]
         {
             let admission = admission.clone();
@@ -179,17 +186,23 @@ fn run_serve(project_root: Option<std::path::PathBuf>) -> std::process::ExitCode
             });
         }
         let (transport, input_failed) = review_ingress::InputTransport::new(
-            tokio::io::stdin(), tokio::io::stdout(), admission.clone());
+            tokio::io::stdin(),
+            tokio::io::stdout(),
+            admission.clone(),
+        );
         let service_handler = handler.clone();
         let mut service = tokio::spawn(async move {
             match service_handler.serve(transport).await {
                 Ok(service) => service.waiting().await.map(|_| ()),
-                Err(ServerInitializeError::ConnectionClosed(_) | ServerInitializeError::Cancelled) => Ok(()),
+                Err(
+                    ServerInitializeError::ConnectionClosed(_) | ServerInitializeError::Cancelled,
+                ) => Ok(()),
                 Err(error) => {
                     eprintln!("baley: failed to start MCP server: {error}");
                     return false;
                 }
-            }.is_ok()
+            }
+            .is_ok()
         });
         let service_ok = tokio::select! {
             _ = admission.closed() => true,

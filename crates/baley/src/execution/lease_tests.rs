@@ -31,15 +31,27 @@ fn a_file_declaration_does_not_cover_a_path_that_merely_starts_with_it() {
 #[test]
 fn a_directory_covers_its_descendants_at_any_depth() {
     let declared = files(&["crates/baley/src/execution"]);
-    assert!(covers(&[], &declared, "crates/baley/src/execution/receipts.rs"));
-    assert!(covers(&[], &declared, "crates/baley/src/execution/deep/under/here.rs"));
+    assert!(covers(
+        &[],
+        &declared,
+        "crates/baley/src/execution/receipts.rs"
+    ));
+    assert!(covers(
+        &[],
+        &declared,
+        "crates/baley/src/execution/deep/under/here.rs"
+    ));
 }
 
 // The root itself counts, which is what lets two declarations be ordered
 // against each other when one contains the other.
 #[test]
 fn a_directory_covers_itself() {
-    assert!(covers(&[], &files(&["crates/baley/src"]), "crates/baley/src"));
+    assert!(covers(
+        &[],
+        &files(&["crates/baley/src"]),
+        "crates/baley/src"
+    ));
 }
 
 // Coverage stops at a component boundary. A sibling directory whose name
@@ -47,7 +59,11 @@ fn a_directory_covers_itself() {
 #[test]
 fn a_directory_does_not_cover_a_sibling_that_shares_its_prefix() {
     let declared = files(&["crates/baley/src/exec"]);
-    assert!(!covers(&[], &declared, "crates/baley/src/execution/receipts.rs"));
+    assert!(!covers(
+        &[],
+        &declared,
+        "crates/baley/src/execution/receipts.rs"
+    ));
     assert!(!covers(&[], &declared, "crates/baley/src/exec2"));
 }
 
@@ -71,7 +87,12 @@ fn either_list_can_be_the_one_that_covers_a_path() {
 // refused rather than normalised.
 #[test]
 fn an_ordinary_relative_path_is_safe() {
-    for path in ["README.md", "crates/baley/src/delivery.rs", "a/b/c/d.rs", ".planning/state.json"] {
+    for path in [
+        "README.md",
+        "crates/baley/src/delivery.rs",
+        "a/b/c/d.rs",
+        ".planning/state.json",
+    ] {
         assert!(safe_relative_path(path), "{path}");
     }
 }
@@ -85,7 +106,14 @@ fn an_absolute_path_is_not_safe() {
 
 #[test]
 fn a_path_that_can_climb_out_is_not_safe() {
-    for path in ["../secrets", "src/../../secrets", "..", "src/..", "./src", "."] {
+    for path in [
+        "../secrets",
+        "src/../../secrets",
+        "..",
+        "src/..",
+        "./src",
+        ".",
+    ] {
         assert!(!safe_relative_path(path), "{path}");
     }
 }

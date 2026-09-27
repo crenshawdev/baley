@@ -67,10 +67,7 @@ pub struct CaptureReport {
 /// A report cannot veto a capture. Revisions and continuation lines are not units.
 pub fn capture_report(records: &[baley::store::model::ItemRecord], bound: u64) -> CaptureReport {
     let latest: BTreeMap<_, _> = records.iter().map(|r| (&r.id, r)).collect();
-    let active = latest
-        .values()
-        .filter(|r| !r.completed)
-        .count();
+    let active = latest.values().filter(|r| !r.completed).count();
     CaptureReport {
         active,
         bound,

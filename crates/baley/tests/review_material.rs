@@ -82,7 +82,10 @@ fn retain_range_ac34() {
     );
     assert_eq!(
         material::git_reads(&observed, &tip, &side),
-        [("a.rs".into(), "b1".into(), model::Side::Base), ("a.rs".into(), "h1".into(), model::Side::Head)]
+        [
+            ("a.rs".into(), "b1".into(), model::Side::Base),
+            ("a.rs".into(), "h1".into(), model::Side::Head)
+        ]
     );
 }
 #[test]
@@ -97,7 +100,10 @@ fn retain_staged_ac35() {
     );
     assert_eq!(
         material::git_reads(&observed, &tip, &side),
-        [("a.rs".into(), "b1".into(), model::Side::Base), ("a.rs".into(), "t1".into(), model::Side::Snapshot)]
+        [
+            ("a.rs".into(), "b1".into(), model::Side::Base),
+            ("a.rs".into(), "t1".into(), model::Side::Snapshot)
+        ]
     );
 }
 #[test]
@@ -130,13 +136,26 @@ fn read_of(input: &Value) -> Result<Observed> {
 #[test]
 fn retain_missing_file() {
     let (entry, bytes) = material::observed_file("m1", "a.rs", read_of(&snapshot("missing")), 100);
-    assert_eq!((entry.availability, bytes), (model::Availability::Absent, None));
+    assert_eq!(
+        (entry.availability, bytes),
+        (model::Availability::Absent, None)
+    );
 }
 #[test]
 fn retain_unavailable_file() {
-    let (entry, bytes) = material::observed_file("m1", "a.rs", read_of(&snapshot("unavailable")), 100);
-    assert_eq!((entry.availability, bytes), (model::Availability::Unavailable, None));
-    assert!(entry.unavailable_reason.unwrap().contains("permission denied"), "the read's reason is kept");
+    let (entry, bytes) =
+        material::observed_file("m1", "a.rs", read_of(&snapshot("unavailable")), 100);
+    assert_eq!(
+        (entry.availability, bytes),
+        (model::Availability::Unavailable, None)
+    );
+    assert!(
+        entry
+            .unavailable_reason
+            .unwrap()
+            .contains("permission denied"),
+        "the read's reason is kept"
+    );
 }
 #[test]
 fn retain_sync_failure() {
@@ -233,7 +252,10 @@ fn read_directory_acquisition_freezes_members() {
             identity: "directory1".into(),
             members: listed
                 .iter()
-                .map(|name| io::DirectoryNode { name: name.clone(), kind: io::NodeKind::File })
+                .map(|name| io::DirectoryNode {
+                    name: name.clone(),
+                    kind: io::NodeKind::File,
+                })
                 .collect(),
         })
     })
@@ -243,9 +265,15 @@ fn read_directory_acquisition_freezes_members() {
 
 #[test]
 fn a_named_file_is_retained_as_a_named_file_target_without_a_head() {
-    let retained =
-        material::retain_file("m1", "f1", "a.rs", read_of(&snapshot("file")), &mut Saved::default(), 100)
-            .unwrap();
+    let retained = material::retain_file(
+        "m1",
+        "f1",
+        "a.rs",
+        read_of(&snapshot("file")),
+        &mut Saved::default(),
+        100,
+    )
+    .unwrap();
     assert_eq!(
         retained.manifest.target,
         model::Target::NamedFile {
@@ -257,8 +285,15 @@ fn a_named_file_is_retained_as_a_named_file_target_without_a_head() {
 #[test]
 fn a_named_file_retains_exactly_the_bytes_observed() {
     let mut saved = Saved::default();
-    let retained =
-        material::retain_file("m1", "f1", "a.rs", read_of(&snapshot("file")), &mut saved, 100).unwrap();
+    let retained = material::retain_file(
+        "m1",
+        "f1",
+        "a.rs",
+        read_of(&snapshot("file")),
+        &mut saved,
+        100,
+    )
+    .unwrap();
     let key = retained.manifest.entries[0].retained.clone().unwrap();
     assert_eq!(saved.files[&key], b"old\n");
 }

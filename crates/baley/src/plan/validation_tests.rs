@@ -20,7 +20,9 @@ fn submission(plans: Value) -> Value {
 // prose or a derived execution block is asking to author what the binary owns.
 #[test]
 fn a_caller_authored_body_is_refused_at_its_own_slot() {
-    let answer = refusal(typed_content(&submission(json!([{"content": {"body": "# Plan\n"}}]))));
+    let answer = refusal(typed_content(&submission(
+        json!([{"content": {"body": "# Plan\n"}}]),
+    )));
     assert_eq!(answer["slot"], "submission.plans[0].content.body");
     assert_eq!(answer["phase"], 12);
     assert_eq!(answer["entry"], 0);
@@ -28,7 +30,9 @@ fn a_caller_authored_body_is_refused_at_its_own_slot() {
 
 #[test]
 fn a_caller_authored_execution_block_is_refused() {
-    let answer = refusal(typed_content(&submission(json!([{"content": {"execution": {"suite": "cargo test"}}}]))));
+    let answer = refusal(typed_content(&submission(
+        json!([{"content": {"execution": {"suite": "cargo test"}}}]),
+    )));
     assert_eq!(answer["slot"], "submission.plans[0].content.execution");
 }
 
@@ -40,15 +44,21 @@ fn a_task_path_outside_the_plans_declared_files_is_refused() {
         "files": ["src/delivery.rs"],
         "tasks": [{"id": "deliver", "files": ["src/delivery.rs"]}, {"id": "record", "files": ["src/receipt.rs"]}],
     }}]))));
-    assert_eq!(answer["slot"], "submission.plans[0].content.tasks[1].files[0]");
+    assert_eq!(
+        answer["slot"],
+        "submission.plans[0].content.tasks[1].files[0]"
+    );
 }
 
 #[test]
 fn task_paths_that_are_all_declared_pass() {
-    assert!(typed_content(&submission(json!([{"content": {
-        "files": ["src/delivery.rs", "src/receipt.rs"],
-        "tasks": [{"id": "deliver", "files": ["src/delivery.rs", "src/receipt.rs"]}],
-    }}]))).is_none());
+    assert!(
+        typed_content(&submission(json!([{"content": {
+            "files": ["src/delivery.rs", "src/receipt.rs"],
+            "tasks": [{"id": "deliver", "files": ["src/delivery.rs", "src/receipt.rs"]}],
+        }}])))
+        .is_none()
+    );
 }
 
 #[test]
@@ -65,7 +75,10 @@ fn a_destination_field_anywhere_in_the_request_is_refused() {
     for field in ["destination", "path", "target_path", "project_root", "root"] {
         let answer = refusal(arguments(&json!({field: "/etc/passwd"})));
         assert_eq!(answer["rule"], "path-confinement", "{field}");
-        assert!(answer["reason"].as_str().unwrap().contains(field), "{field}");
+        assert!(
+            answer["reason"].as_str().unwrap().contains(field),
+            "{field}"
+        );
     }
 }
 
@@ -80,7 +93,12 @@ fn a_destination_field_on_the_submission_or_a_plan_or_its_target_is_refused() {
 // that could carry one, so a plan may write the word in its own prose.
 #[test]
 fn the_same_word_inside_authored_content_is_not_a_destination() {
-    assert!(arguments(&submission(json!([{"content": {"path": "src/delivery.rs"}}]))).is_none());
+    assert!(
+        arguments(&submission(
+            json!([{"content": {"path": "src/delivery.rs"}}])
+        ))
+        .is_none()
+    );
     assert!(arguments(&json!({"submission": {"phase": 12, "plans": []}})).is_none());
 }
 
@@ -98,9 +116,18 @@ fn the_content_the_target_and_the_binding_must_name_the_same_plan() {
         })).expect("a submission")
     };
     assert!(identities(&agreeing(12, 1, 12, 1)).is_none());
-    assert!(identities(&agreeing(13, 1, 12, 1)).is_some(), "content names another phase");
-    assert!(identities(&agreeing(12, 2, 12, 1)).is_some(), "content names another plan");
-    assert!(identities(&agreeing(11, 1, 11, 1)).is_some(), "both name a phase the binding does not");
+    assert!(
+        identities(&agreeing(13, 1, 12, 1)).is_some(),
+        "content names another phase"
+    );
+    assert!(
+        identities(&agreeing(12, 2, 12, 1)).is_some(),
+        "content names another plan"
+    );
+    assert!(
+        identities(&agreeing(11, 1, 11, 1)).is_some(),
+        "both name a phase the binding does not"
+    );
 }
 
 // A phase address is the integer every operation takes, or the dotted form of
@@ -114,7 +141,9 @@ fn a_phase_address_is_digits_or_dotted_digits() {
 
 #[test]
 fn anything_else_is_not_a_phase_address() {
-    for address in ["", ".", "12.", ".12", "12..1", "12a", "phase-12", "-1", "1 2", "١٢"] {
+    for address in [
+        "", ".", "12.", ".12", "12..1", "12a", "phase-12", "-1", "1 2", "١٢",
+    ] {
         assert!(!phase_address(address), "{address:?}");
     }
 }

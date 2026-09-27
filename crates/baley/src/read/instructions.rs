@@ -10,7 +10,8 @@ Drafts use `{"kind":"plan-draft","phase":N,"plan":k,"digest":"<submission_digest
 
 /// Generated internal skill installed beside every role adapter.
 pub fn markdown() -> String {
-    format!(r#"---
+    format!(
+        r#"---
 name: bal-read-contract
 description: "The shared Baley record contract for every main thread and worker: records through document, source through host tools."
 user-invocable: false
@@ -21,5 +22,6 @@ allowed-tools:
 <read-contract>
 {CONTRACT}
 </read-contract>
-"#)
+"#
+    )
 }

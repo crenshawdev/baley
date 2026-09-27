@@ -377,7 +377,10 @@ pub enum Scope {
 /// The executor role for one scope: the shared read contract, the design's
 /// Executor block and the classical default, then the scope's protocol.
 pub fn role_text(scope: Scope) -> String {
-    let shared = format!("{}\n\n{EXECUTOR_BLOCK}\n\n{CLASSICAL_DEFAULT}", crate::read::instructions::CONTRACT);
+    let shared = format!(
+        "{}\n\n{EXECUTOR_BLOCK}\n\n{CLASSICAL_DEFAULT}",
+        crate::read::instructions::CONTRACT
+    );
     match scope {
         Scope::Phase => format!("{shared}\n\n{PROTOCOL}\n\n{LEASE} {BRANCH_RULE}\n\n{USABILITY}"),
         Scope::Task => format!("{shared}\n\n{TASK_PROTOCOL}\n\n{BRANCH_RULE}"),
@@ -391,13 +394,20 @@ pub fn dispatch_text() -> String {
 
 /// `skills/bal-executor-contract/SKILL.md`, a generated artifact.
 pub fn contract_markdown() -> String {
-    format!("{CONTRACT_HEAD}{}\n\n{RETURN}\n{CONTRACT_TAIL}", dispatch_text())
+    format!(
+        "{CONTRACT_HEAD}{}\n\n{RETURN}\n{CONTRACT_TAIL}",
+        dispatch_text()
+    )
 }
 
 /// `skills/bal-execute/SKILL.md`, a generated artifact.
 pub fn frontdoor_markdown() -> String {
-    let frontdoor = crate::help::table::render_description("bal-execute", FRONTDOOR).expect("compiled skill front matter");
-    format!("{frontdoor}\n## Shared read contract\n\n{}\n\n{USABILITY}", crate::read::instructions::CONTRACT)
+    let frontdoor = crate::help::table::render_description("bal-execute", FRONTDOOR)
+        .expect("compiled skill front matter");
+    format!(
+        "{frontdoor}\n## Shared read contract\n\n{}\n\n{USABILITY}",
+        crate::read::instructions::CONTRACT
+    )
 }
 
 /// A configured command as the effective configuration reports it, with the
@@ -419,10 +429,22 @@ pub struct LanguageNote {
 }
 
 pub const MANIFESTS: [(&str, &str); 4] = [
-    ("Cargo.toml", "Rust: a stub is a trait impl or a substituted function; tests live in #[test] functions and tests/*.rs."),
-    ("pyproject.toml", "Python: a stub is a monkeypatch or a fake object; tests live in test_*.py functions and unittest.TestCase methods."),
-    ("package.json", "JavaScript or TypeScript: a stub is jest.mock or a substituted module; tests live in *.test.* and *.spec.* files."),
-    ("go.mod", "Go: a stub is an interface implementation; tests live in *_test.go Test functions."),
+    (
+        "Cargo.toml",
+        "Rust: a stub is a trait impl or a substituted function; tests live in #[test] functions and tests/*.rs.",
+    ),
+    (
+        "pyproject.toml",
+        "Python: a stub is a monkeypatch or a fake object; tests live in test_*.py functions and unittest.TestCase methods.",
+    ),
+    (
+        "package.json",
+        "JavaScript or TypeScript: a stub is jest.mock or a substituted module; tests live in *.test.* and *.spec.* files.",
+    ),
+    (
+        "go.mod",
+        "Go: a stub is an interface implementation; tests live in *_test.go Test functions.",
+    ),
 ];
 
 pub fn language_note(present: &[&str]) -> LanguageNote {

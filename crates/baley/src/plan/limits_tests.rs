@@ -35,22 +35,41 @@ fn link(id: &str) -> Item {
 
 /// A plan already saved in the current set.
 fn saved(plan: u32, items: Vec<Item>) -> Contribution {
-    Contribution { plan, entry: None, items }
+    Contribution {
+        plan,
+        entry: None,
+        items,
+    }
 }
 
 /// A plan being proposed in this submission.
 fn proposed(plan: u32, entry: usize, items: Vec<Item>) -> Contribution {
-    Contribution { plan, entry: Some(entry), items }
+    Contribution {
+        plan,
+        entry: Some(entry),
+        items,
+    }
 }
 
 fn refusal(error: Error) -> Value {
-    let (Error::Invalid(payload) | Error::Conflict(payload)) = error else { panic!("a typed refusal: {error:?}") };
+    let (Error::Invalid(payload) | Error::Conflict(payload)) = error else {
+        panic!("a typed refusal: {error:?}")
+    };
     serde_json::from_str(payload.trim_start_matches("plan-refusal:")).expect("a refusal envelope")
 }
 
 #[test]
 fn a_complete_check_and_link_meet_the_content_rules() {
-    assert!(content(12, &[saved(1, vec![check("check/A", &[("truth/A", 1)]), link("link/A")])]).is_ok());
+    assert!(
+        content(
+            12,
+            &[saved(
+                1,
+                vec![check("check/A", &[("truth/A", 1)]), link("link/A")]
+            )]
+        )
+        .is_ok()
+    );
 }
 
 // A command nobody can run, or an expectation of nothing, is a check that
@@ -59,11 +78,16 @@ fn a_complete_check_and_link_meet_the_content_rules() {
 fn a_check_without_a_command_is_refused_at_its_own_slot() {
     for blank in ["", "   ", "\t\n"] {
         let mut item = check("check/A", &[("truth/A", 1)]);
-        let Item::Check { spec, .. } = &mut item else { panic!("a check") };
+        let Item::Check { spec, .. } = &mut item else {
+            panic!("a check")
+        };
         spec.command = blank.into();
         let answer = refusal(content(12, &[saved(1, vec![item])]).unwrap_err());
         assert_eq!(answer["rule"], "check-command", "{blank:?}");
-        assert_eq!(answer["slot"], "current.plans[1].evidence_map.items[0].spec.command");
+        assert_eq!(
+            answer["slot"],
+            "current.plans[1].evidence_map.items[0].spec.command"
+        );
         assert_eq!(answer["id"], "check/A");
     }
 }
@@ -71,11 +95,16 @@ fn a_check_without_a_command_is_refused_at_its_own_slot() {
 #[test]
 fn a_check_expecting_nothing_is_refused() {
     let mut item = check("check/A", &[("truth/A", 1)]);
-    let Item::Check { spec, .. } = &mut item else { panic!("a check") };
+    let Item::Check { spec, .. } = &mut item else {
+        panic!("a check")
+    };
     spec.expected = super::evidence::Expected::Literal("  ".into());
     let answer = refusal(content(12, &[saved(1, vec![item])]).unwrap_err());
     assert_eq!(answer["rule"], "check-expected");
-    assert_eq!(answer["slot"], "current.plans[1].evidence_map.items[0].spec.expected.value");
+    assert_eq!(
+        answer["slot"],
+        "current.plans[1].evidence_map.items[0].spec.expected.value"
+    );
 }
 
 #[test]
@@ -87,17 +116,25 @@ fn a_check_with_a_blank_test_file_is_refused() {
             "associations": [{"truth_id": "T6", "truth_version": 1, "reason": "The refusal names its slot."}],
         })).expect("an artifact item");
         let mut item = check("check/blank", &[("T6", 1)]);
-        let Item::Check { spec, .. } = &mut item else { panic!("a check") };
+        let Item::Check { spec, .. } = &mut item else {
+            panic!("a check")
+        };
         spec.test.file = blank.into();
         let result = content(39, &[proposed(3, 1, vec![artifact, item])]);
         assert!(result.is_err(), "test.file {blank:?} must be refused");
         let answer = refusal(result.unwrap_err());
         assert_eq!(answer["rule"], "check-test-file");
-        assert_eq!(answer["slot"], "submission.plans[1].content.evidence_map.items[1].spec.test.file");
+        assert_eq!(
+            answer["slot"],
+            "submission.plans[1].content.evidence_map.items[1].spec.test.file"
+        );
         assert_eq!(answer["phase"], 39);
         assert_eq!(answer["entry"], 1);
         assert_eq!(answer["id"], "check/blank");
-        assert_eq!(answer["reason"], "phase 39 item check/blank needs nonblank test.file");
+        assert_eq!(
+            answer["reason"],
+            "phase 39 item check/blank needs nonblank test.file"
+        );
     }
 }
 
@@ -117,14 +154,20 @@ adequacy belongs to the owner and verifier.",
         "so an old-policy blank command, expected output or test file, an extra check or\n\
 an unnamed link blocks that union.",
     ] {
-        assert!(rendered.contains(block), "missing instruction block: {block}");
+        assert!(
+            rendered.contains(block),
+            "missing instruction block: {block}"
+        );
     }
     for obsolete in [
         "Only command and expected output are content-checked on a check.",
         "Test locator,",
         "blank command/output",
     ] {
-        assert!(!rendered.contains(obsolete), "obsolete instruction remains: {obsolete}");
+        assert!(
+            !rendered.contains(obsolete),
+            "obsolete instruction remains: {obsolete}"
+        );
     }
 }
 
@@ -132,7 +175,9 @@ an unnamed link blocks that union.",
 fn a_link_missing_either_end_or_its_value_is_refused() {
     for field in ["caller", "callee", "value"] {
         let mut item = link("link/A");
-        let Item::Link { spec, .. } = &mut item else { panic!("a link") };
+        let Item::Link { spec, .. } = &mut item else {
+            panic!("a link")
+        };
         match field {
             "caller" => spec.caller.clear(),
             "callee" => spec.callee.clear(),
@@ -140,7 +185,10 @@ fn a_link_missing_either_end_or_its_value_is_refused() {
         }
         let answer = refusal(content(12, &[saved(1, vec![item])]).unwrap_err());
         assert_eq!(answer["rule"], "link-content", "{field}");
-        assert_eq!(answer["slot"], format!("current.plans[1].evidence_map.items[0].spec.{field}"));
+        assert_eq!(
+            answer["slot"],
+            format!("current.plans[1].evidence_map.items[0].spec.{field}")
+        );
     }
 }
 
@@ -148,8 +196,14 @@ fn a_link_missing_either_end_or_its_value_is_refused() {
 // different place for a plan being proposed than for one already saved.
 #[test]
 fn a_slot_names_the_submission_entry_when_proposed_and_the_saved_plan_otherwise() {
-    assert_eq!(base(&proposed(3, 0, Vec::new()), 2), "submission.plans[0].content.evidence_map.items[2]");
-    assert_eq!(base(&saved(3, Vec::new()), 2), "current.plans[3].evidence_map.items[2]");
+    assert_eq!(
+        base(&proposed(3, 0, Vec::new()), 2),
+        "submission.plans[0].content.evidence_map.items[2]"
+    );
+    assert_eq!(
+        base(&saved(3, Vec::new()), 2),
+        "current.plans[3].evidence_map.items[2]"
+    );
 }
 
 // One truth gets one check across the whole phase. Two distinct checks on the
@@ -158,13 +212,23 @@ fn a_slot_names_the_submission_entry_when_proposed_and_the_saved_plan_otherwise(
 fn one_truth_takes_one_distinct_check() {
     assert!(checks(12, &[saved(1, vec![check("check/A", &[("truth/A", 1)])])]).is_ok());
 
-    let two = saved(1, vec![check("check/A", &[("truth/A", 1)]), check("check/A2", &[("truth/A", 1)])]);
+    let two = saved(
+        1,
+        vec![
+            check("check/A", &[("truth/A", 1)]),
+            check("check/A2", &[("truth/A", 1)]),
+        ],
+    );
     let answer = refusal(checks(12, &[two]).unwrap_err());
     assert_eq!(answer["rule"], "truth-check-limit");
     assert_eq!(answer["slot"], "submission.plans");
     assert_eq!(answer["id"], "truth/A");
-    let ids: Vec<_> = answer["details"]["checks"].as_array().unwrap()
-        .iter().map(|check| check["id"].as_str().unwrap().to_owned()).collect();
+    let ids: Vec<_> = answer["details"]["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|check| check["id"].as_str().unwrap().to_owned())
+        .collect();
     assert_eq!(ids, ["check/A", "check/A2"]);
 }
 
@@ -172,7 +236,13 @@ fn one_truth_takes_one_distinct_check() {
 // check, not two.
 #[test]
 fn the_same_check_id_against_one_truth_twice_is_one_check() {
-    let twice = saved(1, vec![check("check/A", &[("truth/A", 1)]), check("check/A", &[("truth/A", 1)])]);
+    let twice = saved(
+        1,
+        vec![
+            check("check/A", &[("truth/A", 1)]),
+            check("check/A", &[("truth/A", 1)]),
+        ],
+    );
     assert!(checks(12, &[twice]).is_ok());
 }
 
@@ -186,7 +256,13 @@ fn one_check_covering_several_truths_is_allowed() {
 // lets a new check take over from the old one.
 #[test]
 fn checks_on_different_versions_of_a_truth_do_not_collide() {
-    let versions = saved(1, vec![check("check/A", &[("truth/A", 1)]), check("check/A2", &[("truth/A", 2)])]);
+    let versions = saved(
+        1,
+        vec![
+            check("check/A", &[("truth/A", 1)]),
+            check("check/A2", &[("truth/A", 2)]),
+        ],
+    );
     assert!(checks(12, &[versions]).is_ok());
 }
 
@@ -205,19 +281,38 @@ fn two_plans_each_with_their_own_check_on_one_truth_collide() {
 // before plan 10.
 #[test]
 fn origins_are_listed_by_plan_with_the_proposal_before_the_saved_definition() {
-    let answer = refusal(checks(12, &[
-        proposed(2, 0, vec![check("check/A", &[("truth/A", 1)])]),
-        saved(10, vec![check("check/A2", &[("truth/A", 1)])]),
-        saved(2, vec![check("check/A", &[("truth/A", 1)])]),
-    ]).unwrap_err());
-    let Details::CheckConflict { checks, .. } = serde_json::from_value(answer["details"].clone()).unwrap()
-        else { panic!("a check conflict") };
-    let first = checks.iter().find(|check| check.id == "check/A").expect("check/A");
+    let answer = refusal(
+        checks(
+            12,
+            &[
+                proposed(2, 0, vec![check("check/A", &[("truth/A", 1)])]),
+                saved(10, vec![check("check/A2", &[("truth/A", 1)])]),
+                saved(2, vec![check("check/A", &[("truth/A", 1)])]),
+            ],
+        )
+        .unwrap_err(),
+    );
+    let Details::CheckConflict { checks, .. } =
+        serde_json::from_value(answer["details"].clone()).unwrap()
+    else {
+        panic!("a check conflict")
+    };
+    let first = checks
+        .iter()
+        .find(|check| check.id == "check/A")
+        .expect("check/A");
     assert_eq!(
-        first.origins.iter().map(|origin| (origin.plan, matches!(origin.source, Source::Proposed))).collect::<Vec<_>>(),
+        first
+            .origins
+            .iter()
+            .map(|origin| (origin.plan, matches!(origin.source, Source::Proposed)))
+            .collect::<Vec<_>>(),
         [(2, true), (2, false)]
     );
-    let second = checks.iter().find(|check| check.id == "check/A2").expect("check/A2");
+    let second = checks
+        .iter()
+        .find(|check| check.id == "check/A2")
+        .expect("check/A2");
     assert_eq!(second.origins[0].plan, 10);
 }
 
@@ -231,7 +326,10 @@ fn a_check_whose_command_is_not_a_string_is_named_as_a_command_problem() {
                 "test": {"file": "f", "function": "g"}, "setup": "", "call": "", "boundary": "b", "fakes": []}}]}}}]}});
     let found = malformed(&raw).expect("a diagnostic");
     assert_eq!(found.rule, "check-command");
-    assert_eq!(found.slot, "submission.plans[0].content.evidence_map.items[0].spec.command");
+    assert_eq!(
+        found.slot,
+        "submission.plans[0].content.evidence_map.items[0].spec.command"
+    );
     assert_eq!(found.id.as_deref(), Some("check/A"));
     assert_eq!(found.phase, Some(12));
 }
@@ -255,11 +353,15 @@ fn a_provisional_map_is_never_malformed() {
 #[test]
 fn a_typed_refusal_crosses_a_boundary_unchanged_and_anything_else_is_converted() {
     let typed = Error::Invalid("plan-refusal:{\"rule\":\"check-command\"}".into());
-    let Error::Conflict(carried) = disposition(typed, Error::Conflict) else { panic!("converted") };
+    let Error::Conflict(carried) = disposition(typed, Error::Conflict) else {
+        panic!("converted")
+    };
     assert_eq!(carried, "plan-refusal:{\"rule\":\"check-command\"}");
 
     let other = Error::Io("disk went away".into());
-    let Error::Conflict(described) = disposition(other, Error::Conflict) else { panic!("converted") };
+    let Error::Conflict(described) = disposition(other, Error::Conflict) else {
+        panic!("converted")
+    };
     assert!(described.contains("disk went away"), "{described}");
     assert!(!described.starts_with("plan-refusal:"), "{described}");
 }

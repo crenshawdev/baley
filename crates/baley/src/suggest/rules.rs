@@ -23,7 +23,9 @@ fn unpriced(key: &str, counted: usize) -> Value {
 fn priced(key: &str, layer: &str, current: &str, proposed: &str, mut evidence: Value) -> Value {
     // Journal order selects the landed rung; identity order makes evidence
     // stable across native revisions and reopening the store.
-    evidence["decisions"].as_array_mut().expect("decision ids")
+    evidence["decisions"]
+        .as_array_mut()
+        .expect("decision ids")
         .sort_by(|a, b| a.as_str().cmp(&b.as_str()));
     json!({"key":key,"layer":layer,"current":current,"proposed":proposed,"evidence":evidence,
         "apply":{"operation":"config-apply","layer":layer,"updates":[{"key":key,"value":proposed}]}})
@@ -34,10 +36,15 @@ pub fn role(key: &str, layer: &str, current: &str, decisions: &[RoutingDecision]
     let evidence = json!({"counted":decisions.len(),"escalated":escalated,
         "decisions":decisions.iter().map(|d| &d.id).collect::<Vec<_>>()});
     if escalated >= ESCALATIONS {
-        let landed = decisions.iter().rev().filter(|d| d.escalated).find_map(|d| d.rung.as_deref());
+        let landed = decisions
+            .iter()
+            .rev()
+            .filter(|d| d.escalated)
+            .find_map(|d| d.rung.as_deref());
         if let Some(proposed) = landed
             && let (Some(start), Some(end)) = (
-                RUNGS.iter().position(|r| *r == current), RUNGS.iter().position(|r| *r == proposed),
+                RUNGS.iter().position(|r| *r == current),
+                RUNGS.iter().position(|r| *r == proposed),
             )
             && end > start
         {
@@ -59,8 +66,14 @@ pub fn gate(key: &str, layer: &str, current: &str, fires: &[GateFire]) -> Value 
             _ => None,
         };
         if let Some(proposed) = proposed {
-            return priced(key, layer, current, proposed, json!({"counted":fires.len(),
-                "escalated":0,"failed":failed,"decisions":fires.iter().map(|f| &f.id).collect::<Vec<_>>()}));
+            return priced(
+                key,
+                layer,
+                current,
+                proposed,
+                json!({"counted":fires.len(),
+                "escalated":0,"failed":failed,"decisions":fires.iter().map(|f| &f.id).collect::<Vec<_>>()}),
+            );
         }
     }
     unpriced(key, fires.len())

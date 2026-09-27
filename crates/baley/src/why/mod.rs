@@ -111,7 +111,9 @@ pub struct Gap {
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum Join {
     Resolved(Box<Resolved>),
-    Ambiguous { matches: Vec<Brief> },
+    Ambiguous {
+        matches: Vec<Brief>,
+    },
     Unresolved {
         #[serde(skip_serializing_if = "Option::is_none")]
         gap: Option<Gap>,

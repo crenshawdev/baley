@@ -48,7 +48,11 @@ pub struct Basis {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum Verdict { Accepted, Rejected, NotSeen }
+pub enum Verdict {
+    Accepted,
+    Rejected,
+    NotSeen,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -120,7 +124,11 @@ pub struct Waiver {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum HumanOutcome { Passed, Failed, Skipped }
+pub enum HumanOutcome {
+    Passed,
+    Failed,
+    Skipped,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -140,7 +148,10 @@ pub struct HumanResult {
 #[serde(tag = "operation", deny_unknown_fields)]
 pub enum Query {
     #[serde(rename = "verify-next")]
-    Next { phase: u32, request_id: Option<String> },
+    Next {
+        phase: u32,
+        request_id: Option<String>,
+    },
     #[serde(rename = "verification-read")]
     Read { phase: u32, attempt: Option<String> },
     /// Read-only; `command` selects the bal-audit view or its bal-coverage alias.
@@ -156,11 +167,24 @@ pub enum Apply {
     #[serde(rename = "verification-submit")]
     Submit { patch: Box<SubmitPatch> },
     #[serde(rename = "truth-waive")]
-    Waive { request_id: String, submission: Box<Waiver>, approval: Box<OwnerApproval<Waiver>> },
+    Waive {
+        request_id: String,
+        submission: Box<Waiver>,
+        approval: Box<OwnerApproval<Waiver>>,
+    },
     #[serde(rename = "verification-human-result")]
-    Human { request_id: String, submission: Box<HumanResult>, approval: Box<OwnerApproval<HumanResult>> },
+    Human {
+        request_id: String,
+        submission: Box<HumanResult>,
+        approval: Box<OwnerApproval<HumanResult>>,
+    },
     #[serde(rename = "verification-complete")]
-    Complete { request_id: String, attempt: String, basis: Box<Basis>, projections: Box<Projections> },
+    Complete {
+        request_id: String,
+        attempt: String,
+        basis: Box<Basis>,
+        projections: Box<Projections>,
+    },
 }
 
 /// The caller's expected projection preimages: the digest of ROADMAP.md and,

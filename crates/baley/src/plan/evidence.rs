@@ -59,7 +59,12 @@ pub struct Check {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", content = "value", rename_all = "lowercase", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "lowercase",
+    deny_unknown_fields
+)]
 pub enum Expected {
     Literal(String),
     Property(String),
@@ -113,22 +118,28 @@ pub enum Pending {
 impl Item {
     pub fn id(&self) -> &str {
         match self {
-            Self::Check { id, .. } | Self::Artifact { id, .. }
-            | Self::Link { id, .. } | Self::Observation { id, .. } => id,
+            Self::Check { id, .. }
+            | Self::Artifact { id, .. }
+            | Self::Link { id, .. }
+            | Self::Observation { id, .. } => id,
         }
     }
 
     pub fn reason(&self) -> &str {
         match self {
-            Self::Check { reason, .. } | Self::Artifact { reason, .. }
-            | Self::Link { reason, .. } | Self::Observation { reason, .. } => reason,
+            Self::Check { reason, .. }
+            | Self::Artifact { reason, .. }
+            | Self::Link { reason, .. }
+            | Self::Observation { reason, .. } => reason,
         }
     }
 
     pub fn associations(&self) -> &[Association] {
         match self {
-            Self::Check { associations, .. } | Self::Artifact { associations, .. }
-            | Self::Link { associations, .. } | Self::Observation { associations, .. } => associations,
+            Self::Check { associations, .. }
+            | Self::Artifact { associations, .. }
+            | Self::Link { associations, .. }
+            | Self::Observation { associations, .. } => associations,
         }
     }
 }

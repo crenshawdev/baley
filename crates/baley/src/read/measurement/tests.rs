@@ -30,14 +30,50 @@ fn transcript_reads_are_counted_by_kind() {
     assert_eq!(
         count_reads(Host::Claude, &claude, &read_lines).unwrap(),
         BTreeMap::from([
-            ("Read whole".into(), Tally { calls: 1, bytes: 10 }),
-            ("Read ranged".into(), Tally { calls: 1, bytes: 20 }),
+            (
+                "Read whole".into(),
+                Tally {
+                    calls: 1,
+                    bytes: 10
+                }
+            ),
+            (
+                "Read ranged".into(),
+                Tally {
+                    calls: 1,
+                    bytes: 20
+                }
+            ),
             ("Grep".into(), Tally { calls: 1, bytes: 8 }),
-            ("shell read".into(), Tally { calls: 1, bytes: 30 }),
+            (
+                "shell read".into(),
+                Tally {
+                    calls: 1,
+                    bytes: 30
+                }
+            ),
             ("unclassified".into(), Tally { calls: 1, bytes: 5 }),
-            ("baley_query search".into(), Tally { calls: 1, bytes: 40 }),
-            ("baley_query read".into(), Tally { calls: 1, bytes: 50 }),
-            ("baley_query document".into(), Tally { calls: 1, bytes: 60 }),
+            (
+                "baley_query search".into(),
+                Tally {
+                    calls: 1,
+                    bytes: 40
+                }
+            ),
+            (
+                "baley_query read".into(),
+                Tally {
+                    calls: 1,
+                    bytes: 50
+                }
+            ),
+            (
+                "baley_query document".into(),
+                Tally {
+                    calls: 1,
+                    bytes: 60
+                }
+            ),
         ])
     );
 
@@ -72,9 +108,27 @@ fn transcript_reads_are_counted_by_kind() {
     assert_eq!(
         count_reads(Host::Codex, &codex, &BTreeMap::new()).unwrap(),
         BTreeMap::from([
-            ("baley_query search".into(), Tally { calls: 1, bytes: 100 }),
-            ("baley_query read".into(), Tally { calls: 1, bytes: 200 }),
-            ("shell read".into(), Tally { calls: 2, bytes: 700 }),
+            (
+                "baley_query search".into(),
+                Tally {
+                    calls: 1,
+                    bytes: 100
+                }
+            ),
+            (
+                "baley_query read".into(),
+                Tally {
+                    calls: 1,
+                    bytes: 200
+                }
+            ),
+            (
+                "shell read".into(),
+                Tally {
+                    calls: 2,
+                    bytes: 700
+                }
+            ),
             ("unclassified".into(), Tally { calls: 3, bytes: 7 }),
         ])
     );
@@ -87,9 +141,12 @@ fn every_agent_call_in_the_episode_selects_its_worker() {
         {"type": "tool_use", "id": "a2", "name": "Agent", "input": {"subagent_type": "bal-planner"}}
     ]}})];
     let workers = vec![
-        ("a1".into(), vec![json!({"message": {"content": [
-            {"type": "tool_use", "id": "a3", "name": "Agent", "input": {"subagent_type": "general-purpose"}}
-        ]}})]),
+        (
+            "a1".into(),
+            vec![json!({"message": {"content": [
+                {"type": "tool_use", "id": "a3", "name": "Agent", "input": {"subagent_type": "general-purpose"}}
+            ]}})],
+        ),
         ("a2".into(), vec![]),
         ("a3".into(), vec![]),
         ("zz".into(), vec![]),
@@ -107,11 +164,25 @@ fn an_episode_without_agent_calls_selects_no_worker() {
 #[test]
 fn the_report_lists_each_kind_with_its_calls_and_bytes() {
     let counts = BTreeMap::from([
-        ("Grep".into(), Tally { calls: 2, bytes: 30 }),
-        ("baley_query read".into(), Tally { calls: 1, bytes: 50 }),
+        (
+            "Grep".into(),
+            Tally {
+                calls: 2,
+                bytes: 30,
+            },
+        ),
+        (
+            "baley_query read".into(),
+            Tally {
+                calls: 1,
+                bytes: 50,
+            },
+        ),
     ]);
-    assert_eq!(report_lines(&counts),
-        "reads[Grep]: 2 calls, 30 bytes\nreads[baley_query read]: 1 calls, 50 bytes\n");
+    assert_eq!(
+        report_lines(&counts),
+        "reads[Grep]: 2 calls, 30 bytes\nreads[baley_query read]: 1 calls, 50 bytes\n"
+    );
 }
 
 #[test]
@@ -120,7 +191,10 @@ fn a_rollout_is_selected_by_its_session_id() {
         "rollout-2026-09-23T12-26-12-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
         "rollout-2026-09-23T11-53-22-01a0cef8-bb58-7f22-8729-5c0e1e82b0f9.jsonl".into(),
     ];
-    assert_eq!(rollout_for(&names, "01a0cf16-cbd7-7910-be17-2003ce72549d").unwrap(), 0);
+    assert_eq!(
+        rollout_for(&names, "01a0cf16-cbd7-7910-be17-2003ce72549d").unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -129,7 +203,10 @@ fn a_session_id_no_rollout_carries_is_not_found() {
         "rollout-2026-09-23T12-26-12-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
         "rollout-2026-09-23T11-53-22-01a0cef8-bb58-7f22-8729-5c0e1e82b0f9.jsonl".into(),
     ];
-    assert_eq!(rollout_for(&names, "01a0cf16-cbd7-7910-be17-2003ce725490").unwrap_err()["code"], "document-not-found");
+    assert_eq!(
+        rollout_for(&names, "01a0cf16-cbd7-7910-be17-2003ce725490").unwrap_err()["code"],
+        "document-not-found"
+    );
 }
 
 #[test]
@@ -138,7 +215,10 @@ fn two_rollouts_with_one_session_id_are_ambiguous() {
         "rollout-2026-09-23T12-26-12-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
         "rollout-2026-09-23T13-00-00-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
     ];
-    assert_eq!(rollout_for(&names, "01a0cf16-cbd7-7910-be17-2003ce72549d").unwrap_err()["code"], "document-ambiguous");
+    assert_eq!(
+        rollout_for(&names, "01a0cf16-cbd7-7910-be17-2003ce72549d").unwrap_err()["code"],
+        "document-ambiguous"
+    );
 }
 
 #[test]
@@ -147,5 +227,8 @@ fn a_session_id_that_is_not_a_uuid_is_refused() {
         "rollout-2026-09-23T12-26-12-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
         "rollout-2026-09-23T11-53-22-01a0cef8-bb58-7f22-8729-5c0e1e82b0f9.jsonl".into(),
     ];
-    assert_eq!(rollout_for(&names, "01a0cf16").unwrap_err()["code"], "document-identity");
+    assert_eq!(
+        rollout_for(&names, "01a0cf16").unwrap_err()["code"],
+        "document-identity"
+    );
 }

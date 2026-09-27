@@ -62,7 +62,9 @@ fn observation_conflicting_replay_refuses() {
     let mut event: model::Observation = serde_json::from_value(input["obs1"].clone()).unwrap();
     event.attempt = "a2".into();
     assert_eq!(
-        attempts::decide_observation(records(&basis), &event, &mut FixedClock).err().unwrap(),
+        attempts::decide_observation(records(&basis), &event, &mut FixedClock)
+            .err()
+            .unwrap(),
         Error::Conflict("observation identity reused".into())
     );
 }

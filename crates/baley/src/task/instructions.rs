@@ -73,6 +73,10 @@ done in this context; `--plan` may dispatch one executor.
 /// `skills/bal-task/SKILL.md`, a generated artifact: the front door above
 /// and the executor role composed with the task scope.
 pub fn markdown() -> String {
-    let frontdoor = crate::help::table::render_description("bal-task", FRONTDOOR).expect("compiled skill front matter");
-    format!("{frontdoor}{}\n", crate::execution::instructions::role_text(crate::execution::instructions::Scope::Task))
+    let frontdoor = crate::help::table::render_description("bal-task", FRONTDOOR)
+        .expect("compiled skill front matter");
+    format!(
+        "{frontdoor}{}\n",
+        crate::execution::instructions::role_text(crate::execution::instructions::Scope::Task)
+    )
 }

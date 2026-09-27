@@ -53,14 +53,20 @@ pub fn latest_checker<'a>(records: &'a [Record], scope: &Scope) -> Option<&'a Ch
     })
 }
 
-pub fn plan_repair_decision(projection: &crate::execution::history::PlanProjection) -> Option<Decision> {
+pub fn plan_repair_decision(
+    projection: &crate::execution::history::PlanProjection,
+) -> Option<Decision> {
     let question = projection.repair_question.as_ref()?;
-    if projection.repair.is_some() { return None }
-    Some(Decision::RepairSuite { question_id: question.id.clone(), approved:
-        projection.repair_answer.as_ref().is_some_and(|answer| {
+    if projection.repair.is_some() {
+        return None;
+    }
+    Some(Decision::RepairSuite {
+        question_id: question.id.clone(),
+        approved: projection.repair_answer.as_ref().is_some_and(|answer| {
             answer.question_id == question.id
                 && answer.disposition == crate::execution::history::SuiteRepairDisposition::Approve
-        }) })
+        }),
+    })
 }
 
 fn checkpoint_question(checkpoint: &Checkpoint) -> Gate {
@@ -165,7 +171,9 @@ fn decide(
     // checkpoint, or names none when the Stop named none; a restart never
     // continues it, and an unlinked approval never lifts a linked Stop.
     for (index, gate) in gates.iter().enumerate() {
-        let State::Answered(answer) = &gate.state else { continue };
+        let State::Answered(answer) = &gate.state else {
+            continue;
+        };
         if answer.disposition != Disposition::Stop {
             continue;
         }

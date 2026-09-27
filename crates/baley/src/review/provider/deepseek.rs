@@ -6,12 +6,28 @@ pub fn request(model: &str, effort: Option<&str>, system: &str, user: &str, key:
     request_with_schema(model, effort, system, user, key, finding_schema())
 }
 
-pub fn consult_request(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key) -> Request {
+pub fn consult_request(
+    model: &str,
+    effort: Option<&str>,
+    system: &str,
+    user: &str,
+    key: &Key,
+) -> Request {
     request_with_schema(model, effort, system, user, key, super::consult::schema())
 }
 
-fn request_with_schema(model: &str, effort: Option<&str>, system: &str, user: &str, key: &Key, schema: Value) -> Request {
-    let system = format!("{system}\n\nRespond with ONLY a single JSON object that conforms to this JSON schema - the object itself is the result, not the schema; no prose, no markdown fences:\n{}", schema);
+fn request_with_schema(
+    model: &str,
+    effort: Option<&str>,
+    system: &str,
+    user: &str,
+    key: &Key,
+    schema: Value,
+) -> Request {
+    let system = format!(
+        "{system}\n\nRespond with ONLY a single JSON object that conforms to this JSON schema - the object itself is the result, not the schema; no prose, no markdown fences:\n{}",
+        schema
+    );
     let mut body = json!({"model":model,
         "messages":[{"role":"system","content":system},{"role":"user","content":user}],
         "response_format":{"type":"json_object"}});
@@ -27,7 +43,9 @@ fn request_with_schema(model: &str, effort: Option<&str>, system: &str, user: &s
 
 pub fn extract(response: &Value) -> Extracted {
     Extracted {
-        text: response["choices"][0]["message"]["content"].as_str().map(str::to_owned),
+        text: response["choices"][0]["message"]["content"]
+            .as_str()
+            .map(str::to_owned),
         model: response["model"].as_str().map(str::to_owned),
         // completion_tokens already includes its reasoning-token breakdown.
         usage: response.get("usage").cloned(),

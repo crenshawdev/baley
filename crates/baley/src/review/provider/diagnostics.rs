@@ -7,30 +7,29 @@ const WINDOW: usize = 4096;
 const CAP: usize = 1024;
 const TRUNCATED: &str = " [truncated]";
 
-static URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(
-    r"([A-Za-z][A-Za-z0-9+.-]*://)[^\s/?#@]+@"
-).unwrap());
-static BARE: LazyLock<Regex> = LazyLock::new(|| Regex::new(
-    r"[^\s/:@]+:[^\s/@]+@"
-).unwrap());
-static URL_CUT: LazyLock<Regex> = LazyLock::new(|| Regex::new(
-    r#"([A-Za-z][A-Za-z0-9+.-]*://)[^\s/?#@"']+$"#
-).unwrap());
-static BARE_CUT: LazyLock<Regex> = LazyLock::new(|| Regex::new(
-    r#"[^\s/:@"']+:[^\s/@"']+$"#
-).unwrap());
-static AUTH: LazyLock<Regex> = LazyLock::new(|| Regex::new(
-    r"(?i)(?:authorization\s*[:=]\s*)?(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+"
-).unwrap());
-static PAIR: LazyLock<Regex> = LazyLock::new(|| Regex::new(concat!(
+static URL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"([A-Za-z][A-Za-z0-9+.-]*://)[^\s/?#@]+@").unwrap());
+static BARE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^\s/:@]+:[^\s/@]+@").unwrap());
+static URL_CUT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"([A-Za-z][A-Za-z0-9+.-]*://)[^\s/?#@"']+$"#).unwrap());
+static BARE_CUT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"[^\s/:@"']+:[^\s/@"']+$"#).unwrap());
+static AUTH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:authorization\s*[:=]\s*)?(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+").unwrap()
+});
+static PAIR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
     r#"(?i)(^|[^A-Za-z0-9_.-])["']?(?:[A-Za-z0-9]+[_.-]){0,4}"#,
     r#"(?:api[_.-]?key|access[_.-]?token|refresh[_.-]?token|passwd|password|secret|token|key)["']?\s*[:=]\s*"#,
     r#"(?:"[^"]*"|'[^']*'|"[^"]*$|'[^']*$|[^\s&"',;)\]}>]+)"#
-)).unwrap());
-static CAMEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(concat!(
+)).unwrap()
+});
+static CAMEL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
     r#"(^|[^A-Za-z0-9_.-])["']?[a-z][A-Za-z0-9]{0,30}(?:Key|Token|Secret|Passwd|Password)["']?\s*[:=]\s*"#,
     r#"(?:"[^"]*"|'[^']*'|"[^"]*$|'[^']*$|[^\s&"',;)\]}>]+)"#
-)).unwrap());
+)).unwrap()
+});
 
 pub fn fence(text: &str) -> String {
     let clean = URL.replace_all(text, "${1}<redacted>@");

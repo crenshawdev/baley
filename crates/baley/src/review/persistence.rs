@@ -186,7 +186,9 @@ pub enum Outcome {
 /// committed records, or the records of the revision that won instead.
 pub async fn commit_records(store: &Store, view: &View, name: &str, proposed: Value) -> Outcome {
     match update(store, view, name, proposed).await {
-        Ok(committed) => records(&committed.snapshot.data).map_or(Outcome::Failed, Outcome::Committed),
+        Ok(committed) => {
+            records(&committed.snapshot.data).map_or(Outcome::Failed, Outcome::Committed)
+        }
         Err(Error::Conflict(_)) => match read(store).await {
             Ok(winner) => records(&winner.snapshot.data).map_or(Outcome::Failed, Outcome::Lost),
             Err(_) => Outcome::Failed,

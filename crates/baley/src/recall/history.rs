@@ -1,11 +1,11 @@
 //! New 4.0 git dependency. Every failed read narrows explicit coverage; no
 //! operation writes refs, the index, the worktree, or fetches missing objects.
 use super::{Candidate, Provenance, current, documents};
+use baley::process::Process;
 use baley::store::{
     model::{self, DecisionRecord, ItemRecord},
     writer::View,
 };
-use baley::process::Process;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
@@ -17,27 +17,39 @@ fn read_git(process: &mut dyn Process, root: &Path, args: &[&str]) -> Result<Vec
     read_git_capped(process, root, args, usize::MAX)
 }
 
-fn read_git_capped(process: &mut dyn Process, root: &Path, args: &[&str], bound: usize) -> Result<Vec<u8>, String> {
+fn read_git_capped(
+    process: &mut dyn Process,
+    root: &Path,
+    args: &[&str],
+    bound: usize,
+) -> Result<Vec<u8>, String> {
     let output = baley::git_process::run(
-            &baley::git_process::launch(baley::git_process::Caller::RecallHistory)
-                .cwd(root)
-                .args(args)
-                .limit(bound)
-                .env("GIT_OPTIONAL_LOCKS", "0")
-                .env("GIT_NO_LAZY_FETCH", "1")
-                .env("GIT_LITERAL_PATHSPECS", "1")
-                .env("GIT_TERMINAL_PROMPT", "0"), process,
-        )
-        .map_err(|e| format!("git {} unavailable: {e}", args[0]))?;
+        &baley::git_process::launch(baley::git_process::Caller::RecallHistory)
+            .cwd(root)
+            .args(args)
+            .limit(bound)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .env("GIT_LITERAL_PATHSPECS", "1")
+            .env("GIT_TERMINAL_PROMPT", "0"),
+        process,
+    )
+    .map_err(|e| format!("git {} unavailable: {e}", args[0]))?;
     git_output(args[0], bound, output)
 }
 
-fn git_output(command: &str, bound: usize, output: baley::process::Output) -> Result<Vec<u8>, String> {
+fn git_output(
+    command: &str,
+    bound: usize,
+    output: baley::process::Output,
+) -> Result<Vec<u8>, String> {
     if !output.success() {
         return Err(format!("git {command} failed ({})", output.status));
     }
     if !output.stdout_complete || output.stdout.len() > bound {
-        return Err(format!("git {command} output exceeds retained-byte bound {bound}"));
+        return Err(format!(
+            "git {command} output exceeds retained-byte bound {bound}"
+        ));
     }
     Ok(output.stdout)
 }
@@ -136,7 +148,8 @@ pub trait ReadGit {
     fn blob(&mut self, id: &str) -> Result<Vec<u8>, String>;
     /// Provided for existing in-memory readers; production queries size without content.
     fn blob_size(&mut self, id: &str) -> Result<Vec<u8>, String> {
-        self.blob(id).map(|bytes| bytes.len().to_string().into_bytes())
+        self.blob(id)
+            .map(|bytes| bytes.len().to_string().into_bytes())
     }
     fn blob_bounded(&mut self, id: &str, _bound: u64) -> Result<Vec<u8>, String> {
         self.blob(id)
@@ -151,13 +164,21 @@ struct Git<'a> {
 
 impl ReadGit for Git<'_> {
     fn shallow(&mut self) -> Result<Vec<u8>, String> {
-        read_git(self.process, self.root, &["rev-parse", "--is-shallow-repository"])
+        read_git(
+            self.process,
+            self.root,
+            &["rev-parse", "--is-shallow-repository"],
+        )
     }
     fn toplevel(&mut self) -> Result<Vec<u8>, String> {
         read_git(self.process, self.root, &["rev-parse", "--show-toplevel"])
     }
     fn commits(&mut self) -> Result<Vec<u8>, String> {
-        read_git(self.process, self.root, &["rev-list", "--topo-order", "HEAD"])
+        read_git(
+            self.process,
+            self.root,
+            &["rev-list", "--topo-order", "HEAD"],
+        )
     }
     fn tree(&mut self, commit: &str, prefix: &str) -> Result<Vec<u8>, String> {
         read_git(
@@ -173,7 +194,12 @@ impl ReadGit for Git<'_> {
         read_git_capped(self.process, self.root, &["cat-file", "-s", id], 32)
     }
     fn blob_bounded(&mut self, id: &str, bound: u64) -> Result<Vec<u8>, String> {
-        read_git_capped(self.process, self.root, &["cat-file", "blob", id], bound as usize)
+        read_git_capped(
+            self.process,
+            self.root,
+            &["cat-file", "blob", id],
+            bound as usize,
+        )
     }
 }
 
@@ -189,7 +215,15 @@ fn admit(candidates: Vec<Candidate>, seen: &mut BTreeSet<String>, out: &mut Hist
 pub fn read(root: &Path, view: &View, live: &[Candidate], process: &mut dyn Process) -> History {
     let seen: BTreeSet<_> = live.iter().map(evidence_key).collect();
     match root.canonicalize() {
-        Ok(root) => traverse(&root, view, seen, &mut Git { process, root: &root }),
+        Ok(root) => traverse(
+            &root,
+            view,
+            seen,
+            &mut Git {
+                process,
+                root: &root,
+            },
+        ),
         Err(e) => History {
             incomplete: vec![format!("history incomplete: {e}")],
             ..History::default()
@@ -222,9 +256,8 @@ fn walk(
 ) -> Result<(), String> {
     let shallow = utf8(git.shallow()?)?;
     if shallow.trim() == "true" {
-        out.incomplete.push(
-            "shallow history: ancestors beyond the shallow boundary are unavailable".into(),
-        );
+        out.incomplete
+            .push("shallow history: ancestors beyond the shallow boundary are unavailable".into());
     }
     let top = utf8(git.toplevel()?)?;
     let relative = root
@@ -268,9 +301,15 @@ fn walk(
             if !visited.insert((path.to_string(), blob.to_string())) {
                 continue;
             }
-            let permit = match git.blob_size(blob).and_then(|size| blob_preflight(path, &size)) {
+            let permit = match git
+                .blob_size(blob)
+                .and_then(|size| blob_preflight(path, &size))
+            {
                 Ok(permit) => permit,
-                Err(error) => { out.incomplete.push(format!("{commit}:{path}: {error}")); continue; }
+                Err(error) => {
+                    out.incomplete.push(format!("{commit}:{path}: {error}"));
+                    continue;
+                }
             };
             let bytes = if let Some(bytes) = blobs.get(blob) {
                 bytes.clone()
@@ -300,27 +339,45 @@ fn walk(
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct BlobPermit { size: u64, bound: u64 }
+struct BlobPermit {
+    size: u64,
+    bound: u64,
+}
 
 /// Parse Git's observation and select the acquisition class before asking for content.
 fn blob_preflight(path: &str, size: &[u8]) -> Result<BlobPermit, String> {
-    let raw = std::str::from_utf8(size).map_err(|_| format!("{path}: invalid git blob size"))?.trim();
+    let raw = std::str::from_utf8(size)
+        .map_err(|_| format!("{path}: invalid git blob size"))?
+        .trim();
     if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(format!("{path}: invalid git blob size"));
     }
-    let size = raw.parse::<u64>().map_err(|_| format!("{path}: invalid git blob size"))?;
+    let size = raw
+        .parse::<u64>()
+        .map_err(|_| format!("{path}: invalid git blob size"))?;
     let class = if matches!(path, "items.jsonl" | "decisions.jsonl") {
         baley::acquisition::Class::Store
-    } else { baley::acquisition::Class::Source };
+    } else {
+        baley::acquisition::Class::Source
+    };
     let bound = baley::acquisition::permit(path, class, size).map_err(|error| error.to_string())?;
     Ok(BlobPermit { size, bound })
 }
 
 fn blob_length(path: &str, permit: &BlobPermit, acquired: u64) -> Result<(), String> {
     if acquired > permit.bound {
-        return Err(baley::acquisition::Crossing { file: path.into(), size: acquired, bound: permit.bound }.to_string());
+        return Err(baley::acquisition::Crossing {
+            file: path.into(),
+            size: acquired,
+            bound: permit.bound,
+        }
+        .to_string());
     }
-    if acquired != permit.size { return Err(format!("{path}: git blob length differs from size observation")); }
+    if acquired != permit.size {
+        return Err(format!(
+            "{path}: git blob length differs from size observation"
+        ));
+    }
     Ok(())
 }
 
@@ -329,45 +386,85 @@ mod tests {
     #[test]
     fn oversized_blob_metadata_refuses_content_acquisition() {
         for path in ["PROJECT.md", "phases/17/CONTEXT.md"] {
-            assert_eq!(super::blob_preflight(path, b"16777217\n"),
-                Err(format!("{path}: size 16777217 exceeds acquisition bound 16777216")));
-            assert_eq!(super::blob_preflight(path, b"16777216\n"),
-                Ok(super::BlobPermit { size: 16_777_216, bound: 16_777_216 }));
+            assert_eq!(
+                super::blob_preflight(path, b"16777217\n"),
+                Err(format!(
+                    "{path}: size 16777217 exceeds acquisition bound 16777216"
+                ))
+            );
+            assert_eq!(
+                super::blob_preflight(path, b"16777216\n"),
+                Ok(super::BlobPermit {
+                    size: 16_777_216,
+                    bound: 16_777_216
+                })
+            );
         }
         for path in ["items.jsonl", "decisions.jsonl"] {
-            assert_eq!(super::blob_preflight(path, b"1073741825\n"),
-                Err(format!("{path}: size 1073741825 exceeds acquisition bound 1073741824")));
-            assert_eq!(super::blob_preflight(path, b"1073741824\n"),
-                Ok(super::BlobPermit { size: 1_073_741_824, bound: 1_073_741_824 }));
+            assert_eq!(
+                super::blob_preflight(path, b"1073741825\n"),
+                Err(format!(
+                    "{path}: size 1073741825 exceeds acquisition bound 1073741824"
+                ))
+            );
+            assert_eq!(
+                super::blob_preflight(path, b"1073741824\n"),
+                Ok(super::BlobPermit {
+                    size: 1_073_741_824,
+                    bound: 1_073_741_824
+                })
+            );
         }
     }
 
     #[test]
     fn invalid_blob_size_refuses_content_acquisition() {
-        for size in [b"".as_slice(), b"-1", b"+1", b"1.5", b"blob 3", b"18446744073709551616", b"\xff"] {
-            assert_eq!(super::blob_preflight("PROJECT.md", size),
-                Err("PROJECT.md: invalid git blob size".into()));
+        for size in [
+            b"".as_slice(),
+            b"-1",
+            b"+1",
+            b"1.5",
+            b"blob 3",
+            b"18446744073709551616",
+            b"\xff",
+        ] {
+            assert_eq!(
+                super::blob_preflight("PROJECT.md", size),
+                Err("PROJECT.md: invalid git blob size".into())
+            );
         }
     }
 
     #[test]
     fn a_truncated_git_capture_is_not_a_complete_blob() {
         let mut output = baley::process::Output::exited(0, b"abcd", b"");
-        assert_eq!(super::git_output("cat-file", 4, output.clone()), Ok(b"abcd".to_vec()));
+        assert_eq!(
+            super::git_output("cat-file", 4, output.clone()),
+            Ok(b"abcd".to_vec())
+        );
         output.stdout_complete = false;
-        assert_eq!(super::git_output("cat-file", 4, output),
-            Err("git cat-file output exceeds retained-byte bound 4".into()));
+        assert_eq!(
+            super::git_output("cat-file", 4, output),
+            Err("git cat-file output exceeds retained-byte bound 4".into())
+        );
     }
 
     #[test]
     fn a_blob_length_mismatch_refuses_the_bytes() {
-        let permit = super::BlobPermit { size: 3, bound: 16_777_216 };
+        let permit = super::BlobPermit {
+            size: 3,
+            bound: 16_777_216,
+        };
         assert_eq!(super::blob_length("PROJECT.md", &permit, 3), Ok(()));
         for size in [2, 4] {
-            assert_eq!(super::blob_length("PROJECT.md", &permit, size),
-                Err("PROJECT.md: git blob length differs from size observation".into()));
+            assert_eq!(
+                super::blob_length("PROJECT.md", &permit, size),
+                Err("PROJECT.md: git blob length differs from size observation".into())
+            );
         }
-        assert_eq!(super::blob_length("PROJECT.md", &permit, 16_777_217),
-            Err("PROJECT.md: size 16777217 exceeds acquisition bound 16777216".into()));
+        assert_eq!(
+            super::blob_length("PROJECT.md", &permit, 16_777_217),
+            Err("PROJECT.md: size 16777217 exceeds acquisition bound 16777216".into())
+        );
     }
 }

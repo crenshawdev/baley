@@ -25,7 +25,10 @@ pub(super) const GREEN_TREE: &str = "tree-at-green";
 pub(super) const COMMAND: &str = "cargo nextest run delivery";
 
 pub(super) fn check(id: &str) -> Check {
-    Check { id: id.into(), item_revision: "revision-1".into() }
+    Check {
+        id: id.into(),
+        item_revision: "revision-1".into(),
+    }
 }
 
 pub(super) fn task() -> Task {
@@ -75,26 +78,44 @@ pub(super) fn record(attempt: &str, id: &str, event: Event) -> Record {
     }
 }
 
-pub(super) fn launch(attempt: &str, run: &str, id: &str, stage: Stage, commit: &str, tree: &str, at: u64) -> Record {
-    record(attempt, run, Event::Launch(Launch {
-        run_id: run.into(),
-        check: Some(check(id)),
-        stage,
-        material: material(commit, tree),
-        launched_at: at,
-    }))
+pub(super) fn launch(
+    attempt: &str,
+    run: &str,
+    id: &str,
+    stage: Stage,
+    commit: &str,
+    tree: &str,
+    at: u64,
+) -> Record {
+    record(
+        attempt,
+        run,
+        Event::Launch(Launch {
+            run_id: run.into(),
+            check: Some(check(id)),
+            stage,
+            material: material(commit, tree),
+            launched_at: at,
+        }),
+    )
 }
 
 pub(super) fn result(attempt: &str, run: &str, code: i32, at: u64) -> Record {
-    record(attempt, &format!("{run}-result"), Event::Result(RunResult {
-        run_id: run.into(),
-        disposition: Disposition::Exited { code },
-        stdout: Capture::new(Vec::new(), true, Vec::new()),
-        stderr: Capture::new(Vec::new(), true, Vec::new()),
-        observed_at: at,
-        observation: Observation::ResultsObserved { summary: Summary::Cargo { failed: code != 0 } },
-        material_unchanged: true,
-    }))
+    record(
+        attempt,
+        &format!("{run}-result"),
+        Event::Result(RunResult {
+            run_id: run.into(),
+            disposition: Disposition::Exited { code },
+            stdout: Capture::new(Vec::new(), true, Vec::new()),
+            stderr: Capture::new(Vec::new(), true, Vec::new()),
+            observed_at: at,
+            observation: Observation::ResultsObserved {
+                summary: Summary::Cargo { failed: code != 0 },
+            },
+            material_unchanged: true,
+        }),
+    )
 }
 
 /// One check delivered honestly: a red run that failed, then a green run that
@@ -103,11 +124,15 @@ pub(super) fn honest_records(id: &str) -> Vec<Record> {
     let red = format!("red-{id}");
     let green = format!("green-{id}");
     vec![
-        record("attempt", &format!("start-{id}"), Event::Attempt {
-            predecessor: None,
-            checks: vec![check(id)],
-            base_commit: RED.into(),
-        }),
+        record(
+            "attempt",
+            &format!("start-{id}"),
+            Event::Attempt {
+                predecessor: None,
+                checks: vec![check(id)],
+                base_commit: RED.into(),
+            },
+        ),
         launch("attempt", &red, id, Stage::Red, RED, RED_TREE, 10),
         result("attempt", &red, 1, 20),
         launch("attempt", &green, id, Stage::Green, GREEN, GREEN_TREE, 30),
@@ -148,4 +173,3 @@ pub(super) fn honest_facts() -> RepositoryFacts {
         .tree(RED, RED_TREE)
         .tree(GREEN, GREEN_TREE)
 }
-

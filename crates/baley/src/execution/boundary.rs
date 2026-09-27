@@ -19,7 +19,9 @@ pub fn native_refusal_reason(reason: &str) -> String {
         return reason.to_owned();
     }
     let mut end = MAX_REASON_BYTES - CUT.len();
-    while !reason.is_char_boundary(end) { end -= 1; }
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
     format!("{}{CUT}", &reason[..end])
 }
 
@@ -29,33 +31,48 @@ pub fn argument_detail(raw: Option<&Value>) -> String {
     let displayed = match value {
         Value::Object(_) => "<object>".to_owned(),
         Value::Array(_) => "<array>".to_owned(),
-        Value::String(s) => serde_json::to_string(&s.chars().take(160).collect::<String>()).expect("scalar"),
+        Value::String(s) => {
+            serde_json::to_string(&s.chars().take(160).collect::<String>()).expect("scalar")
+        }
         other => other.to_string(),
     };
     if raw.is_some_and(|v| v["operation"] == "execute-next") {
         format!("phase={displayed}; phase must be a positive JSON integer")
     } else {
-        let error = raw.cloned().map(serde_json::from_value::<super::model::ExecutorPatch>)
-            .and_then(Result::err).map(|e| e.to_string()).unwrap_or_else(|| "arguments must match the execution schema".into());
+        let error = raw
+            .cloned()
+            .map(serde_json::from_value::<super::model::ExecutorPatch>)
+            .and_then(Result::err)
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "arguments must match the execution schema".into());
         format!("arguments: {}", error.chars().take(512).collect::<String>())
     }
 }
 
 /// Native operations have their own encoding; old boundaries stay unchanged.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(tag="operation",deny_unknown_fields)]
+#[serde(tag = "operation", deny_unknown_fields)]
 pub enum NativeApply {
-    #[serde(rename="execution-admit")]
-    Admit {request:super::admission::Request},
-    #[serde(rename="execution-extend")]
-    Extend {request:super::admission::Request},
+    #[serde(rename = "execution-admit")]
+    Admit { request: super::admission::Request },
+    #[serde(rename = "execution-extend")]
+    Extend { request: super::admission::Request },
     /// A `checkpoint` names a stopped task checkpoint this answer continues or
     /// declines; the retained Stop is preserved and the successor links to it.
-    #[serde(rename="execution-authorize")]
-    Authorize {phase:u32,request_id:String,owner:String,at:String,response:String,
-        #[serde(default)] checkpoint:Option<String>,
-        #[serde(default)] dispatch:Option<String>,
-        #[serde(default)] disposition:Option<crate::evidence::gates::Disposition>},
+    #[serde(rename = "execution-authorize")]
+    Authorize {
+        phase: u32,
+        request_id: String,
+        owner: String,
+        at: String,
+        response: String,
+        #[serde(default)]
+        checkpoint: Option<String>,
+        #[serde(default)]
+        dispatch: Option<String>,
+        #[serde(default)]
+        disposition: Option<crate::evidence::gates::Disposition>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
@@ -114,10 +131,16 @@ impl Success {
             expected_execution_version: active.expected_execution_version,
             route: active.route.clone(),
             identities: Box::new(DispatchIdentities {
-                dispatch: DocumentIdentity::Dispatch { id: active.id.clone() },
-                plan: DocumentIdentity::PhasePlan { phase: std::num::NonZeroU32::new(active.phase).expect("admitted phase"),
-                    plan: std::num::NonZeroU32::new(active.plan).expect("admitted plan") },
-                context: DocumentIdentity::PhaseContext { phase: std::num::NonZeroU32::new(active.phase).expect("admitted phase") },
+                dispatch: DocumentIdentity::Dispatch {
+                    id: active.id.clone(),
+                },
+                plan: DocumentIdentity::PhasePlan {
+                    phase: std::num::NonZeroU32::new(active.phase).expect("admitted phase"),
+                    plan: std::num::NonZeroU32::new(active.plan).expect("admitted plan"),
+                },
+                context: DocumentIdentity::PhaseContext {
+                    phase: std::num::NonZeroU32::new(active.phase).expect("admitted phase"),
+                },
             }),
             prompt_digest: (!active.prompt_digest.is_empty()).then(|| active.prompt_digest.clone()),
         }
@@ -198,9 +221,7 @@ impl Response {
 impl Response {
     pub fn into_envelope(self) -> ExecutionEnvelope {
         match self {
-            Self::Dispatch { dispatch, .. } => {
-                Envelope::Ok(Success::dispatch(&dispatch))
-            }
+            Self::Dispatch { dispatch, .. } => Envelope::Ok(Success::dispatch(&dispatch)),
             Self::NextPlan { phase, plan } => Envelope::Ok(Success::NextPlan { phase, plan }),
             Self::Complete { phase } => Envelope::Ok(Success::Complete { phase }),
             Self::JudgmentStop {
@@ -331,13 +352,15 @@ impl PreparedAnswer {
             };
         }
         let receipt = match &envelope {
-            Envelope::Ok(Success::Dispatch { dispatch_id, prompt_digest, .. }) => {
-                Receipt::Dispatch {
-                    dispatch_id: dispatch_id.clone(),
-                    prompt_bytes: None,
-                    prompt_digest: prompt_digest.clone().unwrap_or_default(),
-                }
-            }
+            Envelope::Ok(Success::Dispatch {
+                dispatch_id,
+                prompt_digest,
+                ..
+            }) => Receipt::Dispatch {
+                dispatch_id: dispatch_id.clone(),
+                prompt_bytes: None,
+                prompt_digest: prompt_digest.clone().unwrap_or_default(),
+            },
             _ => Receipt::Compact {
                 envelope: envelope.clone(),
             },
@@ -527,7 +550,11 @@ impl Located {
     }
 
     /// An input the operation needed and could not read.
-    pub fn input(rule: impl Into<String>, slot: impl Into<String>, path: impl Into<String>) -> Self {
+    pub fn input(
+        rule: impl Into<String>,
+        slot: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
         Self {
             rule: Some(rule.into()),
             slot: Some(slot.into()),
@@ -721,9 +748,17 @@ impl BoundaryV1 {
     }
 
     pub fn validate(&self, terminal: bool) -> Result<(), Failure> {
-        if self.is_native_refusal() && (terminal || self.tool != BoundaryTool::BaleyApply
-            || self.lease_refusal.is_some()
-            || !matches!(self.receipt, Receipt::Compact { envelope: Envelope::Refused { .. } })) {
+        if self.is_native_refusal()
+            && (terminal
+                || self.tool != BoundaryTool::BaleyApply
+                || self.lease_refusal.is_some()
+                || !matches!(
+                    self.receipt,
+                    Receipt::Compact {
+                        envelope: Envelope::Refused { .. }
+                    }
+                ))
+        {
             return Err(Failure::Encoding);
         }
         let digest = |value: &str| {
@@ -758,19 +793,29 @@ impl BoundaryV1 {
             return Err(Failure::Encoding);
         }
         if let Some(located) = &self.located
-            && (terminal || if self.is_native_refusal() {
-                let expected = Located { rule: located.rule.clone(), slot: located.slot.clone(),
-                    id: located.id.clone(), ..Located::default() };
-                **located != expected || [&located.rule, &located.slot].iter()
-                    .any(|value| value.as_ref().is_some_and(|text| text.trim().is_empty()))
-            } else { !located.valid() })
+            && (terminal
+                || if self.is_native_refusal() {
+                    let expected = Located {
+                        rule: located.rule.clone(),
+                        slot: located.slot.clone(),
+                        id: located.id.clone(),
+                        ..Located::default()
+                    };
+                    **located != expected
+                        || [&located.rule, &located.slot]
+                            .iter()
+                            .any(|value| value.as_ref().is_some_and(|text| text.trim().is_empty()))
+                } else {
+                    !located.valid()
+                })
         {
             return Err(Failure::Encoding);
         }
         if let Some(evidence) = &self.lease_refusal {
             evidence.validate()?;
-            let expected = Self::lease_refusal(self.request_digest.clone(), evidence.paths.clone())?
-                .with_located(self.located.as_deref().cloned());
+            let expected =
+                Self::lease_refusal(self.request_digest.clone(), evidence.paths.clone())?
+                    .with_located(self.located.as_deref().cloned());
             if terminal || *self != expected {
                 return Err(Failure::Encoding);
             }
@@ -909,7 +954,10 @@ mod tests {
                 } => {
                     assert_eq!(dispatch_id, "d1");
                     assert_eq!(prompt_bytes, None);
-                    assert_eq!(prompt_digest, "d08d660b7de4e2314def9d953b46d4fec2db3acbfe7344cda4ede7faacc5e177");
+                    assert_eq!(
+                        prompt_digest,
+                        "d08d660b7de4e2314def9d953b46d4fec2db3acbfe7344cda4ede7faacc5e177"
+                    );
                 }
             }
         }
@@ -1022,8 +1070,8 @@ mod tests {
 
     #[test]
     fn dispatch_receipt_contains_references_and_never_prompt_or_body() {
-        let answer = PreparedAnswer::new(Envelope::Ok(Success::dispatch(&large_prompt_dispatch())))
-        .unwrap();
+        let answer =
+            PreparedAnswer::new(Envelope::Ok(Success::dispatch(&large_prompt_dispatch()))).unwrap();
         assert_eq!(
             serde_json::to_value(&answer.receipt).unwrap(),
             json!({"receipt":"dispatch","dispatch_id":"d1",
@@ -1036,7 +1084,11 @@ mod tests {
     fn a_dispatch_answer_over_the_compact_limit_is_too_large() {
         let mut oversized = large_prompt_dispatch();
         oversized.id = "d".repeat(MAX_COMPACT_BYTES);
-        assert!(PreparedAnswer::new(Envelope::Ok(Success::dispatch(&oversized))).unwrap().too_large());
+        assert!(
+            PreparedAnswer::new(Envelope::Ok(Success::dispatch(&oversized)))
+                .unwrap()
+                .too_large()
+        );
     }
 
     #[test]

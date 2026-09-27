@@ -24,9 +24,14 @@ pub enum Action {
 impl Action {
     pub fn instruction(&self) -> String {
         match self {
-            Self::Resolve { phase, source } => format!("Resolve {source}: set the tick on phase {} to match its derived status", phase.address()),
+            Self::Resolve { phase, source } => format!(
+                "Resolve {source}: set the tick on phase {} to match its derived status",
+                phase.address()
+            ),
             Self::Resume(next) => next.clone(),
-            Self::Interrupted(id) => format!("Continue dispatch {id} with execution-authorize or retire it"),
+            Self::Interrupted(id) => {
+                format!("Continue dispatch {id} with execution-authorize or retire it")
+            }
             Self::Execute(id) => format!("/bal-execute {}", id.address()),
             Self::Verify(id) => format!("/bal-verify {}", id.address()),
             Self::Context(id) => format!("/bal-context {}", id.address()),
@@ -74,8 +79,13 @@ impl Rule {
     }
 
     fn apply_with_conflicts(
-        self, lifecycle: &Lifecycle, observations: &Observations, pause: Option<&Pause>,
-        skip_discuss: bool, conflicts: &[crate::derivation::RoadmapConflict], interrupted: Option<&str>,
+        self,
+        lifecycle: &Lifecycle,
+        observations: &Observations,
+        pause: Option<&Pause>,
+        skip_discuss: bool,
+        conflicts: &[crate::derivation::RoadmapConflict],
+        interrupted: Option<&str>,
     ) -> Option<Action> {
         let lowest = |status| {
             lifecycle
@@ -87,9 +97,13 @@ impl Rule {
         };
         match self {
             Self::Interrupted => interrupted.map(|id| Action::Interrupted(id.into())),
-            Self::Conflict => conflicts.iter()
+            Self::Conflict => conflicts
+                .iter()
                 .min_by(|a, b| a.phase.number().total_cmp(&b.phase.number()))
-                .map(|issue| Action::Resolve { phase: issue.phase, source: issue.source.clone() }),
+                .map(|issue| Action::Resolve {
+                    phase: issue.phase,
+                    source: issue.source.clone(),
+                }),
             Self::Pause => pause
                 .filter(|p| Some(p.phase) == lifecycle.current)
                 .map(|p| Action::Resume(p.next.clone())),
@@ -132,17 +146,52 @@ pub fn select(
 }
 
 pub fn select_with_conflicts(
-    lifecycle: &Lifecycle, observations: &Observations, pause: Option<&Pause>,
-    skip_discuss: bool, conflicts: &[crate::derivation::RoadmapConflict],
+    lifecycle: &Lifecycle,
+    observations: &Observations,
+    pause: Option<&Pause>,
+    skip_discuss: bool,
+    conflicts: &[crate::derivation::RoadmapConflict],
 ) -> Option<Action> {
-    select_with_interruptions(lifecycle, observations, pause, skip_discuss, conflicts, None)
+    select_with_interruptions(
+        lifecycle,
+        observations,
+        pause,
+        skip_discuss,
+        conflicts,
+        None,
+    )
 }
 
 pub fn select_with_interruptions(
-    lifecycle: &Lifecycle, observations: &Observations, pause: Option<&Pause>,
-    skip_discuss: bool, conflicts: &[crate::derivation::RoadmapConflict], interrupted: Option<&str>,
+    lifecycle: &Lifecycle,
+    observations: &Observations,
+    pause: Option<&Pause>,
+    skip_discuss: bool,
+    conflicts: &[crate::derivation::RoadmapConflict],
+    interrupted: Option<&str>,
 ) -> Option<Action> {
-    Rule::Conflict.apply_with_conflicts(lifecycle, observations, pause, skip_discuss, conflicts, interrupted)
-        .or_else(|| Rule::Interrupted.apply_with_conflicts(lifecycle, observations, pause, skip_discuss, conflicts, interrupted))
-        .or_else(|| RULES.iter().find_map(|rule| rule.apply(lifecycle, observations, pause, skip_discuss)))
+    Rule::Conflict
+        .apply_with_conflicts(
+            lifecycle,
+            observations,
+            pause,
+            skip_discuss,
+            conflicts,
+            interrupted,
+        )
+        .or_else(|| {
+            Rule::Interrupted.apply_with_conflicts(
+                lifecycle,
+                observations,
+                pause,
+                skip_discuss,
+                conflicts,
+                interrupted,
+            )
+        })
+        .or_else(|| {
+            RULES
+                .iter()
+                .find_map(|rule| rule.apply(lifecycle, observations, pause, skip_discuss))
+        })
 }

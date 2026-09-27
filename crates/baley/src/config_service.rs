@@ -313,11 +313,9 @@ pub fn start(command: &Command) -> Start {
             Ok(entry) => Start::Session(Some(entry)),
             Err(error) => Start::Answer(Box::new(refused("invalid-config", error.to_string()))),
         },
-        Command::Apply(Apply::Interview { accepted, answers, .. })
-            if !accepted || answers.is_none() =>
-        {
-            Start::ObserveOnly
-        }
+        Command::Apply(Apply::Interview {
+            accepted, answers, ..
+        }) if !accepted || answers.is_none() => Start::ObserveOnly,
         _ => Start::Session(None),
     }
 }

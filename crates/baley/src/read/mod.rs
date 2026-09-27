@@ -20,7 +20,9 @@ pub struct ReadDomain {
 
 impl ReadDomain {
     pub fn new(planning_root: &Path) -> Result<Self, String> {
-        Ok(Self { planning_root: planning_root.to_path_buf() })
+        Ok(Self {
+            planning_root: planning_root.to_path_buf(),
+        })
     }
     pub fn query(&mut self, query: Query, process: &mut dyn Process) -> Value {
         match query {

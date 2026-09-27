@@ -554,8 +554,12 @@ The schema below is also returned as the `plan-read` contract.
 "#;
 
 pub fn markdown() -> String {
-    let role = crate::help::table::render_description("bal-plan", ROLE).expect("compiled skill front matter");
+    let role = crate::help::table::render_description("bal-plan", ROLE)
+        .expect("compiled skill front matter");
     let schema = serde_json::to_string_pretty(&super::model::contract())
         .expect("compiled plan submission schema");
-    format!("{role}\n## Shared read contract\n\n{}\n\n```json\n{schema}\n```\n", crate::read::instructions::CONTRACT)
+    format!(
+        "{role}\n## Shared read contract\n\n{}\n\n```json\n{schema}\n```\n",
+        crate::read::instructions::CONTRACT
+    )
 }

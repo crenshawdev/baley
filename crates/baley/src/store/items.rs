@@ -43,7 +43,10 @@ mod tests {
             version: VERSION,
             id: id.into(),
             revision: 1,
-            origin: Origin { source: "capture".into(), original: Evidence::Missing },
+            origin: Origin {
+                source: "capture".into(),
+                original: Evidence::Missing,
+            },
             text: text.into(),
             kind: "todo".into(),
             phase: None,
@@ -53,11 +56,18 @@ mod tests {
     }
 
     fn view(items: Vec<ItemRecord>) -> View {
-        View { items, decisions: vec![], snapshot: Snapshot::new(1, b"", b"", serde_json::Value::Null).unwrap() }
+        View {
+            items,
+            decisions: vec![],
+            snapshot: Snapshot::new(1, b"", b"", serde_json::Value::Null).unwrap(),
+        }
     }
 
     fn recalled(view: &View) -> Vec<(&str, u64)> {
-        view.recall_items().iter().map(|item| (item.id.as_str(), item.revision)).collect()
+        view.recall_items()
+            .iter()
+            .map(|item| (item.id.as_str(), item.revision))
+            .collect()
     }
 
     #[test]

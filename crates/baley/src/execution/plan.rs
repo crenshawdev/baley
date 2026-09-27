@@ -514,7 +514,10 @@ impl PlanGraph {
     }
 
     pub fn next_ready(&self, completed: &BTreeSet<u32>) -> Option<u32> {
-        self.plans.iter().find(|plan| !completed.contains(plan)).copied()
+        self.plans
+            .iter()
+            .find(|plan| !completed.contains(plan))
+            .copied()
     }
 }
 

@@ -61,7 +61,9 @@ fn frozen_token_relationships_and_raw_stopword_order() {
 #[test]
 fn equal_scores_keep_candidate_order() {
     let candidates = (1..=7).map(|i| prose("quasar seam", i)).collect();
-    let answer = Corpus::new(candidates).query("quasar", None, "builtin").unwrap();
+    let answer = Corpus::new(candidates)
+        .query("quasar", None, "builtin")
+        .unwrap();
     for (i, hit) in answer.results.iter().enumerate() {
         assert_eq!(hit.provenance, prose("", i + 1).provenance);
     }
@@ -82,7 +84,9 @@ fn a_repeated_query_term_does_not_change_the_answer() {
 #[test]
 fn the_default_limit_is_5_while_total_counts_every_match() {
     let candidates = (1..=7).map(|i| prose("quasar seam", i)).collect();
-    let answer = Corpus::new(candidates).query("quasar", None, "builtin").unwrap();
+    let answer = Corpus::new(candidates)
+        .query("quasar", None, "builtin")
+        .unwrap();
     assert_eq!(answer.total, 7);
     assert_eq!(answer.results.len(), 5);
 }
@@ -171,7 +175,10 @@ fn a_phase_context_offers_its_other_sections_and_not_its_local_decisions() {
         None,
     );
     let corpus = Corpus::new(snippets);
-    assert_eq!(corpus.query("otherquasar", None, "builtin").unwrap().total, 1);
+    assert_eq!(
+        corpus.query("otherquasar", None, "builtin").unwrap().total,
+        1
+    );
     assert_eq!(
         corpus.query("localquasar", None, "builtin").unwrap().total,
         0
@@ -209,9 +216,24 @@ fn ledgers_config_evidence_reports_credentials_and_traces_are_not_eligible() {
 #[test]
 fn a_linked_or_escaping_entry_is_refused() {
     use documents::{Seen, Step, step};
-    let link_file = Seen { link: true, contained: false, dir: false, file: false };
-    let link_dir = Seen { link: true, contained: false, dir: false, file: false };
-    let escaping = Seen { link: false, contained: false, dir: false, file: true };
+    let link_file = Seen {
+        link: true,
+        contained: false,
+        dir: false,
+        file: false,
+    };
+    let link_dir = Seen {
+        link: true,
+        contained: false,
+        dir: false,
+        file: false,
+    };
+    let escaping = Seen {
+        link: false,
+        contained: false,
+        dir: false,
+        file: true,
+    };
     assert_eq!(step("phases/1/CONTEXT.md", &link_file), Step::Refuse);
     assert_eq!(step("phases/2", &link_dir), Step::Refuse);
     assert_eq!(step("phases/1/CONTEXT.md", &escaping), Step::Refuse);
@@ -220,8 +242,18 @@ fn a_linked_or_escaping_entry_is_refused() {
 #[test]
 fn a_contained_directory_is_descended_and_a_contained_eligible_file_read() {
     use documents::{Seen, Step, step};
-    let dir = Seen { link: false, contained: true, dir: true, file: false };
-    let file = Seen { link: false, contained: true, dir: false, file: true };
+    let dir = Seen {
+        link: false,
+        contained: true,
+        dir: true,
+        file: false,
+    };
+    let file = Seen {
+        link: false,
+        contained: true,
+        dir: false,
+        file: true,
+    };
     assert_eq!(step("phases/2", &dir), Step::Descend);
     assert_eq!(step("phases/1/CONTEXT.md", &file), Step::Read);
     assert_eq!(step("phases/1/reports/SUMMARY.md", &file), Step::Skip);
@@ -249,10 +281,7 @@ fn unreadable_permitted_source_states_incomplete_coverage() {
 fn a_git_launch_failure_is_incomplete_coverage() {
     struct Missing;
     impl baley::process::Process for Missing {
-        fn run(
-            &mut self,
-            _: &baley::process::Launch,
-        ) -> std::io::Result<baley::process::Output> {
+        fn run(&mut self, _: &baley::process::Launch) -> std::io::Result<baley::process::Output> {
             Err(std::io::Error::other("git executable unavailable"))
         }
     }
@@ -270,7 +299,11 @@ fn a_git_launch_failure_is_incomplete_coverage() {
 fn one_query_answers_a_record_hit_and_a_document_hit_together() {
     let store = view(vec![item("orbit-item", "orbit from the store")]);
     let mut candidates = current(&store);
-    candidates.extend(documents::snippets("PROJECT.md", "orbit from a document\n", None));
+    candidates.extend(documents::snippets(
+        "PROJECT.md",
+        "orbit from a document\n",
+        None,
+    ));
     let answer = Corpus::new(candidates)
         .query("orbit", None, "builtin")
         .unwrap();
@@ -296,7 +329,10 @@ fn a_paragraph_snippet_cites_its_first_line_and_keeps_its_continuation() {
         .find(|c| c.text.starts_with("orbit starts here"))
         .unwrap();
     assert!(paragraph.text.contains("and carries on here"));
-    assert!(matches!(&paragraph.provenance, Provenance::Document { line: 3, .. }));
+    assert!(matches!(
+        &paragraph.provenance,
+        Provenance::Document { line: 3, .. }
+    ));
 }
 
 /// Git's answers, supplied: the planning root is `/repo/.planning`, commits
@@ -318,7 +354,12 @@ impl history::ReadGit for Answers {
         Ok(b"/repo\n".to_vec())
     }
     fn commits(&mut self) -> std::result::Result<Vec<u8>, String> {
-        Ok(self.commits.iter().map(|c| format!("{c}\n")).collect::<String>().into())
+        Ok(self
+            .commits
+            .iter()
+            .map(|c| format!("{c}\n"))
+            .collect::<String>()
+            .into())
     }
     fn tree(&mut self, commit: &str, _: &str) -> std::result::Result<Vec<u8>, String> {
         Ok(self.trees[commit]
@@ -328,7 +369,10 @@ impl history::ReadGit for Answers {
             .into())
     }
     fn blob(&mut self, id: &str) -> std::result::Result<Vec<u8>, String> {
-        self.blobs[id].clone().map(String::into_bytes).map_err(String::from)
+        self.blobs[id]
+            .clone()
+            .map(String::into_bytes)
+            .map_err(String::from)
     }
 }
 
@@ -373,7 +417,11 @@ fn a_removed_document_cites_its_path_line_and_the_newest_commit_holding_it() {
 fn a_blob_held_by_several_commits_yields_one_candidate() {
     let history = traverse(&view(vec![]), &mut removed_project());
     assert_eq!(
-        history.candidates.iter().filter(|c| c.text == "removed orbit").count(),
+        history
+            .candidates
+            .iter()
+            .filter(|c| c.text == "removed orbit")
+            .count(),
         1
     );
 }
@@ -468,8 +516,14 @@ fn review_material_reads_a_project_file_named_relative_to_the_project() {
     std::fs::create_dir_all(dir.path().join(".planning")).unwrap();
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
     std::fs::write(dir.path().join("src/lib.rs"), "fn material() {}\n").unwrap();
-    let (path, bytes) = resident::project_source(&dir.path().join(".planning"), "src/lib.rs").unwrap();
-    assert_eq!(path, std::fs::canonicalize(dir.path().join("src/lib.rs")).unwrap().to_string_lossy());
+    let (path, bytes) =
+        resident::project_source(&dir.path().join(".planning"), "src/lib.rs").unwrap();
+    assert_eq!(
+        path,
+        std::fs::canonicalize(dir.path().join("src/lib.rs"))
+            .unwrap()
+            .to_string_lossy()
+    );
     assert_eq!(bytes, b"fn material() {}\n");
 }
 
@@ -478,7 +532,8 @@ fn review_material_refuses_a_file_under_the_planning_root() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".planning")).unwrap();
     std::fs::write(dir.path().join(".planning/STATE.json"), "{}").unwrap();
-    let error = resident::project_source(&dir.path().join(".planning"), ".planning/STATE.json").unwrap_err();
+    let error = resident::project_source(&dir.path().join(".planning"), ".planning/STATE.json")
+        .unwrap_err();
     assert_eq!(error, ".planning/STATE.json is not a project source file");
 }
 
@@ -487,6 +542,7 @@ fn review_material_refuses_a_file_outside_the_project() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("project/.planning")).unwrap();
     std::fs::write(dir.path().join("outside.rs"), "fn outside() {}\n").unwrap();
-    let error = resident::project_source(&dir.path().join("project/.planning"), "../outside.rs").unwrap_err();
+    let error = resident::project_source(&dir.path().join("project/.planning"), "../outside.rs")
+        .unwrap_err();
     assert_eq!(error, "../outside.rs is not a project source file");
 }

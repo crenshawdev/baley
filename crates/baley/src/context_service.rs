@@ -17,9 +17,11 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
     match command {
         Command::Intake(phase) => {
             let observed = baley::context::persistence::read_snapshot(root)?;
-            let saved = observed.as_ref().map(|snapshot| {
-                baley::context::persistence::saved(&snapshot.data, phase)
-            }).transpose()?.flatten();
+            let saved = observed
+                .as_ref()
+                .map(|snapshot| baley::context::persistence::saved(&snapshot.data, phase))
+                .transpose()?
+                .flatten();
             let context = if let Some(saved) = saved {
                 let rendered = baley::context::render::document(&saved);
                 json!({"identity":{"kind":"phase-context","phase":phase},
@@ -32,10 +34,17 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             };
             let roadmap = if root.join("ROADMAP.md").is_file() {
                 let bytes = std::fs::read(root.join("ROADMAP.md"))?;
-                let available = std::str::from_utf8(&bytes).ok()
+                let available = std::str::from_utf8(&bytes)
+                    .ok()
                     .and_then(|text| baley::derivation::parse_roadmap(text).ok())
-                    .is_some_and(|parsed| parsed.phases.iter()
-                        .filter(|entry| entry.id.address() == phase.to_string()).count() == 1);
+                    .is_some_and(|parsed| {
+                        parsed
+                            .phases
+                            .iter()
+                            .filter(|entry| entry.id.address() == phase.to_string())
+                            .count()
+                            == 1
+                    });
                 json!({"identity":{"kind":"phase-roadmap-row","phase":phase},
                     "classification":"canonical-roadmap-row","revision":baley::store::model::digest(&bytes),
                     "availability":if available {"available"} else {"unavailable"}})
@@ -70,41 +79,87 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                 }
             };
             use baley::context::{persistence, render, validation};
-            let held = if submission.is_none() || approval.as_ref().is_some_and(|value|
-                value.approved && value.submission_digest.is_some()) {
-                let Some(phase) = phase.or_else(|| submission.as_ref().map(|value| value.phase)) else {
-                    return Ok(model::refused("submission", "phase", "digest approval needs phase", None, None, None));
+            let held = if submission.is_none()
+                || approval
+                    .as_ref()
+                    .is_some_and(|value| value.approved && value.submission_digest.is_some())
+            {
+                let Some(phase) = phase.or_else(|| submission.as_ref().map(|value| value.phase))
+                else {
+                    return Ok(model::refused(
+                        "submission",
+                        "phase",
+                        "digest approval needs phase",
+                        None,
+                        None,
+                        None,
+                    ));
                 };
-                let Some(digest) = approval.as_ref().and_then(|value| value.submission_digest.as_ref()) else {
-                    return Ok(model::refused("submission", "approval.submission_digest",
-                        "missing submission needs approval.submission_digest", Some(phase.get()), None, None));
+                let Some(digest) = approval
+                    .as_ref()
+                    .and_then(|value| value.submission_digest.as_ref())
+                else {
+                    return Ok(model::refused(
+                        "submission",
+                        "approval.submission_digest",
+                        "missing submission needs approval.submission_digest",
+                        Some(phase.get()),
+                        None,
+                        None,
+                    ));
                 };
                 let drafts = baley::session::drafts(root)?;
-                let drafts = drafts.lock()
+                let drafts = drafts
+                    .lock()
                     .map_err(|_| baley::store::Error::Invalid("drafts unavailable".into()))?;
                 let held = drafts.contexts.get(&(phase.get(), digest.clone()));
                 if let Some(held) = held {
                     if approval.as_ref().is_some_and(|value| value.approved)
-                        && let Some(newest_digest) = drafts.newest_context.get(&phase.get()).filter(|newest| *newest != digest)
-                        && let Some(newest) = drafts.contexts.get(&(phase.get(), newest_digest.clone()))
+                        && let Some(newest_digest) = drafts
+                            .newest_context
+                            .get(&phase.get())
+                            .filter(|newest| *newest != digest)
+                        && let Some(newest) =
+                            drafts.contexts.get(&(phase.get(), newest_digest.clone()))
                     {
-                        return Ok(Answer::DraftRefused { code: "stale-draft".into(),
+                        return Ok(Answer::DraftRefused {
+                            code: "stale-draft".into(),
                             identity: json!(newest.document.identity),
-                            part: newest.document.first_difference(&held.document) });
+                            part: newest.document.first_difference(&held.document),
+                        });
                     }
                 } else if submission.is_none() {
-                    return Ok(Answer::DraftRefused { code: "unknown-draft".into(),
-                        identity: json!({"kind":"phase-context","phase":phase}), part: None });
+                    return Ok(Answer::DraftRefused {
+                        code: "unknown-draft".into(),
+                        identity: json!({"kind":"phase-context","phase":phase}),
+                        part: None,
+                    });
                 }
                 held.cloned()
-            } else { None };
-            let Some(submission) = submission.or_else(|| held.as_ref().map(|draft| draft.submission.clone())) else {
-                return Ok(model::refused("unknown-draft", "approval.submission_digest",
-                    "held context draft is absent", phase.map(|value| value.get()), None, None));
+            } else {
+                None
+            };
+            let Some(submission) =
+                submission.or_else(|| held.as_ref().map(|draft| draft.submission.clone()))
+            else {
+                return Ok(model::refused(
+                    "unknown-draft",
+                    "approval.submission_digest",
+                    "held context draft is absent",
+                    phase.map(|value| value.get()),
+                    None,
+                    None,
+                ));
             };
             if phase.is_some_and(|phase| phase != submission.phase) {
-                return Ok(model::refused("submission", "phase", "phase must match submission.phase",
-                    Some(submission.phase.get()), None, None));
+                return Ok(model::refused(
+                    "submission",
+                    "phase",
+                    "phase must match submission.phase",
+                    Some(submission.phase.get()),
+                    None,
+                    None,
+                ));
             }
             if let Some(refusal) = validation::validate(&json!({"submission":submission})) {
                 return Ok(refusal);
@@ -199,7 +254,9 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
                     external: vec![ExternalChange {
                         target: format!("phase-context:{phase}"),
                         expected,
-                        bytes: held.as_ref().map(|draft| draft.document.bytes())
+                        bytes: held
+                            .as_ref()
+                            .map(|draft| draft.document.bytes())
                             .unwrap_or_else(|| render::document(&context).into_bytes()),
                     }],
                 };
@@ -220,11 +277,16 @@ pub async fn execute<I: crate::config::reload::ConfigIo + Clone + Sync>(
             let document = baley::read::document::context_draft(&submission, &digest)?;
             {
                 let drafts = baley::session::drafts(root)?;
-                let mut drafts = drafts.lock()
+                let mut drafts = drafts
+                    .lock()
                     .map_err(|_| baley::store::Error::Invalid("drafts unavailable".into()))?;
-                drafts.contexts.insert((submission.phase.get(), digest.clone()), baley::session::ContextDraft {
-                    submission: submission.clone(), document,
-                });
+                drafts.contexts.insert(
+                    (submission.phase.get(), digest.clone()),
+                    baley::session::ContextDraft {
+                        submission: submission.clone(),
+                        document,
+                    },
+                );
                 drafts.newest_context.insert(submission.phase.get(), digest);
             }
             Ok(model::ok(

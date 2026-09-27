@@ -13,7 +13,8 @@ pub const PLAN: &str = "Work backward from the phase goal and its locked decisio
 /// Diagnosis: the reported symptom and proposed cause, fix selection left to the user.
 pub const DIAGNOSIS: &str = "Examine retained named source files with the reported symptom and proposed cause. Return findings; leave fix selection to the user.";
 /// Every other review: falsify correctness.
-pub const CORRECTNESS: &str = "Try to falsify correctness against the retained artifact and supporting evidence.";
+pub const CORRECTNESS: &str =
+    "Try to falsify correctness against the retained artifact and supporting evidence.";
 
 /// The intent for a saved admission: a specialist names it, the `plan`
 /// trigger names it, and everything else is a correctness review.
@@ -69,7 +70,8 @@ pub fn frontdoor_markdown(command: &str) -> Option<String> {
         ),
         _ => return None,
     };
-    Some(format!(r#"---
+    Some(format!(
+        r#"---
 name: {name}
 description: "{description}"
 argument-hint: "{hint}"
@@ -154,5 +156,6 @@ native plan slice with the approved locked context and uses the ordinary
 manual-plan trigger with its configured gate; by path it retains that one
 document.
 </intent>
-"#))
+"#
+    ))
 }

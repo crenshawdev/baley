@@ -20,7 +20,11 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { key_file: None, max_prompt_tokens: 120_000, request_timeout_ms: transport::DEFAULT_TIMEOUT_MS }
+        Self {
+            key_file: None,
+            max_prompt_tokens: 120_000,
+            request_timeout_ms: transport::DEFAULT_TIMEOUT_MS,
+        }
     }
 }
 
@@ -30,7 +34,14 @@ pub struct Extracted {
     pub usage: Option<serde_json::Value>,
 }
 
-pub fn build_request(provider: Provider, model: &str, effort: Option<&str>, system: &str, user: &str, key: &credentials::Key) -> Result<transport::Request, String> {
+pub fn build_request(
+    provider: Provider,
+    model: &str,
+    effort: Option<&str>,
+    system: &str,
+    user: &str,
+    key: &credentials::Key,
+) -> Result<transport::Request, String> {
     match provider {
         Provider::OpenAi => Ok(openai::request(model, effort, system, user, key)),
         Provider::Gemini => Ok(gemini::request(model, effort, system, user, key)),

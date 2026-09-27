@@ -208,8 +208,12 @@ The role has no disk instruction loader or user override.
 "#;
 
 pub fn markdown() -> String {
-    let role = crate::help::table::render_description("bal-context", ROLE).expect("compiled skill front matter");
+    let role = crate::help::table::render_description("bal-context", ROLE)
+        .expect("compiled skill front matter");
     let schema = serde_json::to_string_pretty(&schemars::schema_for!(Apply))
         .expect("compiled context submission schema");
-    format!("{role}\n## Shared read contract\n\n{}\n\n```json\n{schema}\n```\n", crate::read::instructions::CONTRACT)
+    format!(
+        "{role}\n## Shared read contract\n\n{}\n\n```json\n{schema}\n```\n",
+        crate::read::instructions::CONTRACT
+    )
 }

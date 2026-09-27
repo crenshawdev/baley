@@ -1,6 +1,6 @@
 //! Filesystem work belongs exclusively to the resource-owning writer thread.
-use crate::process::Process;
 use super::{Error, Observed, Result, Storage};
+use crate::process::Process;
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -127,7 +127,11 @@ impl Filesystem {
                 .join("CONTEXT.md"));
         }
         if let Some(phase) = phase_uat_target(target)? {
-            return Ok(self.root.join("phases").join(phase.to_string()).join("UAT.md"));
+            return Ok(self
+                .root
+                .join("phases")
+                .join(phase.to_string())
+                .join("UAT.md"));
         }
         if let Some(name) = projection_target(target) {
             return Ok(self.root.join(name));
@@ -211,9 +215,18 @@ pub(crate) struct Opened<T> {
 /// is not the one registered is refused.
 pub(crate) fn lock_set<T>(opened: Vec<Opened<T>>) -> Result<BTreeMap<(u64, u64), (T, PathBuf)>> {
     let mut ownership = BTreeMap::new();
-    for Opened { path, registered, opened, now, handle } in opened {
+    for Opened {
+        path,
+        registered,
+        opened,
+        now,
+        handle,
+    } in opened
+    {
         if registered.first() != Some(&opened) || now != registered {
-            return Err(Error::Conflict("registered directory identity changed".into()));
+            return Err(Error::Conflict(
+                "registered directory identity changed".into(),
+            ));
         }
         ownership.entry(opened).or_insert((handle, path));
     }
@@ -310,25 +323,33 @@ pub(crate) fn phase_context_target(target: &str) -> Result<Option<u32>> {
 }
 
 pub(crate) fn debug_target(target: &str) -> Result<Option<&str>> {
-    let Some(slug) = target.strip_prefix("debug:") else { return Ok(None); };
+    let Some(slug) = target.strip_prefix("debug:") else {
+        return Ok(None);
+    };
     crate::debug::model::validate_slug(slug)?;
     Ok(Some(slug))
 }
 
 pub(crate) fn spike_target(target: &str) -> Result<Option<&str>> {
-    let Some(slug) = target.strip_prefix("spike:") else { return Ok(None); };
+    let Some(slug) = target.strip_prefix("spike:") else {
+        return Ok(None);
+    };
     crate::spike::model::validate_slug(slug)?;
     Ok(Some(slug))
 }
 
 pub(crate) fn task_target(target: &str) -> Result<Option<&str>> {
-    let Some(slug) = target.strip_prefix("task:") else { return Ok(None); };
+    let Some(slug) = target.strip_prefix("task:") else {
+        return Ok(None);
+    };
     crate::task::model::validate_slug(slug)?;
     Ok(Some(slug))
 }
 
 pub(crate) fn task_plan_target(target: &str) -> Result<Option<&str>> {
-    let Some(slug) = target.strip_prefix("task-plan:") else { return Ok(None); };
+    let Some(slug) = target.strip_prefix("task-plan:") else {
+        return Ok(None);
+    };
     crate::task::model::validate_slug(slug)?;
     Ok(Some(slug))
 }
@@ -361,7 +382,8 @@ pub fn is_staging_name(name: &str) -> bool {
         return false;
     };
     let mut parts = inner.rsplitn(3, '.');
-    let (Some(sequence), Some(pid), Some(target)) = (parts.next(), parts.next(), parts.next()) else {
+    let (Some(sequence), Some(pid), Some(target)) = (parts.next(), parts.next(), parts.next())
+    else {
         return false;
     };
     let number = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
@@ -402,10 +424,18 @@ pub(crate) fn phase_summary_target(target: &str) -> Result<Option<u32>> {
 impl Storage for Filesystem {
     type Prepared = Prepared;
 
-    fn validate_prune(&mut self, prune: &crate::milestone::prune::Prune, replay: bool) -> Result<()> {
+    fn validate_prune(
+        &mut self,
+        prune: &crate::milestone::prune::Prune,
+        replay: bool,
+    ) -> Result<()> {
         crate::milestone::prune::validate(&self.root, prune, replay, &mut *self.process)
     }
-    fn validate_release(&mut self, write: &crate::milestone::release::WriteSeal, replay: bool) -> Result<()> {
+    fn validate_release(
+        &mut self,
+        write: &crate::milestone::release::WriteSeal,
+        replay: bool,
+    ) -> Result<()> {
         crate::milestone::release::validate(&self.root, write, replay, &mut *self.process)
     }
     fn install_release(&mut self, write: &crate::milestone::release::WriteSeal) -> Result<()> {
@@ -427,7 +457,9 @@ impl Storage for Filesystem {
         crate::milestone::prune::install(&self.root, prune, &mut *self.process)
     }
 
-    fn root(&self) -> Option<&Path> { Some(&self.root) }
+    fn root(&self) -> Option<&Path> {
+        Some(&self.root)
+    }
 
     fn acquire(&mut self) -> Result<Box<dyn Send>> {
         let mut opened = Vec::new();
@@ -469,8 +501,11 @@ impl Storage for Filesystem {
     }
 
     fn read(&mut self, target: &str) -> Result<Observed> {
-        if debug_target(target)?.is_some() || spike_target(target)?.is_some()
-            || task_target(target)?.is_some() || task_plan_target(target)?.is_some() {
+        if debug_target(target)?.is_some()
+            || spike_target(target)?.is_some()
+            || task_target(target)?.is_some()
+            || task_plan_target(target)?.is_some()
+        {
             safe_plan_path(&self.target(target)?)?;
         }
         if let Some((phase, plan)) = phase_plan_target(target)? {
@@ -490,7 +525,14 @@ impl Storage for Filesystem {
                 directory_identity: String::new(),
             });
         }
-        if phase_context_target(target)?.is_some() || phase_plan_target(target)?.is_some() || phase_uat_target(target)?.is_some() || debug_target(target)?.is_some() || spike_target(target)?.is_some() || task_target(target)?.is_some() || task_plan_target(target)?.is_some() {
+        if phase_context_target(target)?.is_some()
+            || phase_plan_target(target)?.is_some()
+            || phase_uat_target(target)?.is_some()
+            || debug_target(target)?.is_some()
+            || spike_target(target)?.is_some()
+            || task_target(target)?.is_some()
+            || task_plan_target(target)?.is_some()
+        {
             // Only the approved writer path requests this participant. Bind and
             // sync its parents before capturing the expected-file identity.
             if self.directories.get(&self.root) != Some(&directory_identity(&self.root)?) {
@@ -544,15 +586,24 @@ impl Storage for Filesystem {
         if metadata.mode() & 0o444 == 0 {
             return Err(Error::Io(format!("unreadable file: {}", target.display())));
         }
-        crate::acquisition::permit(&target.to_string_lossy(), crate::acquisition::Class::Store, metadata.len())
-            .map_err(crate::acquisition::store_error)?;
+        crate::acquisition::permit(
+            &target.to_string_lossy(),
+            crate::acquisition::Class::Store,
+            metadata.len(),
+        )
+        .map_err(crate::acquisition::store_error)?;
         let mut file = File::open(&target)?;
         let opened = file.metadata()?;
         if opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
             return Err(Error::Conflict("file replaced during read".into()));
         }
-        let bytes = crate::acquisition::read_opened(&target, &mut file, &opened, crate::acquisition::Class::Store)
-            .map_err(crate::acquisition::store_error)?;
+        let bytes = crate::acquisition::read_opened(
+            &target,
+            &mut file,
+            &opened,
+            crate::acquisition::Class::Store,
+        )
+        .map_err(crate::acquisition::store_error)?;
         let directory_identity = identity.clone();
         identity.push_str(&format!(
             "{}:{}:{}",
@@ -568,8 +619,11 @@ impl Storage for Filesystem {
     }
 
     fn prepare(&mut self, target: &str, bytes: &[u8]) -> Result<Prepared> {
-        let plan = phase_plan_target(target)?.is_some() || debug_target(target)?.is_some() || spike_target(target)?.is_some()
-            || task_target(target)?.is_some() || task_plan_target(target)?.is_some();
+        let plan = phase_plan_target(target)?.is_some()
+            || debug_target(target)?.is_some()
+            || spike_target(target)?.is_some()
+            || task_target(target)?.is_some()
+            || task_plan_target(target)?.is_some();
         let target = self.target(target)?;
         if plan {
             self.check_plan_parent(&target)?;
@@ -648,8 +702,12 @@ impl Storage for Filesystem {
 
     fn resync(&mut self, target: &str, bytes: &[u8]) -> Result<Observed> {
         let path = self.target(target)?;
-        if phase_plan_target(target)?.is_some() || debug_target(target)?.is_some() || spike_target(target)?.is_some()
-            || task_target(target)?.is_some() || task_plan_target(target)?.is_some() {
+        if phase_plan_target(target)?.is_some()
+            || debug_target(target)?.is_some()
+            || spike_target(target)?.is_some()
+            || task_target(target)?.is_some()
+            || task_plan_target(target)?.is_some()
+        {
             self.check_plan_parent(&path)?;
         }
         (self.probe)(Stage::RecoverySync, &path)?;
@@ -678,11 +736,19 @@ mod lock_tests {
     /// A directory opened as registered: its chain is itself under a root.
     fn opened(path: &str, identity: (u64, u64)) -> Opened<()> {
         let chain = vec![identity, (1, 2)];
-        Opened { path: path.into(), registered: chain.clone(), opened: identity, now: chain, handle: () }
+        Opened {
+            path: path.into(),
+            registered: chain.clone(),
+            opened: identity,
+            now: chain,
+            handle: (),
+        }
     }
 
     fn order(set: &BTreeMap<(u64, u64), ((), PathBuf)>) -> Vec<((u64, u64), &str)> {
-        set.iter().map(|(identity, (_, path))| (*identity, path.to_str().unwrap())).collect()
+        set.iter()
+            .map(|(identity, (_, path))| (*identity, path.to_str().unwrap()))
+            .collect()
     }
 
     #[test]
@@ -693,12 +759,19 @@ mod lock_tests {
             opened("/c", (1, 10)),
         ])
         .unwrap();
-        assert_eq!(order(&set), [((1, 10), "/c"), ((1, 20), "/b"), ((2, 5), "/a")]);
+        assert_eq!(
+            order(&set),
+            [((1, 10), "/c"), ((1, 20), "/b"), ((2, 5), "/a")]
+        );
     }
 
     #[test]
     fn two_paths_to_one_directory_take_one_lock_named_by_the_first_path() {
-        let set = lock_set(vec![opened("/alias/config", (1, 7)), opened("/home/config", (1, 7))]).unwrap();
+        let set = lock_set(vec![
+            opened("/alias/config", (1, 7)),
+            opened("/home/config", (1, 7)),
+        ])
+        .unwrap();
         assert_eq!(order(&set), [((1, 7), "/alias/config")]);
     }
 
@@ -708,7 +781,9 @@ mod lock_tests {
         moved.opened = (1, 8);
         assert_eq!(
             lock_set(vec![opened("/root", (1, 3)), moved]).map(|_| ()),
-            Err(Error::Conflict("registered directory identity changed".into()))
+            Err(Error::Conflict(
+                "registered directory identity changed".into()
+            ))
         );
     }
 
@@ -718,7 +793,9 @@ mod lock_tests {
         moved.now[1] = (1, 9);
         assert_eq!(
             lock_set(vec![moved]).map(|_| ()),
-            Err(Error::Conflict("registered directory identity changed".into()))
+            Err(Error::Conflict(
+                "registered directory identity changed".into()
+            ))
         );
     }
 }
@@ -731,7 +808,13 @@ mod target_tests {
     fn a_phase_summary_target_names_a_positive_phase_without_padding() {
         assert_eq!(phase_summary_target("phase-summary:3").unwrap(), Some(3));
         assert_eq!(phase_summary_target("decisions.jsonl").unwrap(), None);
-        for target in ["phase-summary:0", "phase-summary:03", "phase-summary:../3", "phase-summary:/3", "phase-summary:"] {
+        for target in [
+            "phase-summary:0",
+            "phase-summary:03",
+            "phase-summary:../3",
+            "phase-summary:/3",
+            "phase-summary:",
+        ] {
             assert!(phase_summary_target(target).is_err(), "{target}");
         }
     }
@@ -740,6 +823,10 @@ mod target_tests {
     fn the_store_root_is_a_directory_to_lock() {
         let temp = tempfile::tempdir().unwrap();
         let store = Filesystem::new(temp.path()).unwrap();
-        assert!(store.directories.contains_key(&std::path::absolute(temp.path()).unwrap()));
+        assert!(
+            store
+                .directories
+                .contains_key(&std::path::absolute(temp.path()).unwrap())
+        );
     }
 }

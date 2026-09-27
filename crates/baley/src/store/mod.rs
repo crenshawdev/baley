@@ -83,11 +83,19 @@ pub struct Observed {
 /// and confirm must check the installed bytes before the writer acknowledges.
 pub trait Storage: Send + 'static {
     type Prepared;
-    fn validate_release(&mut self, _write: &crate::milestone::release::WriteSeal, _replay: bool) -> Result<()> {
-        Err(Error::Invalid("storage does not support release bumps".into()))
+    fn validate_release(
+        &mut self,
+        _write: &crate::milestone::release::WriteSeal,
+        _replay: bool,
+    ) -> Result<()> {
+        Err(Error::Invalid(
+            "storage does not support release bumps".into(),
+        ))
     }
     fn install_release(&mut self, _write: &crate::milestone::release::WriteSeal) -> Result<()> {
-        Err(Error::Invalid("storage does not support release bumps".into()))
+        Err(Error::Invalid(
+            "storage does not support release bumps".into(),
+        ))
     }
     fn validate_undo(&mut self, _write: &crate::undo::model::Write, _replay: bool) -> Result<()> {
         Err(Error::Invalid("storage does not support phase undo".into()))
@@ -95,13 +103,23 @@ pub trait Storage: Send + 'static {
     fn install_undo(&mut self, _write: &crate::undo::model::Write) -> Result<()> {
         Err(Error::Invalid("storage does not support phase undo".into()))
     }
-    fn validate_prune(&mut self, _prune: &crate::milestone::prune::Prune, _replay: bool) -> Result<()> {
-        Err(Error::Invalid("storage does not support milestone prune".into()))
+    fn validate_prune(
+        &mut self,
+        _prune: &crate::milestone::prune::Prune,
+        _replay: bool,
+    ) -> Result<()> {
+        Err(Error::Invalid(
+            "storage does not support milestone prune".into(),
+        ))
     }
     fn install_prune(&mut self, _prune: &crate::milestone::prune::Prune) -> Result<()> {
-        Err(Error::Invalid("storage does not support milestone prune".into()))
+        Err(Error::Invalid(
+            "storage does not support milestone prune".into(),
+        ))
     }
-    fn root(&self) -> Option<&std::path::Path> { None }
+    fn root(&self) -> Option<&std::path::Path> {
+        None
+    }
     /// Hold root and registered shared-parent ownership until the guard is dropped.
     /// In-memory adapters already have one owner and need no additional lock.
     fn acquire(&mut self) -> Result<Box<dyn Send>> {
@@ -120,12 +138,17 @@ pub trait Storage: Send + 'static {
 mod git_limit_tests {
     #[test]
     fn a_git_limit_keeps_its_type_and_names_the_enforced_bound() {
-        let error = super::Error::from(crate::git_process::Error::Limit(crate::git_process::Limit {
-            command: "git diff --cached".into(),
-            bound: std::time::Duration::from_secs(60),
-        }));
+        let error = super::Error::from(crate::git_process::Error::Limit(
+            crate::git_process::Limit {
+                command: "git diff --cached".into(),
+                bound: std::time::Duration::from_secs(60),
+            },
+        ));
         assert!(matches!(&error, super::Error::GitLimit(limit)
             if limit.command == "git diff --cached" && limit.bound == std::time::Duration::from_secs(60)));
-        assert_eq!(error.to_string(), "git diff --cached exceeded git deadline of 60 seconds");
+        assert_eq!(
+            error.to_string(),
+            "git diff --cached exceeded git deadline of 60 seconds"
+        );
     }
 }

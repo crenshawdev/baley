@@ -55,10 +55,7 @@ impl ArtifactIo for MemoryIo {
     }
     fn read(&mut self, path: &Path) -> Observation<Vec<u8>> {
         assert!(
-            matches!(
-                path.file_name().unwrap().to_str(),
-                Some("ROADMAP.md")
-            ),
+            matches!(path.file_name().unwrap().to_str(), Some("ROADMAP.md")),
             "excluded read: {}",
             path.display()
         );
@@ -386,7 +383,11 @@ fn an_absent_root_reads_no_roadmap_and_declares_nothing() {
     assert_eq!(captured.roadmap, Observation::Absent);
     assert!(captured.declarations.is_none());
     assert!(captured.phases.is_empty());
-    assert!(!io.calls.iter().any(|(operation, _)| operation == "read"), "{:?}", io.calls);
+    assert!(
+        !io.calls.iter().any(|(operation, _)| operation == "read"),
+        "{:?}",
+        io.calls
+    );
 }
 
 #[test]
@@ -394,7 +395,13 @@ fn a_phase_listing_admits_only_plan_names_and_sorts_them() {
     let mut io = MemoryIo::one();
     io.lists.insert(
         "/planning/phases/1".into(),
-        Observation::Present(vec!["PLAN-2.md".into(), "notes.md".into(), "PLAN.md".into(), "PLAN-10.md".into(), "PLAN-x.md".into()]),
+        Observation::Present(vec![
+            "PLAN-2.md".into(),
+            "notes.md".into(),
+            "PLAN.md".into(),
+            "PLAN-10.md".into(),
+            "PLAN-x.md".into(),
+        ]),
     );
     let captured = capture_inputs(Path::new("/planning"), &mut io).unwrap();
     assert_eq!(

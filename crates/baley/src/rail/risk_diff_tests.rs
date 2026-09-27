@@ -22,7 +22,10 @@ fn diff(path: &str, added: &[&str]) -> Vec<u8> {
 fn each_category_reports_the_changed_line_that_signals_it() {
     let path = "work/notes.txt";
     let scan = scan(
-        Some(&diff(path, &["DROP TABLE accounts;", "const body = JSON.parse(input);"])),
+        Some(&diff(
+            path,
+            &["DROP TABLE accounts;", "const body = JSON.parse(input);"],
+        )),
         &[PathBuf::from(path)],
         &categories(),
     )
@@ -30,8 +33,14 @@ fn each_category_reports_the_changed_line_that_signals_it() {
     assert_eq!(
         scan.matches,
         [
-            Match { category: "destructive".into(), signal: "changed line: a DROP statement".into() },
-            Match { category: "untrusted_input".into(), signal: "changed line: a JSON.parse call".into() },
+            Match {
+                category: "destructive".into(),
+                signal: "changed line: a DROP statement".into()
+            },
+            Match {
+                category: "untrusted_input".into(),
+                signal: "changed line: a JSON.parse call".into()
+            },
         ]
     );
     assert!(scan.checked && !scan.inconclusive);
@@ -40,8 +49,12 @@ fn each_category_reports_the_changed_line_that_signals_it() {
 #[test]
 fn a_signal_for_a_category_not_configured_is_not_reported() {
     let path = "work/notes.txt";
-    let scan = scan(Some(&diff(path, &["DROP TABLE accounts;"])), &[PathBuf::from(path)], &["untrusted_input".into()])
-        .unwrap();
+    let scan = scan(
+        Some(&diff(path, &["DROP TABLE accounts;"])),
+        &[PathBuf::from(path)],
+        &["untrusted_input".into()],
+    )
+    .unwrap();
     assert!(scan.matches.is_empty());
 }
 
@@ -59,7 +72,12 @@ fn a_binary_change_is_checked_but_inconclusive_with_no_matches() {
 fn a_binary_change_beside_a_text_change_is_still_inconclusive() {
     let mut body = diff("work/notes.txt", &["a plain sentence"]);
     body.extend_from_slice(b"diff --git a/logo.bin b/logo.bin\nindex 1111111..2222222 100644\nBinary files a/logo.bin and b/logo.bin differ\n");
-    let scan = scan(Some(&body), &[PathBuf::from("work/notes.txt"), PathBuf::from("logo.bin")], &categories()).unwrap();
+    let scan = scan(
+        Some(&body),
+        &[PathBuf::from("work/notes.txt"), PathBuf::from("logo.bin")],
+        &categories(),
+    )
+    .unwrap();
     assert!(scan.checked && scan.inconclusive);
     assert!(scan.matches.is_empty());
 }
@@ -67,7 +85,12 @@ fn a_binary_change_beside_a_text_change_is_still_inconclusive() {
 #[test]
 fn a_change_matching_nothing_is_checked_conclusive_and_clear() {
     let path = "work/notes.txt";
-    let scan = scan(Some(&diff(path, &["a plain sentence"])), &[PathBuf::from(path)], &categories()).unwrap();
+    let scan = scan(
+        Some(&diff(path, &["a plain sentence"])),
+        &[PathBuf::from(path)],
+        &categories(),
+    )
+    .unwrap();
     assert!(scan.checked && !scan.inconclusive);
     assert!(scan.matches.is_empty());
 }

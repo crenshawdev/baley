@@ -25,12 +25,20 @@ fn scope(occurrence: &str) -> Scope {
 
 /// A record in the occurrence under decision, `run`.
 fn record(fact: Fact) -> Record {
-    Record { version: VERSION, scope: scope("run"), fact }
+    Record {
+        version: VERSION,
+        scope: scope("run"),
+        fact,
+    }
 }
 
 /// A record in another occurrence.
 fn elsewhere(fact: Fact) -> Record {
-    Record { version: VERSION, scope: scope("other"), fact }
+    Record {
+        version: VERSION,
+        scope: scope("other"),
+        fact,
+    }
 }
 
 fn checkpoint() -> Fact {
@@ -96,7 +104,12 @@ fn checker(disposition: Verdict) -> Fact {
 }
 
 /// What checker applicability said about the latest check.
-fn applicable(freshness: Freshness, allowed: bool, spent: bool, override_id: Option<&str>) -> CheckerApplicability {
+fn applicable(
+    freshness: Freshness,
+    allowed: bool,
+    spent: bool,
+    override_id: Option<&str>,
+) -> CheckerApplicability {
     CheckerApplicability {
         verdict_applicable: freshness == Freshness::Current,
         freshness,
@@ -110,21 +123,41 @@ fn granted(id: &str, meaning: Meaning) -> Fact {
     Fact::Override(Override {
         id: id.into(),
         reason: "the operator said so".into(),
-        authorization: Authorization::Invocation { id: "invoke".into(), invocation: "continue it".into() },
+        authorization: Authorization::Invocation {
+            id: "invoke".into(),
+            invocation: "continue it".into(),
+        },
         meaning,
     })
 }
 
 fn paused() -> Fact {
-    granted("pause", Meaning::PausedNext { sentence: "verify the fix on the device".into() })
+    granted(
+        "pause",
+        Meaning::PausedNext {
+            sentence: "verify the fix on the device".into(),
+        },
+    )
 }
 
-fn decision(records: &[Record], applicability: Option<CheckerApplicability>, plans: &[String]) -> Decision {
+fn decision(
+    records: &[Record],
+    applicability: Option<CheckerApplicability>,
+    plans: &[String],
+) -> Decision {
     select(records, &scope("run"), applicability, plans).decision
 }
 
-fn continued(answer: Option<Answer>, override_id: Option<&str>, rerun_plans: &[String]) -> Decision {
-    Decision::Continue { answer, override_id: override_id.map(str::to_string), rerun_plans: rerun_plans.to_vec() }
+fn continued(
+    answer: Option<Answer>,
+    override_id: Option<&str>,
+    rerun_plans: &[String],
+) -> Decision {
+    Decision::Continue {
+        answer,
+        override_id: override_id.map(str::to_string),
+        rerun_plans: rerun_plans.to_vec(),
+    }
 }
 
 #[test]
@@ -133,21 +166,34 @@ fn an_unresolved_checkpoint_with_no_linked_gate_asks_its_need_verbatim() {
         panic!("no question was asked")
     };
     assert_eq!(
-        (gate.question.as_str(), gate.need.as_str(), gate.checkpoint_id.as_deref()),
+        (
+            gate.question.as_str(),
+            gate.need.as_str(),
+            gate.checkpoint_id.as_deref()
+        ),
         (NEED, NEED, Some("cp-1"))
     );
 }
 
 #[test]
 fn an_asked_checkpoint_question_waits_on_that_gate() {
-    let records = [record(checkpoint()), record(Fact::Gate(asked(State::Unanswered)))];
-    assert_eq!(decision(&records, None, &[]), Decision::Wait(asked(State::Unanswered)));
+    let records = [
+        record(checkpoint()),
+        record(Fact::Gate(asked(State::Unanswered))),
+    ];
+    assert_eq!(
+        decision(&records, None, &[]),
+        Decision::Wait(asked(State::Unanswered))
+    );
 }
 
 #[test]
 fn a_stop_answer_stops_with_that_answer() {
     let stop = answer(Disposition::Stop);
-    let records = [record(checkpoint()), record(Fact::Gate(asked(State::Answered(stop.clone()))))];
+    let records = [
+        record(checkpoint()),
+        record(Fact::Gate(asked(State::Answered(stop.clone())))),
+    ];
     assert_eq!(decision(&records, None, &[]), Decision::Stop(stop));
 }
 
@@ -155,17 +201,30 @@ fn a_stop_answer_stops_with_that_answer() {
 fn an_approve_or_adjust_answer_continues_with_that_answer() {
     for disposition in [Disposition::Approve, Disposition::Adjust] {
         let given = answer(disposition);
-        let records = [record(checkpoint()), record(Fact::Gate(asked(State::Answered(given.clone()))))];
-        assert_eq!(decision(&records, None, &[]), continued(Some(given), None, &[]));
+        let records = [
+            record(checkpoint()),
+            record(Fact::Gate(asked(State::Answered(given.clone())))),
+        ];
+        assert_eq!(
+            decision(&records, None, &[]),
+            continued(Some(given), None, &[])
+        );
     }
 }
 
 #[test]
 fn a_current_passing_check_leaves_an_approved_continuation_standing() {
     let approve = answer(Disposition::Approve);
-    let records = [record(checker(Verdict::Pass)), record(Fact::Gate(progress(State::Answered(approve.clone()))))];
+    let records = [
+        record(checker(Verdict::Pass)),
+        record(Fact::Gate(progress(State::Answered(approve.clone())))),
+    ];
     assert_eq!(
-        decision(&records, Some(applicable(Freshness::Current, true, false, None)), &[]),
+        decision(
+            &records,
+            Some(applicable(Freshness::Current, true, false, None)),
+            &[]
+        ),
         continued(Some(approve), None, &[])
     );
 }
@@ -174,7 +233,11 @@ fn a_current_passing_check_leaves_an_approved_continuation_standing() {
 fn a_blocker_with_its_revision_unspent_asks_for_revision() {
     let records = [record(checker(Verdict::Fail))];
     assert_eq!(
-        decision(&records, Some(applicable(Freshness::Current, false, false, None)), &[]),
+        decision(
+            &records,
+            Some(applicable(Freshness::Current, false, false, None)),
+            &[]
+        ),
         Decision::Revise
     );
 }
@@ -184,7 +247,11 @@ fn an_unusable_result_or_a_spent_revision_requires_an_override() {
     for (verdict, spent) in [(Verdict::Unusable, false), (Verdict::Fail, true)] {
         let records = [record(checker(verdict))];
         assert_eq!(
-            decision(&records, Some(applicable(Freshness::Current, false, spent, None)), &[]),
+            decision(
+                &records,
+                Some(applicable(Freshness::Current, false, spent, None)),
+                &[]
+            ),
             Decision::OverrideRequired
         );
     }
@@ -194,7 +261,11 @@ fn an_unusable_result_or_a_spent_revision_requires_an_override() {
 fn an_active_bypass_of_that_result_continues_with_its_override_id() {
     let records = [record(checker(Verdict::Fail))];
     assert_eq!(
-        decision(&records, Some(applicable(Freshness::Changed, true, false, Some("bypass"))), &[]),
+        decision(
+            &records,
+            Some(applicable(Freshness::Changed, true, false, Some("bypass"))),
+            &[]
+        ),
         continued(None, Some("bypass"), &[])
     );
 }
@@ -203,7 +274,11 @@ fn an_active_bypass_of_that_result_continues_with_its_override_id() {
 fn changed_material_asks_for_a_fresh_check() {
     let records = [record(checker(Verdict::Pass))];
     assert_eq!(
-        decision(&records, Some(applicable(Freshness::Changed, false, false, None)), &[]),
+        decision(
+            &records,
+            Some(applicable(Freshness::Changed, false, false, None)),
+            &[]
+        ),
         Decision::FreshCheck
     );
 }
@@ -218,47 +293,78 @@ fn a_rerun_override_for_the_admitted_plans_continues_with_those_plans() {
     let plans = ["PLAN-1.md".to_string(), "PLAN-2.md".to_string()];
     let records = [record(granted(
         "rerun",
-        Meaning::Rerun { admitted_plans: vec!["PLAN-2.md".into(), "PLAN-1.md".into()] },
+        Meaning::Rerun {
+            admitted_plans: vec!["PLAN-2.md".into(), "PLAN-1.md".into()],
+        },
     ))];
-    assert_eq!(decision(&records, None, &plans), continued(None, Some("rerun"), &plans));
+    assert_eq!(
+        decision(&records, None, &plans),
+        continued(None, Some("rerun"), &plans)
+    );
 }
 
 #[test]
 fn an_ended_occurrence_answers_ended() {
-    let ended = Occurrence::Fulfilled { completion: "resumed".into() };
-    assert_eq!(decision(&[record(Fact::Occurrence(ended.clone()))], None, &[]), Decision::Ended(ended));
+    let ended = Occurrence::Fulfilled {
+        completion: "resumed".into(),
+    };
+    assert_eq!(
+        decision(&[record(Fact::Occurrence(ended.clone()))], None, &[]),
+        Decision::Ended(ended)
+    );
 }
 
 #[test]
 fn another_occurrences_records_do_not_change_the_answer() {
     let records = [
-        elsewhere(Fact::Gate(progress(State::Answered(answer(Disposition::Stop))))),
-        elsewhere(Fact::Occurrence(Occurrence::Fulfilled { completion: "done".into() })),
+        elsewhere(Fact::Gate(progress(State::Answered(answer(
+            Disposition::Stop,
+        ))))),
+        elsewhere(Fact::Occurrence(Occurrence::Fulfilled {
+            completion: "done".into(),
+        })),
     ];
     assert_eq!(decision(&records, None, &[]), Decision::AwaitAcceptance);
 }
 
 #[test]
 fn a_saved_pause_sentence_alone_awaits_acceptance() {
-    assert_eq!(decision(&[record(paused())], None, &[]), Decision::AwaitAcceptance);
+    assert_eq!(
+        decision(&[record(paused())], None, &[]),
+        Decision::AwaitAcceptance
+    );
 }
 
 #[test]
 fn an_unanswered_progress_gate_waits_on_it() {
-    let records = [record(paused()), record(Fact::Gate(progress(State::Unanswered)))];
-    assert_eq!(decision(&records, None, &[]), Decision::Wait(progress(State::Unanswered)));
+    let records = [
+        record(paused()),
+        record(Fact::Gate(progress(State::Unanswered))),
+    ];
+    assert_eq!(
+        decision(&records, None, &[]),
+        Decision::Wait(progress(State::Unanswered))
+    );
 }
 
 #[test]
 fn an_approved_progress_gate_continues_with_its_answer() {
     let approve = answer(Disposition::Approve);
-    let records = [record(paused()), record(Fact::Gate(progress(State::Answered(approve.clone()))))];
-    assert_eq!(decision(&records, None, &[]), continued(Some(approve), None, &[]));
+    let records = [
+        record(paused()),
+        record(Fact::Gate(progress(State::Answered(approve.clone())))),
+    ];
+    assert_eq!(
+        decision(&records, None, &[]),
+        continued(Some(approve), None, &[])
+    );
 }
 
 #[test]
 fn a_superseded_progress_gate_grants_nothing() {
-    let superseded = progress(State::Superseded { by: "replacement".into() });
+    let superseded = progress(State::Superseded {
+        by: "replacement".into(),
+    });
     let records = [record(paused()), record(Fact::Gate(superseded))];
     assert_eq!(decision(&records, None, &[]), Decision::AwaitAcceptance);
 }

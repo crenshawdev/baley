@@ -1,7 +1,9 @@
 //! Compiled spike role; the installed skill is only its rendering.
 pub fn markdown() -> &'static str {
     static MARKDOWN: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        crate::help::table::render_description("bal-spike", r#"---
+        crate::help::table::render_description(
+            "bal-spike",
+            r#"---
 name: bal-spike
 description: ""
 argument-hint: "<the question or hypothesis to resolve>"
@@ -99,7 +101,9 @@ than SPIKE.md. Never use Write, Edit or Bash to change it, stage it or commit it
    project nor deletes external files. No phase completion or production change
    follows from a spike verdict.
 </method>
-"#).expect("compiled skill front matter")
+"#,
+        )
+        .expect("compiled skill front matter")
     });
     &MARKDOWN
 }

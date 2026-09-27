@@ -12,14 +12,20 @@ pub type Pending<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send 
 pub type Sleep = std::sync::Arc<dyn Fn(Duration) -> Pending<'static, ()> + Send + Sync>;
 
 pub fn effective_timeout(millis: u64) -> u64 {
-    if millis == 0 { DEFAULT_TIMEOUT_MS } else { millis.min(DEFAULT_TIMEOUT_MS) }
+    if millis == 0 {
+        DEFAULT_TIMEOUT_MS
+    } else {
+        millis.min(DEFAULT_TIMEOUT_MS)
+    }
 }
 
 pub fn native_sleep() -> Sleep {
-    std::sync::Arc::new(|duration| Box::pin(async move {
-        tokio::time::sleep(duration).await;
-        Ok(())
-    }))
+    std::sync::Arc::new(|duration| {
+        Box::pin(async move {
+            tokio::time::sleep(duration).await;
+            Ok(())
+        })
+    })
 }
 
 // Neither request nor wire response implements Debug/Serialize: headers and
@@ -49,7 +55,8 @@ pub struct Native;
 impl Body for reqwest::Response {
     fn chunk(&mut self) -> Pending<'_, Option<Vec<u8>>> {
         Box::pin(async move {
-            reqwest::Response::chunk(self).await
+            reqwest::Response::chunk(self)
+                .await
                 .map(|chunk| chunk.map(|bytes| bytes.to_vec()))
                 .map_err(|error| diagnostics::excerpt(&error.without_url().to_string()))
         })
@@ -65,21 +72,34 @@ impl Transport for Native {
                 .timeout(timeout)
                 .build()
                 .map_err(|error| diagnostics::excerpt(&error.without_url().to_string()))?;
-            let mut outgoing = client.post(&request.url).timeout(timeout).json(&request.body);
+            let mut outgoing = client
+                .post(&request.url)
+                .timeout(timeout)
+                .json(&request.body);
             for (name, value) in request.headers {
                 outgoing = outgoing.header(name, value);
             }
-            let response = outgoing.send().await
+            let response = outgoing
+                .send()
+                .await
                 .map_err(|error| diagnostics::excerpt(&error.without_url().to_string()))?;
             // Only possible provider request identifiers cross acquisition;
             // authorization/cookies and arbitrary headers are never retained.
             let headers = ["x-request-id", "request-id"]
                 .into_iter()
-                .filter_map(|name| response.headers().get(name)
-                    .and_then(|value| value.to_str().ok())
-                    .map(|value| (name.to_owned(), value.to_owned())))
+                .filter_map(|name| {
+                    response
+                        .headers()
+                        .get(name)
+                        .and_then(|value| value.to_str().ok())
+                        .map(|value| (name.to_owned(), value.to_owned()))
+                })
                 .collect();
-            Ok(Response { status: response.status().as_u16(), headers, body: Box::new(response) })
+            Ok(Response {
+                status: response.status().as_u16(),
+                headers,
+                body: Box::new(response),
+            })
         })
     }
 }
@@ -91,7 +111,12 @@ pub struct Acquired {
     pub json: Option<Value>,
 }
 
-pub async fn request(transport: &dyn Transport, request: Request, timeout: Duration, sleep: &Sleep) -> Result<Acquired, String> {
+pub async fn request(
+    transport: &dyn Transport,
+    request: Request,
+    timeout: Duration,
+    sleep: &Sleep,
+) -> Result<Acquired, String> {
     tokio::select! {
         biased;
         _ = sleep(timeout) => Err(format!("request timed out after {}ms", timeout.as_millis())),

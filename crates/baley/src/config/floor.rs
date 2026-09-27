@@ -202,7 +202,10 @@ impl FloorIo for Host {
     }
     fn read(&mut self, body: &mut File, limit: usize) -> (Vec<u8>, io::Result<()>) {
         let mut bytes = Vec::new();
-        let read = (&mut *body).take(limit as u64).read_to_end(&mut bytes).map(|_| ());
+        let read = (&mut *body)
+            .take(limit as u64)
+            .read_to_end(&mut bytes)
+            .map(|_| ());
         (bytes, read)
     }
 }
@@ -345,11 +348,7 @@ pub fn read_with(
             return Ok(scope);
         }
     };
-    let mut reader = Reader {
-        root,
-        io,
-        bytes: 0,
-    };
+    let mut reader = Reader { root, io, bytes: 0 };
     let phase_root = planning_root.join(format!("phases/{phase}"));
     let plans = if let Some(plan) = plan {
         vec![(plan, phase_root.join(format!("PLAN-{plan}.md")))]

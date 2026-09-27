@@ -14,15 +14,20 @@ fn fixture() -> Value {
 fn records(review: Value) -> Value {
     persistence::records(&json!({"review":review})).unwrap()
 }
-fn decide(review: Value, submitted: &returns::ReturnSubmission) -> Result<returns::ReturnDecision, returns::ReturnError> {
+fn decide(
+    review: Value,
+    submitted: &returns::ReturnSubmission,
+) -> Result<returns::ReturnDecision, returns::ReturnError> {
     returns::decide_return(records(review), submitted, &mut FixedClock)
 }
 /// The receipt for a new closure, read from the records it would commit.
 fn closed(decision: returns::ReturnDecision) -> returns::ReturnReceipt {
     match decision {
-        returns::ReturnDecision::Close { records, admission, attempt } => {
-            returns::receipt(&records, &admission, &attempt, false).unwrap()
-        }
+        returns::ReturnDecision::Close {
+            records,
+            admission,
+            attempt,
+        } => returns::receipt(&records, &admission, &attempt, false).unwrap(),
         returns::ReturnDecision::Replay(_) => panic!("a pending attempt was replayed"),
     }
 }
@@ -87,7 +92,11 @@ fn accept_malformed_return_closes_failed() {
 /// The new closure a return of `raw` writes over the pending records.
 fn closing(input: &Value, raw: &[u8]) -> (Value, Box<model::Admission>, Box<model::Attempt>) {
     match decide(input["pending"].clone(), &submission(input, Some(raw))).unwrap() {
-        returns::ReturnDecision::Close { records, admission, attempt } => (records, admission, attempt),
+        returns::ReturnDecision::Close {
+            records,
+            admission,
+            attempt,
+        } => (records, admission, attempt),
         returns::ReturnDecision::Replay(_) => panic!("a pending attempt was replayed"),
     }
 }
@@ -152,5 +161,8 @@ fn a_provider_failure_closes_the_attempt_failed_with_no_original() {
     let mut submitted = submission(&input, None);
     submitted.host_failure = Some("HTTP 500: upstream error".into());
     let result = closed(decide(input["pending"].clone(), &submitted).unwrap());
-    assert_eq!((result.terminal, result.original), (model::AttemptState::Failed, None));
+    assert_eq!(
+        (result.terminal, result.original),
+        (model::AttemptState::Failed, None)
+    );
 }

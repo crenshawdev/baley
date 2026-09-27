@@ -50,7 +50,12 @@ fn a_name_git_would_read_as_a_revision_expression_is_refused() {
 
 #[test]
 fn a_name_with_whitespace_or_control_characters_is_refused() {
-    for name in ["refs/heads/my main", "refs/heads/main\n", "refs/heads/main\t", "refs/heads/ma\0in"] {
+    for name in [
+        "refs/heads/my main",
+        "refs/heads/main\n",
+        "refs/heads/main\t",
+        "refs/heads/ma\0in",
+    ] {
         assert!(!valid_ref(name), "{name:?}");
     }
 }

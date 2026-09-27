@@ -115,7 +115,10 @@ fn fixtures() -> Vec<Fixture> {
 /// The action `select` answers for the authored progress-table case `name`,
 /// checked against the instruction the table authors for it.
 fn authored(name: &str) -> Action {
-    let case = fixtures().into_iter().find(|case| case.name == name).unwrap();
+    let case = fixtures()
+        .into_iter()
+        .find(|case| case.name == name)
+        .unwrap();
     let action = select(
         &case.lifecycle,
         &case.observations,
@@ -206,9 +209,18 @@ fn a_pause_saved_for_another_phase_is_not_offered() {
 #[test]
 fn skipping_discussion_changes_only_an_unplanned_phases_answer() {
     for case in fixtures() {
-        let answer = |skip| select(&case.lifecycle, &case.observations, case.pause.as_ref(), skip);
+        let answer = |skip| {
+            select(
+                &case.lifecycle,
+                &case.observations,
+                case.pause.as_ref(),
+                skip,
+            )
+        };
         match answer(false) {
-            Some(Action::Context(id)) => assert_eq!(answer(true), Some(Action::Plan(id)), "{}", case.name),
+            Some(Action::Context(id)) => {
+                assert_eq!(answer(true), Some(Action::Plan(id)), "{}", case.name)
+            }
             without => assert_eq!(answer(true), without, "{}", case.name),
         }
     }

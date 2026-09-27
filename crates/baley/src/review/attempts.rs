@@ -83,10 +83,11 @@ pub async fn record_observation(
 ) -> Result<ObservationReceipt> {
     validate_observation(&event)?;
     let view = persistence::read(store).await?;
-    let records = match decide_observation(persistence::records(&view.snapshot.data)?, &event, clock)? {
-        Recording::Replay(receipt) => return Ok(*receipt),
-        Recording::Contribute(records) => records,
-    };
+    let records =
+        match decide_observation(persistence::records(&view.snapshot.data)?, &event, clock)? {
+            Recording::Replay(receipt) => return Ok(*receipt),
+            Recording::Contribute(records) => records,
+        };
     let committed = match persistence::update(
         store,
         &view,
@@ -138,7 +139,11 @@ pub enum Recording {
 
 /// Replay an observation already saved, or contribute a new one to `records`.
 /// The clock is read only for a new observation.
-pub fn decide_observation(records: Value, event: &Observation, clock: &mut impl Clock) -> Result<Recording> {
+pub fn decide_observation(
+    records: Value,
+    event: &Observation,
+    clock: &mut impl Clock,
+) -> Result<Recording> {
     if records
         .get("observations")
         .and_then(|values| values.get(&event.observation))
@@ -218,21 +223,49 @@ fn delivery_key(attempt: &str, view: &str) -> String {
 
 /// The host-independent exit report and the Claude stop hook share the same
 /// Interrupted observation reducer. A terminal return is never undone.
-pub fn worker_exit(records: &Value, report: &crate::execution::runner::WorkerExit,
-    id: &str, at: u64) -> Result<(Value, bool)> {
-    let refuse = || crate::execution::admission::refuse(report.phase, "exit-target", "review", id,
-        "exit must name an issued local review attempt in this phase");
+pub fn worker_exit(
+    records: &Value,
+    report: &crate::execution::runner::WorkerExit,
+    id: &str,
+    at: u64,
+) -> Result<(Value, bool)> {
+    let refuse = || {
+        crate::execution::admission::refuse(
+            report.phase,
+            "exit-target",
+            "review",
+            id,
+            "exit must name an issued local review attempt in this phase",
+        )
+    };
     let attempt: Attempt = persistence::get(records, "attempts", id).map_err(|_| refuse())?;
-    let admission: super::model::Admission = persistence::get(records, "admissions", &attempt.fire).map_err(|_| refuse())?;
+    let admission: super::model::Admission =
+        persistence::get(records, "admissions", &attempt.fire).map_err(|_| refuse())?;
     if records["issued"].get(id).is_none()
-        || admission.home.kind == super::model::HomeKind::Phase && admission.home.id != report.phase.to_string()
-        || super::provider::Provider::parse(&attempt.requested.agent).is_some() {
+        || admission.home.kind == super::model::HomeKind::Phase
+            && admission.home.id != report.phase.to_string()
+        || super::provider::Provider::parse(&attempt.requested.agent).is_some()
+    {
         return Err(refuse());
     }
-    let event = Observation { observation: format!("worker-exit:{}", report.request_id),
-        attempt: id.into(), launch: None, host_return: None, kind: ObservationKind::Interrupted,
-        reference: serde_json::to_string(report)?, observed_at: at, host: Some(report.host.clone()),
-        model: None, usage: super::model::Usage { input: None, output: None, cost: None, currency: None }, contract: attempt.contract };
+    let event = Observation {
+        observation: format!("worker-exit:{}", report.request_id),
+        attempt: id.into(),
+        launch: None,
+        host_return: None,
+        kind: ObservationKind::Interrupted,
+        reference: serde_json::to_string(report)?,
+        observed_at: at,
+        host: Some(report.host.clone()),
+        model: None,
+        usage: super::model::Usage {
+            input: None,
+            output: None,
+            cost: None,
+            currency: None,
+        },
+        contract: attempt.contract,
+    };
     let next = contribute_observation(records.clone(), &event, at)?;
     let saved: Attempt = persistence::get(&next, "attempts", id)?;
     Ok((next, saved.state == AttemptState::Interrupted))
@@ -370,25 +403,42 @@ mod gap153_delivery_tests {
 
     /// Attempt a1 issued and running for the phase 14 admission f1.
     fn running_attempt() -> Value {
-        let fixture: Value = serde_json::from_str(include_str!("../../tests/fixtures/phase9/h1-admission.json")).unwrap();
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/phase9/h1-admission.json"
+        ))
+        .unwrap();
         let mut admission = fixture["H"].clone();
         admission["home"]["id"] = json!("14");
         json!({"attempts":{"a1":fixture["a1"]},"admissions":{"f1":admission},"issued":{"a1":true}})
     }
 
     fn exit_report(request_id: &str) -> crate::execution::runner::WorkerExit {
-        crate::execution::runner::WorkerExit { request_id: request_id.into(), phase: 14,
-            host: "codex exec".into(), outcome: crate::execution::runner::WorkerOutcome::Failed,
-            detail: Some("host exited".into()), dispatch: None, attempt: None, review: Some("a1".into()) }
+        crate::execution::runner::WorkerExit {
+            request_id: request_id.into(),
+            phase: 14,
+            host: "codex exec".into(),
+            outcome: crate::execution::runner::WorkerOutcome::Failed,
+            detail: Some("host exited".into()),
+            dispatch: None,
+            attempt: None,
+            review: Some("a1".into()),
+        }
     }
 
     #[test]
     fn a_worker_exit_interrupts_a_running_attempt_and_records_its_observation() {
-        let (next, interrupted) = worker_exit(&running_attempt(), &exit_report("exit-review"), "a1", 100).unwrap();
+        let (next, interrupted) =
+            worker_exit(&running_attempt(), &exit_report("exit-review"), "a1", 100).unwrap();
         assert!(interrupted);
         assert_eq!(next["attempts"]["a1"]["state"], "interrupted");
-        assert_eq!(next["observations"]["worker-exit:exit-review"]["kind"], "interrupted");
-        assert_eq!(next["observation_recorded_at"]["worker-exit:exit-review"], 100);
+        assert_eq!(
+            next["observations"]["worker-exit:exit-review"]["kind"],
+            "interrupted"
+        );
+        assert_eq!(
+            next["observation_recorded_at"]["worker-exit:exit-review"],
+            100
+        );
         assert_eq!(next["closures"], Value::Null);
     }
 
@@ -397,7 +447,8 @@ mod gap153_delivery_tests {
         let mut returned = running_attempt();
         returned["attempts"]["a1"]["state"] = json!("accepted");
         returned["attempts"]["a1"]["original"] = json!("original-1");
-        let (next, interrupted) = worker_exit(&returned, &exit_report("exit-after-return"), "a1", 101).unwrap();
+        let (next, interrupted) =
+            worker_exit(&returned, &exit_report("exit-after-return"), "a1", 101).unwrap();
         assert!(!interrupted);
         assert_eq!(next["attempts"]["a1"]["state"], "accepted");
         assert_eq!(next["attempts"]["a1"]["original"], "original-1");
@@ -405,7 +456,15 @@ mod gap153_delivery_tests {
 
     #[test]
     fn a_worker_exit_naming_an_unknown_attempt_is_refused() {
-        assert!(worker_exit(&running_attempt(), &exit_report("exit-after-return"), "unknown", 101).is_err());
+        assert!(
+            worker_exit(
+                &running_attempt(),
+                &exit_report("exit-after-return"),
+                "unknown",
+                101
+            )
+            .is_err()
+        );
     }
     #[test]
     fn gap153_delivery_contribution_records_exact_membership() {

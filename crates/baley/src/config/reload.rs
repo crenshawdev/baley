@@ -55,8 +55,12 @@ pub trait ConfigIo: Send + 'static {
     fn identity(&mut self, path: &Path) -> Result<PathBuf>;
     fn read(&mut self, resolved: &Path) -> Result<Input>;
     /// Store input is a separate acquisition class; ordinary config stays unchanged.
-    fn read_store(&mut self, resolved: &Path) -> std::result::Result<Input, baley::acquisition::Error> {
-        self.read(resolved).map_err(baley::acquisition::Error::Store)
+    fn read_store(
+        &mut self,
+        resolved: &Path,
+    ) -> std::result::Result<Input, baley::acquisition::Error> {
+        self.read(resolved)
+            .map_err(baley::acquisition::Error::Store)
     }
 }
 
@@ -74,19 +78,36 @@ impl ConfigIo for FileIo {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 if fs::symlink_metadata(path).is_ok() {
                     return Err(acquisition::Error::Store(Error::Io(format!(
-                        "existing config/input cannot be read: {}", path.display()))));
+                        "existing config/input cannot be read: {}",
+                        path.display()
+                    ))));
                 }
-                return Ok(Input { identity: path.into(), bytes: None, stamp: None });
+                return Ok(Input {
+                    identity: path.into(),
+                    bytes: None,
+                    stamp: None,
+                });
             }
-            Err(error) => return Err(acquisition::Error::Store(Error::Io(format!("config {}: {error}", path.display())))),
+            Err(error) => {
+                return Err(acquisition::Error::Store(Error::Io(format!(
+                    "config {}: {error}",
+                    path.display()
+                ))));
+            }
         };
         let metadata = file.metadata()?;
         if unreadable_mode(metadata.mode()) {
-            return Err(acquisition::Error::Store(Error::Io(format!("config {} is unreadable", path.display()))));
+            return Err(acquisition::Error::Store(Error::Io(format!(
+                "config {} is unreadable",
+                path.display()
+            ))));
         }
         let bytes = acquisition::read_opened(path, &mut file, &metadata, Class::Store)?;
-        Ok(Input { identity: path.into(), bytes: Some(bytes),
-            stamp: Some((metadata.dev(), metadata.ino(), metadata.mode())) })
+        Ok(Input {
+            identity: path.into(),
+            bytes: Some(bytes),
+            stamp: Some((metadata.dev(), metadata.ino(), metadata.mode())),
+        })
     }
 
     fn read(&mut self, path: &Path) -> Result<Input> {
@@ -146,12 +167,11 @@ pub struct Generation {
 
 impl Generation {
     pub fn routing_inputs(&self) -> baley::execution::model::ConfigInputs {
-        let capture =
-            |input: &crate::config::reload::Input| baley::execution::model::ConfigInput {
-                identity: input.identity.clone(),
-                content: input.bytes.as_deref().map(baley::store::model::digest),
-                stamp: input.stamp,
-            };
+        let capture = |input: &crate::config::reload::Input| baley::execution::model::ConfigInput {
+            identity: input.identity.clone(),
+            content: input.bytes.as_deref().map(baley::store::model::digest),
+            stamp: input.stamp,
+        };
         baley::execution::model::ConfigInputs {
             repo: capture(&self.repo),
             global: self.global.as_ref().map(capture),

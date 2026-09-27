@@ -135,13 +135,20 @@ pub fn receipt(
     replayed: bool,
 ) -> StoreResult<ReturnReceipt> {
     let closure: Closure = persistence::get(records, "closures", &attempt.attempt)?;
-    let findings = closure.original.as_ref().map(|id| {
-        let original: Original = persistence::get(records, "originals", id)?;
-        Ok::<_, baley::store::Error>(FindingsReceipt {
-            digest: original.content,
-            count: original.parsed.as_ref().map_or(0, |parsed| parsed.findings.len()),
+    let findings = closure
+        .original
+        .as_ref()
+        .map(|id| {
+            let original: Original = persistence::get(records, "originals", id)?;
+            Ok::<_, baley::store::Error>(FindingsReceipt {
+                digest: original.content,
+                count: original
+                    .parsed
+                    .as_ref()
+                    .map_or(0, |parsed| parsed.findings.len()),
+            })
         })
-    }).transpose()?;
+        .transpose()?;
     let originals = match &closure.original {
         Some(id) => {
             let original: Original = persistence::get(records, "originals", id)?;
@@ -210,7 +217,11 @@ pub async fn accept_return(
     let records = persistence::records(&view.snapshot.data).map_err(|_| delivery(id))?;
     let (records, admission, attempt) = match decide_return(records, &submitted, clock)? {
         ReturnDecision::Replay(receipt) => return Ok(*receipt),
-        ReturnDecision::Close { records, admission, attempt } => (records, admission, attempt),
+        ReturnDecision::Close {
+            records,
+            admission,
+            attempt,
+        } => (records, admission, attempt),
     };
     let outcome = persistence::commit_records(store, &view, &format!("return:{id}"), records).await;
     settle(outcome, &admission, &attempt, &submitted)
@@ -285,7 +296,8 @@ pub fn decide_return(
         .and_then(|values| values.get(id))
         .is_some()
     {
-        return replay(&records, &admission, &attempt, submitted).map(|receipt| ReturnDecision::Replay(Box::new(receipt)));
+        return replay(&records, &admission, &attempt, submitted)
+            .map(|receipt| ReturnDecision::Replay(Box::new(receipt)));
     }
     if matches!(
         attempt.state,

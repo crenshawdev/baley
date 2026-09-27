@@ -23,31 +23,56 @@ use baley::execution::{instructions, render::RENDERED_PROJECT_FILES};
 use regex::Regex;
 
 fn corpus() -> Vec<(String, String)> {
-    let mut surfaces: Vec<_> = RENDERED_PROJECT_FILES.iter().map(|file| {
-        (file.path.to_owned(), super::instruction_surfaces::render(file.command)
-            .unwrap_or_else(|| panic!("{}: no renderer for {:?}", file.path, file.command)))
-    }).collect();
+    let mut surfaces: Vec<_> = RENDERED_PROJECT_FILES
+        .iter()
+        .map(|file| {
+            (
+                file.path.to_owned(),
+                super::instruction_surfaces::render(file.command)
+                    .unwrap_or_else(|| panic!("{}: no renderer for {:?}", file.path, file.command)),
+            )
+        })
+        .collect();
     // An explicit canonical alias is also accepted by main.rs.
-    surfaces.push(("review-instructions --alias bal-review".into(),
+    surfaces.push((
+        "review-instructions --alias bal-review".into(),
         super::instruction_surfaces::render(&["review-instructions", "--alias", "bal-review"])
-            .expect("canonical review alias")));
-    surfaces.push(("executor dispatch_text".into(), instructions::dispatch_text()));
-    for present in instructions::MANIFESTS.iter().map(|(name, _)| vec![*name])
+            .expect("canonical review alias"),
+    ));
+    surfaces.push((
+        "executor dispatch_text".into(),
+        instructions::dispatch_text(),
+    ));
+    for present in instructions::MANIFESTS
+        .iter()
+        .map(|(name, _)| vec![*name])
         .chain(std::iter::once(Vec::new()))
     {
-        surfaces.push((format!("executor command_policy {present:?}"),
-            instructions::command_policy(&[], &present).to_string()));
+        surfaces.push((
+            format!("executor command_policy {present:?}"),
+            instructions::command_policy(&[], &present).to_string(),
+        ));
     }
-    surfaces.extend(baley::help::table::COMMANDS.iter()
-        .map(|command| (format!("help description {}", command.name), command.description.to_owned())));
-    surfaces.push(("reviewer brief".into(), baley::review::provider::payload::brief().to_owned()));
+    surfaces.extend(baley::help::table::COMMANDS.iter().map(|command| {
+        (
+            format!("help description {}", command.name),
+            command.description.to_owned(),
+        )
+    }));
+    surfaces.push((
+        "reviewer brief".into(),
+        baley::review::provider::payload::brief().to_owned(),
+    ));
     surfaces
 }
 
 fn config_expansions(token: &str) -> Vec<String> {
     let schema = super::config::schema();
     let family = |prefix: &str| -> BTreeSet<&str> {
-        schema.keys().filter_map(|key| key.strip_prefix(prefix)?.split('.').next()).collect()
+        schema
+            .keys()
+            .filter_map(|key| key.strip_prefix(prefix)?.split('.').next())
+            .collect()
     };
     let roles: BTreeSet<_> = super::config::roles::ROLES.into_iter().collect();
     let mut expanded = vec![token.to_owned()];
@@ -56,13 +81,19 @@ fn config_expansions(token: &str) -> Vec<String> {
         ("<provider>", family("review.providers.")),
         ("<trigger>", family("review.triggers.")),
     ] {
-        expanded = expanded.into_iter().flat_map(|name| {
-            if name.contains(marker) {
-                vocabulary.iter().map(|value| name.replace(marker, value)).collect()
-            } else {
-                vec![name]
-            }
-        }).collect();
+        expanded = expanded
+            .into_iter()
+            .flat_map(|name| {
+                if name.contains(marker) {
+                    vocabulary
+                        .iter()
+                        .map(|value| name.replace(marker, value))
+                        .collect()
+                } else {
+                    vec![name]
+                }
+            })
+            .collect();
     }
     expanded
 }
@@ -71,17 +102,22 @@ fn config_expansions(token: &str) -> Vec<String> {
 fn compiled_instructions_name_only_what_exists() {
     let schema = super::config::schema();
     let operations: BTreeSet<_> = super::server::query_operation_names()
-        .chain(super::server::apply_operation_names()).collect();
+        .chain(super::server::apply_operation_names())
+        .collect();
     // Shipped skills only: the rendered files plus the hand-authored ones,
     // traced against skills/ independently of this assertion. The help
     // catalog is not proof that a skill exists. `bal-phase` has no skill; the
     // task instructions still send oversized work to `/bal-phase add` until
     // the owner decides that wording, and this names it rather than hiding it.
-    let mut skills: BTreeSet<_> = [
-        "bal-review-delivery", "bal-reviewer-contract", "bal-phase",
-    ].into_iter().collect();
+    let mut skills: BTreeSet<_> = ["bal-review-delivery", "bal-reviewer-contract", "bal-phase"]
+        .into_iter()
+        .collect();
     skills.extend(RENDERED_PROJECT_FILES.iter().map(|file| {
-        file.path.strip_prefix("skills/").unwrap().strip_suffix("/SKILL.md").unwrap()
+        file.path
+            .strip_prefix("skills/")
+            .unwrap()
+            .strip_suffix("/SKILL.md")
+            .unwrap()
     }));
     // guard::input and guard::bash accept this named event. The hook manifest is
     // a separate artifact, never a member of this instruction corpus.
@@ -92,9 +128,13 @@ fn compiled_instructions_name_only_what_exists() {
     let spans = Regex::new(r"`([^`\n]+)`").unwrap();
     let keys = Regex::new(r#""([^"\n]+)"\s*:"#).unwrap();
     let json_operations = Regex::new(r#""operation"\s*:\s*"([^"]+)""#).unwrap();
-    let operation_consts = Regex::new(r#""operation"\s*:\s*\{[^{}]*"const"\s*:\s*"([^"]+)""#).unwrap();
+    let operation_consts =
+        Regex::new(r#""operation"\s*:\s*\{[^{}]*"const"\s*:\s*"([^"]+)""#).unwrap();
     let operation_fields = Regex::new(r#"\boperation:\s*"?([a-z][a-z0-9_-]*)"#).unwrap();
-    let invocations = Regex::new(r"\bbaley_(?:query|apply)(?:`\s+with\s+`|\s+(?:with\s+operation\s+)?)([a-z][a-z0-9_/-]*)").unwrap();
+    let invocations = Regex::new(
+        r"\bbaley_(?:query|apply)(?:`\s+with\s+`|\s+(?:with\s+operation\s+)?)([a-z][a-z0-9_/-]*)",
+    )
+    .unwrap();
     let skill_names = Regex::new(r"/(bal-[a-z0-9-]+)").unwrap();
     let mut unresolved = BTreeSet::new();
     for (surface, text) in corpus() {
@@ -107,12 +147,23 @@ fn compiled_instructions_name_only_what_exists() {
                 candidates.insert(("hook event", token.to_owned()));
                 continue;
             }
-            if ["answer field", "request field", "dispatch field", "file", "path", "code", "language API"]
-                .iter().any(|marker| prefix.ends_with(marker))
+            if [
+                "answer field",
+                "request field",
+                "dispatch field",
+                "file",
+                "path",
+                "code",
+                "language API",
+            ]
+            .iter()
+            .any(|marker| prefix.ends_with(marker))
             {
                 continue;
             }
-            if dotted.is_match(token) || (prefix.ends_with("config key") && identifier.is_match(token)) {
+            if dotted.is_match(token)
+                || (prefix.ends_with("config key") && identifier.is_match(token))
+            {
                 candidates.insert(("config key", token.to_owned()));
             }
         }
@@ -128,7 +179,11 @@ fn compiled_instructions_name_only_what_exists() {
         }
         for capture in invocations.captures_iter(&text) {
             if !["with", "operation", "permission", "an"].contains(&&capture[1]) {
-                candidates.extend(capture[1].split('/').map(|name| ("wire operation", name.to_owned())));
+                candidates.extend(
+                    capture[1]
+                        .split('/')
+                        .map(|name| ("wire operation", name.to_owned())),
+                );
             }
         }
         for capture in skill_names.captures_iter(&text) {
@@ -137,7 +192,9 @@ fn compiled_instructions_name_only_what_exists() {
         // No candidate is filtered by membership before this point.
         for (kind, token) in candidates {
             let known = match kind {
-                "config key" => config_expansions(&token).iter().all(|name| schema.contains_key(name)),
+                "config key" => config_expansions(&token)
+                    .iter()
+                    .all(|name| schema.contains_key(name)),
                 "wire operation" => operations.contains(token.as_str()),
                 "skill" => skills.contains(token.as_str()),
                 "hook event" => hook_events.contains(&token.as_str()),
@@ -148,19 +205,26 @@ fn compiled_instructions_name_only_what_exists() {
             }
         }
     }
-    assert!(unresolved.is_empty(), "unresolved compiled instruction names:\n{}",
-        unresolved.into_iter().collect::<Vec<_>>().join("\n"));
+    assert!(
+        unresolved.is_empty(),
+        "unresolved compiled instruction names:\n{}",
+        unresolved.into_iter().collect::<Vec<_>>().join("\n")
+    );
 }
 
 #[test]
 fn schema_defaults_match_their_declared_domain() {
     for (key, spec) in super::config::schema() {
-        let default = spec.get("default").unwrap_or_else(|| panic!("{key}: missing default"));
+        let default = spec
+            .get("default")
+            .unwrap_or_else(|| panic!("{key}: missing default"));
         // Import semantics admit explicit null array defaults as unanswered;
         // missing defaults must not be silently substituted with null.
-        assert!(super::config::reload::valid_type(spec, default, true)
-            && super::config::write::valid_grammar(spec, default),
-            "{key}: default {default} is outside its declared domain {spec}");
+        assert!(
+            super::config::reload::valid_type(spec, default, true)
+                && super::config::write::valid_grammar(spec, default),
+            "{key}: default {default} is outside its declared domain {spec}"
+        );
     }
 }
 
@@ -193,12 +257,19 @@ fn rendered_files_obey_named_byte_ceilings() {
         ("skills/bal-task/SKILL.md", 32768),
     ];
     for file in RENDERED_PROJECT_FILES {
-        let ceiling = ceilings.iter().find(|(path, _)| *path == file.path)
-            .unwrap_or_else(|| panic!("{}: missing named byte ceiling", file.path)).1;
+        let ceiling = ceilings
+            .iter()
+            .find(|(path, _)| *path == file.path)
+            .unwrap_or_else(|| panic!("{}: missing named byte ceiling", file.path))
+            .1;
         let rendered = super::instruction_surfaces::render(file.command)
             .unwrap_or_else(|| panic!("{}: missing renderer", file.path));
-        assert!(rendered.len() <= ceiling,
-            "{}: {} UTF-8 bytes exceed the {ceiling}-byte ceiling", file.path, rendered.len());
+        assert!(
+            rendered.len() <= ceiling,
+            "{}: {} UTF-8 bytes exceed the {ceiling}-byte ceiling",
+            file.path,
+            rendered.len()
+        );
     }
 }
 
@@ -229,7 +300,10 @@ fn compiled_contracts_send_source_reads_to_host_tools() {
             .iter()
             .find(|(name, _)| *name == carrier)
             .unwrap_or_else(|| panic!("{carrier}: missing compiled surface"));
-        assert!(text.contains(expected), "{carrier}: missing host-tools sentence");
+        assert!(
+            text.contains(expected),
+            "{carrier}: missing host-tools sentence"
+        );
     }
 }
 
@@ -258,7 +332,10 @@ fn the_query_tool_description_sends_source_reads_to_host_tools() {
         .iter()
         .find(|tool| tool.name == "baley_query")
         .expect("baley_query tool");
-    let description = query.description.as_deref().expect("baley_query description");
+    let description = query
+        .description
+        .as_deref()
+        .expect("baley_query description");
     assert!(
         description.contains(expected),
         "baley_query description: missing host-tools sentence"
@@ -268,13 +345,15 @@ fn the_query_tool_description_sends_source_reads_to_host_tools() {
 #[test]
 fn plan_instructions_derive_tests_from_behavior() {
     let text = baley::plan::instructions::markdown();
-    let derivation = "Start from the approved behavior and the changes needed to deliver it. Treat a
+    let derivation =
+        "Start from the approved behavior and the changes needed to deliver it. Treat a
 plan step as a container for work; separate its independently testable
 responsibilities instead of testing the whole step. For each responsibility,
 choose input classes, decision edges and failure responses justified by the
 requirement. Take expected values from that requirement; never invent behavior
 to make an answer available. Flag ambiguity for the owner to clarify.";
-    let bounded_cases = "A generated unit test exercises one responsibility and one behavior, using at
+    let bounded_cases =
+        "A generated unit test exercises one responsibility and one behavior, using at
 most one simulated external seam; split a unit that touches two. Run the real
 logic that owns the decision with supplied observations and independently
 justified expectations. In the one check's existing fields, connect the
@@ -297,7 +376,10 @@ downstream decision; its type alone does not disqualify it.";
         ("bounded cases", bounded_cases),
         ("gathering and responsibility-relative fakes", gathering),
     ] {
-        assert!(text.contains(expected), "plan markdown: missing {name} block");
+        assert!(
+            text.contains(expected),
+            "plan markdown: missing {name} block"
+        );
     }
 }
 
@@ -342,10 +424,21 @@ task may add tests only after that close.";
    prevents task close. Hold it fixed until this task closes. A refusal names
    each unsatisfied check; nothing is manufactured after the fact.";
     for (carrier, text, expected) in [
-        ("plan markdown", baley::plan::instructions::markdown(), planner),
-        ("executor contract", instructions::contract_markdown(), executor),
+        (
+            "plan markdown",
+            baley::plan::instructions::markdown(),
+            planner,
+        ),
+        (
+            "executor contract",
+            instructions::contract_markdown(),
+            executor,
+        ),
     ] {
-        assert!(text.contains(expected), "{carrier}: missing complete close-rule block");
+        assert!(
+            text.contains(expected),
+            "{carrier}: missing complete close-rule block"
+        );
     }
 }
 
@@ -358,7 +451,10 @@ Constituent unit tests cannot establish integration, GUI interaction, real
 persistence, performance or an assembled workflow, and passing them does not
 close that obligation. Do not waive it, rename it a unit test or weaken the
 promise. State what remains unverified.";
-    assert!(text.contains(expected), "plan markdown: missing live-verification block");
+    assert!(
+        text.contains(expected),
+        "plan markdown: missing live-verification block"
+    );
 }
 
 #[test]
@@ -372,7 +468,10 @@ program separately under a Live verification heading in the context scope.
 That part becomes an observation in the evidence map of the phase that first
 makes it runnable; do not add a field to the truth. Passing unit tests do not
 close this live obligation.";
-    assert!(text.contains(expected), "context markdown: missing owned-decision and live-verification section");
+    assert!(
+        text.contains(expected),
+        "context markdown: missing owned-decision and live-verification section"
+    );
 }
 
 #[test]
@@ -386,16 +485,26 @@ fn plan_review_asks_the_test_questions() {
     ] {
         let text = baley::review::instructions::frontdoor_markdown(carrier)
             .unwrap_or_else(|| panic!("{carrier}: missing review front door"));
-        assert!(text.contains(expected), "{carrier}: missing plan-review question block");
+        assert!(
+            text.contains(expected),
+            "{carrier}: missing plan-review question block"
+        );
     }
     let intent = baley::review::instructions::intent_for(baley::review::selection::Kind::Plan);
-    assert!(intent.contains(expected), "plan intent: missing plan-review question block");
+    assert!(
+        intent.contains(expected),
+        "plan intent: missing plan-review question block"
+    );
     let brief = baley::review::provider::payload::brief();
-    let expected_brief = "  For its tests, ask whether each serves the approved requirement, whether the
+    let expected_brief =
+        "  For its tests, ask whether each serves the approved requirement, whether the
   assertion can expose the stated defect, and whether a fake supplies the
   decision the test is meant to exercise. Assess the fake relative to the
   responsibility that test exercises, not merely the type of value it returns.";
-    assert!(brief.contains(expected_brief), "provider brief: missing plan-review question block");
+    assert!(
+        brief.contains(expected_brief),
+        "provider brief: missing plan-review question block"
+    );
 }
 
 #[test]
@@ -403,7 +512,10 @@ fn plan_review_keeps_existing_completion_judgments() {
     let text = baley::review::instructions::frontdoor_markdown("bal-plan-review")
         .expect("bal-plan-review front door");
     let expected = "These questions are advisory to plan submission and add no plan-submit gate. The owner's exact check inspection at execution-plan-complete and the verifier's item verdicts at verification-complete remain required completion judgments.";
-    assert!(text.contains(expected), "bal-plan-review: missing advisory and completion-judgment block");
+    assert!(
+        text.contains(expected),
+        "bal-plan-review: missing advisory and completion-judgment block"
+    );
 }
 
 #[test]
@@ -422,10 +534,19 @@ when a check ran but does not establish the behavior, and not_seen only when
 the evidence was unavailable, stating what was observed; never invent a new
 status or accept unsupported evidence.";
     for (carrier, text) in [
-        ("bal-verifier-contract", baley::verification::instructions::contract_markdown()),
-        ("bal-verify", baley::verification::instructions::frontdoor_markdown()),
+        (
+            "bal-verifier-contract",
+            baley::verification::instructions::contract_markdown(),
+        ),
+        (
+            "bal-verify",
+            baley::verification::instructions::frontdoor_markdown(),
+        ),
     ] {
-        assert!(text.contains(expected), "{carrier}: missing evidence-limits block");
+        assert!(
+            text.contains(expected),
+            "{carrier}: missing evidence-limits block"
+        );
     }
 }
 
@@ -441,7 +562,9 @@ fn compiled_read_surfaces() -> Vec<(&'static str, String)> {
     surfaces.push(("executor dispatch_text", instructions::dispatch_text()));
     surfaces.push((
         "server initialize instructions",
-        super::server::info().instructions.expect("initialize instructions"),
+        super::server::info()
+            .instructions
+            .expect("initialize instructions"),
     ));
     surfaces
 }

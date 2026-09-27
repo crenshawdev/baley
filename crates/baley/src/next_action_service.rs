@@ -86,13 +86,19 @@ pub(super) fn recheck_holds(
 pub(super) fn ask(
     scope: &baley::evidence::Scope,
     gate: baley::evidence::gates::Gate,
-) -> (baley::evidence::Record, baley::next_action::continuation::Decision) {
+) -> (
+    baley::evidence::Record,
+    baley::next_action::continuation::Decision,
+) {
     let record = baley::evidence::Record {
         version: baley::evidence::VERSION,
         scope: scope.clone(),
         fact: Fact::Gate(gate.clone()),
     };
-    (record, baley::next_action::continuation::Decision::Wait(gate))
+    (
+        record,
+        baley::next_action::continuation::Decision::Wait(gate),
+    )
 }
 
 /// Reads one named occurrence. The phase 6 dispatcher consumes this decision.
@@ -142,15 +148,22 @@ pub async fn continuation<I: ConfigIo + Clone + Sync>(
         .unwrap_or_default();
     let mut selected = continuation::select(&records, scope, applicability, plans);
     if let Ok(phase) = scope.phase.parse::<u32>()
-        && let Some(active) = view.snapshot.data["execution"]["occurrences"][phase.to_string()]["active"].as_object()
-        && let Some(plan) = active.get("plan").and_then(serde_json::Value::as_u64).and_then(|plan| u32::try_from(plan).ok()) {
+        && let Some(active) =
+            view.snapshot.data["execution"]["occurrences"][phase.to_string()]["active"].as_object()
+        && let Some(plan) = active
+            .get("plan")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|plan| u32::try_from(plan).ok())
+    {
         let plan_events = baley::execution::history::plan_records(&view.snapshot.data, phase)
             .map_err(store_error)?;
         let admitted = baley::execution::history::admitted_plans(&view.snapshot.data, phase)
             .map_err(store_error)?;
         if let Some((identity, _)) = admitted.iter().find(|(identity, _)| identity.plan == plan)
             && let Some(decision) = continuation::plan_repair_decision(
-                &baley::execution::history::plan_project(&plan_events, identity)) {
+                &baley::execution::history::plan_project(&plan_events, identity),
+            )
+        {
             selected.checkpoint = None;
             selected.decision = decision;
         }
@@ -246,8 +259,11 @@ pub async fn query<I: ConfigIo + Clone + Sync>(
 }
 
 pub async fn query_checked<I: ConfigIo + Clone + Sync>(
-    factory: &SessionFactory<I>, checked: derivation::RecheckedLifecycle, view: View,
-    driver: &Driver, conflicts: &[derivation::RoadmapConflict],
+    factory: &SessionFactory<I>,
+    checked: derivation::RecheckedLifecycle,
+    view: View,
+    driver: &Driver,
+    conflicts: &[derivation::RoadmapConflict],
 ) -> Result<Option<Action>, DerivationError> {
     let root = checked.capture().root.clone();
     let session = factory.first_touch(&root).await.map_err(store_error)?;
@@ -263,8 +279,7 @@ pub async fn query_checked<I: ConfigIo + Clone + Sync>(
     let modern = baley::review::deferred::enumerate_deferred(session.review_store())
         .await
         .map_err(store_error)?;
-    let records =
-        baley::review::persistence::records(&view.snapshot.data).map_err(store_error)?;
+    let records = baley::review::persistence::records(&view.snapshot.data).map_err(store_error)?;
     let mut members = Vec::new();
     let mut unreadable = Vec::new();
     for member in modern.members {
@@ -292,12 +307,27 @@ pub async fn query_checked<I: ConfigIo + Clone + Sync>(
         }
     }
     observations::include_reviews(&mut observed.queue, members.clone(), unreadable.clone());
-    let interruption = match checked.answer().current.and_then(|p| p.address().parse::<u32>().ok()) {
-        Some(phase) => baley::execution::history::interrupted_dispatch(&view.snapshot.data, phase, view.snapshot.generation).map_err(store_error)?,
+    let interruption = match checked
+        .answer()
+        .current
+        .and_then(|p| p.address().parse::<u32>().ok())
+    {
+        Some(phase) => baley::execution::history::interrupted_dispatch(
+            &view.snapshot.data,
+            phase,
+            view.snapshot.generation,
+        )
+        .map_err(store_error)?,
         None => None,
     };
-    let answer = next_action::select_with_interruptions(checked.answer(), &observed, paused.as_ref(), skip, conflicts,
-        interruption.as_ref().map(|i| i.id.as_str()));
+    let answer = next_action::select_with_interruptions(
+        checked.answer(),
+        &observed,
+        paused.as_ref(),
+        skip,
+        conflicts,
+        interruption.as_ref().map(|i| i.id.as_str()),
+    );
     let task_driver = driver.clone();
     let task_capture = checked.capture().clone();
     let (current, lifecycle) = tokio::task::spawn_blocking(move || {

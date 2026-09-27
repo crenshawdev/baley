@@ -1,15 +1,12 @@
 //! Pause-local branch policy. Observations and decisions remain separate.
-use crate::process::Process;
 use super::git;
+use crate::process::Process;
 use crate::{
     evidence::gates::{Gate, OptionChoice, Purpose, State},
     store::{Error, Result},
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    path::Path,
-};
+use std::{collections::BTreeMap, path::Path};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Policy {
@@ -87,7 +84,12 @@ pub fn read_merge_base(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> Resul
     }
 }
 
-pub fn observe(root: &Path, planning: &Path, policy: &Policy, process: &mut dyn Process) -> Result<Observed> {
+pub fn observe(
+    root: &Path,
+    planning: &Path,
+    policy: &Policy,
+    process: &mut dyn Process,
+) -> Result<Observed> {
     let branch = text(git::run(root, ["branch", "--show-current"], process)?)?
         .trim_end_matches('\n')
         .into();
@@ -109,7 +111,8 @@ pub fn observe(root: &Path, planning: &Path, policy: &Policy, process: &mut dyn 
         let output = crate::git_process::run(
             &crate::git_process::launch(crate::git_process::Caller::PauseMergeBase)
                 .cwd(root)
-                .args(["merge-base", branches[base].as_str(), head.as_str()]), process,
+                .args(["merge-base", branches[base].as_str(), head.as_str()]),
+            process,
         )?;
         read_merge_base(output.code(), &output.stdout, &output.stderr)?
     } else {

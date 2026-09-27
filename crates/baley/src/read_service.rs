@@ -4,7 +4,10 @@ use baley::read::{Query, ReadDomain};
 use serde_json::Value;
 
 use baley::envelope::Refusal;
-use std::{collections::BTreeMap, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 pub fn execute(
     domains: &mut BTreeMap<PathBuf, ReadDomain>,
@@ -21,5 +24,8 @@ pub fn execute(
 
 pub fn unavailable(reason: impl Into<String>) -> Value {
     // D-145: the read layer serves the startup-bound project.
-    Refusal::new("read-unavailable", reason).rule("bound-project").slot("project").value()
+    Refusal::new("read-unavailable", reason)
+        .rule("bound-project")
+        .slot("project")
+        .value()
 }

@@ -10,13 +10,20 @@
 use serde_json::{Value, json};
 
 fn code_of(answer: &Value) -> &str {
-    answer["code"].as_str().unwrap_or_else(|| panic!("no code in {answer}"))
+    answer["code"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no code in {answer}"))
 }
 
 #[test]
 fn a_verdict_refusal_carries_a_code() {
     let answer = baley::verification::verdicts::refusal(
-        "verification-basis", "basis", "", "current verification authority unavailable", json!(null), json!(null),
+        "verification-basis",
+        "basis",
+        "",
+        "current verification authority unavailable",
+        json!(null),
+        json!(null),
     );
     assert_eq!(answer["status"], "refused", "{answer}");
     assert_eq!(answer["rule"], "verification-basis", "{answer}");

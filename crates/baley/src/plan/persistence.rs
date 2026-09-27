@@ -49,13 +49,19 @@ pub fn require_legacy_execution(data: &Value, phase: u32) -> Result<()> {
     Ok(())
 }
 
-pub fn require_execution_ready(data:&Value,phase:u32,documents:&std::collections::BTreeMap<String,String>) -> Result<()> {
+pub fn require_execution_ready(
+    data: &Value,
+    phase: u32,
+    documents: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
     use baley::execution::admission;
-    let Some(current)=saved(data,phase)?.filter(|o|!o.publications.is_empty()) else {return Ok(())};
-    let retained=admission::records(data,phase)?;
-    let number=current.publications.keys().next().expect("nonempty");
+    let Some(current) = saved(data, phase)?.filter(|o| !o.publications.is_empty()) else {
+        return Ok(());
+    };
+    let retained = admission::records(data, phase)?;
+    let number = current.publications.keys().next().expect("nonempty");
     let record=retained.last().ok_or_else(||admission::refuse(phase,"admission-required","contract",&number.to_string(),format!("phase {phase} plan {number} requires an explicit complete execution admission: submit baley_apply execution-admit with expected_set_version 0 and a contract naming every published plan's publication_request, content_revision and map_revision, allocating every task and giving each current check exactly one owner")))?;
-    admission::validate(data,documents,&record.request.contract)?;
+    admission::validate(data, documents, &record.request.contract)?;
     Ok(())
 }
 
@@ -82,13 +88,28 @@ fn same_authored(left: &Submission, right: &Submission) -> bool {
 }
 
 pub fn required_truths(data: &Value, content: &Content) -> Result<Vec<(String, String)>> {
-    let context = baley::context::persistence::saved(data, content.phase.get())?
-        .ok_or_else(|| Error::Invalid("native-approved-truths: typed plan content needs approved truths".into()))?;
-    content.requirements.iter().map(|id| {
-        let truth = context.truths.iter().find(|truth| &truth.id == id)
-            .ok_or_else(|| Error::Invalid(format!("native-approved-truths: requirement {id} is absent")))?;
-        Ok((truth.id.clone(), truth.text.clone()))
-    }).collect()
+    let context =
+        baley::context::persistence::saved(data, content.phase.get())?.ok_or_else(|| {
+            Error::Invalid(
+                "native-approved-truths: typed plan content needs approved truths".into(),
+            )
+        })?;
+    content
+        .requirements
+        .iter()
+        .map(|id| {
+            let truth = context
+                .truths
+                .iter()
+                .find(|truth| &truth.id == id)
+                .ok_or_else(|| {
+                    Error::Invalid(format!(
+                        "native-approved-truths: requirement {id} is absent"
+                    ))
+                })?;
+            Ok((truth.id.clone(), truth.text.clone()))
+        })
+        .collect()
 }
 
 pub fn rendered_content(data: &Value, content: &Content) -> Result<Content> {
@@ -105,7 +126,10 @@ pub fn rendered_document(data: &Value, content: &Content) -> Result<Vec<u8>> {
 
 /// True when the approval binds this exact submission, by copy or by digest.
 pub fn binds(submission: &Submission, approval: &Approval) -> Result<bool> {
-    Ok(approval.submission.as_ref().is_some_and(|approved| same_authored(submission, approved))
+    Ok(approval
+        .submission
+        .as_ref()
+        .is_some_and(|approved| same_authored(submission, approved))
         || approval.submission_digest.as_deref() == Some(submission_digest(submission)?.as_str()))
 }
 
@@ -122,14 +146,22 @@ pub fn bound(data: &Value, submission: &Submission, approval: Approval) -> Resul
         // truths or a requirement names none, stays the wire copy here; the
         // publication path refuses it with the located rule, not a render error.
         let Ok(content) = rendered_content(data, &entry.content) else {
-            return Ok(Approval { submission: Some(submission.clone()), submission_digest: None, ..approval });
+            return Ok(Approval {
+                submission: Some(submission.clone()),
+                submission_digest: None,
+                ..approval
+            });
         };
         entry.content = content;
         if let Some(replacement) = &mut entry.replacement {
             replacement.content = entry.content.clone();
         }
     }
-    Ok(Approval { submission: Some(retained), submission_digest: None, ..approval })
+    Ok(Approval {
+        submission: Some(retained),
+        submission_digest: None,
+        ..approval
+    })
 }
 
 pub fn approve(submission: &Submission, approval: &Approval) -> Result<()> {
@@ -142,7 +174,8 @@ pub fn approve(submission: &Submission, approval: &Approval) -> Result<()> {
         || approval.at.as_ref().is_none_or(|s| s.trim().is_empty())
     {
         return Err(Error::Invalid(
-            "exact-submission-approval: owner, time and the submission copy or its digest required".into(),
+            "exact-submission-approval: owner, time and the submission copy or its digest required"
+                .into(),
         ));
     }
     if submission.request_id.trim().is_empty() || submission.plans.is_empty() {
@@ -154,7 +187,9 @@ pub fn approve(submission: &Submission, approval: &Approval) -> Result<()> {
 }
 
 pub fn payload_digest(submission: &Submission, approval: &Approval) -> Result<String> {
-    let canonical = approval.submission.as_ref()
+    let canonical = approval
+        .submission
+        .as_ref()
         .filter(|approved| same_authored(submission, approved))
         .unwrap_or(submission);
     Ok(digest(&serde_json::to_vec(&(canonical, approval))?))
@@ -162,13 +197,31 @@ pub fn payload_digest(submission: &Submission, approval: &Approval) -> Result<St
 
 /// The durable request receipt precedes inventory, allocation and replacement
 /// checks. A retry observes history; it is never a new publication transaction.
-pub fn replay(previous: &Value, submission: &Submission, approval: Option<&Approval>) -> Result<Option<Receipt>> {
-    let Some(occurrence) = saved(previous, submission.phase.get())? else { return Ok(None) };
-    let Some(receipt) = occurrence.receipts.get(&submission.request_id) else { return Ok(None) };
-    let digest = approval.map(|a| payload_digest(submission, a)).transpose()?;
+pub fn replay(
+    previous: &Value,
+    submission: &Submission,
+    approval: Option<&Approval>,
+) -> Result<Option<Receipt>> {
+    let Some(occurrence) = saved(previous, submission.phase.get())? else {
+        return Ok(None);
+    };
+    let Some(receipt) = occurrence.receipts.get(&submission.request_id) else {
+        return Ok(None);
+    };
+    let digest = approval
+        .map(|a| payload_digest(submission, a))
+        .transpose()?;
     if occurrence.id != submission.occurrence || digest.as_ref() != Some(&receipt.payload_digest) {
-        let identities = receipt.results.iter().map(|p| format!("phase {} plan {}", p.identity.phase, p.identity.plan)).collect::<Vec<_>>().join(", ");
-        return Err(Error::Conflict(format!("request-id-reuse: request {} in {} is bound to {identities} and its exact approved payload", submission.request_id, occurrence.id)));
+        let identities = receipt
+            .results
+            .iter()
+            .map(|p| format!("phase {} plan {}", p.identity.phase, p.identity.plan))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(Error::Conflict(format!(
+            "request-id-reuse: request {} in {} is bound to {identities} and its exact approved payload",
+            submission.request_id, occurrence.id
+        )));
     }
     Ok(Some(receipt.clone()))
 }
@@ -208,11 +261,15 @@ pub fn contribute(
         let number = if entry.replacement.is_some() {
             entry.target.plan.get()
         } else {
-            high_water = high_water.checked_add(1).ok_or_else(|| Error::Invalid("number-exhaustion".into()))?;
+            high_water = high_water
+                .checked_add(1)
+                .ok_or_else(|| Error::Invalid("number-exhaustion".into()))?;
             high_water
         };
         if !targets.insert(number) {
-            return Err(Error::Invalid(format!("duplicate publication target: phase {phase} plan {number}")));
+            return Err(Error::Invalid(format!(
+                "duplicate publication target: phase {phase} plan {number}"
+            )));
         }
         if entry.target.phase.get() != phase || entry.target.plan.get() != number {
             return Err(Error::Conflict(format!(
@@ -220,14 +277,27 @@ pub fn contribute(
                 entry.target
             )));
         }
-        let retained = approval.submission.as_ref()
-            .and_then(|approved| approved.plans.iter().find(|candidate| candidate.target == entry.target))
-            .ok_or_else(|| Error::Invalid("exact-submission-approval: retained plan content is absent".into()))?;
+        let retained = approval
+            .submission
+            .as_ref()
+            .and_then(|approved| {
+                approved
+                    .plans
+                    .iter()
+                    .find(|candidate| candidate.target == entry.target)
+            })
+            .ok_or_else(|| {
+                Error::Invalid("exact-submission-approval: retained plan content is absent".into())
+            })?;
         let bytes = render::document(&retained.content)?;
         baley::execution::plan::parse_plan(&bytes, phase, number)
             .map_err(|error| Error::Invalid(error.to_string()))?;
         let revision = digest(&bytes);
-        let mut history = occurrence.publications.get(&number).map(|p| p.history.clone()).unwrap_or_default();
+        let mut history = occurrence
+            .publications
+            .get(&number)
+            .map(|p| p.history.clone())
+            .unwrap_or_default();
         history.push(revision.clone());
         let publication = Publication {
             identity: entry.target.clone(),
@@ -237,15 +307,28 @@ pub fn contribute(
             approval: approval.clone(),
             readiness: Readiness::ProvisionalAuthoring,
             history,
-            map_revision: if matches!(&entry.content.evidence_map, Some(super::evidence::Map::Attached { .. })) {
+            map_revision: if matches!(
+                &entry.content.evidence_map,
+                Some(super::evidence::Map::Attached { .. })
+            ) {
                 Some(super::map_history::event_id(submission, &entry.target)?)
-            } else { None },
+            } else {
+                None
+            },
         };
         occurrence.publications.insert(number, publication.clone());
         for (number, sources) in &inventory.provenance {
-            occurrence.provenance.entry(*number).or_default().extend(sources.iter().cloned());
+            occurrence
+                .provenance
+                .entry(*number)
+                .or_default()
+                .extend(sources.iter().cloned());
         }
-        occurrence.provenance.entry(number).or_default().insert(format!("publication:{}", submission.request_id));
+        occurrence
+            .provenance
+            .entry(number)
+            .or_default()
+            .insert(format!("publication:{}", submission.request_id));
         occurrence.consumed.extend(&inventory.occupied);
         occurrence.consumed.push(number);
         occurrence.consumed.sort_unstable();
@@ -274,40 +357,72 @@ pub fn contribute(
 
 /// Read-only candidate validation is also required by the committing algebra.
 /// It needs no approval and creates neither a session nor a durable reservation.
-pub fn validate_candidate(previous: &Value, submission: &Submission, inventory: &Inventory) -> Result<()> {
+pub fn validate_candidate(
+    previous: &Value,
+    submission: &Submission,
+    inventory: &Inventory,
+) -> Result<()> {
     if let Some(refusal) = super::validation::identities(submission) {
         return Err(Error::Invalid(serde_json::to_string(&refusal)?));
     }
     let phase = submission.phase.get();
     if baley::context::persistence::saved(previous, phase)?.is_none() {
-        return Err(Diagnostic { rule: "native-approved-truths".into(), slot: "submission.phase".into(),
+        return Err(Diagnostic {
+            rule: "native-approved-truths".into(),
+            slot: "submission.phase".into(),
             details: None,
-            phase: Some(phase), entry: None, id: None,
-            reason: format!("phase {phase} current native truth authority is absent; use context-submit") }.error());
+            phase: Some(phase),
+            entry: None,
+            id: None,
+            reason: format!(
+                "phase {phase} current native truth authority is absent; use context-submit"
+            ),
+        }
+        .error());
     }
     if submission.occurrence != occurrence(previous, phase)? {
-        return Err(Error::Conflict("phase occurrence changed; preview and approve again".into()));
+        return Err(Error::Conflict(
+            "phase occurrence changed; preview and approve again".into(),
+        ));
     }
     if submission.inventory_basis != inventory.basis {
-        return Err(Error::Conflict("inventory precondition changed; preview and approve again".into()));
+        return Err(Error::Conflict(
+            "inventory precondition changed; preview and approve again".into(),
+        ));
     }
-    if submission.plans.is_empty() || submission.plans.len() > 64 || submission.request_id.trim().is_empty() {
-        return Err(Error::Invalid("publication needs a request identity and 1 through 64 plans".into()));
+    if submission.plans.is_empty()
+        || submission.plans.len() > 64
+        || submission.request_id.trim().is_empty()
+    {
+        return Err(Error::Invalid(
+            "publication needs a request identity and 1 through 64 plans".into(),
+        ));
     }
     super::associations::validate(previous, submission)?;
     let mut high_water = inventory.high_water;
     let mut targets = std::collections::BTreeSet::new();
     for entry in &submission.plans {
         if entry.content.evidence_map.is_none() {
-            return Err(Error::Invalid("evidence-map-mode: new mapless authoring must explicitly choose provisional mode".into()));
+            return Err(Error::Invalid(
+                "evidence-map-mode: new mapless authoring must explicitly choose provisional mode"
+                    .into(),
+            ));
         }
-        let number = if entry.replacement.is_some() { entry.target.plan.get() } else {
-            high_water = high_water.checked_add(1).ok_or_else(|| Error::Invalid("number-exhaustion".into()))?;
+        let number = if entry.replacement.is_some() {
+            entry.target.plan.get()
+        } else {
+            high_water = high_water
+                .checked_add(1)
+                .ok_or_else(|| Error::Invalid("number-exhaustion".into()))?;
             high_water
         };
-        if !targets.insert(number) { return Err(Error::Invalid("duplicate publication target".into())); }
+        if !targets.insert(number) {
+            return Err(Error::Invalid("duplicate publication target".into()));
+        }
         if entry.target.plan.get() != number {
-            return Err(Error::Conflict(format!("allocation target changed: expected phase {phase} plan {number}")));
+            return Err(Error::Conflict(format!(
+                "allocation target changed: expected phase {phase} plan {number}"
+            )));
         }
         rendered_document(previous, &entry.content)?;
     }
@@ -316,12 +431,22 @@ pub fn validate_candidate(previous: &Value, submission: &Submission, inventory: 
 
 /// The expected-old participant is authority-bearing too. Recovery may see the
 /// installed new projection, but the intent must still retain the exact old one.
-pub fn validate_old_document(previous: &Value, phase: u32, plan: u32, bytes: Option<&[u8]>) -> Result<()> {
+pub fn validate_old_document(
+    previous: &Value,
+    phase: u32,
+    plan: u32,
+    bytes: Option<&[u8]>,
+) -> Result<()> {
     let old = saved(previous, phase)?;
-    let expected = old.as_ref().and_then(|o| o.publications.get(&plan))
-        .map(|p| render::document(&p.content)).transpose()?;
+    let expected = old
+        .as_ref()
+        .and_then(|o| o.publications.get(&plan))
+        .map(|p| render::document(&p.content))
+        .transpose()?;
     if expected.as_deref() != bytes {
-        return Err(Error::Conflict(format!("stale-target: phase {phase} plan {plan} expected old publication bytes changed")));
+        return Err(Error::Conflict(format!(
+            "stale-target: phase {phase} plan {plan} expected old publication bytes changed"
+        )));
     }
     Ok(())
 }
@@ -383,7 +508,9 @@ pub fn declared_requirements(results: &[Publication]) -> Vec<String> {
     let mut ids = Vec::new();
     for publication in results {
         for id in &publication.content.requirements {
-            if !ids.contains(id) { ids.push(id.clone()); }
+            if !ids.contains(id) {
+                ids.push(id.clone());
+            }
         }
     }
     ids
@@ -392,11 +519,17 @@ pub fn declared_requirements(results: &[Publication]) -> Vec<String> {
 /// The one allocation receipt this publication adds, with its results.
 fn added_receipt(previous: &Value, proposed: &Value, phase: u32) -> Result<Vec<Publication>> {
     let old = saved(previous, phase)?;
-    let new = saved(proposed, phase)?.ok_or_else(|| Error::Invalid("missing plan occurrence".into()))?;
-    let receipts: Vec<_> = new.receipts.iter()
-        .filter(|(id, _)| old.as_ref().is_none_or(|o| !o.receipts.contains_key(*id))).collect();
+    let new =
+        saved(proposed, phase)?.ok_or_else(|| Error::Invalid("missing plan occurrence".into()))?;
+    let receipts: Vec<_> = new
+        .receipts
+        .iter()
+        .filter(|(id, _)| old.as_ref().is_none_or(|o| !o.receipts.contains_key(*id)))
+        .collect();
     if receipts.len() != 1 {
-        return Err(Error::Invalid("publication needs one allocation receipt".into()));
+        return Err(Error::Invalid(
+            "publication needs one allocation receipt".into(),
+        ));
     }
     Ok(receipts[0].1.results.clone())
 }
@@ -405,7 +538,12 @@ fn added_receipt(previous: &Value, proposed: &Value, phase: u32) -> Result<Vec<P
 /// the observed preimage by the ids this publication's receipt declares, and
 /// nothing when the preimage seeds nothing (D-131). Commit and recovery both
 /// derive the participant from this.
-pub fn seeded_requirements(previous: &Value, proposed: &Value, phase: u32, preimage: Option<&[u8]>) -> Result<Option<(Vec<u8>, Vec<String>)>> {
+pub fn seeded_requirements(
+    previous: &Value,
+    proposed: &Value,
+    phase: u32,
+    preimage: Option<&[u8]>,
+) -> Result<Option<(Vec<u8>, Vec<String>)>> {
     let declared = declared_requirements(&added_receipt(previous, proposed, phase)?);
     baley::verification::projections::seeded_requirements(preimage, phase, &declared)
 }
@@ -414,35 +552,72 @@ pub fn seeded_requirements(previous: &Value, proposed: &Value, phase: u32, preim
 /// This checks historical approval equality without recertifying an old map
 /// under today's content policy; admission separately validates the whole union.
 pub fn validate_retained(data: &Value, phase: u32, publication: &Publication) -> Result<()> {
-    let invalid = |slot: &str, reason: &str| Diagnostic {
-        rule: "publication-authority".into(), slot: format!("current.plans[{}].{slot}", publication.identity.plan),
-        phase: Some(phase), entry: None, id: Some(publication.identity.plan.to_string()),
-        reason: reason.into(), details: None,
-    }.error();
-    let occurrence = saved(data, phase)?.ok_or_else(|| invalid("occurrence", "missing publication occurrence"))?;
-    let submission = publication.approval.submission.as_ref().ok_or_else(|| invalid("approval", "missing approved submission"))?;
-    approve(submission, &publication.approval).map_err(|_| invalid("approval", "inexact approved submission"))?;
-    if publication.identity.phase.get() != phase || publication.occurrence != occurrence.id
-        || submission.phase.get() != phase || submission.occurrence != occurrence.id
-        || occurrence.publications.get(&publication.identity.plan.get()) != Some(publication)
+    let invalid = |slot: &str, reason: &str| {
+        Diagnostic {
+            rule: "publication-authority".into(),
+            slot: format!("current.plans[{}].{slot}", publication.identity.plan),
+            phase: Some(phase),
+            entry: None,
+            id: Some(publication.identity.plan.to_string()),
+            reason: reason.into(),
+            details: None,
+        }
+        .error()
+    };
+    let occurrence = saved(data, phase)?
+        .ok_or_else(|| invalid("occurrence", "missing publication occurrence"))?;
+    let submission = publication
+        .approval
+        .submission
+        .as_ref()
+        .ok_or_else(|| invalid("approval", "missing approved submission"))?;
+    approve(submission, &publication.approval)
+        .map_err(|_| invalid("approval", "inexact approved submission"))?;
+    if publication.identity.phase.get() != phase
+        || publication.occurrence != occurrence.id
+        || submission.phase.get() != phase
+        || submission.occurrence != occurrence.id
+        || occurrence
+            .publications
+            .get(&publication.identity.plan.get())
+            != Some(publication)
     {
-        return Err(invalid("occurrence", "publication is not current in the bound occurrence"));
+        return Err(invalid(
+            "occurrence",
+            "publication is not current in the bound occurrence",
+        ));
     }
-    if !submission.plans.iter().any(|e| e.target == publication.identity && e.content == publication.content)
-        || publication.content.phase != publication.identity.phase || publication.content.plan != publication.identity.plan
+    if !submission
+        .plans
+        .iter()
+        .any(|e| e.target == publication.identity && e.content == publication.content)
+        || publication.content.phase != publication.identity.phase
+        || publication.content.plan != publication.identity.plan
     {
-        return Err(invalid("content", "publication differs from its exact approved content"));
+        return Err(invalid(
+            "content",
+            "publication differs from its exact approved content",
+        ));
     }
-    let receipt = occurrence.receipts.get(&submission.request_id).ok_or_else(|| invalid("receipt", "missing publication receipt"))?;
+    let receipt = occurrence
+        .receipts
+        .get(&submission.request_id)
+        .ok_or_else(|| invalid("receipt", "missing publication receipt"))?;
     if !receipt.results.contains(publication)
         || receipt.payload_digest != payload_digest(submission, &publication.approval)?
     {
-        return Err(invalid("receipt", "publication receipt differs from approval"));
+        return Err(invalid(
+            "receipt",
+            "publication receipt differs from approval",
+        ));
     }
     if digest(&render::document(&publication.content)?) != publication.revision
         || publication.history.last() != Some(&publication.revision)
     {
-        return Err(invalid("revision", "content revision does not identify approved bytes"));
+        return Err(invalid(
+            "revision",
+            "content revision does not identify approved bytes",
+        ));
     }
     Ok(())
 }

@@ -23,7 +23,8 @@ where
             .unset("GIT_LITERAL_PATHSPECS")
             .unset("GIT_GLOB_PATHSPECS")
             .unset("GIT_NOGLOB_PATHSPECS")
-            .unset("GIT_ICASE_PATHSPECS"), process,
+            .unset("GIT_ICASE_PATHSPECS"),
+        process,
     )?;
     if !output.success() {
         return Err(Error::Invalid(format!(
@@ -54,7 +55,11 @@ pub fn resolve_commit(root: &Path, reference: &str, process: &mut dyn Process) -
 
 /// Pause may compare a narrowed re-arm against its previous authored tree.
 /// Keep commit IDs as commits so existing pause fire preimages remain intact.
-pub fn resolve_comparison(root: &Path, reference: &str, process: &mut dyn Process) -> Result<String> {
+pub fn resolve_comparison(
+    root: &Path,
+    reference: &str,
+    process: &mut dyn Process,
+) -> Result<String> {
     let id = object_id(run(
         root,
         [
@@ -87,7 +92,11 @@ pub fn index_id(root: &Path, process: &mut dyn Process) -> Result<String> {
     object_id(run(root, ["write-tree"], process)?)
 }
 
-pub fn resolve(root: &Path, source: &Source, process: &mut dyn Process) -> (Resolution, Vec<String>) {
+pub fn resolve(
+    root: &Path,
+    source: &Source,
+    process: &mut dyn Process,
+) -> (Resolution, Vec<String>) {
     // Resolve independently, preserving whichever immutable endpoint is available.
     let (base, head, index) = match source {
         Source::Committed { base, head } => (
@@ -95,7 +104,11 @@ pub fn resolve(root: &Path, source: &Source, process: &mut dyn Process) -> (Reso
             Some(resolve_commit(root, head, process)),
             None,
         ),
-        Source::Staged { base } => (resolve_commit(root, base, process), None, Some(index_id(root, process))),
+        Source::Staged { base } => (
+            resolve_commit(root, base, process),
+            None,
+            Some(index_id(root, process)),
+        ),
         Source::Execution { .. } => {
             return (
                 Resolution::Committed {
@@ -152,7 +165,12 @@ pub fn diff(root: &Path, material: &MaterialIdentity, process: &mut dyn Process)
 
 /// Pause supplies its provenance-filtered selection. An empty selection means
 /// no authored material, and never broadens to all paths in the tree.
-pub fn diff_selected(root: &Path, material: &MaterialIdentity, paths: &[PathBuf], process: &mut dyn Process) -> Result<Diff> {
+pub fn diff_selected(
+    root: &Path,
+    material: &MaterialIdentity,
+    paths: &[PathBuf],
+    process: &mut dyn Process,
+) -> Result<Diff> {
     material.validate()?;
     if paths.is_empty() {
         return Ok(Diff {
@@ -192,7 +210,11 @@ fn arguments(
     args
 }
 
-pub fn changed_paths(root: &Path, material: &MaterialIdentity, process: &mut dyn Process) -> Result<Vec<PathBuf>> {
+pub fn changed_paths(
+    root: &Path,
+    material: &MaterialIdentity,
+    process: &mut dyn Process,
+) -> Result<Vec<PathBuf>> {
     read_paths(root, material, &[], process)
 }
 
@@ -205,7 +227,11 @@ fn read_paths(
     material.validate()?;
     // --no-renames reports a rename as a deletion plus an addition. Both ends
     // are classified, with NUL records avoiding Git's display quoting entirely.
-    let names = run(root, arguments(material, &["--name-only", "-z"], pathspecs), process)?;
+    let names = run(
+        root,
+        arguments(material, &["--name-only", "-z"], pathspecs),
+        process,
+    )?;
     if !names.is_empty() && names.last() != Some(&0) {
         return Err(Error::Invalid("unterminated Git pathname record".into()));
     }
@@ -256,7 +282,12 @@ fn diff_with_pathspecs(
     Ok(Diff { paths, body })
 }
 
-pub fn scan(root: &Path, material: &MaterialIdentity, surfaces: &[String], process: &mut dyn Process) -> Result<Scan> {
+pub fn scan(
+    root: &Path,
+    material: &MaterialIdentity,
+    surfaces: &[String],
+    process: &mut dyn Process,
+) -> Result<Scan> {
     let diff = diff(root, material, process)?;
     risk_diff::scan(Some(&diff.body), &diff.paths, surfaces)
 }

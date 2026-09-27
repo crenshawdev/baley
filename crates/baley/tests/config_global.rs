@@ -1,8 +1,4 @@
-use baley::store::{
-    Error, Observed, Storage,
-    filesystem::Filesystem,
-    transaction::ExternalChange,
-};
+use baley::store::{Error, Observed, Storage, filesystem::Filesystem, transaction::ExternalChange};
 
 fn observed(bytes: Option<&[u8]>, identity: &str) -> Observed {
     Observed {

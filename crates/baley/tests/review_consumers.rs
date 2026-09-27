@@ -15,8 +15,12 @@ fn records(input: &Value) -> Value {
 fn raw_plan_ac53() {
     let input = fixture("plan");
     assert_eq!(
-        serde_json::to_value(consumers::input_from_records(&records(&input), "a1").unwrap().identity)
-            .unwrap(),
+        serde_json::to_value(
+            consumers::input_from_records(&records(&input), "a1")
+                .unwrap()
+                .identity
+        )
+        .unwrap(),
         json!({"kind":"raw","fire":"f1","round":1,"original":"o1","finding_ids":["o1:0"]})
     );
 }

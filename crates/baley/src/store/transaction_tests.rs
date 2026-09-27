@@ -51,7 +51,11 @@ struct Disk {
 }
 
 fn file(bytes: &[u8]) -> Observed {
-    Observed { bytes: Some(bytes.to_vec()), identity: "file".into(), directory_identity: DIR.into() }
+    Observed {
+        bytes: Some(bytes.to_vec()),
+        identity: "file".into(),
+        directory_identity: DIR.into(),
+    }
 }
 
 impl Disk {
@@ -60,13 +64,19 @@ impl Disk {
     }
 
     fn bytes(&self, target: &str) -> Option<Vec<u8>> {
-        self.files.get(target).and_then(|observed| observed.bytes.clone())
+        self.files
+            .get(target)
+            .and_then(|observed| observed.bytes.clone())
     }
 
     /// Record `request`, run the edit waiting on it, and fail it if it is the
     /// injected fault. Answers whether the change is to land, and the error.
     fn step(&mut self, request: Request) -> (bool, Result<()>) {
-        if self.edit.as_ref().is_some_and(|(when, _, _)| *when == request) {
+        if self
+            .edit
+            .as_ref()
+            .is_some_and(|(when, _, _)| *when == request)
+        {
             let (_, target, bytes) = self.edit.take().unwrap();
             self.files.insert(target, file(&bytes));
         }
@@ -88,7 +98,9 @@ impl Disk {
     fn installed(&mut self, target: &str, bytes: &[u8]) -> Result<Observed> {
         let observed = self.read(target)?;
         if observed.bytes.as_deref() != Some(bytes) {
-            return Err(Error::Io(format!("{target} does not hold the installed bytes")));
+            return Err(Error::Io(format!(
+                "{target} does not hold the installed bytes"
+            )));
         }
         Ok(observed)
     }
@@ -143,7 +155,10 @@ struct Rule {
 
 impl Policy for Rule {
     fn validate(&mut self, context: &MutationContext<'_>) -> Result<()> {
-        self.log.lock().unwrap().push(Policy(context.operation.into()));
+        self.log
+            .lock()
+            .unwrap()
+            .push(Policy(context.operation.into()));
         if self.refuse {
             return Err(Error::Policy("refused".into()));
         }
@@ -180,7 +195,11 @@ fn disk() -> Disk {
 }
 
 fn change(target: &str, before: &[u8], after: &[u8]) -> Participant {
-    Participant { target: target.into(), expected: file(before), bytes: after.to_vec() }
+    Participant {
+        target: target.into(),
+        expected: file(before),
+        bytes: after.to_vec(),
+    }
 }
 
 /// The write to generation 2: one decision appended, items unchanged.
@@ -200,17 +219,34 @@ fn with_config() -> Vec<Participant> {
 }
 
 fn allow(disk: &Disk) -> Rule {
-    Rule { log: disk.log.clone(), refuse: false }
+    Rule {
+        log: disk.log.clone(),
+        refuse: false,
+    }
 }
 
 fn refuse(disk: &Disk) -> Rule {
-    Rule { log: disk.log.clone(), refuse: true }
+    Rule {
+        log: disk.log.clone(),
+        refuse: true,
+    }
 }
 
 fn commit_to(disk: &mut Disk, policy: &mut Rule, participants: Vec<Participant>) -> Result<()> {
     let next = snapshot(2, DECISION);
-    let context = MutationContext { operation: "store", snapshot: &next };
-    commit(disk, policy, &context, &next, IntentKind::Store, participants, &mut Recorded::new())
+    let context = MutationContext {
+        operation: "store",
+        snapshot: &next,
+    };
+    commit(
+        disk,
+        policy,
+        &context,
+        &next,
+        IntentKind::Store,
+        participants,
+        &mut Recorded::new(),
+    )
 }
 
 fn recover_on(disk: &mut Disk, policy: &mut Rule) -> Result<()> {
@@ -219,7 +255,11 @@ fn recover_on(disk: &mut Disk, policy: &mut Rule) -> Result<()> {
 
 /// The requests that change what a target holds, in order.
 fn changes(requests: &[Request]) -> Vec<Request> {
-    requests.iter().filter(|request| matches!(request, Install(_) | Remove(_))).cloned().collect()
+    requests
+        .iter()
+        .filter(|request| matches!(request, Install(_) | Remove(_)))
+        .cloned()
+        .collect()
 }
 
 /// Every target as the committed write leaves it.
@@ -246,7 +286,12 @@ fn a_commit_writes_the_intent_first_the_state_last_and_removes_the_intent_after_
     commit_to(&mut disk, &mut policy, participants()).unwrap();
     assert_eq!(
         changes(&disk.requests()),
-        [Install(at(INTENT)), Install(at(DECISIONS)), Install(at(STATE)), Remove(at(INTENT))]
+        [
+            Install(at(INTENT)),
+            Install(at(DECISIONS)),
+            Install(at(STATE)),
+            Remove(at(INTENT))
+        ]
     );
     assert_written(&disk);
 }
@@ -258,9 +303,17 @@ fn a_commit_confirms_the_intent_and_each_participant_before_the_next_change() {
     commit_to(&mut disk, &mut policy, participants()).unwrap();
     let requests = disk.requests();
     for target in [INTENT, DECISIONS, STATE] {
-        let install = requests.iter().position(|r| *r == Install(at(target))).unwrap();
-        let confirm = requests.iter().position(|r| *r == Confirm(at(target))).unwrap();
-        let next = requests[install + 1..].iter().position(|r| matches!(r, Install(_) | Remove(_)));
+        let install = requests
+            .iter()
+            .position(|r| *r == Install(at(target)))
+            .unwrap();
+        let confirm = requests
+            .iter()
+            .position(|r| *r == Confirm(at(target)))
+            .unwrap();
+        let next = requests[install + 1..]
+            .iter()
+            .position(|r| matches!(r, Install(_) | Remove(_)));
         assert!(
             next.is_none_or(|next| confirm < install + 1 + next),
             "{target} is confirmed before the next change: {requests:?}"
@@ -295,7 +348,11 @@ fn after_the_intent() -> [Fault; 9] {
 }
 
 fn installs(requests: &[Request]) -> Vec<Request> {
-    requests.iter().filter(|request| matches!(request, Install(_))).cloned().collect()
+    requests
+        .iter()
+        .filter(|request| matches!(request, Install(_)))
+        .cloned()
+        .collect()
 }
 
 #[test]
@@ -325,11 +382,14 @@ fn a_failure_after_the_intent_lands_fails_the_commit_and_keeps_the_intent() {
 #[test]
 fn a_participant_changed_outside_the_writer_is_refused_before_anything_is_prepared() {
     let mut disk = disk();
-    disk.files.insert(GLOBAL.into(), file(b"edited: elsewhere\n"));
+    disk.files
+        .insert(GLOBAL.into(), file(b"edited: elsewhere\n"));
     let mut policy = allow(&disk);
     assert_eq!(
         commit_to(&mut disk, &mut policy, with_config()),
-        Err(Error::Conflict("pending participant changed: global-config".into()))
+        Err(Error::Conflict(
+            "pending participant changed: global-config".into()
+        ))
     );
     assert_eq!(disk.requests(), []);
     assert_eq!(disk.bytes(GLOBAL), Some(b"edited: elsewhere\n".to_vec()));
@@ -343,15 +403,27 @@ fn a_target_edited_after_preparation_is_refused_keeping_the_foreign_bytes() {
         let mut policy = allow(&disk);
         assert_eq!(
             commit_to(&mut disk, &mut policy, participants()),
-            Err(Error::Conflict("pending participant changed: decisions.jsonl".into())),
+            Err(Error::Conflict(
+                "pending participant changed: decisions.jsonl".into()
+            )),
             "{when:?}"
         );
-        assert_eq!(disk.bytes(DECISIONS), Some(b"foreign\n".to_vec()), "{when:?}");
+        assert_eq!(
+            disk.bytes(DECISIONS),
+            Some(b"foreign\n".to_vec()),
+            "{when:?}"
+        );
         assert_eq!(disk.bytes(STATE), Some(old_state()), "{when:?}");
         let requests = disk.requests();
-        assert!(!requests.contains(&Install(at(DECISIONS))), "{when:?}: {requests:?}");
+        assert!(
+            !requests.contains(&Install(at(DECISIONS))),
+            "{when:?}: {requests:?}"
+        );
         for target in [DECISIONS, STATE] {
-            assert!(requests.contains(&Discard(at(target))), "{when:?}: {target} {requests:?}");
+            assert!(
+                requests.contains(&Discard(at(target))),
+                "{when:?}: {target} {requests:?}"
+            );
         }
     }
 }
@@ -367,7 +439,10 @@ fn a_policy_refusal_installs_nothing_and_discards_every_prepared_file() {
     let requests = disk.requests();
     assert_eq!(installs(&requests), []);
     for target in [DECISIONS, STATE, INTENT] {
-        assert!(requests.contains(&Discard(at(target))), "{target}: {requests:?}");
+        assert!(
+            requests.contains(&Discard(at(target))),
+            "{target}: {requests:?}"
+        );
     }
     assert_untouched(&disk);
 }
@@ -391,7 +466,9 @@ fn a_pending_intent_refuses_a_new_commit_before_anything_is_prepared() {
     let mut policy = allow(&disk);
     assert_eq!(
         commit_to(&mut disk, &mut policy, participants()),
-        Err(Error::Conflict("pending operation requires recovery".into()))
+        Err(Error::Conflict(
+            "pending operation requires recovery".into()
+        ))
     );
     assert_eq!(disk.requests(), []);
 }
@@ -402,7 +479,10 @@ fn interrupted(fault: Fault, participants: Vec<Participant>) -> Disk {
     let mut disk = disk();
     disk.fault = Some(fault.clone());
     let mut policy = allow(&disk);
-    assert!(commit_to(&mut disk, &mut policy, participants).is_err(), "{fault:?}");
+    assert!(
+        commit_to(&mut disk, &mut policy, participants).is_err(),
+        "{fault:?}"
+    );
     assert!(disk.bytes(INTENT).is_some(), "{fault:?}");
     disk.log.lock().unwrap().clear();
     disk
@@ -481,7 +561,9 @@ fn recovery_refuses_a_participant_holding_foreign_bytes_and_writes_nothing() {
     let mut policy = allow(&disk);
     assert_eq!(
         recover_on(&mut disk, &mut policy),
-        Err(Error::Conflict("pending participant changed: decisions.jsonl".into()))
+        Err(Error::Conflict(
+            "pending participant changed: decisions.jsonl".into()
+        ))
     );
     assert_eq!(changes(&disk.requests()), []);
     assert_eq!(disk.bytes(DECISIONS), Some(b"foreign\n".to_vec()));
@@ -515,8 +597,14 @@ fn recovery_checks_the_policy_as_recovery_before_installing_any_participant() {
     let mut policy = allow(&disk);
     recover_on(&mut disk, &mut policy).unwrap();
     let requests = disk.requests();
-    let check = requests.iter().position(|r| *r == Policy("recovery".into())).unwrap();
-    let first = requests.iter().position(|r| matches!(r, Install(_))).unwrap();
+    let check = requests
+        .iter()
+        .position(|r| *r == Policy("recovery".into()))
+        .unwrap();
+    let first = requests
+        .iter()
+        .position(|r| matches!(r, Install(_)))
+        .unwrap();
     assert!(check < first, "{requests:?}");
 }
 
@@ -525,7 +613,10 @@ fn a_denying_policy_fails_recovery_writes_nothing_and_keeps_the_intent() {
     let mut disk = nothing_installed();
     let intent = disk.bytes(INTENT);
     let mut policy = refuse(&disk);
-    assert_eq!(recover_on(&mut disk, &mut policy), Err(Error::Policy("refused".into())));
+    assert_eq!(
+        recover_on(&mut disk, &mut policy),
+        Err(Error::Policy("refused".into()))
+    );
     assert_eq!(changes(&disk.requests()), []);
     assert_eq!(disk.bytes(INTENT), intent);
     assert_eq!(disk.bytes(STATE), Some(old_state()));
@@ -549,7 +640,12 @@ fn recovery_keeps_an_outside_participant_that_already_landed_and_only_resyncs_it
     assert_eq!(recover_on(&mut disk, &mut policy), Ok(()));
     let requests = disk.requests();
     assert!(requests.contains(&Resync(at(GLOBAL))), "{requests:?}");
-    assert!(!requests.iter().any(|request| matches!(request, Prepare(target) | Install(target) if target == GLOBAL)), "{requests:?}");
+    assert!(
+        !requests.iter().any(
+            |request| matches!(request, Prepare(target) | Install(target) if target == GLOBAL)
+        ),
+        "{requests:?}"
+    );
     assert_eq!(disk.bytes(GLOBAL), Some(b"new: config\n".to_vec()));
     assert_written(&disk);
 }
@@ -557,7 +653,8 @@ fn recovery_keeps_an_outside_participant_that_already_landed_and_only_resyncs_it
 #[test]
 fn a_tampered_intent_is_refused_before_any_write() {
     let mut disk = nothing_installed();
-    let mut intent: serde_json::Value = serde_json::from_slice(&disk.bytes(INTENT).unwrap()).unwrap();
+    let mut intent: serde_json::Value =
+        serde_json::from_slice(&disk.bytes(INTENT).unwrap()).unwrap();
     intent["participants"][0]["target"] = json!(ITEMS);
     let tampered = serde_json::to_vec(&intent).unwrap();
     disk.files.insert(INTENT.into(), file(&tampered));
@@ -571,7 +668,10 @@ fn a_tampered_intent_is_refused_before_any_write() {
 }
 
 /// How many times `count` ticks on this thread while `work` runs.
-fn ticks(count: &'static std::thread::LocalKey<std::cell::Cell<usize>>, work: impl FnOnce()) -> usize {
+fn ticks(
+    count: &'static std::thread::LocalKey<std::cell::Cell<usize>>,
+    work: impl FnOnce(),
+) -> usize {
     let before = count.with(std::cell::Cell::get);
     work();
     count.with(std::cell::Cell::get) - before
@@ -615,43 +715,88 @@ mod native_inputs {
     use super::*;
 
     fn inventory(bytes: &[u8], identity: &str) -> Observed {
-        Observed { bytes: Some(bytes.to_vec()), identity: identity.into(), directory_identity: "phase-12".into() }
+        Observed {
+            bytes: Some(bytes.to_vec()),
+            identity: identity.into(),
+            directory_identity: "phase-12".into(),
+        }
     }
 
     fn state(directory: &str) -> Observed {
-        Observed { bytes: Some(b"{}".to_vec()), identity: "state".into(), directory_identity: directory.into() }
+        Observed {
+            bytes: Some(b"{}".to_vec()),
+            identity: "state".into(),
+            directory_identity: directory.into(),
+        }
     }
 
     fn rule(result: Result<()>) -> String {
-        let Err(Error::Invalid(message)) = result else { panic!("not a located refusal: {result:?}") };
-        let diagnostic: crate::plan::model::Diagnostic = serde_json::from_str(message.strip_prefix("plan-refusal:").unwrap()).unwrap();
+        let Err(Error::Invalid(message)) = result else {
+            panic!("not a located refusal: {result:?}")
+        };
+        let diagnostic: crate::plan::model::Diagnostic =
+            serde_json::from_str(message.strip_prefix("plan-refusal:").unwrap()).unwrap();
         diagnostic.rule
     }
 
     #[test]
     fn an_admission_confirms_against_the_inventory_and_store_it_was_prepared_in() {
         let prepared = inventory(b"PLAN-1.md", "inode-1");
-        assert_eq!(admission_inputs_hold(12, &prepared, "store", &prepared.clone(), &state("store")), Ok(()));
+        assert_eq!(
+            admission_inputs_hold(12, &prepared, "store", &prepared.clone(), &state("store")),
+            Ok(())
+        );
     }
 
     #[test]
     fn an_admission_whose_plan_inventory_changed_before_confirmation_is_refused() {
         let prepared = inventory(b"PLAN-1.md", "inode-1");
-        for changed in [inventory(b"PLAN-1.md\nPLAN-2.md", "inode-1"), inventory(b"PLAN-1.md", "inode-2")] {
-            assert_eq!(rule(admission_inputs_hold(12, &prepared, "store", &changed, &state("store"))), "admission-inputs-changed");
+        for changed in [
+            inventory(b"PLAN-1.md\nPLAN-2.md", "inode-1"),
+            inventory(b"PLAN-1.md", "inode-2"),
+        ] {
+            assert_eq!(
+                rule(admission_inputs_hold(
+                    12,
+                    &prepared,
+                    "store",
+                    &changed,
+                    &state("store")
+                )),
+                "admission-inputs-changed"
+            );
         }
     }
 
     #[test]
     fn an_admission_whose_store_is_no_longer_the_bound_one_is_refused() {
         let prepared = inventory(b"PLAN-1.md", "inode-1");
-        assert_eq!(rule(admission_inputs_hold(12, &prepared, "store", &prepared.clone(), &state("another-store"))), "admission-inputs-changed");
+        assert_eq!(
+            rule(admission_inputs_hold(
+                12,
+                &prepared,
+                "store",
+                &prepared.clone(),
+                &state("another-store")
+            )),
+            "admission-inputs-changed"
+        );
     }
 
     #[test]
     fn a_dispatch_confirms_only_against_the_inventory_it_was_prepared_from() {
         let prepared = inventory(b"PLAN-1.md", "inode-1");
-        assert_eq!(dispatch_inputs_hold(12, &prepared, &prepared.clone()), Ok(()));
-        assert_eq!(rule(dispatch_inputs_hold(12, &prepared, &inventory(b"PLAN-1.md\nPLAN-2.md", "inode-1"))), "admission-inputs-changed");
+        assert_eq!(
+            dispatch_inputs_hold(12, &prepared, &prepared.clone()),
+            Ok(())
+        );
+        assert_eq!(
+            rule(dispatch_inputs_hold(
+                12,
+                &prepared,
+                &inventory(b"PLAN-1.md\nPLAN-2.md", "inode-1")
+            )),
+            "admission-inputs-changed"
+        );
     }
 }
