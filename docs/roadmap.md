@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status is as of origin/main `f46727bd` on 2026-09-27, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status is as of origin/main `55e24a50` on 2026-09-27, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
 
 ## The path to the first release
 
@@ -59,19 +59,17 @@ ADRs: [0001 event ledger](adr/0001-event-ledger.md), [0002 SQLite](adr/0002-sqli
 
 ```mermaid
 flowchart LR
-    T1["T1 to T12<br/>merged"]
-    T13["T13<br/>conformance suite"]
+    T1["T1 to T13<br/>merged"]
     T14["T14<br/>CLI, git forge,<br/>ticker, benchmark"]
 
-    T1 --> T13 --> T14
+    T1 --> T14
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
     classDef next fill:#fff8c5,stroke:#9a6700,stroke-width:3px,color:#3b2300
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
 
     class T1 done
-    class T13 next
-    class T14 planned
+    class T14 next
 ```
 
 Figure 2. Build 1's tasks. One pull request per task.
@@ -90,7 +88,7 @@ Figure 2. Build 1's tasks. One pull request per task.
 | T10 | Claims, leases and reconciliation | [#132](https://github.com/crenshawdev/baley/pull/132) | Merged |
 | T11 | Anchors and the adapter's `verify` | [#135](https://github.com/crenshawdev/baley/pull/135) | Merged |
 | T12 | Export, doctor and the owner-only acknowledge-restore command; backups removed | [#138](https://github.com/crenshawdev/baley/pull/138) | Merged |
-| T13 | The conformance suite, run against every store adapter | [#140](https://github.com/crenshawdev/baley/pull/140) | In review |
+| T13 | The conformance suite, run against every store adapter | [#140](https://github.com/crenshawdev/baley/pull/140) | Merged |
 | T14 | CLI commands `verify`, `doctor`, `export`, `purge`, `anchor` and `acknowledge-restore`; the real git forge and ticker, and the benchmark | | Planned |
 
 
