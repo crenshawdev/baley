@@ -15,7 +15,7 @@ use baley_store::{
     Head, PAYLOAD_PURGED, PAYLOAD_PURGED_VERSION, PAYLOAD_REDUCED, PAYLOAD_REDUCED_VERSION,
     ProjectId, Projector, Refusal, RequestProjector, StoreError, ViewSpec, store_owned,
 };
-use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
 use crate::queue::{FileLock, Monotonic, Timing, Turn, pause_for};
 use crate::schema::{EPOCH, SCHEMA};
@@ -429,6 +429,23 @@ pub(crate) fn connect(path: &Path) -> Result<Connection, StoreError> {
         "PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;",
     )
     .map_err(sql)?;
+    Ok(conn)
+}
+
+/// A connection that can only read the existing database file: opened
+/// read-only, so a missing file is an error and never created. Only the
+/// busy timeout is set; the write settings `connect` applies have nothing
+/// to do on it.
+pub(crate) fn connect_read_only(path: &Path) -> Result<Connection, StoreError> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(sql)?;
+    conn.busy_timeout(Duration::from_millis(5000))
+        .map_err(sql)?;
     Ok(conn)
 }
 

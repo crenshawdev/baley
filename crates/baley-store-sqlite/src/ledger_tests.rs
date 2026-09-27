@@ -605,6 +605,18 @@ fn verify_reports_truncation_past_the_head() {
     );
 }
 
+// Verification only reads: with the database file gone it fails and
+// leaves no file behind. Catches a verify connection opened read-write,
+// which creates an empty baley.db.
+#[test]
+fn verify_without_a_database_file_fails_and_creates_none() {
+    let f = Fixture::new();
+    let path = f.home.path().join("baley.db");
+    std::fs::remove_file(&path).expect("remove");
+    assert!(f.ledger().verify(&project(), None).is_err());
+    assert!(!path.exists());
+}
+
 // A body whose stored bytes are damaged, its event untouched, is corrupt
 // while the chain verifies. Catches a verify that never opens a body.
 #[test]

@@ -28,7 +28,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::payload::sql_int;
 use crate::queue::{BATCH_EVENTS, BATCH_ROWS, BATCH_TIME, Turn};
-use crate::store::{SqliteStore, connect, sql};
+use crate::store::{SqliteStore, connect_read_only, sql};
 use crate::transact::stored_head;
 use crate::view::{Fence, Staging, ViewTable, catalog_tables, fold, live_views, write_staged};
 
@@ -617,9 +617,7 @@ struct Pinned {
 impl Pinned {
     /// A connection for the snapshot, which can only read.
     fn connect(store: &SqliteStore) -> Result<Connection, StoreError> {
-        let conn = connect(&store.home.join("baley.db"))?;
-        conn.execute_batch("PRAGMA query_only = ON").map_err(sql)?;
-        Ok(conn)
+        connect_read_only(&store.home.join("baley.db"))
     }
 
     fn begin(conn: Connection, project: &ProjectId) -> Result<Self, StoreError> {
