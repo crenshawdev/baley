@@ -25,7 +25,7 @@ use sha2::{Digest, Sha256};
 
 use crate::payload::stream_in;
 use crate::rebuild::{event_columns, stored_event};
-use crate::store::{SqliteStore, connect, sql};
+use crate::store::{SqliteStore, connect_read_only, sql};
 use crate::transact::stored_head;
 use crate::view::encode;
 
@@ -231,9 +231,8 @@ impl SqliteStore {
         project: &ProjectId,
         anchor: Option<&Anchor>,
     ) -> Result<VerifyReport, StoreError> {
-        let conn = connect(&self.home.join("baley.db"))?;
-        conn.execute_batch("PRAGMA query_only = ON; BEGIN DEFERRED;")
-            .map_err(sql)?;
+        let conn = connect_read_only(&self.home.join("baley.db"))?;
+        conn.execute_batch("BEGIN DEFERRED").map_err(sql)?;
         let report = verify_in(&conn, project, anchor);
         // A read transaction has nothing to keep; ending it cannot lose data.
         let _ = conn.execute_batch("ROLLBACK");
@@ -267,7 +266,7 @@ fn verify_in(
                 break;
             }
             if age_unanchored_since.is_none()
-                && event.seq >= unanchored_from
+                && unanchored_from.is_some_and(|from| event.seq >= from)
                 && !anchor_command_event(&event.type_name, &event.payload)
             {
                 age_unanchored_since = Some(event.recorded_at);
