@@ -32,13 +32,13 @@ The same fact is routinely held three times: once in a snapshot namespace, once 
 - records are bound to the physical directory through device and inode numbers, so the store cannot be moved, copied or rebuilt elsewhere;
 - almost every read deserializes or deep-clones the whole store, and several readers scan the whole log to find one entry.
 
-On the store left by the Cadence 4.0 build (about three weeks, 40 phases), `state.json` was 99.1 MB and `decisions.jsonl` 76.3 MB. The long-running server reached 8.7 GB resident against a 62 MB store, and 2.5 GB after one cold read. A first estimate, made on that JSON with duplicate copies and retired prompt text removed, puts the unique large content at 3.6 MB (0.7 MB compressed) and the rest at no more than 38.9 MB (4.0 MB compressed). That estimate is not evidence for the new design; the benchmark in [Performance](#performance) is.
+On the store Baley replaced (about three weeks, 40 phases), `state.json` was 99.1 MB and `decisions.jsonl` 76.3 MB. The long-running server reached 8.7 GB resident against a 62 MB store, and 2.5 GB after one cold read. A first estimate, made on that JSON with duplicate copies and retired prompt text removed, puts the unique large content at 3.6 MB (0.7 MB compressed) and the rest at no more than 38.9 MB (4.0 MB compressed). That estimate is not evidence for the new design; the benchmark in [Performance](#performance) is.
 
 The Markdown inputs are also a second source of truth. Phases exist only as lines in `ROADMAP.md`; execution parses its task list out of `PLAN-k.md`; two features (`why` and `recall`) read old Markdown out of git history.
 
 ### Why now
 
-Baley starts with an empty store (the Cadence records are not imported), so the record model can be chosen on its merits without a data migration.
+Baley starts with an empty store (the old records are not imported), so the record model can be chosen on its merits without a data migration.
 
 ## Goals
 
@@ -54,7 +54,7 @@ Baley starts with an empty store (the Cadence records are not imported), so the 
 - **Moving records between machines.** The ledger is designed so it can travel later (see [Future work](#future-work)); only chain-head anchors leave the machine in this milestone.
 - **Multi-user or server deployment.** One user, one machine. The port leaves room for a server adapter; none is built.
 - **A separate operating-system user for Baley.** Real process separation is future work; this design uses the hosts' sandboxes (see [Threat model](#threat-model)).
-- **Importing Cadence records.** The store starts empty.
+- **Importing records from the old store.** The store starts empty.
 - **Windows in the first release.** The first release ships for Linux and macOS; Windows comes in a later release ([0002](0002-system-design.md), SYS-R14).
 
 ## Threat model
@@ -1014,7 +1014,7 @@ Two sessions on different projects, or two agents on one project, each hold the 
 
 ## Where the domain rules live
 
-The domain rules are owned, specified and tested by the area design documents ([0002](0002-system-design.md)); nothing is required to behave as it did in Cadence. This table records, for each rule the ledger has to carry, which area owns it and how the ledger records it.
+The domain rules are owned, specified and tested by the area design documents ([0002](0002-system-design.md)); nothing is required to behave as it did in the old store. This table records, for each rule the ledger has to carry, which area owns it and how the ledger records it.
 
 | Rule | Owned by | In the ledger |
 |---|---|---|
@@ -1102,7 +1102,7 @@ A rebuild batch is timed from acquiring the writer queue to releasing it, commit
 
 The commit budget was 10 ms before the benchmark. Commit time is mostly the flush that makes a commit durable, and it spikes occasionally on both drives; 20 ms keeps the same meaning (a commit a person never notices) with the flush measured. The rebuild-batch budget moved from 50 to 100 ms for the same reason.
 
-**How it was measured.** A prototype of the SQLite adapter in [`spikes/evidence-ledger-bench`](../../spikes/evidence-ledger-bench/README.md) replays a numbers-only profile of the Cadence 4.0 build (1,551 commands, 1,615 events, 618 attachments), with synthetic content calibrated to the zstd ratio measured on each class of real content. It pays every cost the design puts in a transaction: the request check, the decision's re-reads, the authority check against events, the cheap git facts, the hash chain as specified, payloads and references, projectors, the search index, claim and record transactions for external effects, and `command.completed`. Writers run as separate processes; rebuild and backup run while writers write. Each drive ran five independent runs, with the page cache warm. Raw results are in `spikes/evidence-ledger-bench/results/`. Across all runs on both drives: no errors with the writer queue, and a rebuild or a purge never changed a view.
+**How it was measured.** A prototype of the SQLite adapter in [`spikes/evidence-ledger-bench`](../../spikes/evidence-ledger-bench/README.md) replays a numbers-only profile of the store Baley replaced (1,551 commands, 1,615 events, 618 attachments), with synthetic content calibrated to the zstd ratio measured on each class of real content. It pays every cost the design puts in a transaction: the request check, the decision's re-reads, the authority check against events, the cheap git facts, the hash chain as specified, payloads and references, projectors, the search index, claim and record transactions for external effects, and `command.completed`. Writers run as separate processes; rebuild and backup run while writers write. Each drive ran five independent runs, with the page cache warm. Raw results are in `spikes/evidence-ledger-bench/results/`. Across all runs on both drives: no errors with the writer queue, and a rebuild or a purge never changed a view.
 
 **What the benchmark changed in this design.**
 
@@ -1134,7 +1134,7 @@ SQLite's limits sit far beyond these numbers: 281 TB per database and about 1 GB
 
 ### Compatibility and migration
 
-Nothing is migrated from the Cadence store; Baley starts empty. Ledgers written while the migration is under way are disposable, and the builds in between are development builds: nobody else uses Baley yet. No data rollback is promised; each slice can be reverted as code.
+Nothing is migrated from the store Baley replaced; Baley starts empty. Ledgers written while the migration is under way are disposable, and the builds in between are development builds: nobody else uses Baley yet. No data rollback is promised; each slice can be reverted as code.
 
 Families are moved by what is written together, not one at a time:
 
