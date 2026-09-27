@@ -1394,7 +1394,7 @@ fn project_work_starts_the_age_at_its_own_time() {
     assert_eq!(report.chain.age_unanchored_since.as_deref(), Some(T1));
 }
 
-// Catches an export that leaks another project's rows or cannot verify alone.
+// Catches an export that leaks another project's events, references or bodies.
 #[test]
 fn exported_project_verifies_alone_without_other_projects() {
     let f = Fixture::new();
@@ -1403,6 +1403,21 @@ fn exported_project_verifies_alone_without_other_projects() {
         .create_project(&other, "Other", T0)
         .expect("other project");
     let head = f.record("one", 1);
+    let mut other_command = fixture_command("other-work", T0);
+    other_command.project = other.clone();
+    let mut other_hash = None;
+    f.store
+        .transact(&other_command, &mut |tx| {
+            let body = tx.put_payload(b"other project's body", RetentionClass::Material)?;
+            other_hash = Some(body.hash);
+            tx.append(NewEvent {
+                attachments: vec![body.clone()],
+                ..fixture_event(json!({"body": body.to_value()}), None)
+            })?;
+            Ok(done())
+        })
+        .expect("other work");
+    let other_hash = other_hash.expect("other payload");
     let target = f.home.path().join("export");
     let exported = f.store.export(&project(), &target, T1).expect("export");
     assert_eq!(exported.head, Some(head));
@@ -1422,6 +1437,25 @@ fn exported_project_verifies_alone_without_other_projects() {
         copy.projects().expect("projects"),
         vec![(project(), "fixture".into())]
     );
+    let exported_db = Connection::open(target.join("baley.db")).expect("exported database");
+    for table in ["event", "payload_ref"] {
+        let rows: i64 = exported_db
+            .query_row(
+                &format!("SELECT count(*) FROM {table} WHERE project_id = ?1"),
+                [&other.0],
+                |row| row.get(0),
+            )
+            .expect("other rows");
+        assert_eq!(rows, 0, "{table}");
+    }
+    let bodies: i64 = exported_db
+        .query_row(
+            "SELECT count(*) FROM payload WHERE hash = ?1",
+            [&other_hash.0[..]],
+            |row| row.get(0),
+        )
+        .expect("other payload");
+    assert_eq!(bodies, 0);
 }
 
 // Catches an export mixing two source snapshots after a command commits.
@@ -1624,17 +1658,18 @@ fn doctor_reports_main_and_log_file_sizes() {
 fn doctor_reports_raw_view_versions_and_building_lag() {
     let f = Fixture::new();
     let head = f.record("work", 1);
+    f.raw().execute("UPDATE view_gen SET projector_version = projector_version - 1, view_set_version = 1 WHERE project_id = ?1", [&project().0]).expect("older stamps");
     f.raw().execute("UPDATE project_gen SET building_gen = 5, building_applied_seq = 1 WHERE project_id = ?1", [&project().0]).expect("marker");
     let health = f.store.doctor(T2, &local_checks()).expect("doctor");
     let entry = &health.projects[0];
-    assert_eq!(entry.view_set, (Some(2), 2));
+    assert_eq!(entry.view_set, (Some(1), 2));
     assert_eq!(
         entry
             .views
             .iter()
             .map(|view| (view.view.as_str(), view.live_version, view.binary_version))
             .collect::<Vec<_>>(),
-        vec![("claim_scope", Some(1), 1), ("request", Some(2), 2)]
+        vec![("claim_scope", Some(0), 1), ("request", Some(1), 2)]
     );
     assert_eq!(
         entry.building,
@@ -1658,6 +1693,81 @@ fn doctor_reports_unanchored_work_from_the_chain() {
             since: T1.into(),
             warning: false
         }
+    );
+}
+
+// Catches one project's malformed event time aborting the whole doctor run.
+#[test]
+fn doctor_keeps_an_unjudgeable_unanchored_age_inside_its_project() {
+    let f = Fixture::new();
+    let other = ProjectId("other".into());
+    f.store.create_project(&other, "Other", T0).expect("other");
+    f.record("work", 1);
+    let events = f
+        .ledger()
+        .history(
+            &project(),
+            1..=u64::MAX,
+            &HistoryFilter {
+                types: vec![],
+                git_commit: None,
+            },
+            PageRequest {
+                limit: 100,
+                after: None,
+            },
+        )
+        .expect("history")
+        .items;
+    let mut previous = None;
+    for (index, mut event) in events.into_iter().enumerate() {
+        if index == 0 {
+            event.recorded_at = "invalid time".into();
+        }
+        event.prev_hash = previous;
+        event.hash = event.compute_hash().expect("reseal");
+        f.raw()
+            .execute(
+                "UPDATE event SET recorded_at = ?1, prev_hash = ?2, hash = ?3 WHERE project_id = ?4 AND seq = ?5",
+                params![event.recorded_at, event.prev_hash.map(|hash| hash.0.to_vec()), &event.hash.0[..], project().0, event.seq as i64],
+            )
+            .expect("rewrite event");
+        previous = Some(event.hash);
+    }
+    f.raw()
+        .execute(
+            "UPDATE project SET head_hash = ?1 WHERE project_id = ?2",
+            params![&previous.expect("head").0[..], project().0],
+        )
+        .expect("rewrite head");
+    let checks = BTreeMap::from([
+        (project(), AnchorCheck::LocalOnly),
+        (other.clone(), AnchorCheck::LocalOnly),
+    ]);
+    let health = f.store.doctor(T2, &checks).expect("doctor");
+    assert_eq!(health.projects.len(), 2);
+    assert_eq!(
+        health.projects[0]
+            .verify
+            .as_ref()
+            .expect("verified chain")
+            .chain
+            .age_unanchored_since
+            .as_deref(),
+        Some("invalid time")
+    );
+    assert_eq!(health.projects[0].unanchored, UnanchoredAge::Unchecked);
+    assert_eq!(health.projects[1].project, other);
+    assert_eq!(health.projects[1].unanchored, UnanchoredAge::None);
+}
+
+// Catches an invalid supplied time hidden when a project has no work to age.
+#[test]
+fn doctor_rejects_an_invalid_supplied_time() {
+    let f = Fixture::new();
+    assert_eq!(
+        f.store.doctor("invalid time", &local_checks()),
+        Err(StoreError::Unavailable("malformed doctor time".into()))
     );
 }
 

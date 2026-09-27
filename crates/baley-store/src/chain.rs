@@ -125,8 +125,9 @@ pub struct ChainReport {
     pub first_break: Option<Break>,
     /// Result of comparing the supplied remote anchor.
     pub anchor: AnchorVerdict,
-    /// The accepted sequences no anchor covers: after the anchored
-    /// sequence, or the whole chain without an anchor. `None` when empty.
+    /// The accepted sequences no anchor covers: after the anchored sequence,
+    /// after an acknowledgement when acknowledged, or the whole chain
+    /// without an anchor. `None` when empty.
     pub unanchored: Option<RangeInclusive<u64>>,
     /// Valid owner acknowledgements still visible after later anchors.
     pub acknowledged_restores: Vec<AcknowledgedRestore>,
@@ -457,7 +458,11 @@ mod tests {
     #[test]
     fn owner_acknowledgement_accepts_a_truncated_copy() {
         let remote = future_anchor();
-        let events = with_ack(remote.clone(), Actor::Owner, |_| {});
+        let events = with_work(
+            with_ack(remote.clone(), Actor::Owner, |_| {}),
+            "fixture.work",
+            "2026-09-25T18:00:01Z",
+        );
         let report = verify_chain(&events, Some(&remote));
         assert_eq!(
             report.anchor,
@@ -470,7 +475,7 @@ mod tests {
                 acknowledged_seq: 3
             }
         );
-        assert_eq!(report.unanchored, None);
+        assert_eq!(report.unanchored, Some(4..=4));
     }
 
     // Catches conversion limited to a tag whose sequence is ahead of the copy.

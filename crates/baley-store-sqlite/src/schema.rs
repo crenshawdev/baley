@@ -95,7 +95,6 @@ CREATE TABLE payload (
   CHECK ((state = 'purged') = (purge_reason IS NOT NULL))
 ) STRICT;
 CREATE INDEX payload_excerpt ON payload(excerpt_hash) WHERE excerpt_hash IS NOT NULL;
-CREATE INDEX payload_non_present ON payload(state) WHERE state != 'present';
 
 -- The release event sequence is reconstructed from payload.reduced.reference
 -- and the [source sequence, hash] pairs in payload.purged.released.

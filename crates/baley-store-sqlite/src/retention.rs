@@ -26,9 +26,6 @@ const REDUCTION_LOOKUP: &str = "SELECT seq, payload_json FROM event INDEXED BY e
     WHERE project_id = ?1 AND type = ?2 ORDER BY seq";
 const EXCERPT_LOOKUP: &str =
     "SELECT hash FROM payload WHERE state = 'reduced' AND excerpt_hash = ?1";
-#[cfg(test)]
-const NON_PRESENT_LOOKUP: &str =
-    "SELECT hash, state, purge_reason FROM payload WHERE state != 'present'";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CheckpointStep {
@@ -960,20 +957,6 @@ mod tests {
         let steps = plan(&raw(home.path()), EXCERPT_LOOKUP, &[&&hash[..]]);
         assert!(
             steps.iter().any(|step| step.contains("payload_excerpt")),
-            "{steps:?}"
-        );
-    }
-
-    // Catches the scrub scanning all present payloads to find tombstones.
-    #[test]
-    fn the_scrub_uses_the_non_present_index() {
-        let home = tempfile::tempdir().expect("home");
-        let _store = open(home.path(), &["a"]);
-        let steps = plan(&raw(home.path()), NON_PRESENT_LOOKUP, &[]);
-        assert!(
-            steps
-                .iter()
-                .any(|step| step.contains("payload_non_present")),
             "{steps:?}"
         );
     }

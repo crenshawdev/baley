@@ -5,7 +5,7 @@ use std::fs;
 
 use baley_store::{
     AnchorCheck, Building, ClaimCounts, ClaimState, Health, Ledger, ProjectHealth, ProjectId,
-    Refusal, StoreError, UnanchoredAge, ViewHealth, claim_state, unanchored_warning,
+    Refusal, StoreError, UnanchoredAge, UtcInstant, ViewHealth, claim_state, unanchored_warning,
 };
 use rusqlite::OptionalExtension;
 
@@ -26,6 +26,7 @@ impl SqliteStore {
         at: &str,
         checks: &BTreeMap<ProjectId, AnchorCheck>,
     ) -> Result<Health, StoreError> {
+        UtcInstant::parse(at).map_err(|_| bad("doctor time"))?;
         let projects = <Self as baley_store::Admin>::projects(self)?;
         for (project, _) in &projects {
             if !checks.contains_key(project) {
@@ -110,9 +111,12 @@ impl SqliteStore {
                 | (_, Err(_)) => UnanchoredAge::Unchecked,
                 (_, Ok(report)) => match &report.chain.age_unanchored_since {
                     None => UnanchoredAge::None,
-                    Some(since) => UnanchoredAge::Since {
-                        since: since.clone(),
-                        warning: unanchored_warning(since, at).map_err(|_| bad("doctor time"))?,
+                    Some(since) => match unanchored_warning(since, at) {
+                        Ok(warning) => UnanchoredAge::Since {
+                            since: since.clone(),
+                            warning,
+                        },
+                        Err(_) => UnanchoredAge::Unchecked,
                     },
                 },
             };

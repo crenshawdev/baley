@@ -168,8 +168,9 @@ impl RestoreAcknowledgedPayload {
 }
 
 /// Whether an event is one the anchor command itself records: its claim,
-/// its result, a reconciliation of it, or a completion of it or of its
-/// reconciler. These say nothing about the project's own work, so they do
+/// push result, reconciliation, acknowledgement of a restore, or completion
+/// of the push, reconciler or acknowledgement command. These say nothing
+/// about the project's own work, so they do
 /// not start the unanchored age that `doctor` warns on.
 pub fn anchor_command_event(type_name: &str, payload: &Value) -> bool {
     let kind = || payload.get("kind").and_then(Value::as_str);

@@ -4,9 +4,9 @@
 |---|---|
 | Status | Accepted |
 | Date | 2026-09-27 |
-| Deciders | Baley owner |
+| Deciders | John Crenshaw |
 | Design document | [0001: The evidence ledger](../design/0001-evidence-ledger.md) |
-| Supersedes | |
+| Supersedes | [0003: Keep one ledger database per user, outside any checkout](0003-per-user-database.md), in part |
 | Superseded by | |
 
 ## Context and problem

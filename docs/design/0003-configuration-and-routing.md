@@ -137,7 +137,7 @@ graph LR
 | CFG-R23 | Each route and each detection records the catalog version it was checked against. | The record says which list was in force. | CFG-R17, CFG-R20 | Active |
 | CFG-R24 | Provider API keys are stored encrypted in a `secret` table in the per-user database. The master key lives in the OS secret store when one is reachable (macOS Keychain; Linux Secret Service); when none is reachable, the master key is a file in the Baley home, mode 0600, and the residual risk (a process running as the owner can read it) is stated to the owner when that fallback is chosen. Baley picks the most secure mechanism the machine offers and records which one is in use. Stated limit: the Linux Secret Service answers any process running as the owner, so an agent under a host whose sandbox allows reads (Codex) could obtain the master key there; that is the operating-system user boundary, not Baley's to close. | Keys are Baley's to hold, out of reasonable reach, with the strongest protection the machine has. | SYS-R12, ADR 0003, ADR 0016 | Active |
 | CFG-R25 | Keys are managed only by `baley key set`, `baley key remove` and `baley key list`. `set` reads the key from the terminal, never from an argument or a file. `list` shows names, set times and the store in use, never a value. No key is ever read from an environment variable or a plain key file. | Keys stay out of shell history, files and transcripts. | SYS-R12 | Active |
-| CFG-R26 | The ledger records that a key exists for a provider and when it was set or removed, never the key. Keys never enter backups, exports or any view. | The record is shareable; the keys are not. | EVD-R14, CFG-R24 | Active |
+| CFG-R26 | The ledger records that a key exists for a provider and when it was set or removed, never the key. Keys never enter exports or any view. An owner's copy of the whole store holds them encrypted. | The record is shareable; the keys are not. | EVD-R14, CFG-R24 | Active |
 | CFG-R27 | Baley reads a stored key for two uses only: to inject it into one command through `baley exec --key <provider>` (SYS-R11) and to call a provider's list endpoint for detection (CFG-R20). | The fewest places a key can leak from. | SYS-R11, CFG-R20 | Active |
 | CFG-R28 | A provider the owner reaches by its own command-line login needs no key in Baley; every command that needs a key says which provider lacks one, and no command forces a key to be set. | No one is forced to hand over a key. | SYS-R10 | Active |
 | CFG-R29 | `git.forge_provider` accepts `github`, `gitlab` and `forgejo`; the first release acts on `github` only, and choosing another value is accepted and reported as not yet supported by [0011: Landing](0011-milestones-landing-undo-pause.md). | All three forges are planned; the setting must not need to change when they arrive. | | Active |
@@ -305,7 +305,7 @@ The `policy` view holds the latest `policy.effective` per project and host. Its 
 
 ### key (secret table and events)
 
-The `secret` table (per-user database) holds per provider: the provider name, the ciphertext, the nonce, the master-key id and the set time. The table is excluded from backups, exports and every view (CFG-R26).
+The `secret` table (per-user database) holds per provider: the provider name, the ciphertext, the nonce, the master-key id and the set time. The table is excluded from exports and every view (CFG-R26). An owner's copy of the whole store holds the table encrypted.
 
 | Event | Fields |
 |---|---|
