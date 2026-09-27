@@ -40,6 +40,15 @@ CREATE TABLE anchor (
   PRIMARY KEY (project_id, seq)
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE export_record (
+  id INTEGER PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES project(project_id),
+  target TEXT NOT NULL,
+  exported_at TEXT NOT NULL,
+  head_seq INTEGER
+) STRICT;
+CREATE INDEX export_record_project ON export_record(project_id);
+
 CREATE TABLE event (
   project_id TEXT NOT NULL REFERENCES project(project_id),
   seq INTEGER NOT NULL,

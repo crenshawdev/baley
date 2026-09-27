@@ -478,7 +478,7 @@ fn schema_digest() -> String {
 
 /// Creates the file settings and the schema under the writer queue. A
 /// second process that was waiting finds the schema and changes nothing.
-fn create(conn: &Connection, queue: &FileLock, at: &str) -> Result<(), StoreError> {
+pub(crate) fn create(conn: &Connection, queue: &FileLock, at: &str) -> Result<(), StoreError> {
     let _turn = queue.wait().map_err(io)?;
     if stored_epoch(conn)?.is_some() {
         return Ok(());

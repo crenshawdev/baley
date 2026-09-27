@@ -1,9 +1,10 @@
 //! Reference release, payload tombstones and the standalone scrub.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fs;
+use std::collections::{BTreeSet, VecDeque};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use baley_store::{
     Answer, Command, EXCERPT_EDGE, Hash, NewEvent, Outcome, OutcomeKind, PAYLOAD_PURGED,
@@ -25,6 +26,7 @@ const REDUCTION_LOOKUP: &str = "SELECT seq, payload_json FROM event INDEXED BY e
     WHERE project_id = ?1 AND type = ?2 ORDER BY seq";
 const EXCERPT_LOOKUP: &str =
     "SELECT hash FROM payload WHERE state = 'reduced' AND excerpt_hash = ?1";
+#[cfg(test)]
 const NON_PRESENT_LOOKUP: &str =
     "SELECT hash, state, purge_reason FROM payload WHERE state != 'present'";
 
@@ -206,8 +208,8 @@ impl SqliteStore {
         reason: &str,
         scrub: impl FnOnce() -> Result<ScrubReport, StoreError>,
     ) -> Result<PurgeReport, StoreError> {
-        let (seq, event) = self.logical_purge(command, hashes, reason)?;
-        Ok(self.finish_purge(command, seq, event, scrub()))
+        let (seq, event, exports) = self.logical_purge(command, hashes, reason)?;
+        Ok(self.finish_purge(command, seq, event, exports, scrub()))
     }
 
     fn finish_purge(
@@ -215,24 +217,15 @@ impl SqliteStore {
         command: &Command,
         seq: u64,
         event: PurgedEvent,
+        exports: Vec<PathBuf>,
         scrub: Result<ScrubReport, StoreError>,
     ) -> PurgeReport {
-        let scrub = scrub.unwrap_or_else(|_| {
-            let backups = self.home.join("backups");
-            ScrubReport {
-                scrubbed: false,
-                unreachable: if fs::symlink_metadata(&backups).is_ok() {
-                    vec![backups]
-                } else {
-                    Vec::new()
-                },
-            }
-        });
+        let scrub = scrub.unwrap_or(ScrubReport { scrubbed: false });
         PurgeReport {
             purged: event.removed,
             shared: event.shared,
             recorded: vec![(command.project.clone(), seq)],
-            unreachable: scrub.unreachable,
+            unreachable: exports,
             scrubbed: scrub.scrubbed,
         }
     }
@@ -243,16 +236,15 @@ impl SqliteStore {
         command: &Command,
         hashes: &[Hash],
         reason: &str,
-    ) -> Result<(u64, PurgedEvent), StoreError> {
+    ) -> Result<(u64, PurgedEvent, Vec<PathBuf>), StoreError> {
         let result = self.command_path(
             command,
             |tx, outcome, _| {
                 let seq = event_answer(&outcome)?;
                 let value = retention_event(tx, &command.project, seq, PAYLOAD_PURGED)?;
-                Ok((
-                    seq,
-                    PurgedEvent::from_value(&value).ok_or_else(|| malformed("purge"))?,
-                ))
+                let event = PurgedEvent::from_value(&value).ok_or_else(|| malformed("purge"))?;
+                let exports = export_targets(tx, &event)?;
+                Ok((seq, event, exports))
             },
             |work| {
                 let tx = work.tx;
@@ -393,6 +385,7 @@ impl SqliteStore {
                     shared: shared.into_iter().collect(),
                     reason: reason.into(),
                 };
+                let exports = export_targets(tx, &event)?;
                 let written = work.push(NewEvent {
                     stream: StreamName(RETENTION_STREAM.into()),
                     type_name: PAYLOAD_PURGED.into(),
@@ -407,16 +400,16 @@ impl SqliteStore {
                     [&command.recorded_at],
                 )
                 .map_err(sql)?;
-                Ok(((written, event), inline_event(written), None, None))
+                Ok(((written, event, exports), inline_event(written), None, None))
             },
         )?;
-        let (seq, event) = match result {
+        let (seq, event, exports) = match result {
             CommandResult::Replayed(value) | CommandResult::New(value, _) => value,
         };
-        Ok((seq, event))
+        Ok((seq, event, exports))
     }
 
-    /// Repeats the main database and home-backup scrub without a request id.
+    /// Repeats the main database scrub without a request id.
     pub fn scrub(&self) -> Result<ScrubReport, StoreError> {
         self.maintenance(|conn| {
             check_epoch(conn)?;
@@ -439,18 +432,36 @@ impl SqliteStore {
                 CheckpointStep::Incomplete
             };
             let scrubbed = settle_scrub(conn, main_step)?;
-            let tombstones = live_tombstones(conn)?;
-            let unreachable = rewrite_backups(&self.home, &tombstones);
-            Ok(ScrubReport {
-                scrubbed,
-                unreachable,
-            })
+            Ok(ScrubReport { scrubbed })
         })
     }
 }
 
 fn malformed(what: &str) -> StoreError {
     StoreError::Unavailable(format!("a malformed {what}"))
+}
+
+fn export_targets(conn: &Connection, event: &PurgedEvent) -> Result<Vec<PathBuf>, StoreError> {
+    let mut targets = BTreeSet::new();
+    let mut statement = conn
+        .prepare(
+            "SELECT DISTINCT e.target FROM export_record e
+         JOIN payload_ref r ON r.project_id = e.project_id
+         LEFT JOIN payload o ON o.hash = r.hash
+         WHERE (r.hash = ?1 OR (o.state = 'reduced' AND o.excerpt_hash = ?1))
+           AND (e.head_seq IS NULL OR
+                (r.seq <= e.head_seq AND (r.released_seq IS NULL OR r.released_seq > e.head_seq)))",
+        )
+        .map_err(sql)?;
+    for hash in event.removed.iter().chain(&event.shared) {
+        let rows = statement
+            .query_map([&hash.0[..]], |row| row.get::<_, String>(0))
+            .map_err(sql)?;
+        for row in rows {
+            targets.insert(PathBuf::from(row.map_err(sql)?));
+        }
+    }
+    Ok(targets.into_iter().collect())
 }
 
 fn body_mismatch(hash: &Hash) -> StoreError {
@@ -620,124 +631,14 @@ pub(crate) fn settle_scrub(
     Ok(true)
 }
 
-fn live_tombstones(conn: &Connection) -> Result<BTreeMap<Hash, String>, StoreError> {
-    let mut statement = conn.prepare(NON_PRESENT_LOOKUP).map_err(sql)?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, Vec<u8>>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            ))
-        })
-        .map_err(sql)?;
-    rows.map(|row| {
-        let (hash, state, reason) = row.map_err(sql)?;
-        let reason = if state == "reduced" {
-            "reduced in live store".to_owned()
-        } else {
-            reason.ok_or_else(|| malformed("purge reason"))?
-        };
-        Ok((blob_hash(hash)?, reason))
-    })
-    .collect()
-}
-
-fn rewrite_backups(home: &Path, tombstones: &BTreeMap<Hash, String>) -> Vec<PathBuf> {
-    let dir = home.join("backups");
-    match fs::symlink_metadata(&dir) {
-        Ok(meta) if meta.file_type().is_dir() => {}
-        Ok(_) => return vec![dir],
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-        Err(_) => return vec![dir],
-    }
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-        Err(_) => return vec![dir],
-    };
-    let mut unreachable = Vec::new();
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => {
-                unreachable.push(dir.clone());
-                continue;
-            }
-        };
-        let path = entry.path();
-        if !entry.file_name().to_string_lossy().ends_with(".db") {
-            continue;
-        }
-        let regular = fs::symlink_metadata(&path)
-            .map(|meta| meta.file_type().is_file())
-            .unwrap_or(false);
-        if !regular || rewrite_backup(&path, tombstones).is_err() {
-            unreachable.push(path);
-        }
-    }
-    unreachable.sort();
-    unreachable
-}
-
-fn rewrite_backup(path: &Path, tombstones: &BTreeMap<Hash, String>) -> Result<(), StoreError> {
-    let mut conn = Connection::open(path).map_err(sql)?;
-    conn.execute_batch("PRAGMA secure_delete = ON")
-        .map_err(sql)?;
-    let secure: i64 = conn
-        .query_row("PRAGMA secure_delete", [], |row| row.get(0))
-        .map_err(sql)?;
-    if secure != 1 {
-        return Err(malformed("backup secure_delete"));
-    }
-    let has_trace_hash: bool = conn
-        .query_row(
-            "SELECT 1 FROM pragma_table_info('trace') WHERE name = 'payload_hash'",
-            [],
-            |_| Ok(()),
-        )
-        .optional()
-        .map_err(sql)?
-        .is_some();
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(sql)?;
-    for (hash, reason) in tombstones {
-        tx.execute(
-            "UPDATE payload SET state = 'purged', body = NULL, excerpt_hash = NULL,
-            excerpt_class = NULL, kept = NULL, purge_reason = ?1
-            WHERE hash = ?2 AND state IN ('present', 'reduced')",
-            params![reason, &hash.0[..]],
-        )
-        .map_err(sql)?;
-        if has_trace_hash {
-            tx.execute("DELETE FROM trace WHERE payload_hash = ?1", [&hash.0[..]])
-                .map_err(sql)?;
-        }
-    }
-    tx.commit().map_err(sql)?;
-    conn.execute_batch("VACUUM").map_err(sql)?;
-    let mut step = CheckpointStep::Incomplete;
-    for attempt in 1..=SCRUB_ATTEMPTS {
-        step = checkpoint_step(checkpoint(&conn, "TRUNCATE")?, attempt);
-        if step != CheckpointStep::Retry {
-            break;
-        }
-    }
-    if !has_trace_hash || step != CheckpointStep::Done {
-        return Err(malformed("backup scrub"));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::queue::scripted::Scripted;
     use crate::store::{Options, TraceEntry};
     use baley_store::{
-        Actor, Answer, CommandKind, Decision, DocKey, Event, EventSchema, KeyValue, Observed,
-        PayloadBody, PayloadStatus, Payloads, REQUEST_VIEW, Recorded, RequestId, Views,
+        Actor, Admin, Answer, CommandKind, Decision, DocKey, Event, EventSchema, KeyValue,
+        Observed, PayloadBody, PayloadStatus, Payloads, REQUEST_VIEW, Recorded, RequestId, Views,
         verify_chain,
     };
     use std::io::Read;
@@ -883,6 +784,86 @@ mod tests {
                 "owner request",
             )
             .expect("purge")
+    }
+
+    // Catches a purge that ignores a completed export holding the removed body.
+    #[test]
+    fn purge_lists_an_earlier_export_of_its_project() {
+        let home = tempfile::tempdir().expect("home");
+        let store = open(home.path(), &["a"]);
+        let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
+        let target = home.path().join("copy");
+        store
+            .export(&ProjectId("a".into()), &target, AT)
+            .expect("export");
+        assert_eq!(
+            purge(&store, "a", "p1", reference.hash).unreachable,
+            vec![target.canonicalize().expect("target")]
+        );
+    }
+
+    // Catches listing an export made after its project released the body.
+    #[test]
+    fn purge_skips_an_export_after_that_projects_release() {
+        let home = tempfile::tempdir().expect("home");
+        let store = open(home.path(), &["a", "b"]);
+        let (a, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
+        let (b, _) = attach(&store, "b", "b1", b"secret", RetentionClass::Material);
+        purge(&store, "a", "p1", a.hash);
+        let target = home.path().join("late");
+        store
+            .export(&ProjectId("a".into()), &target, AT)
+            .expect("export");
+        assert!(purge(&store, "b", "p2", b.hash).unreachable.is_empty());
+    }
+
+    // Catches omitting another project's earlier export for a shared body.
+    #[test]
+    fn shared_purge_lists_another_projects_export() {
+        let home = tempfile::tempdir().expect("home");
+        let store = open(home.path(), &["a", "b"]);
+        let (a, _) = attach(&store, "a", "a1", b"shared", RetentionClass::Material);
+        attach(&store, "b", "b1", b"shared", RetentionClass::Material);
+        let target = home.path().join("copy-b");
+        store
+            .export(&ProjectId("b".into()), &target, AT)
+            .expect("export");
+        let report = purge(&store, "a", "p1", a.hash);
+        assert_eq!(report.shared, vec![a.hash]);
+        assert_eq!(
+            report.unreachable,
+            vec![target.canonicalize().expect("target")]
+        );
+    }
+
+    // Catches a purge replay forgetting the export listing.
+    #[test]
+    fn replayed_purge_lists_the_same_export() {
+        let home = tempfile::tempdir().expect("home");
+        let store = open(home.path(), &["a"]);
+        let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
+        let target = home.path().join("copy");
+        store
+            .export(&ProjectId("a".into()), &target, AT)
+            .expect("export");
+        let first = purge(&store, "a", "p1", reference.hash);
+        let replay = purge(&store, "a", "p1", reference.hash);
+        assert_eq!(replay.unreachable, first.unreachable);
+    }
+
+    // Catches an interrupted export hidden while its head is pending.
+    #[test]
+    fn pending_export_record_is_listed() {
+        let home = tempfile::tempdir().expect("home");
+        let store = open(home.path(), &["a"]);
+        let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
+        let target = home.path().join("pending");
+        raw(home.path()).execute("INSERT INTO export_record (project_id, target, exported_at, head_seq) VALUES ('a', ?1, ?2, NULL)",
+            params![target.to_string_lossy(), AT]).expect("pending");
+        assert_eq!(
+            purge(&store, "a", "p1", reference.hash).unreachable,
+            vec![target]
+        );
     }
 
     fn trace(store: &SqliteStore, project: &str, hash: Hash, kind: &str) {
@@ -1236,35 +1217,6 @@ mod tests {
         assert_eq!(live, 1);
     }
 
-    // Catches a pre-reduction backup retaining an original whose excerpt is shared.
-    #[test]
-    fn a_backup_drops_a_reduced_original_with_a_shared_excerpt() {
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a"]);
-        let (first, _) = attach(&store, "a", "a1", &body(300_000, 3), RetentionClass::Output);
-        let (second, _) = attach(&store, "a", "a2", &body(300_000, 4), RetentionClass::Output);
-        let saved = backup(home.path(), "before.db");
-        let excerpt = reduce(&store, "a", "r1", &first);
-        assert_eq!(excerpt.hash, reduce(&store, "a", "r2", &second).hash);
-        let report = purge(&store, "a", "p1", first.hash);
-        assert!(report.shared.contains(&first.hash));
-        assert!(report.shared.contains(&excerpt.hash));
-        assert!(!report.unreachable.contains(&saved));
-        let (state, body, reason): (String, Option<Vec<u8>>, Option<String>) =
-            Connection::open(&saved)
-                .expect("backup")
-                .query_row(
-                    "SELECT state, body, purge_reason FROM payload WHERE hash = ?1",
-                    [&first.hash.0[..]],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .expect("original row");
-        assert_eq!(
-            (state.as_str(), body, reason.as_deref()),
-            ("purged", None, Some("reduced in live store"))
-        );
-    }
-
     // Catches deleting a project's excerpt trace while its other reduction needs it.
     #[test]
     fn a_shared_excerpt_keeps_its_projects_trace() {
@@ -1291,7 +1243,7 @@ mod tests {
             .into_iter()
             .find(|event| event.type_name == PAYLOAD_REDUCED)
             .expect("reduction");
-        let (purge_seq, purged) = store
+        let (purge_seq, purged, _) = store
             .logical_purge(
                 &command("a", "retention.purge", "p1"),
                 &[original.hash],
@@ -1505,117 +1457,6 @@ mod tests {
         assert_eq!(kinds(home.path()), vec!["b-trace"]);
     }
 
-    fn backup(home: &Path, name: &str) -> PathBuf {
-        let dir = home.join("backups");
-        fs::create_dir_all(&dir).expect("backups");
-        let path = dir.join(name);
-        raw(home)
-            .execute("VACUUM INTO ?1", [&path.to_string_lossy().to_string()])
-            .expect("vacuum into");
-        path
-    }
-
-    // Catches a home backup retaining a body that the live store purged.
-    #[test]
-    fn a_backup_in_the_home_receives_the_purge() {
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a"]);
-        let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
-        let backup = backup(home.path(), "one.db");
-        let report = purge(&store, "a", "p1", reference.hash);
-        assert!(!report.unreachable.contains(&backup));
-        let row: (String, Option<Vec<u8>>) = Connection::open(&backup)
-            .expect("backup")
-            .query_row(
-                "SELECT state, body FROM payload WHERE hash = ?1",
-                [&reference.hash.0[..]],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .expect("row");
-        assert_eq!(row, ("purged".into(), None));
-    }
-
-    // Catches a backup reported clean when its trace rows have no provenance.
-    #[test]
-    fn a_backup_without_trace_provenance_is_listed() {
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a"]);
-        let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
-        let backup = backup(home.path(), "old.db");
-        Connection::open(&backup)
-            .expect("backup")
-            .execute_batch("DROP INDEX trace_payload; ALTER TABLE trace DROP COLUMN payload_hash;")
-            .expect("older trace");
-        let report = purge(&store, "a", "p1", reference.hash);
-        assert!(report.unreachable.contains(&backup));
-        let state: String = Connection::open(&backup)
-            .expect("backup")
-            .query_row(
-                "SELECT state FROM payload WHERE hash = ?1",
-                [&reference.hash.0[..]],
-                |row| row.get(0),
-            )
-            .expect("row");
-        assert_eq!(state, "purged");
-    }
-
-    // Catches a backup link followed or silently skipped by the scrub.
-    #[cfg(unix)]
-    #[test]
-    fn a_linked_backup_is_listed_not_followed() {
-        use std::os::unix::fs::symlink;
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a"]);
-        let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
-        let target = home.path().join("target.db");
-        raw(home.path())
-            .execute("VACUUM INTO ?1", [&target.to_string_lossy().to_string()])
-            .expect("backup");
-        fs::create_dir_all(home.path().join("backups")).expect("backups");
-        let link = home.path().join("backups/two.db");
-        symlink(&target, &link).expect("link");
-        let report = purge(&store, "a", "p1", reference.hash);
-        assert!(report.unreachable.contains(&link));
-        let row: (String, bool) = Connection::open(target)
-            .expect("target")
-            .query_row(
-                "SELECT state, body IS NOT NULL FROM payload WHERE hash = ?1",
-                [&reference.hash.0[..]],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .expect("row");
-        assert_eq!(row, ("present".into(), true));
-    }
-
-    // Catches following a linked backups directory outside the home's direct entries.
-    #[cfg(unix)]
-    #[test]
-    fn a_linked_backups_directory_is_listed_not_followed() {
-        use std::os::unix::fs::symlink;
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a"]);
-        let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
-        let target = home.path().join("elsewhere");
-        fs::create_dir(&target).expect("target directory");
-        let saved = target.join("one.db");
-        raw(home.path())
-            .execute("VACUUM INTO ?1", [&saved.to_string_lossy().to_string()])
-            .expect("backup");
-        let link = home.path().join("backups");
-        symlink(&target, &link).expect("link");
-        let report = purge(&store, "a", "p1", reference.hash);
-        assert!(report.unreachable.contains(&link));
-        let row: (String, bool) = Connection::open(saved)
-            .expect("saved")
-            .query_row(
-                "SELECT state, body IS NOT NULL FROM payload WHERE hash = ?1",
-                [&reference.hash.0[..]],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .expect("row");
-        assert_eq!(row, ("present".into(), true));
-    }
-
     // Catches VACUUM running before the compatibility epoch has been checked.
     #[test]
     fn scrub_refuses_a_newer_epoch_before_writing() {
@@ -1687,37 +1528,6 @@ mod tests {
                 .expect("marker"),
             1
         );
-    }
-
-    // Catches hiding an untouched backup when the scrub fails.
-    #[test]
-    fn a_scrub_error_lists_the_backups_directory() {
-        let home = tempfile::tempdir().expect("home");
-        let store = open(home.path(), &["a"]);
-        let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
-        let backup = backup(home.path(), "one.db");
-        let report = store
-            .purge_with(
-                &command("a", "retention.purge", "p1"),
-                &[reference.hash],
-                "owner request",
-                || {
-                    Err(StoreError::ReadOnly {
-                        needed_epoch: EPOCH + 1,
-                    })
-                },
-            )
-            .expect("purge report");
-        assert_eq!(report.unreachable, vec![home.path().join("backups")]);
-        let body: Option<Vec<u8>> = Connection::open(backup)
-            .expect("backup")
-            .query_row(
-                "SELECT body FROM payload WHERE hash = ?1",
-                [&reference.hash.0[..]],
-                |row| row.get(0),
-            )
-            .expect("backup body");
-        assert!(body.is_some());
     }
 
     // Catches a scrub clearing its marker after an incomplete checkpoint.

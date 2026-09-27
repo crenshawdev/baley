@@ -147,7 +147,7 @@ pub trait Ledger {
     /// present payload body and retained excerpt the project references,
     /// counting reduced and purged bodies as tombstones. Reports the latest
     /// local anchor row beside the supplied anchor without trusting it, and
-    /// the time the unanchored age runs from. Reads one snapshot, holding
+    /// the time the unanchored age runs from in the chain report. Reads one snapshot, holding
     /// no more than one page of rows or one chunk of a body at a time.
     fn verify(
         &self,
@@ -188,11 +188,21 @@ pub struct VerifyReport {
     pub stored_anchor: Option<StoredAnchor>,
     /// How that row compares with the supplied anchor.
     pub stored_anchor_comparison: StoredAnchorComparison,
-    /// The recorded time of the earliest accepted event after the supplied
-    /// anchor that is not one of the anchor command's own events, or
-    /// `None` when there is none. `doctor` measures the unanchored age from
-    /// it; the raw range stays in `chain.unanchored`.
-    pub age_unanchored_since: Option<String>,
+}
+
+/// The caller's observation of the configured remote anchor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnchorCheck {
+    /// The remote's latest valid anchor.
+    Remote(Anchor),
+    /// The remote confirmed no anchor.
+    RemoteAbsent,
+    /// The remote could not be reached.
+    RemoteUnreachable,
+    /// The remote returned malformed anchor data.
+    RemoteMalformed(String),
+    /// This project has no configured remote.
+    LocalOnly,
 }
 
 /// A local anchor row: the anchor, its tag and when Baley confirmed it.
@@ -335,20 +345,19 @@ pub trait Views {
 pub trait Admin {
     /// Creates an empty project. Slice 1 creates projects only this way;
     /// `baley init` arrives with slice 2.
-    fn create_project(&self, project: &ProjectId, name: &str) -> Result<(), StoreError>;
+    fn create_project(&self, project: &ProjectId, name: &str, at: &str) -> Result<(), StoreError>;
 
-    /// Copies the store into `dir` after the integrity check, chain
-    /// verification against `anchors` (fetched from the forge by the
-    /// caller, one per project) and view verification all pass.
-    fn backup(
-        &self,
-        dir: &Path,
-        anchors: &BTreeMap<ProjectId, Anchor>,
-    ) -> Result<BackupReport, StoreError>;
+    /// Lists project ids and names in id order.
+    fn projects(&self) -> Result<Vec<(ProjectId, String)>, StoreError>;
 
     /// Writes a standalone store holding one project's events, views,
     /// payloads and anchors, which verifies on its own (EVD-R15).
-    fn export(&self, project: &ProjectId, target: &Path) -> Result<(), StoreError>;
+    fn export(
+        &self,
+        project: &ProjectId,
+        target: &Path,
+        at: &str,
+    ) -> Result<ExportReport, StoreError>;
 
     /// Reduces one reference whose retention has ended: keeps the first and
     /// last 64 KiB of its body as a new payload and records
@@ -370,7 +379,7 @@ pub trait Admin {
         reason: &str,
     ) -> Result<PurgeReport, StoreError>;
 
-    /// Repeats the idempotent scrub, including backups in the home.
+    /// Repeats the idempotent scrub.
     fn scrub(&self) -> Result<ScrubReport, StoreError>;
 
     /// Replays the project's events into a new generation of every
@@ -403,15 +412,21 @@ pub trait Admin {
     fn verify_views(&self, project: &ProjectId) -> Result<ViewsReport, StoreError>;
 
     /// The store's health as of `at`, a supplied UTC time, with each
-    /// project's chain verified against its anchor in `anchors`.
-    fn doctor(&self, at: &str, anchors: &BTreeMap<ProjectId, Anchor>)
-    -> Result<Health, StoreError>;
+    /// project's chain verified against its supplied anchor check.
+    fn doctor(
+        &self,
+        at: &str,
+        checks: &BTreeMap<ProjectId, AnchorCheck>,
+    ) -> Result<Health, StoreError>;
 }
 
+/// A verified standalone project home.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BackupReport {
-    pub path: PathBuf,
-    pub bytes: u64,
+pub struct ExportReport {
+    /// The directory created for the export.
+    pub target: PathBuf,
+    /// The exported project's verified head.
+    pub head: Option<Head>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -423,8 +438,8 @@ pub struct PurgeReport {
     pub shared: Vec<Hash>,
     /// The `payload.purged` event in the purging project.
     pub recorded: Vec<(ProjectId, u64)>,
-    /// Unrewritten backups, or the home backups directory when its entries
-    /// were not checked; exports are added by T12.
+    /// Exports that already received a purged or shared body, from the export
+    /// records; a pending export is listed.
     pub unreachable: Vec<PathBuf>,
     /// Whether the main database scrub completed.
     pub scrubbed: bool,
@@ -435,8 +450,6 @@ pub struct PurgeReport {
 pub struct ScrubReport {
     /// Whether the main database scrub completed.
     pub scrubbed: bool,
-    /// Backups in the home that could not be fully rewritten.
-    pub unreachable: Vec<PathBuf>,
 }
 
 /// What a rebuild made live.
@@ -462,29 +475,87 @@ pub struct ViewsReport {
 /// What `doctor` reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Health {
-    pub integrity_ok: bool,
+    /// Compatibility epoch recorded in the database.
     pub epoch: u32,
+    /// Time of a logical purge whose scrub has not finished.
+    pub scrub_pending: Option<String>,
+    /// Every row returned by SQLite's integrity check.
+    pub integrity: Vec<String>,
+    /// Main database file size.
     pub database_bytes: u64,
+    /// Write-ahead log file size, or zero when absent.
     pub log_bytes: u64,
-    /// Bytes by record family, then by retention class.
-    pub bytes_by_family: BTreeMap<String, u64>,
-    pub bytes_by_class: BTreeMap<String, u64>,
-    pub backups: Vec<PathBuf>,
+    /// Health of each project, in id order.
     pub projects: Vec<ProjectHealth>,
 }
 
+/// Store and remote findings for one project.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectHealth {
+    /// Project id.
     pub project: ProjectId,
-    pub chain: ChainReport,
-    /// (view, stored projector version, events behind the head).
-    pub views: Vec<(String, u32, u64)>,
-    pub active_claims: u64,
-    pub interrupted_claims: u64,
-    /// When the oldest unanchored event was recorded, if any.
-    pub unanchored_since: Option<String>,
-    /// Set when the unanchored range is more than a day old at `at`.
-    pub unanchored_warning: bool,
+    /// Caller-supplied remote observation.
+    pub check: AnchorCheck,
+    /// Chain and body verification against that observation.
+    pub verify: Result<VerifyReport, StoreError>,
+    /// A local row despite confirmed remote absence.
+    pub remote_absent_local_row: Option<StoredAnchor>,
+    /// Age of unanchored work.
+    pub unanchored: UnanchoredAge,
+    /// Raw version of each registered view in the live generation.
+    pub views: Vec<ViewHealth>,
+    /// Live view-set version and this binary's version.
+    pub view_set: (Option<u32>, u32),
+    /// Unfinished building generation, if any.
+    pub building: Option<Building>,
+    /// Replay verification of the views.
+    pub views_check: Result<ViewsReport, StoreError>,
+    /// Open claims judged at the supplied time.
+    pub claims: Result<ClaimCounts, StoreError>,
+}
+
+/// Whether the unanchored age could be checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnanchoredAge {
+    /// No trustworthy remote observation was available.
+    Unchecked,
+    /// No unanchored work event was accepted.
+    None,
+    /// The first work event and whether it is more than one day old.
+    Since { since: String, warning: bool },
+}
+
+/// One registered view's stored and current version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewHealth {
+    /// View name.
+    pub view: String,
+    /// Version stamped on the live generation.
+    pub live_version: Option<u32>,
+    /// Version in this binary.
+    pub binary_version: u32,
+}
+
+/// Progress of an unfinished generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Building {
+    /// Building generation number.
+    pub generation: u64,
+    /// Last event applied in the building generation.
+    pub applied_seq: u64,
+    /// Events behind the project head.
+    pub lag: u64,
+}
+
+/// Counts of claims at the supplied time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimCounts {
+    /// Claims with a live lease.
+    pub active: u64,
+    /// Claims with an expired lease.
+    pub interrupted: u64,
+    /// Claims held for owner resolution.
+    pub awaiting_owner: u64,
 }
 
 #[cfg(test)]

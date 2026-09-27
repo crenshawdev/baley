@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use baley_store::{
     ANCHOR_FAILED, ANCHOR_FAILED_VERSION, ANCHOR_PUSH, ANCHOR_PUSHED, ANCHOR_PUSHED_VERSION,
-    ANCHOR_RECONCILE, ANCHOR_SCOPE, ANCHOR_STREAM, Actor, Anchor, AnchorPushedPayload,
+    ANCHOR_RECONCILE, ANCHOR_SCOPE, ANCHOR_STREAM, Actor, Anchor, AnchorCheck, AnchorPushedPayload,
     AnchorVerdict, Block, ChainReport, Claim, ClaimDecision, ClaimId, ClaimOwner, ClaimState,
     Claimed, Command, CommandKind, Decision, Hash, Head, LEASE_RENEWAL_SECONDS, Ledger, NewEvent,
     Observed, Outcome, OutcomeKind, PayloadFault, ProjectId, ReconcileAuthority, Recorded, Refusal,
@@ -268,7 +268,10 @@ pub fn chain_mismatch(chain: &ChainReport) -> Option<String> {
             broken.unwrap_or(0)
         )),
         (_, Some(seq)) => Some(format!("the local chain breaks at sequence {seq}")),
-        (AnchorVerdict::NoAnchor | AnchorVerdict::Matches, None) => None,
+        (
+            AnchorVerdict::NoAnchor | AnchorVerdict::Matches | AnchorVerdict::Acknowledged { .. },
+            None,
+        ) => None,
     }
 }
 
@@ -300,15 +303,15 @@ pub fn pre_push_check(
         payload_faults: Vec::new(),
     };
     Ok(match anchor_status(project, fetched) {
-        AnchorStatus::Remote(anchor) => pre_push_verdict(ledger.verify(project, Some(&anchor))?),
-        AnchorStatus::RemoteAbsent => pre_push_verdict(ledger.verify(project, None)?),
-        AnchorStatus::RemoteMalformed(tag) => {
+        AnchorCheck::Remote(anchor) => pre_push_verdict(ledger.verify(project, Some(&anchor))?),
+        AnchorCheck::RemoteAbsent => pre_push_verdict(ledger.verify(project, None)?),
+        AnchorCheck::RemoteMalformed(tag) => {
             refuse(format!("the latest remote tag {tag} is not a valid anchor"))
         }
-        AnchorStatus::RemoteUnreachable => {
+        AnchorCheck::RemoteUnreachable => {
             refuse("the remote was unreachable at the latest-anchor fetch".into())
         }
-        AnchorStatus::LocalOnly => refuse("no remote at the latest-anchor fetch".into()),
+        AnchorCheck::LocalOnly => refuse("no remote at the latest-anchor fetch".into()),
     })
 }
 
@@ -745,34 +748,33 @@ fn record_unreachable(
     })
 }
 
-/// What the remote said when verification fetched the latest anchor.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AnchorStatus {
-    /// The latest remote anchor, the outside witness.
-    Remote(Anchor),
-    /// The remote answered and holds no anchor of this project.
-    RemoteAbsent,
-    /// The remote could not be read, so anchored verification is
-    /// inconclusive.
-    RemoteUnreachable,
-    /// The latest tag is not a well-formed anchor.
-    RemoteMalformed(String),
-    /// The project has no remote: local verification only.
-    LocalOnly,
-}
-
 /// The status a latest-anchor fetch gives.
-pub fn anchor_status(project: &ProjectId, observation: &FetchObservation) -> AnchorStatus {
+pub fn anchor_status(project: &ProjectId, observation: &FetchObservation) -> AnchorCheck {
     match observation {
         FetchObservation::Present { tag, annotation } => {
             match parse_tag_anchor(project, tag, annotation) {
-                Some(anchor) => AnchorStatus::Remote(anchor),
-                None => AnchorStatus::RemoteMalformed(tag.clone()),
+                Some(anchor) => AnchorCheck::Remote(anchor),
+                None => AnchorCheck::RemoteMalformed(tag.clone()),
             }
         }
-        FetchObservation::Absent => AnchorStatus::RemoteAbsent,
-        FetchObservation::Unreachable => AnchorStatus::RemoteUnreachable,
-        FetchObservation::NoRemote => AnchorStatus::LocalOnly,
+        FetchObservation::Absent => AnchorCheck::RemoteAbsent,
+        FetchObservation::Unreachable => AnchorCheck::RemoteUnreachable,
+        FetchObservation::NoRemote => AnchorCheck::LocalOnly,
+    }
+}
+
+/// Fetches the latest anchor for doctor, or reports a local-only project.
+pub fn anchor_check(
+    forge: &mut dyn Forge,
+    project: &ProjectId,
+    remote: Option<&str>,
+) -> AnchorCheck {
+    match remote {
+        Some(remote) => anchor_status(
+            project,
+            &forge.fetch_tag(project, remote, &TagQuery::LatestAnchor),
+        ),
+        None => AnchorCheck::LocalOnly,
     }
 }
 
@@ -780,7 +782,7 @@ pub fn anchor_status(project: &ProjectId, observation: &FetchObservation) -> Anc
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verification {
     /// What the latest-anchor fetch found.
-    pub status: AnchorStatus,
+    pub status: AnchorCheck,
     /// The store's verification against the remote anchor, if any.
     pub report: VerifyReport,
     /// When the remote was checked, a supplied UTC time.
@@ -798,7 +800,7 @@ pub fn verify_observed(
 ) -> Result<Verification, StoreError> {
     let status = anchor_status(project, observation);
     let witness = match &status {
-        AnchorStatus::Remote(anchor) => Some(anchor),
+        AnchorCheck::Remote(anchor) => Some(anchor),
         _ => None,
     };
     let report = ledger.verify(project, witness)?;
@@ -1119,7 +1121,6 @@ mod tests {
             tombstones_checked: 0,
             stored_anchor: None,
             stored_anchor_comparison: StoredAnchorComparison::NotCompared,
-            age_unanchored_since: None,
         }
     }
 
@@ -1129,7 +1130,25 @@ mod tests {
             first_break,
             anchor,
             unanchored: None,
+            acknowledged_restores: Vec::new(),
+            age_unanchored_since: None,
         }
+    }
+
+    // Catches the accepted restore gap still blocking future anchor pushes.
+    #[test]
+    fn acknowledged_restore_allows_a_new_anchor_push() {
+        assert_eq!(
+            chain_mismatch(&chain(
+                AnchorVerdict::Acknowledged {
+                    anchored: 12,
+                    restored: Some(head(9)),
+                    acknowledged_seq: 10,
+                },
+                None
+            )),
+            None
+        );
     }
 
     // The claim over head 7 intends 7, and the tag an open claim at event 8
@@ -1400,7 +1419,7 @@ mod tests {
                     annotation: anchor_annotation(&anchor)
                 }
             ),
-            AnchorStatus::Remote(anchor)
+            AnchorCheck::Remote(anchor)
         );
         assert_eq!(
             anchor_status(
@@ -1410,19 +1429,19 @@ mod tests {
                     annotation: "{}".into()
                 }
             ),
-            AnchorStatus::RemoteMalformed(tag)
+            AnchorCheck::RemoteMalformed(tag)
         );
         assert_eq!(
             anchor_status(&project(), &FetchObservation::Absent),
-            AnchorStatus::RemoteAbsent
+            AnchorCheck::RemoteAbsent
         );
         assert_eq!(
             anchor_status(&project(), &FetchObservation::Unreachable),
-            AnchorStatus::RemoteUnreachable
+            AnchorCheck::RemoteUnreachable
         );
         assert_eq!(
             anchor_status(&project(), &FetchObservation::NoRemote),
-            AnchorStatus::LocalOnly
+            AnchorCheck::LocalOnly
         );
     }
 

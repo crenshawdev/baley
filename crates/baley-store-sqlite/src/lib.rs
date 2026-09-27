@@ -3,11 +3,14 @@
 //! adapter opens behind the writer queue and compatibility epoch, records
 //! commands and claims, stores payloads, rebuilds project views in
 //! generations, and implements the port's `Ledger`, verifying a project's
-//! chain and bodies against an anchor the caller fetched. T10 requires a
+//! chain and bodies against an anchor the caller fetched. T12 requires a
 //! fresh ledger: earlier epoch-1 files are disposable and a different
 //! schema digest is refused at open.
 
+mod admin;
 mod claim;
+mod doctor;
+mod export;
 mod ledger;
 #[cfg(test)]
 mod ledger_tests;

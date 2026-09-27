@@ -16,8 +16,7 @@ use baley_store::{
     Anchor, ChainVerifier, Claim, ClaimId, ClaimOwner, Claimed, Command, Cursor, Decide,
     DecideClaim, DecideReconcile, EVENT_PAGE_BOUND, Event, Hash, Head, HistoryFilter, KeyValue,
     Ledger, Page, PageRequest, PayloadFault, ProjectId, ReconcileAuthority, Recorded, Refusal,
-    StoreError, StoredAnchor, StreamName, VerifyReport, anchor_command_event,
-    compare_stored_anchor,
+    StoreError, StoredAnchor, StreamName, VerifyReport, compare_stored_anchor,
 };
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, params_from_iter};
@@ -241,15 +240,13 @@ impl SqliteStore {
 }
 
 /// The whole verification inside the snapshot the first read fixes.
-fn verify_in(
+pub(crate) fn verify_in(
     conn: &Connection,
     project: &ProjectId,
     anchor: Option<&Anchor>,
 ) -> Result<VerifyReport, StoreError> {
     known(conn, project)?;
     let mut verifier = ChainVerifier::new(anchor);
-    let unanchored_from = verifier.unanchored_from();
-    let mut age_unanchored_since = None;
     {
         let mut statement = conn
             .prepare(concat!(
@@ -265,12 +262,6 @@ fn verify_in(
             if !verifier.push(&event) {
                 break;
             }
-            if age_unanchored_since.is_none()
-                && unanchored_from.is_some_and(|from| event.seq >= from)
-                && !anchor_command_event(&event.type_name, &event.payload)
-            {
-                age_unanchored_since = Some(event.recorded_at);
-            }
         }
     }
     let stored_anchor = latest_anchor_row(conn, project)?;
@@ -283,7 +274,6 @@ fn verify_in(
         tombstones_checked: bodies.tombstones,
         stored_anchor,
         stored_anchor_comparison,
-        age_unanchored_since,
     })
 }
 

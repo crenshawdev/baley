@@ -12,8 +12,13 @@ use std::ops::RangeInclusive;
 
 use sha2::{Digest, Sha256};
 
+use crate::anchor::{
+    ANCHOR_RESTORE_ACKNOWLEDGED, ANCHOR_RESTORE_ACKNOWLEDGED_VERSION, RestoreAcknowledgedPayload,
+    anchor_command_event, anchor_tag,
+};
 use crate::canonical::CanonicalError;
-use crate::event::{Event, Hash, ProjectId};
+use crate::event::{Actor, Event, Hash, ProjectId};
+use crate::time::{TimeError, UtcInstant};
 
 /// The domain prefix of the first hash of every chain.
 pub const DOMAIN: &[u8] = b"baley-ledger/1";
@@ -99,6 +104,12 @@ pub enum AnchorVerdict {
         anchored: Hash,
         found: Hash,
     },
+    /// The owner accepted a restored chain behind this remote anchor.
+    Acknowledged {
+        anchored: u64,
+        restored: Option<Head>,
+        acknowledged_seq: u64,
+    },
     /// A break at or before the anchored sequence stopped the walk, so the
     /// anchor was never compared. The break is in `first_break`.
     Unchecked { anchored: u64 },
@@ -112,10 +123,31 @@ pub struct ChainReport {
     /// The first position the verifier refused, if any. Events after it
     /// are not examined.
     pub first_break: Option<Break>,
+    /// Result of comparing the supplied remote anchor.
     pub anchor: AnchorVerdict,
     /// The accepted sequences no anchor covers: after the anchored
     /// sequence, or the whole chain without an anchor. `None` when empty.
     pub unanchored: Option<RangeInclusive<u64>>,
+    /// Valid owner acknowledgements still visible after later anchors.
+    pub acknowledged_restores: Vec<AcknowledgedRestore>,
+    /// First work event outside the final anchor or acknowledgement.
+    pub age_unanchored_since: Option<String>,
+}
+
+/// An owner accepted a gap behind a remote anchor at this event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcknowledgedRestore {
+    /// Sequence of the acknowledgement event.
+    pub seq: u64,
+    /// Remote anchor accepted by the owner.
+    pub anchor: Anchor,
+    /// Local head before the acknowledgement event.
+    pub restored: Option<Head>,
+}
+
+/// Warns only after more than one day of unanchored work.
+pub fn unanchored_warning(since: &str, at: &str) -> Result<bool, TimeError> {
+    Ok(UtcInstant::parse(at)? > UtcInstant::parse(since)?.plus_seconds(86_400)?)
 }
 
 impl ChainReport {
@@ -124,7 +156,9 @@ impl ChainReport {
         self.first_break.is_none()
             && matches!(
                 self.anchor,
-                AnchorVerdict::NoAnchor | AnchorVerdict::Matches
+                AnchorVerdict::NoAnchor
+                    | AnchorVerdict::Matches
+                    | AnchorVerdict::Acknowledged { .. }
             )
     }
 }
@@ -140,6 +174,8 @@ pub struct ChainVerifier {
     first_break: Option<Break>,
     /// Set when the walk accepts the anchored sequence.
     reached: Option<AnchorVerdict>,
+    acknowledged: Vec<(AcknowledgedRestore, Option<String>)>,
+    first_work: Option<String>,
 }
 
 impl ChainVerifier {
@@ -151,6 +187,8 @@ impl ChainVerifier {
             project: None,
             first_break: None,
             reached: None,
+            acknowledged: Vec::new(),
+            first_work: None,
         }
     }
 
@@ -163,6 +201,7 @@ impl ChainVerifier {
         }
         let expected_seq = self.head.as_ref().map_or(1, |head| head.seq + 1);
         let expected_prev = self.head.as_ref().map(|head| head.hash);
+        let restored = self.head.clone();
         let kind = if event.seq != expected_seq {
             Some(BreakKind::Sequence { found: event.seq })
         } else if let Some(project) = self
@@ -204,6 +243,39 @@ impl ChainVerifier {
                             }
                         });
                     }
+                    if event.type_name == ANCHOR_RESTORE_ACKNOWLEDGED
+                        && event.type_version == ANCHOR_RESTORE_ACKNOWLEDGED_VERSION
+                        && event.actor == Actor::Owner
+                        && let Some(payload) =
+                            RestoreAcknowledgedPayload::from_value(&event.payload)
+                        && payload.tag == anchor_tag(&event.project_id, payload.seq)
+                        && payload.restored_seq == restored.as_ref().map_or(0, |head| head.seq)
+                        && payload.restored_head == restored.as_ref().map(|head| head.hash)
+                    {
+                        self.acknowledged.push((
+                            AcknowledgedRestore {
+                                seq: event.seq,
+                                anchor: payload.anchor(),
+                                restored,
+                            },
+                            None,
+                        ));
+                    }
+                    if !anchor_command_event(&event.type_name, &event.payload) {
+                        if self.first_work.is_none()
+                            && self
+                                .anchor
+                                .as_ref()
+                                .is_none_or(|anchor| event.seq > anchor.seq)
+                        {
+                            self.first_work = Some(event.recorded_at.clone());
+                        }
+                        for (ack, first) in &mut self.acknowledged {
+                            if event.seq > ack.seq && first.is_none() {
+                                *first = Some(event.recorded_at.clone());
+                            }
+                        }
+                    }
                     None
                 }
             }
@@ -233,7 +305,7 @@ impl ChainVerifier {
     pub fn finish(self) -> ChainReport {
         let unanchored_from = self.unanchored_from();
         let head_seq = self.head.as_ref().map_or(0, |head| head.seq);
-        let anchor_verdict = match (&self.anchor, self.reached) {
+        let mut anchor_verdict = match (&self.anchor, self.reached) {
             (None, _) => AnchorVerdict::NoAnchor,
             (Some(_), Some(verdict)) => verdict,
             (Some(anchor), None) if self.first_break.is_some() => AnchorVerdict::Unchecked {
@@ -244,7 +316,28 @@ impl ChainVerifier {
                 head: head_seq,
             },
         };
-        let unanchored = unanchored_from
+        let accepted = if matches!(
+            anchor_verdict,
+            AnchorVerdict::Truncated { .. } | AnchorVerdict::Rewritten { .. }
+        ) {
+            self.acknowledged
+                .iter()
+                .rev()
+                .find(|(ack, _)| self.anchor.as_ref() == Some(&ack.anchor))
+        } else {
+            None
+        };
+        let (from, age) = if let Some((ack, first)) = accepted {
+            anchor_verdict = AnchorVerdict::Acknowledged {
+                anchored: ack.anchor.seq,
+                restored: ack.restored.clone(),
+                acknowledged_seq: ack.seq,
+            };
+            (ack.seq.checked_add(1), first.clone())
+        } else {
+            (unanchored_from, self.first_work)
+        };
+        let unanchored = from
             .filter(|from| head_seq >= *from)
             .map(|from| from..=head_seq);
         ChainReport {
@@ -252,6 +345,8 @@ impl ChainVerifier {
             first_break: self.first_break,
             anchor: anchor_verdict,
             unanchored,
+            acknowledged_restores: self.acknowledged.into_iter().map(|(ack, _)| ack).collect(),
+            age_unanchored_since: age,
         }
     }
 }
@@ -306,6 +401,209 @@ mod tests {
                 .push(Event::seal(ProjectId(PROJECT.into()), seq, prev, draft(seq)).expect("seal"));
         }
         events
+    }
+
+    fn with_ack(
+        remote: Anchor,
+        actor: Actor,
+        alter: impl FnOnce(&mut serde_json::Value),
+    ) -> Vec<Event> {
+        let mut events = chain(2);
+        let head = events.last().expect("head");
+        let mut payload = RestoreAcknowledgedPayload {
+            remote: "origin".into(),
+            tag: anchor_tag(&ProjectId(PROJECT.into()), remote.seq),
+            seq: remote.seq,
+            head: remote.hash,
+            restored_seq: head.seq,
+            restored_head: Some(head.hash),
+            checked_at: "2026-09-25T18:00:00Z".into(),
+        }
+        .to_value();
+        alter(&mut payload);
+        let mut ack = draft(3);
+        ack.stream = "project".into();
+        ack.type_name = ANCHOR_RESTORE_ACKNOWLEDGED.into();
+        ack.actor = actor;
+        ack.payload = payload;
+        events.push(Event::seal(ProjectId(PROJECT.into()), 3, Some(head.hash), ack).expect("ack"));
+        events
+    }
+
+    fn with_work(mut events: Vec<Event>, type_name: &str, at: &str) -> Vec<Event> {
+        let seq = events.len() as u64 + 1;
+        let mut work = draft(seq);
+        work.type_name = type_name.into();
+        work.recorded_at = at.into();
+        work.payload = if type_name == crate::request::COMMAND_COMPLETED {
+            json!({"kind": crate::anchor::ANCHOR_ACKNOWLEDGE_RESTORE})
+        } else {
+            json!({"phase": 2})
+        };
+        let previous = events.last().expect("previous").hash;
+        events
+            .push(Event::seal(ProjectId(PROJECT.into()), seq, Some(previous), work).expect("work"));
+        events
+    }
+
+    fn future_anchor() -> Anchor {
+        Anchor {
+            seq: 8,
+            hash: Hash([8; 32]),
+        }
+    }
+
+    // Catches an owner acknowledgement ignored for a truncated copy.
+    #[test]
+    fn owner_acknowledgement_accepts_a_truncated_copy() {
+        let remote = future_anchor();
+        let events = with_ack(remote.clone(), Actor::Owner, |_| {});
+        let report = verify_chain(&events, Some(&remote));
+        assert_eq!(
+            report.anchor,
+            AnchorVerdict::Acknowledged {
+                anchored: 8,
+                restored: Some(Head {
+                    seq: 2,
+                    hash: events[1].hash
+                }),
+                acknowledged_seq: 3
+            }
+        );
+        assert_eq!(report.unanchored, None);
+    }
+
+    // Catches conversion limited to a tag whose sequence is ahead of the copy.
+    #[test]
+    fn owner_acknowledgement_accepts_a_rewritten_copy() {
+        let remote = Anchor {
+            seq: 1,
+            hash: Hash([9; 32]),
+        };
+        let events = with_ack(remote.clone(), Actor::Owner, |_| {});
+        assert!(matches!(
+            verify_chain(&events, Some(&remote)).anchor,
+            AnchorVerdict::Acknowledged {
+                acknowledged_seq: 3,
+                ..
+            }
+        ));
+    }
+
+    // Catches verifier authority based on the payload alone.
+    #[test]
+    fn agent_acknowledgement_does_not_accept_a_restore() {
+        let remote = future_anchor();
+        let events = with_ack(remote.clone(), Actor::Baley, |_| {});
+        assert!(matches!(
+            verify_chain(&events, Some(&remote)).anchor,
+            AnchorVerdict::Truncated { .. }
+        ));
+    }
+
+    // Catches an acknowledgement accepted against any remote anchor.
+    #[test]
+    fn acknowledgement_names_one_remote_anchor() {
+        let remote = future_anchor();
+        let events = with_ack(
+            Anchor {
+                seq: 7,
+                hash: Hash([7; 32]),
+            },
+            Actor::Owner,
+            |_| {},
+        );
+        assert!(matches!(
+            verify_chain(&events, Some(&remote)).anchor,
+            AnchorVerdict::Truncated { .. }
+        ));
+    }
+
+    // Catches an acknowledgement moved after it was recorded.
+    #[test]
+    fn acknowledgement_requires_the_restored_head() {
+        let remote = future_anchor();
+        let events = with_ack(remote.clone(), Actor::Owner, |value| {
+            value["restored_seq"] = json!(1)
+        });
+        assert!(matches!(
+            verify_chain(&events, Some(&remote)).anchor,
+            AnchorVerdict::Truncated { .. }
+        ));
+    }
+
+    // Catches decoding that ignores an extra field.
+    #[test]
+    fn acknowledgement_payload_is_exact() {
+        let remote = future_anchor();
+        let events = with_ack(remote.clone(), Actor::Owner, |value| {
+            value["extra"] = json!(true)
+        });
+        assert!(matches!(
+            verify_chain(&events, Some(&remote)).anchor,
+            AnchorVerdict::Truncated { .. }
+        ));
+    }
+
+    // Catches a warning at exactly one day rather than strictly after it.
+    #[test]
+    fn unanchored_warning_starts_after_one_day() {
+        assert_eq!(
+            unanchored_warning("2026-09-25T00:00:00Z", "2026-09-26T00:00:00Z"),
+            Ok(false)
+        );
+        assert_eq!(
+            unanchored_warning("2026-09-25T00:00:00Z", "2026-09-26T00:00:01Z"),
+            Ok(true)
+        );
+    }
+
+    // Catches an accepted gap hidden after a later anchor lands.
+    #[test]
+    fn acknowledged_restores_remain_after_a_later_match() {
+        let events = with_work(
+            with_ack(future_anchor(), Actor::Owner, |_| {}),
+            "phase.declared",
+            "2026-09-25T18:00:01Z",
+        );
+        let landed = Anchor {
+            seq: 4,
+            hash: events[3].hash,
+        };
+        let report = verify_chain(&events, Some(&landed));
+        assert_eq!(report.anchor, AnchorVerdict::Matches);
+        assert_eq!(report.acknowledged_restores.len(), 1);
+    }
+
+    // Catches age measured from the old tag after an accepted restore.
+    #[test]
+    fn accepted_restore_ages_from_its_next_work() {
+        let remote = future_anchor();
+        let events = with_work(
+            with_ack(remote.clone(), Actor::Owner, |_| {}),
+            "phase.declared",
+            "2026-09-25T18:00:01Z",
+        );
+        let report = verify_chain(&events, Some(&remote));
+        assert_eq!(
+            report.age_unanchored_since.as_deref(),
+            Some("2026-09-25T18:00:01Z")
+        );
+    }
+
+    // Catches the acknowledge command's own completion starting the age.
+    #[test]
+    fn acknowledgement_completion_starts_no_age() {
+        let remote = future_anchor();
+        let events = with_work(
+            with_ack(remote.clone(), Actor::Owner, |_| {}),
+            crate::request::COMMAND_COMPLETED,
+            "2026-09-25T18:00:01Z",
+        );
+        assert_eq!(
+            verify_chain(&events, Some(&remote)).age_unanchored_since,
+            None
+        );
     }
 
     fn hex(text: &str) -> Hash {
@@ -635,7 +933,9 @@ mod tests {
                 head: None,
                 first_break: None,
                 anchor: AnchorVerdict::NoAnchor,
-                unanchored: None
+                unanchored: None,
+                acknowledged_restores: Vec::new(),
+                age_unanchored_since: None,
             }
         );
         let anchor = Anchor {

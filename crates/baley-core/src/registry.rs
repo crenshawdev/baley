@@ -12,7 +12,8 @@ use std::fmt;
 use serde_json::Value;
 
 use baley_store::{
-    ANCHOR_FAILED, ANCHOR_FAILED_VERSION, ANCHOR_PUSHED, ANCHOR_PUSHED_VERSION, Event, EventSchema,
+    ANCHOR_FAILED, ANCHOR_FAILED_VERSION, ANCHOR_PUSHED, ANCHOR_PUSHED_VERSION,
+    ANCHOR_RESTORE_ACKNOWLEDGED, ANCHOR_RESTORE_ACKNOWLEDGED_VERSION, Event, EventSchema,
     ProjectId,
 };
 
@@ -257,6 +258,11 @@ impl Registry {
 /// with a registry that holds them; `Registry::new` stays empty.
 pub fn register_anchor_events(registry: &mut Registry) -> Result<(), RegistryError> {
     registry.register(ANCHOR_PUSHED, ANCHOR_PUSHED_VERSION, [])?;
+    registry.register(
+        ANCHOR_RESTORE_ACKNOWLEDGED,
+        ANCHOR_RESTORE_ACKNOWLEDGED_VERSION,
+        [],
+    )?;
     registry.register(ANCHOR_FAILED, ANCHOR_FAILED_VERSION, [])
 }
 

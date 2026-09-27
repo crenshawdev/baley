@@ -23,14 +23,15 @@ pub mod time;
 pub mod view;
 
 pub use anchor::{
-    ANCHOR_FAILED, ANCHOR_FAILED_VERSION, ANCHOR_PUSH, ANCHOR_PUSHED, ANCHOR_PUSHED_VERSION,
-    ANCHOR_RECONCILE, ANCHOR_SCOPE, ANCHOR_STREAM, ANCHOR_TAG_PREFIX, AnchorPushedPayload,
-    anchor_command_event, anchor_tag,
+    ANCHOR_ACKNOWLEDGE_RESTORE, ANCHOR_FAILED, ANCHOR_FAILED_VERSION, ANCHOR_PUSH, ANCHOR_PUSHED,
+    ANCHOR_PUSHED_VERSION, ANCHOR_RECONCILE, ANCHOR_RESTORE_ACKNOWLEDGED,
+    ANCHOR_RESTORE_ACKNOWLEDGED_VERSION, ANCHOR_SCOPE, ANCHOR_STREAM, ANCHOR_TAG_PREFIX,
+    AnchorPushedPayload, RestoreAcknowledgedPayload, anchor_command_event, anchor_tag,
 };
 pub use canonical::{CanonicalError, MAX_SAFE_INTEGER, canonical_json};
 pub use chain::{
-    Anchor, AnchorVerdict, Break, BreakKind, ChainReport, ChainVerifier, Head, chain_hash,
-    verify_chain,
+    AcknowledgedRestore, Anchor, AnchorVerdict, Break, BreakKind, ChainReport, ChainVerifier, Head,
+    chain_hash, unanchored_warning, verify_chain,
 };
 pub use claim::{
     Block, CLAIM_SCOPE_VIEW, COMMAND_CLAIMED, COMMAND_CLAIMED_VERSION, COMMAND_RECONCILED,
@@ -50,10 +51,11 @@ pub use event::{
     SealError,
 };
 pub use ledger::{
-    Admin, BackupReport, Decide, DecideClaim, DecideReconcile, EVENT_PAGE_BOUND, EventSchema,
-    Health, HistoryFilter, Ledger, PayloadFault, ProjectHealth, PurgeReport, RebuildReport,
-    ScrubReport, StoredAnchor, StoredAnchorComparison, Transaction, VerifyReport, Views,
-    ViewsReport, compare_stored_anchor,
+    Admin, AnchorCheck, Building, ClaimCounts, Decide, DecideClaim, DecideReconcile,
+    EVENT_PAGE_BOUND, EventSchema, ExportReport, Health, HistoryFilter, Ledger, PayloadFault,
+    ProjectHealth, PurgeReport, RebuildReport, ScrubReport, StoredAnchor, StoredAnchorComparison,
+    Transaction, UnanchoredAge, VerifyReport, ViewHealth, Views, ViewsReport,
+    compare_stored_anchor,
 };
 pub use payload::{
     PayloadBody, PayloadRef, PayloadReference, PayloadStatus, Payloads, RetentionClass,
