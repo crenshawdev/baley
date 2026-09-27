@@ -215,7 +215,7 @@ flowchart TB
 
 *Figure 3. Only the binary and the adapter know the engine exists. `baley-core` cannot import rusqlite, so domain code cannot reach SQL.*
 
-The binary wires one adapter into the core at start-up. The binary crate also holds the inherited code until each build replaces it. Tests of the domain run against the real SQLite adapter in a temporary directory or in memory; no fake store exists.
+The binary wires one adapter into the core at start-up. The binary crate also holds the inherited code until each build replaces it. Tests of the domain run against the real SQLite adapter in a temporary directory or in memory; no fake store exists. Core tests that need a store live in the adapter's crate, which takes `baley-core` as a test dependency only, so the graph the binary builds is the one drawn here.
 
 #### The storage port
 
@@ -246,6 +246,7 @@ classDiagram
     +put_payload(bytes, class) PayloadRef
     +open_claims() Claims
     +head() Option~Head~
+    +record_anchor(anchor, tag, remote, observed_at)
   }
   class Views {
     <<trait>>
@@ -293,18 +294,31 @@ classDiagram
     +checked_seq
     +differing
   }
+  class VerifyReport {
+    +chain
+    +payloads
+    +bodies_checked
+    +tombstones_checked
+    +stored_anchor
+    +stored_anchor_comparison
+    +age_unanchored_since
+  }
   Ledger ..> Transaction : decide runs inside
   Ledger ..> Projector : runs after append
   Ledger ..> EventSchema : fences and upcasts with
   Transaction ..> Payloads : attachments
   Admin ..> RebuildReport : rebuild returns
   Admin ..> ViewsReport : verify_views returns
+  Ledger ..> VerifyReport : verify returns
 ```
 
-*Figure 4. The storage port. The decision runs inside the transaction with read access. `Transaction::head` is `None` for a project with no events, so an empty chain has nothing to anchor. The `Projector` and `EventSchema` traits are defined in `baley-store` (ADR 0010). The core implements domain projectors and the event type registry. The store-owned `request` and `claim_scope` projectors live in `baley-store` (ADR 0021). An adapter opened without the core's registry reads none of the core's types. `Search` arrives with slice 8.*
+*Figure 4. The storage port. The decision runs inside the transaction with read access. `Transaction::head` is `None` for a project with no events, so an empty chain has nothing to anchor. The `Projector` and `EventSchema` traits are defined in `baley-store` (ADR 0010). The core implements domain projectors and the event type registry. The store-owned `request` and `claim_scope` projectors live in `baley-store` (ADR 0021). An adapter opened without the core's registry reads none of the core's types. The anchor passed to `verify` is the latest anchor the core fetched through its forge seam; no store crate reaches the forge. `backup` and `doctor` take one fetched anchor per project until T12 replaces the map with a per-project `AnchorCheck` in the port: the core's fetch status, a remote anchor, absent, unreachable, malformed or local only, so neither operation takes an unchecked remote for a verified outside witness. `Search` arrives with slice 8.*
 
 - **`transact`** runs one command's decision. The caller does its slow work first (tests, model calls, git work) and passes the results in. The adapter takes the writer queue, opens the write transaction and checks that the project's live `request` view was built at this binary's projector version. It checks the request, then fences a new request if any of the project's live views or its view set was built by a newer binary, or if the project holds an event type or version this binary cannot read (see [Views and projectors](#views-and-projectors-evd-r9-evd-r10-evd-r27)). A replay is answered before those fences. `decide` reads through `Transaction` and returns the inputs its caller observed. The adapter re-checks documents and absences against the store and compares the caller-supplied git facts seen and now. Reading git inside the transaction is issue #40, for Build 4. A decision confirms authority against events where required and appends events. Any `Transaction` operation's error fails the command, and a stored payload must be attached to an event. The adapter runs the projectors, writes each changed document once, and commits. If any step fails, nothing is recorded (EVD-R5).
-- **Claims** use the same write path. `claim` records `command.claimed` and a lease before the effect, or records a refusal as `command.completed`. `renew_lease` changes only the lease row. `complete` records the acting owner's outcome and closes the claim, even after lease expiry if reconciliation has not closed it. `reconcile` records a finding and either closes an interrupted claim or holds it for the owner. `open_claims` pages through claimed and awaiting-owner request documents and joins their matching lease rows. These methods are on the SQLite adapter itself, as `transact` is, until T11 implements `Ledger`. The lease and scope rules, event shapes and `claim_scope` view are store-owned in `baley-store` (ADR 0021).
+- **Claims** use the same write path. `claim` records `command.claimed` and a lease before the effect, or records a refusal as `command.completed`. `renew_lease` changes only the lease row. `complete` records the acting owner's outcome and closes the claim, even after lease expiry if reconciliation has not closed it. `reconcile` records a finding and either closes an interrupted claim or holds it for the owner. `open_claims` pages through claimed and awaiting-owner request documents and joins their matching lease rows. The SQLite adapter implements `Ledger` by delegating to these write methods of its own, unchanged. The lease and scope rules, event shapes and `claim_scope` view are store-owned in `baley-store` (ADR 0021).
+- **`record_anchor`** writes the project's anchor row in the command's transaction, so the row commits or rolls back with its `anchor.pushed` event. It refuses a row unless an `anchor.pushed` event appended earlier in the same command carries exactly its tag, sequence, head, remote and time, and the tag is `baley-anchor/<project_id>/<seq>` for the command's project. A row already stored for the sequence must agree in every value, or the command is refused and nothing is written.
+- **`stream`, `history` and `head`** read stored events exactly as recorded, never upcast. `stream` returns a stream's events from a version on, in stream-version order; `history` returns a project's events in a sequence range, in sequence order, that have any of the named types (all types when none are named) and, when a commit is named, recorded it. Each page holds at most `min(limit, 100)` events, read with SQL `LIMIT`, and its cursor is bound to the project, the query and the page's last position; another query refuses it with `InvalidCursor`. `head` is `None` for a project with no events and `UnknownProject` for an absent one. None of the three reads a view, so they work on a project this binary may not write.
+- **`verify`** takes the anchor the core fetched from the forge, or none. It walks the project's whole chain through the pure verifier one stored event at a time, compares the latest local anchor row with the supplied anchor without trusting it, and streams every present body the project references and every excerpt a reduced body retains, hashing the uncompressed bytes and checking the stored length. The `VerifyReport` holds the chain report (`first_break`, the anchor verdict and the raw unanchored range), each missing or corrupt body, the bodies checked, the tombstones counted, the latest local row and its comparison (`NotCompared`, `Matches`, `MissingLocal`, `LocalBehind`, `LocalAhead` or `Conflict`), and the time the unanchored age runs from (see [The hash chain and anchors](#the-hash-chain-and-anchors-evd-r3)).
 - **`expect`** additionally names the stream that serializes a contested decision, so two commands that would both pass their own checks are ordered by one version counter. Each contested decision names its stream in [Serializing streams](#serializing-streams).
 - **Views** are declared by the core as a `ViewSpec`: a name, a version, a key shape, indexed fields, the ordering of each index and a page-size bound. `find` reads by a declared index, never by scan, and returns a page with a cursor. A cursor is bound to the query, project, generation and view version that issued it and refused under any other. One query runs against one read snapshot, the same snapshot in which the adapter checks the project's live view versions.
 - **`EventSchema`** is the core's registry of event types, handed to the adapter at open. `reads` says which types and versions this binary can read; a project holding any other is read-only for it. `projection_payload` gives an event's current type version and its payload upcast to that version. Projectors never see a stored event directly: ordinary projection and replay both hand them a copy carrying that version and payload.
@@ -338,11 +352,13 @@ Event types are named `<family>.<fact>` in the past tense, and each has a payloa
 
 `command.claimed` version 1 carries the kind, request id, digest, intent, scope and owner. `command.reconciled` version 1 carries the claim's kind and request id, claim sequence, finding and resolution (`resolved` or `awaiting_owner`). `command.completed` version 2 carries `scope`: the closed claim's tokens when it closes a claim, or `[]` otherwise. The store reads these events only at those exact versions. A project holding version 1 of `command.completed` is read-only for this binary. T10 requires a fresh ledger; ledgers written before the first release are disposable.
 
+The anchor command records its result on the `project` stream. `anchor.pushed` version 1 is exactly `{"tag", "seq", "head", "remote", "observed_at"}`: the tag confirmed on the remote, the pre-claim sequence and lower-case head hash it names, the configured remote's name (never a URL, never credentials) and the supplied time Baley confirmed the tag, which is not necessarily when the forge created it. `anchor.failed` version 1 carries the same five fields and `reason`: a refused, unreachable or missing remote at the push, or the mismatch that stopped it before the push. Both are core types, registered at version 1 by `baley_core::register_anchor_events` for any store that records anchors; `Registry::new` stays empty. The port defines their names, versions and the `anchor.pushed` codec, so the adapter can check an anchor row against its event.
+
 Streams used by the record families:
 
 | Stream | Examples of events |
 |---|---|
-| `project` | `project.initialized`, `project.described`, `scope.approved`, `forge.checked`, `policy.effective`, `checkout.seen` |
+| `project` | `project.initialized`, `project.described`, `scope.approved`, `forge.checked`, `policy.effective`, `checkout.seen`, `anchor.pushed`, `anchor.failed` |
 | `roadmap` | `phase.declared`, `phase.reordered`, `phase.withdrawn`, `requirement.declared`, `requirement.corrected`, `requirement.reassigned`, `requirement.reprioritized`, `requirement.dropped` ([0004](0004-starting-a-project-and-changing-scope.md)), `story.refined` ([0005](0005-context-plans-and-acceptance.md)) |
 | `phase/<n>` | `plan.approved`, `plan.checked`, `plan.replaced`, `sprint.retrospective` ([0005](0005-context-plans-and-acceptance.md)), `plan.admitted`, `dispatch.issued` (serializes one active dispatch per phase), the task, run, suite and plan outcome events of [0006](0006-execution.md), `phase.completed`, `completion.invalidated`, `phase.undone` |
 | `plan/<n>-<k>` | `plan.submitted`, `plan.approved`, `plan.superseded` |
@@ -377,7 +393,7 @@ A command is one request from a caller, carrying a request id and a scope: a lis
 2. **Act.** The external work runs outside any transaction.
 3. **Record.** One more transaction re-checks the claim and acting owner, records the result events and `command.completed`, and removes the lease. It carries the same digest and scope in the command. A changed scope is refused before the scope check. An owner resolution uses `reconcile` with an owner actor.
 
-**Active and interrupted claims.** A claim records its owner (process, host session and start time) and scope. The owner holds a lease and renews it every 10 seconds while it works. From supplied times, the lease is active strictly before the instant 60 seconds after its last renewal and interrupted at that instant. The row is liveness, not evidence: `claim_lease` lives outside the chain and is matched to the claim event by `claim_seq`. A missing or mismatched row means interrupted at once. Renewal records no event. A renewal by another owner, of a closed or held claim, at an invalid time, or before the matching row's time is refused. With no matching row, the floor is the claim event's time. The owner may renew an expired open claim or record its result after expiry, until reconciliation closes it.
+**Active and interrupted claims.** A claim records its owner (process, host session and start time) and scope. The owner holds a lease, renews it as soon as its claim commits, and then renews it every 10 seconds while it works. From supplied times, the lease is active strictly before the instant 60 seconds after its last renewal and interrupted at that instant. The row is liveness, not evidence: `claim_lease` lives outside the chain and is matched to the claim event by `claim_seq`. A missing or mismatched row means interrupted at once. Renewal records no event. A renewal by another owner, of a closed or held claim, at an invalid time, or before the matching row's time is refused. With no matching row, the floor is the claim event's time. The owner may renew an expired open claim or record its result after expiry, until reconciliation closes it.
 
 - A claim whose lease is current is **active**. It blocks only commands in its own scope; everything else proceeds.
 - A claim whose lease has expired is **interrupted**: its owner died or lost its connection. An interrupted claim can be reconciled automatically; a claim held for the owner needs the owner's reconciliation.
@@ -394,15 +410,26 @@ The command declares exact-string tokens. Slice 1 has `anchor` for anchor pushes
 
 **Reconciliation.** The caller checks interrupted claims on its first use of a project after starting, and when a scoped command receives `Blocked { Interrupted }`. The shared server performs the first-use check per project. The anchor command is the first scoped caller: it fetches the tag through the forge, judges the observation and retries its original request after resolution. An interrupted test run is recorded as interrupted; an interrupted provider call is recorded as undelivered and may be retried under a new request. A finding is recorded as `command.reconciled`, followed by the claim's completion when resolved and the reconciling command's own completion. An unreachable remote finds nothing, records nothing in the chain, writes a trace row and leaves the claim interrupted. Ambiguous real state, such as a half-applied revert, makes the `request` document `awaiting_owner`. It keeps blocking its scope, refuses automatic reconciliation and is resolved only through the owner's `reconcile`.
 
-A claim reconciled as not pushed can land late because leases measure liveness, not evidence. This is harmless for anchors because verification reads the remote. The finding carries `checked_at`, the time of the remote check, and a late owner record step receives the reconciliation's outcome as a replay.
+A claim reconciled as not pushed can land late because leases measure liveness, not evidence. This is harmless for anchors because verification reads the remote. The finding carries `checked_at`, the time of the remote check, not a promise that the tag stayed absent. A late owner record step receives the reconciliation's outcome as a replay and changes nothing; the anchor command reports it together with whether its own push said it landed.
 
-**Failures are outcomes.** An effect that fails cleanly (the remote refused the push, the provider returned an error) is a domain outcome: the record step commits `command.completed` with that result, and the claim is finished, not interrupted. A failed anchor push therefore never blocks work; the unanchored range grows, the next anchor point retries, and `doctor` warns once the unanchored range is more than a day old.
+**Failures are outcomes.** An effect that fails cleanly (the remote refused the push or could not be reached, the provider returned an error) is a domain outcome: the record step commits `command.completed` with that result, and the claim is finished, not interrupted. A failed anchor push therefore never blocks work; the unanchored range grows, the next anchor point retries, and `doctor` warns once the unanchored range is more than a day old.
+
+**The anchor push.** `baley-core::anchor` runs the anchor command over the port and a forge seam the binary supplies; each of its steps is also callable on its own over supplied observations.
+
+- *Request.* The digest binds the kind `anchor.push`, the project, the actor, the policy version, the configured remote's name and the scope `["anchor"]`. No head, sequence or tag enters it, so a retry of the same request keeps its digest while the head moves.
+- *Claim.* The decision reads the head once through `Transaction::head` and records it, with the remote's name, as the claim's intent. With no configured remote or no events it refuses on the merits and takes no lease. The tag is `baley-anchor/<project_id>/<seq>` for that pre-claim sequence, never the sequence of `command.claimed`.
+- *Heartbeat.* Once the claim commits, the command renews the lease at once and starts a ticker that renews it every 10 seconds, at times the binary's clock supplies, through the fetch, the verification and any push. A failed renewal is returned beside the outcome and never cancels the check or a permitted push; the record step's owner and claim checks decide the result. The ticker is stopped and joined before the record step on every path.
+- *Check.* Under that heartbeat the command fetches the latest remote anchor and verifies the whole local chain against it, as `verify` does. A chain that agrees with it may be pushed; with a confirmed absence of any anchor, a chain that verifies locally may be anchored for the first time. A truncated, rewritten or broken chain, or a malformed latest tag, refuses the anchor with a recorded outcome naming the mismatch and pushes nothing, so a rolled-back copy is never anchored even after it grows past the remote anchor. An unreachable remote, or none, at this fetch is recorded as a failed push is. Damaged payload bodies are reported and do not stop the anchor. The local anchor row never stands in for the remote.
+- *Record.* A confirmed tag records `anchor.pushed` and the anchor row in one transaction, as `done`. A refused, unreachable or missing remote at the push, or a refused check, records `anchor.failed` with its reason, as `refused`, and no row. The step carries the original request id, digest, scope and owner.
+- *Blocked.* When the claim meets `Blocked { Interrupted }`, the command reads that holder through `open_claims`, fetches the holder's own tag, takes `checked_at` from the clock right after the fetch, and reconciles under a separate `anchor.reconcile` command attributed to Baley, with an empty scope, recorded at `checked_at`, and a digest bound to the holder's claim, the observation and `checked_at`. A matching tag records `anchor.pushed` and the row at `checked_at`; a conflicting or malformed tag, or a confirmed absence, records `anchor.failed`. The original request then retries once, with its own identity and a fresh time, and its claim reads the head as it then stands. An unreachable remote, or none to ask, is unknown: one `claim.unreachable` trace row names the claim's kind, request id and sequence, nothing enters the chain and the claim stays interrupted. An active or awaiting-owner holder is left alone, and a reconciliation that loses a race to a renewal or completion stops without pushing.
+
+The anchor push changes no source, so it needs no authorization (0011, LND-R18). The triggers that call it (a verified phase, a milestone step, at least daily) arrive with slices 4 and 6; until then only the owner runs it.
 
 ```mermaid
 stateDiagram-v2
   [*] --> Active : claim transaction commits, lease taken
-  Active --> Active : lease renewed every 10 s
-  Active --> Completed : result recorded, success or clean failure
+  Active --> Active : lease renewed at once, then every 10 s
+  Active --> Completed : ticker stopped, result recorded, success or clean failure
   Active --> Interrupted : lease expires, owner gone
   Interrupted --> Active : owner renews
   Interrupted --> Completed : owner records before reconciliation
@@ -414,7 +441,7 @@ stateDiagram-v2
   Completed --> [*]
 ```
 
-*Figure 5. A command with an external effect. An active claim blocks only its scope. An interrupted claim can be reconciled automatically where the real state can be read; a held claim needs the owner's reconciliation. An unreachable remote is not a finding. A claim is never re-executed.*
+*Figure 5. A command with an external effect. An active claim blocks only its scope. An interrupted claim can be reconciled automatically where the real state can be read; a held claim needs the owner's reconciliation. An unreachable remote is not a finding. A claim is never re-executed. The owner stops renewing before it records.*
 
 ```mermaid
 sequenceDiagram
@@ -428,28 +455,46 @@ sequenceDiagram
   L->>C: decide reads the pre-claim head
   L->>Q: append command.claimed, project claim and scope, take lease, commit
   L-->>C: New with claim sequence
-  C->>F: perform external effect
-  loop every 10 seconds during the effect
-    C->>L: renew_lease with supplied time
-    L->>Q: update matching lease row without an event
+  C->>L: renew_lease at once with supplied time
+  par heartbeat
+    loop every 10 seconds until the ticker stops
+      C->>L: renew_lease with supplied time
+      L->>Q: update matching lease row without an event
+    end
+  and check and act
+    C->>F: fetch the latest remote anchor
+    F-->>C: observation
+    C->>L: verify(project, fetched anchor)
+    L-->>C: chain report and payload faults
+    alt chain agrees with the remote anchor, or no anchor yet and the chain verifies
+      C->>F: push the tag of the pre-claim head
+      F-->>C: pushed, refused, no remote or unreachable
+    else truncated, rewritten, broken, malformed or remote not read
+      C->>C: push nothing, keep the mismatch as the reason
+    end
   end
+  C->>C: stop and join the ticker
   C->>L: retry claim with same request id
   L-->>C: InProgress, no write and no second effect
   C->>L: complete(command, owner, decide)
-  L->>Q: check owner and scope, append result and command.completed, delete lease, commit
+  L->>Q: check owner and scope, append anchor.pushed and the anchor row or anchor.failed, then command.completed, delete lease, commit
   L-->>C: New outcome
   C->>L: retry claim after completion
   L-->>C: Replayed outcome, no write
   C->>L: scoped command meets an interrupted claim
   L-->>C: Blocked with Interrupted and claim id
   C->>F: fetch the remote tag named by the claim
-  F-->>C: observation
-  C->>L: reconcile from observation
-  L->>Q: append finding, claim completion and reconciling receipt, commit
-  C->>L: retry original scoped request id
+  F-->>C: observation, checked_at taken after it
+  alt remote read
+    C->>L: reconcile from observation under anchor.reconcile
+    L->>Q: append result event, finding, claim completion and reconciling receipt, commit
+    C->>L: retry original scoped request id once
+  else remote unreachable or none
+    C->>Q: one claim.unreachable trace row, nothing in the chain, claim stays interrupted
+  end
 ```
 
-*Figure 6. Claim, act and record. Leases renew outside the chain. An interrupted holder is reconciled from a remote observation before the blocked request retries.*
+*Figure 6. Claim, act and record, drawn for an anchor push. The lease is renewed as soon as the claim commits and every 10 seconds through the latest-anchor fetch, the verification and any push, outside the chain; the ticker is stopped before the record step whether the check refused or the push ran. An interrupted holder is reconciled from a fetch of its own tag before the blocked request retries once.*
 
 ```mermaid
 sequenceDiagram
@@ -545,9 +590,13 @@ Each project's events are chained in project-sequence order:
 
 `prev_hash` is stored with each event so a break is located without recomputing from the start. A payload enters the chain as its reference, so the chain commits to the content's hash and length, not its bytes: it proves what was committed to, and when, even after the body is purged.
 
-A chain whose head lives only in the database protects against accidents, not against someone who can rewrite the file and recompute every hash. So Baley anchors the head outside the machine. At every verified phase, every milestone step, and at least daily while a project is active, Baley pushes the tag `baley-anchor/<project_id>/<seq>`, whose annotation holds the sequence and head hash, to the project's forge remote. The repository's tag ruleset makes tags impossible to move or delete, for anyone. The anchor push is a command with an external effect and follows the claim, act, record steps.
+A chain whose head lives only in the database protects against accidents, not against someone who can rewrite the file and recompute every hash. So Baley anchors the head outside the machine. At every verified phase, every milestone step, and at least daily while a project is active, Baley pushes the tag `baley-anchor/<project_id>/<seq>`, whose annotation holds the sequence and head hash, to the project's forge remote. The annotation's first line is canonical JSON, `{"head":"<64 lower-case hex digits>","seq":<decimal>}`, and a line feed ends it (ADR 0007 records why anchors live on the forge). A reader takes only that first line, so a tag signature after it is ignored, requires exactly that form, and requires the tag's sequence to be the annotation's. A tag whose first line is anything else exists but is not an anchor: it is malformed, never absent. The repository's tag ruleset makes tags impossible to move or delete, for anyone. The anchor push is a command with an external effect and follows the claim, act, record steps ([The anchor push](#commands)). After claiming and before pushing, it checks the local chain against the latest remote anchor, as `verify` does, and refuses with a recorded outcome on a truncation, rewrite or rollback, so a restored or rewritten copy is never anchored, even once it grows past the remote anchor.
 
-`baley verify` walks the chain, recomputes every hash, checks every present payload against its hash, and compares the chain with the latest anchor fetched from the forge. It reports the first mismatch, a chain shorter than the anchor (truncation), or a head that differs from the anchor at the anchored sequence (rewrite or rollback). Changes after the latest anchor are checked against the local chain only; the report states the unanchored range. A project with no forge remote gets local verification only, and `doctor` says so.
+`baley verify` walks the chain, recomputes every hash, checks every present payload against its hash, and compares the chain with the latest anchor fetched from the forge. The core fetches it through its forge seam, as the project's anchor tag with the highest numeric sequence, parses it and hands it to `Ledger::verify`; no store crate reaches the forge. It reports the first mismatch, a chain shorter than the anchor (truncation), or a head that differs from the anchor at the anchored sequence (rewrite or rollback). Changes after the latest anchor are checked against the local chain only; the report states the unanchored range as raw sequences, the anchor command's own events included. The latest local anchor row is reported beside the remote anchor and compared with it, and a difference is reported, never repaired: a remote anchor newer than the row can be a push that landed before its record step.
+
+The core's report says what the fetch found: a remote anchor, a confirmed absence, an unreachable remote, a malformed latest tag, or local only for a project with no configured remote. Only a well-formed remote anchor is handed to the store as the outside witness; the local row never stands in for it. With the remote unreachable or its latest tag malformed, anchored verification is inconclusive, and the whole chain and every body are still checked locally. A project with no forge remote gets local verification only, and `doctor` says so.
+
+`doctor` measures the unanchored age from `VerifyReport.age_unanchored_since`: the recorded time of the earliest accepted event after the anchor that is not one of the anchor command's own. Those are its `command.claimed`, `anchor.pushed` or `anchor.failed`, and `command.reconciled`, and the `command.completed` of the push or of its `anchor.reconcile` reconciler. An idle project whose only unanchored events are anchor attempts therefore has no age and no warning. The adapter finds that time during the verification walk from stored times; T12's `doctor` compares it with its supplied time, for local-only projects too. No clock is read for it.
 
 The chain is per project, so one project's ledger can be exported and verified without the others (EVD-R15). Appending takes the database's single write lock, so a chain never forks.
 
@@ -759,10 +808,10 @@ erDiagram
   }
   ANCHOR {
     text project_id PK, FK
-    integer seq PK
+    integer seq PK "the pre-claim sequence the tag names"
     blob head_hash
     text tag
-    text pushed_at
+    text pushed_at "when Baley confirmed the tag"
   }
   CLAIM_LEASE {
     text project_id PK, FK
@@ -849,7 +898,7 @@ erDiagram
 
 *Figure 11. Tables of the SQLite adapter at compatibility epoch 1. `VIEW_DOC` stands for one table per view version, `v_<view>_<version>`, with a `k_` column per key field and an `i_` column per index field; `request` is an ordinary view, and its documents belong to their generation like any other view's. `SEARCH_ENTRY` is an FTS5 virtual table that arrives with slice 8.*
 
-Further tables: `schema_meta` (compatibility epoch, `schema_digest`, created and migrated times, and `scrub_pending`) and `trace` (diagnostics, outside the chain, size-capped, with an optional payload hash). A `claim_lease` row is liveness only, matched to its claim by `claim_seq`, and never rebuilt.
+Further tables: `schema_meta` (compatibility epoch, `schema_digest`, created and migrated times, and `scrub_pending`) and `trace` (diagnostics, outside the chain, size-capped, with an optional payload hash). A `claim_lease` row is liveness only, matched to its claim by `claim_seq`, and never rebuilt. An `anchor` row caches a tag Baley confirmed on the remote. `Transaction::record_anchor` writes it in the transaction that records its `anchor.pushed` event, so neither commits without the other, and a second row for the same sequence must agree in every value. The row is outside the chain and outside generation rebuilds, and it is never the witness `verify` compares against: it is reported beside the remote anchor, and a difference is reported, not corrected.
 
 `project_gen` holds each project's live generation and, while a rebuild or verification runs, the generation it builds and the last event applied to it. `view_gen` holds, per generation, each view's projector version and the view set version of the binary that built it. Per generation, a view's documents and its `view_gen` stamp belong to that generation; a rebuild or cleanup never touches events, payloads, references and their `released_seq`, anchors, checkouts, leases, trace rows, `schema_meta` or either catalog. `view_catalog` records each view version's spec, and `view_set_catalog` each view set version's sorted view names, seeded with version 1 as `request` alone and version 2 as `claim_scope request`. Both are global and independent of any project's generations: they say what a version means, not which project uses it.
 
@@ -932,7 +981,9 @@ Each process opens its own connection. SQLite's write-ahead log lets any number 
 
 **Compatibility epoch.** Every write transaction reads the compatibility epoch from `schema_meta` before anything else. A process whose epoch is older than the stored one stops writing, answers read-only, and tells the caller which binary is needed. Migrations raise the epoch in the same transaction that changes the schema, so an older process that is already running is fenced at its next write. Until the first release, the schema stays at epoch 1 and is edited in place: ledgers written before a release are disposable. `schema_meta` records the digest of the schema text at creation; a build with a different epoch-1 schema refuses to open the file and tells the owner to delete it, with no migration.
 
-**Checkpoints.** SQLite folds the write-ahead log into the database automatically every 1,000 pages. A reader that never finishes would stop that and let the log grow without bound; Baley's reads are short-lived by construction, apart from a view verification's comparison snapshot, which lasts one project's comparison; the server runs a passive checkpoint when idle. `baley doctor` reports the log size.
+**Verification.** `verify` opens a read-only connection of its own and holds one read transaction for the project's events, its latest anchor row, its references, bodies and excerpts, as a payload stream and a view comparison do. The store's read connection stays free, and commands keep committing beside it, unseen by the snapshot. It holds one stored event, or one 64 KiB chunk of one body, at a time, plus the report.
+
+**Checkpoints.** SQLite folds the write-ahead log into the database automatically every 1,000 pages. A reader that never finishes would stop that and let the log grow without bound; Baley's reads are short-lived by construction, apart from a view verification's comparison snapshot, which lasts one project's comparison, and a chain verification's snapshot, which lasts one project's walk; the server runs a passive checkpoint when idle. `baley doctor` reports the log size.
 
 #### Opening the store
 
@@ -1021,6 +1072,9 @@ The domain rules are owned, specified and tested by the area design documents ([
 | Lease state and the 60-second expiry | [0001: The evidence ledger](0001-evidence-ledger.md) | `baley-store::claim::lease_state`, enforced by the shared command path |
 | Scope blocking by exact token | [0001: The evidence ledger](0001-evidence-ledger.md) | The `claim_scope` view and `baley-store::claim::blocking`, run by the store for every command |
 | Anchor reconciliation judgement | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md), LND-R18 | `baley-core::reconcile`, recorded as `command.reconciled` |
+| The anchor command's kind, scope, result event types and versions, the `anchor.pushed` payload, the tag name, and which events are the command's own | [0001: The evidence ledger](0001-evidence-ledger.md), with [0011](0011-milestones-landing-undo-pause.md) LND-R18 | `baley-store::anchor`, read by both the core and the adapter |
+| The anchor command: pre-claim intent, stable digest, latest-anchor check before the push, heartbeat, record and reconciliation from the command, and the tag annotation codec | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md), LND-R18 | `baley-core::anchor` and `baley-core::forge`; recorded as `command.claimed`, `anchor.pushed` or `anchor.failed`, and `command.completed` |
+| An anchor row only beside its `anchor.pushed` event, and chain, body and anchor-row verification | [0001: The evidence ledger](0001-evidence-ledger.md), EVD-R3 | The adapter's `Transaction::record_anchor` and `Ledger::verify` |
 | A plan's approval binds its exact submitted content, the owner and the time | [0005: Context, plans and acceptance](0005-context-plans-and-acceptance.md), PLN-R15 | `plan.approved` carries the submission digest, owner and time; admission confirms it against the event |
 | Plan replay is scoped to its phase occurrence | [0005: Context, plans and acceptance](0005-context-plans-and-acceptance.md), PLN-R15 | Request scope (project, command kind) plus the phase in the digest |
 | Completion binds context, publications, admissions and task and plan history, and stops applying when any of them changes or execution is undone | [0007: Verification](0007-verification.md), VER-R13 | The `phase` view computes applicability from the bound facts; `completion.invalidated` is projected when a bound fact changes; completion is confirmed against events when used |
@@ -1049,7 +1103,7 @@ See [Threat model](#threat-model) for who is defended against.
 - **Agent isolation (EVD-R24).** Agents run as the owner's user, so file modes cannot keep them out. The barrier is the host's sandbox: Baley's setup adds a rule to each host's configuration that denies agents writes to Baley's home, and reads where the host can. Claude Code's sandbox denies named paths for reading and writing. Codex's `workspace-write` sandbox confines agent writes to the workspace but grants full disk read under every policy, so on Codex an agent can read the ledger and cannot change it. That read permission is Codex's sandbox policy, not Baley's to change, and it applies to everything the owner's user can read, not to the ledger in particular; Baley does not claim to hide the ledger from a process running as the owner. What Baley guarantees without read isolation: writes are refused, tampering is detected by the chain and the anchors, and API keys are stored encrypted with the master key in the OS secret store (0003, CFG-R24); nothing else sensitive is kept outside payloads, and payloads can be purged. The host matrix showed on both hosts that agents are blocked from writing while Baley's server and hook still write. As a second, best-effort layer, the guard refuses file-tool writes into the home and shell commands that name it.
 - **Detection.** Anchors on the forge make a rewrite, truncation or rollback detectable up to the latest anchor, even by an agent that can run `sqlite3` and sign with the owner's key.
 - **Secrets.** Test output and review material can carry secrets. They are always payloads, so they can always be purged, with the limits stated in [Payloads, retention and purge](#payloads-retention-and-purge-evd-r11-evd-r14). The existing fence that screens outbound review payloads stays.
-- **Network.** The store makes no network calls. Anchors are pushed with git to the project's own remote.
+- **Network.** The store makes no network calls. Anchors are pushed with git to the project's own remote, and the latest anchor is fetched from it, through the core's forge seam; the binary implements that seam, and the store only receives the fetched anchor. A remote is named in the ledger by its configured name, never by URL or credentials.
 
 ### Failure modes and recovery
 
@@ -1057,7 +1111,7 @@ See [Threat model](#threat-model) for who is defended against.
 |---|---|---|---|
 | Process killed in a database-only command | SQLite rolls back the uncommitted transaction | The command did not happen | Retry with the same request id |
 | Process killed after a claim, during or after the external effect | The claim's lease expires | Commands in the claim's scope return `Blocked` naming the claim and its state; other work continues | Reconcile against the real state; a finding records `command.reconciled` |
-| Remote unreachable during reconciliation | The remote observation is unreachable | Nothing is recorded in the chain; a trace row names the attempt and the claim stays interrupted | Retry reconciliation after the remote is reachable |
+| Remote unreachable, or none configured, during reconciliation of an interrupted anchor claim | The fetch of the claim's own tag is unreachable, or there is no remote to ask | Nothing is recorded in the chain; one `claim.unreachable` trace row names the claim's kind, request id and sequence, and the claim stays interrupted | Retry reconciliation after the remote is reachable |
 | A claim awaits the owner | The `request` document is `awaiting_owner` | Commands in its scope return `Blocked { AwaitingOwner }` | The owner's `reconcile` resolves it |
 | `claim_scope` and `request` disagree on a holder | The scope check validates the holder's request identity, sequence and token | The scoped command fails with nothing written | `verify --views` shows the difference; rebuild repairs it |
 | Power loss after acknowledgement | None needed | Nothing is lost (`synchronous=FULL`) | None |
@@ -1074,7 +1128,9 @@ See [Threat model](#threat-model) for who is defended against.
 | Older process after an upgrade | Epoch check in its next write | Read-only, naming the needed binary | Restart with the new binary |
 | Migration fails | Transaction error | Refused; database unchanged; backup kept | Report the bug; the old binary still works |
 | Unsafe home or a network filesystem | Checks on open | Refused with the reason and the fix | Fix modes or ownership, or set `BALEY_HOME` to a local path |
-| Anchor push fails cleanly (remote unreachable or refused) | `command.completed` with the failure | Nothing blocks; `doctor` warns once the unanchored range is over a day old | Retried at the next anchor point |
+| Anchor push fails cleanly (remote unreachable, refused or missing at the push or at the latest-anchor fetch) | `anchor.failed` and `command.completed` refused, the claim completed | Nothing blocks; `doctor` warns once the unanchored range, not counting the anchor command's own events, is over a day old | Retried at the next anchor point |
+| Local chain behind or different from the latest remote anchor at an anchor push, as after a restore of an older copy | The latest-anchor fetch and the chain comparison, after the claim and before the push | `anchor.failed` and a refused outcome naming the mismatch (truncation, rewrite or break); nothing is pushed, and every later anchor refuses the same way | T12's owner-only acknowledge-restore command, built with backup and restore, records the rollback as an event naming the restored head and the latest remote anchor it falls behind; anchoring then resumes from the restored chain, and `verify` reports the acknowledged gap instead of a rollback |
+| Remote unreachable or latest tag malformed at `verify` | The core's latest-anchor fetch | The report says the remote could not be checked or its tag is not an anchor; the chain and bodies are checked locally and nothing is taken as the outside witness | Verify again once the remote is reachable; a malformed tag is itself evidence to report |
 | Write-ahead log grows | Log size in doctor | Warning in doctor | Idle checkpoint; find the long reader |
 | Purge scrub held back by an open reader, or interrupted | The truncating checkpoint's row reports busy; `scrub_pending` remains | Scrub incomplete; `doctor` shows it pending | Close the reader and run the scrub |
 | A backup in the home cannot be rewritten | The backup rewrite fails or skips it | Listed as unreachable | Fix or delete that backup file |
@@ -1096,7 +1152,7 @@ Budgets on the reference workload, and what the benchmark measured: p99 unless s
 | Longest rebuild batch | 100 ms | 43 ms (99) | 38 ms (39) |
 | Rebuild's final flip | 50 ms | 2.8 ms (4.1) | 4.4 ms (4.8) |
 
-Size budget: the reference workload stores in at most 50 MB, counting the database, its write-ahead log after a checkpoint, and every payload body under default retention, with retired prompt text included. **Measured: 24.5 MB**, against 175 MB for the same history in the JSON store. Memory: no operation loads more than its answer; the server's resident memory does not grow with the store. The prototype has no long-running server, so this is verified during the build.
+Size budget: the reference workload stores in at most 50 MB, counting the database, its write-ahead log after a checkpoint, and every payload body under default retention, with retired prompt text included. **Measured: 24.5 MB**, against 175 MB for the same history in the JSON store. Memory: no operation loads more than its answer; the server's resident memory does not grow with the store. `verify` costs one walk of the project's events and one read and decompression of every present body it references; no latency budget is set for it, and it holds one event or one 64 KiB body chunk at a time. The prototype has no long-running server, so this is verified during the build.
 
 A rebuild batch is timed from acquiring the writer queue to releasing it, commit included and the wait to acquire it excluded; the pause after it is not part of it. The final flip is the last turn of a rebuild, measured the same way: reading the head, applying the tail and moving `live_gen`.
 
@@ -1116,7 +1172,7 @@ SQLite's limits sit far beyond these numbers: 281 TB per database and about 1 GB
 
 ### Observability
 
-- `baley doctor` reports the compatibility epoch, `integrity_check`, chain verification against the latest anchor per project, view verification, write-ahead log size, database size by record family and retention class, view versions and lag, active, interrupted and awaiting-owner claims, the age of the unanchored range, and backups present.
+- `baley doctor` reports the compatibility epoch, `integrity_check`, chain verification against the latest anchor per project, view verification, write-ahead log size, database size by record family and retention class, view versions and lag, active, interrupted and awaiting-owner claims, the age of the unanchored range, and backups present. The age runs from the earliest unanchored event that is not the anchor command's own (see [The hash chain and anchors](#the-hash-chain-and-anchors-evd-r3)), and each project's chain result says what the latest-anchor fetch found: a remote anchor, absent, unreachable, malformed, or local only. An unchecked remote is shown apart from a local-only project, and neither is shown as anchored.
 - The `trace` table records diagnostics (timings, retries, busy waits) outside the chain, with its own size cap and rotation.
 - Every refusal carries a stable code and the facts that caused it, as refusals do today.
 
@@ -1191,7 +1247,7 @@ Slices:
 
 | Requirement | How it is proven |
 |---|---|
-| EVD-R2, R3 | Conformance tests append events, verify the chain, then in a copy of the database in a temporary directory: alter, insert, delete and reorder rows; recompute the whole chain after an edit; truncate the tail; restore an older copy. Against a local anchor fixture, `verify` names the first bad position, the truncation or the rollback. |
+| EVD-R2, R3 | Conformance tests append events, verify the chain, then in a copy of the database in a temporary directory: alter, insert, delete and reorder rows; recompute the whole chain after an edit; truncate the tail; restore an older copy. Against a local anchor fixture, `verify` names the first bad position, the truncation or the rollback. T11's unit tests prove the mechanism the conformance suite (T13) then runs in full: against a supplied anchor naming another head `verify` reports a rewrite, and past the head a truncation; a body corrupted in place is corrupt while the chain holds, a purged body is a tombstone, a reduced body's retained excerpt is hashed and a corrupt excerpt faults beside its tombstone; a local row behind or conflicting with the remote anchor is reported as such; no remote, an absent tag and an unreachable remote each give their own status with no anchor compared; a rolled-back chain is refused before the push even after it grows past the remote anchor; the anchor command's own events start no unanchored age while the project's work does. |
 | EVD-R5 | A conformance test fails a projector mid-command and asserts no event, view change, payload, reference or outcome was recorded. |
 | EVD-R6 | Replay of a request id with the same digest returns the original outcome; with a different digest it is refused; two sessions using the same id for different command kinds do not collide. |
 | EVD-R7 | A command whose view input, absence query or HEAD changes between its slow work and its transaction is refused as stale. |
@@ -1209,7 +1265,7 @@ Slices:
 | EVD-R21 | The benchmark harness measures every budget on the reference workload. Timings are measured, not asserted in tests, because timing is not portable. |
 | EVD-R24 | The host matrix, run by hand on both hosts before acceptance (done 2026-09-25, `spikes/host-matrix`), and again before each release. |
 | EVD-R25 | `show` and `export` render every record family from views. |
-| EVD-R26 | T10 proves the store half with fixture decisions: commands outside an active claim's scope proceed, commands inside return `Blocked`, an in-progress retry does not repeat the effect, and a clean failure completes the claim. A caller can reconcile an interrupted claim from a supplied observation; an awaiting-owner claim is resolved only with `ReconcileAuthority::Owner`. T11 proves the anchor call path, and slice 6 proves a real revert held for the owner. |
+| EVD-R26 | T10 proves the store half with fixture decisions: commands outside an active claim's scope proceed, commands inside return `Blocked`, an in-progress retry does not repeat the effect, and a clean failure completes the claim. A caller can reconcile an interrupted claim from a supplied observation; an awaiting-owner claim is resolved only with `ReconcileAuthority::Owner`. T11 proves the anchor call path in separate units: the claim step acts only after its claim event exists and names the pre-claim head; missing remote, in-progress, replayed and blocked requests do not act; refused and unreachable pushes complete the claim with `anchor.failed`; a successful record writes `anchor.pushed`, the completion and the row together, and a conflicting row leaves all three unwritten; matching, conflicting and absent holder tags reconcile and retry once under the original identity; an unreachable holder fetch writes one trace row and leaves the claim open; the heartbeat renews at once, ticks through the work and stops before the record step, and a failed renewal cancels nothing. Slice 6 proves a real revert held for the owner. |
 | EVD-R27 | An edited view document that says "approved" or "complete" does not grant admission or completion, because the event is missing. |
 | EVD-R28 | Withdrawn. |
 
