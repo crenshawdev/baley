@@ -71,7 +71,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | LND-R15 | Undo reverts a sprint's task commits, newest first, in `committed` mode (one signed revert commit per task commit) or `staged` mode (the reverts left in the index). The manifest comes from the sprint's recorded task closes only; a sprint with pushed commits is refused (`already-pushed`); the tree must be clean and no revert, cherry-pick or merge in progress; each revert is claimed before it runs and a conflict stops with the conflicting paths recorded; an interrupted revert is reconciled before anything continues. One undo per sprint; the sprint returns to Planned (0004 Figure 1). | Work is taken back exactly as it was recorded, and never twice. | EXE-R4, SYS-P7 | Active |
 | LND-R16 | Pause makes a work-in-progress commit of the paths the active dispatch authorized, then records `pause.recorded` with the preserved HEAD, branch, policy version, dispatch and the next step in one sentence. Resume checks every binding and records `pause.resumed`; a binding that moved is refused naming it. Next action offers the resume only for the sprint that was paused. | Work is put down whole and picked up where it was. | EXE-R17, CFG-R8 | Active |
 | LND-R17 | An owner's stop halts the sprint's work at once, holds through restarts, and is lifted only by the owner's resume, with or without a checkpoint. A stop is never refused. | The owner said stop. | SYS-P5, EXE-R19 | Active |
-| LND-R18 | Baley pushes an anchor tag at each verified sprint, each milestone step and each landing, and at least daily while a project is active, as an external step needing no authorization (it changes no source); a failed anchor push is an outcome, recorded and retried on the next occasion. | Rewrite and rollback are detectable from outside the machine. | ADR 0007 | Active |
+| LND-R18 | Baley pushes an anchor tag at each verified sprint, each milestone step and each landing, and at least daily while a project is active, as an external step needing no authorization (it changes no source). The tag names the head as it stood before the push was claimed. After claiming and before pushing, Baley checks the local chain against the latest remote anchor and, when the chain is behind it or differs, records a refusal naming the mismatch and pushes nothing. A failed anchor push (refused, unreachable, or no remote) is an outcome, recorded as `anchor.failed` and retried on the next occasion. | Rewrite and rollback are detectable from outside the machine. | ADR 0007 | Active |
 | LND-R19 | Every refusal in this area is recorded with its reason and facts, and a replayed request is answered from the record. | The owner can see why a landing did not move. | EVD-R26 | Active |
 
 ## 4. Roles and actors
@@ -163,7 +163,9 @@ Owner commands under `baley land`, `baley milestone`, `baley release`, `baley un
 
 ### anchor.pushed, anchor.failed (events, `project` stream)
 
-Tag name, sequence, head hash, remote; or the failure reason.
+Version 1 of each. `anchor.pushed` is exactly `{"tag", "seq", "head", "remote", "observed_at"}`: the tag `baley-anchor/<project_id>/<seq>`, the pre-claim sequence and lower-case head hash it names, the configured remote's name, and when Baley confirmed the tag. The anchor row is written in the same transaction. `anchor.failed` carries the same five fields and `reason`: the remote's refusal, an unreachable or missing remote, or the chain mismatch found before the push; no row is written. The tag's annotation, one canonical JSON line with the head and sequence, is settled in ADR [0007](../adr/0007-forge-anchors.md) and [0001](0001-evidence-ledger.md) (The hash chain and anchors).
+
+Reconciling an interrupted push records the same events: `anchor.pushed` and the row at the check time when the remote holds the matching tag, `anchor.failed` when it holds another or confirms none. A push that lands after reconciliation found its tag absent is harmless: the claim keeps the reconciled outcome, and verification reads the remote.
 
 ### Views
 
@@ -264,11 +266,18 @@ sequenceDiagram
   O->>B: land checkout, land pull, land tag, land reap
   B->>G: checkout base, pull --ff-only, tag, branch -d
   B->>L: landing.step per cleanup, landing.completed
-  B->>F: push anchor tag
-  B->>L: anchor.pushed
+  B->>L: command.claimed anchor.push, intent the head before the claim
+  B->>F: fetch the latest anchor tag
+  B->>L: verify the chain against it
+  alt the chain agrees
+    B->>F: push the anchor tag
+    B->>L: anchor.pushed and the anchor row, or anchor.failed
+  else the chain is behind or differs
+    B->>L: anchor.failed naming the mismatch, nothing pushed
+  end
 ```
 
-*Figure 4. Landing a sprint on GitHub.*
+*Figure 4. Landing a sprint on GitHub. The anchor at the end follows the claim, check, act and record steps of [0001](0001-evidence-ledger.md) (Commands, The anchor push); the landing that triggers it arrives with slice 6.*
 
 ```mermaid
 sequenceDiagram
@@ -371,7 +380,7 @@ The binary crate holds the inherited engine; its landing, milestone and undo pat
 | LND-R15 | Built | `crates/baley/src/undo/manifest.rs:30-171`, `crates/baley/src/undo/revert.rs:36-109`, `crates/baley/src/undo_service.rs:189-311`; no pushed check |
 | LND-R16 | Not reachable | `crates/baley/src/pause_service.rs:1275` has no MCP route (`crates/baley/src/server.rs:127-134`) |
 | LND-R17 | Partly built | Stop as an owner answer (`crates/baley/src/execution_service.rs:451-465`) |
-| LND-R18 | Not built | Anchors are designed in 0001 and not yet pushed by any code |
+| LND-R18 | Partly built | The anchor command, its latest-anchor check and its recorded outcomes (`crates/baley-core/src/anchor.rs`, `crates/baley-core/src/forge.rs`); the triggers at verified sprints, milestone steps, landings and daily arrive with slices 4 and 6, and the git forge adapter with the CLI |
 | LND-R19 | Built | Receipts per namespace (`crates/baley/src/milestone_service.rs:253-549`, `crates/baley/src/landing_service.rs:310-316`) |
 
 ## 12. Open questions

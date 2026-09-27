@@ -11,7 +11,10 @@ use std::fmt;
 
 use serde_json::Value;
 
-use baley_store::{Event, EventSchema, ProjectId};
+use baley_store::{
+    ANCHOR_FAILED, ANCHOR_FAILED_VERSION, ANCHOR_PUSHED, ANCHOR_PUSHED_VERSION, Event, EventSchema,
+    ProjectId,
+};
 
 /// Why an upcaster could not read a stored payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -247,6 +250,14 @@ impl Registry {
         }
         fences
     }
+}
+
+/// Registers the anchor command's result events, `anchor.pushed` and
+/// `anchor.failed`, at version 1. A store that records anchors is opened
+/// with a registry that holds them; `Registry::new` stays empty.
+pub fn register_anchor_events(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.register(ANCHOR_PUSHED, ANCHOR_PUSHED_VERSION, [])?;
+    registry.register(ANCHOR_FAILED, ANCHOR_FAILED_VERSION, [])
 }
 
 /// The store fences a project holding an event this binary cannot read:

@@ -143,6 +143,7 @@ dependencies = [
 name = "baley-store-sqlite"
 version = "0.1.0"
 dependencies = [
+ "baley-core",
  "baley-store",
  "rusqlite",
  "serde_json",

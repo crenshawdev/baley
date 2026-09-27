@@ -715,14 +715,27 @@ fn next(
     rows.next().transpose().map_err(sql)
 }
 
-/// The project's events after a sequence, in order, bounded in SQL.
-const EVENTS_AFTER: &str = "SELECT seq, stream, stream_version, type, type_version, actor,
-        recorded_at, request_id, git_commit, git_tree, git_checkout, policy_version,
-        payload_json, prev_hash, hash
-   FROM event WHERE project_id = ?1 AND seq > ?2 ORDER BY seq LIMIT ?3";
+/// The event columns `stored_event` reads, in its order.
+macro_rules! event_columns {
+    () => {
+        "seq, stream, stream_version, type, type_version, actor, recorded_at, request_id,
+         git_commit, git_tree, git_checkout, policy_version, payload_json, prev_hash, hash"
+    };
+}
+pub(crate) use event_columns;
 
-/// One row of `EVENTS_AFTER` as the stored event.
-fn stored_event(project: &ProjectId, row: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
+/// The project's events after a sequence, in order, bounded in SQL.
+const EVENTS_AFTER: &str = concat!(
+    "SELECT ",
+    event_columns!(),
+    " FROM event WHERE project_id = ?1 AND seq > ?2 ORDER BY seq LIMIT ?3"
+);
+
+/// One row of `event_columns!()` as the stored event.
+pub(crate) fn stored_event(
+    project: &ProjectId,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<Event> {
     let bad = |at: usize, what: String| {
         rusqlite::Error::FromSqlConversionFailure(at, rusqlite::types::Type::Text, what.into())
     };

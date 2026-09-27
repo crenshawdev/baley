@@ -129,32 +129,49 @@ impl ChainReport {
     }
 }
 
-/// Walks `events` in the order given, recomputing every hash from the
-/// event's own fields, and compares the result with `anchor`. The stored
-/// `prev_hash` and `hash` are checked against the recomputation, never
-/// trusted: a chain whose stored links agree with each other but not with
-/// its contents is broken at the first event whose recomputed hash differs.
-pub fn verify_chain<'a>(
-    events: impl IntoIterator<Item = &'a Event>,
-    anchor: Option<&Anchor>,
-) -> ChainReport {
-    let mut head: Option<Head> = None;
-    let mut project: Option<ProjectId> = None;
-    let mut first_break = None;
-    // Set when the walk accepts the anchored sequence.
-    let mut reached: Option<AnchorVerdict> = None;
+/// The pure verifier fed one stored event at a time, so an adapter can walk
+/// a whole chain without holding it. [`verify_chain`] is the same walk over
+/// an iterator.
+#[derive(Debug, Clone)]
+pub struct ChainVerifier {
+    anchor: Option<Anchor>,
+    head: Option<Head>,
+    project: Option<ProjectId>,
+    first_break: Option<Break>,
+    /// Set when the walk accepts the anchored sequence.
+    reached: Option<AnchorVerdict>,
+}
 
-    for event in events {
-        let expected_seq = head.as_ref().map_or(1, |head| head.seq + 1);
-        let expected_prev = head.as_ref().map(|head| head.hash);
+impl ChainVerifier {
+    /// A walk that will compare the chain with `anchor`, if any.
+    pub fn new(anchor: Option<&Anchor>) -> Self {
+        Self {
+            anchor: anchor.cloned(),
+            head: None,
+            project: None,
+            first_break: None,
+            reached: None,
+        }
+    }
+
+    /// Checks the next event in stored order, recomputing its hash from its
+    /// own fields. True when it is accepted; false when it is the first bad
+    /// position, and for every event after one, which is not examined.
+    pub fn push(&mut self, event: &Event) -> bool {
+        if self.first_break.is_some() {
+            return false;
+        }
+        let expected_seq = self.head.as_ref().map_or(1, |head| head.seq + 1);
+        let expected_prev = self.head.as_ref().map(|head| head.hash);
         let kind = if event.seq != expected_seq {
             Some(BreakKind::Sequence { found: event.seq })
-        } else if project
+        } else if let Some(project) = self
+            .project
             .as_ref()
-            .is_some_and(|project| *project != event.project_id)
+            .filter(|project| **project != event.project_id)
         {
             Some(BreakKind::Project {
-                expected: project.clone().expect("checked"),
+                expected: project.clone(),
             })
         } else if event.prev_hash != expected_prev {
             Some(BreakKind::PrevHash {
@@ -169,15 +186,15 @@ pub fn verify_chain<'a>(
                     found: event.hash,
                 }),
                 Ok(hash) => {
-                    project.get_or_insert_with(|| event.project_id.clone());
-                    head = Some(Head {
+                    self.project.get_or_insert_with(|| event.project_id.clone());
+                    self.head = Some(Head {
                         seq: event.seq,
                         hash,
                     });
-                    if let Some(anchor) = anchor
+                    if let Some(anchor) = &self.anchor
                         && anchor.seq == event.seq
                     {
-                        reached = Some(if anchor.hash == hash {
+                        self.reached = Some(if anchor.hash == hash {
                             AnchorVerdict::Matches
                         } else {
                             AnchorVerdict::Rewritten {
@@ -191,39 +208,65 @@ pub fn verify_chain<'a>(
                 }
             }
         };
-        if let Some(kind) = kind {
-            first_break = Some(Break {
-                seq: expected_seq,
-                kind,
-            });
-            break;
+        match kind {
+            Some(kind) => {
+                self.first_break = Some(Break {
+                    seq: expected_seq,
+                    kind,
+                });
+                false
+            }
+            None => true,
         }
     }
 
-    let head_seq = head.as_ref().map_or(0, |head| head.seq);
-    let anchor_verdict = match (anchor, reached) {
-        (None, _) => AnchorVerdict::NoAnchor,
-        (Some(_), Some(verdict)) => verdict,
-        (Some(anchor), None) if first_break.is_some() => AnchorVerdict::Unchecked {
-            anchored: anchor.seq,
-        },
-        (Some(anchor), None) => AnchorVerdict::Truncated {
-            anchored: anchor.seq,
-            head: head_seq,
-        },
-    };
-    let unanchored_from = match anchor {
-        None => 1,
-        Some(anchor) => anchor.seq + 1,
-    };
-    let unanchored = (head_seq >= unanchored_from).then_some(unanchored_from..=head_seq);
-
-    ChainReport {
-        head,
-        first_break,
-        anchor: anchor_verdict,
-        unanchored,
+    /// The first sequence no anchor covers: after the anchored sequence,
+    /// or 1 without an anchor.
+    pub fn unanchored_from(&self) -> u64 {
+        self.anchor.as_ref().map_or(1, |anchor| anchor.seq + 1)
     }
+
+    /// The report for the events pushed so far.
+    pub fn finish(self) -> ChainReport {
+        let unanchored_from = self.unanchored_from();
+        let head_seq = self.head.as_ref().map_or(0, |head| head.seq);
+        let anchor_verdict = match (&self.anchor, self.reached) {
+            (None, _) => AnchorVerdict::NoAnchor,
+            (Some(_), Some(verdict)) => verdict,
+            (Some(anchor), None) if self.first_break.is_some() => AnchorVerdict::Unchecked {
+                anchored: anchor.seq,
+            },
+            (Some(anchor), None) => AnchorVerdict::Truncated {
+                anchored: anchor.seq,
+                head: head_seq,
+            },
+        };
+        let unanchored = (head_seq >= unanchored_from).then_some(unanchored_from..=head_seq);
+        ChainReport {
+            head: self.head,
+            first_break: self.first_break,
+            anchor: anchor_verdict,
+            unanchored,
+        }
+    }
+}
+
+/// Walks `events` in the order given, recomputing every hash from the
+/// event's own fields, and compares the result with `anchor`. The stored
+/// `prev_hash` and `hash` are checked against the recomputation, never
+/// trusted: a chain whose stored links agree with each other but not with
+/// its contents is broken at the first event whose recomputed hash differs.
+pub fn verify_chain<'a>(
+    events: impl IntoIterator<Item = &'a Event>,
+    anchor: Option<&Anchor>,
+) -> ChainReport {
+    let mut verifier = ChainVerifier::new(anchor);
+    for event in events {
+        if !verifier.push(event) {
+            break;
+        }
+    }
+    verifier.finish()
 }
 
 #[cfg(test)]
@@ -537,6 +580,21 @@ mod tests {
                 }
             })
         );
+    }
+
+    // Fed one event at a time, the verifier refuses the first bad event and
+    // every event after it, and the head stays where the break left it.
+    // Catches an adapter walk that keeps accepting rows past a break.
+    #[test]
+    fn the_incremental_verifier_stops_at_the_first_break() {
+        let mut events = chain(4);
+        events[1].payload = json!({"phase": 1, "title": "Foundations"});
+        let mut verifier = ChainVerifier::new(None);
+        let accepted: Vec<bool> = events.iter().map(|event| verifier.push(event)).collect();
+        assert_eq!(accepted, [true, false, false, false]);
+        let report = verifier.finish();
+        assert_eq!(report.head.map(|head| head.seq), Some(1));
+        assert_eq!(report.first_break.map(|at| at.seq), Some(2));
     }
 
     // An empty chain has no head, no break and nothing unanchored; with an
