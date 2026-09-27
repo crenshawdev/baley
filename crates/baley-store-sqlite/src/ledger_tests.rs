@@ -1662,9 +1662,10 @@ fn doctor_reports_raw_view_versions_and_building_lag() {
     f.raw().execute("UPDATE project_gen SET building_gen = 5, building_applied_seq = 1 WHERE project_id = ?1", [&project().0]).expect("marker");
     let health = f.store.doctor(T2, &local_checks()).expect("doctor");
     let entry = &health.projects[0];
-    assert_eq!(entry.view_set, (Some(1), 2));
+    let raw_views = entry.raw_views.as_ref().expect("raw views");
+    assert_eq!(raw_views.view_set, (Some(1), 2));
     assert_eq!(
-        entry
+        raw_views
             .views
             .iter()
             .map(|view| (view.view.as_str(), view.live_version, view.binary_version))
@@ -1672,12 +1673,42 @@ fn doctor_reports_raw_view_versions_and_building_lag() {
         vec![("claim_scope", Some(0), 1), ("request", Some(1), 2)]
     );
     assert_eq!(
-        entry.building,
+        raw_views.building,
         Some(baley_store::Building {
             generation: 5,
             applied_seq: 1,
             lag: head.seq - 1
         })
+    );
+}
+
+// Catches one project's malformed building marker aborting the whole doctor run.
+#[test]
+fn doctor_keeps_a_bad_building_marker_inside_its_entry() {
+    let f = Fixture::new();
+    let other = ProjectId("other".into());
+    f.store.create_project(&other, "Other", T0).expect("other");
+    f.raw()
+        .execute(
+            "INSERT INTO project_gen (project_id, live_gen, building_gen, building_applied_seq) VALUES (?1, 0, 5, -1)",
+            [&other.0],
+        )
+        .expect("bad marker");
+    let checks = BTreeMap::from([
+        (project(), AnchorCheck::LocalOnly),
+        (other.clone(), AnchorCheck::LocalOnly),
+    ]);
+    let health = f.store.doctor(T2, &checks).expect("doctor");
+    assert_eq!(health.projects.len(), 2);
+    assert_eq!(health.projects[0].project, project());
+    assert!(health.projects[0].verify.is_ok());
+    assert!(health.projects[0].raw_views.is_ok());
+    assert_eq!(health.projects[1].project, other);
+    assert_eq!(
+        health.projects[1].raw_views,
+        Err(StoreError::Unavailable(
+            "malformed building sequence".into()
+        ))
     );
 }
 

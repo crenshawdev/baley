@@ -53,9 +53,9 @@ pub use event::{
 pub use ledger::{
     Admin, AnchorCheck, Building, ClaimCounts, Decide, DecideClaim, DecideReconcile,
     EVENT_PAGE_BOUND, EventSchema, ExportReport, Health, HistoryFilter, Ledger, PayloadFault,
-    ProjectHealth, PurgeReport, RebuildReport, ScrubReport, StoredAnchor, StoredAnchorComparison,
-    Transaction, UnanchoredAge, VerifyReport, ViewHealth, Views, ViewsReport,
-    compare_stored_anchor,
+    ProjectHealth, PurgeReport, RawViewHealth, RebuildReport, ScrubReport, StoredAnchor,
+    StoredAnchorComparison, Transaction, UnanchoredAge, VerifyReport, ViewHealth, Views,
+    ViewsReport, compare_stored_anchor,
 };
 pub use payload::{
     PayloadBody, PayloadRef, PayloadReference, PayloadStatus, Payloads, RetentionClass,

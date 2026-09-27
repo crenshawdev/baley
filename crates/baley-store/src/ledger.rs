@@ -502,12 +502,8 @@ pub struct ProjectHealth {
     pub remote_absent_local_row: Option<StoredAnchor>,
     /// Age of unanchored work.
     pub unanchored: UnanchoredAge,
-    /// Raw version of each registered view in the live generation.
-    pub views: Vec<ViewHealth>,
-    /// Live view-set version and this binary's version.
-    pub view_set: (Option<u32>, u32),
-    /// Unfinished building generation, if any.
-    pub building: Option<Building>,
+    /// Raw view stamps and building marker, or their read error.
+    pub raw_views: Result<RawViewHealth, StoreError>,
     /// Replay verification of the views.
     pub views_check: Result<ViewsReport, StoreError>,
     /// Open claims judged at the supplied time.
@@ -517,12 +513,23 @@ pub struct ProjectHealth {
 /// Whether the unanchored age could be checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnanchoredAge {
-    /// No trustworthy remote observation was available.
+    /// Remote unreachable or malformed, verification failed, or stored work time unreadable.
     Unchecked,
     /// No unanchored work event was accepted.
     None,
     /// The first work event and whether it is more than one day old.
     Since { since: String, warning: bool },
+}
+
+/// Raw view state for one project's live generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawViewHealth {
+    /// Version of each registered view in the live generation.
+    pub views: Vec<ViewHealth>,
+    /// Live view-set version and this binary's version.
+    pub view_set: (Option<u32>, u32),
+    /// Unfinished building generation, if any.
+    pub building: Option<Building>,
 }
 
 /// One registered view's stored and current version.

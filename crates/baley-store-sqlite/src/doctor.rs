@@ -5,7 +5,8 @@ use std::fs;
 
 use baley_store::{
     AnchorCheck, Building, ClaimCounts, ClaimState, Health, Ledger, ProjectHealth, ProjectId,
-    Refusal, StoreError, UnanchoredAge, UtcInstant, ViewHealth, claim_state, unanchored_warning,
+    RawViewHealth, Refusal, StoreError, UnanchoredAge, UtcInstant, ViewHealth, claim_state,
+    unanchored_warning,
 };
 use rusqlite::OptionalExtension;
 
@@ -75,7 +76,7 @@ impl SqliteStore {
         let mut health = Vec::with_capacity(projects.len());
         for (project, _) in projects {
             let check = checks.get(&project).expect("checked above").clone();
-            let (views, view_set, building) = self.snapshot(|conn| {
+            let raw_views = self.snapshot(|conn| {
                 let live = live_views(conn, &project)?;
                 let views = self.views().tables().map(|table| {
                     let version = live.stamps.get(&table.spec().name).map(|stamp| u32::try_from(stamp.projector).map_err(|_| bad("view version"))).transpose()?;
@@ -91,8 +92,8 @@ impl SqliteStore {
                     let applied_seq = u64::try_from(applied_seq).map_err(|_| bad("building sequence"))?;
                     Ok(Building { generation, applied_seq, lag: live.head.saturating_sub(applied_seq) })
                 }).transpose()?;
-                Ok((views, (set, self.views().version().get()), building))
-            })?;
+                Ok(RawViewHealth { views, view_set: (set, self.views().version().get()), building })
+            });
             let witness = match &check {
                 AnchorCheck::Remote(anchor) => Some(anchor),
                 _ => None,
@@ -142,9 +143,7 @@ impl SqliteStore {
                 verify,
                 remote_absent_local_row,
                 unanchored,
-                views,
-                view_set,
-                building,
+                raw_views,
                 views_check,
                 claims,
             });

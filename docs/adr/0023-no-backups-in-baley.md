@@ -6,7 +6,7 @@
 | Date | 2026-09-27 |
 | Deciders | John Crenshaw |
 | Design document | [0001: The evidence ledger](../design/0001-evidence-ledger.md) |
-| Supersedes | [0003: Keep one ledger database per user, outside any checkout](0003-per-user-database.md), in part |
+| Supersedes | [0003](0003-per-user-database.md), in part: the automatic backup before a migration and verified backups as a safeguard; [0016](0016-key-store.md), in part: keys kept out of backups |
 | Superseded by | |
 
 ## Context and problem
