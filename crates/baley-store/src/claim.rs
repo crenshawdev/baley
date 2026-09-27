@@ -49,7 +49,7 @@ pub struct ClaimId {
     pub request_id: RequestId,
 }
 
-/// A claim not yet completed, active or interrupted.
+/// A claim not yet completed, active, interrupted or awaiting the owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claim {
     pub id: ClaimId,
@@ -89,9 +89,8 @@ pub enum ClaimDecision {
 pub enum Claimed {
     /// The claim committed; the caller may act.
     New { seq: u64 },
-    /// The same request holds an open claim: the effect is under way or
-    /// was interrupted. Nothing was recorded, and the effect must not run
-    /// again.
+    /// The same request holds an open claim: active, interrupted or awaiting
+    /// the owner. Nothing was recorded, and the effect must not run again.
     InProgress(Claim),
     /// The request was completed before, with the same digest. Nothing was
     /// recorded; this is its outcome.

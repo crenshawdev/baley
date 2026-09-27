@@ -127,8 +127,8 @@ impl SqliteStore {
     /// until migration exists, and a missing schema is created under the
     /// writer queue with `at` as its creation time. An existing file whose
     /// epoch-1 schema digest differs is refused before any write; T10 needs
-    /// a fresh ledger. A store at this
-    /// binary's epoch must be in write-ahead-log mode with 8 KiB pages.
+    /// a fresh ledger at epoch 1. A store at this binary's epoch must be in
+    /// write-ahead-log mode with 8 KiB pages.
     /// The declared views and the view set version's names are checked
     /// before anything is touched, and at this binary's epoch their missing
     /// tables, indexes and catalog rows are created through the write path;
@@ -158,7 +158,7 @@ impl SqliteStore {
         let writer = connect(&path)?;
 
         let epoch = match stored_epoch(&writer)? {
-            Some(epoch) => {
+            Some(epoch) if epoch == EPOCH => {
                 let digest = writer
                     .query_row(
                         "SELECT value FROM schema_meta WHERE key = 'schema_digest'",
@@ -172,6 +172,7 @@ impl SqliteStore {
                 }
                 epoch
             }
+            Some(epoch) => epoch,
             None => {
                 create(&writer, &queue, at)?;
                 stored_epoch(&writer)?

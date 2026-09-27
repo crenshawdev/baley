@@ -873,7 +873,7 @@ mod tests {
         let text: String = f
             .raw()
             .query_row(
-                "SELECT payload_json FROM event WHERE type = 'command.reconciled'",
+                "SELECT payload_json FROM event WHERE type = 'command.reconciled' AND stream = 'command/anchor.push'",
                 [],
                 |row| row.get(0),
             )

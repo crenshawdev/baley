@@ -1226,7 +1226,7 @@ The conformance suite lives in `baley-store` and runs against every adapter.
 - [ADR 0007: Anchor chain heads on the forge](../adr/0007-forge-anchors.md)
 - [ADR 0008: Use host sandboxes to keep agents out of the ledger](../adr/0008-host-sandbox-isolation.md)
 - [ADR 0009: Serve instructions from the binary; files on disk are stubs](../adr/0009-served-instructions.md)
-- [ADR 0010: Define the projector and event schema traits in the port](../adr/0010-projector-traits-in-the-port.md), superseded in part by ADR 0021
+- [ADR 0010: Define the projector and event schema traits in the port](../adr/0010-projector-traits-in-the-port.md), superseding ADR 0005 in part, superseded in part by ADR 0021
 - [ADR 0021: Claim liveness and scope rules in the port](../adr/0021-claim-rules-in-the-port.md)
 
 ## Future work
