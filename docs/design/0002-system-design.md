@@ -142,7 +142,7 @@ Every area document applies these.
 | SYS-P9 | **Instructions are part of the binary.** Every instruction a model sees is compiled into Baley and served in bounded parts by id. Files a host must load (skills, agent definitions) are stubs Baley renders ([ADR 0009](../adr/0009-served-instructions.md)). |
 | SYS-P10 | **A small, typed wire.** Few MCP tools, typed operations, operation names that are only ever added. Nothing is sent twice and nothing is echoed back. A refusal names a code and a place. |
 | SYS-P11 | **Enforcement by mechanism.** A rule that matters is enforced by Baley or its guard, never by prose asking the model to comply. The guard checks git commands and file writes at the host's edge; the host sandbox keeps agents from writing Baley's home and config folder, and on Claude Code from reading them ([ADR 0008](../adr/0008-host-sandbox-isolation.md), [ADR 0020](../adr/0020-sandbox-is-a-write-barrier.md)). |
-| SYS-P12 | **Host neutrality.** Everything works with Claude Code or Codex as the host. Each wire, tool or instruction decision is judged on both, and the host that offers less sets the floor. Every capability reaches every agent, not only the main session. |
+| SYS-P12 | **Host neutrality.** Everything works with Claude Code or Codex as the host. Each wire, tool or instruction decision is judged on both, and the host that offers less sets the floor: the whole process works on either host at that floor. A host that offers more may offer more, as an addition its adapter declares; no step of the process depends on an addition, and on a host without it Baley states that it is unavailable there ([ADR 0029](../adr/0029-a-host-may-offer-more.md)). Every capability reaches every agent, not only the main session. |
 
 ## 7. Inside Baley
 
@@ -342,6 +342,7 @@ Decision records this design produces.
 - Settings in TOML, global and project, with host sections (SYS-R13): [ADR 0015](../adr/0015-settings-in-toml.md), superseded in part by ADR 0027
 - Baley's own crenshawdev folders and provider keys in a plain `keys.env` (SYS-R11, SYS-R12, SYS-R13): [ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)
 - One HTTP stack on tokio and hyper, with axum hosting the MCP server over HTTP (SYS-R2): [ADR 0028](../adr/0028-one-http-stack.md)
+- The host that offers less sets the floor, and a host may offer more as a declared addition (SYS-P12): [ADR 0029](../adr/0029-a-host-may-offer-more.md)
 
 ## 12. Open questions
 
