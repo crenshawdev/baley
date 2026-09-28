@@ -48,7 +48,6 @@ The binary writes the empty tree with `git hash-object -t tree -w --stdin`, writ
 ### Negative
 
 - Settings keyed to the remote's name, including `remote.<name>.push` and `remote.<name>.receivepack`, do not apply to the anchor push. A remote with several push URLs cannot anchor.
-
 - A forge's presentation of a tag on a tree may be less useful than its presentation of a release tag on a commit.
 - The tagger names Baley, not a cryptographically authenticated person. The forge's access and immutability rules still matter.
 - Objects are written into the checkout's object store even though no local ref is retained.

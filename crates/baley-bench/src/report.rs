@@ -54,7 +54,7 @@ pub fn aggregate(values: &[f64]) -> (f64, f64) {
     };
     (median, *sorted.last().unwrap())
 }
-/// Row names, units and budgets in design 0001.
+/// Measured rows with their units and design 0001's budgets.
 pub const ROWS: &[(&str, &str, Option<f64>)] = &[
     ("Open with checks (slice 1)", "ms", Some(10.0)),
     ("Commit a command", "ms", Some(20.0)),
