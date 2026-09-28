@@ -6,7 +6,7 @@
 | Design issue | [#48](https://github.com/crenshawdev/baley/issues/48); build issue [#26](https://github.com/crenshawdev/baley/issues/26) |
 | Requirement prefix | REV |
 | Applies | [0002: System design](0002-system-design.md) |
-| Related | ADRs: [0007](../adr/0007-forge-anchors.md), [0009](../adr/0009-served-instructions.md), [0013](../adr/0013-host-session-calls-outside-models.md), [0019](../adr/0019-reviews-adjudicated-and-ruled.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
+| Related | ADRs: [0007](../adr/0007-forge-anchors.md), [0009](../adr/0009-served-instructions.md), [0013](../adr/0013-host-session-calls-outside-models.md), [0019](../adr/0019-reviews-adjudicated-and-ruled.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
 
 The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
 
@@ -55,7 +55,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 |---|---|---|---|---|
 | REV-R1 | A review has exactly one trigger (`plan`, `diff`, `risk_surface`) or one kind (`minimalism`, `decision`, `diagnosis`). Triggered reviews carry the trigger's gate; on-demand kinds have no gate. | One shape, two ways in. | | Active |
 | REV-R2 | Gates: `off` raises no review; `advisory` lets work continue once the round is delivered and adjudicated; `deferred` queues the review and lets work continue until landing; `blocking` and `adjudicated` hold the work until every finding of the current round has an owner ruling. A round with no findings settles on delivery. Pending, interrupted or failed delivery never lets work continue. | The owner sets how strictly each review holds the work; nothing clears a gate but a ruling. | SYS-P5 | Active |
-| REV-R3 | Every reviewer in `review.reviewers` runs on every triggered review; there is no mode. The `host` reviewer is the host's own subagent routed by `roles.reviewer.*`; a provider reviewer uses the model of `review.providers.<p>.tiers.<trigger tier>` and the effort of `review.triggers.<t>.effort`. A provider with no model for the tier, or no key when a key is needed, is named as not run; an empty usable set falls back to `host`. A reviewer that could not run never counts as a pass. | Every configured voice is heard, and a missing one is visible. | CFG-R12, CFG-R28 | Active |
+| REV-R3 | Every reviewer in `review.reviewers` runs on every triggered review; there is no mode. The `host` reviewer is the host's own subagent routed by `roles.reviewer.*`; a provider reviewer uses the model of `review.providers.<p>.tiers.<trigger tier>` and the effort of `review.triggers.<t>.effort`. A provider with no model for the tier is named as not run at admission. Admission does not read `keys.env`. When a provider's call fails for any reason (`baley exec --key` refusing with `no-such-key` because `keys.env` has no line for it, the provider unreachable, or any other failure of the call), the failure is recorded as `review.failed`; a key refusal from `baley exec --key` has kind `launch`. In place of a provider that is not run or whose call failed, the `host` reviewer, the host's own subagent routed by `roles.reviewer.*`, is issued and reviews like any host review. When `host` is already in `review.reviewers`, no second host review runs, and the provider stays recorded as not run or failed. A reviewer that could not run never counts as a pass. | Every configured voice is heard, a missing one is visible, and a review never goes without a reviewer because a provider could not be reached. | CFG-R12, CFG-R27, CFG-R28 | Active |
 | REV-R4 | Baley builds one review work order per reviewer: the material by hash, the trigger's intent, the finding schema, and for a provider the complete prompt and request. The host session makes the outside call and returns the typed findings; Baley never calls a provider. Keys reach the call only through `baley exec --key` (SYS-R11). The prompt is measured against `review.max_prompt_tokens` and refused when over (`prompt-too-large`); the call is bounded by `review.request_timeout_ms`. | Responsibility stays with the party that acts, and cost stays bounded. | SYS-R9, SYS-R11, SYS-P2 | Active |
 | REV-R5 | Material is acquired once at admission, retained as `material` payloads by content hash, and never replaced by current source. A committed range is read from git; a staged tree from the index; a plan from its approved payload with the sprint's context and stories. Material past the source bound is refused naming the file and size. | Every reviewer and the owner see the same bytes, and the record can show them later. | EVD-R11, EVD-R14 | Active |
 | REV-R6 | A reviewer returns findings only, each with file, line, severity, claim and failure scenario; at most 100 per round; a finding missing a field is refused (`finding-shape`) and the return fails. The raw return is retained. An empty list is a valid result only after a real attempt; a launch or transport failure is recorded as a failure, never as an empty review. | Findings are data the owner can rule on; a failure is not a pass. | SYS-P3 | Active |
@@ -79,7 +79,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | Actor | Receives | Returns | Model and effort from |
 |---|---|---|---|
 | Owner | Adjudicated findings with fix options; the deferred queue; filing candidates | Rulings (fix, track, dismiss with reason); the word to file; declines | Not applicable |
-| Reviewer `host` (dispatched) | The review work order: material, intent, finding schema | Findings | `roles.reviewer.*` ([0003](0003-configuration-and-routing.md)) |
+| Reviewer `host` (dispatched, also in place of a provider that cannot be called) | The review work order: material, intent, finding schema | Findings | `roles.reviewer.*` ([0003](0003-configuration-and-routing.md)) |
 | Provider reviewer (called by the host session) | The complete prompt and request Baley built | Findings, the provider's model and usage | `review.providers.<p>.tiers.<tier>`, `review.triggers.<t>.effort` |
 | Host session | Work orders; findings to adjudicate | The outside call's result; the adjudication; the owner's rulings | Not applicable |
 | Baley: this area | Admissions, returns, rulings, filing requests | Work orders, refusals, settlement, records | Not applicable |
@@ -92,7 +92,7 @@ Operations are typed operations on the host interface; the owner-only ones are a
 ### review admit
 
 - **Inputs:** the trigger (from 0005, 0006 or 0009) or the kind (from the owner); the target; the caller.
-- **Outputs:** the review id, the gate, the reviewers that will run and those named as not run, one work order per reviewer.
+- **Outputs:** the review id, the gate, the reviewers that will run and those named as not run (a provider with no model for the tier), with the `host` reviewer in place of a provider named as not run unless `host` already runs (REV-R3), one work order per reviewer. Admission does not read `keys.env`.
 - **Refusals:**
 
   | Code | When | Requirement |
@@ -154,7 +154,7 @@ Operations are typed operations on the host interface; the owner-only ones are a
 
 ### review.issued, review.returned, review.failed (events)
 
-`review.issued`: reviewer, round, work order id. `review.returned`: reviewer, round, findings (payload reference), observed model, usage (input, output, reasoning tokens as integers or unknown), duration. `review.failed`: reviewer, round, kind (`launch`, `transport`, `malformed`, `interrupted`), detail.
+`review.issued`: reviewer, round, work order id. `review.returned`: reviewer, round, findings (payload reference), observed model, usage (input, output, reasoning tokens as integers or unknown), duration. `review.failed`: reviewer, round, kind (`launch`, `transport`, `malformed`, `interrupted`), detail. A key refusal from `baley exec --key` during an outside review (`no-such-key`, `keys-file-exposed`, `keys-file-invalid`) is a failed call like any other: it is recorded with kind `launch` and triggers the host fallback of REV-R3.
 
 ### finding (part of `review.returned`)
 
@@ -202,6 +202,7 @@ stateDiagram-v2
   [*] --> Admitted: review.admitted
   Admitted --> Running: review.issued per reviewer
   Running --> Running: review.returned, review.failed
+  Running --> Running: a provider call failed, host reviewer issued in its place unless host already runs
   Running --> Interrupted: a reviewer exited without returning
   Interrupted --> Running: review continue rerun
   Interrupted --> Closed: review continue close
@@ -254,9 +255,21 @@ sequenceDiagram
       R-->>H: findings
       H->>B: review return
     and provider
-      H->>P: baley exec --key openai -- call with Baley's request
-      P-->>H: findings, model, usage
-      H->>B: review return
+      H->>P: baley exec --key OPENAI_API_KEY -- call with Baley's request
+      alt call succeeds
+        P-->>H: findings, model, usage
+        H->>B: review return
+      else call fails (no-such-key, unreachable or any other failure)
+        H->>B: review return with the failure
+        B->>L: review.failed
+        opt host is not already a reviewer
+          B->>L: review.issued for the host reviewer
+          B-->>H: host reviewer work order in its place
+          H->>R: launch
+          R-->>H: findings
+          H->>B: review return
+        end
+      end
     end
     B->>L: review.returned per reviewer
     alt no findings
@@ -334,7 +347,7 @@ sequenceDiagram
 |---|---|---|
 | Reviewer | The `host` reviewer and, inside the provider prompt, each provider: refute, do not bless; a finding needs a file, a line and a concrete failure; approach differences are not findings; no inflation, no softening; empty only after a real attempt; return findings only, in the schema | REV-R6 |
 | Adjudicator | The host session, as the review stub: for each finding open the code it names and decide whether it holds; drop what does not, with the reason; merge duplicates across reviewers; write each survivor in plain words with the options for fixing it; bring them to the owner; never apply a fix | REV-R7, REV-R8 |
-| Outside call | The host session: make the provider call through `baley exec --key <provider>` with the request Baley built, unchanged; return the typed findings and the provider's reported model and usage | REV-R4, REV-R19 |
+| Outside call | The host session: make the provider call through `baley exec --key` with the request Baley built, unchanged; return the typed findings and the provider's reported model and usage | REV-R4, REV-R19 |
 | Review stubs | The host session: which operation `review`, `review queue` and `findings file` call | REV-R14, REV-R15 |
 
 ## 11. Build status

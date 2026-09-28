@@ -63,7 +63,7 @@ Baley starts with an empty store (the old records are not imported), so the reco
 |---|---|---|
 | Accidental failure: crash, power loss, disk error, a bug | Leave a transaction half-done, corrupt pages | SQLite transactions and durability, `integrity_check`, and `verify` on any restored copy |
 | A person or program editing the database outside Baley | Change rows directly | The hash chain detects naive edits; forge anchors detect edits that recompute the chain |
-| An agent running as the owner's user | Everything the owner's files allow, including running `sqlite3` on the database and signing with the owner's cached GPG key | The host sandbox denies the agent access to Baley's home (prevention); the guard refuses file tools and shell commands that name the home (best effort); forge anchors detect a rewrite, truncation or rollback of anything before the latest anchor (detection) |
+| An agent running as the owner's user | Everything the owner's files allow, including running `sqlite3` on the database and signing with the owner's cached GPG key | The host sandbox denies the agent writes to Baley's home and config folder on both hosts, and reads of them on Claude Code (prevention); the guard refuses file tools and shell commands that name the home (best effort); forge anchors detect a rewrite, truncation or rollback of anything before the latest anchor (detection) |
 | Another local user | Read or write files they have access to | Private file modes and ownership checks on every open |
 | A remote attacker | Nothing directly | The store makes no network calls; only the chain head is pushed to the forge |
 
@@ -90,15 +90,15 @@ Identifiers are stable. Requirements changed by the review keep their number; ne
 | EVD-R13 | Recorded text can be searched with relevance ranking, scoped by project and phase, with semantics defined independently of the engine. | Replaces custom recall index |
 | EVD-R14 | Payload bodies can be removed by retention policy or by command without breaking EVD-R3 or EVD-R10. Retention applies per reference. Each removal is an event in the chain of the project that makes it, and removes every derived copy Baley manages. | Goal 5 |
 | EVD-R15 | A project's ledger can be exported as a standalone database that verifies on its own. | Goal 5 |
-| EVD-R16 | There is one database per user, outside any checkout, in the platform data directory on Linux and macOS. `BALEY_HOME` overrides the location. | Goal 5 |
+| EVD-R16 | There is one database per user, outside any checkout, in Baley's data folder under the crenshawdev vendor folder: `$XDG_DATA_HOME/crenshawdev/baley` on Linux and `~/Library/Application Support/crenshawdev/baley` on macOS. `BALEY_HOME` overrides the location. | Goal 5 |
 | EVD-R17 | A checkout maps to its project through a committed project file holding the project id. No record holds a filesystem identity. | Goal 5 |
 | EVD-R18 | Baley never writes its records into the working tree. The only working-tree writes are the ones named in [Working-tree writes](#working-tree-writes). | Goal 6 |
 | EVD-R19 | The database carries a compatibility epoch, checked in every write transaction. A process that finds a newer epoch stops writing. Migrations run in one transaction. Views only ever rebuild forward. Stored events are never rewritten. | Development builds share the machine |
 | EVD-R20 | A command acknowledged to its caller survives power loss. | Goal 1 |
 | EVD-R21 | Performance and size budgets hold on the reference workload, measured before acceptance, as set out in [Performance](#performance). | Goal 3 |
 | EVD-R22 | The store files are owned by and private to the owning user. Every open checks ownership, modes and symbolic links on the real database path. | Records hold source and output |
-| EVD-R23 | The store refuses to open on a network filesystem, judged at the real database path, and says why. | SQLite write-ahead log constraint |
-| EVD-R24 | The design works with Claude Code and Codex as host, proven by the host matrix. Each host's sandbox denies agents writes to Baley's home while Baley's server and hook can still write it; Claude Code's sandbox also denies reads, Codex's does not. The ledger's integrity never depends on reads being denied. | Host neutrality; threat model |
+| EVD-R23 | Withdrawn. The store makes no filesystem check; a data folder on a network share is not supported, because SQLite's write-ahead log does not work over a network filesystem ([Location, layout and file safety](#location-layout-and-file-safety-evd-r16-evd-r22), [ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)). | |
+| EVD-R24 | The design works with Claude Code and Codex as host, proven by the host matrix. Each host's sandbox denies agents writes to Baley's home and to its config folder while Baley's server and hook can still write the home; Claude Code's sandbox also denies reads of both, Codex's does not. The ledger's integrity never depends on reads being denied. | Host neutrality; threat model |
 | EVD-R25 | An owner can see the state and history of any record without reading files: through the CLI, through the MCP document query, and through an explicit export. | Replaces Markdown copies |
 | EVD-R26 | A command with an effect outside the database claims its request and records its intent before acting, and records the result after. Retries and duplicates never repeat the effect. An active claim blocks only its own scope; an interrupted claim (lease expired) is reconciled before work in its scope continues. | External effects cannot be rolled back |
 | EVD-R27 | A decision that grants authority (admission, completion, landing, release) confirms its deciding facts against events inside its transaction, so an edited view cannot grant authority. | Views are derived data |
@@ -168,7 +168,7 @@ flowchart TB
   class host,checkout external
 ```
 
-*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. The host's sandbox keeps its agents out of Baley's home; only Baley's own processes reach the database.*
+*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. The host's sandbox keeps its agents from writing Baley's home and config folder, and on Claude Code from reading them; only Baley's own processes write the database.*
 
 ### Terms
 
@@ -971,11 +971,11 @@ Indexes: `event(project_id, stream, stream_version)` unique; `event(project_id, 
 
 Connection settings: `journal_mode=WAL`, `synchronous=FULL`, `foreign_keys=ON`, `secure_delete=ON`, `busy_timeout=5000`, page size 8 KiB. rusqlite's bundled build compiles SQLite from source (3.53.2 with rusqlite 0.40.1) with FTS5 enabled, so no system SQLite is used.
 
-#### Location, layout and file safety (EVD-R16, EVD-R22, EVD-R23)
+#### Location, layout and file safety (EVD-R16, EVD-R22)
 
 Until slice 2, the command line reads `BALEY_HOME` only. It refuses an unset or empty value, a path that is not an existing directory, or a home with no `baley.db`; it does not create a ledger. Platform location and the safety checks below arrive in slice 2.
 
-The target home directory is `BALEY_HOME` if set, otherwise the platform data directory: `$XDG_DATA_HOME/baley`, falling back to `~/.local/share/baley`, on Linux; `~/Library/Application Support/baley` on macOS.
+The target home directory is `BALEY_HOME` if set, otherwise Baley's data folder under the crenshawdev vendor folder: `$XDG_DATA_HOME/crenshawdev/baley`, falling back to `~/.local/share/crenshawdev/baley` when `XDG_DATA_HOME` is unset, empty or relative, on Linux; `~/Library/Application Support/crenshawdev/baley` on macOS. Each crenshawdev application has its own folder there, and nothing is shared at the vendor level ([ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)).
 
 ```
 <home>/
@@ -986,7 +986,9 @@ The target home directory is `BALEY_HOME` if set, otherwise the platform data di
   baley.db.maintenance  the lock a rebuild or view verification holds
 ```
 
-From slice 2, on every open, Baley resolves the real path of the database and checks: the home and database are owned by the current user; the home is mode 0700 and the files 0600, and anything more permissive is refused with the fix named; neither the home nor the database is a symbolic link; and the filesystem holding the real database path is local. Exports are created private. Settings are TOML files, one global and one per project ([0002](0002-system-design.md), SYS-R13); where they live is set by [0003: Configuration and routing](0003-configuration-and-routing.md) (CFG-R2, CFG-R3).
+From slice 2, on every open, Baley resolves the real path of the database and checks: the home and database are owned by the current user; the home is mode 0700 and the files 0600, and anything more permissive is refused with the fix named; and neither the home nor the database is a symbolic link. Exports are created private. Settings are TOML files, one global and one per project ([0002](0002-system-design.md), SYS-R13), and provider keys are lines in `keys.env`; where they live is set by [0003: Configuration and routing](0003-configuration-and-routing.md) (CFG-R2, CFG-R3, CFG-R24). On macOS the global file `config.toml` and `keys.env` sit in the same folder as the ledger; on Linux they are in the config folder, `$XDG_CONFIG_HOME/crenshawdev/baley`. When `BALEY_HOME` is set, `config.toml`, `keys.env` and the database all live in it. Where the folder holding `keys.env` is the home (on macOS, or when `BALEY_HOME` is set), the home's own open checks above apply to it; the `keys.env` check itself does not check the folder (CFG-R24).
+
+**Network shares are not supported.** SQLite's write-ahead log does not work over a network filesystem ([sqlite.org/wal.html](https://www.sqlite.org/wal.html)). Baley makes no filesystem check.
 
 **Copies of the store.** Baley makes no backups. The owner can copy the whole store with SQLite's backup API, a filesystem snapshot, or Baley stopped. A restore returns the ledger only to the copy's moment. After restoring behind the latest remote anchor, the owner runs `acknowledge-restore`; verification keeps that accepted gap visible. A purge cannot reach such copies. An export is a new home of mode 0700 with a mode-0600 `baley.db` containing only one project.
 
@@ -994,7 +996,7 @@ Development builds and tests set `BALEY_HOME` so they never touch the owner's re
 
 #### Project identity and policy (EVD-R17)
 
-A project is initialized once with `baley init`. That creates the project in the ledger with a new random project id (UUID version 4) and writes the project file, `baley.toml`, at the repository root, which the owner commits. TOML allows comments, which a hand-edited policy file needs. The file holds the project id, the project name, and the project's policy: reviewers, routing and protected branches, the project-level settings (0002, SYS-R13). Its location and discovery are designed in [0003](0003-configuration-and-routing.md) (CFG-R3, CFG-R4).
+A project is initialized once with `baley init`. That creates the project in the ledger with a new random project id (UUID version 4) and writes the project file, `baley.toml`, at the repository root, which the owner commits. TOML is a format people already read, diff and edit by hand; when Baley writes the file, comments and key order in it are not kept ([ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)). The file holds the project id, the project name, and the project's policy: reviewers, routing and protected branches, the project-level settings (0002, SYS-R13). Its location and discovery are designed in [0003](0003-configuration-and-routing.md) (CFG-R3, CFG-R4).
 
 Baley finds a checkout's project the way git finds a repository: it walks up from the working directory to the first directory holding the project file, stopping at the repository root. The guard uses the same discovery. A directory with no project file is not managed and the guard stays silent. Every checkout Baley sees is recorded with `checkout.seen` (path, root commit, remote URL) for diagnosis only. If two checkouts whose remotes differ claim the same project id (a fork cloned beside its upstream), Baley refuses to record for the second and tells the owner to give it its own id with `baley init --new-id`.
 
@@ -1054,7 +1056,7 @@ Each process opens its own connection. SQLite's write-ahead log lets any number 
 ```mermaid
 stateDiagram-v2
   [*] --> Locating
-  Locating --> Refused : unsafe owner, modes or links, or a network filesystem
+  Locating --> Refused : unsafe owner, modes or links
   Locating --> Opening
   Opening --> Creating : no database
   Creating --> Declaring : 8 KiB pages, write-ahead log and the epoch-1 schema created under the writer queue
@@ -1071,7 +1073,7 @@ stateDiagram-v2
   Refused --> [*]
 ```
 
-*Figure 12. Opening the store. A binary never writes to an epoch it does not understand or to an epoch-1 file of another schema. A changed view spec or view set needs a new version. Reconciliation at start belongs to the caller on its first use of each project. Locating's ownership, mode, link and filesystem checks arrive in slice 2; until then the CLI requires an existing `$BALEY_HOME/baley.db` before it opens, so it never creates a database.*
+*Figure 12. Opening the store. A binary never writes to an epoch it does not understand or to an epoch-1 file of another schema. A changed view spec or view set needs a new version. Reconciliation at start belongs to the caller on its first use of each project. Locating's ownership, mode and link checks arrive in slice 2; until then the CLI requires an existing `$BALEY_HOME/baley.db` before it opens, so it never creates a database.*
 
 Open checks each declared view version's spec against `view_catalog` and the declared view set version's names against `view_set_catalog`, reading first on the read connection so that an open that finds everything in place takes no write. It records a spec or set version seen for the first time, creates missing view tables and indexes under the writer queue, and refuses a version already recorded with another spec or other names. It looks at no project's views: each project is brought to this binary's views on its first use, as in Figure 8, so one project that needs a rebuild never keeps the store from opening.
 
@@ -1162,7 +1164,7 @@ The domain rules are owned, specified and tested by the area design documents ([
 
 See [Threat model](#threat-model) for who is defended against.
 
-- **Agent isolation (EVD-R24).** Agents run as the owner's user, so file modes cannot keep them out. The barrier is the host's sandbox: Baley's setup adds a rule to each host's configuration that denies agents writes to Baley's home, and reads where the host can. Claude Code's sandbox denies named paths for reading and writing. Codex's `workspace-write` sandbox confines agent writes to the workspace but grants full disk read under every policy, so on Codex an agent can read the ledger and cannot change it. That read permission is Codex's sandbox policy, not Baley's to change, and it applies to everything the owner's user can read, not to the ledger in particular; Baley does not claim to hide the ledger from a process running as the owner. What Baley guarantees without read isolation: writes are refused, tampering is detected by the chain and the anchors, and API keys are stored encrypted with the master key in the OS secret store (0003, CFG-R24); nothing else sensitive is kept outside payloads, and payloads can be purged. The host matrix showed on both hosts that agents are blocked from writing while Baley's server and hook still write. As a second, best-effort layer, the guard refuses file-tool writes into the home and shell commands that name it.
+- **Agent isolation (EVD-R24).** Agents run as the owner's user, so file modes cannot keep them out. The barrier is the host's sandbox: Baley's setup adds a rule to each host's configuration that denies agents writes to Baley's home and its config folder, and reads of both where the host can (Claude Code). Claude Code's sandbox denies named paths for reading and writing. Codex's `workspace-write` sandbox confines agent writes to the workspace but grants full disk read under every policy, so on Codex an agent can read the ledger and cannot change it. That read permission is Codex's sandbox policy, not Baley's to change, and it applies to everything the owner's user can read, not to the ledger in particular; Baley does not claim to hide the ledger from a process running as the owner. What Baley guarantees without read isolation: writes are refused, tampering is detected by the chain and the anchors, and API keys never enter the ledger: they stay in `keys.env`, which an agent under a host that allows reads (Codex) can read like any other file of the owner's (0003, CFG-R24); nothing else sensitive is kept outside payloads, and payloads can be purged. The host matrix showed on both hosts that agents are blocked from writing while Baley's server and hook still write. As a second, best-effort layer, the guard refuses file-tool writes into the home and shell commands that name it.
 - **Detection.** Anchors on the forge make a rewrite, truncation or rollback detectable up to the latest anchor, even by an agent that can run `sqlite3` and sign with the owner's key.
 - **Secrets.** Test output and review material can carry secrets. They are always payloads, so they can always be purged, with the limits stated in [Payloads, retention and purge](#payloads-retention-and-purge-evd-r11-evd-r14). The existing fence that screens outbound review payloads stays.
 - **Network.** The store makes no network calls. Anchors are pushed with git to the project's own remote, and the latest anchor is fetched from it, through the core's forge seam; the binary implements that seam, and the store only receives the fetched anchor. A remote is named in the ledger by its configured name, never by URL or credentials. Git runs without prompts. In slice 1 the owner names the remote, which must be configured in the repository at the current directory.
@@ -1189,7 +1191,8 @@ See [Threat model](#threat-model) for who is defended against.
 | Older binary after a newer one rebuilt a project's views | The live view stamps, checked in each view read and new command | That project's view reads and new commands are refused as read-only; history, payloads and other projects still work | Use the newer binary |
 | Older process after an upgrade | Epoch check in its next write | Read-only, naming the needed binary | Restart with the new binary |
 | Migration fails | Transaction error | Refused; database unchanged | Report the bug; the old binary still works |
-| Unsafe home or a network filesystem | Checks on open, from slice 2 | Refused with the reason and the fix | Fix modes or ownership, or set `BALEY_HOME` to a local path |
+| Unsafe home | Checks on open, from slice 2 | Refused with the reason and the fix | Fix modes, ownership or links |
+| Home on a network share | Not detected | Not supported: SQLite's write-ahead log does not work over a network filesystem | Move the home to a local disk, or set `BALEY_HOME` to a local path |
 | Anchor push fails cleanly (remote unreachable, refused or missing at the push or at the latest-anchor fetch) | `anchor.failed` and `command.completed` refused, the claim completed | Nothing blocks; `doctor` warns once the unanchored range, not counting the anchor command's own events, is over a day old | Retried at the next anchor point |
 | Local chain behind or different from the latest remote anchor at an anchor push, as after a restore of an older copy | The latest-anchor fetch and the chain comparison, after the claim and before the push | `anchor.failed` and a refused outcome naming the mismatch (truncation, rewrite or break); nothing is pushed | The owner runs `acknowledge-restore` on an intact restored chain. Its event names the restored head and remote anchor; anchoring resumes, while `verify` reports the accepted gap |
 | Remote unreachable or latest tag malformed at `verify` | The core's latest-anchor fetch | The report says the remote could not be checked or its tag is not an anchor; the chain and bodies are checked locally and nothing is taken as the outside witness | Verify again once the remote is reachable; a malformed tag is itself evidence to report |
@@ -1223,7 +1226,7 @@ The real adapter is measured by `crates/baley-bench`. Latency figures are each r
 | Server start with `quick_check` (server in Build 3, measured in Build 9) | 2 s | Measured in Build 9 | Measured in Build 9 |
 | Search | Defined in Build 8 | Measured in Build 8 | Measured in Build 8 |
 | Server resident memory | Does not grow with store size | Measured in Build 9 | Measured in Build 9 |
-| Open including ownership, mode, link and filesystem checks | 10 ms | Re-measured in slice 2 | Re-measured in slice 2 |
+| Open including ownership, mode and link checks | 10 ms | Re-measured in slice 2 | Re-measured in slice 2 |
 
 **Prototype record.** The following table and size figure are the prototype's measurements, retained unchanged. They are not measurements of the workspace adapter.
 
@@ -1303,8 +1306,8 @@ Families are moved by what is written together, not one at a time:
 Slices:
 
 1. **Foundation.** The workspace split, the port, the SQLite adapter, the conformance suite, payloads and references, the hash chain, anchors and the command line: `verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor` and `acknowledge-restore`. The inherited command surface stays beside these. Nothing in the lifecycle uses the ledger yet.
-2. **Identity, location and policy.** The home directory and its checks, `baley init`, the project file, discovery for the server and the guard, `policy.effective`, host sandbox rules.
-3. **Standalone families.** Captures; guard, with the Codex answer adapter (`ask` becomes `deny`); task, debug and spike.
+2. **Identity, location and policy.** The home directory and its checks, `baley init`, the project file, discovery for the server and the guard, `policy.effective`.
+3. **Standalone families.** Captures; guard, with the Codex answer adapter (`ask` becomes `deny`); host sandbox rules for the home and the config folder; task, debug and spike.
 4. **The lifecycle slice.** Roadmap, requirements, context, plans, evidence maps, admission, execution, dispatch, runs, native evidence and verification move together, built as a series of pull requests on one branch and merged when the whole slice works.
 5. **Review and risk.**
 6. **Milestones, landing, undo and pause.**
@@ -1351,11 +1354,12 @@ Slices:
 | EVD-R12 | The crate graph proves the first half: baley-core and baley-store have no normal dependency path to rusqlite, and baley-store has none to baley-core. Each adapter runs the conformance suite as one test per check for the second half. |
 | EVD-R13 | Search returns hits in relevance order with stable ties, scoped by project and phase, over a fixture corpus. |
 | EVD-R15 | Conformance opens exports independently, lists only the exported project, compares history, verifies the chain, refuses the other project's body, checks released-body tombstones and the reported head, and checks purge export listings including replay and shared references. Export records, pending exports and stored released-body bytes remain adapter tests. Rows of a project an export does not list are not observable through the port; the adapter counts them in the exported file. |
-| EVD-R16, R17, R22, R23 | From slice 2, location resolution, project discovery and the open checks run against directory trees built in a temporary directory with `BALEY_HOME` set: wrong owner, permissive modes, a symbolic-linked home or database, and a filesystem classified as networked. |
+| EVD-R16, R17, R22 | From slice 2, location resolution, project discovery and the open checks run against directory trees built in a temporary directory with `BALEY_HOME` set: wrong owner, permissive modes, and a symbolic-linked home or database. |
 | EVD-R18 | Each command's test asserts it writes nothing in the working tree beyond the named exceptions. |
 | EVD-R19 | Conformance checks opening a newer epoch read-only and fencing an already-open connection, newer view and view-set read/write fences, refusal to rebuild backward, forward rebuilds before first use including removed views, and changed sets refused without a new version. A missing view stamp, the raw epoch getter and epoch fences on trace writes remain adapter tests. The migration check arrives with the first migration. |
 | EVD-R20 | Relies on SQLite's documented durability with `synchronous=FULL`. Power loss is not reproducible in a portable test and is not re-tested. |
 | EVD-R21 | `crates/baley-bench` measures real-adapter open, commits, keyed reads, guard store work, writer waits, rebuild total and batches, flip, size, purge, scrub and verification. Search, server start and memory, and slice-2 open checks are measured in the builds named in Performance. Timings are measurements, never test assertions. |
+| EVD-R23 | Withdrawn. |
 | EVD-R24 | The host matrix, run by hand on both hosts before acceptance (done 2026-09-25, `spikes/host-matrix`), and again before each release. |
 | EVD-R25 | From Build 9, `show` and the record export render every record family from views. |
 | EVD-R26 | The conformance suite proves the store half with supplied times and findings: commands outside an active claim's scope proceed, commands inside return Blocked before deciding, a retry returns InProgress, a clean failure completes the claim, an interrupted claim reconciles from a supplied finding, and an awaiting-owner claim refuses automatic reconciliation and accepts owner resolution. The core's tests over the adapter prove the anchor call path in separate units: the claim step acts only after its claim event exists and names the pre-claim head; missing remote, in-progress, replayed and blocked requests do not act; refused and unreachable pushes complete the claim with `anchor.failed`; a successful record writes `anchor.pushed`, the completion and the row together, and a conflicting row leaves all three unwritten; matching, conflicting and absent holder tags reconcile and retry once under the original identity; an unreachable holder fetch writes one trace row and leaves the claim open; the heartbeat renews at once, ticks through the work and stops before the record step, and a failed renewal cancels nothing. The binary's git forge is tested over literal output and the process fake, and its ticker over a scripted pace and a ticker-local worker join seam. No test runs git. Slice 6 proves a real revert held for the owner. |
@@ -1415,8 +1419,8 @@ classDiagram
 ## Decisions
 
 - [ADR 0001: Record evidence as an append-only, hash-chained event ledger](../adr/0001-event-ledger.md)
-- [ADR 0002: Use SQLite as the storage engine](../adr/0002-sqlite.md)
-- [ADR 0003: Keep one ledger database per user, outside any checkout](../adr/0003-per-user-database.md)
+- [ADR 0002: Use SQLite as the storage engine](../adr/0002-sqlite.md), superseded in part by ADR 0027
+- [ADR 0003: Keep one ledger database per user, outside any checkout](../adr/0003-per-user-database.md), superseded in part by ADR 0023 and ADR 0027
 - [ADR 0004: Identify projects by a committed project file](../adr/0004-project-identity.md)
 - [ADR 0005: Put storage behind a port with engine adapters](../adr/0005-storage-port.md), superseded in part by ADR 0010
 - [ADR 0006: Keep every operational record in the ledger](../adr/0006-no-markdown-records.md)
@@ -1430,6 +1434,7 @@ classDiagram
 - [ADR 0024: Separate port conformance from adapter mechanism tests](../adr/0024-conformance-suite-and-adapter-tests.md)
 - [ADR 0025: Point anchor tags at the empty tree](../adr/0025-anchor-tag-objects.md)
 - [ADR 0026: Anchors are read by Baley, and a missing tag ruleset is reported](../adr/0026-anchors-read-by-baley.md)
+- [ADR 0027: Keep Baley's files in its own crenshawdev folders, with provider keys in a plain keys.env](../adr/0027-vendor-folders-and-plain-keys.md), superseding ADR 0002 and ADR 0003 in part
 
 ## Future work
 

@@ -106,7 +106,7 @@ The owner works in a familiar loop: start a project, discuss a phase, approve a 
 56. As an owner, I want agents kept out of Baley's own records, so that the record of the work cannot be rewritten by the work.
 57. As an owner, I want tampering with the record detected, including by checking against copies anchored on the forge, so that I can trust the history.
 58. As an owner, I want an API key to reach only the one call that needs it, with any copy in the output hidden, so that keys do not leak into conversations or logs.
-59. As an owner, I want Baley to store my API keys itself and manage them only through its command line, so that keys do not sit in plain files or environment variables.
+59. As an owner, I want my API keys in one file in Baley's own config folder, which I edit and Baley only reads, so that Baley never takes a key from an environment variable and keeps no second copy of it.
 
 ### Hosts and running
 

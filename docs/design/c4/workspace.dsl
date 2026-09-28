@@ -10,22 +10,23 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
                 domain = component "Domain areas" "The rules of each process area: planning, execution, verification, review, risk, landing and the rest."
                 composer = component "Work order composer" "Builds every dispatch: role, model and effort from policy, instructions from the binary, inputs from the record."
                 policy = component "Policy" "Reads the global and project settings, resolves the values in effect and records which applied."
-                keyStore = component "Key store" "Holds provider API keys encrypted in the ledger; the master key sits in the OS secret store."
+                keys = component "Keys" "Reads provider API keys from keys.env for one command or one detection; never writes the file."
                 catalog = component "Model catalog" "The models each host and provider offers, seeded from the binary and refreshed by detection."
                 ports = component "Ports and adapters" "Storage, git and test runner, forge and host adapters. The core sees only these ports."
             }
             ledger = container "Ledger" "One append-only, hash-chained record per user, outside any checkout." "SQLite" "Database"
             settings = container "Settings" "One global file and one file per project." "TOML" "File"
+            keysFile = container "Keys file" "keys.env in Baley's config folder: one NAME=value line per key, written by the owner, read only by Baley." "Text" "File"
         }
 
         host = softwareSystem "Host" "Claude Code or Codex: the owner's session, which relays Baley's work orders and adjudicates, and the worker agents it launches." "External"
         repo = softwareSystem "Repository" "The project's git checkout." "External"
         forge = softwareSystem "Forge" "GitHub: chain anchors, pull requests, issues." "External"
         reviewers = softwareSystem "Outside reviewers" "Model providers such as OpenAI, Gemini and DeepSeek." "External"
-        secretStore = softwareSystem "OS secret store" "macOS Keychain or the Linux Secret Service." "External"
 
         owner -> host "Works in"
         owner -> hostInterface "Uses the command line"
+        owner -> keysFile "Writes provider keys by hand"
         host -> hostInterface "Work orders, results, questions" "MCP over stdio or HTTP"
         host -> repo "Workers edit source and commit"
         host -> reviewers "Outside review calls, with prompts built by Baley"
@@ -36,11 +37,10 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         policy -> settings "Reads"
         policy -> catalog "Checks model names"
         policy -> ports "Records the effective policy and each route"
-        hostInterface -> policy "Settings, key and model commands"
-        hostInterface -> keyStore "Injects a key into one command"
-        keyStore -> secretStore "Master key"
-        keyStore -> ports "Encrypted keys"
-        catalog -> keyStore "Key for detection"
+        hostInterface -> policy "Settings and model commands"
+        hostInterface -> keys "Injects a key into one command"
+        keys -> keysFile "Reads"
+        catalog -> keys "Key for detection"
         catalog -> reviewers "Lists models"
         catalog -> ports "Records detections"
         domain -> ports "Records and acts through"
@@ -66,7 +66,7 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         }
 
         component binary "configuration" {
-            include hostInterface composer policy keyStore catalog ports settings ledger secretStore reviewers owner
+            include hostInterface composer policy keys catalog ports settings keysFile ledger reviewers owner
             autolayout lr
         }
 

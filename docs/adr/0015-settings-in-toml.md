@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0002: System design](../design/0002-system-design.md), [0003: Configuration and routing](../design/0003-configuration-and-routing.md) |
 | Supersedes |  |
-| Superseded by | |
+| Superseded by | [0027](0027-vendor-folders-and-plain-keys.md), in part: the global file is `config.toml` in Baley's folder under a crenshawdev vendor folder |
 
 ## Context and problem
 

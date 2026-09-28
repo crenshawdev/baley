@@ -6,7 +6,7 @@
 | Design issue | none; build issue [#23](https://github.com/crenshawdev/baley/issues/23) |
 | Requirement prefix | CFG |
 | Applies | [0002: System design](0002-system-design.md) |
-| Related | ADRs: [0003](../adr/0003-per-user-database.md), [0004](../adr/0004-project-identity.md), [0009](../adr/0009-served-instructions.md), [0015](../adr/0015-settings-in-toml.md), [0016](../adr/0016-key-store.md) · C4 view: configuration |
+| Related | ADRs: [0003](../adr/0003-per-user-database.md), [0004](../adr/0004-project-identity.md), [0009](../adr/0009-served-instructions.md), [0015](../adr/0015-settings-in-toml.md), [0016](../adr/0016-key-store.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md), [0028](../adr/0028-one-http-stack.md) · C4 view: configuration |
 
 The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
 
@@ -18,7 +18,7 @@ This area decides:
 - where the settings files live and how a checkout finds its project;
 - how a role's model and effort are resolved for every work order, and what a retry changes;
 - which model names Baley accepts for each host and provider, and how that list stays current;
-- how provider API keys are stored and reached.
+- where provider API keys are read from and how they reach a call.
 
 It does not decide the meaning of settings owned by other areas (section 9 lists every setting and its owner), how a work order reaches a host or how effort is delivered there ([0012: Host interface](0012-host-interface.md)), whether a review or a risk gate fires ([0008: Review](0008-review.md), [0009: Risk](0009-risk.md)), or what the guard does with git commands ([0010: Guard](0010-guard.md)).
 
@@ -35,9 +35,7 @@ graph LR
     1["<div style='font-weight: bold'>Owner</div><div style='font-size: 70%; margin-top: 0px'>[Person]</div><div style='font-size: 80%; margin-top:10px'>The person responsible for<br />the work. Approves plans,<br />rules on findings, sets<br />policy.</div>"]
     style 1 fill:#08427b,stroke:#052e56,color:#ffffff
 
-    17["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Model providers such as<br />OpenAI, Gemini and DeepSeek.</div>"]
-    style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    18["<div style='font-weight: bold'>OS secret store</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>macOS Keychain or the Linux<br />Secret Service.</div>"]
+    18["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Model providers such as<br />OpenAI, Gemini and DeepSeek.</div>"]
     style 18 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
 
     subgraph 2 ["Baley"]
@@ -56,7 +54,7 @@ graph LR
         style 7 fill:#85bbf0,stroke:#5d82a8,color:#000000
         8["<div style='font-weight: bold'>Policy</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>Reads the global and project<br />settings, resolves the values<br />in effect and records which<br />applied.</div>"]
         style 8 fill:#85bbf0,stroke:#5d82a8,color:#000000
-        9["<div style='font-weight: bold'>Key store</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>Holds provider API keys<br />encrypted in the ledger; the<br />master key sits in the OS<br />secret store.</div>"]
+        9["<div style='font-weight: bold'>Keys</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>Reads provider API keys from<br />keys.env for one command or<br />one detection; never writes<br />the file.</div>"]
         style 9 fill:#85bbf0,stroke:#5d82a8,color:#000000
       end
 
@@ -64,19 +62,21 @@ graph LR
       style 12 fill:#438dd5,stroke:#2e6295,color:#ffffff
       13["<div style='font-weight: bold'>Settings</div><div style='font-size: 70%; margin-top: 0px'>[Container: TOML]</div><div style='font-size: 80%; margin-top:10px'>One global file and one file<br />per project.</div>"]
       style 13 fill:#438dd5,stroke:#2e6295,color:#ffffff
+      14["<div style='font-weight: bold'>Keys file</div><div style='font-size: 70%; margin-top: 0px'>[Container: Text]</div><div style='font-size: 80%; margin-top:10px'>keys.env in Baley's config<br />folder: one NAME=value line<br />per key, written by the<br />owner, read only by Baley.</div>"]
+      style 14 fill:#438dd5,stroke:#2e6295,color:#ffffff
     end
 
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->4
+    1-. "<div>Writes provider keys by hand</div><div style='font-size: 70%'></div>" .->14
     7-. "<div>Resolves role, model and<br />effort</div><div style='font-size: 70%'></div>" .->8
     8-. "<div>Reads</div><div style='font-size: 70%'></div>" .->13
     8-. "<div>Checks model names</div><div style='font-size: 70%'></div>" .->10
     8-. "<div>Records the effective policy<br />and each route</div><div style='font-size: 70%'></div>" .->11
-    4-. "<div>Settings, key and model<br />commands</div><div style='font-size: 70%'></div>" .->8
+    4-. "<div>Settings and model commands</div><div style='font-size: 70%'></div>" .->8
     4-. "<div>Injects a key into one<br />command</div><div style='font-size: 70%'></div>" .->9
-    9-. "<div>Master key</div><div style='font-size: 70%'></div>" .->18
-    9-. "<div>Encrypted keys</div><div style='font-size: 70%'></div>" .->11
+    9-. "<div>Reads</div><div style='font-size: 70%'></div>" .->14
     10-. "<div>Key for detection</div><div style='font-size: 70%'></div>" .->9
-    10-. "<div>Lists models</div><div style='font-size: 70%'></div>" .->17
+    10-. "<div>Lists models</div><div style='font-size: 70%'></div>" .->18
     10-. "<div>Records detections</div><div style='font-size: 70%'></div>" .->11
     11-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->12
 
@@ -84,7 +84,7 @@ graph LR
 ```
 <!-- /c4:configuration -->
 
-*Figure 1. The parts of the Baley server this area designs: Policy, the Key store and the Model catalog, and what they talk to.*
+*Figure 1. The parts of the Baley server this area designs: Policy, Keys and the Model catalog, and what they talk to.*
 
 ## 2. Terms
 
@@ -104,16 +104,17 @@ graph LR
 | Provider | An outside model vendor reached by API key or its own command-line login: Anthropic, OpenAI, Gemini, DeepSeek. |
 | Detection | Asking a provider's list endpoint, with the owner's key, which model names that key can use. |
 | Hint table | A table compiled into Baley that tags known model names with a tier (`flagship`, `balanced`, `cheap`) and whether they accept high effort. |
-| Key store | The part of Baley that holds provider API keys. |
-| Master key | The one random key that encrypts every stored API key. |
-| Secret store | The operating system's own store for secrets: Keychain on macOS, the Secret Service (GNOME Keyring, KWallet, over D-Bus) on Linux. |
+| Config folder | Baley's own folder under the crenshawdev vendor folder: `$XDG_CONFIG_HOME/crenshawdev/baley` on Linux (an empty or relative `XDG_CONFIG_HOME` counts as unset), `~/Library/Application Support/crenshawdev/baley` on macOS, or `BALEY_HOME` when it is set. It holds the global file and the keys file. |
+| Keys file | `keys.env` in the config folder: one `NAME=value` line per provider API key, written by the owner by hand and only read by Baley. |
+| Key name | The name on the left of a line in the keys file, such as `OPENAI_API_KEY`. |
+| Keys | The part of Baley that reads a key from the keys file for one use. |
 
 ## 3. Requirements
 
 | Id | Rule | Why | Depends on | Status |
 |---|---|---|---|---|
-| CFG-R1 | Settings are TOML in two files: one global file per user and one project file per repository; there is no other settings file. | One familiar, reviewable format; nothing else to find or protect. | SYS-R13 | Active |
-| CFG-R2 | The global file is `$XDG_CONFIG_HOME/baley/baley.toml` (default `~/.config/baley/baley.toml`) on Linux and `~/Library/Application Support/baley/baley.toml` on macOS; when `BALEY_HOME` is set, the global file is `$BALEY_HOME/baley.toml`. | Each platform's own place; tests and development builds never touch the owner's file. | ADR 0003, SYS-R14 | Active |
+| CFG-R1 | Settings are TOML in two files: one global file per user and one project file per repository; there is no other settings file. | One familiar, reviewable format for every setting; no other file holds settings. | SYS-R13 | Active |
+| CFG-R2 | The global file is `config.toml` in Baley's config folder: `$XDG_CONFIG_HOME/crenshawdev/baley/config.toml` (default `~/.config/crenshawdev/baley/config.toml`) on Linux and `~/Library/Application Support/crenshawdev/baley/config.toml` on macOS; when `BALEY_HOME` is set, the global file is `$BALEY_HOME/config.toml`. An empty or relative `XDG_CONFIG_HOME` is treated as unset. Each crenshawdev application has its own folder under the vendor folder, and nothing is shared at the vendor level. | Each platform's own place, grouped under one vendor folder; tests and development builds never touch the owner's file. | ADR 0003, ADR 0027, SYS-R14 | Active |
 | CFG-R3 | The project file is `baley.toml` at the repository root, committed with the code. | Policy travels with the code; every clone and every teammate runs under the same project settings. | ADR 0004 | Active |
 | CFG-R4 | Every request names the working directory it is made from; Baley finds the project by walking up from that directory to the nearest `baley.toml`, stopping at the git repository root. The guard uses the same walk. A directory with no project file is unmanaged and Baley stays silent about it. When project files are nested, the nearest one applies and nothing is inherited from the outer one. | One shared server serves many sessions in many projects, so the project is a property of the request, not of the process. | SYS-R1, ADR 0004 | Active |
 | CFG-R5 | Each setting has a scope: `global`, `project` or `both`. Branch, forge and repository settings and the test and lint commands are `project`. Roles and the escalation switch are `both`. A value written in a layer outside the setting's scope is ignored and reported as a scope diagnostic; the command line refuses to write it. | Repository facts belong to the repository; per-user choices must not leak into a committed file by mistake. | SYS-R13 | Active |
@@ -122,7 +123,7 @@ graph LR
 | CFG-R8 | Whenever the merged result changes, for any layer, Baley records `policy.effective` with the full merged policy and the layer and file each value came from; every command records the policy version it ran under. | The record says what Baley acted under, not what the files say now. | EVD-R17 | Active |
 | CFG-R9 | The effective policy is re-read and re-validated before every command that writes to the ledger. An invalid file (unparseable, wrong type, value outside its grammar) makes the policy unavailable, and every command that needs it is refused with `config-unavailable` naming the file and the fault. | Never act on a torn or half-edited policy. | CFG-R8 | Active |
 | CFG-R10 | A dispatch whose routing inputs changed between admission and its run is refused as `routing-inputs-changed`. | A worker must run under the route the owner's policy produced when it was admitted. | CFG-R8, SYS-R6 | Active |
-| CFG-R11 | Only Baley's command line and its interview write the settings files. The guard refuses any agent write to either file. Instructions served to models never mention the files. | The owner sets policy; the model never does. | SYS-P11, SYS-R13 | Active |
+| CFG-R11 | Only Baley's command line and its interview write the settings files. The host sandbox and the guard refuse any agent write to Baley's config folder (the global file and the keys file) and to the project file. Instructions served to models never mention the files. | The owner sets policy; the model never does. | SYS-P11, SYS-R13 | Active |
 | CFG-R12 | Six roles are routed: `planner`, `analyzer`, `checker`, `executor`, `verifier`, `reviewer`. Each has `roles.<role>.model` (a model name, default absent) and `roles.<role>.effort` (a rung; defaults: planner, analyzer, executor and verifier `high`, reviewer `medium`, checker `low`). | Every worker Baley dispatches has an owner-set cost. | SYS-P1 | Active |
 | CFG-R13 | An absent model means the host session's own model; Baley then passes no model to the host. | The owner's session choice is the default everywhere. | CFG-R12 | Active |
 | CFG-R14 | A model name is checked against the model catalog for the host or provider it is written for, at write time; an unknown name is refused by the command line and interview with `unknown-model`, naming the catalog entries that exist. A name is never silently dropped at dispatch. | A misspelled model must fail where the owner can see it. | CFG-R12, CFG-R19 | Active |
@@ -131,25 +132,25 @@ graph LR
 | CFG-R17 | Every route records the role, the model, the starting rung, the rung run, the attempt, the setting and layer that supplied the model and the effort, and each reason in plain words. The work order carries the route; nothing else does. | The owner can always see why a worker ran as it did. | SYS-P2, CFG-R8 | Active |
 | CFG-R18 | The plan-time risk floor never changes a model or a rung. | Effort is the owner's choice; risk changes the review gate ([0009](0009-risk.md)), not the cost. | | Active |
 | CFG-R19 | The model catalog is data in the per-user database, seeded from the binary at install and at every upgrade, never a setting. Host aliases (for Claude Code: `opus`, `sonnet`, `haiku`, `fable`) come from the host adapter's compiled table. Exact model ids are accepted beside aliases. | Aliases track new models by themselves; the owner's choice stays small. | ADR 0003 | Active |
-| CFG-R20 | For each provider Baley holds a key for, the catalog is refreshed by detection: Baley calls the provider's list endpoint with that key, records every id returned, tags each id from the hint table, and places an untagged id by best fit (newest first) unless the owner chooses. Detection runs at install, when a key is set, when a project is initialized, when a call fails with a model-not-found or deprecated error, and on `baley models update`. It never runs on a timer. Detection sends no prompt and no project content. | The vendor's list is the truth; Baley's table is a hint. Nothing waits on a Baley release. | CFG-R21, SYS-R9 | Active |
-| CFG-R21 | Detection that fails (offline, bad key, rate limit) leaves the previous catalog in place, is recorded as `models.detection_failed`, and never blocks a command. | Setup and dispatch must not depend on a network call. | CFG-R20 | Active |
+| CFG-R20 | For each provider whose key is in the keys file, the catalog is refreshed by detection: Baley calls the provider's list endpoint with that key, records every id returned, tags each id from the hint table, and places an untagged id by best fit (newest first) unless the owner chooses. Baley finds a provider's key by a small compiled table of key names: `OPENAI_API_KEY` for OpenAI, `GEMINI_API_KEY` for Gemini, `DEEPSEEK_API_KEY` for DeepSeek. Detection runs at install, at `baley init`, when a call fails with a model-not-found or deprecated-model error, and on `baley models update`. It never runs on a timer. Detection sends no prompt and no project content. | The vendor's list is the truth; Baley's table is a hint. Nothing waits on a Baley release. | CFG-R21, SYS-R9 | Active |
+| CFG-R21 | Detection that fails (offline, bad key, rate limit, or a keys file Baley refuses) leaves the previous catalog in place, is recorded as `models.detection_failed`, and never blocks a command. A refused keys file records the failure for every provider. A provider with no key in the keys file is not detected and is not recorded as a failure; its detected catalog entries become unverifiable (Figure 3). An automatic trigger skips it quietly; when the owner names it in `baley models update`, Baley says which key name is missing from the keys file (CFG-R28). | Setup and dispatch must not depend on a network call. | CFG-R20 | Active |
 | CFG-R22 | The owner can add or remove a catalog name by hand (`baley models add`, `baley models remove`); a hand-added name wins over detection and is never removed by it. | A model newer than every list is still usable at once. | CFG-R19 | Active |
 | CFG-R23 | Each route and each detection records the catalog version it was checked against. | The record says which list was in force. | CFG-R17, CFG-R20 | Active |
-| CFG-R24 | Provider API keys are stored encrypted in a `secret` table in the per-user database. The master key lives in the OS secret store when one is reachable (macOS Keychain; Linux Secret Service); when none is reachable, the master key is a file in the Baley home, mode 0600, and the residual risk (a process running as the owner can read it) is stated to the owner when that fallback is chosen. Baley picks the most secure mechanism the machine offers and records which one is in use. Stated limit: the Linux Secret Service answers any process running as the owner, so an agent under a host whose sandbox allows reads (Codex) could obtain the master key there; that is the operating-system user boundary, not Baley's to close. | Keys are Baley's to hold, out of reasonable reach, with the strongest protection the machine has. | SYS-R12, ADR 0003, ADR 0016 | Active |
-| CFG-R25 | Keys are managed only by `baley key set`, `baley key remove` and `baley key list`. `set` reads the key from the terminal, never from an argument or a file. `list` shows names, set times and the store in use, never a value. No key is ever read from an environment variable or a plain key file. | Keys stay out of shell history, files and transcripts. | SYS-R12 | Active |
-| CFG-R26 | The ledger records that a key exists for a provider and when it was set or removed, never the key. Keys never enter exports or any view. An owner's copy of the whole store holds them encrypted. | The record is shareable; the keys are not. | EVD-R14, CFG-R24 | Active |
-| CFG-R27 | Baley reads a stored key for two uses only: to inject it into one command through `baley exec --key <provider>` (SYS-R11) and to call a provider's list endpoint for detection (CFG-R20). | The fewest places a key can leak from. | SYS-R11, CFG-R20 | Active |
-| CFG-R28 | A provider the owner reaches by its own command-line login needs no key in Baley; every command that needs a key says which provider lacks one, and no command forces a key to be set. | No one is forced to hand over a key. | SYS-R10 | Active |
+| CFG-R24 | Provider API keys are plain `NAME=value` lines in one file, `keys.env`, in Baley's config folder beside `config.toml` (`$BALEY_HOME/keys.env` when `BALEY_HOME` is set). Lines are `NAME=value`, with an optional `export ` prefix and the value optionally in single or double quotes; a line starting with `#` is a comment. Baley refuses to read the file with `keys-file-exposed` when its group or others can read it, naming the file and the `chmod 600` fix, or when another user owns it, naming the `chown` fix; and with `keys-file-invalid` when a name appears twice, naming the line. A symbolic link to the file is followed. This check does not check the folder; where the folder is Baley's home (on macOS, or when `BALEY_HOME` is set), the home's own open checks apply ([0001](0001-evidence-ledger.md), EVD-R22). Keys are not encrypted; there is no master key and no OS secret store. Stated limit: an agent under a host whose sandbox allows reads (Codex) can read the file, as it can any file the owner's user can read; that is the operating-system user boundary, not Baley's to close. | The file's mode protects the keys the way it protects any key the owner keeps in a file; nothing Baley added would protect them better from a process running as the owner. | SYS-R12, ADR 0027 | Active |
+| CFG-R25 | Baley only reads the keys file and never writes it; the owner edits it by hand. Baley has no command that sets, removes or lists keys. Keys come only from that file, never from an environment variable. | The owner holds the keys; Baley has no second copy to keep in step. | SYS-R12 | Active |
+| CFG-R26 | The ledger may record that a key was used and how (for example a review by OpenAI through its API with `OPENAI_API_KEY`), never the key's value. Keys never enter the ledger, exports or any view. | The record is shareable; the keys are not. | EVD-R14, CFG-R24 | Active |
+| CFG-R27 | Baley reads a key from the keys file for two uses only: to inject it into one command through `baley exec --key <NAME>` (SYS-R11) and to call a provider's list endpoint for detection (CFG-R20). | The fewest places a key can leak from. | SYS-R11, CFG-R20 | Active |
+| CFG-R28 | A provider the owner reaches by its own command-line login needs no line in the keys file; every command that needs a key names the key missing from the file, and no command forces the owner to add one. | No one is forced to hand over a key. | SYS-R10 | Active |
 | CFG-R29 | `git.forge_provider` accepts `github`, `gitlab` and `forgejo`; the first release acts on `github` only, and choosing another value is accepted and reported as not yet supported by [0011: Landing](0011-milestones-landing-undo-pause.md). | All three forges are planned; the setting must not need to change when they arrive. | | Active |
 
 ## 4. Roles and actors
 
 | Actor | Receives | Returns | Model and effort from |
 |---|---|---|---|
-| Owner | Prompts from the settings interview; refusals naming file, setting and fault | Settings values; keys typed at the terminal; catalog additions | Not applicable |
-| Baley command line | `baley config`, `baley key`, `baley models` commands | Receipts, facts, refusals | Not applicable |
+| Owner | Prompts from the settings interview; refusals naming file, setting and fault | Settings values; keys written into the keys file by hand; catalog additions | Not applicable |
+| Baley command line | `baley config`, `baley exec`, `baley models` commands | Receipts, facts, refusals | Not applicable |
 | Policy (component) | A project, a host name, a role, an attempt | The effective policy; a route | Not applicable |
-| Key store (component) | A provider name | An encrypted key decrypted for one use; facts about keys | Not applicable |
+| Keys (component) | A key name | The key's value for one use; a refusal when the name has no line or the file is refused (CFG-R24) | Not applicable |
 | Model catalog (component) | A host or provider name and a model name | Whether the name is accepted; the catalog version | Not applicable |
 | Work order composer ([0002](0002-system-design.md) section 8) | A route | A work order carrying it | The route |
 | Guard hook ([0010](0010-guard.md)) | A working directory | The project and its effective policy, or "unmanaged" | Not applicable |
@@ -175,7 +176,7 @@ All operations of this area are command-line commands run by the owner. Nothing 
 ### baley config set
 
 - **Inputs:** `--global` or `--project` (required), optional `--host <name>`, one or more `name=value` pairs; `name=null` resets.
-- **Outputs:** the settings changed, the file written, and the facts as `config show` returns them; a new `policy.effective` when the merged result changed.
+- **Outputs:** the settings changed, the file written, and the facts as `config show` returns them; a new `policy.effective` when the merged result changed. Baley writes the whole file to a temporary file in the same folder and renames it over the old one; comments and key order in the file are not kept ([ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)).
 - **Refusals:**
 
   | Code | When | Requirement |
@@ -194,39 +195,18 @@ All operations of this area are command-line commands run by the owner. Nothing 
 - **Refusals:** as `config set`; a declined interview writes nothing.
 - **Also run by:** `project start` when the global file or the project's settings are missing ([0004](0004-starting-a-project-and-changing-scope.md), PRJ-R9); the same questions, put to the owner through the host when the start runs from a session.
 
-### baley key set
-
-- **Inputs:** a provider name; the key is read from the terminal with echo off.
-- **Outputs:** a receipt naming the provider, the store in use (Keychain, Secret Service or file), and the detection result that follows (CFG-R20).
-- **Refusals:**
-
-  | Code | When | Requirement |
-  |---|---|---|
-  | `unknown-provider` | The name is not a provider Baley knows | CFG-R25 |
-  | `key-store-unavailable` | No master key can be created or reached | CFG-R24 |
-
-### baley key remove
-
-- **Inputs:** a provider name.
-- **Outputs:** a receipt; the catalog entries detected with that key are marked as no longer verifiable.
-- **Refusals:** `no-such-key` when no key is stored for the provider (CFG-R25).
-
-### baley key list
-
-- **Inputs:** none.
-- **Outputs:** one row per provider: whether a key is stored, when it was set, the store in use; never a value.
-- **Refusals:** none.
+There is no command that sets, removes or lists keys (CFG-R25): the owner writes `keys.env` by hand.
 
 ### baley exec
 
-- **Inputs:** `--key <provider>`, `--`, the command and its arguments.
-- **Outputs:** the command's exit code; its output with every occurrence of the key replaced by `[baley:<provider>-key]`.
-- **Refusals:** `no-such-key` (CFG-R27, SYS-R11). The full contract of this command belongs to [0012: Host interface](0012-host-interface.md).
+- **Inputs:** `--key <NAME>`, the key's name exactly as written in `keys.env`; `--`; the command and its arguments.
+- **Outputs:** the command's exit code; the key is set under that same name in the command's environment only; its output with every occurrence of the key replaced by `[baley:<NAME>]`, for example `[baley:OPENAI_API_KEY]`.
+- **Refusals:** `no-such-key` when `keys.env` has no line with that name (CFG-R27, SYS-R11); `keys-file-exposed` when group or others can read `keys.env` (naming the file and the `chmod 600` fix) or another user owns it (naming the `chown` fix); `keys-file-invalid` when a name appears twice (naming the line) (CFG-R24). The full contract of this command belongs to [0012: Host interface](0012-host-interface.md).
 
 ### baley models update
 
-- **Inputs:** optional provider names (default: every provider with a stored key).
-- **Outputs:** per provider: ids added, removed and unchanged, the tier each got and from what (hint table, best fit, owner), and the new catalog version; a `models.detected` or `models.detection_failed` event per provider.
+- **Inputs:** optional provider names (default: every provider whose key is in `keys.env`).
+- **Outputs:** per provider: ids added, removed and unchanged, the tier each got and from what (hint table, best fit, owner), and the new catalog version; a `models.detected` or `models.detection_failed` event per provider. A provider named here that has no key in `keys.env` gets no event: the output names the key missing from `keys.env`, and its detected entries become unverifiable (CFG-R21).
 - **Refusals:** none; a failed detection is reported, not refused (CFG-R21).
 
 ### baley models add, baley models remove
@@ -257,7 +237,7 @@ Called by the work order composer for every dispatch, never by a host.
 
 ## 6. Records
 
-### The global file (TOML)
+### The global file `config.toml` (TOML)
 
 | Table | Content |
 |---|---|
@@ -303,16 +283,11 @@ The `policy` view holds the latest `policy.effective` per project and host. Its 
 | `policy_version`, `catalog_version` | integer | The versions in force |
 | `reasons` | list of strings | One plain sentence per decision made |
 
-### key (secret table and events)
+### The keys file `keys.env`
 
-The `secret` table (per-user database) holds per provider: the provider name, the ciphertext, the nonce, the master-key id and the set time. The table is excluded from exports and every view (CFG-R26). An owner's copy of the whole store holds the table encrypted.
+One `NAME=value` line per key, in the config folder beside `config.toml`, for example a line for `OPENAI_API_KEY`. The owner writes it; Baley reads it and never writes it (CFG-R24, CFG-R25). It is not a settings file and is not part of the ledger. The grammar, the duplicate-name refusal and the ownership and mode checks are those of CFG-R24.
 
-| Event | Fields |
-|---|---|
-| `key.set` | provider, set time, store kind (`keychain`, `secret-service`, `file`) |
-| `key.removed` | provider, time |
-
-The `keys` view holds, per provider, whether a key is stored, its set time and the store kind.
+The ledger may record that a key was used and how, such as a review by OpenAI through its API with `OPENAI_API_KEY`, never the key's value (CFG-R26).
 
 ### model catalog (table and events)
 
@@ -329,14 +304,16 @@ The `model_catalog` table holds per entry: host or provider, name, source (`alia
 ```mermaid
 stateDiagram-v2
   [*] --> Absent
-  Absent --> Stored: baley key set
-  Stored --> Stored: baley key set (replaced, new set time)
-  Stored --> Absent: baley key remove
-  Stored --> Unreachable: master key not reachable in the secret store
-  Unreachable --> Stored: secret store unlocked or master key restored
+  Absent --> Present: the owner adds the line to keys.env
+  Present --> Present: the owner replaces the value
+  Present --> Absent: the owner removes the line
+  Present --> Exposed: group or others can read keys.env, or another user owns it
+  Exposed --> Present: the owner fixes the mode or the owner
+  Present --> Invalid: a name appears twice
+  Invalid --> Present: the owner removes the duplicate line
 ```
 
-*Figure 2. States of a provider key. Unreachable keys make `baley exec --key` and detection refuse with `key-store-unavailable`; nothing is deleted.*
+*Figure 2. States of a provider key as Baley finds it when it reads `keys.env`. Every transition is the owner's edit; Baley never writes the file. An exposed file makes `baley exec --key` refuse with `keys-file-exposed`, naming the fix (`chmod 600`, with the file, or `chown`); an invalid file makes it refuse with `keys-file-invalid`, naming the line. Either makes detection record `models.detection_failed` for every provider, leaving the catalog as it was.*
 
 ```mermaid
 stateDiagram-v2
@@ -346,8 +323,8 @@ stateDiagram-v2
   Detected --> Suspect: model-not-found or deprecated error on a call
   Suspect --> Detected: models.detected after the trouble-triggered refresh
   Suspect --> Suspect: detection failed (previous list kept)
-  Detected --> Unverifiable: baley key remove
-  Unverifiable --> Detected: baley key set
+  Detected --> Unverifiable: detection finds no key for the provider
+  Unverifiable --> Detected: detection runs with the key present
 ```
 
 *Figure 3. States of one provider's catalog entries. Host aliases and owner entries have no lifecycle: they are present until the binary or the owner changes them.*
@@ -417,34 +394,40 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   participant O as Owner
+  participant F as keys.env
   participant C as Command line
-  participant S as Key store
-  participant X as OS secret store
+  participant S as Keys
   participant V as Provider list endpoint
   participant K as Model catalog
   participant L as Ledger
-  O->>C: baley key set openai
-  C->>O: prompt, echo off
-  O->>C: key
-  C->>S: store(openai, key)
-  S->>X: get or create master key
-  alt secret store unreachable
-    S->>S: fall back to the 0600 master-key file, tell the owner the residual risk
-  end
-  S->>L: secret row (encrypted), key.set event
+  O->>F: add the OPENAI_API_KEY line by hand
+  O->>C: baley models update openai
   C->>K: detect(openai)
-  K->>V: GET list endpoint with the key
-  alt request fails
-    K->>L: models.detection_failed
-    C-->>O: key stored, detection failed, previous list kept
-  else
-    K->>K: tag ids from the hint table, place unknown ids by best fit
-    K->>L: models.detected, new catalog version
-    C-->>O: key stored, models found, tiers, catalog version
+  K->>S: key named OPENAI_API_KEY
+  S->>F: read
+  alt keys.env refused
+    S-->>K: keys-file-exposed naming the fix, or keys-file-invalid naming the line
+    K->>L: models.detection_failed for every provider
+    C-->>O: the refusal, previous list kept
+  else no OPENAI_API_KEY line
+    S-->>K: no key
+    K->>K: openai entries become unverifiable, no failure recorded
+    C-->>O: OPENAI_API_KEY is missing from keys.env
+  else key found
+    S-->>K: the key, for this one call
+    K->>V: GET list endpoint with the key
+    alt request fails
+      K->>L: models.detection_failed
+      C-->>O: detection failed, previous list kept
+    else
+      K->>K: tag ids from the hint table, place unknown ids by best fit
+      K->>L: models.detected, new catalog version
+      C-->>O: models found, tiers, catalog version
+    end
   end
 ```
 
-*Figure 6. Setting a key and detecting the provider's models.*
+*Figure 6. Detecting a provider's models with the key the owner wrote into `keys.env`. The same detection runs at install, at `baley init` and after a model-not-found or deprecated-model failure (CFG-R20); there, a provider with no key is skipped quietly instead of being named to the owner (CFG-R21).*
 
 ```mermaid
 sequenceDiagram
@@ -503,7 +486,7 @@ Every setting Baley reads, with the area that owns its meaning. This area owns t
 | `review.triggers.risk_surface.waive_routing_floor` | same list | absent | project | [0009](0009-risk.md) | Surfaces whose floor the owner waives |
 | `debug.attempt_threshold` | integer, min 1 | 3 | both | [0014](0014-support-families.md) | Attempts before a diagnosis review is offered |
 
-Settings removed from the schema because nothing reads them (CFG-R7), plus `review.mode` (every reviewer runs, [0008](0008-review.md)) `git.create_tag`, `git.on_land_cleanup`, `git.issue_check` (per-landing choices, [0011](0011-milestones-landing-undo-pause.md)) `workflow.skip_discuss` (refinement is never skipped, [0013](0013-next-action-and-progress.md)), `memory.backend` and `review.consult.*` (recall always available; consult is the diagnosis review, [0014](0014-support-families.md)): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `planning.commit_docs`, `review.key_file`, `review.decision_review.tier`, `review.decision_review.effort`. Sprint capacity is designed in [0005](0005-context-plans-and-acceptance.md) (PLN-R9), not as free numbers here.
+Settings removed from the schema because nothing reads them (CFG-R7): `granularity`, `workflow.research`, `workflow.plan_check`, `workflow.verifier`, `workflow.inline_plan_threshold`, `workflow.max_plan_tasks`, `workflow.max_plan_bytes`, `git.create_tag`, `git.on_land_cleanup`, `git.issue_check` (removed for good: tag and reap are the owner's choice at each merge confirmation and the tracker check always runs, [0011](0011-milestones-landing-undo-pause.md)), `review.decision_review.tier`, `review.decision_review.effort`. Removed because the design replaces them: `review.mode` (every reviewer runs, [0008](0008-review.md)), `workflow.skip_discuss` (refinement is never skipped, [0013](0013-next-action-and-progress.md)), `memory.backend` and `review.consult.*` (recall always available; consult is the diagnosis review, [0014](0014-support-families.md)), `review.key_file` (keys come only from `keys.env`, CFG-R25) and `planning.commit_docs` (Baley writes no records into the working tree, [0001](0001-evidence-ledger.md) EVD-R18). Sprint capacity is designed in [0005](0005-context-plans-and-acceptance.md) (PLN-R9), not as free numbers here.
 
 ## 10. Instructions served
 
@@ -519,7 +502,7 @@ The binary crate holds the inherited engine. It reads JSON files under `.plannin
 | CFG-R4 | Partly built | Bash guard walks up to `.planning` (`crates/baley/src/guard/bash.rs:27-44`); the server binds one project per process (`crates/baley/src/server.rs:810-817`); Write/Edit guard does not walk (`crates/baley/src/guard/mod.rs:323-334`) |
 | CFG-R5 | Partly built | `GLOBAL_ONLY` and `repo_only` flags (`crates/baley/src/config/mod.rs:14-18`, `crates/baley/src/config/merge.rs:59-87`); scopes differ from this design |
 | CFG-R6 | Partly built | defaults, global, repo merge (`crates/baley/src/config/merge.rs:35-49`); no host sections |
-| CFG-R7 | Partly built | unknown keys dropped with a diagnostic (`crates/baley/src/config/merge.rs:93-129`); eleven keys without readers still in `crates/baley/src/config/schema.json` |
+| CFG-R7 | Partly built | unknown keys dropped with a diagnostic (`crates/baley/src/config/merge.rs:93-129`); twelve keys without readers still in `crates/baley/src/config/schema.json` |
 | CFG-R8 | Not built | routes persist config inputs only (`crates/baley/src/config/reload.rs:168-181`) |
 | CFG-R9 | Built | `crates/baley/src/config/reload.rs:300-312`, `crates/baley/src/session/mod.rs:498-509` |
 | CFG-R10 | Built | `crates/baley/src/config/reload.rs:210-221`, `crates/baley/src/execution/boundary.rs:172` |

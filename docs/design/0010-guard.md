@@ -6,7 +6,7 @@
 | Design issue | none; build issue [#24](https://github.com/crenshawdev/baley/issues/24) |
 | Requirement prefix | GRD |
 | Applies | [0002: System design](0002-system-design.md) |
-| Related | ADRs: [0008](../adr/0008-host-sandbox-isolation.md), [0009](../adr/0009-served-instructions.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
+| Related | ADRs: [0008](../adr/0008-host-sandbox-isolation.md), [0009](../adr/0009-served-instructions.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
 
 The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
 
@@ -18,7 +18,7 @@ This area decides what Baley does at the host's edge, before a tool call an agen
 - the Bash guard: which git commands it acts on, what it asks, what it refuses, and what it does when it cannot decide;
 - the Write/Edit guard: which paths an agent may not write;
 - how each answer is recorded, remembered and replayed;
-- the answer adapter per host, and the host sandbox that keeps agents from writing Baley's home, and from reading it where the host can.
+- the answer adapter per host, and the host sandbox that keeps agents from writing Baley's home and its config folder, and from reading both where the host can.
 
 It does not decide the lease itself or what an out-of-lease commit does at task close ([0006](0006-execution.md)); which branch work happens on or how landing pushes ([0011](0011-milestones-landing-undo-pause.md)); risk detection ([0009](0009-risk.md)); or how stubs are rendered and installed ([0012](0012-host-interface.md)).
 
@@ -47,7 +47,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) the guard is t
 | Id | Rule | Why | Depends on | Status |
 |---|---|---|---|---|
 | GRD-R1 | Baley installs one hook per host: a pre-tool-use call for `Bash`, `Write` and `Edit` on Claude Code, and for `Bash` on Codex, with a bounded timeout. There is no other hook. | One edge, the same on both hosts as far as each allows. | SYS-P11, SYS-P12 | Active |
-| GRD-R2 | The guard finds the project by walking up from the call's working directory to the nearest `baley.toml`, stopping at the git repository root (CFG-R4). Outside a project the guard is silent for Bash; the Write/Edit rules that need no project (the global settings file) still apply. | The guard acts only where Baley is responsible. | CFG-R4 | Active |
+| GRD-R2 | The guard finds the project by walking up from the call's working directory to the nearest `baley.toml`, stopping at the git repository root (CFG-R4). Outside a project the guard is silent for Bash; the Write/Edit rules that need no project (Baley's config folder) still apply. | The guard acts only where Baley is responsible. | CFG-R4 | Active |
 | GRD-R3 | The Bash guard acts on a command only when it carries a git `commit` or `push` verb. It splits the command on `;`, `|`, `&`, `&&`, `||` and newlines, takes segments whose first word is `git` or ends in `/git`, skips git's global flags and their operands, and declines to judge a command containing substitutions, backticks, redirects, subshells, braces, a leading comment, a NUL or an unclosed quote. A declined command passes with nothing recorded. No other git verb is covered; this is a stated limit of the design. | Commit and push are where work reaches the record and the forge; everything else was tried and did not pay. | | Active |
 | GRD-R4 | A `push` always asks, on any branch, with a fixed reason. | Publishing is the owner's step. | SYS-P5 | Active |
 | GRD-R5 | A `commit` on a protected branch follows `git.on_protected`: `ask`, `refuse` (deny) or `allow`; an unknown value asks. On any other branch a commit passes. | The owner sets the branch discipline once. | CFG-R5 | Active |
@@ -56,9 +56,9 @@ In the component view of [0002](0002-system-design.md) (Figure 4) the guard is t
 | GRD-R8 | Every `ask`, `deny` and guard failure is recorded before it is answered: the command digest (never the command), the working directory, the project, the verb, the branch, the policy in force, the outcome and the reason. A plain pass records nothing. | The record shows what the guard held and why. | SYS-P6 | Active |
 | GRD-R9 | When the record cannot be written, an `ask` becomes `deny` with the reason that the guard could not record its decision, on stderr and in the answer; a `deny` stays a deny; a pass stays a pass. | An unrecorded ask is the gap the record exists to close. | GRD-R8 | Active |
 | GRD-R10 | A redelivered call with the same call id gets its confirmed answer again, from the record, even after the policy changed. | The host may deliver a call twice; the answer must not differ. | EVD-R26 | Active |
-| GRD-R11 | The Write/Edit guard denies a write to the global settings file, the project file `baley.toml`, any file Baley rendered as a stub, and, during an active dispatch, any path outside the dispatch's lease (EXE-R8). Path resolution canonicalizes the existing prefix and refuses control bytes, doubled separators and non-directory parents; a path it cannot resolve is denied. | The owner sets policy, Baley renders stubs, and the lease means something as the write happens. | CFG-R11, ADR 0009, EXE-R8 | Active |
+| GRD-R11 | The Write/Edit guard denies a write to any path in Baley's config folder (the global settings file `config.toml` and the keys file `keys.env`, [0003](0003-configuration-and-routing.md) CFG-R2, CFG-R24), the project file `baley.toml`, any file Baley rendered as a stub, and, during an active dispatch, any path outside the dispatch's lease (EXE-R8). Path resolution canonicalizes the existing prefix and refuses control bytes, doubled separators and non-directory parents; a path it cannot resolve is denied. | The owner sets policy and holds the keys, Baley renders stubs, and the lease means something as the write happens. | CFG-R11, CFG-R24, ADR 0009, EXE-R8 | Active |
 | GRD-R12 | The answer adapter renders each answer in the host's form. Claude Code takes `allow`, `deny` and `ask`. Codex takes `deny` and an exit code; it rejects `ask`, so on Codex every `ask` is answered `deny` with the reason and the instruction to run the command outside the agent. | The host that offers less sets the floor. | SYS-P12 | Active |
-| GRD-R13 | The host sandbox, configured at install, keeps agent processes from writing Baley's home on both hosts and from reading it on Claude Code; Codex's sandbox grants reads under every policy, which is Codex's policy and not Baley's to change. The guard is a second layer, not the first. `baley doctor` checks the sandbox configuration on each host and reports what an agent can reach, reads included. | The record is protected by the host, and tampering is detected by the chain and its anchors. | ADR 0008 | Active |
+| GRD-R13 | The host sandbox, configured at install, keeps agent processes from writing Baley's home and its config folder on both hosts, and from reading both on Claude Code; Codex's sandbox grants reads under every policy, which is Codex's policy and not Baley's to change. The guard is a second layer, not the first. `baley doctor` checks the sandbox configuration on each host and reports what an agent can reach, reads included. | The record is protected by the host, and tampering is detected by the chain and its anchors. | ADR 0008 | Active |
 | GRD-R14 | The guard reads the hook's input up to a fixed bound, answers within the hook's timeout, and never launches a program except git for the branch; when git is unavailable it reads the branch from `.git/HEAD` directly, bounded and without following symbolic links. | The guard must answer fast and must not become a way to run things. | | Active |
 
 ## 4. Roles and actors
@@ -91,7 +91,7 @@ No model is dispatched by this area.
 ### baley doctor (the guard's part)
 
 - **Inputs:** the host name.
-- **Outputs:** whether the hook is installed and points at this binary; whether the sandbox keeps an agent from reading and writing Baley's home; the answer forms the host honours.
+- **Outputs:** whether the hook is installed and points at this binary; whether the sandbox keeps an agent from writing Baley's home and config folder, and from reading them; the answer forms the host honours.
 - **Refusals:** none; findings are reported (GRD-R13).
 
 ## 6. Records
