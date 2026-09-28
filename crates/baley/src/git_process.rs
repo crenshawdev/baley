@@ -24,6 +24,8 @@ pub enum Caller {
     RecallHistory,
     ReadDocumentHead,
     LandingGit,
+    /// Anchor tag transport.
+    AnchorForge,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,7 +62,8 @@ pub fn deadline(caller: Caller) -> Deadline {
         | Caller::RailConfig
         | Caller::RecallHistory
         | Caller::ReadDocumentHead
-        | Caller::LandingGit => Deadline {
+        | Caller::LandingGit
+        | Caller::AnchorForge => Deadline {
             nominal: OTHER_GIT_DEADLINE,
             work: OTHER_GIT_DEADLINE,
         },

@@ -52,3 +52,5 @@ Every budget in the design's Performance table, on two databases: the reference 
 Five runs on each of two drives, 2026-09-25: `results/2026-09-25-t700/` (Crucial T700) and `results/2026-09-25-p3plus/` (Crucial P3 Plus), each with one file per run and a `summary.json`. They are summarized against each budget in design 0001's Performance section, together with the design changes the runs led to. Measurements follow loading on the same machine, so the page cache is warm.
 
 `./target/release/evidence-ledger-bench run <home-root> <runs> <results-dir>` reproduces a set. `BENCH_GATE=0` in a writer's environment turns the writer queue off; the harness runs both modes itself.
+
+The real workspace adapter is measured by [`crates/baley-bench`](../../crates/baley-bench); this prototype and its results remain the recorded prototype run.

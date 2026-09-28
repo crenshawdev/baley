@@ -44,6 +44,8 @@ pub struct Options {
     pub view_set_version: NonZeroU32,
     /// The clock and pause of rebuilds, cleanups and view verification.
     pub timing: Arc<dyn Timing>,
+    /// Optional measurement of time spent waiting for a write's queue turn.
+    pub queue_wait: Option<Arc<dyn Fn(Duration) + Send + Sync>>,
 }
 
 impl Default for Options {
@@ -56,6 +58,7 @@ impl Default for Options {
             schema: Box::new(ReadsNothing),
             view_set_version: NonZeroU32::new(2).expect("nonzero"),
             timing: Arc::new(Monotonic),
+            queue_wait: None,
         }
     }
 }
@@ -107,6 +110,7 @@ pub struct SqliteStore {
     /// Held for a whole rebuild or view verification.
     maintenance_lock: FileLock,
     timing: Arc<dyn Timing>,
+    queue_wait: Option<Arc<dyn Fn(Duration) + Send + Sync>>,
     trace_cap: u64,
     views: ViewSet,
     /// The store's `request` projector first, then the core's.
@@ -195,6 +199,7 @@ impl SqliteStore {
             queue,
             maintenance_lock,
             timing: options.timing,
+            queue_wait: options.queue_wait,
             trace_cap: options.trace_cap,
             views,
             projectors,
@@ -351,7 +356,11 @@ impl SqliteStore {
         &self,
         f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
+        let waiting = self.queue_wait.as_ref().map(|_| self.timing.now());
         let _turn = self.queue.wait().map_err(io)?;
+        if let (Some(observer), Some(waiting)) = (&self.queue_wait, waiting) {
+            observer(self.timing.now().saturating_sub(waiting));
+        }
         self.transaction(f)
     }
 
@@ -566,6 +575,50 @@ mod tests {
     use super::*;
 
     const AT: &str = "2026-09-25T18:00:00Z";
+
+    #[test]
+    fn queue_observer_measures_only_the_wait() {
+        let home = tempfile::tempdir().unwrap();
+        drop(open(home.path()));
+        let timing = crate::queue::scripted::Scripted::still();
+        timing.script(&[Duration::ZERO, Duration::from_millis(7)]);
+        let waits = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&waits);
+        let store = SqliteStore::open(
+            home.path(),
+            AT,
+            Options {
+                timing,
+                queue_wait: Some(Arc::new(move |wait| observed.lock().unwrap().push(wait))),
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        store.record_trace(&trace("wait")).unwrap();
+        assert_eq!(*waits.lock().unwrap(), [Duration::from_millis(7)]);
+    }
+
+    #[test]
+    fn no_queue_observer_consumes_no_reading() {
+        let home = tempfile::tempdir().unwrap();
+        let timing = crate::queue::scripted::Scripted::still();
+        timing.script(&[
+            Duration::from_millis(11),
+            Duration::from_millis(22),
+            Duration::from_millis(33),
+        ]);
+        let store = SqliteStore::open(
+            home.path(),
+            AT,
+            Options {
+                timing: timing.clone(),
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        store.record_trace(&trace("no wait")).unwrap();
+        assert_eq!(timing.now(), Duration::from_millis(11));
+    }
 
     fn open(home: &Path) -> SqliteStore {
         SqliteStore::open(home, AT, Options::default()).expect("open")

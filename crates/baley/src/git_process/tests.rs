@@ -5,6 +5,7 @@ use std::{ffi::OsString, io, time::Duration};
 #[test]
 fn git_subprocesses_run_under_a_deadline() {
     let rows: &[(Caller, &[&str], &str, u64)] = &[
+        (Caller::AnchorForge, &["remote"], "git remote", 60),
         (
             Caller::GuardBranch,
             &["symbolic-ref", "--quiet", "--short", "HEAD"],

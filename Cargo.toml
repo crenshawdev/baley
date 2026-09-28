@@ -11,4 +11,5 @@ members = [
     "crates/baley-core",
     "crates/baley-store-sqlite",
     "crates/baley",
+    "crates/baley-bench",
 ]

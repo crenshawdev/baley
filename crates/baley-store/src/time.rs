@@ -22,6 +22,20 @@ impl fmt::Display for TimeError {
 impl std::error::Error for TimeError {}
 
 impl UtcInstant {
+    /// Constructs a UTC instant from Unix seconds and a nanosecond fraction.
+    pub fn from_unix(seconds: i64, nanos: u32) -> Result<Self, TimeError> {
+        let seconds = seconds
+            .checked_add(civil_days(1970, 1, 1) * 86_400)
+            .ok_or(TimeError)?;
+        if nanos >= 1_000_000_000
+            || seconds < civil_days(0, 1, 1) * 86_400
+            || seconds >= civil_days(10000, 1, 1) * 86_400
+        {
+            return Err(TimeError);
+        }
+        Ok(Self { seconds, nanos })
+    }
+
     /// Parses `YYYY-MM-DDTHH:MM:SS[.f{1,9}]Z`, without offsets or leap seconds.
     pub fn parse(value: &str) -> Result<Self, TimeError> {
         let b = value.as_bytes();
@@ -91,6 +105,30 @@ impl UtcInstant {
     }
 }
 
+impl fmt::Display for UtcInstant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let days = self.seconds.div_euclid(86_400);
+        let era = days.div_euclid(146_097);
+        let doe = days - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        let year = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = mp + if mp < 10 { 3 } else { -9 };
+        let year = year + i64::from(month <= 2);
+        let time = self.seconds.rem_euclid(86_400);
+        write!(
+            f,
+            "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:09}Z",
+            time / 3600,
+            time / 60 % 60,
+            time % 60,
+            self.nanos
+        )
+    }
+}
+
 fn digits(bytes: &[u8]) -> Result<u32, TimeError> {
     bytes.iter().try_fold(0u32, |n, b| {
         if b.is_ascii_digit() {
@@ -115,6 +153,49 @@ fn civil_days(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unix_epoch_has_padded_utc_form() {
+        assert_eq!(
+            UtcInstant::from_unix(0, 0).unwrap().to_string(),
+            "1970-01-01T00:00:00.000000000Z"
+        );
+    }
+    #[test]
+    fn unix_leap_day_uses_gregorian_arithmetic() {
+        assert_eq!(
+            UtcInstant::from_unix(951_782_400, 0).unwrap().to_string(),
+            "2000-02-29T00:00:00.000000000Z"
+        );
+    }
+    #[test]
+    fn unix_fraction_keeps_nine_digits() {
+        assert_eq!(
+            UtcInstant::from_unix(0, 5).unwrap().to_string(),
+            "1970-01-01T00:00:00.000000005Z"
+        );
+    }
+    #[test]
+    fn unix_display_is_accepted_by_the_parser() {
+        for (seconds, nanos) in [
+            (-62_167_219_200, 0),
+            (-1, 9),
+            (0, 0),
+            (253_402_300_799, 999_999_999),
+        ] {
+            let instant = UtcInstant::from_unix(seconds, nanos).unwrap();
+            assert_eq!(UtcInstant::parse(&instant.to_string()), Ok(instant));
+        }
+    }
+    #[test]
+    fn unix_fraction_cannot_wrap() {
+        assert_eq!(UtcInstant::from_unix(0, 1_000_000_000), Err(TimeError));
+    }
+    #[test]
+    fn unix_year_cannot_exceed_four_digits() {
+        assert_eq!(UtcInstant::from_unix(253_402_300_800, 0), Err(TimeError));
+        assert_eq!(UtcInstant::from_unix(-62_167_219_201, 0), Err(TimeError));
+    }
 
     // Catches a deadline wrapping past the last representable UTC instant.
     #[test]
