@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status is as of origin/main `55e24a50` on 2026-09-27, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status is as of origin/main `7429cc12`, with task 14 built on `foundations-edge` pending independent verification on 2026-09-28, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
 
 ## The path to the first release
 
@@ -55,12 +55,12 @@ Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work
 
 The evidence ledger store: a storage port with a SQLite adapter behind it, one conformance suite every adapter must pass, the hash chain, forge anchors, verify, export, doctor and acknowledge-restore. Nothing uses it yet.
 
-ADRs: [0001 event ledger](adr/0001-event-ledger.md), [0002 SQLite](adr/0002-sqlite.md), [0003 per-user database](adr/0003-per-user-database.md), [0005 storage port](adr/0005-storage-port.md), [0007 forge anchors](adr/0007-forge-anchors.md), [0010 projector traits in the port](adr/0010-projector-traits-in-the-port.md), [0012 optimistic concurrency](adr/0012-optimistic-concurrency.md), [0021 claim rules in the port](adr/0021-claim-rules-in-the-port.md), [0022 acknowledged restore](adr/0022-acknowledged-restore.md), [0023 no backups in Baley](adr/0023-no-backups-in-baley.md), [0024 conformance suite and adapter tests](adr/0024-conformance-suite-and-adapter-tests.md).
+ADRs: [0001 event ledger](adr/0001-event-ledger.md), [0002 SQLite](adr/0002-sqlite.md), [0003 per-user database](adr/0003-per-user-database.md), [0005 storage port](adr/0005-storage-port.md), [0007 forge anchors](adr/0007-forge-anchors.md), [0010 projector traits in the port](adr/0010-projector-traits-in-the-port.md), [0012 optimistic concurrency](adr/0012-optimistic-concurrency.md), [0021 claim rules in the port](adr/0021-claim-rules-in-the-port.md), [0022 acknowledged restore](adr/0022-acknowledged-restore.md), [0023 no backups in Baley](adr/0023-no-backups-in-baley.md), [0024 conformance suite and adapter tests](adr/0024-conformance-suite-and-adapter-tests.md), [0025 anchor tag objects](adr/0025-anchor-tag-objects.md).
 
 ```mermaid
 flowchart LR
     T1["T1 to T13<br/>merged"]
-    T14["T14<br/>CLI, git forge,<br/>ticker, benchmark"]
+    T14["T14<br/>verify, doctor, export, purge,<br/>scrub, rebuild, anchor,<br/>acknowledge-restore<br/>git forge, ticker, benchmark<br/>built, independent verification pending"]
 
     T1 --> T14
 
@@ -89,7 +89,7 @@ Figure 2. Build 1's tasks. One pull request per task.
 | T11 | Anchors and the adapter's `verify` | [#135](https://github.com/crenshawdev/baley/pull/135) | Merged |
 | T12 | Export, doctor and the owner-only acknowledge-restore command; backups removed | [#138](https://github.com/crenshawdev/baley/pull/138) | Merged |
 | T13 | The conformance suite, run against every store adapter | [#140](https://github.com/crenshawdev/baley/pull/140) | Merged |
-| T14 | CLI commands `verify`, `doctor`, `export`, `purge`, `anchor` and `acknowledge-restore`; the real git forge and ticker, and the benchmark | | Planned |
+| T14 | CLI commands `verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor` and `acknowledge-restore`; the git forge and ticker, and `baley-bench` with `seed` | Not opened | Built, local checks passed, independent verification pending |
 
 
 ## Build 2: Identity, settings and keys
@@ -173,7 +173,7 @@ Ranked recall and exact "why" queries, then task, debug and spike on the ledger.
 
 [#30](https://github.com/crenshawdev/baley/issues/30) · milestone Evidence · planned
 
-Removes the old JSON record, the intent journal, participants, root binding, the Markdown renderers and parsers, and every `.planning` path. Every owner command and every served instruction then reads the ledger. The real server's memory, start time and main operations are measured against design 0001's budgets. The timings are recorded as measurements, not test assertions.
+Removes the old JSON record, the intent journal, participants, root binding, the Markdown renderers and parsers, and every `.planning` path. Builds `baley show` and record export to Markdown (EVD-R25), with the record-export spelling settled beside the standalone project export. Every owner command and every served instruction then reads the ledger. The real server's memory, start time and main operations are measured against design 0001's budgets. The timings are recorded as measurements, not test assertions.
 
 - Designs: [0001 evidence ledger](design/0001-evidence-ledger.md), [0012 host interface](design/0012-host-interface.md), [0014 support families](design/0014-support-families.md)
 - ADRs: [0006 no Markdown records](adr/0006-no-markdown-records.md), [0009 served instructions](adr/0009-served-instructions.md)

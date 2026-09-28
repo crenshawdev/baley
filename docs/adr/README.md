@@ -32,3 +32,4 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0022](0022-acknowledged-restore.md) | Report owner-acknowledged restores behind a remote anchor | Accepted |
 | [0023](0023-no-backups-in-baley.md) | Keep whole-store backups outside Baley | Accepted, supersedes 0003 and 0016 in part |
 | [0024](0024-conformance-suite-and-adapter-tests.md) | Separate port conformance from adapter mechanism tests | Accepted |
+| [0025](0025-anchor-tag-objects.md) | Point anchor tags at the empty tree | Accepted |
