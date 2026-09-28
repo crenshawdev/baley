@@ -9,6 +9,8 @@ rust-version = "1.98"
 publish = false
 
 [dependencies]
+# The effective user id for the open checks, which std does not expose.
+libc = "0.2"
 baley-store = { path = "../baley-store" }
 # `bundled` compiles SQLite from source with FTS5, so no system SQLite is used.
 # The design's benchmark ran on rusqlite 0.40.1 with SQLite 3.53.2; the lock

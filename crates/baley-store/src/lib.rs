@@ -45,7 +45,9 @@ pub use command::{
     Observed, ObservedDocument, Outcome, OutcomeKind, Recorded, StreamName,
 };
 pub use conformance::{Binary, Corruption, StoreFactory};
-pub use error::{GitFact, Refusal, StaleInput, StoreError};
+pub use error::{
+    FaultTarget, GitFact, HomeFault, HomeProblem, Refusal, StaleInput, StoreError, UNSAFE_HOME,
+};
 pub use event::{
     Actor, ActorError, AgentRole, Event, EventDraft, GitFacts, Hash, ProjectId, RequestId,
     SealError,

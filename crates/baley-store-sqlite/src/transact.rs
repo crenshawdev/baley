@@ -1466,7 +1466,7 @@ mod tests {
     // Catches a replay fenced by a raw newer set stamp beside a current request view.
     #[test]
     fn a_replay_is_answered_beside_a_newer_view_set() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let Recorded::New { outcome, .. } = record(&store, "r1", &[(1, "open")]) else {
             panic!("new request")
@@ -1487,7 +1487,7 @@ mod tests {
     // the stream has moved. Catches `expect` that never compares.
     #[test]
     fn expect_refuses_a_stream_that_moved() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         record(&store, "r1", &[(1, "open")]);
         let stream = StreamName("item/1".into());
@@ -1511,7 +1511,7 @@ mod tests {
     // own writes, which would refuse every create-if-absent command.
     #[test]
     fn a_decision_is_not_stale_against_its_own_events() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let absence = Absence::Event(EventMatch {
             type_name: RECORDED.into(),
@@ -1536,7 +1536,7 @@ mod tests {
     // before `BEGIN IMMEDIATE`.
     #[test]
     fn the_write_transaction_is_open_while_the_decision_runs() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let other = raw(home.path());
         other.busy_timeout(Duration::ZERO).expect("no wait");
@@ -1583,7 +1583,7 @@ mod tests {
     // answer's canonical JSON. Catches a large answer written inline.
     #[test]
     fn an_answer_past_4_kib_is_stored_as_a_payload() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let answer = json!("x".repeat(4096));
         let recorded = store
@@ -1607,7 +1607,7 @@ mod tests {
     // the sensitive flag ignored below the size limit.
     #[test]
     fn a_sensitive_answer_is_stored_as_a_payload() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         store
             .transact(&command("item.add", "secret", 1), &mut |_| {
@@ -1626,7 +1626,7 @@ mod tests {
     // projector written per event.
     #[test]
     fn each_changed_document_is_written_once() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         raw(home.path())
             .execute_batch(
@@ -1652,7 +1652,7 @@ mod tests {
     // command's own writes.
     #[test]
     fn get_inside_a_decision_sees_its_own_events() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let seen = std::cell::RefCell::new(None);
         record(&store, "r1", &[(1, "open")]);
@@ -1675,7 +1675,7 @@ mod tests {
     // out, stored item 2 stays. Catches a find that reads only stored rows.
     #[test]
     fn find_inside_a_decision_sees_its_own_events() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         record(&store, "r1", &[(2, "open"), (3, "open")]);
         let seen = std::cell::RefCell::new(Vec::new());
@@ -1741,7 +1741,7 @@ mod tests {
     // does not move, and stored fields that differ from the hashed ones.
     #[test]
     fn a_commands_events_extend_the_chain_and_move_the_head() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         record(&store, "r1", &[(1, "open")]);
         let Recorded::New { head, .. } = record(&store, "r2", &[(2, "open")]) else {
@@ -1766,7 +1766,7 @@ mod tests {
     // Catches an operation's error a decision can swallow into a commit.
     #[test]
     fn an_error_the_decision_goes_past_still_fails_the_command() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         record(&store, "r1", &[(1, "open")]);
         let events = count(home.path(), "event");
@@ -1811,7 +1811,7 @@ mod tests {
     // read-only fence applied to a replay, which only reads.
     #[test]
     fn a_replay_is_answered_on_a_project_this_binary_cannot_write() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let Recorded::New { outcome, .. } = record(&store, "r1", &[(1, "open")]) else {
             panic!("recorded");
@@ -1828,7 +1828,7 @@ mod tests {
     // next write is refused. Catches a mark trusted by its sequence alone.
     #[test]
     fn a_chain_rewritten_under_the_checked_head_is_checked_again() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         record(&store, "r1", &[(1, "open")]);
         let conn = raw(home.path());
@@ -1861,7 +1861,7 @@ mod tests {
     // a body left outside the chain, where no purge reaches it.
     #[test]
     fn a_payload_no_event_attaches_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let loose = Cell::new(None);
         let result = store.transact(&command("item.add", "r1", 1), &mut |tx| {
@@ -1882,7 +1882,7 @@ mod tests {
     // as plain JSON, so its body gets no reference row.
     #[test]
     fn an_object_with_a_references_fields_that_is_not_one_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let mut reference = PayloadRef {
             hash: Hash([7; 32]),
@@ -1910,7 +1910,7 @@ mod tests {
     // which SQLite ends at the NUL and rejects.
     #[test]
     fn event_exists_matches_a_field_name_holding_a_nul() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let mut event = item(1, "open");
         event.payload["a\u{0}b"] = json!("x");
@@ -1940,7 +1940,7 @@ mod tests {
     // the git facts a refusal on git state rests on.
     #[test]
     fn command_completed_records_the_decisions_git_facts() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         store
             .transact(&command("item.add", "r1", 1), &mut |_| {

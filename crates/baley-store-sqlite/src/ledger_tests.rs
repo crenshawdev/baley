@@ -64,7 +64,7 @@ impl Fixture {
     }
 
     fn with_schema(schema: Box<dyn EventSchema>) -> Self {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), schema);
         store
             .write(|tx| {

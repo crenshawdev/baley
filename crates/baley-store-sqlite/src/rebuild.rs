@@ -1355,7 +1355,7 @@ mod tests {
     // in the old generation between them and be flipped away.
     #[test]
     fn the_tail_and_the_flip_commit_in_one_transaction() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let timing = Scripted::still();
         let store = created(home.path(), Arc::clone(&timing));
         fixture(&store);
@@ -1382,7 +1382,7 @@ mod tests {
     // Catches a failed rebuild changing the live generation number.
     #[test]
     fn a_failed_final_tail_preserves_the_live_generation_number() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let writer = created(home.path(), Scripted::still());
         fixture(&writer);
         let before = live_gen(home.path());
@@ -1407,7 +1407,7 @@ mod tests {
     // nothing, or one that undoes the flip.
     #[test]
     fn a_cleanup_failure_after_the_flip_names_the_live_generation() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let timing = Scripted::still();
         let store = created(home.path(), Arc::clone(&timing));
         fixture(&store);
@@ -1442,7 +1442,7 @@ mod tests {
     // clock only between tables, and so holds the queue past the bound.
     #[test]
     fn a_cleanup_turn_stops_at_the_time_bound() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let timing = Scripted::still();
         let store = created(home.path(), Arc::clone(&timing));
         fixture(&store);
@@ -1462,7 +1462,7 @@ mod tests {
     // Catches abandoned rows or markers left after the next rebuild.
     #[test]
     fn the_next_rebuild_deletes_an_abandoned_generation() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         // Every batch reaches the time bound after its first event.
         let store = created(home.path(), Scripted::stepping(BATCH_TIME));
         fixture(&store);
@@ -1480,7 +1480,7 @@ mod tests {
     // Catches orphan cleanup deleting live rows or stamps.
     #[test]
     fn a_live_marker_rebuild_preserves_rows_and_stamps() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = created(home.path(), Scripted::still());
         fixture(&store);
         let stamped = stamps(home.path(), 0);
@@ -1502,7 +1502,7 @@ mod tests {
     // how long the batch held the queue.
     #[test]
     fn the_pause_after_a_batch_is_as_long_as_it_held_the_queue() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let timing = Scripted::still();
         let store = created(home.path(), Arc::clone(&timing));
         record(&store, "r1", &[]).expect("one event");
@@ -1515,7 +1515,7 @@ mod tests {
     // Catches missing stamps treated as current.
     #[test]
     fn a_missing_view_stamp_rebuilds_before_use() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open_as(
             home.path(),
             vec![item(2), tally(None), quiet()],
@@ -1557,7 +1557,7 @@ mod tests {
     // Catches replay rewriting the original payload text.
     #[test]
     fn replay_preserves_the_stored_payload_text() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = created(home.path(), Scripted::still());
         store
             .transact(&command("fixture.add", "old"), &mut |tx| {
@@ -1583,7 +1583,7 @@ mod tests {
     // the first read the second.
     #[test]
     fn generation_numbers_are_not_reused() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = created(home.path(), Scripted::still());
         fixture(&store);
         let first = store.rebuild(&project()).expect("first");
@@ -1597,7 +1597,7 @@ mod tests {
     // limited to the current versions' tables.
     #[test]
     fn cleanup_removes_old_and_orphan_rows() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let old = open_as(
             home.path(),
             vec![item(1), tally(None)],
@@ -1629,7 +1629,7 @@ mod tests {
     // Catches verification changing the damaged marker, live rows or stamps.
     #[test]
     fn a_live_marker_verification_preserves_rows_and_stamps() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = created(home.path(), Scripted::still());
         fixture(&store);
         let stamped = stamps(home.path(), 0);
@@ -1650,7 +1650,7 @@ mod tests {
     // Catches scratch rows or markers leaked after a projector error.
     #[test]
     fn a_projector_error_in_view_verification_leaves_no_scratch_rows() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let writer = created(home.path(), Scripted::still());
         fixture(&writer);
         let failing = open_as(
@@ -1672,7 +1672,7 @@ mod tests {
     // a failed cleanup hidden behind the comparison's own error.
     #[test]
     fn a_failed_scratch_cleanup_is_reported_as_unfinished() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let timing = Scripted::still();
         let store = created(home.path(), Arc::clone(&timing));
         fixture(&store);
@@ -1704,7 +1704,7 @@ mod tests {
     // comparison ends.
     #[test]
     fn verification_leaves_the_read_connection_free() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let timing = Scripted::still();
         let store = Arc::new(created(home.path(), Arc::clone(&timing)));
         fixture(&store);
@@ -1729,7 +1729,7 @@ mod tests {
     // which would see the command in live but not in scratch.
     #[test]
     fn the_verification_snapshot_is_pinned_before_the_queue_is_released() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = created(home.path(), Scripted::still());
         fixture(&store);
         let writer = open_with(home.path(), Scripted::still());
@@ -1759,7 +1759,7 @@ mod tests {
     // Catches verification removing an unfinished rebuild marker.
     #[test]
     fn an_unfinished_verification_preserves_its_building_marker() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = created(home.path(), Scripted::still());
         fixture(&store);
         let mut session = store.start_rebuild(&project()).expect("start");
@@ -1772,7 +1772,7 @@ mod tests {
     // Catches a failed rebuild changing the live generation number.
     #[test]
     fn an_unreadable_rebuild_preserves_the_live_generation_number() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = created(home.path(), Scripted::still());
         fixture(&store);
         let blind = SqliteStore::open(
@@ -1793,7 +1793,7 @@ mod tests {
     // Catches rows and stamps left for a retired view.
     #[test]
     fn a_removed_views_rows_and_stamps_are_deleted() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let old = created(home.path(), Scripted::still());
         fixture(&old);
         drop(old);
