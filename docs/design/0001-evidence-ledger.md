@@ -1203,23 +1203,23 @@ See [Threat model](#threat-model) for who is defended against.
 
 ### Performance
 
-The real adapter is measured by `crates/baley-bench`. Latency figures are each run's p99, reported as the median of five runs with the worst run in brackets. The longest rebuild batch uses each run's maximum, not its p99. Totals, flip and size use one value per run. The full measurements on the owner's two drives are filled in during verification before merge.
+The real adapter is measured by `crates/baley-bench`. Latency figures are each run's p99, reported as the median of five runs with the worst run in brackets. The longest rebuild batch uses each run's maximum, not its p99. Totals, flip and size use one value per run. The longest lock wait is the single longest wait across all five runs. Measured on 2026-09-27 with `baley-bench run HOME --runs 5` (30 seconds per writer phase), five runs per drive with the page cache warm after loading: AMD Ryzen 7 9800X3D, Linux 7.2.7, SQLite 3.53.2, btrfs with zstd compression on both drives.
 
 | Operation | Budget | Crucial T700 | Crucial P3 Plus (QLC) |
 |---|---|---|---|
-| Open with epoch, schema-digest and view-catalog checks (guard, CLI) | 10 ms | Pending measurement | Pending measurement |
-| Commit a command, including claim and complete for external effects | 20 ms | Pending measurement | Pending measurement |
-| Commit a command of 10 events | 20 ms | Pending measurement | Pending measurement |
-| Get one view document by key and parse it | 2 ms | Pending measurement | Pending measurement |
-| Guard hook, store work only, in a new process | 25 ms | Pending measurement | Pending measurement |
-| Wait for the write lock with 8 sessions, p99 and longest wait | 250 ms | Pending measurement | Pending measurement |
-| Rebuild every view of the reference project while writers run | 30 s | Pending measurement | Pending measurement |
-| Longest rebuild batch | 100 ms | Pending measurement | Pending measurement |
-| Rebuild's final flip | 50 ms | Pending measurement | Pending measurement |
-| Size, database and log after all handles close | 50 MB | Pending measurement | Pending measurement |
-| Purge, including scrub | No budget | Pending measurement | Pending measurement |
-| Standalone scrub | No budget | Pending measurement | Pending measurement |
-| Verify reference project | No budget | Pending measurement | Pending measurement |
+| Open with epoch, schema-digest and view-catalog checks (guard, CLI) | 10 ms | 0.95 ms (1.04) | 0.78 ms (0.99) |
+| Commit a command, including claim and complete for external effects | 20 ms | 5.9 ms (11.9) | 10.2 ms (11.2) |
+| Commit a command of 10 events | 20 ms | 7.0 ms (11.6) | 10.3 ms (11.1) |
+| Get one view document by key and parse it | 2 ms | 0.023 ms (0.025) | 0.022 ms (0.027) |
+| Guard hook, store work only, in a new process | 25 ms | 7.6 ms (16.2) | 12.8 ms (16.6) |
+| Wait for the write lock with 8 sessions, p99 and longest wait | 250 ms | 37 ms (65), longest 136 ms | 58 ms (59), longest 72 ms |
+| Rebuild every view of the reference project while writers run | 30 s | 4.1 s (4.2) | 4.0 s (4.1) |
+| Longest rebuild batch | 100 ms | 16.7 ms (23.9) | 19.4 ms (19.6) |
+| Rebuild's final flip | 50 ms | 8.0 ms (11.3) | 12.8 ms (13.3) |
+| Size, database and log after all handles close | 50 MB | 15.3 MB | 15.3 MB |
+| Purge, including scrub | No budget | 42 ms (74) | 62 ms (66) |
+| Standalone scrub | No budget | 30 ms (50) | 38 ms (43) |
+| Verify reference project | No budget | 49 ms (57) | 48 ms (49) |
 | Server start with `quick_check` (server in Build 3, measured in Build 9) | 2 s | Measured in Build 9 | Measured in Build 9 |
 | Search | Defined in Build 8 | Measured in Build 8 | Measured in Build 8 |
 | Server resident memory | Does not grow with store size | Measured in Build 9 | Measured in Build 9 |
