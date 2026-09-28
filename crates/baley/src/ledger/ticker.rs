@@ -76,13 +76,17 @@ impl<W: Worker> TickGuard for ThreadGuard<W> {
         self.thread.join();
     }
 }
+/// The core asks for whole seconds; the pace waits a `Duration`.
+fn interval(seconds: u64) -> Duration {
+    Duration::from_secs(seconds)
+}
 impl Ticker for ThreadTicker {
     fn start(
         &mut self,
         interval_seconds: u64,
         tick: Box<dyn FnMut(String) + Send + 'static>,
     ) -> Box<dyn TickGuard> {
-        let interval = Duration::from_secs(interval_seconds);
+        let interval = interval(interval_seconds);
         let (stop, receiver) = mpsc::channel();
         let pace = DeadlinePace {
             stop: receiver,
@@ -130,7 +134,7 @@ mod tests {
         assert_eq!(*times.lock().unwrap(), ["one", "two"]);
     }
     #[test]
-    fn pace_receives_seconds_not_milliseconds() {
+    fn the_pace_is_not_given_a_different_interval() {
         let intervals = Arc::default();
         run_ticks(
             Script {
@@ -141,6 +145,10 @@ mod tests {
             Box::new(|_| panic!("no tick")),
         );
         assert_eq!(*intervals.lock().unwrap(), [Duration::from_secs(10)]);
+    }
+    #[test]
+    fn start_cannot_read_seconds_as_milliseconds() {
+        assert_eq!(interval(10), Duration::from_millis(10_000));
     }
     struct BlockingPace {
         stop: Receiver<()>,
