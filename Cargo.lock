@@ -104,6 +104,7 @@ name = "baley"
 version = "0.1.0"
 dependencies = [
  "baley-core",
+ "baley-store",
  "baley-store-sqlite",
  "clap",
  "grep-matcher",

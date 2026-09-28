@@ -26,6 +26,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Owner operations on the evidence ledger.
+    #[command(flatten)]
+    Ledger(baley::ledger::LedgerCommand),
     /// Render the query-only help front door without opening a project.
     HelpInstructions,
     /// Regenerate only a skill's description from the compiled table on stdin.
@@ -96,7 +99,12 @@ fn main() -> std::process::ExitCode {
 
 fn run_command(command: Command) -> std::process::ExitCode {
     use std::io::{Read, Write};
+    let command = match command {
+        Command::Ledger(command) => return baley::ledger::run(command),
+        other => other,
+    };
     let arguments: Vec<&str> = match &command {
+        Command::Ledger(_) => unreachable!("dispatched above"),
         Command::Serve => return run_serve(None),
         Command::Guard => return guard::run(),
         Command::SkillDescription { name } => {
@@ -232,4 +240,16 @@ fn run_serve(project_root: Option<std::path::PathBuf>) -> std::process::ExitCode
     // runtime destructor wait to the coordinator's ten-second deadline.
     runtime.shutdown_timeout(std::time::Duration::ZERO);
     outcome
+}
+
+#[cfg(test)]
+mod ledger_argument_tests {
+    use super::*;
+    #[test]
+    fn verify_reaches_the_flattened_ledger_surface() {
+        let cli = Cli::try_parse_from(["baley", "verify", "P", "--local-only"]).unwrap();
+        assert!(
+            matches!(cli.command,Command::Ledger(baley::ledger::LedgerCommand::Verify { project,local_only:true,.. }) if project == "P")
+        );
+    }
 }
