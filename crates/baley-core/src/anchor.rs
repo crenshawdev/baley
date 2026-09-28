@@ -258,7 +258,7 @@ pub fn chain_mismatch(chain: &ChainReport) -> Option<String> {
     let broken = chain.first_break.as_ref().map(|at| at.seq);
     match (&chain.anchor, broken) {
         (AnchorVerdict::Truncated { anchored, head }, _) => Some(format!(
-            "the local chain ends at sequence {head}, before the remote anchor at {anchored}"
+            "the local chain ends at sequence {head}, counting this anchor's claim, before the remote anchor at {anchored}"
         )),
         (AnchorVerdict::Rewritten { seq, .. }, _) => Some(format!(
             "the local chain differs from the remote anchor at sequence {seq}"
@@ -1356,7 +1356,7 @@ mod tests {
                     },
                     None,
                 ),
-                "the local chain ends at sequence 50, before the remote anchor at 60",
+                "the local chain ends at sequence 50, counting this anchor's claim, before the remote anchor at 60",
             ),
             (
                 chain(

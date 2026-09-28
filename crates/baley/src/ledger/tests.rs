@@ -294,7 +294,64 @@ fn an_accepted_restore_is_visible_and_successful() {
         });
     let r = display::verify_report(&report);
     assert_eq!(r.code, 0);
-    assert!(text(&r).contains("acknowledged restore at 1"));
+    assert_eq!(text(&r).matches("acknowledged").count(), 1);
+    assert!(text(&r).contains("acknowledged at 1"));
+}
+#[test]
+fn an_earlier_acknowledgement_stays_listed_after_a_newer_anchor() {
+    let mut report = clean();
+    report
+        .chain
+        .acknowledged_restores
+        .push(AcknowledgedRestore {
+            seq: 1,
+            anchor: Anchor {
+                seq: 60,
+                hash: Hash([6; 32]),
+            },
+            restored: None,
+        });
+    assert!(text(&display::verify_report(&report)).contains("acknowledged restore at 1"));
+}
+#[test]
+fn anchor_row_comparison_is_not_printed_as_a_type_name() {
+    let mut report = clean();
+    report.stored_anchor_comparison = StoredAnchorComparison::MissingLocal;
+    let r = text(&display::verify_report(&report));
+    assert!(r.contains("local anchor row: missing, although the remote holds an anchor"));
+    assert!(!r.contains("MissingLocal"));
+}
+#[test]
+fn view_versions_are_not_printed_as_options() {
+    let mut h = health();
+    if let Ok(raw) = &mut h.projects[0].raw_views {
+        raw.views.push(ViewHealth {
+            view: "request".into(),
+            live_version: None,
+            binary_version: 2,
+        });
+    }
+    let r = text(&display::doctor(&h, &projects()));
+    assert!(r.contains("view set 2, binary 2"));
+    assert!(r.contains("view request: live none, binary 2"));
+    assert!(!r.contains("Some("));
+}
+#[test]
+fn claim_states_and_breaks_are_not_printed_as_type_names() {
+    assert_eq!(
+        display::claim_state_text(ClaimState::AwaitingOwner),
+        "awaiting the owner"
+    );
+    assert_eq!(
+        display::break_text(&BreakKind::Sequence { found: 7 }),
+        "the row there carries sequence 7"
+    );
+    assert_eq!(
+        display::status_text(&PayloadStatus::Purged {
+            reason: "leaked".into()
+        }),
+        "purged: leaked"
+    );
 }
 #[test]
 fn view_differences_are_named() {
@@ -303,7 +360,7 @@ fn view_differences_are_named() {
         differing: vec![("request".into(), DocKey(vec![KeyValue::Text("R".into())]))],
     });
     assert_eq!(r.code, 1);
-    assert!(text(&r).contains("request DocKey([Text(\"R\")])"));
+    assert!(text(&r).contains("request \"R\""));
 }
 fn health() -> Health {
     Health {
@@ -748,7 +805,7 @@ fn a_blocked_anchor_names_its_holder() {
         vec![],
     );
     assert_eq!(r.code, 1);
-    assert_eq!(text(&r), "anchor blocked by request held (Active)");
+    assert_eq!(text(&r), "anchor blocked by request held (active)");
 }
 #[test]
 fn an_unknown_remote_leaves_the_claim_visible() {
