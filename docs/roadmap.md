@@ -135,8 +135,10 @@ flowchart LR
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
+    classDef progress fill:#9a6700,stroke:#7d4e00,color:#ffffff
     class T1,T2 done
-    class T3,T4,T5,T6,T7,T8,T9,T10,T11,T12,T13 planned
+    class T3 progress
+    class T4,T5,T6,T7,T8,T9,T10,T11,T12,T13 planned
 ```
 
 Figure 3. Build 2's tasks. Arrows point from a task to what waits on it. One pull request per task.
@@ -145,7 +147,7 @@ Figure 3. Build 2's tasks. Arrows point from a task to what waits on it. One pul
 |---|---|---|---|
 | T1 | Folders, the home and the open checks | [#149](https://github.com/crenshawdev/baley/pull/149) | Merged |
 | T2 | The keys file reader | [#152](https://github.com/crenshawdev/baley/pull/152) | Merged |
-| T3 | `baley exec --key` | | Planned |
+| T3 | `baley exec --key` | | In progress |
 | T4 | Settings: the schema, the two files, the merge and route resolution | | Planned |
 | T5 | The project file and discovery | | Planned |
 | T6 | `baley init` | | Planned |
