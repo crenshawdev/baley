@@ -279,7 +279,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 4. Landing a sprint on GitHub. The anchor at the end follows the claim, check, act and record steps of [0001](0001-evidence-ledger.md) (Commands, The anchor push); the landing that triggers it arrives with slice 6.*
+*Figure 4. Landing a sprint on GitHub. The anchor at the end follows the claim, check, act and record steps of [0001](0001-evidence-ledger.md) (Commands, The anchor push); the landing that triggers it arrives with Build 6.*
 
 ```mermaid
 sequenceDiagram
@@ -382,7 +382,7 @@ The binary crate holds the inherited engine; its landing, milestone and undo pat
 | LND-R15 | Built | `crates/baley/src/undo/manifest.rs:30-171`, `crates/baley/src/undo/revert.rs:36-109`, `crates/baley/src/undo_service.rs:189-311`; no pushed check |
 | LND-R16 | Not reachable | `crates/baley/src/pause_service.rs:1275` has no MCP route (`crates/baley/src/server.rs:127-134`) |
 | LND-R17 | Partly built | Stop as an owner answer (`crates/baley/src/execution_service.rs:451-465`) |
-| LND-R18 | Partly built | The anchor command, its latest-anchor check, its recorded outcomes and owner-only acknowledge-restore (`crates/baley-core/src/anchor.rs`, `crates/baley-core/src/forge.rs`); the CLI and its git forge are built in `crates/baley/src/ledger`. The triggers at verified sprints, milestone steps, landings and daily arrive with slices 4 and 6 |
+| LND-R18 | Partly built | The anchor command, its latest-anchor check, its recorded outcomes and owner-only acknowledge-restore (`crates/baley-core/src/anchor.rs`, `crates/baley-core/src/forge.rs`); the CLI and its git forge are built in `crates/baley/src/ledger`. The triggers at verified sprints, milestone steps, landings and daily arrive with Build 6 |
 | LND-R19 | Built | Receipts per namespace (`crates/baley/src/milestone_service.rs:253-549`, `crates/baley/src/landing_service.rs:310-316`) |
 
 ## 12. Open questions
