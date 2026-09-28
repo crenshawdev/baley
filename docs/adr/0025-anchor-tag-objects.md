@@ -34,7 +34,7 @@ Chosen option: **annotated tag on the empty tree**, with tagger `Baley <baley@lo
 
 The binary first requires a configured remote and resolves its push destination with `git remote get-url --push --all REMOTE`. Exactly one non-empty URL is required. An empty, multiple or failed lookup is unreachable and stops before any object write. Git applies `pushurl` and `pushInsteadOf` during this lookup.
 
-The binary writes the empty tree with `git hash-object -t tree -w --stdin`, writes the tag object with `git mktag`, and pushes its object id with `git push --porcelain --no-verify PUSH_URL SHA:refs/tags/TAG`. Pushing to the URL avoids the named remote's fetch mappings, which can otherwise create local tags after a push. It creates no local ref. Fetch disables tag following, configured ref mappings and `FETCH_HEAD` writes, then reads the fetched object with `git cat-file tag`.
+The binary writes the empty tree with `git hash-object -t tree -w --stdin`, writes the tag object with `git mktag`, and pushes its object id with `git push --porcelain --no-verify PUSH_URL SHA:refs/tags/TAG`. Pushing to the URL avoids the named remote's fetch mappings, which can otherwise create local tags after a push. It creates no local ref. Fetch resolves the same single push URL, lists and fetches from it, disables tag following, configured ref mappings and `FETCH_HEAD` writes, then reads the fetched object with `git cat-file tag`. Reading where the anchor was written keeps a remote whose `url` and `pushurl` name different repositories from reporting its own anchors as absent.
 
 ## Consequences
 
@@ -47,7 +47,7 @@ The binary writes the empty tree with `git hash-object -t tree -w --stdin`, writ
 
 ### Negative
 
-- Settings keyed to the remote's name, including `remote.<name>.push` and `remote.<name>.receivepack`, do not apply to the anchor push. A remote with several push URLs cannot anchor.
+- Settings keyed to the remote's name, including `remote.<name>.push` and `remote.<name>.receivepack`, do not apply to the anchor push. A remote with several push URLs can neither anchor nor verify against a remote anchor.
 - A forge's presentation of a tag on a tree may be less useful than its presentation of a release tag on a commit.
 - The tagger names Baley, not a cryptographically authenticated person. The forge's access and immutability rules still matter.
 - Objects are written into the checkout's object store even though no local ref is retained.

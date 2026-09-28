@@ -69,6 +69,20 @@ impl<P: Process> GitForge<P> {
             None => Err(CliRefusal("the current directory is not in a git repository; remotes are read from the repository at the current directory".into())),
         }
     }
+    /// Resolves the one repository anchors are written to and read from.
+    fn anchor_url(&mut self, remote: &str) -> Option<String> {
+        let output = self.call(
+            &strings(&["remote", "get-url", "--push", "--all", remote]),
+            &[],
+        )?;
+        match push_url(output) {
+            Ok(url) => Some(url),
+            Err(reason) => {
+                self.last_error = Some(format!("remote {remote} {reason}"));
+                None
+            }
+        }
+    }
     fn object(&mut self, args: &[String], input: &[u8]) -> Option<String> {
         let output = self.call(args, input)?;
         if !output.success() {
@@ -133,8 +147,8 @@ pub(super) fn push_args(url: &str, sha: &str, tag: &str) -> Vec<String> {
     ])
 }
 /// Requests both exact and peeled refs for exact queries.
-pub(super) fn ls_remote_args(remote: &str, project: &ProjectId, query: &TagQuery) -> Vec<String> {
-    let mut args = strings(&["ls-remote", "--tags", "--exit-code", remote]);
+pub(super) fn ls_remote_args(url: &str, project: &ProjectId, query: &TagQuery) -> Vec<String> {
+    let mut args = strings(&["ls-remote", "--tags", "--exit-code", url]);
     match query {
         TagQuery::Exact(tag) => {
             args.push(format!("refs/tags/{tag}"));
@@ -145,13 +159,13 @@ pub(super) fn ls_remote_args(remote: &str, project: &ProjectId, query: &TagQuery
     args
 }
 /// Fetches objects without creating local refs.
-pub(super) fn fetch_args(remote: &str, tag: &str) -> Vec<String> {
+pub(super) fn fetch_args(url: &str, tag: &str) -> Vec<String> {
     strings(&[
         "fetch",
         "--no-tags",
         "--no-write-fetch-head",
         "--refmap=",
-        remote,
+        url,
         &format!("refs/tags/{tag}"),
     ])
 }
@@ -169,7 +183,9 @@ pub(super) fn push_observation(output: &Output, tag: &str) -> PushObservation {
             continue;
         }
         match columns[0] {
-            "*" | "=" => return PushObservation::Pushed,
+            // A success line from a git that then failed is not a confirmed push.
+            "*" | "=" if output.success() => return PushObservation::Pushed,
+            "*" | "=" => return PushObservation::Unreachable,
             "!" => {
                 return PushObservation::Refused {
                     reason: columns[2].into(),
@@ -261,18 +277,8 @@ impl<P: Process> Forge for GitForge<P> {
             Some(false) => return PushObservation::NoRemote,
             None => return PushObservation::Unreachable,
         }
-        let Some(output) = self.call(
-            &strings(&["remote", "get-url", "--push", "--all", remote]),
-            &[],
-        ) else {
+        let Some(url) = self.anchor_url(remote) else {
             return PushObservation::Unreachable;
-        };
-        let url = match push_url(output) {
-            Ok(url) => url,
-            Err(reason) => {
-                self.last_error = Some(format!("remote {remote} {reason}"));
-                return PushObservation::Unreachable;
-            }
         };
         let Some(tree) = self.object(
             &strings(&["hash-object", "-t", "tree", "-w", "--stdin"]),
@@ -298,7 +304,11 @@ impl<P: Process> Forge for GitForge<P> {
             Some(false) => return FetchObservation::NoRemote,
             None => return FetchObservation::Unreachable,
         }
-        let Some(output) = self.call(&ls_remote_args(remote, project, query), &[]) else {
+        // Read the repository the push wrote to, not a separate fetch URL.
+        let Some(url) = self.anchor_url(remote) else {
+            return FetchObservation::Unreachable;
+        };
+        let Some(output) = self.call(&ls_remote_args(&url, project, query), &[]) else {
             return FetchObservation::Unreachable;
         };
         match listing(project, query, &output) {
@@ -318,7 +328,7 @@ impl<P: Process> Forge for GitForge<P> {
                 annotated: true,
             } => {
                 if !self
-                    .call(&fetch_args(remote, &tag), &[])
+                    .call(&fetch_args(&url, &tag), &[])
                     .is_some_and(|o| o.success())
                 {
                     return FetchObservation::Unreachable;
@@ -386,6 +396,17 @@ mod tests {
             PushObservation::Refused {
                 reason: "[rejected] (already exists)".into()
             }
+        );
+    }
+    #[test]
+    fn a_failed_git_exit_cannot_confirm_a_push() {
+        assert_eq!(
+            push_observation(&output(1, "*\tsha:refs/tags/tag\t[new tag]\n"), "tag"),
+            PushObservation::Unreachable
+        );
+        assert_eq!(
+            push_observation(&output(128, "=\tsha:refs/tags/tag\t[up to date]\n"), "tag"),
+            PushObservation::Unreachable
         );
     }
     #[test]
@@ -501,10 +522,52 @@ mod tests {
         );
     }
     #[test]
-    fn an_absent_listing_launches_no_fetch() {
-        let mut f = forge(Recorded::new().out("o\n").answer(output(2, "")));
-        assert_eq!(f.fetch_tag(&p(), "o", &exact()), FetchObservation::Absent);
+    fn reads_cannot_use_a_fetch_url_the_push_never_wrote_to() {
+        let mut f = forge(
+            Recorded::new()
+                .out("origin\n")
+                .out("/fixture/push.git\n")
+                .out(listed(true))
+                .out("")
+                .out("object x\ntype tree\ntag baley-anchor/p/5\n\nnote\n"),
+        );
+        assert_eq!(
+            f.fetch_tag(&p(), "origin", &exact()),
+            FetchObservation::Present {
+                tag: "baley-anchor/p/5".into(),
+                annotation: "note\n".into()
+            }
+        );
+        let launches = f.process.launches();
+        assert_eq!(
+            launches[1].args,
+            strings(&["remote", "get-url", "--push", "--all", "origin"])
+                .iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(launches[2].args[3], "/fixture/push.git");
+        assert_eq!(launches[3].args[4], "/fixture/push.git");
+    }
+    #[test]
+    fn several_push_urls_stop_a_read_before_listing() {
+        let mut f = forge(Recorded::new().out("origin\n").out("one\ntwo\n"));
+        assert_eq!(
+            f.fetch_tag(&p(), "origin", &exact()),
+            FetchObservation::Unreachable
+        );
         assert_eq!(f.process.launches().len(), 2);
+    }
+    #[test]
+    fn an_absent_listing_launches_no_fetch() {
+        let mut f = forge(
+            Recorded::new()
+                .out("o\n")
+                .out("/fixture/remote.git\n")
+                .answer(output(2, "")),
+        );
+        assert_eq!(f.fetch_tag(&p(), "o", &exact()), FetchObservation::Absent);
+        assert_eq!(f.process.launches().len(), 3);
     }
     #[test]
     fn a_failed_listing_is_not_absence() {
@@ -537,7 +600,12 @@ mod tests {
     }
     #[test]
     fn lightweight_tags_are_present_without_fetch() {
-        let mut f = forge(Recorded::new().out("o\n").out(listed(false)));
+        let mut f = forge(
+            Recorded::new()
+                .out("o\n")
+                .out("/fixture/remote.git\n")
+                .out(listed(false)),
+        );
         assert_eq!(
             f.fetch_tag(&p(), "o", &exact()),
             FetchObservation::Present {
@@ -545,13 +613,14 @@ mod tests {
                 annotation: "".into()
             }
         );
-        assert_eq!(f.process.launches().len(), 2);
+        assert_eq!(f.process.launches().len(), 3);
     }
     #[test]
     fn a_failed_fetch_is_not_absence() {
         let mut f = forge(
             Recorded::new()
                 .out("o\n")
+                .out("/fixture/remote.git\n")
                 .out(listed(true))
                 .fail(128, "offline"),
         );
@@ -583,12 +652,13 @@ mod tests {
         let mut f = forge(
             Recorded::new()
                 .out("o\n")
+                .out("/fixture/remote.git\n")
                 .out(listed(true))
                 .out("")
                 .out("header\n\nnote\n"),
         );
         f.fetch_tag(&p(), "o", &exact());
-        assert_eq!(f.process.launches().len(), 4);
+        assert_eq!(f.process.launches().len(), 5);
         for l in f.process.launches() {
             assert_eq!(l.git_caller(), Some(Caller::AnchorForge));
             assert_eq!(l.timeout, Some(std::time::Duration::from_secs(60)));
@@ -629,19 +699,20 @@ mod tests {
         let mut f = forge(
             Recorded::new()
                 .out("o\n")
+                .out("/fixture/remote.git\n")
                 .out(listed(true))
                 .out("")
                 .out("header\n\nnote\n"),
         );
         f.fetch_tag(&p(), "o", &exact());
         assert_eq!(
-            f.process.launches()[2].args,
+            f.process.launches()[3].args,
             strings(&[
                 "fetch",
                 "--no-tags",
                 "--no-write-fetch-head",
                 "--refmap=",
-                "o",
+                "/fixture/remote.git",
                 "refs/tags/baley-anchor/p/5"
             ])
             .iter()
