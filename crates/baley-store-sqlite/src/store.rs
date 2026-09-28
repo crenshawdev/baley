@@ -172,13 +172,19 @@ impl SqliteStore {
         let queue = FileLock::open(&home.join("baley.db.writer")).map_err(io)?;
         let maintenance_lock = FileLock::open(&home.join("baley.db.maintenance")).map_err(io)?;
         let path = home.join("baley.db");
-        std::fs::OpenOptions::new()
+        // Only a missing database is created; an existing one is never opened
+        // for writing here, so a private read-only file still reaches SQLite.
+        match std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(false)
+            .create_new(true)
             .mode(0o600)
             .open(&path)
-            .map_err(io)?;
+        {
+            Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => {
+                return Err(io(error));
+            }
+            _ => {}
+        }
         let writer = connect(&path)?;
 
         let epoch = match stored_epoch(&writer)? {
