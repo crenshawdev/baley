@@ -346,46 +346,34 @@ impl fmt::Display for HomeFault {
             }
             HomeProblem::Owner { owner, user } => write!(
                 f,
-                "is owned by user id {owner}, not by this user ({user}) (fix: chown {user} {})",
-                shell_path(&self.path)
+                "is owned by user id {owner}, not by this user ({user}) (fix: {})",
+                fix(&format!("chown {user}"), &self.path)
             ),
             HomeProblem::Mode { mode, allowed } => write!(
                 f,
-                "has mode {mode:04o}, which allows more than {allowed:04o} (fix: chmod {allowed:o} {})",
-                shell_path(&self.path)
+                "has mode {mode:04o}, which allows more than {allowed:04o} (fix: {})",
+                fix(&format!("chmod {allowed:o}"), &self.path)
             ),
         }
     }
 }
 
-fn shell_path(path: &std::path::Path) -> String {
-    use std::os::unix::ffi::OsStrExt;
-    let bytes = path.as_os_str().as_bytes();
-    match std::str::from_utf8(bytes) {
-        Ok(text)
+/// The fix as a command, or a plain instruction when the path is not UTF-8:
+/// no one quoting of raw bytes works in bash, zsh, dash and fish alike.
+fn fix(command: &str, path: &std::path::Path) -> String {
+    match path.to_str() {
+        Some(text)
             if !text.is_empty()
                 && text
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"/._-+@%:,=".contains(&b)) =>
         {
-            text.to_owned()
+            format!("{command} {text}")
         }
-        Ok(text) => format!("'{}'", text.replace('\'', "'\\''")),
-        // A lossy conversion would name a different path, so bytes that are not
-        // UTF-8 go out as ANSI-C escapes, which bash, zsh and POSIX sh accept.
-        Err(_) => {
-            let mut out = String::from("$'");
-            for &b in bytes {
-                match b {
-                    b'\'' => out.push_str("\\'"),
-                    b'\\' => out.push_str("\\\\"),
-                    0x20..=0x7e => out.push(b as char),
-                    _ => out.push_str(&format!("\\x{b:02x}")),
-                }
-            }
-            out.push('\'');
-            out
-        }
+        Some(text) => format!("{command} '{}'", text.replace('\'', "'\\''")),
+        None => format!(
+            "{command} on this path, whose name is not UTF-8 and cannot be written as a command"
+        ),
     }
 }
 
@@ -431,21 +419,19 @@ mod home_tests {
         );
     }
     #[test]
-    fn non_utf8_repair_path_keeps_its_original_bytes() {
+    fn non_utf8_repair_path_is_not_given_as_a_wrong_command() {
         use std::os::unix::ffi::OsStrExt;
         let fault = HomeFault {
-            path: std::ffi::OsStr::from_bytes(b"/h/\xffho'me").into(),
+            path: std::ffi::OsStr::from_bytes(b"/h/\xffhome").into(),
             target: FaultTarget::Home,
             problem: HomeProblem::Mode {
                 mode: 0o755,
                 allowed: 0o700,
             },
         };
-        assert!(
-            fault
-                .to_string()
-                .ends_with("(fix: chmod 700 $'/h/\\xffho\\'me')")
-        );
+        assert!(fault.to_string().ends_with(
+            "(fix: chmod 700 on this path, whose name is not UTF-8 and cannot be written as a command)"
+        ));
     }
     #[test]
     fn unsafe_home_display_does_not_drop_faults_or_use_debug() {
