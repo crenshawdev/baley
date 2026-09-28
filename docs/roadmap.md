@@ -201,6 +201,7 @@ Every issue here except #134 blocks the release design #14. #134 blocks Build 4,
 | Issue | What | Milestone | Depends on / blocks |
 |---|---|---|---|
 | [#134](https://github.com/crenshawdev/baley/issues/134) | Choose what a plan re-check reads | Encyclopedists | Blocks Build 4 and lands before it |
+| [#146](https://github.com/crenshawdev/baley/issues/146) | Decide what a restored copy does with bodies purged after it was taken | Evidence | None |
 | [#47](https://github.com/crenshawdev/baley/issues/47) | Repository upkeep and the build gate | Encyclopedists | #49 #50 #54 wait on it (stated in their text; no GitHub link) |
 
 ### Upkeep and docs
