@@ -3,7 +3,10 @@ use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, DirBuilder};
 use std::io;
-use std::os::unix::{ffi::OsStrExt, fs::DirBuilderExt, fs::PermissionsExt};
+use std::os::unix::{
+    ffi::OsStrExt,
+    fs::{DirBuilderExt, MetadataExt, PermissionsExt},
+};
 use std::path::{Path, PathBuf};
 
 /// The platform whose folder conventions apply.
@@ -152,31 +155,60 @@ impl fmt::Display for FolderRefusal {
 
 /// Creates a private folder and default-mode parents, leaving existing paths unchanged.
 pub fn create_private(path: &Path) -> io::Result<()> {
-    let existed = fs::symlink_metadata(path).is_ok();
+    let mut made = Vec::new();
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        let mut ancestors: Vec<&Path> = parent.ancestors().collect();
+        ancestors.reverse();
+        for dir in ancestors
+            .into_iter()
+            .filter(|dir| !dir.as_os_str().is_empty())
+        {
+            match fs::create_dir(dir) {
+                Ok(()) => made.push(identity(&fs::symlink_metadata(dir)?)),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
     }
     let created = DirBuilder::new().mode(0o700).create(path);
-    match after_create(existed, created)? {
+    let home = match &created {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            Some(identity(&fs::symlink_metadata(path)?))
+        }
+        _ => None,
+    };
+    match after_create(&made, home, created)? {
         Created::Done => Ok(()),
         Created::ByItsParents => fs::set_permissions(path, fs::Permissions::from_mode(0o700)),
     }
+}
+
+fn identity(metadata: &fs::Metadata) -> (u64, u64) {
+    (metadata.dev(), metadata.ino())
 }
 
 /// What creating a home left to do.
 #[derive(Debug, PartialEq, Eq)]
 enum Created {
     Done,
-    /// A `..` in the path let creating the parents make the home itself, with
-    /// the default mode, so it is new and must still be made private.
+    /// A `..` in the path let this call make the home while creating its
+    /// parents, with the default mode, so it must still be made private.
     ByItsParents,
 }
 
-fn after_create(existed: bool, created: io::Result<()>) -> io::Result<Created> {
+/// `made` holds the device and inode of each folder this call created; `home`
+/// is the home's when it already existed at the final step.
+fn after_create(
+    made: &[(u64, u64)],
+    home: Option<(u64, u64)>,
+    created: io::Result<()>,
+) -> io::Result<Created> {
     match created {
         Ok(()) => Ok(Created::Done),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists && existed => Ok(Created::Done),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(Created::ByItsParents),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(match home {
+            Some(id) if made.contains(&id) => Created::ByItsParents,
+            _ => Created::Done,
+        }),
         Err(error) => Err(error),
     }
 }
@@ -185,16 +217,19 @@ fn after_create(existed: bool, created: io::Result<()>) -> io::Result<Created> {
 mod tests {
     #[test]
     fn home_made_by_its_own_parents_is_still_made_private() {
-        let exists = || Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        let exists = Err(io::Error::from(io::ErrorKind::AlreadyExists));
         assert_eq!(
-            after_create(false, exists()).unwrap(),
+            after_create(&[(1, 10), (1, 11)], Some((1, 11)), exists).unwrap(),
             Created::ByItsParents
         );
     }
     #[test]
     fn existing_home_is_left_unchanged() {
-        let exists = || Err(io::Error::from(io::ErrorKind::AlreadyExists));
-        assert_eq!(after_create(true, exists()).unwrap(), Created::Done);
+        let exists = Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        assert_eq!(
+            after_create(&[(1, 10)], Some((1, 12)), exists).unwrap(),
+            Created::Done
+        );
     }
     use super::*;
     use std::os::unix::ffi::OsStringExt;
