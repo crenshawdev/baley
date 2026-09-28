@@ -8,6 +8,7 @@ use crate::{EPOCH, Options, SqliteStore};
 use baley_store::*;
 use rusqlite::{Connection, params};
 use std::cell::{Cell, RefCell};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,7 +23,7 @@ struct SqliteFactory {
 }
 impl SqliteFactory {
     fn new() -> Self {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::checks::private_folder();
         let root = directory.path().canonicalize().unwrap();
         Self {
             _directory: directory,
@@ -69,7 +70,10 @@ impl StoreFactory for SqliteFactory {
     type Snapshot = PathBuf;
     fn create(&self, binary: Binary) -> Result<SqliteStore, StoreError> {
         let home = self.path("home");
-        std::fs::create_dir(&home).map_err(io)?;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&home)
+            .map_err(io)?;
         self.open(&home, binary)
     }
     fn reopen(&self, store: &SqliteStore, binary: Binary) -> Result<SqliteStore, StoreError> {
@@ -98,7 +102,10 @@ impl StoreFactory for SqliteFactory {
     fn restore(&self, snapshot: &PathBuf, binary: Binary) -> Result<SqliteStore, StoreError> {
         self.inside(snapshot);
         let home = self.path("home");
-        std::fs::create_dir(&home).map_err(io)?;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&home)
+            .map_err(io)?;
         std::fs::copy(snapshot, home.join("baley.db")).map_err(io)?;
         self.open(&home, binary)
     }

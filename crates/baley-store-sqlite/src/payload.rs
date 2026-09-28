@@ -397,7 +397,7 @@ mod tests {
     // use, or a reference that carries its own copy.
     #[test]
     fn the_same_bytes_stored_twice_make_one_row_and_two_references() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         events(&store, 2);
         let refs = store
@@ -443,7 +443,7 @@ mod tests {
     // Catches bodies stored without compression.
     #[test]
     fn a_body_is_stored_compressed() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = SqliteStore::open(
             home.path(),
             AT,
@@ -471,7 +471,7 @@ mod tests {
     // an engine error in place of the port's refusal.
     #[test]
     fn the_status_of_an_unknown_hash_is_a_refusal() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let unknown = Hash([9; 32]);
         assert_eq!(
@@ -484,7 +484,7 @@ mod tests {
     // Catches an open that fails differently from `status`.
     #[test]
     fn opening_an_unknown_hash_is_a_refusal() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let unknown = Hash([9; 32]);
         assert!(matches!(
@@ -498,7 +498,7 @@ mod tests {
     // read-write, which creates an empty baley.db.
     #[test]
     fn opening_a_body_without_a_database_file_fails_and_creates_none() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let path = home.path().join("baley.db");
         std::fs::remove_file(&path).expect("remove");
@@ -524,7 +524,7 @@ mod tests {
     // length given for the excerpt, or ranges dropped or reordered.
     #[test]
     fn a_reduced_payload_reads_back_its_tombstone() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let original = put(&store, &noise(1_000_000), RetentionClass::Output);
         let excerpt = put(&store, &noise(131_072), RetentionClass::Output);
@@ -554,7 +554,7 @@ mod tests {
     // `open`. Catches a purged row read as unknown or as an error.
     #[test]
     fn a_purged_payload_reads_back_its_reason() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let payload = put(&store, b"a leaked token", RetentionClass::Output);
         raw(home.path())
@@ -580,7 +580,7 @@ mod tests {
     // next chunk would find the body gone.
     #[test]
     fn a_stream_keeps_its_snapshot_across_a_purge() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let original = noise(600_000);
         let payload = put(&store, &original, RetentionClass::Output);
@@ -607,7 +607,7 @@ mod tests {
     // life, blocking every other read on the store.
     #[test]
     fn an_open_stream_leaves_the_read_connection_free() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let payload = put(&store, &noise(300_000), RetentionClass::Output);
         let stream = store.open(&payload.hash).expect("open");
@@ -629,7 +629,7 @@ mod tests {
     // Catches a reduction the read side would have to guess at.
     #[test]
     fn the_schema_refuses_a_reduction_without_its_ranges() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let original = put(&store, b"original", RetentionClass::Output);
         let excerpt = put(&store, b"excerpt", RetentionClass::Output);
@@ -646,7 +646,7 @@ mod tests {
     // records no cause.
     #[test]
     fn the_schema_refuses_a_purge_without_a_reason() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let original = put(&store, b"original", RetentionClass::Output);
         let excerpt = put(&store, b"excerpt", RetentionClass::Output);
@@ -662,7 +662,7 @@ mod tests {
     // the row still claims it.
     #[test]
     fn the_schema_refuses_a_present_row_without_a_body() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let original = put(&store, b"original", RetentionClass::Output);
         let excerpt = put(&store, b"excerpt", RetentionClass::Output);
@@ -678,7 +678,7 @@ mod tests {
     // reduction whose excerpt is the body it replaced.
     #[test]
     fn the_schema_refuses_an_excerpt_of_itself() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let original = put(&store, b"original", RetentionClass::Output);
         assert!(check_refuses(
@@ -695,7 +695,7 @@ mod tests {
     // body that is gone, or a purged body brought back.
     #[test]
     fn storing_tombstoned_bytes_again_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let purged = put(&store, b"a secret", RetentionClass::Material);
         let reduced = put(&store, b"long output", RetentionClass::Output);

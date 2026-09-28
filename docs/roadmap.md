@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status is as of origin/main `dd5f29b4` on 2026-09-27, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status is as of the T1 base, origin/main `67d7ad8b`, on 2026-09-28, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
 
 ## The path to the first release
 
@@ -34,7 +34,7 @@ flowchart TB
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
 
     class B1 done
-    class B2 next
+    class B2 progress
     class B4,R1 blocked
     class B3,B5,B6,B7,B8,B9,D134,OTHER,R2,R3 planned
 ```
@@ -88,7 +88,7 @@ Figure 2. Build 1's tasks. One pull request per task.
 
 ## Build 2: Identity, settings and keys
 
-[#23](https://github.com/crenshawdev/baley/issues/23) · milestone Evidence · next
+[#23](https://github.com/crenshawdev/baley/issues/23) · milestone Evidence · in progress
 
 Baley finds its per-user ledger safely, and `baley init` ties a repository to a project through a committed `baley.toml`. Baley keeps its files in its own folder under a crenshawdev vendor folder: the global settings file `config.toml` and the keys file `keys.env` in `$XDG_CONFIG_HOME/crenshawdev/baley` and the ledger in `$XDG_DATA_HOME/crenshawdev/baley` on Linux (an empty or relative XDG variable counts as unset), all three in `~/Library/Application Support/crenshawdev/baley` on macOS, and all three in `BALEY_HOME` when it is set ([ADR 0027](adr/0027-vendor-folders-and-plain-keys.md)). The ledger's home is not supported on a network share, and Baley does not check for one. Baley reads the two TOML settings files ([ADR 0015](adr/0015-settings-in-toml.md)) and resolves routes against a model catalog it refreshes by calling each provider's model-list endpoint with `reqwest` ([ADR 0028](adr/0028-one-http-stack.md)). Provider keys are plain `NAME=value` lines in `keys.env`, which the owner edits by hand and Baley only reads, refusing it with `keys-file-exposed` when group or others can read it or another user owns it, and with `keys-file-invalid` when a name appears twice. There is no encryption, no master key and no OS secret store. Keys reach a call only through `baley exec --key`, and never enter events, views or exports. All of it runs from the command line, on Linux and macOS.
 
@@ -96,6 +96,66 @@ Baley finds its per-user ledger safely, and `baley init` ties a repository to a 
 - ADRs: [0003 per-user database](adr/0003-per-user-database.md), [0004 project identity](adr/0004-project-identity.md), [0013 host session calls outside models](adr/0013-host-session-calls-outside-models.md), [0015 settings in TOML](adr/0015-settings-in-toml.md), [0027 vendor folders and plain keys](adr/0027-vendor-folders-and-plain-keys.md), [0028 one HTTP stack](adr/0028-one-http-stack.md)
 - Carries: no bugs
 - Blocked by: Build 1 ([#22](https://github.com/crenshawdev/baley/issues/22))
+
+```mermaid
+flowchart LR
+    T1["T1: Folders, the home and the open checks"]
+    T2["T2: The keys file reader"]
+    T3["T3: baley exec --key"]
+    T4["T4: Settings: the schema, the two files, the merge and route resolution"]
+    T5["T5: The project file and discovery"]
+    T6["T6: baley init"]
+    T7["T7: The model catalog"]
+    T8["T8: Detection"]
+    T9["T9: The recorded policy"]
+    T10["T10: baley config show and baley config set"]
+    T11["T11: baley config interview"]
+    T12["T12: The anchor remote from the project's settings"]
+    T13["T13: Checkouts and forks"]
+
+    T1 --> T2
+    T1 --> T4
+    T1 --> T6
+    T1 --> T7
+    T2 --> T3
+    T2 --> T8
+    T4 --> T5
+    T4 --> T7
+    T5 --> T6
+    T5 --> T9
+    T6 --> T8
+    T6 --> T9
+    T6 --> T13
+    T7 --> T8
+    T7 --> T9
+    T9 --> T10
+    T9 --> T12
+    T10 --> T11
+    T12 --> T13
+
+    classDef progress fill:#9a6700,stroke:#7d4e00,color:#ffffff
+    classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
+    class T1 progress
+    class T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12,T13 planned
+```
+
+Figure 3. Build 2's tasks. Arrows point from a task to what waits on it. One pull request per task.
+
+| Task | What | Pull requests | Status |
+|---|---|---|---|
+| T1 | Folders, the home and the open checks | | In progress |
+| T2 | The keys file reader | | Planned |
+| T3 | `baley exec --key` | | Planned |
+| T4 | Settings: the schema, the two files, the merge and route resolution | | Planned |
+| T5 | The project file and discovery | | Planned |
+| T6 | `baley init` | | Planned |
+| T7 | The model catalog | | Planned |
+| T8 | Detection | | Planned |
+| T9 | The recorded policy | | Planned |
+| T10 | `baley config show` and `baley config set` | | Planned |
+| T11 | `baley config interview` | | Planned |
+| T12 | The anchor remote from the project's settings | | Planned |
+| T13 | Checkouts and forks | | Planned |
 
 ## Build 3: Hosts
 
@@ -243,7 +303,7 @@ Counts as of 2026-09-27.
 
 What the records leave open or do not say.
 
-- Builds 2 to 9 have no task breakdown. Each lists the design requirements it delivers, and all but Build 7 add a short list of settled points.
+- Builds 3 to 9 have no task breakdown. Each lists the design requirements it delivers, and all but Build 7 add a short list of settled points.
 - There is no first version number. The release design #14 picks it.
 - #44 was meant to land before Build 1 T10, which has merged. #49, #50 and #54 wait on the #47 design, as their text says; GitHub has no dependency link for them. No order is given for #47 itself or for bug #70.
 - Whether Codex connects reliably to a local HTTP MCP server is open in [design 0012](design/0012-host-interface.md), to be settled by a test when the service transport is built.

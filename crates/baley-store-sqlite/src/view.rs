@@ -1634,7 +1634,7 @@ mod tests {
     // that filters rows instead of seeking past them.
     #[test]
     fn every_find_statement_is_one_search_of_its_index() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = stocked(home.path());
         store
             .write(|tx| tx.execute_batch("ANALYZE").map_err(sql))
@@ -1719,7 +1719,7 @@ mod tests {
     // Catches a limit applied in Rust after every matching row was read.
     #[test]
     fn each_find_statement_is_limited_in_sql() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = stocked(home.path());
         let table = store.views().table("item").expect("item");
         let index = table.index("by_state_rank").expect("index");
@@ -1756,7 +1756,7 @@ mod tests {
     // that inserts beside the old row or keeps the old body.
     #[test]
     fn a_second_put_replaces_the_first() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         put(&store, 1, "open", 5, "ann", 11);
         put(&store, 1, "done", 8, "bob", 20);
@@ -1781,7 +1781,7 @@ mod tests {
     // provenance not stored, or not read back.
     #[test]
     fn get_returns_the_documents_provenance() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         put(&store, 9, "open", 1, "ann", 42);
         let got = store
@@ -1794,7 +1794,7 @@ mod tests {
     // Catches a delete that misses the row, or removes the wrong one.
     #[test]
     fn a_deleted_document_reads_absent() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         put(&store, 1, "open", 5, "ann", 11);
         put(&store, 2, "open", 5, "ann", 12);
@@ -1811,7 +1811,7 @@ mod tests {
     // Catches a generation fixed at 0 in the reads or the writes.
     #[test]
     fn reads_and_writes_follow_the_live_generation() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         put(&store, 1, "open", 5, "ann", 11);
         flip_to_generation_1(&store);
@@ -1838,7 +1838,7 @@ mod tests {
     // that ignores the generation it is given and lands in the live one.
     #[test]
     fn a_write_to_another_generation_leaves_live_reads_unchanged() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         put(&store, 1, "open", 5, "ann", 11);
         store
@@ -1862,7 +1862,7 @@ mod tests {
     // Catches a missing project read as an empty view.
     #[test]
     fn a_read_in_an_unknown_project_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let other = ProjectId("p2".into());
         assert_eq!(
@@ -1876,7 +1876,7 @@ mod tests {
     // which would fall outside the index's total order.
     #[test]
     fn a_document_without_its_index_fields_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         for body in [
             r#"{"id": 1, "rank": 5, "owner": "ann"}"#,
@@ -1902,7 +1902,7 @@ mod tests {
     // disagrees with the document it indexes.
     #[test]
     fn a_document_whose_key_fields_differ_from_its_key_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         for body in [
             r#"{"id": 2, "state": "open", "rank": 5, "owner": "ann"}"#,
@@ -2013,7 +2013,7 @@ mod tests {
     // read through the table the old spec made.
     #[test]
     fn a_changed_spec_under_the_same_version_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         drop(open_with(home.path(), vec![item_view()]).expect("open"));
         let changed = ViewSpec {
             page_bound: 4,
@@ -2031,7 +2031,7 @@ mod tests {
     // reuses the table the old spec made.
     #[test]
     fn a_new_version_gets_its_own_table() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         drop(open_with(home.path(), vec![item_view()]).expect("open"));
         let next = ViewSpec {
             version: 4,
@@ -2058,7 +2058,7 @@ mod tests {
     // skips a missing index, and one that always takes the write path.
     #[test]
     fn only_a_missing_part_makes_a_view_pending() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let pending = || store.snapshot(|conn| store.views().pending(conn));
         assert_eq!(pending(), Ok(false));
@@ -2079,7 +2079,7 @@ mod tests {
     // timeout and fail with `Busy`.
     #[test]
     fn opening_with_views_in_place_takes_no_write_transaction() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         drop(open_with(home.path(), vec![item_view()]).expect("open"));
         let holder = raw(home.path());
         holder.execute_batch("BEGIN IMMEDIATE").expect("hold");
@@ -2093,7 +2093,7 @@ mod tests {
     // epoch rule.
     #[test]
     fn a_read_only_store_creates_no_view_table() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         drop(SqliteStore::open(home.path(), AT, Options::default()).expect("open"));
         let conn = raw(home.path());
         conn.execute("UPDATE schema_meta SET value = 2 WHERE key = 'epoch'", [])

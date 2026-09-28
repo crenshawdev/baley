@@ -111,6 +111,8 @@ pub enum StaleInput {
 /// Why the port refused a request outright.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
+    /// The home or a store file is unsafe. Contains every known fault, never empty.
+    UnsafeHome(Vec<HomeFault>),
     /// Doctor has no remote check for this project.
     MissingAnchorCheck(ProjectId),
     /// An export target already exists, including a symbolic link.
@@ -201,6 +203,16 @@ pub enum Refusal {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Refused(Refusal::UnsafeHome(faults)) => {
+                write!(f, "refused: {UNSAFE_HOME}: ")?;
+                for (index, fault) in faults.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str("; ")?;
+                    }
+                    write!(f, "{fault}")?;
+                }
+                Ok(())
+            }
             Self::Blocked(block) => {
                 write!(f, "blocked by claim {:?} ({:?})", block.claim, block.state)
             }
@@ -268,9 +280,176 @@ impl fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
+/// The stable code of an unsafe-home refusal.
+pub const UNSAFE_HOME: &str = "unsafe-home";
+
+/// One unsafe path and the repair its caller can make.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HomeFault {
+    /// The real path inspected by the adapter.
+    pub path: PathBuf,
+    /// Whether this is the ledger home or a store file.
+    pub target: FaultTarget,
+    /// What prevents opening it safely.
+    pub problem: HomeProblem,
+}
+
+/// The kind of path whose safety is required.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaultTarget {
+    /// The folder holding the store.
+    Home,
+    /// A database, log, shared-memory or lock file.
+    File,
+}
+
+/// A fault found before opening any store file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeProblem {
+    /// The final path component is a symbolic link.
+    Link,
+    /// The home is not a folder.
+    NotAFolder,
+    /// A store file is not a regular file.
+    NotAFile,
+    /// The path belongs to another user.
+    Owner {
+        /// The path's observed owner.
+        owner: u32,
+        /// The process's effective user id.
+        user: u32,
+    },
+    /// The permission bits grant more than the allowed access.
+    Mode {
+        /// Observed mode, including special bits.
+        mode: u32,
+        /// The maximum permission bits for this path.
+        allowed: u32,
+    },
+}
+
+impl fmt::Display for HomeFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} ", self.path.display())?;
+        match self.problem {
+            HomeProblem::Link => write!(
+                f,
+                "is a symbolic link (fix: replace the link with the real {})",
+                match self.target {
+                    FaultTarget::Home => "folder",
+                    FaultTarget::File => "file",
+                }
+            ),
+            HomeProblem::NotAFolder => f.write_str("is not a folder (fix: remove or rename it)"),
+            HomeProblem::NotAFile => {
+                f.write_str("is not a regular file (fix: remove or rename it)")
+            }
+            HomeProblem::Owner { owner, user } => write!(
+                f,
+                "is owned by user id {owner}, not by this user ({user}) (fix: {})",
+                fix(&format!("chown {user}"), &self.path)
+            ),
+            HomeProblem::Mode { mode, allowed } => write!(
+                f,
+                "has mode {mode:04o}, which allows more than {allowed:04o} (fix: {})",
+                fix(&format!("chmod {allowed:o}"), &self.path)
+            ),
+        }
+    }
+}
+
+/// The fix as a command, or a plain instruction when the path is not UTF-8:
+/// no one quoting of raw bytes works in bash, zsh, dash and fish alike.
+fn fix(command: &str, path: &std::path::Path) -> String {
+    match path.to_str() {
+        Some(text)
+            if !text.is_empty()
+                && text
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"/._-+@%:,=".contains(&b)) =>
+        {
+            format!("{command} {text}")
+        }
+        Some(text) => format!("{command} '{}'", text.replace('\'', "'\\''")),
+        None => format!(
+            "{command} on this path, whose name is not UTF-8 and cannot be written as a command"
+        ),
+    }
+}
+
 /// Which git fact moved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitFact {
     Head,
     Index,
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::*;
+
+    #[test]
+    fn mode_fix_quotes_application_support_as_one_argument() {
+        let fault = HomeFault {
+            path: "/Users/o/Library/Application Support/crenshawdev/baley".into(),
+            target: FaultTarget::Home,
+            problem: HomeProblem::Mode {
+                mode: 0o750,
+                allowed: 0o700,
+            },
+        };
+        assert_eq!(
+            fault.to_string(),
+            "/Users/o/Library/Application Support/crenshawdev/baley has mode 0750, which allows more than 0700 (fix: chmod 700 '/Users/o/Library/Application Support/crenshawdev/baley')"
+        );
+    }
+    #[test]
+    fn repair_path_quotes_do_not_end_the_shell_argument() {
+        let fault = HomeFault {
+            path: "/h/o'ne/baley.db".into(),
+            target: FaultTarget::File,
+            problem: HomeProblem::Owner {
+                owner: 0,
+                user: 1000,
+            },
+        };
+        assert_eq!(
+            fault.to_string(),
+            "/h/o'ne/baley.db is owned by user id 0, not by this user (1000) (fix: chown 1000 '/h/o'\\''ne/baley.db')"
+        );
+    }
+    #[test]
+    fn non_utf8_repair_path_is_not_given_as_a_wrong_command() {
+        use std::os::unix::ffi::OsStrExt;
+        let fault = HomeFault {
+            path: std::ffi::OsStr::from_bytes(b"/h/\xffhome").into(),
+            target: FaultTarget::Home,
+            problem: HomeProblem::Mode {
+                mode: 0o755,
+                allowed: 0o700,
+            },
+        };
+        assert!(fault.to_string().ends_with(
+            "(fix: chmod 700 on this path, whose name is not UTF-8 and cannot be written as a command)"
+        ));
+    }
+    #[test]
+    fn unsafe_home_display_does_not_drop_faults_or_use_debug() {
+        let faults = vec![
+            HomeFault {
+                path: "/h".into(),
+                target: FaultTarget::Home,
+                problem: HomeProblem::Link,
+            },
+            HomeFault {
+                path: "/h/baley.db".into(),
+                target: FaultTarget::File,
+                problem: HomeProblem::NotAFile,
+            },
+        ];
+        assert_eq!(
+            StoreError::Refused(Refusal::UnsafeHome(faults)).to_string(),
+            "refused: unsafe-home: /h is a symbolic link (fix: replace the link with the real folder); /h/baley.db is not a regular file (fix: remove or rename it)"
+        );
+    }
 }

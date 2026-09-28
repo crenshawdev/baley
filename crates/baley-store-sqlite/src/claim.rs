@@ -277,7 +277,7 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
-            let home = tempfile::tempdir().expect("temp dir");
+            let home = crate::checks::private_folder();
             let store = SqliteStore::open(
                 home.path(),
                 AT,
@@ -1183,8 +1183,9 @@ mod tests {
     // Catches an old epoch-1 file with no completion events being written to.
     #[test]
     fn old_schema_digest_is_refused_without_changing_the_file() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let path = home.path().join("baley.db");
+        crate::checks::private_file(&path);
         let conn = Connection::open(&path).expect("old file");
         conn.execute_batch("CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value ANY NOT NULL);
             CREATE TABLE claim_lease (project_id TEXT, kind TEXT, request_id TEXT, claim_seq INTEGER, owner TEXT, renewed_at TEXT);

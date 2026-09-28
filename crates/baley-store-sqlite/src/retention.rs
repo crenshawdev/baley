@@ -785,7 +785,7 @@ mod tests {
     // Catches an interrupted export hidden while its head is pending.
     #[test]
     fn pending_export_record_is_listed() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
         let target = home.path().join("pending");
@@ -869,7 +869,7 @@ mod tests {
     // Catches the reduction event lookup walking every event of a project.
     #[test]
     fn the_purge_uses_the_event_type_index() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let _store = open(home.path(), &["a"]);
         let steps = plan(
             &raw(home.path()),
@@ -885,7 +885,7 @@ mod tests {
     // Catches the excerpt dependency lookup scanning every payload row.
     #[test]
     fn the_purge_uses_the_excerpt_index() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let _store = open(home.path(), &["a"]);
         let hash = [0u8; 32];
         let steps = plan(&raw(home.path()), EXCERPT_LOOKUP, &[&&hash[..]]);
@@ -912,7 +912,7 @@ mod tests {
     // Catches an offset time entering the event chain where retention cannot parse it.
     #[test]
     fn a_command_with_an_offset_time_is_refused() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let mut command = command("a", "fixture", "a1");
         command.recorded_at = "2026-09-25T18:00:00+00:00".into();
@@ -926,7 +926,7 @@ mod tests {
     // Catches reducing a record or moving the head on that refusal.
     #[test]
     fn only_an_output_reference_is_reduced() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let (reference, _) = attach(&store, "a", "a1", &body(300_000, 3), RetentionClass::Record);
         let before = head(home.path(), "a");
@@ -940,7 +940,7 @@ mod tests {
     // Catches reduction tombstoning a body a second reference needs whole.
     #[test]
     fn a_reduction_leaves_the_body_whole_for_another_reference() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let body = body(300_000, 3);
         let (first, _) = attach(&store, "a", "a1", &body, RetentionClass::Output);
@@ -960,7 +960,7 @@ mod tests {
     // Catches corrupt bytes being hidden by a reduction tombstone.
     #[test]
     fn a_reduction_refuses_a_body_that_fails_its_hash() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let (reference, _) = attach(&store, "a", "a1", &body(300_000, 3), RetentionClass::Output);
         let corrupt = zstd::bulk::compress(&body(300_000, 4), zstd::DEFAULT_COMPRESSION_LEVEL)
@@ -986,7 +986,7 @@ mod tests {
     // Catches ranges recorded against a length unlike the decoded body.
     #[test]
     fn a_reduction_refuses_a_body_of_another_length() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let (reference, _) = attach(&store, "a", "a1", &body(300_000, 3), RetentionClass::Output);
         raw(home.path())
@@ -1006,7 +1006,7 @@ mod tests {
     // Catches a purged body brought back as an excerpt.
     #[test]
     fn reduction_after_purge_is_refused() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let (reference, _) = attach(&store, "a", "a1", &body(300_000, 3), RetentionClass::Output);
         purge(&store, "a", "p1", reference.hash);
@@ -1019,7 +1019,7 @@ mod tests {
     // Catches a reduced original's 128 KiB excerpt left after its purge.
     #[test]
     fn purging_a_reduced_original_removes_its_excerpt() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let (original, _) = attach(&store, "a", "a1", &body(300_000, 3), RetentionClass::Output);
         let excerpt = reduce(&store, "a", "r1", &original);
@@ -1045,7 +1045,7 @@ mod tests {
     // Catches releasing every reference to a shared excerpt hash.
     #[test]
     fn an_identical_excerpt_survives_the_other_originals_purge() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let (first, _) = attach(&store, "a", "a1", &body(300_000, 3), RetentionClass::Output);
         let (second, _) = attach(&store, "a", "a2", &body(300_000, 4), RetentionClass::Output);
@@ -1072,7 +1072,7 @@ mod tests {
     // Catches deleting a project's excerpt trace while its other reduction needs it.
     #[test]
     fn a_shared_excerpt_keeps_its_projects_trace() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let (first, _) = attach(&store, "a", "a1", &body(300_000, 3), RetentionClass::Output);
         let (second, _) = attach(&store, "a", "a2", &body(300_000, 4), RetentionClass::Output);
@@ -1087,7 +1087,7 @@ mod tests {
     // Catches a purge event that cannot rebuild the sequence of released references.
     #[test]
     fn release_sequences_can_be_rebuilt_from_retention_events() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let (original, _) = attach(&store, "a", "a1", &body(300_000, 3), RetentionClass::Output);
         let excerpt = reduce(&store, "a", "r1", &original);
@@ -1133,7 +1133,7 @@ mod tests {
     // Catches one project recording the removal of another project's body.
     #[test]
     fn a_purge_in_a_project_that_never_referenced_the_hash_is_refused() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a", "b"]);
         let (reference, _) = attach(&store, "b", "b1", b"secret", RetentionClass::Material);
         assert_eq!(
@@ -1153,7 +1153,7 @@ mod tests {
     // Catches a decision claiming a removal without releasing anything.
     #[test]
     fn a_decision_cannot_append_a_removal_record() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let result = store.transact(&command("a", "fixture", "a1"), &mut |tx| {
             tx.append(NewEvent {
@@ -1196,7 +1196,7 @@ mod tests {
     // Catches a replay that checks only the hash-wide body, not A's reference.
     #[test]
     fn a_retry_gets_its_tombstone_while_the_body_lives_on_elsewhere() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a", "b"]);
         let reference = sensitive_answer(&store, "a", "a1");
         attach(&store, "b", "b1", b"\"secret\"", RetentionClass::Record);
@@ -1227,7 +1227,7 @@ mod tests {
     // Catches a retried purge recording again or deriving its old report from changed rows.
     #[test]
     fn a_retried_purge_rebuilds_its_report_from_the_event() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a", "b"]);
         let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
         attach(&store, "b", "b1", b"secret", RetentionClass::Material);
@@ -1246,7 +1246,7 @@ mod tests {
     // Catches derived trace text left for a removed body, in any project.
     #[test]
     fn trace_rows_of_a_removed_body_are_deleted_in_every_project() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a", "b"]);
         let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
         let other = Hash([8; 32]);
@@ -1260,7 +1260,7 @@ mod tests {
     // Catches A's purge erasing B's diagnostic for a body B still requires.
     #[test]
     fn trace_rows_of_a_shared_body_go_only_for_the_purging_project() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a", "b"]);
         let (reference, _) = attach(&store, "a", "a1", b"shared", RetentionClass::Material);
         attach(&store, "b", "b1", b"shared", RetentionClass::Material);
@@ -1273,7 +1273,7 @@ mod tests {
     // Catches VACUUM running before the compatibility epoch has been checked.
     #[test]
     fn scrub_refuses_a_newer_epoch_before_writing() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let conn = raw(home.path());
         conn.execute_batch(
@@ -1306,7 +1306,7 @@ mod tests {
     // Catches reporting an error after logical removal already committed.
     #[test]
     fn a_scrub_error_leaves_a_successful_purge_report_incomplete() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
         let command = command("a", "retention.purge", "p1");
@@ -1346,7 +1346,7 @@ mod tests {
     // Catches a scrub clearing its marker after an incomplete checkpoint.
     #[test]
     fn only_a_done_scrub_clears_the_marker() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let _store = open(home.path(), &["a"]);
         let mut conn = raw(home.path());
         conn.execute(
@@ -1377,7 +1377,7 @@ mod tests {
     // Catches a logical purge whose unsanitized free pages have no durable marker.
     #[test]
     fn the_purge_sets_the_scrub_marker() {
-        let home = tempfile::tempdir().expect("home");
+        let home = crate::checks::private_folder();
         let store = open(home.path(), &["a"]);
         let (reference, _) = attach(&store, "a", "a1", b"secret", RetentionClass::Material);
         store

@@ -1,10 +1,12 @@
 //! Opening the store and the write path every write goes through (design
 //! 0001, Opening the store; Processes and concurrency; EVD-R8, R19, R20).
 
+use crate::checks::{self, Judgement};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::num::NonZeroU32;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -125,26 +127,37 @@ pub struct SqliteStore {
 }
 
 impl SqliteStore {
-    /// Opens `<home>/baley.db`. The epoch is read before anything that
-    /// could write: a store stamped with a newer epoch is opened for
-    /// reading and left exactly as it was, one at an older epoch is refused
+    /// Opens `<home>/baley.db`. Before writing database contents, open reads
+    /// the epoch: a store stamped with a newer epoch is opened for reading
+    /// and left exactly as it was, one at an older epoch is refused
     /// until migration exists, and a missing schema is created under the
     /// writer queue with `at` as its creation time. An existing file whose
     /// epoch-1 schema digest differs is refused before any write; T12 needs
     /// a fresh ledger at epoch 1. A store at this binary's epoch must be in
     /// write-ahead-log mode with 8 KiB pages.
-    /// The declared views and the view set version's names are checked
-    /// before anything is touched, and at this binary's epoch their missing
-    /// tables, indexes and catalog rows are created through the write path;
-    /// a read-only store creates none. No project's views are looked at.
-    /// The home must already exist; locating it and checking its safety is
-    /// slice 2's work.
+    /// Declared view specs are validated before any file is opened or
+    /// created. At this binary's epoch, stored view and view-set declarations
+    /// are checked, and missing tables, indexes and catalog rows are created
+    /// through the write path. A read-only store creates none of those.
+    /// No project's views are looked at.
+    /// The caller creates the home, which must exist. Before anything else,
+    /// open checks the real home and each store file present: not a link,
+    /// the right kind, owned by the effective user, and no permission bit
+    /// beyond 0700 for the home or 0600 for a file. It refuses with
+    /// `Refusal::UnsafeHome`, naming each fault. It then creates the lock
+    /// files and an empty `baley.db` with mode 0600 when missing.
     pub fn open(home: &Path, at: &str, options: Options) -> Result<Self, StoreError> {
-        if !home.is_dir() {
-            return Err(StoreError::Unavailable(format!(
-                "{} is not a directory",
-                home.display()
-            )));
+        match checks::judge(&checks::gather(home)?) {
+            Judgement::Safe => {}
+            Judgement::Unsafe(faults) => {
+                return Err(StoreError::Refused(Refusal::UnsafeHome(faults)));
+            }
+            Judgement::Unreadable { path, error } => {
+                return Err(StoreError::Unavailable(format!(
+                    "cannot inspect {}: {error}",
+                    path.display()
+                )));
+            }
         }
         let mut projectors: Vec<Box<dyn Projector>> = vec![
             Box::new(ClaimScopeProjector::new()),
@@ -159,6 +172,16 @@ impl SqliteStore {
         let queue = FileLock::open(&home.join("baley.db.writer")).map_err(io)?;
         let maintenance_lock = FileLock::open(&home.join("baley.db.maintenance")).map_err(io)?;
         let path = home.join("baley.db");
+        // Only a missing database is created; an existing one is never opened
+        // for writing here, so a private read-only file still reaches SQLite.
+        created_or_present(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+                .map(drop),
+        )?;
         let writer = connect(&path)?;
 
         let epoch = match stored_epoch(&writer)? {
@@ -561,6 +584,14 @@ pub(crate) fn sql(error: rusqlite::Error) -> StoreError {
     }
 }
 
+/// The database may already exist; any other failure to create it is an error.
+pub(crate) fn created_or_present(created: std::io::Result<()>) -> Result<(), StoreError> {
+    match created {
+        Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => Err(io(error)),
+        _ => Ok(()),
+    }
+}
+
 fn io(error: std::io::Error) -> StoreError {
     StoreError::Unavailable(error.to_string())
 }
@@ -578,7 +609,7 @@ mod tests {
 
     #[test]
     fn queue_observer_measures_only_the_wait() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::checks::private_folder();
         drop(open(home.path()));
         let timing = crate::queue::scripted::Scripted::still();
         timing.script(&[Duration::ZERO, Duration::from_millis(7)]);
@@ -600,7 +631,7 @@ mod tests {
 
     #[test]
     fn no_queue_observer_consumes_no_reading() {
-        let home = tempfile::tempdir().unwrap();
+        let home = crate::checks::private_folder();
         let timing = crate::queue::scripted::Scripted::still();
         timing.script(&[
             Duration::from_millis(11),
@@ -645,7 +676,7 @@ mod tests {
     // created or stamped again on every open.
     #[test]
     fn opening_twice_keeps_one_schema_and_one_epoch() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let first = open(home.path());
         let second = SqliteStore::open(home.path(), "2026-09-26T09:00:00Z", Options::default())
             .expect("second open");
@@ -666,7 +697,7 @@ mod tests {
     // Catches trace writes bypassing the epoch fence.
     #[test]
     fn a_trace_write_after_a_newer_epoch_records_nothing() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = SqliteStore::open(
             home.path(),
             AT,
@@ -692,7 +723,7 @@ mod tests {
     // Catches a reopened store misreporting its epoch or accepting a trace write.
     #[test]
     fn a_reopened_newer_epoch_is_reported_and_fences_trace() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         drop(
             SqliteStore::open(
                 home.path(),
@@ -729,7 +760,7 @@ mod tests {
     // cannot open a store no other connection holds open.
     #[test]
     fn a_read_only_connection_opens_a_closed_store() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         store.record_trace(&trace("written")).expect("write");
         drop(store);
@@ -747,7 +778,7 @@ mod tests {
     // an error, or one set on the write connection only.
     #[test]
     fn the_connection_settings_read_back_as_set() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         for connection in [&store.writer, &store.reader] {
             let conn = lock(connection);
@@ -776,7 +807,7 @@ mod tests {
     // that grows without bound or drops the newest.
     #[test]
     fn the_trace_keeps_its_cap_and_drops_the_oldest() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = SqliteStore::open(
             home.path(),
             AT,
@@ -803,6 +834,7 @@ mod tests {
     /// A database the test builds by hand with Baley's schema at this
     /// epoch, but with the journal mode and page size it is given.
     fn foreign_store(home: &Path, journal_mode: &str, page_size: i64) {
+        crate::checks::private_file(&home.join("baley.db"));
         let conn = raw(home);
         conn.execute_batch(&format!("PRAGMA page_size = {page_size};"))
             .expect("page size");
@@ -821,7 +853,7 @@ mod tests {
     // or takes a write transaction before reading the epoch.
     #[test]
     fn opening_a_newer_store_leaves_it_as_it_was() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         drop(open(home.path()));
         let conn = raw(home.path());
         conn.execute("UPDATE schema_meta SET value = 2 WHERE key = 'epoch'", [])
@@ -843,7 +875,7 @@ mod tests {
     // refuses only newer epochs.
     #[test]
     fn an_older_epoch_refuses_the_next_write() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         raw(home.path())
             .execute("UPDATE schema_meta SET value = 0 WHERE key = 'epoch'", [])
@@ -862,7 +894,7 @@ mod tests {
     // switched. Catches a journal mode that is never checked.
     #[test]
     fn a_store_outside_the_write_ahead_log_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         foreign_store(home.path(), "DELETE", PAGE_SIZE);
         let refusal = SqliteStore::open(home.path(), AT, Options::default()).err();
         assert!(
@@ -876,7 +908,7 @@ mod tests {
     // exist.
     #[test]
     fn a_store_with_another_page_size_is_refused() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         foreign_store(home.path(), "WAL", 4096);
         let refusal = SqliteStore::open(home.path(), AT, Options::default()).err();
         assert!(
@@ -891,7 +923,7 @@ mod tests {
     // so a regression fails on the timeout instead of hanging the suite.
     #[test]
     fn a_read_through_the_same_store_runs_during_its_write() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = Arc::new(open(home.path()));
         let (in_write, wait_for_write) = mpsc::channel();
         let (release, wait_for_release) = mpsc::channel::<()>();
@@ -931,7 +963,7 @@ mod tests {
     // would drop a row while fewer than the cap remain.
     #[test]
     fn the_trace_keeps_its_cap_across_a_gap() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = SqliteStore::open(
             home.path(),
             AT,
@@ -964,7 +996,7 @@ mod tests {
     // fail, or a panic that commits half a write.
     #[test]
     fn a_panic_inside_a_write_rolls_back_and_the_store_goes_on() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         let store = open(home.path());
         let unwound = catch_unwind(AssertUnwindSafe(|| {
             store.write(|tx| {
@@ -997,7 +1029,7 @@ mod tests {
     // is not 32 bytes. Catches type checks left to the code alone.
     #[test]
     fn the_schema_refuses_values_of_the_wrong_type() {
-        let home = tempfile::tempdir().expect("temp dir");
+        let home = crate::checks::private_folder();
         drop(open(home.path()));
         let conn = raw(home.path());
         assert!(

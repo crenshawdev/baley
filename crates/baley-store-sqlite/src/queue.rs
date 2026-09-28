@@ -12,6 +12,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
@@ -40,6 +41,7 @@ impl FileLock {
     pub(crate) fn open(path: &Path) -> io::Result<Self> {
         let file = OpenOptions::new()
             .create(true)
+            .mode(0o600)
             .truncate(false)
             .write(true)
             .open(path)?;
