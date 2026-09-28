@@ -43,5 +43,7 @@ pub mod why;
 
 /// Platform configuration and ledger folders.
 pub mod folders;
+/// The owner's provider keys, read from `keys.env`.
+pub mod keys;
 /// Owner commands over the evidence ledger.
 pub mod ledger;

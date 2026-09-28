@@ -136,7 +136,7 @@ graph LR
 | CFG-R21 | Detection that fails (offline, bad key, rate limit, or a keys file Baley refuses) leaves the previous catalog in place, is recorded as `models.detection_failed`, and never blocks a command. A refused keys file records the failure for every provider. A provider with no key in the keys file is not detected and is not recorded as a failure; its detected catalog entries become unverifiable (Figure 3). An automatic trigger skips it quietly; when the owner names it in `baley models update`, Baley says which key name is missing from the keys file (CFG-R28). | Setup and dispatch must not depend on a network call. | CFG-R20 | Active |
 | CFG-R22 | The owner can add or remove a catalog name by hand (`baley models add`, `baley models remove`); a hand-added name wins over detection and is never removed by it. | A model newer than every list is still usable at once. | CFG-R19 | Active |
 | CFG-R23 | Each route and each detection records the catalog version it was checked against. | The record says which list was in force. | CFG-R17, CFG-R20 | Active |
-| CFG-R24 | Provider API keys are plain `NAME=value` lines in one file, `keys.env`, in Baley's config folder beside `config.toml` (`$BALEY_HOME/keys.env` when `BALEY_HOME` is set). Lines are `NAME=value`, with an optional `export ` prefix and the value optionally in single or double quotes; a line starting with `#` is a comment. Baley refuses to read the file with `keys-file-exposed` when its group or others can read it, naming the file and the `chmod 600` fix, or when another user owns it, naming the `chown` fix; and with `keys-file-invalid` when a name appears twice, naming the line. A symbolic link to the file is followed. This check does not check the folder; where the folder is Baley's home (on macOS, or when `BALEY_HOME` is set), the home's own open checks apply ([0001](0001-evidence-ledger.md), EVD-R22). Keys are not encrypted; there is no master key and no OS secret store. Stated limit: an agent under a host whose sandbox allows reads (Codex) can read the file, as it can any file the owner's user can read; that is the operating-system user boundary, not Baley's to close. | The file's mode protects the keys the way it protects any key the owner keeps in a file; nothing Baley added would protect them better from a process running as the owner. | SYS-R12, ADR 0027 | Active |
+| CFG-R24 | Provider API keys are plain `NAME=value` lines in one file, `keys.env`, in Baley's config folder beside `config.toml` (`$BALEY_HOME/keys.env` when `BALEY_HOME` is set). A missing file means no keys. A line is blank, a comment whose first byte is `#`, or `NAME=value` with an optional `export ` prefix. A name is `[A-Za-z_][A-Za-z0-9_]*` followed directly by `=`. Trailing spaces, tabs and carriage returns are removed. An unquoted value runs to the end of the line and holds no space or tab, since a shell reads such a line differently. A quoted value is everything between matching single or double quotes that end the line, with no escapes. A value, quoted or not, holds no control byte (`0x00` to `0x1F`, or `0x7F`) except a tab inside quotes; refusal catches a stray carriage return from a paste instead of sending a wrong key. Baley refuses the file with `keys-file-exposed` when a group or other read bit is set (`mode & 0o044`), naming the file and the `chmod 600` fix, or another user owns it, naming the numeric `chown` fix; both faults are named when both hold, owner first. Other mode bits are not judged. A fix named in a refusal tells the owner what to do: Baley never runs it, never checks that it works in the owner's shell, and never creates, changes or repairs the file. `keys-file-invalid` refuses a repeated name, an empty value or any other invalid line, including non-UTF-8 outside a comment, a byte-order mark on line 1, unquoted space or tab, and a forbidden control character. Every faulty line is named by number, never its text. `keys-file-unreadable` refuses a path that is not a regular file or cannot be read, naming the file and the cause. Any of these three refusals makes `baley exec` refuse and detection record `models.detection_failed` for every provider. A symbolic link to the file is followed. This check does not check the folder; where the folder is Baley's home (on macOS, or when `BALEY_HOME` is set), the home's own open checks apply when a command opens the ledger; `baley exec` opens none ([0001](0001-evidence-ledger.md), EVD-R22). Keys are not encrypted; there is no master key and no OS secret store. Stated limit: an agent under a host whose sandbox allows reads (Codex) can read the file, as it can any file the owner's user can read; that is the operating-system user boundary, not Baley's to close. | The file's mode protects the keys the way it protects any key the owner keeps in a file; nothing Baley added would protect them better from a process running as the owner. | SYS-R12, ADR 0027 | Active |
 | CFG-R25 | Baley only reads the keys file and never writes it; the owner edits it by hand. Baley has no command that sets, removes or lists keys. Keys come only from that file, never from an environment variable. | The owner holds the keys; Baley has no second copy to keep in step. | SYS-R12 | Active |
 | CFG-R26 | The ledger may record that a key was used and how (for example a review by OpenAI through its API with `OPENAI_API_KEY`), never the key's value. Keys never enter the ledger, exports or any view. | The record is shareable; the keys are not. | EVD-R14, CFG-R24 | Active |
 | CFG-R27 | Baley reads a key from the keys file for two uses only: to inject it into one command through `baley exec --key <NAME>` (SYS-R11) and to call a provider's list endpoint for detection (CFG-R20). | The fewest places a key can leak from. | SYS-R11, CFG-R20 | Active |
@@ -201,7 +201,7 @@ There is no command that sets, removes or lists keys (CFG-R25): the owner writes
 
 - **Inputs:** `--key <NAME>`, the key's name exactly as written in `keys.env`; `--`; the command and its arguments.
 - **Outputs:** the command's exit code; the key is set under that same name in the command's environment only; its output with every occurrence of the key replaced by `[baley:<NAME>]`, for example `[baley:OPENAI_API_KEY]`.
-- **Refusals:** `no-such-key` when `keys.env` has no line with that name (CFG-R27, SYS-R11); `keys-file-exposed` when group or others can read `keys.env` (naming the file and the `chmod 600` fix) or another user owns it (naming the `chown` fix); `keys-file-invalid` when a name appears twice (naming the line) (CFG-R24). The full contract of this command belongs to [0012: Host interface](0012-host-interface.md).
+- **Refusals:** `no-such-key` when `keys.env` has no line with that name (CFG-R27, SYS-R11); `keys-file-exposed` when group or others can read `keys.env` (naming the file and the `chmod 600` fix) or another user owns it (naming the `chown` fix); `keys-file-invalid` when a line is not a valid key line, a value is empty or a name appears twice (naming each line); `keys-file-unreadable` when `keys.env` is not a regular file or cannot be read (naming the file and the cause) (CFG-R24). The full contract of this command belongs to [0012: Host interface](0012-host-interface.md).
 
 ### baley models update
 
@@ -285,7 +285,11 @@ The `policy` view holds the latest `policy.effective` per project and host. Its 
 
 ### The keys file `keys.env`
 
-One `NAME=value` line per key, in the config folder beside `config.toml`, for example a line for `OPENAI_API_KEY`. The owner writes it; Baley reads it and never writes it (CFG-R24, CFG-R25). It is not a settings file and is not part of the ledger. The grammar, the duplicate-name refusal and the ownership and mode checks are those of CFG-R24.
+One `NAME=value` line per key, in the config folder beside `config.toml`, for example a line for `OPENAI_API_KEY`. The owner writes it; Baley reads it and never writes it (CFG-R24, CFG-R25). It is not a settings file and is not part of the ledger. The grammar, refusals and ownership and mode checks are those of CFG-R24.
+
+Lines split on LF, with CRLF accepted. Trailing spaces, tabs and carriage returns are removed before interpreting a line. Blank lines and comments count in the one-based line numbers; a final LF does not start another line. Every line but a comment must be UTF-8. A comment starts at the first byte with `#`, and its remaining bytes are ignored without decoding. Line 1 must not start with a byte-order mark. The optional `export ` prefix has exactly one space. Names are compared exactly, and only accepted lines register a name for duplicate checks. Quoted values keep all bytes between their first and last matching quotes, including inner quotes and literal backslashes. Unquoted values hold no space or tab. No value holds a control byte (`0x00` to `0x1F`, or `0x7F`) except a tab inside quotes; a value that does is refused with `keys-file-invalid` naming its line. All faulty lines are reported in file order, by number and never by text.
+
+A symbolic link is followed, and the opened file's kind, owner and mode are judged before its lines. A known kind or exposure fault takes precedence over an incomplete read. A missing file or folder means no keys; a key looked up in it gives `no-such-key` naming the key and the configured file path and saying the file does not exist. Lookup is by exact name, without trimming or case folding. A key prints only as `[baley:<NAME>]` through `Debug` and has no `Display` or `Serialize`. Its crate-private value accessor is reserved for the child environment in `baley exec` (Build 2 T3) and the detection request header (Build 2 T8). Neither the file bytes nor the key strings are wiped from memory when dropped.
 
 The ledger may record that a key was used and how, such as a review by OpenAI through its API with `OPENAI_API_KEY`, never the key's value (CFG-R26).
 
@@ -309,11 +313,13 @@ stateDiagram-v2
   Present --> Absent: the owner removes the line
   Present --> Exposed: group or others can read keys.env, or another user owns it
   Exposed --> Present: the owner fixes the mode or the owner
-  Present --> Invalid: a name appears twice
-  Invalid --> Present: the owner removes the duplicate line
+  Present --> Invalid: a line is malformed, a value is empty or a name appears twice
+  Invalid --> Present: the owner corrects the named lines
+  Present --> Unreadable: keys.env is not a regular file or cannot be read
+  Unreadable --> Present: the owner replaces the file or fixes its permissions
 ```
 
-*Figure 2. States of a provider key as Baley finds it when it reads `keys.env`. Every transition is the owner's edit; Baley never writes the file. An exposed file makes `baley exec --key` refuse with `keys-file-exposed`, naming the fix (`chmod 600`, with the file, or `chown`); an invalid file makes it refuse with `keys-file-invalid`, naming the line. Either makes detection record `models.detection_failed` for every provider, leaving the catalog as it was.*
+*Figure 2. States of a provider key as Baley finds it when it reads `keys.env`. Every transition is the owner's edit; Baley never writes the file. An exposed file makes `baley exec --key` refuse with `keys-file-exposed`, naming the fix (`chmod 600`, with the file, or `chown`); an invalid file makes it refuse with `keys-file-invalid`, naming each line by number and never its text; an unreadable file makes it refuse with `keys-file-unreadable`, naming the file and the cause. A missing file leaves every key Absent. Any of the three refusals makes detection record `models.detection_failed` for every provider, leaving the catalog as it was. The reader is built; `baley exec` and detection are later Build 2 tasks (section 11).*
 
 ```mermaid
 stateDiagram-v2
@@ -406,7 +412,7 @@ sequenceDiagram
   K->>S: key named OPENAI_API_KEY
   S->>F: read
   alt keys.env refused
-    S-->>K: keys-file-exposed naming the fix, or keys-file-invalid naming the line
+    S-->>K: keys-file-exposed naming the fix, keys-file-invalid naming each line, or keys-file-unreadable naming the file and the cause
     K->>L: models.detection_failed for every provider
     C-->>O: the refusal, previous list kept
   else no OPENAI_API_KEY line
@@ -498,7 +504,8 @@ The binary crate holds the inherited engine. It reads JSON files under `.plannin
 
 | Requirement | Status | Where |
 |---|---|---|
-| CFG-R1, CFG-R2, CFG-R3 | Not built | JSON layers at `crates/baley/src/config/write.rs:19-24` and `crates/baley/src/server.rs:224-230` |
+| CFG-R1, CFG-R3 | Not built | JSON layers at `crates/baley/src/config/write.rs:19-24` and `crates/baley/src/server.rs:224-230` |
+| CFG-R2 | Partly built | Platform config folders and `BALEY_HOME` resolve in `crates/baley/src/folders.rs:83-134`; reading `config.toml` is Build 2 T4. The inherited engine still reads JSON layers. |
 | CFG-R4 | Partly built | Bash guard walks up to `.planning` (`crates/baley/src/guard/bash.rs:27-44`); the server binds one project per process (`crates/baley/src/server.rs:810-817`); Write/Edit guard does not walk (`crates/baley/src/guard/mod.rs:323-334`) |
 | CFG-R5 | Partly built | `GLOBAL_ONLY` and `repo_only` flags (`crates/baley/src/config/mod.rs:14-18`, `crates/baley/src/config/merge.rs:59-87`); scopes differ from this design |
 | CFG-R6 | Partly built | defaults, global, repo merge (`crates/baley/src/config/merge.rs:35-49`); no host sections |
@@ -514,7 +521,10 @@ The binary crate holds the inherited engine. It reads JSON files under `.plannin
 | CFG-R17 | Partly built | reasons and sources in `crates/baley/src/config/roles.rs:143-180`; no policy or catalog version |
 | CFG-R18 | Built | `crates/baley/src/config/policy.rs:108-129` |
 | CFG-R19 to CFG-R23 | Not built | fixed list at `crates/baley/src/config/roles.rs:16` |
-| CFG-R24 to CFG-R27 | Not built | keys read from env and a key file (`crates/baley/src/review/provider/credentials.rs:52-112`) |
+| CFG-R24 | Built | `crates/baley/src/keys.rs:7-473`: file gathering, exposure checks, grammar and exact lookup |
+| CFG-R25 | Partly built | `crates/baley/src/keys.rs:254-344` has no write and reads no environment variable. The inherited review engine still reads environment variables and `providers.env` (`crates/baley/src/review/provider/credentials.rs:52-112`) until Build 4 replaces `credentials.rs::resolve`. |
+| CFG-R26 | Partly built | The key type prints only `[baley:<NAME>]` and has no `Display` or `Serialize` (`crates/baley/src/keys.rs:16-71`). Launches (`baley exec`, Build 2 T3) and detection (Build 2 T8) are not built; recording key use belongs to Build 4. |
+| CFG-R27 | Not built | `baley exec --key` and detection are later Build 2 tasks (T3 and T8). The inherited review engine reads keys itself (`crates/baley/src/review/provider/credentials.rs:52-112`). |
 | CFG-R28 | Built | provider reviewers are optional (`crates/baley/src/config/policy.rs:78-93`) |
 | CFG-R29 | Partly built | enum in `crates/baley/src/config/schema.json`; no not-yet-supported report |
 
