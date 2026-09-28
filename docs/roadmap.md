@@ -89,7 +89,7 @@ Figure 2. Build 1's tasks. One pull request per task.
 | T11 | Anchors and the adapter's `verify` | [#135](https://github.com/crenshawdev/baley/pull/135) | Merged |
 | T12 | Export, doctor and the owner-only acknowledge-restore command; backups removed | [#138](https://github.com/crenshawdev/baley/pull/138) | Merged |
 | T13 | The conformance suite, run against every store adapter | [#140](https://github.com/crenshawdev/baley/pull/140) | Merged |
-| T14 | CLI commands `verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor` and `acknowledge-restore`; the git forge and ticker, and `baley-bench` with `seed` | Not opened | In review |
+| T14 | CLI commands `verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor` and `acknowledge-restore`; the git forge and ticker, and `baley-bench` with `seed` | [#142](https://github.com/crenshawdev/baley/pull/142) | In review |
 
 
 ## Build 2: Identity, settings and keys
