@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status is as of origin/main `7429cc12` on 2026-09-27, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status is as of origin/main `dd5f29b4` on 2026-09-27, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
 
 ## The path to the first release
 
@@ -33,7 +33,7 @@ flowchart TB
     classDef blocked fill:#cf222e,stroke:#a40e26,color:#ffffff
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
 
-    class B1 progress
+    class B1 done
     class B2 next
     class B4,R1 blocked
     class B3,B5,B6,B7,B8,B9,D134,OTHER,R2,R3 planned
@@ -51,7 +51,7 @@ Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work
 
 ## Build 1: Foundation
 
-[#22](https://github.com/crenshawdev/baley/issues/22) · milestone Evidence · design [0001 evidence ledger](design/0001-evidence-ledger.md) · in progress
+[#22](https://github.com/crenshawdev/baley/issues/22) · milestone Evidence · design [0001 evidence ledger](design/0001-evidence-ledger.md) · done
 
 The evidence ledger store: a storage port with a SQLite adapter behind it, one conformance suite every adapter must pass, the hash chain, and forge anchors pushed with git. The owner's command line runs verify, doctor, export, purge, scrub, rebuild, anchor and acknowledge-restore, and `baley-bench` measures the real adapter. Nothing in the lifecycle uses the ledger yet.
 
@@ -59,17 +59,11 @@ ADRs: [0001 event ledger](adr/0001-event-ledger.md), [0002 SQLite](adr/0002-sqli
 
 ```mermaid
 flowchart LR
-    T1["T1 to T13<br/>merged"]
-    T14["T14<br/>verify, doctor, export, purge,<br/>scrub, rebuild, anchor,<br/>acknowledge-restore<br/>git forge, ticker, benchmark"]
-
-    T1 --> T14
+    T1["T1 to T14<br/>merged"]
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
-    classDef next fill:#fff8c5,stroke:#9a6700,stroke-width:3px,color:#3b2300
-    classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
 
     class T1 done
-    class T14 next
 ```
 
 Figure 2. Build 1's tasks. One pull request per task.
@@ -89,7 +83,7 @@ Figure 2. Build 1's tasks. One pull request per task.
 | T11 | Anchors and the adapter's `verify` | [#135](https://github.com/crenshawdev/baley/pull/135) | Merged |
 | T12 | Export, doctor and the owner-only acknowledge-restore command; backups removed | [#138](https://github.com/crenshawdev/baley/pull/138) | Merged |
 | T13 | The conformance suite, run against every store adapter | [#140](https://github.com/crenshawdev/baley/pull/140) | Merged |
-| T14 | CLI commands `verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor` and `acknowledge-restore`; the git forge and ticker, and `baley-bench` with `seed` | [#142](https://github.com/crenshawdev/baley/pull/142) | In review |
+| T14 | CLI commands `verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor` and `acknowledge-restore`; the git forge and ticker, and `baley-bench` with `seed` | [#142](https://github.com/crenshawdev/baley/pull/142) | Merged |
 
 
 ## Build 2: Identity, settings and keys
