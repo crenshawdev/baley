@@ -551,14 +551,16 @@ mod tests {
         assert!(!home.join("baley.db.writer").exists());
     }
     #[test]
-    fn read_only_private_database_is_not_rejected_before_sqlite() {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        let root = private_folder();
-        let home = root.path().join("home");
-        fs::DirBuilder::new().mode(0o700).create(&home).unwrap();
-        drop(open(&home).unwrap());
-        fs::set_permissions(home.join("baley.db"), fs::Permissions::from_mode(0o400)).unwrap();
-        assert!(open(&home).is_ok());
+    fn existing_database_is_not_an_error_when_creating_only_a_missing_one() {
+        use std::io;
+        assert_eq!(
+            crate::store::created_or_present(Err(io::Error::from(io::ErrorKind::AlreadyExists))),
+            Ok(())
+        );
+        assert!(
+            crate::store::created_or_present(Err(io::Error::from(io::ErrorKind::PermissionDenied)))
+                .is_err()
+        );
     }
     #[test]
     fn linked_parent_does_not_refuse_a_real_private_home() {

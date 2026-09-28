@@ -174,17 +174,14 @@ impl SqliteStore {
         let path = home.join("baley.db");
         // Only a missing database is created; an existing one is never opened
         // for writing here, so a private read-only file still reaches SQLite.
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
-        {
-            Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => {
-                return Err(io(error));
-            }
-            _ => {}
-        }
+        created_or_present(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+                .map(drop),
+        )?;
         let writer = connect(&path)?;
 
         let epoch = match stored_epoch(&writer)? {
@@ -584,6 +581,14 @@ pub(crate) fn sql(error: rusqlite::Error) -> StoreError {
     match error.sqlite_error_code() {
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => StoreError::Busy,
         _ => StoreError::Unavailable(error.to_string()),
+    }
+}
+
+/// The database may already exist; any other failure to create it is an error.
+pub(crate) fn created_or_present(created: std::io::Result<()>) -> Result<(), StoreError> {
+    match created {
+        Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => Err(io(error)),
+        _ => Ok(()),
     }
 }
 
