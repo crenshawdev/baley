@@ -133,9 +133,9 @@ flowchart LR
     T10 --> T11
     T12 --> T13
 
-    classDef progress fill:#9a6700,stroke:#7d4e00,color:#ffffff
+    classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
-    class T1 progress
+    class T1 done
     class T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12,T13 planned
 ```
 
@@ -143,7 +143,7 @@ Figure 3. Build 2's tasks. Arrows point from a task to what waits on it. One pul
 
 | Task | What | Pull requests | Status |
 |---|---|---|---|
-| T1 | Folders, the home and the open checks | | In progress |
+| T1 | Folders, the home and the open checks | [#149](https://github.com/crenshawdev/baley/pull/149) | Merged |
 | T2 | The keys file reader | | Planned |
 | T3 | `baley exec --key` | | Planned |
 | T4 | Settings: the schema, the two files, the merge and route resolution | | Planned |
