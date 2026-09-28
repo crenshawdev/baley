@@ -153,7 +153,11 @@ pub(super) fn verify_report(report: &VerifyReport) -> Render {
         ),
     });
     if let Some(broken) = &report.chain.first_break {
-        lines.push(format!("first break at {}: {:?}", broken.seq, broken.kind));
+        lines.push(format!(
+            "first break at {}: {}",
+            broken.seq,
+            break_text(&broken.kind)
+        ));
     }
     if let Some(range) = &report.chain.unanchored {
         lines.push(format!(
@@ -165,7 +169,19 @@ pub(super) fn verify_report(report: &VerifyReport) -> Render {
     if let Some(at) = &report.chain.age_unanchored_since {
         lines.push(format!("work unanchored since {at}"));
     }
-    for restore in &report.chain.acknowledged_restores {
+    let shown = match &report.chain.anchor {
+        AnchorVerdict::Acknowledged {
+            acknowledged_seq, ..
+        } => Some(*acknowledged_seq),
+        _ => None,
+    };
+    // The verdict line already names the acknowledgement it rests on.
+    for restore in report
+        .chain
+        .acknowledged_restores
+        .iter()
+        .filter(|r| Some(r.seq) != shown)
+    {
         lines.push(format!(
             "acknowledged restore at {}: {} behind {} {}",
             restore.seq,
@@ -189,8 +205,8 @@ pub(super) fn verify_report(report: &VerifyReport) -> Render {
         ));
     }
     lines.push(format!(
-        "local anchor comparison: {:?}",
-        report.stored_anchor_comparison
+        "local anchor row: {}",
+        comparison_text(report.stored_anchor_comparison)
     ));
     let good = report.chain.is_intact()
         && report.payloads.is_empty()
@@ -232,7 +248,7 @@ pub(super) fn views(report: &ViewsReport) -> Render {
         result.lines.push("no differences".into());
     }
     for (view, key) in &report.differing {
-        result.lines.push(format!("{view} {key:?}"));
+        result.lines.push(format!("{view} {}", key_text(key)));
     }
     result
 }
@@ -311,16 +327,19 @@ pub(super) fn doctor(health: &Health, projects: &[(ProjectId, String)]) -> Rende
             }
             Ok(raw) => {
                 result.lines.push(format!(
-                    "view set {:?}, binary {}",
-                    raw.view_set.0, raw.view_set.1
+                    "view set {}, binary {}",
+                    version_text(raw.view_set.0),
+                    raw.view_set.1
                 ));
                 if raw.view_set.0.is_some_and(|v| v > raw.view_set.1) {
                     result.code = 1;
                 }
                 for v in &raw.views {
                     result.lines.push(format!(
-                        "view {}: live {:?}, binary {}",
-                        v.view, v.live_version, v.binary_version
+                        "view {}: live {}, binary {}",
+                        v.view,
+                        version_text(v.live_version),
+                        v.binary_version
                     ));
                     if v.live_version.is_some_and(|live| live > v.binary_version) {
                         result.code = 1;
@@ -418,7 +437,7 @@ fn unread(kind: OutcomeKind, error: &AnswerUnread) -> Render {
         u8::from(kind == OutcomeKind::Refused)
     };
     let why = match error {
-        AnswerUnread::Gone(status) => format!("{status:?}"),
+        AnswerUnread::Gone(status) => status_text(status),
         AnswerUnread::Malformed => "malformed answer".into(),
         AnswerUnread::Read(error) => error.to_string(),
     };
@@ -532,8 +551,9 @@ pub(super) fn anchor(
         ),
         AnchorOutcome::Blocked(b) => Render::line(
             format!(
-                "anchor blocked by request {} ({:?})",
-                b.claim.request_id.0, b.state
+                "anchor blocked by request {} ({})",
+                b.claim.request_id.0,
+                claim_state_text(b.state)
             ),
             1,
         ),
@@ -566,8 +586,74 @@ pub(super) fn acknowledgement_error(
 ) -> Render {
     match error {
         AcknowledgeRestoreError::NothingToAcknowledge(check) => Render::refusal(format!("nothing to acknowledge: {}",check_text(check))),
-        AcknowledgeRestoreError::Store(StoreError::Blocked(b)) => Render::refusal(format!("an anchor claim {} is {:?}; run baley anchor {project} --remote {remote} first to reconcile it", b.claim.request_id.0,b.state)),
+        AcknowledgeRestoreError::Store(StoreError::Blocked(b)) => Render::refusal(format!("an anchor claim {} is {}; run baley anchor {project} --remote {remote} first to reconcile it", b.claim.request_id.0,claim_state_text(b.state))),
         AcknowledgeRestoreError::Store(StoreError::Stale(StaleInput::Head { .. })) => Render { lines: vec!["the chain moved after it was verified; nothing was recorded, run the command again".into()],code:3,error:true },
         AcknowledgeRestoreError::Store(e) => store_error(e,Some(project)),
     }
+}
+
+/// Owner wording for the local anchor row against the remote anchor.
+pub(super) fn comparison_text(comparison: StoredAnchorComparison) -> &'static str {
+    match comparison {
+        StoredAnchorComparison::NotCompared => "not compared with a remote anchor",
+        StoredAnchorComparison::Matches => "matches the remote anchor",
+        StoredAnchorComparison::MissingLocal => "missing, although the remote holds an anchor",
+        StoredAnchorComparison::LocalBehind => "older than the remote anchor",
+        StoredAnchorComparison::LocalAhead => "newer than the remote anchor",
+        StoredAnchorComparison::Conflict => {
+            "names the remote anchor's sequence with another hash or tag"
+        }
+    }
+}
+/// A stored version, or none when nothing is stamped yet.
+pub(super) fn version_text(version: Option<u32>) -> String {
+    version.map_or_else(|| "none".into(), |v| v.to_string())
+}
+/// Owner wording for an open claim's state.
+pub(super) fn claim_state_text(state: ClaimState) -> &'static str {
+    match state {
+        ClaimState::Active => "active",
+        ClaimState::Interrupted => "interrupted",
+        ClaimState::AwaitingOwner => "awaiting the owner",
+    }
+}
+/// Owner wording for what is wrong at a chain break.
+pub(super) fn break_text(kind: &BreakKind) -> String {
+    let hex = |h: &Option<Hash>| h.as_ref().map_or_else(|| "none".into(), |h| h.to_hex());
+    match kind {
+        BreakKind::Sequence { found } => format!("the row there carries sequence {found}"),
+        BreakKind::Project { expected } => {
+            format!("the event names a project other than {}", expected.0)
+        }
+        BreakKind::PrevHash { expected, found } => format!(
+            "previous hash {} where {} was expected",
+            hex(found),
+            hex(expected)
+        ),
+        BreakKind::Hash { expected, found } => format!(
+            "hash {} where {} was expected",
+            found.to_hex(),
+            expected.to_hex()
+        ),
+        BreakKind::Canonical(error) => format!("no canonical form: {error}"),
+    }
+}
+/// Owner wording for a body that is no longer present.
+pub(super) fn status_text(status: &PayloadStatus) -> String {
+    match status {
+        PayloadStatus::Present { bytes } => format!("present, {bytes} bytes"),
+        PayloadStatus::Reduced { .. } => "reduced to an excerpt".into(),
+        PayloadStatus::Purged { reason } => format!("purged: {reason}"),
+    }
+}
+/// A document key as its field values, in declared order.
+pub(super) fn key_text(key: &DocKey) -> String {
+    key.0
+        .iter()
+        .map(|v| match v {
+            KeyValue::Text(t) => format!("{t:?}"),
+            KeyValue::Integer(i) => i.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
