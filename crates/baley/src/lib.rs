@@ -41,5 +41,7 @@ pub mod verification;
 /// Why a file line is as it is: the git chain joined to the record.
 pub mod why;
 
+/// Platform configuration and ledger folders.
+pub mod folders;
 /// Owner commands over the evidence ledger.
 pub mod ledger;

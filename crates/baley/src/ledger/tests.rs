@@ -86,45 +86,6 @@ fn acknowledge_restore_is_on_the_surface() {
     );
 }
 
-const UNSET: &str =
-    "baley: BALEY_HOME is not set; this build opens the ledger only at $BALEY_HOME/baley.db";
-#[test]
-fn an_unset_home_cannot_choose_a_default() {
-    assert_eq!(home::home_from(None).unwrap_err().to_string(), UNSET);
-}
-#[test]
-fn an_empty_home_cannot_choose_a_default() {
-    assert_eq!(
-        home::home_from(Some("".into())).unwrap_err().to_string(),
-        UNSET
-    );
-}
-#[test]
-fn a_file_is_not_a_home() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("file");
-    std::fs::write(&file, "").unwrap();
-    assert_eq!(
-        home::home_from(Some(file.clone().into()))
-            .unwrap_err()
-            .to_string(),
-        format!(
-            "baley: BALEY_HOME is {}, which is not a directory",
-            file.display()
-        )
-    );
-}
-#[test]
-fn a_missing_ledger_cannot_be_created_by_a_typo() {
-    let dir = tempfile::tempdir().unwrap();
-    assert_eq!(
-        home::ledger_file(dir.path()).unwrap_err().to_string(),
-        format!(
-            "baley: no ledger at {}/baley.db; this build does not create one",
-            dir.path().display()
-        )
-    );
-}
 #[test]
 fn a_configured_remote_matches_a_whole_line() {
     assert!(remotes::configured("dead\norigin\n", "origin"));
@@ -895,4 +856,34 @@ fn read_only_refusal_names_the_needed_epoch() {
         )),
         "the ledger is read-only for this build; a build at epoch 3 is needed"
     );
+}
+
+#[test]
+fn unsafe_home_renders_every_fix_as_a_refusal_not_debug() {
+    let error = StoreError::Refused(Refusal::UnsafeHome(vec![
+        HomeFault {
+            path: "/h".into(),
+            target: FaultTarget::Home,
+            problem: HomeProblem::Mode {
+                mode: 0o755,
+                allowed: 0o700,
+            },
+        },
+        HomeFault {
+            path: "/h/baley.db".into(),
+            target: FaultTarget::File,
+            problem: HomeProblem::Link,
+        },
+    ]));
+    let rendered = display::store_error(&error, None);
+    assert_eq!(
+        rendered.lines,
+        [
+            "unsafe-home: the ledger's home is not safe to open",
+            "/h has mode 0755, which allows more than 0700 (fix: chmod 700 /h)",
+            "/h/baley.db is a symbolic link (fix: replace the link with the real file)",
+        ]
+    );
+    assert_eq!(rendered.code, 2);
+    assert!(rendered.error);
 }

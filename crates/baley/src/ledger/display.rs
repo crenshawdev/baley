@@ -46,6 +46,17 @@ pub(super) fn exit_class(error: &StoreError) -> u8 {
 }
 /// Renders a store failure with the owner's recovery text.
 pub(super) fn store_error(error: &StoreError, project: Option<&str>) -> Render {
+    if let StoreError::Refused(Refusal::UnsafeHome(faults)) = error {
+        let mut lines = vec![format!(
+            "{UNSAFE_HOME}: the ledger's home is not safe to open"
+        )];
+        lines.extend(faults.iter().map(ToString::to_string));
+        return Render {
+            lines,
+            code: exit_class(error),
+            error: true,
+        };
+    }
     if let StoreError::Refused(Refusal::ExportUnverified { report, .. }) = error {
         let mut rendered = verify_report(report);
         rendered

@@ -11,3 +11,15 @@ pub(super) fn options() -> Options {
         ..Options::default()
     }
 }
+
+/// Creates the ledger home when missing, then opens it with the caller's schema.
+pub(crate) fn store(
+    home: &std::path::Path,
+    at: &str,
+    options: Options,
+) -> Result<baley_store_sqlite::SqliteStore, baley_store::StoreError> {
+    crate::folders::create_private(home).map_err(|error| {
+        baley_store::StoreError::Unavailable(format!("cannot create {}: {error}", home.display()))
+    })?;
+    baley_store_sqlite::SqliteStore::open(home, at, options)
+}
