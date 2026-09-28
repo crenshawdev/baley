@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, DirBuilder};
 use std::io;
-use std::os::unix::{ffi::OsStrExt, fs::DirBuilderExt};
+use std::os::unix::{ffi::OsStrExt, fs::DirBuilderExt, fs::PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// The platform whose folder conventions apply.
@@ -152,17 +152,50 @@ impl fmt::Display for FolderRefusal {
 
 /// Creates a private folder and default-mode parents, leaving existing paths unchanged.
 pub fn create_private(path: &Path) -> io::Result<()> {
+    let existed = fs::symlink_metadata(path).is_ok();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    match DirBuilder::new().mode(0o700).create(path) {
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
-        result => result,
+    let created = DirBuilder::new().mode(0o700).create(path);
+    match after_create(existed, created)? {
+        Created::Done => Ok(()),
+        Created::ByItsParents => fs::set_permissions(path, fs::Permissions::from_mode(0o700)),
+    }
+}
+
+/// What creating a home left to do.
+#[derive(Debug, PartialEq, Eq)]
+enum Created {
+    Done,
+    /// A `..` in the path let creating the parents make the home itself, with
+    /// the default mode, so it is new and must still be made private.
+    ByItsParents,
+}
+
+fn after_create(existed: bool, created: io::Result<()>) -> io::Result<Created> {
+    match created {
+        Ok(()) => Ok(Created::Done),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists && existed => Ok(Created::Done),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(Created::ByItsParents),
+        Err(error) => Err(error),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn home_made_by_its_own_parents_is_still_made_private() {
+        let exists = || Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        assert_eq!(
+            after_create(false, exists()).unwrap(),
+            Created::ByItsParents
+        );
+    }
+    #[test]
+    fn existing_home_is_left_unchanged() {
+        let exists = || Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        assert_eq!(after_create(true, exists()).unwrap(), Created::Done);
+    }
     use super::*;
     use std::os::unix::ffi::OsStringExt;
 
