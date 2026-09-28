@@ -390,8 +390,8 @@ Streams used by the record families:
 | Stream | Examples of events |
 |---|---|
 | `project` | `project.initialized`, `project.described`, `scope.approved`, `forge.checked`, `policy.effective`, `checkout.seen`, `anchor.pushed`, `anchor.failed`, `anchor.restore_acknowledged` |
-| `roadmap` | `phase.declared`, `phase.reordered`, `phase.withdrawn`, `requirement.declared`, `requirement.corrected`, `requirement.reassigned`, `requirement.reprioritized`, `requirement.dropped` ([0004](0004-starting-a-project-and-changing-scope.md)), `story.refined` ([0005](0005-context-plans-and-acceptance.md)) |
-| `phase/<n>` | `plan.approved`, `plan.checked`, `plan.replaced`, `sprint.retrospective` ([0005](0005-context-plans-and-acceptance.md)), `plan.admitted`, `dispatch.issued` (serializes one active dispatch per phase), the task, run, suite and plan outcome events of [0006](0006-execution.md), `phase.completed`, `completion.invalidated`, `phase.undone` |
+| `roadmap` | `phase.declared`, `phase.reordered`, `phase.withdrawn`, `story.declared`, `story.corrected`, `story.reassigned`, `story.reprioritized`, `story.dropped` ([0004](0004-starting-a-project-and-changing-scope.md)), `story.refined`, and `questions.opened`, `question.answered`, `question.deferred` and `questions.abandoned` for a story's question set ([0005](0005-context-plans-and-acceptance.md)) |
+| `phase/<n>` | `plan.approved`, `plan.checked`, `plan.replaced`, `phase.retrospective`, and `questions.opened`, `question.answered`, `question.deferred` and `questions.abandoned` for a plan draft's question set ([0005](0005-context-plans-and-acceptance.md)), `plan.admitted`, `dispatch.issued` (serializes one active dispatch per phase), the task, run, suite and plan outcome events of [0006](0006-execution.md), `phase.completed`, `completion.invalidated`, `phase.undone` |
 | `plan/<n>-<k>` | `plan.submitted`, `plan.approved`, `plan.superseded` |
 | `admission/<n>` | `execution.admitted`, `execution.extended` |
 | `dispatch/<id>` | `task.started`, `task.run`, `task.closed`, `suite.run`, `dispatch.ended`, `worker.exited`, `worker.interrupted` |
@@ -726,7 +726,7 @@ The store-owned `request` view is at version 2. It projects `command.claimed` to
 
 | View | Key | Indexed by | Answers |
 |---|---|---|---|
-| `roadmap` | project | | The ordered phases and their declared requirements |
+| `roadmap` | project | | The ordered phases and their declared stories |
 | `phase` | (project, phase) | status | Status, context, completion and whether it still applies |
 | `plan` | (project, phase, plan) | status | Current content reference, approval binding, readiness |
 | `evidence_map` | (project, phase, plan) | | The acceptance evidence a plan must produce |
@@ -735,7 +735,8 @@ The store-owned `request` view is at version 2. It projects `command.claimed` to
 | `run` | (project, run id) | dispatch, phase | One run: launch, result, output reference |
 | `verification` | (project, attempt id) | phase, state | Attempts, runs, claims, waivers, completion |
 | `review` | (project, review id) | phase, state | Review attempts and their outcomes |
-| `review_queue` | (project, item) | phase, state | Deferred reviews awaiting adjudication |
+| `review_queue` | (project, item) | phase, state | Deferred reviews with rulings owed |
+| `dismissal` | (project, finding fingerprint) | | The standing dismissal of a finding's fingerprint, matched when a finding returns ([0008](0008-review.md), REV-R22) |
 | `risk` | (project, phase) | | Observations and receipts |
 | `milestone` | (project, name) | state | Close, archive, release and landing state |
 | `pause` | project | | The active pause and its resume bindings |
@@ -1007,9 +1008,9 @@ Agents may not edit the project file; the guard refuses writes to it.
 | Today | Replacement |
 |---|---|
 | `ROADMAP.md` phase list, read by every status query | `roadmap` stream and view. The commands of [0004](0004-starting-a-project-and-changing-scope.md) declare, edit, reorder and withdraw phases. |
-| `REQUIREMENTS.md` traceability rows | `requirement.declared`, `requirement.corrected`, `requirement.reassigned` and `requirement.dropped` events ([0004](0004-starting-a-project-and-changing-scope.md)) and the `roadmap` view. Completion and undo record events instead of editing rows. |
+| `REQUIREMENTS.md` traceability rows | `story.declared`, `story.corrected`, `story.reassigned` and `story.dropped` events ([0004](0004-starting-a-project-and-changing-scope.md)) and the `roadmap` view. Completion and undo record events instead of editing rows. |
 | `PROJECT.md` milestone version | The `milestone` view. |
-| `phases/<n>/CONTEXT.md` | `story.refined` events on the stories a sprint commits ([0005](0005-context-plans-and-acceptance.md)); accepted assumptions are part of the event. |
+| `phases/<n>/CONTEXT.md` | `story.refined` events on the stories a phase commits ([0005](0005-context-plans-and-acceptance.md)). Each carries the id of the question set its truths were drafted from; the answers and deferrals are that set's own `question.answered` and `question.deferred` records (0005 section 6). |
 | `phases/<n>/PLAN-k.md`, parsed by execution | `plan.approved` event carrying the approval binding; execution reads the typed plan from the `plan` view, never parses Markdown. |
 | `phases/<n>/SUMMARY.md` | A query over the `dispatch` and `run` views. Git source accounting no longer needs an exemption for Baley's own files, because Baley writes none. |
 | `phases/<n>/UAT.md` | `observation.recorded` events ([0007](0007-verification.md)). |
@@ -1292,15 +1293,15 @@ Families are moved by what is written together, not one at a time:
 
 | Family | Written in the same transaction as | Read together with |
 |---|---|---|
-| Roadmap, requirements | Plan publication (seeds requirements), completion (ticks phase and requirements), undo | Progress, next action, audit |
+| Roadmap, stories | Plan publication (seeds `REQUIREMENTS.md` rows), completion (ticks the phase in `ROADMAP.md` and its rows in `REQUIREMENTS.md`), undo | Progress, next action, audit |
 | Context | Plan publication (validates against it) | Admission, verification, review selection |
-| Plans, evidence maps | Requirements | Admission, dispatch, verification |
+| Plans, evidence maps | Stories | Admission, dispatch, verification |
 | Admission, execution, dispatch, runs | Native summaries, evidence | Verification, progress, undo |
 | Native evidence | Task checkpoints | Next action, execution |
-| Verification | Completion edits roadmap and requirements | Progress, milestone |
+| Verification | Completion edits `ROADMAP.md` and `REQUIREMENTS.md` | Progress, milestone |
 | Review | Review families only | Selection reads plans and context |
 | Risk | Risk families only | Suggest, milestone preflight |
-| Milestones, landing, undo | Undo edits roadmap and requirements | Progress |
+| Milestones, landing, undo | Undo edits `ROADMAP.md` and `REQUIREMENTS.md` | Progress |
 | Captures, config and routing, task, debug, spike, guard | Their own families | Their own readers |
 
 Builds:
@@ -1308,7 +1309,7 @@ Builds:
 1. **Foundation.** The workspace split, the port, the SQLite adapter, the conformance suite, payloads and references, the hash chain, anchors and the command line: `verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor` and `acknowledge-restore`. The inherited command surface stays beside these. Nothing in the lifecycle uses the ledger yet.
 2. **Identity, settings and keys.** Folders and open checks, keys and `baley exec`, settings and `policy.effective`, `baley init`, discovery, checkouts, the model catalog and detection.
 3. **Hosts.** The shared server, its start routes, install, the guard with the Codex answer adapter, the sandbox over the home and the config folder, stubs and captures.
-4. **Planning.** Project start, stories, sprints, plans, plan review and risk scan, the first dispatches, and routing finished.
+4. **Planning.** Project start, stories, phases, plans, plan review and risk scan, the first dispatches, and routing finished.
 5. **Doing the work.** Execution, runs, verification, diff review and the completion risk scan.
 6. **Milestones, landing, undo and pause.** The anchor triggers and the forge check.
 7. **Next action and progress.**
@@ -1491,7 +1492,7 @@ Every read the MCP server serves today, and the view and key that serve it. All 
 | `execute-next` | `phase`, `plan`, `admission`, `dispatch` for (project, phase); evidence events for the phase | |
 | `verify-next` | `phase`, `plan`, `evidence_map`, `dispatch`, `verification` for (project, phase) | |
 | `verification-read` | `verification` (project, attempt id), or by phase index | Newest first |
-| `verification-audit` | `roadmap` requirements; `phase` and `verification` by phase | Roadmap order |
+| `verification-audit` | `roadmap` stories; `phase` and `verification` by phase | Roadmap order |
 | `execution-history` | `dispatch` by phase; `run` (project, run id) with a payload stream for output | Sequence |
 | `evidence-read` | `evidence_map` (project, phase, plan); evidence events for the plan | Sequence |
 | `plan-read` | `plan` by phase; `evidence_map` | Plan number |

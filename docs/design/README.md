@@ -21,6 +21,7 @@ Bug fixes, refactors inside one module and dependency updates do not.
 | System design | [`0002-system-design.md`](0002-system-design.md) | The architecture every area follows: who is responsible for what, the patterns, the parts and the decisions that cut across areas |
 | Area design documents | `NNNN-slug.md` | The full design of one process area, in the form of [TEMPLATE.md](TEMPLATE.md). The set: 0003 configuration and routing, 0004 starting a project and changing scope, 0005 context, plans and acceptance, 0006 execution, 0007 verification, 0008 review, 0009 risk, 0010 guard, 0011 milestones, landing, undo and pause, 0012 host interface, 0013 next action and progress, 0014 support families |
 | Decision records (ADRs) | [`../adr/`](../adr/) | One architectural decision each: its context, the options and why one was chosen |
+| Glossary | [`CONTEXT.md`](../../CONTEXT.md) | One term for each concept across every document, with its meaning, the section that owns it and the words to avoid for it; it changes with the document that changes a term |
 | C4 model | [`c4/workspace.dsl`](c4/workspace.dsl) | The one model of Baley's structure; every structure diagram is exported from it |
 | Architecture overview | `../architecture/` | The system as it is built today, updated with the code that changes it |
 

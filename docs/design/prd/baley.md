@@ -25,9 +25,9 @@ The owner works in a familiar loop: start a project, discuss a phase, approve a 
 ### Starting and shaping a project
 
 1. As an owner, I want to bring a new or existing repository under Baley with one command, so that I can start working without hand-editing configuration.
-2. As an owner, I want Baley to write the first requirements and roadmap with me, so that the work has an approved scope before any agent builds anything.
+2. As an owner, I want Baley to write the first stories and roadmap with me, so that the work has an approved scope before any agent builds anything.
 3. As an owner, I want to add, edit, insert and remove phases in the roadmap through Baley, so that the roadmap changes only with a record of why.
-4. As an owner, I want every earlier version of an approved requirement or phase kept, so that I can see how the scope changed and who changed it.
+4. As an owner, I want every earlier version of an approved story or phase kept, so that I can see how the scope changed and who changed it.
 5. As an owner, I want Baley to find the project from any folder inside the repository, so that I do not have to tell it where I am.
 
 ### Settings, roles and models
@@ -35,7 +35,7 @@ The owner works in a familiar loop: start a project, discuss a phase, approve a 
 6. As an owner, I want to set up Baley through a guided interview the first time, so that I get working defaults without reading every setting.
 7. As an owner, I want global settings shared by all my projects and project settings that override them, so that I configure once and adjust per project.
 8. As an owner, I want settings that differ between Claude Code and Codex kept in their own section for each host, so that each host uses the models it actually has.
-9. As an owner, I want to choose which model and effort level each role uses (planner, assumptions analyzer, plan checker, executor, verifier, reviewer), so that I spend the strongest models where judgment matters.
+9. As an owner, I want to choose which model and effort level each role uses (planner, analyzer, plan checker, executor, verifier, reviewer), so that I spend the strongest models where judgment matters.
 10. As an owner, I want a retry to step up one effort level when I allow it, so that a failed attempt gets more capacity without me intervening.
 11. As an owner, I want to see every setting, its value and where it came from, so that I never have to guess why Baley made a choice.
 12. As an owner, I want Baley to record which settings were in effect for each decision, so that I can explain any past outcome.
@@ -45,9 +45,9 @@ The owner works in a familiar loop: start a project, discuss a phase, approve a 
 
 14. As an owner, I want to refine each story with its acceptance criteria (truths, the outcomes a person can observe) before it is planned, so that the plan is measured against what I actually want.
 15. As an owner, I want each truth written as a single observable outcome, so that it can be proven or disproven.
-16. As an owner, I want to set a sprint's capacity in tasks and have Baley refuse a plan that would exceed it, so that sprints stay small enough to finish without anyone estimating.
+16. As an owner, I want to set a phase's capacity in tasks and have Baley refuse a plan that would exceed it, so that phases stay small enough to finish without anyone estimating.
 17. As an owner, I want a planner agent to write the plan, with exactly one check for each truth, so that every promised outcome has a test that proves it.
-18. As an owner, I want an assumptions analyzer to surface what the plan takes for granted, so that I catch wrong assumptions before code is written.
+18. As an owner, I want an analyzer to find what a story leaves unsaid, settle from the code and the records whatever they can settle, and ask me only the decisions left to me, each with a recommended answer, in rounds ordered by what each question depends on, so that nothing I did not decide is built on and I am never asked what the code already says.
 19. As an owner, I want a plan checker to judge the plan independently, so that a bad plan is caught before it is built.
 20. As an owner, I want each phase to deliver something I can actually use, so that progress is real at every step.
 21. As an owner, I want to approve splitting a phase in two before it happens, so that scope never changes without me.

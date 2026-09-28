@@ -24,7 +24,7 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0014](0014-baley-runs-tests.md) | Have Baley run tests and checks itself and judge by exit code | Accepted |
 | [0015](0015-settings-in-toml.md) | Keep settings in TOML: one global file, one project file, host sections | Accepted, superseded in part by 0027 |
 | [0016](0016-key-store.md) | Store provider API keys encrypted in the ledger with the master key in the OS secret store | Superseded by 0027, and in part by 0023 |
-| [0017](0017-stories-and-sprints.md) | Codify Scrum: a requirement is a story that carries its truths, a phase is a sprint | Accepted |
+| [0017](0017-stories-and-sprints.md) | Codify Scrum: a requirement is a story that carries its truths, a phase is a sprint | Accepted, superseded in part by 0031 |
 | [0018](0018-lease-enforced-at-close.md) | Enforce the lease at task close on both hosts, with the guard as an early stop where it sees writes | Accepted |
 | [0019](0019-reviews-adjudicated-and-ruled.md) | Run every configured reviewer, adjudicate in the host session, and let the owner rule on each finding | Accepted |
 | [0020](0020-sandbox-is-a-write-barrier.md) | State what each host's sandbox denies; reads are the host's policy | Accepted, supersedes 0008 in part, superseded in part by 0027 |
@@ -37,3 +37,5 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0027](0027-vendor-folders-and-plain-keys.md) | Keep Baley's files in its own crenshawdev folders, with provider keys in a plain keys.env | Accepted, supersedes 0016, and 0002, 0003, 0013, 0015 and 0020 in part |
 | [0028](0028-one-http-stack.md) | Use one HTTP stack on tokio and hyper: reqwest for outgoing calls, axum for the MCP server | Accepted |
 | [0029](0029-a-host-may-offer-more.md) | Let a host offer more than the floor | Accepted |
+| [0030](0030-question-rounds.md) | Put refinement and planning decisions to the owner in dependency-ordered question rounds | Accepted |
+| [0031](0031-one-term-per-concept.md) | Use one term per concept, kept in a glossary: phase, not sprint, and story, not requirement | Accepted, supersedes 0017 in part |
