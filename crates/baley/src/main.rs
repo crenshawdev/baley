@@ -26,6 +26,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run one command with a provider key and redact its output.
+    Exec(baley::exec::ExecArgs),
     /// Owner operations on the evidence ledger.
     #[command(flatten)]
     Ledger(baley::ledger::LedgerCommand),
@@ -101,10 +103,11 @@ fn run_command(command: Command) -> std::process::ExitCode {
     use std::io::{Read, Write};
     let command = match command {
         Command::Ledger(command) => return baley::ledger::run(command),
+        Command::Exec(args) => return baley::exec::run(args),
         other => other,
     };
     let arguments: Vec<&str> = match &command {
-        Command::Ledger(_) => unreachable!("dispatched above"),
+        Command::Ledger(_) | Command::Exec(_) => unreachable!("dispatched above"),
         Command::Serve => return run_serve(None),
         Command::Guard => return guard::run(),
         Command::SkillDescription { name } => {
@@ -251,5 +254,56 @@ mod ledger_argument_tests {
         assert!(
             matches!(cli.command,Command::Ledger(baley::ledger::LedgerCommand::Verify { project,local_only:true,.. }) if project == "P")
         );
+    }
+}
+
+#[cfg(test)]
+mod exec_argument_tests {
+    use super::*;
+
+    #[test]
+    fn exec_arguments_after_the_separator_belong_to_the_command() {
+        let cli = Cli::try_parse_from([
+            "baley", "exec", "--key", "A", "--", "cmd", "--key", "B", "--",
+        ])
+        .unwrap();
+        let Command::Exec(args) = cli.command else {
+            panic!("exec command lost")
+        };
+        assert_eq!(args.key, "A");
+        assert_eq!(args.command, ["cmd", "--key", "B", "--"]);
+        for input in [
+            vec!["baley", "exec", "--key=A", "--", "ls"],
+            vec![
+                "baley",
+                "exec",
+                "--project-root",
+                "/x",
+                "--key",
+                "A",
+                "--",
+                "ls",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(input).unwrap();
+            let Command::Exec(args) = cli.command else {
+                panic!("exec command lost")
+            };
+            assert_eq!(args.key, "A");
+            assert_eq!(args.command, ["ls"]);
+        }
+    }
+
+    #[test]
+    fn exec_refuses_a_missing_key_separator_or_command() {
+        for input in [
+            vec!["baley", "exec", "--key", "A", "ls"],
+            vec!["baley", "exec", "--key", "A", "--"],
+            vec!["baley", "exec", "--", "ls"],
+            vec!["baley", "exec", "--key", "A", "--key", "B", "--", "ls"],
+        ] {
+            let error = Cli::try_parse_from(input).err().expect("usage refusal");
+            assert_eq!(error.exit_code(), 2);
+        }
     }
 }
