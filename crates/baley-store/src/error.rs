@@ -359,15 +359,33 @@ impl fmt::Display for HomeFault {
 }
 
 fn shell_path(path: &std::path::Path) -> String {
-    let text = path.to_string_lossy();
-    if !text.is_empty()
-        && text
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"/._-+@%:,=".contains(&b))
-    {
-        text.into_owned()
-    } else {
-        format!("'{}'", text.replace('\'', "'\\''"))
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = path.as_os_str().as_bytes();
+    match std::str::from_utf8(bytes) {
+        Ok(text)
+            if !text.is_empty()
+                && text
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"/._-+@%:,=".contains(&b)) =>
+        {
+            text.to_owned()
+        }
+        Ok(text) => format!("'{}'", text.replace('\'', "'\\''")),
+        // A lossy conversion would name a different path, so bytes that are not
+        // UTF-8 go out as ANSI-C escapes, which bash, zsh and POSIX sh accept.
+        Err(_) => {
+            let mut out = String::from("$'");
+            for &b in bytes {
+                match b {
+                    b'\'' => out.push_str("\\'"),
+                    b'\\' => out.push_str("\\\\"),
+                    0x20..=0x7e => out.push(b as char),
+                    _ => out.push_str(&format!("\\x{b:02x}")),
+                }
+            }
+            out.push('\'');
+            out
+        }
     }
 }
 
@@ -410,6 +428,23 @@ mod home_tests {
         assert_eq!(
             fault.to_string(),
             "/h/o'ne/baley.db is owned by user id 0, not by this user (1000) (fix: chown 1000 '/h/o'\\''ne/baley.db')"
+        );
+    }
+    #[test]
+    fn non_utf8_repair_path_keeps_its_original_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let fault = HomeFault {
+            path: std::ffi::OsStr::from_bytes(b"/h/\xffho'me").into(),
+            target: FaultTarget::Home,
+            problem: HomeProblem::Mode {
+                mode: 0o755,
+                allowed: 0o700,
+            },
+        };
+        assert!(
+            fault
+                .to_string()
+                .ends_with("(fix: chmod 700 $'/h/\\xffho\\'me')")
         );
     }
     #[test]
