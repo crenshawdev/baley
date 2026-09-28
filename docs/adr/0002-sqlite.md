@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0001: The evidence ledger](../design/0001-evidence-ledger.md) |
 | Supersedes | |
-| Superseded by | |
+| Superseded by | [0027](0027-vendor-folders-and-plain-keys.md), in part: the store no longer detects or refuses a network filesystem; network shares are not supported |
 
 ## Context and problem
 

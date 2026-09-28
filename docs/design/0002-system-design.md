@@ -57,28 +57,25 @@ graph LR
 
     1["<div style='font-weight: bold'>Owner</div><div style='font-size: 70%; margin-top: 0px'>[Person]</div><div style='font-size: 80%; margin-top:10px'>The person responsible for<br />the work. Approves plans,<br />rules on findings, sets<br />policy.</div>"]
     style 1 fill:#08427b,stroke:#052e56,color:#ffffff
-    14["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code or Codex: the<br />owner's session, which relays<br />Baley's work orders and<br />adjudicates, and the worker<br />agents it launches.</div>"]
-    style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    15["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
+    15["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code or Codex: the<br />owner's session, which relays<br />Baley's work orders and<br />adjudicates, and the worker<br />agents it launches.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    16["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
+    16["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    17["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Model providers such as<br />OpenAI, Gemini and DeepSeek.</div>"]
+    17["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
     style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    18["<div style='font-weight: bold'>OS secret store</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>macOS Keychain or the Linux<br />Secret Service.</div>"]
+    18["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Model providers such as<br />OpenAI, Gemini and DeepSeek.</div>"]
     style 18 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     2["<div style='font-weight: bold'>Baley</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Decides and orchestrates<br />every step of the process;<br />keeps the record.</div>"]
     style 2 fill:#1168bd,stroke:#0b4884,color:#ffffff
 
-    1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->14
+    1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->15
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->2
-    14-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio or HTTP]</div>" .->2
-    14-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->15
-    14-. "<div>Outside review calls, with<br />prompts built by Baley</div><div style='font-size: 70%'></div>" .->17
-    2-. "<div>Master key</div><div style='font-size: 70%'></div>" .->18
-    2-. "<div>Lists models</div><div style='font-size: 70%'></div>" .->17
-    2-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
-    2-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->16
+    15-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio or HTTP]</div>" .->2
+    15-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->16
+    15-. "<div>Outside review calls, with<br />prompts built by Baley</div><div style='font-size: 70%'></div>" .->18
+    2-. "<div>Lists models</div><div style='font-size: 70%'></div>" .->18
+    2-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->16
+    2-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->17
 
   end
 ```
@@ -91,10 +88,9 @@ graph LR
 | Owner | The person responsible for the work | Approves, rules and sets policy |
 | Baley | One Rust binary, run as one shared server per user | Decides, orchestrates, validates and keeps the record |
 | Host | Claude Code or Codex | Its main session relays and adjudicates; the worker agents it launches do one piece of engineering judgment each |
-| Outside reviewers | Model providers such as OpenAI, Gemini and DeepSeek | Review plans and diffs when the owner's policy asks for them; called by the host session, never by Baley. Baley itself only asks a provider which models a stored key can use ([0003](0003-configuration-and-routing.md), CFG-R20) |
+| Outside reviewers | Model providers such as OpenAI, Gemini and DeepSeek | Review plans and diffs when the owner's policy asks for them; called by the host session, never by Baley. Baley itself only asks a provider which models a key in `keys.env` can use ([0003](0003-configuration-and-routing.md), CFG-R20) |
 | Repository | The project's git checkout | Holds the source; Baley reads git facts and runs tests and git there |
 | Forge | GitHub | Holds chain anchors, pull requests and issues |
-| OS secret store | macOS Keychain or the Linux Secret Service | Holds the master key that encrypts Baley's stored API keys ([0003](0003-configuration-and-routing.md)) |
 
 ## 4. The flow the owner works in
 
@@ -145,7 +141,7 @@ Every area document applies these.
 | SYS-P8 | **Ports and adapters.** The domain core is plain synchronous code. Everything outside it is behind a port: storage, host, forge, and the process runner for git and tests. Baley has no port to outside models. Baley identifies its host and version on every connection, from the client information the host sends, and that host's adapter chooses the mechanisms: notification or waiting in steps, how a work order is delivered, where effort goes. A new host means a new adapter. |
 | SYS-P9 | **Instructions are part of the binary.** Every instruction a model sees is compiled into Baley and served in bounded parts by id. Files a host must load (skills, agent definitions) are stubs Baley renders ([ADR 0009](../adr/0009-served-instructions.md)). |
 | SYS-P10 | **A small, typed wire.** Few MCP tools, typed operations, operation names that are only ever added. Nothing is sent twice and nothing is echoed back. A refusal names a code and a place. |
-| SYS-P11 | **Enforcement by mechanism.** A rule that matters is enforced by Baley or its guard, never by prose asking the model to comply. The guard checks git commands and file writes at the host's edge; the host sandbox keeps agents out of Baley's home ([ADR 0008](../adr/0008-host-sandbox-isolation.md)). |
+| SYS-P11 | **Enforcement by mechanism.** A rule that matters is enforced by Baley or its guard, never by prose asking the model to comply. The guard checks git commands and file writes at the host's edge; the host sandbox keeps agents from writing Baley's home and config folder, and on Claude Code from reading them ([ADR 0008](../adr/0008-host-sandbox-isolation.md), [ADR 0020](../adr/0020-sandbox-is-a-write-barrier.md)). |
 | SYS-P12 | **Host neutrality.** Everything works with Claude Code or Codex as the host. Each wire, tool or instruction decision is judged on both, and the host that offers less sets the floor. Every capability reaches every agent, not only the main session. |
 
 ## 7. Inside Baley
@@ -160,15 +156,13 @@ graph LR
 
     1["<div style='font-weight: bold'>Owner</div><div style='font-size: 70%; margin-top: 0px'>[Person]</div><div style='font-size: 80%; margin-top:10px'>The person responsible for<br />the work. Approves plans,<br />rules on findings, sets<br />policy.</div>"]
     style 1 fill:#08427b,stroke:#052e56,color:#ffffff
-    14["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code or Codex: the<br />owner's session, which relays<br />Baley's work orders and<br />adjudicates, and the worker<br />agents it launches.</div>"]
-    style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    15["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
+    15["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code or Codex: the<br />owner's session, which relays<br />Baley's work orders and<br />adjudicates, and the worker<br />agents it launches.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    16["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
+    16["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    17["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Model providers such as<br />OpenAI, Gemini and DeepSeek.</div>"]
+    17["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
     style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    18["<div style='font-weight: bold'>OS secret store</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>macOS Keychain or the Linux<br />Secret Service.</div>"]
+    18["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Model providers such as<br />OpenAI, Gemini and DeepSeek.</div>"]
     style 18 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
 
     subgraph 2 ["Baley"]
@@ -178,27 +172,30 @@ graph LR
       style 12 fill:#438dd5,stroke:#2e6295,color:#ffffff
       13["<div style='font-weight: bold'>Settings</div><div style='font-size: 70%; margin-top: 0px'>[Container: TOML]</div><div style='font-size: 80%; margin-top:10px'>One global file and one file<br />per project.</div>"]
       style 13 fill:#438dd5,stroke:#2e6295,color:#ffffff
+      14["<div style='font-weight: bold'>Keys file</div><div style='font-size: 70%; margin-top: 0px'>[Container: Text]</div><div style='font-size: 80%; margin-top:10px'>keys.env in Baley's config<br />folder: one NAME=value line<br />per key, written by the<br />owner, read only by Baley.</div>"]
+      style 14 fill:#438dd5,stroke:#2e6295,color:#ffffff
       3["<div style='font-weight: bold'>Baley server</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>One shared process per user.<br />MCP server, command line and<br />guard hook.</div>"]
       style 3 fill:#438dd5,stroke:#2e6295,color:#ffffff
     end
 
-    1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->14
+    1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->15
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->3
-    14-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio or HTTP]</div>" .->3
-    14-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->15
-    14-. "<div>Outside review calls, with<br />prompts built by Baley</div><div style='font-size: 70%'></div>" .->17
+    1-. "<div>Writes provider keys by hand</div><div style='font-size: 70%'></div>" .->14
+    15-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio or HTTP]</div>" .->3
+    15-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->16
+    15-. "<div>Outside review calls, with<br />prompts built by Baley</div><div style='font-size: 70%'></div>" .->18
     3-. "<div>Reads</div><div style='font-size: 70%'></div>" .->13
-    3-. "<div>Master key</div><div style='font-size: 70%'></div>" .->18
-    3-. "<div>Lists models</div><div style='font-size: 70%'></div>" .->17
+    3-. "<div>Reads</div><div style='font-size: 70%'></div>" .->14
+    3-. "<div>Lists models</div><div style='font-size: 70%'></div>" .->18
     3-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->12
-    3-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
-    3-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->16
+    3-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->16
+    3-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->17
 
   end
 ```
 <!-- /c4:containers -->
 
-*Figure 3. Containers: the shared Baley server, the ledger and the settings files.*
+*Figure 3. Containers: the shared Baley server, the ledger, the settings files and the keys file.*
 
 <!-- c4:components -->
 ```mermaid
@@ -211,15 +208,13 @@ graph LR
     1["<div style='font-weight: bold'>Owner</div><div style='font-size: 70%; margin-top: 0px'>[Person]</div><div style='font-size: 80%; margin-top:10px'>The person responsible for<br />the work. Approves plans,<br />rules on findings, sets<br />policy.</div>"]
     style 1 fill:#08427b,stroke:#052e56,color:#ffffff
 
-    14["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code or Codex: the<br />owner's session, which relays<br />Baley's work orders and<br />adjudicates, and the worker<br />agents it launches.</div>"]
-    style 14 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    15["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
+    15["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code or Codex: the<br />owner's session, which relays<br />Baley's work orders and<br />adjudicates, and the worker<br />agents it launches.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    16["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
+    16["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    17["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Model providers such as<br />OpenAI, Gemini and DeepSeek.</div>"]
+    17["<div style='font-weight: bold'>Forge</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>GitHub: chain anchors, pull<br />requests, issues.</div>"]
     style 17 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
-    18["<div style='font-weight: bold'>OS secret store</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>macOS Keychain or the Linux<br />Secret Service.</div>"]
+    18["<div style='font-weight: bold'>Outside reviewers</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Model providers such as<br />OpenAI, Gemini and DeepSeek.</div>"]
     style 18 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
 
     subgraph 2 ["Baley"]
@@ -242,7 +237,7 @@ graph LR
         style 7 fill:#85bbf0,stroke:#5d82a8,color:#000000
         8["<div style='font-weight: bold'>Policy</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>Reads the global and project<br />settings, resolves the values<br />in effect and records which<br />applied.</div>"]
         style 8 fill:#85bbf0,stroke:#5d82a8,color:#000000
-        9["<div style='font-weight: bold'>Key store</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>Holds provider API keys<br />encrypted in the ledger; the<br />master key sits in the OS<br />secret store.</div>"]
+        9["<div style='font-weight: bold'>Keys</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>Reads provider API keys from<br />keys.env for one command or<br />one detection; never writes<br />the file.</div>"]
         style 9 fill:#85bbf0,stroke:#5d82a8,color:#000000
       end
 
@@ -250,13 +245,16 @@ graph LR
       style 12 fill:#438dd5,stroke:#2e6295,color:#ffffff
       13["<div style='font-weight: bold'>Settings</div><div style='font-size: 70%; margin-top: 0px'>[Container: TOML]</div><div style='font-size: 80%; margin-top:10px'>One global file and one file<br />per project.</div>"]
       style 13 fill:#438dd5,stroke:#2e6295,color:#ffffff
+      14["<div style='font-weight: bold'>Keys file</div><div style='font-size: 70%; margin-top: 0px'>[Container: Text]</div><div style='font-size: 80%; margin-top:10px'>keys.env in Baley's config<br />folder: one NAME=value line<br />per key, written by the<br />owner, read only by Baley.</div>"]
+      style 14 fill:#438dd5,stroke:#2e6295,color:#ffffff
     end
 
-    1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->14
+    1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->15
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->4
-    14-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio or HTTP]</div>" .->4
-    14-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->15
-    14-. "<div>Outside review calls, with<br />prompts built by Baley</div><div style='font-size: 70%'></div>" .->17
+    1-. "<div>Writes provider keys by hand</div><div style='font-size: 70%'></div>" .->14
+    15-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio or HTTP]</div>" .->4
+    15-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->16
+    15-. "<div>Outside review calls, with<br />prompts built by Baley</div><div style='font-size: 70%'></div>" .->18
     4-. "<div>Asks what may happen next</div><div style='font-size: 70%'></div>" .->5
     5-. "<div>Applies the area's rules</div><div style='font-size: 70%'></div>" .->6
     6-. "<div>Requests work orders</div><div style='font-size: 70%'></div>" .->7
@@ -264,17 +262,16 @@ graph LR
     8-. "<div>Reads</div><div style='font-size: 70%'></div>" .->13
     8-. "<div>Checks model names</div><div style='font-size: 70%'></div>" .->10
     8-. "<div>Records the effective policy<br />and each route</div><div style='font-size: 70%'></div>" .->11
-    4-. "<div>Settings, key and model<br />commands</div><div style='font-size: 70%'></div>" .->8
+    4-. "<div>Settings and model commands</div><div style='font-size: 70%'></div>" .->8
     4-. "<div>Injects a key into one<br />command</div><div style='font-size: 70%'></div>" .->9
-    9-. "<div>Master key</div><div style='font-size: 70%'></div>" .->18
-    9-. "<div>Encrypted keys</div><div style='font-size: 70%'></div>" .->11
+    9-. "<div>Reads</div><div style='font-size: 70%'></div>" .->14
     10-. "<div>Key for detection</div><div style='font-size: 70%'></div>" .->9
-    10-. "<div>Lists models</div><div style='font-size: 70%'></div>" .->17
+    10-. "<div>Lists models</div><div style='font-size: 70%'></div>" .->18
     10-. "<div>Records detections</div><div style='font-size: 70%'></div>" .->11
     6-. "<div>Records and acts through</div><div style='font-size: 70%'></div>" .->11
     11-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->12
-    11-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->15
-    11-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->16
+    11-. "<div>Reads git facts, runs tests<br />and git</div><div style='font-size: 70%'></div>" .->16
+    11-. "<div>Pushes anchors, opens pull<br />requests and issues</div><div style='font-size: 70%'></div>" .->17
 
   end
 ```
@@ -289,7 +286,7 @@ graph LR
 | Domain areas | The rules of each process area, one design document each |
 | Work order composer | Builds every dispatch: role, model and effort from policy, instructions from the binary, inputs from the ledger |
 | Policy | Reads the global and project settings, resolves the values in effect, records which applied ([0003](0003-configuration-and-routing.md)) |
-| Key store | Holds provider API keys encrypted in the ledger, with the master key in the OS secret store ([0003](0003-configuration-and-routing.md)) |
+| Keys | Reads provider API keys from `keys.env` in Baley's config folder, for one command or one detection; never writes the file ([0003](0003-configuration-and-routing.md)) |
 | Model catalog | The model names each host and provider offers, seeded from the binary and refreshed by detection ([0003](0003-configuration-and-routing.md)) |
 | Ports and adapters | The store, git and the test runner, the forge, the host adapters |
 
@@ -320,8 +317,8 @@ The one contract between Baley and every worker, including the outside reviews t
 | SYS-R8 | Baley runs the test suite and each check's command itself. It judges results by exit code, with an optional standard report (such as JUnit XML) for which tests failed. | Evidence is first-hand, and every language works. |
 | SYS-R9 | Outside models are called by the host session, never by Baley. Baley decides whether an outside review runs and with which providers, and builds the complete prompt and material as a work order; the host session makes the call and returns typed findings. | Responsibility stays with the party that acts. |
 | SYS-R10 | Each outside provider uses either its own command-line login or an API key, as the owner chooses. | No one is forced to hand over a key. |
-| SYS-R11 | An API key reaches a call only through `baley exec --key <provider> -- <command>`, which sets it in that one command's environment and replaces any copy of it in the command's output before the model sees it. | Keys stay out of conversations, transcripts and logs. The owner's own session keeps its own login. |
-| SYS-R12 | Baley stores API keys itself, out of reasonable reach, never in a plain file in a folder and never in environment variables, and they are managed only through Baley's command line. | Keys are owned and handled by Baley. |
+| SYS-R11 | An API key reaches a call only through `baley exec --key <NAME> -- <command>`, which takes the key's name exactly as written in `keys.env`, sets the key under that same name in that one command's environment, and replaces any copy of it in the command's output before the model sees it. | Keys stay out of conversations, transcripts and logs. The owner's own session keeps its own login. |
+| SYS-R12 | API keys are plain `NAME=value` lines in one file, `keys.env`, in Baley's config folder. The owner edits the file by hand; Baley only reads it, refuses to read it when group or others can read it or another user owns it, and never takes a key from an environment variable. Keys are not encrypted, and there is no master key and no OS secret store. | The owner holds the keys; the file's mode and the operating-system user protect them, as they protect any key the owner keeps in a file ([ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)). |
 | SYS-R13 | Settings are TOML: one global file for everything shared across projects and one project file that overrides it. Branch, forge and repository settings live only in the project file. Settings that differ per host sit in a section for each host. Baley's command line and interview write the files; the model is never told about them; the ledger records the effective settings Baley acted under. | Familiar, reviewable settings with a record of what applied. |
 | SYS-R14 | The first release supports Linux and macOS. | Windows is planned for a later release. |
 
@@ -340,9 +337,11 @@ Decision records this design produces.
 
 - One shared Baley server per user, over stdio and HTTP (SYS-R1 to SYS-R4): [ADR 0011](../adr/0011-one-shared-server.md)
 - Optimistic concurrency in the shared server (SYS-R6): [ADR 0012](../adr/0012-optimistic-concurrency.md)
-- Outside models are called by the host session, not Baley (SYS-R9 to SYS-R12): [ADR 0013](../adr/0013-host-session-calls-outside-models.md)
+- Outside models are called by the host session, not Baley (SYS-R9 to SYS-R12): [ADR 0013](../adr/0013-host-session-calls-outside-models.md), superseded in part by ADR 0027
 - Baley runs tests itself and judges by exit code (SYS-R8): [ADR 0014](../adr/0014-baley-runs-tests.md)
-- Settings in TOML, global and project, with host sections (SYS-R13): [ADR 0015](../adr/0015-settings-in-toml.md)
+- Settings in TOML, global and project, with host sections (SYS-R13): [ADR 0015](../adr/0015-settings-in-toml.md), superseded in part by ADR 0027
+- Baley's own crenshawdev folders and provider keys in a plain `keys.env` (SYS-R11, SYS-R12, SYS-R13): [ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)
+- One HTTP stack on tokio and hyper, with axum hosting the MCP server over HTTP (SYS-R2): [ADR 0028](../adr/0028-one-http-stack.md)
 
 ## 12. Open questions
 

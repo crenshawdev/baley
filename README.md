@@ -22,7 +22,7 @@ Baley keeps AI coding agents accountable to the person who answers for their wor
 
 - One Rust binary, run as one server per user. The host (Claude Code or Codex) talks to it as an MCP server over stdio or HTTP; a hook runs before each of the host's tool calls; a command line serves the owner.
 - The binary owns the process. The model does the engineering; Baley decides every process step from the record and the settings, builds each agent's complete work order, runs the tests itself, and owns the rules about what happens next.
-- Records are an append-only, hash-chained event ledger in SQLite, kept outside the repository and anchored on the forge, so a rewrite is detectable. Settings are two TOML files, one for you and one committed with the project. API keys are stored encrypted, never in a file or an environment variable.
+- Records are an append-only, hash-chained event ledger in SQLite, kept outside the repository and anchored on the forge, so a rewrite is detectable. Settings are two TOML files, one for you and one committed with the project. API keys are plain `NAME=value` lines in one file, `keys.env`, in Baley's config folder; you edit it, Baley only reads it and refuses it when group or others can read it or another user owns it, and no key is taken from an environment variable.
 - The whole design is written before the code: one document per process area under [docs/design](docs/design/), with the decisions in [docs/adr](docs/adr/).
 
 ## Following the work

@@ -9,8 +9,8 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | Number | Decision | Status |
 |---|---|---|
 | [0001](0001-event-ledger.md) | Record evidence as an append-only, hash-chained event ledger | Accepted |
-| [0002](0002-sqlite.md) | Use SQLite as the storage engine | Accepted |
-| [0003](0003-per-user-database.md) | Keep one ledger database per user, outside any checkout | Accepted, superseded in part by 0023 |
+| [0002](0002-sqlite.md) | Use SQLite as the storage engine | Accepted, superseded in part by 0027 |
+| [0003](0003-per-user-database.md) | Keep one ledger database per user, outside any checkout | Accepted, superseded in part by 0023 and 0027 |
 | [0004](0004-project-identity.md) | Identify projects by a committed project file | Accepted |
 | [0005](0005-storage-port.md) | Put storage behind a port with engine adapters | Accepted, superseded in part by 0010 |
 | [0006](0006-no-markdown-records.md) | Keep every operational record in the ledger | Accepted |
@@ -20,17 +20,19 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0010](0010-projector-traits-in-the-port.md) | Define the projector and event schema traits in the port | Accepted, superseded in part by 0021 |
 | [0011](0011-one-shared-server.md) | Run one shared Baley server per user over stdio and HTTP | Accepted |
 | [0012](0012-optimistic-concurrency.md) | Use optimistic concurrency in the shared server | Accepted |
-| [0013](0013-host-session-calls-outside-models.md) | Let the host session call outside models, never Baley | Accepted |
+| [0013](0013-host-session-calls-outside-models.md) | Let the host session call outside models, never Baley | Accepted, superseded in part by 0027 |
 | [0014](0014-baley-runs-tests.md) | Have Baley run tests and checks itself and judge by exit code | Accepted |
-| [0015](0015-settings-in-toml.md) | Keep settings in TOML: one global file, one project file, host sections | Accepted |
-| [0016](0016-key-store.md) | Store provider API keys encrypted in the ledger with the master key in the OS secret store | Accepted, superseded in part by 0023 |
+| [0015](0015-settings-in-toml.md) | Keep settings in TOML: one global file, one project file, host sections | Accepted, superseded in part by 0027 |
+| [0016](0016-key-store.md) | Store provider API keys encrypted in the ledger with the master key in the OS secret store | Superseded by 0027, and in part by 0023 |
 | [0017](0017-stories-and-sprints.md) | Codify Scrum: a requirement is a story that carries its truths, a phase is a sprint | Accepted |
 | [0018](0018-lease-enforced-at-close.md) | Enforce the lease at task close on both hosts, with the guard as an early stop where it sees writes | Accepted |
 | [0019](0019-reviews-adjudicated-and-ruled.md) | Run every configured reviewer, adjudicate in the host session, and let the owner rule on each finding | Accepted |
-| [0020](0020-sandbox-is-a-write-barrier.md) | State what each host's sandbox denies; reads are the host's policy | Accepted, supersedes 0008 in part |
+| [0020](0020-sandbox-is-a-write-barrier.md) | State what each host's sandbox denies; reads are the host's policy | Accepted, supersedes 0008 in part, superseded in part by 0027 |
 | [0021](0021-claim-rules-in-the-port.md) | Claim liveness and scope rules in the port | Accepted |
 | [0022](0022-acknowledged-restore.md) | Report owner-acknowledged restores behind a remote anchor | Accepted |
 | [0023](0023-no-backups-in-baley.md) | Keep whole-store backups outside Baley | Accepted, supersedes 0003 and 0016 in part |
 | [0024](0024-conformance-suite-and-adapter-tests.md) | Separate port conformance from adapter mechanism tests | Accepted |
 | [0025](0025-anchor-tag-objects.md) | Point anchor tags at the empty tree | Accepted |
 | [0026](0026-anchors-read-by-baley.md) | Anchors are read by Baley, and a missing tag ruleset is reported | Accepted, supersedes 0007 in part |
+| [0027](0027-vendor-folders-and-plain-keys.md) | Keep Baley's files in its own crenshawdev folders, with provider keys in a plain keys.env | Accepted, supersedes 0016, and 0002, 0003, 0013, 0015 and 0020 in part |
+| [0028](0028-one-http-stack.md) | Use one HTTP stack on tokio and hyper: reqwest for outgoing calls, axum for the MCP server | Accepted |

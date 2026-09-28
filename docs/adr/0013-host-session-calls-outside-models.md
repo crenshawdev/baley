@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0002: System design](../design/0002-system-design.md), [0008: Review](../design/0008-review.md) |
 | Supersedes |  |
-| Superseded by | |
+| Superseded by | [0027](0027-vendor-folders-and-plain-keys.md), in part: keys come from `keys.env`, and `baley exec --key` takes the key's name as written there |
 
 ## Context and problem
 

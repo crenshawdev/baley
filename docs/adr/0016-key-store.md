@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0003: Configuration and routing](../design/0003-configuration-and-routing.md) |
 | Supersedes |  |
-| Superseded by | [0023](0023-no-backups-in-baley.md), in part: keys kept out of backups |
+| Superseded by | [0023](0023-no-backups-in-baley.md), in part: keys kept out of backups; [0027](0027-vendor-folders-and-plain-keys.md): keys are plain lines in a file the owner edits, with no encryption, master key or OS secret store |
 
 ## Context and problem
 
