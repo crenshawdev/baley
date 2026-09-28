@@ -54,9 +54,13 @@ pub fn aggregate(values: &[f64]) -> (f64, f64) {
     };
     (median, *sorted.last().unwrap())
 }
+/// The shared name of an open measured with every current check.
+pub const OPEN_ROW: &str =
+    "Open with ownership, mode, link, epoch, schema-digest and view-catalog checks";
+
 /// Measured rows with their units and design 0001's budgets.
 pub const ROWS: &[(&str, &str, Option<f64>)] = &[
-    ("Open with checks (slice 1)", "ms", Some(10.0)),
+    (OPEN_ROW, "ms", Some(10.0)),
     ("Commit a command", "ms", Some(20.0)),
     ("Commit a command of 10 events", "ms", Some(20.0)),
     ("Get one view document by key and parse it", "ms", Some(2.0)),
@@ -107,10 +111,6 @@ pub fn markdown(runs: &[Run]) -> String {
             "Server resident memory (Build 9)",
             "does not grow with the store",
         ),
-        (
-            "Ownership, mode, link and filesystem open checks (slice 2)",
-            "10 ms including open",
-        ),
     ] {
         lines.push(format!(
             "| {name} | {budget} | measured later | measured later |"
@@ -122,6 +122,21 @@ pub fn markdown(runs: &[Run]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn measured_open_does_not_keep_an_unmeasured_checks_placeholder() {
+        let run = Run::from([(
+            OPEN_ROW.into(),
+            Figure {
+                value: Some(1.25),
+                longest: None,
+            },
+        )]);
+        let text = markdown(&[run]);
+        assert!(text.contains("| Open with ownership, mode, link, epoch, schema-digest and view-catalog checks | 10 ms | 1.250 [1.250] ms | within |"));
+        assert_eq!(text.matches(OPEN_ROW).count(), 1);
+        assert!(!text.lines().any(|line| line.to_lowercase().contains("open") && line.contains("measured later")));
+    }
+
     #[test]
     fn nearest_rank_does_not_select_the_hundredth_sample() {
         assert_eq!(

@@ -6,8 +6,9 @@ mod workload;
 use baley_store::*;
 use baley_store_sqlite::{Monotonic, SqliteStore, Timing};
 use generator::{Generator, Profile, Rng, Text, guard_command};
-use report::{Figure, Pause, Run};
+use report::{Figure, OPEN_ROW, Pause, Run};
 use serde_json::{Value, json};
+use std::os::unix::fs::DirBuilderExt;
 use std::{
     collections::BTreeSet,
     fs,
@@ -51,7 +52,7 @@ fn latency(run: &mut Run, name: &str, values: &[f64]) {
     figure(run, name, report::percentile(values, 0.99));
 }
 fn load(home: &Path, projects: usize, g: &Generator) -> Result<(Vec<f64>, BTreeSet<Hash>)> {
-    fs::create_dir(home)?;
+    fs::DirBuilder::new().mode(0o700).create(home)?;
     let store = open(home, &g.profile)?;
     let mut commits = Vec::new();
     let mut material = BTreeSet::new();
@@ -206,7 +207,7 @@ fn measure(root: &Path, g: &Generator, p: &Path, seconds: u64) -> Result<(Run, V
         samples.push(ms(t.elapsed()));
         drop(store);
     }
-    latency(&mut run, "Open with checks (slice 1)", &samples);
+    latency(&mut run, OPEN_ROW, &samples);
     let store = open(&five, &g.profile)?;
     samples.clear();
     for n in 0..300u64 {
@@ -422,7 +423,7 @@ fn guard_once(home: &Path, p: &Path, request: &str) -> Result<()> {
     Ok(())
 }
 fn seed(home: &Path) -> Result<()> {
-    fs::create_dir(home)?;
+    fs::DirBuilder::new().mode(0o700).create(home)?;
     let store = SqliteStore::open(home, &now(), workload::seed_options())?;
     let project = ProjectId("seed".into());
     store.create_project(&project, "Owner hand run", &now())?;
