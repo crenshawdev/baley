@@ -14,7 +14,7 @@ The current design of this area, and nothing else. Edit it in place when the des
 
 This area decides how an approved plan becomes committed, tested code:
 
-- admission: binding a sprint's approved plans and their checks to an execution that can begin;
+- admission: binding a phase's approved plans and their checks to an execution that can begin;
 - the executor's work order and what the executor may and may not do;
 - tasks: one signed commit each, red then green for every check, the narrowest verify per task;
 - the lease: what a task may change, how a violation is caught, and what the owner rules;
@@ -34,9 +34,9 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 
 | Term | Meaning |
 |---|---|
-| Admission | Binding the sprint's approved plans, their evidence maps and the allocation of each check to a task, at exact versions, so execution can begin. |
+| Admission | Binding the phase's approved plans, their evidence maps and the allocation of each check to a task, at exact versions, so execution can begin. |
 | Allocation | Which task delivers which check. Every check has exactly one task. |
-| Dispatch | One work order to the executor for one plan: the unfinished tasks, their checks, the lease, the commands, the route. One dispatch is active per sprint. |
+| Dispatch | One work order to the executor for one plan: the unfinished tasks, their checks, the lease, the commands, the route. One dispatch is active per phase. |
 | Attempt | One executor run on a dispatch. A retry is a new attempt on the same dispatch. |
 | Task | One unit of work: one signed commit, one or more verify commands, the checks it delivers. |
 | Verify | A task's narrowest command that settles it: one test, one binary, never the suite. |
@@ -48,7 +48,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | Suite | The project's test command (`workflow.test_command`), run once at plan close. |
 | Repair | The one owner-approved fix and relaunch after a red suite. |
 | Retire | Ending a task that cannot be done, releasing its checks. |
-| Gap plan | A plan added to a sprint after admission to deliver what a blocked plan did not. |
+| Gap plan | A plan added to a phase after admission to deliver what a blocked plan did not. |
 | Inspection | The owner's per-check confirmation at plan completion that the check tests what it claims and stubs nothing it asserts about. |
 | Orchestrator | The host session in its relay job (0002): launches the executor, reports its exit, relays owner answers, requests the suite and completion. |
 
@@ -56,8 +56,8 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 
 | Id | Rule | Why | Depends on | Status |
 |---|---|---|---|---|
-| EXE-R1 | Execution of a sprint begins with an admission that binds its approved plans, their evidence maps and an allocation giving every check exactly one task, all at exact versions; a plan, map or truth that changed since is refused (`stale-binding`). A later extension admits more plans and keeps every earlier binding verbatim. | The executor builds against exactly what the owner approved. | PLN-R14, PLN-R15, SYS-P4 | Active |
-| EXE-R2 | One dispatch is active per sprint. It is issued for the first admitted plan with no outcome, or the plan the owner names. Its id binds the plan, the admission, the base commit and the unfinished tasks; the same state issues the same dispatch, and a changed state supersedes it (`dispatch-superseded`). | A worker can be handed the same work twice and never a different work under the same id. | SYS-P2, SYS-R6 | Active |
+| EXE-R1 | Execution of a phase begins with an admission that binds its approved plans, their evidence maps and an allocation giving every check exactly one task, all at exact versions; a plan, map or truth that changed since is refused (`stale-binding`). A later extension admits more plans and keeps every earlier binding verbatim. | The executor builds against exactly what the owner approved. | PLN-R14, PLN-R15, SYS-P4 | Active |
+| EXE-R2 | One dispatch is active per phase. It is issued for the first admitted plan with no outcome, or the plan the owner names. Its id binds the plan, the admission, the base commit and the unfinished tasks; the same state issues the same dispatch, and a changed state supersedes it (`dispatch-superseded`). | A worker can be handed the same work twice and never a different work under the same id. | SYS-P2, SYS-R6 | Active |
 | EXE-R3 | The executor's work order carries everything: identity, goal, context, notes, each unfinished task with its verify commands and checks, each check's spec, the completed history, the continuation, the suite command, the lease, the command policy, the route, and the instructions of section 10. The executor reads it from Baley by id and reads nothing else of Baley's. | Baley hands the model everything it needs; the model decides nothing about the process. | SYS-P2, SYS-P9 | Active |
 | EXE-R4 | A task closes on exactly one signed commit whose subject follows Conventional Commits and names the task id, reachable from HEAD and after the dispatch base; one commit closes one task. | One unit of work, one record of it. | SYS-P6 | Active |
 | EXE-R5 | For every check a task delivers: a red run of its command, at a commit where its test exists and compiles and fails; then a green run at a later commit where it passes; the check's test file is byte-identical at red, green and the closing commit; the red commit is an ancestor of the green, the green of the closing commit. A close without this pair, or with a pair whose test file changed, is refused (`red-green`). | A failure that was watched is the only proof the test reaches the code. | PLN-R12 | Active |
@@ -68,15 +68,15 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | EXE-R10 | Baley counts failed runs of one task's verify within one attempt. After three, a fourth run is refused (`circuit-breaker`) and a checkpoint goes to the owner naming the task, the three failures and the executor's last stated cause. The owner answers continue (one more attempt of three), retire, or stop. The number is Baley's and is never told to the model. | An executor does not loop on its own failure. | SYS-P5, PLN-R17 | Active |
 | EXE-R11 | The executor closes its last task, reports and stops. The orchestrator, never the executor, requests the suite and plan completion. | The party that did the work does not hold the gate on it. | SYS-P5 | Active |
 | EXE-R12 | The suite runs once at plan close, after every task is closed. A red suite raises one question to the owner naming the failing tests and the paths the executor proposes to touch. Yes buys exactly one repair (signed commits after the failed run, paths outside the lease recorded as deviations) and one relaunch. No, a second red, or a refused repair blocks the plan; there is never a third launch. | Repair is bounded and on the record. | EXE-R7, EXE-R11 | Active |
-| EXE-R13 | A task may be retired by the owner with a reason. Retirement releases the task's checks for a later plan and blocks the plan; a blocked plan's remaining checks are released the same way. | A blocked task does not block the sprint silently. | EXE-R1 | Active |
-| EXE-R14 | A gap plan is a plan approved after admission (0005) and admitted by extension, linked to the plan it repairs. A sprint is complete only when every admitted plan is complete or every check of a blocked plan is delivered by a later plan. | Nothing blocked is quietly counted as done. | EXE-R13, PLN-R20 | Active |
-| EXE-R15 | A plan completes when every task is closed, the latest suite launch passed, the owner has inspected every check the plan delivered, and any risk the sprint raised is settled ([0009](0009-risk.md)). The inspection is per check, given at plan completion, and states that the check tests what it claims and stubs nothing it asserts about. | Done is proven and the owner has looked. | EXE-R5, EXE-R12 | Active |
+| EXE-R13 | A task may be retired by the owner with a reason. Retirement releases the task's checks for a later plan and blocks the plan; a blocked plan's remaining checks are released the same way. | A blocked task does not block the phase silently. | EXE-R1 | Active |
+| EXE-R14 | A gap plan is a plan approved after admission (0005) and admitted by extension, linked to the plan it repairs. A phase is complete only when every admitted plan is complete or every check of a blocked plan is delivered by a later plan. | Nothing blocked is quietly counted as done. | EXE-R13, PLN-R20 | Active |
+| EXE-R15 | A plan completes when every task is closed, the latest suite launch passed, the owner has inspected every check the plan delivered, and any risk the phase raised is settled ([0009](0009-risk.md)). The inspection is per check, given at plan completion, and states that the check tests what it claims and stubs nothing it asserts about. | Done is proven and the owner has looked. | EXE-R5, EXE-R12 | Active |
 | EXE-R16 | The orchestrator reports the executor's exit with its outcome. A dispatch whose executor exited without closing every task is interrupted; nothing continues until the owner says so. There is no timeout. | A dead worker is detected the same way on every host. | SYS-P12 | Active |
 | EXE-R17 | Before any continuation, Baley reconciles the checkout: commits after the last acknowledged progress, or a dirty tree, refuse the continuation (`reconciliation-required`) until the owner rules on them. | Work Baley did not see is never built on blindly. | SYS-P7 | Active |
 | EXE-R18 | Deviations are recorded on the plan's outcome and shown to the verifier: out-of-lease paths the owner accepted, repair paths outside the lease, and the executor's stated findings that a truth or a decision is wrong or unachievable. A surprise in a verify's output, even a passing one, is a stated deviation. | The verifier and the owner see everything that went beside the plan. | EXE-R8, EXE-R12 | Active |
 | EXE-R19 | Every executor stop is a checkpoint answered by the owner: a decision the plan did not make, a blocked package or tool, a contradiction with a truth or decision, a lease the task cannot honor, the circuit breaker. An owner stop is lifted only by the owner. | The owner decides; the executor does not work around. | SYS-P5 | Active |
 | EXE-R20 | Each dispatch round records the host's token count as reported by the orchestrator. | Cost per round is a fact the owner can see. | | Active |
-| EXE-R21 | Execution is sequential: one dispatch per sprint, plans in admitted order, no parallel agents and no worktrees. | One writer to one checkout. | SYS-R6 | Active |
+| EXE-R21 | Execution is sequential: one dispatch per phase, plans in admitted order, no parallel agents and no worktrees. | One writer to one checkout. | SYS-R6 | Active |
 | EXE-R22 | The cheap git facts a task close and a run depend on (HEAD, whether the index matches) are read inside the write transaction that records them, and the command is refused if either moved. | The record binds to the checkout as it was at the moment of recording. | EVD-R7 | Active |
 
 ## 4. Roles and actors
@@ -87,7 +87,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | Executor (dispatched) | The work order (EXE-R3) | Task starts, run requests, progress, checkpoints, task closes, a short exit report | `roles.executor.*` ([0003](0003-configuration-and-routing.md)); a retry may move one rung (CFG-R16) |
 | Orchestrator (host session) | The dispatch id and the route | Launches the executor; reports its exit; relays owner answers; requests the suite, repair, and completion | Not applicable |
 | Baley: this area | Admission, dispatch, run and close requests | Refusals, receipts, runs, outcomes | Not applicable |
-| Hardin | What may happen next in the sprint | Admit, dispatch, continue, suite, complete, or the refusal | Not applicable |
+| Hardin | What may happen next in the phase | Admit, dispatch, continue, suite, complete, or the refusal | Not applicable |
 | Process port | A command, a directory | Exit code, output, report file | Not applicable |
 
 ## 5. Commands and operations
@@ -96,15 +96,15 @@ Operations are typed operations on the host interface; the owner-only ones are a
 
 ### execution admit, execution extend
 
-- **Inputs:** sprint; the plans with their approval digests and map versions; the allocation (task per check).
+- **Inputs:** phase; the plans with their approval digests and map versions; the allocation (task per check).
 - **Outputs:** the admission record and its version.
-- **Refusals:** `stale-binding` (a plan, map or truth changed), `allocation-incomplete` (a check with no task or two), `check-command` (an allocated check's command is not one of its task's verify commands), `admitted-set` (`admit` on a sprint already admitted; use `extend`) (EXE-R1).
+- **Refusals:** `stale-binding` (a plan, map or truth changed), `allocation-incomplete` (a check with no task or two), `check-command` (an allocated check's command is not one of its task's verify commands), `admitted-set` (`admit` on a phase already admitted; use `extend`) (EXE-R1).
 
 ### execute next
 
-- **Inputs:** sprint; optional plan number (owner's choice).
+- **Inputs:** phase; optional plan number (owner's choice).
 - **Outputs:** the dispatch id and route to launch, or `complete`, or a refusal.
-- **Refusals:** `interrupted` (an unanswered worker exit), `reconciliation-required` (EXE-R17), `continuation-required` (a checkpoint or stop unanswered), `active-plan-conflict` (another plan's dispatch is active), `suite-failed` (every plan has an outcome and the sprint is not complete) (EXE-R2, EXE-R16, EXE-R19).
+- **Refusals:** `interrupted` (an unanswered worker exit), `reconciliation-required` (EXE-R17), `continuation-required` (a checkpoint or stop unanswered), `active-plan-conflict` (another plan's dispatch is active), `suite-failed` (every plan has an outcome and the phase is not complete) (EXE-R2, EXE-R16, EXE-R19).
 
 ### task start, task progress, task checkpoint, task close
 
@@ -213,8 +213,8 @@ Operations are typed operations on the host interface; the owner-only ones are a
 
 | View | Key | Content |
 |---|---|---|
-| `dispatch` | project, sprint | The active dispatch, its tasks and their state, checkpoints, runs |
-| `plan` | project, sprint, plan | Adds admission version, outcome, deviations, suite state, inspections |
+| `dispatch` | project, phase | The active dispatch, its tasks and their state, checkpoints, runs |
+| `plan` | project, phase, plan | Adds admission version, outcome, deviations, suite state, inspections |
 | `run` | project, run | One run's launch and result |
 
 ## 7. States

@@ -6,7 +6,7 @@ Baley keeps AI coding agents accountable to the person who answers for their wor
 
 ## What it does
 
-- **You approve before anything runs.** Work is a backlog of stories, each with the acceptance criteria you agreed, committed to sprints. A sprint's plan is written, checked and approved by you before any agent acts on it.
+- **You approve before anything runs.** Work is a backlog of stories, each with the acceptance criteria you agreed, committed to phases. A phase's plan is written, checked and approved by you before any agent acts on it.
 - **Every step leaves evidence.** Which agent did what, against which commit, which tests ran and what they printed, which verdict was reached and why.
 - **The next step has to be earned.** Baley decides what may happen next from the recorded evidence. If the proof for a step is missing, it refuses and names what is missing.
 - **Plans and diffs get attacked, not just approved.** Reviews come from the reviewers you configure: the host's own subagent, and outside providers (OpenAI, Gemini, DeepSeek) if you want them. Every finding is checked against the code and brought to you; you rule on each one, and Baley never acts on a finding by itself.
@@ -29,7 +29,7 @@ Baley keeps AI coding agents accountable to the person who answers for their wor
 
 - **What is being built:** the [milestones](https://github.com/crenshawdev/baley/milestones), each a theme of the design, and the build issues under them.
 - **In what order:** the [roadmap](docs/roadmap.md), from the build under way to the first release, updated by each build pull request.
-- **How it is designed:** every significant change starts as a design document with requirements and diagrams, and each architectural decision is kept as a decision record. See [the design process](docs/design/README.md), [design documents](docs/design/) and [decision records](docs/adr/).
+- **How it is designed:** every significant change starts as a design document with requirements and diagrams, and each architectural decision is kept as a decision record. See [the design process](docs/design/README.md), [design documents](docs/design/), [decision records](docs/adr/) and [the glossary](CONTEXT.md), which gives one term for each concept.
 - **How it is built:** every change reaches `main` through a pull request with passing CI (tests, clippy, cargo-deny), and signed commits are required.
 
 ## Issues and contributions

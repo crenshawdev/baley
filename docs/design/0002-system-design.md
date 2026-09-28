@@ -34,7 +34,7 @@ Three parties, one authority each.
 The host's main session is the model too. Baley gives it two jobs:
 
 - **Relay.** It launches the worker Baley names with Baley's work order, hands the results back, and puts Baley's questions to the owner. In this job it keeps no state and makes no decision.
-- **Adjudicator.** When Baley asks, it judges other models' output. In adversarial and refute reviews it checks each finding against the code, drops what does not hold, and brings the owner each finding that survives, in plain words, with the options for fixing it. It does the same for the planner, plan checker and assumptions analyzer. The owner rules; Baley records the ruling.
+- **Adjudicator.** When Baley asks, it judges other models' output. In adversarial and refute reviews it checks each finding against the code, drops what does not hold, and brings the owner each finding that survives, in plain words, with the options for fixing it. It does the same for the planner's plans, the plan checker's findings and the analyzer's draft truths. It does not adjudicate questions: the analyzer's and the planner's questions go to the owner as returned, in the rounds Baley works out, and the owner's answers come back unchanged ([0005](0005-context-plans-and-acceptance.md), PLN-R24). The owner rules; Baley records the ruling.
 
 Skills a host loads only tell the main session how to reach Baley's MCP server.
 
@@ -98,9 +98,9 @@ The working loop comes from the earlier system: discuss, plan, check, execute, v
 
 | Step | Owner | Baley | Model (worker) | Host session |
 |---|---|---|---|---|
-| Start a project | Describes the project; approves requirements and roadmap | Records them; decides the first phase | Planner drafts requirements and roadmap | Relays |
-| Context | Discusses the phase; approves its truths | Enforces the truth rules; records by digest | Analyzer surfaces assumptions; drafts truths | Adjudicates the analyzer's output |
-| Plan | Approves the plan | Enforces the plan rules (one check per truth, evidence map, file leases); routes planner and checker | Planner writes the plan; plan checker judges it | Launches workers; adjudicates the planner's and checker's output |
+| Start a project | Describes the project; approves the first stories and roadmap | Records them; decides the first phase | Planner drafts the stories and roadmap | Relays |
+| Refinement | Answers each story's questions round by round, or defers one with a reason; approves the story's truths | Works out each round from the questions' dependencies; records answers and deferrals as given; enforces the truth rules; records truths by digest | Analyzer finds the facts in the code and the records, asks questions only for the decisions left to the owner, then drafts truths from the answers | Relays the questions and the answers unchanged; adjudicates the draft truths |
+| Plan | Answers the plan's questions round by round; approves the plan | Enforces the plan rules (one check per truth, evidence map, file leases); works out the rounds of the plan's questions; routes planner and checker | Planner writes the plan on its recommended answers; plan checker judges it | Launches workers; relays the plan's questions and the answers unchanged; adjudicates the planner's and checker's output |
 | Plan review | Rules on each finding | Decides whether review runs and how strictly; builds the review work order; records rulings | Reviewers critique | Makes outside review calls; adjudicates the findings |
 | Execute | Answers repair and stop questions | Admits, orders, allocates checks, runs the tests, enforces red then green and the suite gate | Executor writes tests and code, one signed commit per task | Launches the executor; returns its results |
 | Diff review and risk | Rules on findings and risk | Detects risk, decides which review fires, holds the gate until ruled | Reviewers critique | Makes outside review calls; adjudicates the findings |
@@ -111,7 +111,7 @@ The working loop comes from the earlier system: discuss, plan, check, execute, v
 
 ```mermaid
 flowchart LR
-  start[Project start] --> scope[Requirements and roadmap]
+  start[Project start] --> scope[Stories and roadmap]
   scope --> ctx[Phase context: truths]
   ctx --> plan[Plan: evidence map, tasks, checks]
   plan --> check[Plan check and review]
@@ -297,7 +297,7 @@ The one contract between Baley and every worker, including the outside reviews t
 | Part | Content | Source |
 |---|---|---|
 | Identity | Work order id, project, phase, plan, attempt | Ledger |
-| Role | Planner, assumptions analyzer, plan checker, executor, verifier or reviewer | The area that issues it |
+| Role | Planner, analyzer, plan checker, executor, verifier or reviewer | The area that issues it |
 | Model and effort | Resolved from the settings, with the setting that decided it | Policy |
 | Instructions | The role's compiled instructions, by id | Binary (SYS-P9) |
 | Inputs | The records the role needs: truths, plan, checks, review material | Ledger |
@@ -343,6 +343,7 @@ Decision records this design produces.
 - Baley's own crenshawdev folders and provider keys in a plain `keys.env` (SYS-R11, SYS-R12, SYS-R13): [ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)
 - One HTTP stack on tokio and hyper, with axum hosting the MCP server over HTTP (SYS-R2): [ADR 0028](../adr/0028-one-http-stack.md)
 - The host that offers less sets the floor, and a host may offer more as a declared addition (SYS-P12): [ADR 0029](../adr/0029-a-host-may-offer-more.md)
+- One term per concept across every document, kept in the glossary [CONTEXT.md](../../CONTEXT.md), with phase for the working increment and story for the owner's declared work: [ADR 0031](../adr/0031-one-term-per-concept.md), superseding ADR 0017 in part
 
 ## 12. Open questions
 

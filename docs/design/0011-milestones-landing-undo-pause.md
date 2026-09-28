@@ -6,7 +6,7 @@
 | Design issue | none; build issue [#27](https://github.com/crenshawdev/baley/issues/27) |
 | Requirement prefix | LND |
 | Applies | [0002: System design](0002-system-design.md) |
-| Related | ADRs: [0007](../adr/0007-forge-anchors.md), [0004](../adr/0004-project-identity.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
+| Related | ADRs: [0007](../adr/0007-forge-anchors.md), [0004](../adr/0004-project-identity.md), [0031](../adr/0031-one-term-per-concept.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
 
 The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
 
@@ -14,16 +14,16 @@ The current design of this area, and nothing else. Edit it in place when the des
 
 This area decides how finished work leaves the checkout and how work in flight is put down and picked up:
 
-- the branch a sprint works on, and landing: pushing, opening the pull request, merging, tagging, and the cleanup after, each step on the owner's word;
+- the branch a phase works on, and landing: pushing, opening the pull request, merging, tagging, and the cleanup after, each step on the owner's word;
 - the tracker check landing reports;
-- milestones: closing one when its sprints are done, archiving it, and releasing the managed project;
-- undo: reverting a sprint's task commits;
+- milestones: closing one when its phases are done, archiving it, and releasing the managed project;
+- undo: reverting a phase's task commits;
 - pause and resume: putting work down with its state preserved, and an owner's stop;
 - the forge adapter every forge step goes through, and the chain anchors it pushes.
 
-It does not decide when a sprint is complete ([0007](0007-verification.md)); what the guard does with a push an agent attempts ([0010](0010-guard.md)); reviews a landing waits on ([0008](0008-review.md)); the forge mirror of stories and sprints (`Backlog`, [0005](0005-context-plans-and-acceptance.md) PLN-R22); or how Baley itself is released ([#14](https://github.com/crenshawdev/baley/issues/14), its own design).
+It does not decide when a phase is complete ([0007](0007-verification.md)); what the guard does with a push an agent attempts ([0010](0010-guard.md)); reviews a landing waits on ([0008](0008-review.md)); the forge mirror of stories and phases (`Backlog`, [0005](0005-context-plans-and-acceptance.md) PLN-R22); or how Baley itself is released ([#14](https://github.com/crenshawdev/baley/issues/14), its own design).
 
-Hand-offs: 0007 completes sprints; this area lands them. 0006's `phase.undone` is this area's undo. 0004's project start offers the forge creation this area performs. 0008's filing and 0009's anchors go through this area's forge adapter.
+Hand-offs: 0007 completes phases; this area lands them. 0006's `phase.undone` is this area's undo. 0004's project start offers the forge creation this area performs. 0008's filing and 0009's anchors go through this area's forge adapter.
 
 In the component view of [0002](0002-system-design.md) (Figure 4) this area is one of the domain areas, and the forge adapter is one of the ports.
 
@@ -32,7 +32,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | Term | Meaning |
 |---|---|
 | Base branch | The branch work is integrated into: `git.base_branch`, or the repository's default. |
-| Integration branch | Where a sprint's task commits go: a branch per sprint, per milestone, or the base branch itself (`git.integration_branch`). |
+| Integration branch | Where a phase's task commits go: a branch per phase, per milestone, or the base branch itself (`git.integration_branch`). |
 | Landing | Taking an integration branch to the base branch on the forge: push, open a pull request, merge, then local cleanup. |
 | Authorization | The owner's grant for exactly one external step of one landing, bound to the landing's exact state. |
 | External step | A step that changes something outside the checkout: push, open, merge, tag push, forge create. |
@@ -41,11 +41,11 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | Merge confirmation | The owner's record that the pull request merged, with the cleanup choices: tag or not, reap the branch or not. |
 | Reap | Deleting the merged integration branch locally. |
 | Tracker check | Landing's read-only report of the forge's open issues for the project. |
-| Milestone | A named group of sprints (Asimov names in this repository; any name in a managed project). |
-| Close | The record that a milestone's sprints are complete, its reviews ruled and its risk settled. |
-| Archive | The later owner step, bound to one exact close, that removes the milestone's sprints from the active roadmap and applies retention; nothing is deleted from the ledger. |
+| Milestone | A named group of phases (Asimov names in this repository; any name in a managed project). |
+| Close | The record that a milestone's phases are complete, its reviews ruled and its risk settled. |
+| Archive | The later owner step, bound to one exact close, that removes the milestone's phases from the active roadmap and applies retention; nothing is deleted from the ledger. |
 | Release | Tagging the managed project at a version, with its version manifest bumped, over a landing. |
-| Undo | Reverting a sprint's task commits, newest first, before they are pushed. |
+| Undo | Reverting a phase's task commits, newest first, before they are pushed. |
 | Pause | A work-in-progress commit of the authorized paths and a resume record. |
 | Stop | The owner's order to halt; lifted only by the owner. |
 | Anchor | The immutable tag `baley-anchor/<project>/<seq>` carrying the chain head (ADR 0007). |
@@ -54,7 +54,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 
 | Id | Rule | Why | Depends on | Status |
 |---|---|---|---|---|
-| LND-R1 | `git.integration_branch` is `sprint` (default), `milestone` or `trunk`. With `sprint`, each sprint works on `baley/sprint-<n>-<slug>`, created when the sprint is first planned per `git.auto_branch`, and lands with its own pull request after completion. With `milestone`, one branch `baley/<milestone-slug>` carries every sprint of the milestone and lands once. With `trunk`, task commits go on the base branch and landing is the push. A branch is never created on a protected branch's name. | The increment reaches the base branch at the pace the owner chooses; a sprint is the default unit that ships. | CFG-R5, GRD-R5 | Active |
+| LND-R1 | `git.integration_branch` is `phase` (default), `milestone` or `trunk`. With `phase`, each phase works on `baley/phase-<n>-<slug>`, created when the phase is first planned per `git.auto_branch`, and lands with its own pull request after completion. With `milestone`, one branch `baley/<milestone-slug>` carries every phase of the milestone and lands once. With `trunk`, task commits go on the base branch and landing is the push. A branch is never created on a protected branch's name. | The increment reaches the base branch at the pace the owner chooses; a phase is the default unit that ships. | CFG-R5, GRD-R5 | Active |
 | LND-R2 | Landing starts by freezing its source (branch and head), base (branch and head) and remote; these never change for that landing. Each external step needs its own authorization by the owner, naming the landing, its generation, source, base and remote, with owner and time; a step without a matching authorization is refused (`unauthorized`). No step publishes, opens or merges anything without one. | Every change to the outside world is the owner's, one step at a time. | SYS-P5, EVD-R27 | Active |
 | LND-R3 | Every external step is claimed before it runs and recorded after; a claim with no record blocks a plain retry (`reconciliation-required`), and `land resume` reads the remote or the forge first and records what it finds, re-running the step only under the same authorization when it is absent. | An interrupted push or merge is never repeated blindly. | SYS-P7, EVD-R26 | Active |
 | LND-R4 | Before any external step, Baley checks that the checkout still matches the frozen source (branch, head, remote URL), that no deferred review is unruled (`landing-unsettled`, [0008](0008-review.md) REV-R11), and that the guard's protected-branch rule does not deny; an `ask` there is satisfied by the owner's authorization. | The owner authorized a state; a different state needs a new word. | REV-R11, GRD-R5 | Active |
@@ -65,13 +65,13 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | LND-R9 | GitHub is the forge of the first release. | One forge proven end to end before another is claimed. | CFG-R29 | Active |
 | LND-R10 | GitLab and Forgejo are forges, each through its own tool (`glab`, `tea`), with the same steps proven on each. | The owner has accounts on all three. | LND-R8 | Backlog |
 | LND-R11 | At project start, when the forge check finds no remote or no tag ruleset (PRJ-R8), Baley offers to create a private repository or the ruleset; each is an external step under LND-R2 and LND-R3. When the forge cannot hold a ruleset on that repository, the check reports the tags as unprotected and anchoring goes on (ADR 0026). | The forge is set up the same way everything else on it is changed. | PRJ-R8 | Active |
-| LND-R12 | A milestone closes when every sprint in it is complete, every review it raised is ruled and every risk settled; the close records readiness bound to those facts and changes nothing else. A milestone with an unmet condition is refused (`milestone-incomplete`, `milestone-unsettled`) naming it. | Nothing half-finished is shipped. | VER-R12, REV-R11, RSK-R6 | Active |
-| LND-R13 | Archive is a separate owner step bound to one exact close: the milestone's sprints leave the active roadmap, run outputs are trimmed per the retention rule ([0001](0001-evidence-ledger.md)), and the roadmap view no longer lists them by default. Nothing is deleted from the ledger. One archive per close. | The active roadmap stays small; the record stays whole. | EVD-R14 | Active |
+| LND-R12 | A milestone closes when every phase in it is complete, every review it raised is ruled and every risk settled; the close records readiness bound to those facts and changes nothing else. A milestone with an unmet condition is refused (`milestone-incomplete`, `milestone-unsettled`) naming it. | Nothing half-finished is shipped. | VER-R12, REV-R11, RSK-R6 | Active |
+| LND-R13 | Archive is a separate owner step bound to one exact close: the milestone's phases leave the active roadmap, run outputs are trimmed per the retention rule ([0001](0001-evidence-ledger.md)), and the roadmap view no longer lists them by default. Nothing is deleted from the ledger. One archive per close. | The active roadmap stays small; the record stays whole. | EVD-R14 | Active |
 | LND-R14 | Release of the managed project is proposed then confirmed. Propose: the tag `v<semver>` must be well-formed, not collide with an existing tag or version, and be newer than the newest; the project's version manifest (a JSON, TOML or similar file the owner names, holding a version string) is read; a landing exists, unstarted, at HEAD. Confirm: the owner's record with time re-observes manifest, tags and HEAD, bumps the manifest in one commit, and binds the release to the landing, which then pushes the tag after merge. | A version is cut once, on the record, over a landing the owner runs. | LND-R2, LND-R6 | Active |
-| LND-R15 | Undo reverts a sprint's task commits, newest first, in `committed` mode (one signed revert commit per task commit) or `staged` mode (the reverts left in the index). The manifest comes from the sprint's recorded task closes only; a sprint with pushed commits is refused (`already-pushed`); the tree must be clean and no revert, cherry-pick or merge in progress; each revert is claimed before it runs and a conflict stops with the conflicting paths recorded; an interrupted revert is reconciled before anything continues. One undo per sprint; the sprint returns to Planned (0004 Figure 1). | Work is taken back exactly as it was recorded, and never twice. | EXE-R4, SYS-P7 | Active |
-| LND-R16 | Pause makes a work-in-progress commit of the paths the active dispatch authorized, then records `pause.recorded` with the preserved HEAD, branch, policy version, dispatch and the next step in one sentence. Resume checks every binding and records `pause.resumed`; a binding that moved is refused naming it. Next action offers the resume only for the sprint that was paused. | Work is put down whole and picked up where it was. | EXE-R17, CFG-R8 | Active |
-| LND-R17 | An owner's stop halts the sprint's work at once, holds through restarts, and is lifted only by the owner's resume, with or without a checkpoint. A stop is never refused. | The owner said stop. | SYS-P5, EXE-R19 | Active |
-| LND-R18 | Baley pushes an anchor tag at each verified sprint, each milestone step and each landing, and at least daily while a project is active, as an external step needing no authorization (it changes no source). The tag names the head as it stood before the push was claimed. After claiming and before pushing, Baley checks the local chain against the latest remote anchor and, when the chain is behind it or differs, records a refusal naming the mismatch and pushes nothing. A failed anchor push (refused, unreachable, or no remote) is an outcome, recorded as `anchor.failed` and retried on the next occasion. After restoring an intact earlier copy behind the latest remote anchor, an owner acknowledgement records the accepted gap and lets anchoring resume. | Rewrite and rollback are detectable from outside the machine. | ADR 0007 | Active |
+| LND-R15 | Undo reverts a phase's task commits, newest first, in `committed` mode (one signed revert commit per task commit) or `staged` mode (the reverts left in the index). The manifest comes from the phase's recorded task closes only; a phase with pushed commits is refused (`already-pushed`); the tree must be clean and no revert, cherry-pick or merge in progress; each revert is claimed before it runs and a conflict stops with the conflicting paths recorded; an interrupted revert is reconciled before anything continues. One undo per phase; the phase returns to Planned (0004 Figure 1). | Work is taken back exactly as it was recorded, and never twice. | EXE-R4, SYS-P7 | Active |
+| LND-R16 | Pause makes a work-in-progress commit of the paths the active dispatch authorized, then records `pause.recorded` with the preserved HEAD, branch, policy version, dispatch and the next step in one sentence. Resume checks every binding and records `pause.resumed`; a binding that moved is refused naming it. Next action offers the resume only for the phase that was paused. | Work is put down whole and picked up where it was. | EXE-R17, CFG-R8 | Active |
+| LND-R17 | An owner's stop halts the phase's work at once, holds through restarts, and is lifted only by the owner's resume, with or without a checkpoint. A stop is never refused. | The owner said stop. | SYS-P5, EXE-R19 | Active |
+| LND-R18 | Baley pushes an anchor tag at each verified phase, each milestone step and each landing, and at least daily while a project is active, as an external step needing no authorization (it changes no source). The tag names the head as it stood before the push was claimed. After claiming and before pushing, Baley checks the local chain against the latest remote anchor and, when the chain is behind it or differs, records a refusal naming the mismatch and pushes nothing. A failed anchor push (refused, unreachable, or no remote) is an outcome, recorded as `anchor.failed` and retried on the next occasion. After restoring an intact earlier copy behind the latest remote anchor, an owner acknowledgement records the accepted gap and lets anchoring resume. | Rewrite and rollback are detectable from outside the machine. | ADR 0007 | Active |
 | LND-R19 | Every refusal in this area is recorded with its reason and facts, and a replayed request is answered from the record. | The owner can see why a landing did not move. | EVD-R26 | Active |
 
 ## 4. Roles and actors
@@ -92,7 +92,7 @@ Owner commands under `baley land`, `baley milestone`, `baley release`, `baley un
 
 ### land start, land authorize, land push, land open, land merge, land resume, land confirm, land checkout, land pull, land tag, land reap, land read
 
-- **Inputs:** `start`: the sprint or milestone; `authorize`: the step (push, open with title and body, merge with the pull request number, tag push with the tag and object), the landing's identity and generation, owner, time; the steps: the landing; `confirm`: the merged pull request and commit, tag choice, reap choice; `read`: the project.
+- **Inputs:** `start`: the phase or milestone; `authorize`: the step (push, open with title and body, merge with the pull request number, tag push with the tag and object), the landing's identity and generation, owner, time; the steps: the landing; `confirm`: the merged pull request and commit, tag choice, reap choice; `read`: the project.
 - **Outputs:** each step's record and the landing's generation; `read` as LND-R7.
 - **Refusals:**
 
@@ -113,8 +113,8 @@ Owner commands under `baley land`, `baley milestone`, `baley release`, `baley un
 ### milestone read, milestone close, milestone archive
 
 - **Inputs:** the milestone; `archive`: the exact close id.
-- **Outputs:** readiness per sprint with what is unmet; `milestone.close_ready`; `milestone.archived`.
-- **Refusals:** `milestone-incomplete`, `milestone-unsettled` (naming the sprint, review or risk), `close-moved` (archive against a close whose facts changed), `archive-exists` (LND-R12, LND-R13).
+- **Outputs:** readiness per phase with what is unmet; `milestone.close_ready`; `milestone.archived`.
+- **Refusals:** `milestone-incomplete`, `milestone-unsettled` (naming the phase, review or risk), `close-moved` (archive against a close whose facts changed), `archive-exists` (LND-R12, LND-R13).
 
 ### release propose, release confirm
 
@@ -124,7 +124,7 @@ Owner commands under `baley land`, `baley milestone`, `baley release`, `baley un
 
 ### undo
 
-- **Inputs:** the sprint, `committed` or `staged`, the manifest id from `undo read`.
+- **Inputs:** the phase, `committed` or `staged`, the manifest id from `undo read`.
 - **Outputs:** per commit the revert record; the final state `committed`, `staged` or `conflict` with paths.
 - **Refusals:** `already-pushed`, `tree-dirty`, `operation-in-progress`, `undo-exists`, `manifest-stale`, `reconciliation-required` (LND-R15).
 
@@ -136,7 +136,7 @@ Owner commands under `baley land`, `baley milestone`, `baley release`, `baley un
 
 ## 6. Records
 
-### landing (events, `milestone/<name>` stream, or `phase/<n>` for a sprint landing)
+### landing (events, `milestone/<name>` stream, or `phase/<n>` for a phase landing)
 
 | Event | Fields |
 |---|---|
@@ -151,15 +151,15 @@ Owner commands under `baley land`, `baley milestone`, `baley release`, `baley un
 
 ### milestone.close_ready, milestone.archived, release.proposed, release.confirmed (events, `milestone/<name>` stream)
 
-`close_ready`: milestone, sprints, the completion, review and risk facts bound. `archived`: the close id, sprints archived, outputs trimmed. `release.proposed`: tag, manifest path and version, newest tag, drift, digest, landing. `release.confirmed`: proposal digest, bump commit, owner, time.
+`close_ready`: milestone, phases, the completion, review and risk facts bound. `archived`: the close id, phases archived, outputs trimmed. `release.proposed`: tag, manifest path and version, newest tag, drift, digest, landing. `release.confirmed`: proposal digest, bump commit, owner, time.
 
 ### undo events (`phase/<n>` stream)
 
-`undo.started`: sprint, mode, manifest (commits in revert order). `undo.claimed`: commit, head, index before. `undo.reverted`: commit, revert commit or index after. `undo.conflict`: commit, conflicting paths. `phase.undone`: sprint, final state.
+`undo.started`: phase, mode, manifest (commits in revert order). `undo.claimed`: commit, head, index before. `undo.reverted`: commit, revert commit or index after. `undo.conflict`: commit, conflicting paths. `phase.undone`: phase, final state.
 
 ### pause.recorded, pause.resumed (events, `pause` stream)
 
-`pause.recorded`: sprint, work-in-progress commit, preserved head, branch, policy version, dispatch, next step. `pause.resumed`: the pause, the checks passed, owner, time.
+`pause.recorded`: phase, work-in-progress commit, preserved head, branch, policy version, dispatch, next step. `pause.resumed`: the pause, the checks passed, owner, time.
 
 ### anchor.pushed, anchor.failed, anchor.restore_acknowledged (events, `project` stream)
 
@@ -173,7 +173,7 @@ Reconciling an interrupted push records the same events: `anchor.pushed` and the
 
 | View | Key | Content |
 |---|---|---|
-| `milestone` | project, milestone | Sprints and their completion, close, archive, release and landing state |
+| `milestone` | project, milestone | Phases and their completion, close, archive, release and landing state |
 | `landing` | project, landing | Frozen source, base and remote; steps done and next; authorizations; confirmation |
 | `pause` | project | The active pause and its bindings, or none |
 
@@ -201,7 +201,7 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Open: first sprint planned
+  [*] --> Open: first phase planned
   Open --> Ready: milestone.close_ready
   Ready --> Open: a bound fact changed (close moved)
   Ready --> Archived: milestone.archived
@@ -236,7 +236,7 @@ sequenceDiagram
   participant G as git
   participant F as Forge
   participant L as Ledger
-  O->>B: land start (sprint 7)
+  O->>B: land start (phase 7)
   B->>L: landing.started (frozen source, base, remote)
   O->>B: land authorize push
   B->>L: landing.authorized
@@ -279,7 +279,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 4. Landing a sprint on GitHub. The anchor at the end follows the claim, check, act and record steps of [0001](0001-evidence-ledger.md) (Commands, The anchor push); the landing that triggers it arrives with Build 6.*
+*Figure 4. Landing a phase on GitHub. The anchor at the end follows the claim, check, act and record steps of [0001](0001-evidence-ledger.md) (Commands, The anchor push); the landing that triggers it arrives with Build 6.*
 
 ```mermaid
 sequenceDiagram
@@ -315,7 +315,7 @@ sequenceDiagram
   participant B as Baley
   participant G as git
   participant L as Ledger
-  O->>B: undo sprint 7, committed
+  O->>B: undo phase 7, committed
   B->>B: pushed? tree clean? no operation in progress?
   alt refused
     B-->>O: already-pushed / tree-dirty / operation-in-progress
@@ -333,17 +333,17 @@ sequenceDiagram
       end
     end
     B->>L: phase.undone
-    B-->>O: sprint back to Planned
+    B-->>O: phase back to Planned
   end
 ```
 
-*Figure 6. Undoing a sprint.*
+*Figure 6. Undoing a phase.*
 
 ## 9. Settings
 
 | Setting | Type | Default | Scope | Owner | Effect |
 |---|---|---|---|---|---|
-| `git.integration_branch` | `sprint`, `milestone`, `trunk` | `sprint` | project | 0011 | Where task commits go and what a landing lands (LND-R1) |
+| `git.integration_branch` | `phase`, `milestone`, `trunk` | `phase` | project | 0011 | Where task commits go and what a landing lands (LND-R1) |
 | `git.auto_branch` | `ask`, `auto`, `off` | `ask` | project | 0011 | Whether Baley creates the integration branch (LND-R1) |
 | `git.base_branch` | branch name or absent | absent (the repository default) | project | 0011 | The branch landings merge into (LND-R1) |
 | `git.forge_provider` | `github`, `gitlab`, `forgejo` | absent | project | 0011 | The forge tool used (LND-R8); `gitlab` and `forgejo` are `Backlog` (LND-R10) |
@@ -367,7 +367,7 @@ The binary crate holds the inherited engine; its landing, milestone and undo pat
 
 | Requirement | Status | Where |
 |---|---|---|
-| LND-R1 | Partly built | Integration branch `baley/v<semver>` per milestone only, on the unreachable pause path (`crates/baley/src/pause/branch.rs:278-336`); no sprint branch |
+| LND-R1 | Partly built | Integration branch `baley/v<semver>` per milestone only, on the unreachable pause path (`crates/baley/src/pause/branch.rs:278-336`); no phase branch |
 | LND-R2 | Built | `crates/baley/src/landing_service.rs:150-220`, `crates/baley/src/landing/authorization.rs:17-75` |
 | LND-R3 | Built | `crates/baley/src/landing_service.rs:535-618`, `crates/baley/src/landing/reconcile.rs:32-132` |
 | LND-R4 | Built | `crates/baley/src/landing_service.rs:279-289`, `crates/baley/src/landing/effects.rs:85-169` |
@@ -382,7 +382,7 @@ The binary crate holds the inherited engine; its landing, milestone and undo pat
 | LND-R15 | Built | `crates/baley/src/undo/manifest.rs:30-171`, `crates/baley/src/undo/revert.rs:36-109`, `crates/baley/src/undo_service.rs:189-311`; no pushed check |
 | LND-R16 | Not reachable | `crates/baley/src/pause_service.rs:1275` has no MCP route (`crates/baley/src/server.rs:127-134`) |
 | LND-R17 | Partly built | Stop as an owner answer (`crates/baley/src/execution_service.rs:451-465`) |
-| LND-R18 | Partly built | The anchor command, its latest-anchor check, its recorded outcomes and owner-only acknowledge-restore (`crates/baley-core/src/anchor.rs`, `crates/baley-core/src/forge.rs`); the CLI and its git forge are built in `crates/baley/src/ledger`. The triggers at verified sprints, milestone steps, landings and daily arrive with Build 6 |
+| LND-R18 | Partly built | The anchor command, its latest-anchor check, its recorded outcomes and owner-only acknowledge-restore (`crates/baley-core/src/anchor.rs`, `crates/baley-core/src/forge.rs`); the CLI and its git forge are built in `crates/baley/src/ledger`. The triggers at verified phases, milestone steps, landings and daily arrive with Build 6 |
 | LND-R19 | Built | Receipts per namespace (`crates/baley/src/milestone_service.rs:253-549`, `crates/baley/src/landing_service.rs:310-316`) |
 
 ## 12. Open questions

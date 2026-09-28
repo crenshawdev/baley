@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0005: Context, plans and acceptance](../design/0005-context-plans-and-acceptance.md), [0004: Starting a project and changing scope](../design/0004-starting-a-project-and-changing-scope.md) |
 | Supersedes |  |
-| Superseded by | |
+| Superseded by | [0031](0031-one-term-per-concept.md), in part: phase is the one term for the working increment, not sprint, and story for the owner's declared work, not requirement; `planning.sprint_capacity` is `planning.phase_capacity` |
 
 ## Context and problem
 

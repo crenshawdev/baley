@@ -172,10 +172,10 @@ One global Baley MCP server per user serves every session and worker on Claude C
 
 [#25](https://github.com/crenshawdev/baley/issues/25) · milestone Evidence · blocked
 
-The owner starts a project, shapes the story backlog, and commits stories to sprints under a task capacity. Each story carries versioned truths, and each truth has one check. Each sprint's plan is written, checked, reviewed and risk-scanned, and approval binds the plan's exact digest. Every configured reviewer runs, and a provider that cannot be called is replaced by the host's own subagent reviewer unless that reviewer already runs. The host session makes the outside calls from Baley's work order and checks each finding, and the owner rules on each one that survives ([ADR 0013](adr/0013-host-session-calls-outside-models.md), [ADR 0019](adr/0019-reviews-adjudicated-and-ruled.md)). The first workers are dispatched here, so routing is finished here.
+The owner starts a project, shapes the story backlog, and commits stories to phases under a task capacity. Each story carries versioned truths, and each truth has one check. The analyzer and the planner ask the owner only the decisions left to the owner, each with a recommended answer, in rounds ordered by what each question depends on, and every answer and deferral is recorded ([ADR 0030](adr/0030-question-rounds.md)). Each phase's plan is written, checked, reviewed and risk-scanned, and approval binds the plan's exact digest. Every configured reviewer runs, and a provider that cannot be called is replaced by the host's own subagent reviewer unless that reviewer already runs. The host session makes the outside calls from Baley's work order and checks each finding, and the owner rules on each one that survives ([ADR 0013](adr/0013-host-session-calls-outside-models.md), [ADR 0019](adr/0019-reviews-adjudicated-and-ruled.md)). The first workers are dispatched here, so routing is finished here.
 
 - Designs: [0001 evidence ledger](design/0001-evidence-ledger.md), [0002 system design](design/0002-system-design.md), [0003 configuration and routing](design/0003-configuration-and-routing.md), [0004 starting a project and changing scope](design/0004-starting-a-project-and-changing-scope.md), [0005 context, plans and acceptance](design/0005-context-plans-and-acceptance.md), [0008 review](design/0008-review.md), [0009 risk](design/0009-risk.md), [0012 host interface](design/0012-host-interface.md), [0014 support families](design/0014-support-families.md)
-- ADRs: [0013 host session calls outside models](adr/0013-host-session-calls-outside-models.md), [0017 stories and sprints](adr/0017-stories-and-sprints.md), [0019 reviews adjudicated and ruled](adr/0019-reviews-adjudicated-and-ruled.md)
+- ADRs: [0013 host session calls outside models](adr/0013-host-session-calls-outside-models.md), [0017 stories and sprints](adr/0017-stories-and-sprints.md), [0019 reviews adjudicated and ruled](adr/0019-reviews-adjudicated-and-ruled.md), [0030 question rounds](adr/0030-question-rounds.md), [0031 one term per concept](adr/0031-one-term-per-concept.md)
 - Carries: [#40](https://github.com/crenshawdev/baley/issues/40), [#68](https://github.com/crenshawdev/baley/issues/68), [#69](https://github.com/crenshawdev/baley/issues/69), [#72](https://github.com/crenshawdev/baley/issues/72)
 - Blocked by: Build 3 ([#24](https://github.com/crenshawdev/baley/issues/24)) and the design [#134](https://github.com/crenshawdev/baley/issues/134), which settles what a plan re-check reads before the plan checker is built
 
@@ -183,7 +183,7 @@ The owner starts a project, shapes the story backlog, and commits stories to spr
 
 [#26](https://github.com/crenshawdev/baley/issues/26) · milestone Evidence · planned
 
-Baley runs a sprint's tasks and runs every test and check itself, judging by exit code ([ADR 0014](adr/0014-baley-runs-tests.md)). A task close is refused for any path outside the lease until the owner rules on it ([ADR 0018](adr/0018-lease-enforced-at-close.md)). The verifier gets specs and run ids, never the executor's summary. Diff review and the completion risk scan gate each plan. A `fix` ruling opens a gap plan, and a finding is filed on GitHub only on the owner's command.
+Baley runs a phase's tasks and runs every test and check itself, judging by exit code ([ADR 0014](adr/0014-baley-runs-tests.md)). A task close is refused for any path outside the lease until the owner rules on it ([ADR 0018](adr/0018-lease-enforced-at-close.md)). The verifier gets specs and run ids, never the executor's summary. Diff review and the completion risk scan gate each plan. A `fix` ruling opens a gap plan, and a finding is filed on GitHub only on the owner's command. A returning finding the owner dismissed before is brought back beside that dismissal, and the owner confirms or reverses it.
 
 - Designs: [0002 system design](design/0002-system-design.md), [0006 execution](design/0006-execution.md), [0007 verification](design/0007-verification.md), [0008 review](design/0008-review.md), [0009 risk](design/0009-risk.md), [0012 host interface](design/0012-host-interface.md)
 - ADRs: [0014 Baley runs tests](adr/0014-baley-runs-tests.md), [0018 lease enforced at close](adr/0018-lease-enforced-at-close.md), [0019 reviews adjudicated and ruled](adr/0019-reviews-adjudicated-and-ruled.md)
@@ -194,10 +194,10 @@ Baley runs a sprint's tasks and runs every test and check itself, judging by exi
 
 [#27](https://github.com/crenshawdev/baley/issues/27) · milestone Evidence · planned
 
-Milestones close and archive. A finished sprint lands on GitHub one step at a time, and each push, pull request, merge, tag and cleanup needs its own owner authorization. Landing waits while a deferred review is unruled. The managed project's releases are proposed and confirmed. Undo and pause work. Anchors are pushed at every occasion the design names.
+Milestones close and archive. A finished phase lands on GitHub one step at a time, and each push, pull request, merge, tag and cleanup needs its own owner authorization. Landing waits while a deferred review is unruled. The managed project's releases are proposed and confirmed. Undo and pause work. Anchors are pushed at every occasion the design names.
 
 - Designs: [0001 evidence ledger](design/0001-evidence-ledger.md), [0003 configuration and routing](design/0003-configuration-and-routing.md), [0004 starting a project and changing scope](design/0004-starting-a-project-and-changing-scope.md), [0008 review](design/0008-review.md), [0011 milestones, landing, undo and pause](design/0011-milestones-landing-undo-pause.md)
-- ADRs: [0007 forge anchors](adr/0007-forge-anchors.md)
+- ADRs: [0007 forge anchors](adr/0007-forge-anchors.md), [0031 one term per concept](adr/0031-one-term-per-concept.md)
 - Carries: no bugs
 - Blocked by: Build 5 ([#26](https://github.com/crenshawdev/baley/issues/26))
 
@@ -208,7 +208,7 @@ Milestones close and archive. A finished sprint lands on GitHub one step at a ti
 Baley answers what to do next and shows progress from keyed ledger views. A status read never writes.
 
 - Designs: [0013 next action and progress](design/0013-next-action-and-progress.md), [0014 support families](design/0014-support-families.md)
-- ADRs: none
+- ADRs: [0031 one term per concept](adr/0031-one-term-per-concept.md)
 - Carries: no bugs
 - Blocked by: Build 6 ([#27](https://github.com/crenshawdev/baley/issues/27))
 
@@ -216,7 +216,7 @@ Baley answers what to do next and shows progress from keyed ledger views. A stat
 
 [#29](https://github.com/crenshawdev/baley/issues/29) · milestone Evidence · planned
 
-Ranked recall and exact "why" queries, then task, debug and spike on the ledger. Purge also removes search rows. Debug gets the diagnosis review. A spike works outside the project and commits nothing.
+Ranked recall and exact "why" queries, then task, debug and spike on the ledger. Purge also removes search rows. Baley runs each debug reproduction itself: red before any hypothesis, and green at resolve over reproduction files byte-identical to the red run's. The owner can close an episode that never reproduced, with a reason. Debug gets the diagnosis review. A spike works outside the project and commits nothing.
 
 - Designs: [0001 evidence ledger](design/0001-evidence-ledger.md), [0008 review](design/0008-review.md), [0013 next action and progress](design/0013-next-action-and-progress.md), [0014 support families](design/0014-support-families.md)
 - ADRs: none
@@ -294,8 +294,8 @@ Counts as of 2026-09-27.
 | [Evidence](https://github.com/crenshawdev/baley/milestone/1) | Replace the JSON store with one designed from how records are read and written, and move it out of the repository's .planning directory. | 22 | 11 | Builds 1 to 9, bug #40 and #44 | Open |
 | [Encyclopedists](https://github.com/crenshawdev/baley/milestone/7) | Keep the repository's names, public face and build gate accurate: Baley names throughout, formatting, labels, description and topics, the README, and what the test suite costs. | 2 | 5 | #134, #47, #49, #50, #54 | Open |
 | [Traders](https://github.com/crenshawdev/baley/milestone/5) | Publish Baley and install it on a machine for both hosts, after a live run of the whole loop on each. | 0 | 1 | #14 | Open |
-| [Seldon](https://github.com/crenshawdev/baley/milestone/3) | Bring a new or existing repository under Baley and write its first requirements and roadmap. | 1 | 0 | None | Closed |
-| [Mule](https://github.com/crenshawdev/baley/milestone/4) | Change what was approved: edit or withdraw a phase, move its requirements, revise a truth or a requirement, keeping every earlier version on record. | 1 | 0 | None | Closed |
+| [Seldon](https://github.com/crenshawdev/baley/milestone/3) | Bring a new or existing repository under Baley and write its first stories and roadmap. | 1 | 0 | None | Closed |
+| [Mule](https://github.com/crenshawdev/baley/milestone/4) | Change what was approved: edit or withdraw a phase, move its stories, revise a truth or a story, keeping every earlier version on record. | 1 | 0 | None | Closed |
 | [Little Lost Robot](https://github.com/crenshawdev/baley/milestone/6) | What an agent may touch: how a task's file lease is enforced, and whether Baley edits source itself. | 2 | 0 | None | Closed |
 | [Terminus](https://github.com/crenshawdev/baley/milestone/2) | Open the repository to the public: a README for visitors, a security policy, issue templates, and branch protection with no bypass. | 2 | 0 | None | Closed |
 
