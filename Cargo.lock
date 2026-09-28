@@ -124,6 +124,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "baley-bench"
+version = "0.1.0"
+dependencies = [
+ "baley-core",
+ "baley-store",
+ "baley-store-sqlite",
+ "serde",
+ "serde_json",
+ "zstd",
+]
+
+[[package]]
 name = "baley-core"
 version = "0.1.0"
 dependencies = [
