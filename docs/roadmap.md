@@ -146,7 +146,7 @@ Figure 3. Build 2's tasks. Arrows point from a task to what waits on it. One pul
 | Task | What | Pull requests | Status |
 |---|---|---|---|
 | T1 | Folders, the home and the open checks | [#149](https://github.com/crenshawdev/baley/pull/149) | Merged |
-| T2 | The keys file reader | | In progress |
+| T2 | The keys file reader | [#152](https://github.com/crenshawdev/baley/pull/152) | In progress |
 | T3 | `baley exec --key` | | Planned |
 | T4 | Settings: the schema, the two files, the merge and route resolution | | Planned |
 | T5 | The project file and discovery | | Planned |
