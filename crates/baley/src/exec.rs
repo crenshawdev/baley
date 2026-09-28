@@ -178,6 +178,13 @@ pub(crate) fn exit_code(status: ExitStatus) -> u8 {
     )
 }
 
+/// Writes the error line and returns its exit code. A stderr that cannot be
+/// written must not turn a refusal into a panic, so the write error is dropped.
+fn report(error: &ExecError, to: &mut impl Write) -> u8 {
+    let _ = writeln!(to, "baley: {error}");
+    error.exit_code()
+}
+
 /// Reads the owner's keys, starts the command and forwards its redacted streams.
 pub fn run(args: ExecArgs) -> ExitCode {
     let result = (|| {
@@ -191,10 +198,7 @@ pub fn run(args: ExecArgs) -> ExitCode {
     })();
     match result {
         Ok(status) => ExitCode::from(exit_code(status)),
-        Err(error) => {
-            eprintln!("baley: {error}");
-            ExitCode::from(error.exit_code())
-        }
+        Err(error) => ExitCode::from(report(&error, &mut io::stderr())),
     }
 }
 
@@ -450,6 +454,17 @@ mod tests {
             .copy(b"xx".as_slice(), Flushing(Full))
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::StorageFull);
+    }
+
+    #[test]
+    fn unwritable_stderr_does_not_replace_the_error_exit_code() {
+        let refusal = ExecError::Folder(FolderRefusal::BaleyHomeEmpty);
+        assert_eq!(report(&refusal, &mut Full), 2);
+        let lost = ExecError::WaitFailed {
+            program: "cmd".into(),
+            error: "wait error".into(),
+        };
+        assert_eq!(report(&lost, &mut Full), 3);
     }
 
     #[test]
