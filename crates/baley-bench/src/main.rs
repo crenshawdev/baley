@@ -465,7 +465,9 @@ fn machine(root: &Path) -> Value {
             .and_then(|l| l.split_once(':'))
             .map(|(_, v)| v.trim().to_owned())
     });
-    let kernel = fs::read_to_string("/proc/sys/kernel/osrelease").ok();
+    let kernel = fs::read_to_string("/proc/sys/kernel/osrelease")
+        .ok()
+        .map(|k| k.trim().to_owned());
     let filesystem = Process::new("findmnt")
         .args(["-no", "FSTYPE,SOURCE", "--target"])
         .arg(root)
