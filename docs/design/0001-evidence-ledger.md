@@ -1207,11 +1207,11 @@ See [Threat model](#threat-model) for who is defended against.
 
 ### Performance
 
-The real adapter is measured by `crates/baley-bench`. Latency figures are each run's p99, reported as the median of five runs with the worst run in brackets. The longest rebuild batch uses each run's maximum, not its p99. Totals, flip and size use one value per run. The longest lock wait is the single longest wait across all five runs. The open row awaits measurement before merge, after Build 2 added the ownership, mode and link checks. The other rows were measured on 2026-09-27 before those checks, and the guard hook row includes an open without them. Those measurements used `baley-bench run HOME --runs 5` (30 seconds per writer phase), five runs per drive with the page cache warm after loading: AMD Ryzen 7 9800X3D, Linux 7.2.7, SQLite 3.53.2, btrfs with zstd compression on both drives.
+The real adapter is measured by `crates/baley-bench`. Latency figures are each run's p99, reported as the median of five runs with the worst run in brackets. The longest rebuild batch uses each run's maximum, not its p99. Totals, flip and size use one value per run. The longest lock wait is the single longest wait across all five runs. The open row was measured on 2026-09-28, after Build 2 added the ownership, mode and link checks, with the same command, machine and drives. The other rows were measured on 2026-09-27 before those checks, and the guard hook row includes an open without them. Those measurements used `baley-bench run HOME --runs 5` (30 seconds per writer phase), five runs per drive with the page cache warm after loading: AMD Ryzen 7 9800X3D, Linux 7.2.7, SQLite 3.53.2, btrfs with zstd compression on both drives.
 
 | Operation | Budget | Crucial T700 | Crucial P3 Plus (QLC) |
 |---|---|---|---|
-| Open with ownership, mode, link, epoch, schema-digest and view-catalog checks (guard, CLI) | 10 ms | Measured before merge | Measured before merge |
+| Open with ownership, mode, link, epoch, schema-digest and view-catalog checks (guard, CLI) | 10 ms | 0.81 ms (0.86) | 0.80 ms (0.81) |
 | Commit a command, including claim and complete for external effects | 20 ms | 5.9 ms (11.9) | 10.2 ms (11.2) |
 | Commit a command of 10 events | 20 ms | 7.0 ms (11.6) | 10.3 ms (11.1) |
 | Get one view document by key and parse it | 2 ms | 0.023 ms (0.025) | 0.022 ms (0.027) |
