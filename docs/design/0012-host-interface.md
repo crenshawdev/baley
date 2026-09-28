@@ -71,7 +71,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is t
 | HST-R16 | The command line serves the owner: `baley init`, `project`, `scope`, `story`, `backlog`, `phase`, `plan`, `exec`, `verify`, `review`, `land`, `milestone`, `release`, `undo`, `pause`, `resume`, `stop`, `config`, `models`, `install`, `service`, `doctor`, `verify-ledger`, `export`, `help`. Every command answers with a receipt or a refusal with a code; the same operations are reachable over MCP where a session needs them. There is no `serve` the owner runs by hand beyond `baley service`. | One way in for a person, the same rules as the wire. | | Active |
 | HST-R17 | `baley install` on each host: places the binary, registers the MCP server (user level), installs the hook (Claude Code: `PreToolUse` for `Bash`, `Write`, `Edit`; Codex: `Bash`), writes the sandbox configuration that keeps agents from writing Baley's home and its config folder (`config.toml` and `keys.env`), and from reading both on Claude Code, renders the stubs, asks the service question, offers the settings interview when settings are missing, and records the install with the binary version. `baley doctor` re-checks every one of these and reports each with a fix. Neither host gets a session-start hook. | A machine is set up once, the same way, and can be checked. | SYS-R3, ADR 0008, ADR 0009, CFG-R11 | Active |
 | HST-R18 | Every store failure behind a call is answered as a refusal with a code, never as an MCP error; refused `apply` calls are recorded, and a refusal that cannot be recorded is answered as a server failure, not a refusal. | The model self-corrects on a refusal; the record never lies about one. | SYS-P10, EVD-R26 | Active |
-| HST-R19 | Frames are bounded (4 MiB raw, depth 128) before the protocol layer sees them; hook input is bounded (64 KiB); every child process runs with a deadline through the process port. | No caller can exhaust the server. | SYS-R5 | Active |
+| HST-R19 | Frames are bounded (4 MiB raw, depth 128) before the protocol layer sees them; hook input is bounded (64 KiB); every child process Baley starts for its own work runs with a deadline through the process port; a command run through `baley exec` runs until it ends. | No caller can exhaust the server. | SYS-R5 | Active |
 | HST-R20 | On Claude Code, the three tools are marked always-loaded so the main session and every subagent see them without a tool search; on Codex the same is requested where the host allows it. | Every capability reaches every agent. | SYS-P12 | Active |
 | HST-R21 | MCP prompts are served on Claude Code as a second entry point for the front doors, listing the same commands the skill stubs list. | A host that lists prompts as commands gets them without a file. | HST-R12 | Backlog |
 | HST-R22 | Skills over MCP (`io.modelcontextprotocol/skills`) replaces the skill stub files on a host that supports it. | The spec's own extension has ADR 0009's shape. | ADR 0009 | Backlog |
@@ -125,9 +125,9 @@ Apply operations are the writes of every area, each named in its document: scope
 
 ### baley exec
 
-- **Inputs:** `--key <NAME>`, the key's name exactly as written in `keys.env`; `--`; the command.
-- **Outputs:** the command's exit code and its output with the key replaced by `[baley:<NAME>]`, for example `[baley:OPENAI_API_KEY]`. The key is set under `NAME` in the command's environment only.
-- **Refusals:** `no-such-key` when `keys.env` has no line with that name (HST-R15); `keys-file-exposed` when group or others can read `keys.env` (naming the file and the `chmod 600` fix) or another user owns it (naming the `chown` fix); `keys-file-invalid` when a name appears twice (naming the line) ([0003](0003-configuration-and-routing.md), CFG-R24).
+- **Inputs:** `--key <NAME>`, once, the key's name exactly as written in `keys.env`; `--`; the command and its arguments, passed on unchanged. The command reads Baley's stdin.
+- **Outputs:** the command's stdout and stderr, each with every occurrence of the key's exact bytes replaced by `[baley:<NAME>]`, for example `[baley:OPENAI_API_KEY]`, passed on as they arrive, except that the latest output, up to the key's length, waits until more arrives or the stream ends. The command's stdout and stderr are pipes, not the terminal. The key is set under `NAME` in the command's environment only. There is no time limit and no process group of the command's own. The exit code is the command's, or 128 plus the number of the signal that ended it. Nothing is recorded: `baley exec` opens no ledger and creates no folder or file. An encoded copy of the key (for example base64) is not replaced.
+- **Refusals:** each on stderr as `baley: <code>: ...`, exit 2, before the command runs: `baley-home-invalid` and `user-home-invalid` when Baley's folders cannot be resolved ([0001](0001-evidence-ledger.md)); `keys-file-exposed` (naming the file and the `chmod 600` or `chown` fix); `keys-file-invalid` when a line is not a valid key line, a value is empty or a name appears twice (naming each line by number); `keys-file-unreadable` when the path is not a regular file or cannot be read (naming the file and the cause); `no-such-key` when `keys.env` has no line with that name (HST-R15); `command-not-started` when the command cannot be started (naming it and the cause). A missing `--key`, `--` or command is a usage error, exit 2. When waiting for the command fails, or the command's output cannot be passed on for a reason other than the reader closing Baley's output, Baley says so on stderr and exits 3.
 
 ## 6. Records
 
@@ -315,7 +315,7 @@ The binary crate holds the inherited engine: one stdio server bound to one proje
 
 | Requirement | Status | Where |
 |---|---|---|
-| HST-R1, HST-R2, HST-R3 | Not built | `serve` binds one project per process on stdio (`crates/baley/src/main.rs:92, 156-160`, `crates/baley/src/server.rs:810-817`); no HTTP, no service, no launcher |
+| HST-R1, HST-R2, HST-R3 | Not built | `serve` binds one project per process on stdio (`crates/baley/src/main.rs:97, 167-171`, `crates/baley/src/server.rs:810-817`); no HTTP, no service, no launcher |
 | HST-R4 | Not built | No adapter; the host model list is Claude-only (`crates/baley/src/config/roles.rs:16`) |
 | HST-R5 | Built | Three tools (`crates/baley/src/server.rs:970-988`), append-only operation names asserted (`server.rs:474-511`), flat schema plus `schema` operation (`server.rs:617-664, 751-808`) |
 | HST-R6 | Built | Parts at 24,576 bytes (`crates/baley/src/read/instructions.rs:5`, `server.rs:751`); `document` and `document-search` only (`server.rs:301-304`) |
@@ -323,14 +323,14 @@ The binary crate holds the inherited engine: one stdio server bound to one proje
 | HST-R8 | Not built | Suite runs inside one call; Codex registration sets a 7,200 s tool timeout (`.codex/config.toml`) |
 | HST-R9, HST-R10 | Partly built | Owner questions are gate records answered by `execution-authorize` with any non-blank owner and time (`crates/baley/src/execution_service.rs:364-501`) |
 | HST-R11 | Built | Compiled instructions, no disk loader (`crates/baley/src/plan/instructions.rs:12-16`, `crates/baley/src/instruction_surfaces.rs:3-41`) |
-| HST-R12 | Not built | `*-instructions` commands print full skills to stdout (`crates/baley/src/main.rs:116-152`); no stub rendering, no install |
+| HST-R12 | Not built | `*-instructions` commands print full skills to stdout (`crates/baley/src/main.rs:127-163`); no stub rendering, no install |
 | HST-R13 | Not built | The full read contract is sent as instructions (`crates/baley/src/server.rs:963-968`) |
 | HST-R14 | Built | Dispatch answers id and route, never a prompt (`crates/baley/src/execution/boundary.rs:93-147`) |
-| HST-R15 | Not built | |
-| HST-R16 | Not built | The CLI has `serve`, `guard`, `skill-description` and the render commands only (`crates/baley/src/main.rs:27-87`) |
+| HST-R15 | Partly built | `baley exec` sets the key in the command's environment and redacts both streams (`crates/baley/src/exec.rs:87-199`, `crates/baley/src/process.rs:124-130, 282-302` for `owner_command` and `stdio_plan`). The inherited review engine still makes provider calls with keys it reads itself (`crates/baley/src/review/provider/credentials.rs:52-112`) until Build 4 moves outside calls to the host session. |
+| HST-R16 | Partly built | The CLI has `serve`, `guard`, `skill-description`, the render commands, the ledger commands (`verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor`, `acknowledge-restore`) and `exec` (`crates/baley/src/main.rs:27-91`); the other commands are later builds. |
 | HST-R17 | Not built | Registrations are hand-written (`.mcp.json`, `.codex/config.toml`, `hooks/hooks.json`) |
 | HST-R18 | Partly built | Store failures are MCP errors (`crates/baley/src/server.rs:888-898`); refused applies recorded best effort (`server.rs:1912-1923`) |
-| HST-R19 | Built | `crates/baley/src/review_ingress.rs:17-23`, `crates/baley/src/guard/mod.rs:15`, `crates/baley/src/process.rs:23-65` |
+| HST-R19 | Partly built | Frames and hook input are bounded (`crates/baley/src/review_ingress.rs:17-23`, `crates/baley/src/guard/mod.rs:15`). Every git child runs with its registered deadline, enforced by `validate_launch` (`crates/baley/src/process.rs:217-248`, `crates/baley/src/git_process.rs`). The suite runner's `sh -c` (`crates/baley/src/execution/runner.rs`) runs with none, owned by Build 5; a command under `baley exec` runs with none by design. |
 | HST-R20 | Not built | |
 
 ## 12. Open questions

@@ -30,11 +30,8 @@ impl Key {
         format!("[baley:{}]", self.name)
     }
 
-    /// The value for the child environment in `baley exec` (T3) or detection's request header (T8).
-    #[expect(
-        dead_code,
-        reason = "its callers are baley exec and detection, built next in Build 2"
-    )]
+    /// The value for the child environment and the redactor in `baley exec`,
+    /// and, from Build 2 T8, detection's request header.
     pub(crate) fn expose(&self) -> &str {
         &self.value
     }
@@ -53,6 +50,16 @@ pub struct Keys {
     keys: Vec<Key>,
 }
 impl Keys {
+    /// Parses supplied bytes for tests without reading a file.
+    #[cfg(test)]
+    pub(crate) fn parsed(path: &Path, bytes: &[u8]) -> Keys {
+        Keys {
+            path: path.into(),
+            missing: false,
+            keys: parse(bytes).expect("valid keys fixture"),
+        }
+    }
+
     /// Finds a key by exact name, without case folding or trimming.
     pub fn get(&self, name: &str) -> Result<&Key, KeysRefusal> {
         self.keys

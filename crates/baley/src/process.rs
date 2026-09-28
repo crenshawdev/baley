@@ -19,9 +19,9 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 /// What to run, and how to hold it while it runs.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Launch {
-    git_registration: Option<crate::git_process::Registration>,
+    origin: Origin,
     pub program: OsString,
     pub args: Vec<OsString>,
     /// Where the child runs. `None` leaves it in this process's own directory,
@@ -45,12 +45,55 @@ pub struct Launch {
     /// Let the child use this process's own stdin, stdout and stderr. Nothing
     /// is captured, so the output carries no bytes.
     pub inherit: bool,
+    /// The child reads this process's stdin while stdout and stderr stay piped.
+    /// Independent of `inherit`; when set, `stdin` bytes are not written.
+    pub inherit_stdin: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Origin {
+    Baley,
+    Git(crate::git_process::Registration),
+    Owner,
+}
+
+impl std::fmt::Debug for Launch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let env: Vec<_> = self
+            .env
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name,
+                    if value.is_some() {
+                        "[redacted]"
+                    } else {
+                        "unset"
+                    },
+                )
+            })
+            .collect();
+        f.debug_struct("Launch")
+            .field("origin", &self.origin)
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field("cwd", &self.cwd)
+            .field("stdin", &self.stdin)
+            .field("env", &env)
+            .field("limit", &self.limit)
+            .field("timeout", &self.timeout)
+            .field("own_group", &self.own_group)
+            .field("die_with_parent", &self.die_with_parent)
+            .field("inherit", &self.inherit)
+            .field("inherit_stdin", &self.inherit_stdin)
+            .finish()
+    }
 }
 
 impl Launch {
     pub fn new(program: impl AsRef<OsStr>) -> Self {
         Self {
-            git_registration: None,
+            origin: Origin::Baley,
             program: program.as_ref().to_owned(),
             args: Vec::new(),
             cwd: None,
@@ -61,6 +104,7 @@ impl Launch {
             own_group: false,
             die_with_parent: false,
             inherit: false,
+            inherit_stdin: false,
         }
     }
 
@@ -71,14 +115,25 @@ impl Launch {
 
     pub(crate) fn registered_git(registration: crate::git_process::Registration) -> Self {
         let mut launch = Self::new("git");
-        launch.git_registration = Some(registration);
+        launch.origin = Origin::Git(registration);
         launch
     }
 
+    /// A command the owner chose through `baley exec`, built only by `exec::launch_for`.
+    /// Baley's own programs never use this constructor.
+    pub(crate) fn owner_command(program: impl AsRef<OsStr>) -> Self {
+        Self {
+            origin: Origin::Owner,
+            inherit_stdin: true,
+            ..Self::new(program)
+        }
+    }
+
     pub(crate) fn git_caller(&self) -> Option<crate::git_process::Caller> {
-        self.git_registration
-            .as_ref()
-            .map(|registration| registration.caller())
+        match &self.origin {
+            Origin::Git(registration) => Some(registration.caller()),
+            _ => None,
+        }
     }
 
     pub fn arg(mut self, arg: impl AsRef<OsStr>) -> Self {
@@ -160,6 +215,9 @@ impl ValidatedLaunch<'_> {
 /// Validate borrowed launch material before a Command or recorded observation
 /// can be obtained. The borrow prevents mutation until the consumer is done.
 pub fn validate_launch(launch: &Launch) -> std::io::Result<ValidatedLaunch<'_>> {
+    if launch.origin == Origin::Owner {
+        return Ok(ValidatedLaunch(launch));
+    }
     let is_git = Path::new(&launch.program).file_name() == Some(OsStr::new("git"));
     match (is_git, launch.git_caller()) {
         (true, Some(caller)) => {
@@ -187,6 +245,59 @@ pub fn validate_launch(launch: &Launch) -> std::io::Result<ValidatedLaunch<'_>> 
         (false, None) => {}
     }
     Ok(ValidatedLaunch(launch))
+}
+
+/// The source or destination of one child stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stream {
+    /// Use this process's stream.
+    Inherit,
+    /// Connect a pipe to Baley.
+    Piped,
+    /// Connect the null device.
+    Null,
+}
+impl Stream {
+    fn stdio(self) -> Stdio {
+        match self {
+            Self::Inherit => Stdio::inherit(),
+            Self::Piped => Stdio::piped(),
+            Self::Null => Stdio::null(),
+        }
+    }
+}
+
+/// The three streams requested for a launch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StdioPlan {
+    /// The child's input source.
+    pub stdin: Stream,
+    /// The child's standard output destination.
+    pub stdout: Stream,
+    /// The child's standard error destination.
+    pub stderr: Stream,
+}
+
+/// Selects streams without constructing an operating-system command.
+pub fn stdio_plan(launch: &Launch) -> StdioPlan {
+    if launch.inherit {
+        return StdioPlan {
+            stdin: Stream::Inherit,
+            stdout: Stream::Inherit,
+            stderr: Stream::Inherit,
+        };
+    }
+    StdioPlan {
+        stdin: if launch.inherit_stdin {
+            Stream::Inherit
+        } else if launch.stdin.is_some() {
+            Stream::Piped
+        } else {
+            Stream::Null
+        },
+        stdout: Stream::Piped,
+        stderr: Stream::Piped,
+    }
 }
 
 /// What a finished child left behind.
@@ -244,8 +355,8 @@ impl Output {
 pub trait Process {
     fn run(&mut self, launch: &Launch) -> std::io::Result<Output>;
 
-    /// Start a child and hand it back while it runs, for the one caller that
-    /// reads a stream as it arrives rather than after the fact. Only `System`
+    /// Start a child and hand it back while it runs, for callers that
+    /// read a stream as it arrives rather than after the fact. Only `System`
     /// offers this; a fake refuses it unless it scripts children of its own.
     fn start(&mut self, launch: &Launch) -> std::io::Result<Box<dyn Child>> {
         let _ = launch;
@@ -282,21 +393,11 @@ impl System {
                 None => command.env_remove(key),
             };
         }
-        if launch.inherit {
-            command
-                .stdin(Stdio::inherit())
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit());
-        } else {
-            command
-                .stdin(if launch.stdin.is_some() {
-                    Stdio::piped()
-                } else {
-                    Stdio::null()
-                })
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-        }
+        let plan = stdio_plan(launch);
+        command
+            .stdin(plan.stdin.stdio())
+            .stdout(plan.stdout.stdio())
+            .stderr(plan.stderr.stdio());
         if launch.own_group {
             command.process_group(0);
         }

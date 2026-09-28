@@ -132,3 +132,71 @@ fn deadline_expiry_requests_cleanup() {
         DeadlineAction::Wait
     );
 }
+
+#[test]
+fn owner_command_named_git_passes_the_gate_but_baleys_git_stays_registered() {
+    use super::validate_launch;
+    use crate::git_process::{self, Caller};
+    for program in ["git", "/usr/bin/git"] {
+        let launch = Launch::owner_command(program);
+        assert_eq!(launch.timeout, None);
+        assert!(validate_launch(&launch).is_ok());
+    }
+    assert_eq!(
+        validate_launch(&Launch::new("git"))
+            .unwrap_err()
+            .to_string(),
+        "git launch requires a registered caller"
+    );
+    let mut launch = git_process::launch(Caller::PauseRead);
+    launch.timeout = None;
+    assert_eq!(
+        validate_launch(&launch).unwrap_err().to_string(),
+        "registered git launch requires its caller deadline and owned process group"
+    );
+}
+
+#[test]
+fn stdio_plan_inherits_stdin_only_for_owner_commands() {
+    use super::{StdioPlan, Stream::*, stdio_plan};
+    for (launch, stdin) in [
+        (Launch::owner_command("sh"), Inherit),
+        (Launch::owner_command("sh").stdin(b"x"), Inherit),
+        (Launch::new("sh"), Null),
+        (Launch::new("sh").stdin(b"x"), Piped),
+    ] {
+        assert_eq!(
+            stdio_plan(&launch),
+            StdioPlan {
+                stdin,
+                stdout: Piped,
+                stderr: Piped
+            }
+        );
+    }
+    for launch in [Launch::new("sh"), Launch::owner_command("sh").stdin(b"x")] {
+        assert_eq!(
+            stdio_plan(&launch.inherit()),
+            StdioPlan {
+                stdin: Inherit,
+                stdout: Inherit,
+                stderr: Inherit
+            }
+        );
+    }
+}
+
+#[test]
+fn launch_debug_never_prints_an_environment_value() {
+    use super::{Process, Recorded};
+    let launch = Launch::new("sh").env("A", "SENTINEL-7c1e").unset("B");
+    let mut recorded = Recorded::new().out("");
+    recorded.run(&launch).unwrap();
+    for debug in [format!("{launch:?}"), format!("{recorded:?}")] {
+        assert!(debug.contains("A"));
+        assert!(debug.contains("[redacted]"));
+        assert!(debug.contains("B"));
+        assert!(debug.contains("unset"));
+        assert!(!debug.contains("SENTINEL-7c1e"));
+    }
+}

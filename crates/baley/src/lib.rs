@@ -41,6 +41,8 @@ pub mod verification;
 /// Why a file line is as it is: the git chain joined to the record.
 pub mod why;
 
+/// Runs one command with a provider key in its environment and redacted from its output.
+pub mod exec;
 /// Platform configuration and ledger folders.
 pub mod folders;
 /// The owner's provider keys, read from `keys.env`.
