@@ -89,8 +89,8 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is o
 | PLN-R22 | Stories are mirrored one way to forge issues and phases to forge milestones through the forge adapter; forge edits are ignored; the ledger stays the truth. | Teammates who live on the forge see the backlog there. | SYS-P6, [0011](0011-milestones-landing-undo-pause.md) | Backlog |
 | PLN-R23 | A question is typed content: `id` (unique within its set), `question` (one decision the owner must make), `recommended` (the answer the asker recommends), and `depends_on` (the ids of questions in the same set whose answers it needs, empty when none). The analyzer's questions for one refinement form one question set; a plan draft's `questions` field forms another. Baley refuses a set with a blank or colliding id (`question-id`), a blank question or recommended answer (`question-blank`), a dependency on an id outside the set or on the question itself (`question-dependency`), or a dependency cycle (`question-cycle`). Unknown keys are refused (`typed-content`). | Every question arrives with the asker's best answer and its place in the order, so the owner can decide quickly and in the right order; a cycle would hold a question that can never be asked. | ADR 0006, SYS-P3 | Active |
 | PLN-R24 | Baley works out each round from a set's dependencies, deterministically over plain values. A question is open until it is answered or deferred. An open question whose `depends_on` are all answered is in the current round; an open question that depends on an open or a deferred question waits. Round 1 is every question with no dependency. Each `questions answer` call is one round, numbered in the order recorded; after it Baley works out the next round from the answers so far. The set is closed when no question is open. The host session puts every question of the current round to the owner, each with its recommended answer, shows the waiting questions and what each waits on, and relays the owner's answers and deferrals unchanged; it answers, drops, merges, rewords and reorders none. An answer to a waiting question is refused with `question-not-in-round`. | The owner decides only what can be decided now, in an order the record fixes, and nobody decides in the owner's place. | PLN-R23, SYS-P5 | Active |
-| PLN-R25 | Every answer is recorded as `question.answered` with the owner's answer, whether it takes the recommended answer, the round, the owner and the time. An answer that rejects the recommended answer is recorded the same way, in the owner's words. A deferral is recorded as `question.deferred` with the owner's reason. Answers and deferrals are never edited or removed; a question already answered or deferred is refused with `question-closed`, and a blank answer with `answer-blank`. A later set for the same story, or the discard of the plan draft a set belongs to, abandons the older set; its recorded answers and deferrals stay, and a call on it is refused with `question-set-abandoned`. | A rejected recommendation, and why, is as much a decision as an accepted one, and the next reader needs both. | PLN-R24, ADR 0006 | Active |
-| PLN-R26 | `story truths approve` is refused with `question-open` while a question of the story's latest set is open, and `plan approve` while a question of the draft's set is open. The owner closes a question without answering it only by deferring it on the record, with a reason, whether it is in the current round or waiting; a deferral with a blank reason is refused with `deferral-reason`. A deferral closes only its own question: a question that waits on a deferred one can never enter a round, and stays open until the owner defers it too. | Nothing is approved on a decision nobody made, unless the owner says on the record that it can wait and why. | PLN-R24, PLN-R25, SYS-P5 | Active |
+| PLN-R25 | Every answer is recorded as `question.answered` with the owner's answer, whether it takes the recommended answer, the round, the owner and the time. An answer that rejects the recommended answer is recorded the same way, in the owner's words. A deferral is recorded as `question.deferred` with the owner's reason. Answers and deferrals are never edited or removed; a question already answered or deferred is refused with `question-closed`, and a blank answer with `answer-blank`. A later set for the same story, or the discard of the plan draft a set belongs to (replaced, or its session ended, PLN-R15), abandons the older set: Baley records `questions.abandoned` naming the set and the cause, its recorded answers and deferrals stay, and a call on it is refused with `question-set-abandoned`. | A rejected recommendation, and why, is as much a decision as an accepted one, and the next reader needs both. | PLN-R24, ADR 0006 | Active |
+| PLN-R26 | `story truths approve` is refused with `question-open` while a question of the story's latest set is open, and with `question-set-abandoned` when the draft being approved was drafted from a set that is no longer the story's latest; `plan approve` is refused with `question-open` while a question of the draft's set is open. The owner closes a question without answering it only by deferring it on the record, with a reason, whether it is in the current round or waiting; a deferral with a blank reason is refused with `deferral-reason`. A deferral closes only its own question: a question that waits on a deferred one can never enter a round, and stays open until the owner defers it too. | Nothing is approved on a decision nobody made, unless the owner says on the record that it can wait and why. | PLN-R24, PLN-R25, SYS-P5 | Active |
 | PLN-R27 | The planner puts every decision a plan needs from the owner in the plan's `questions` field and writes the plan on the recommended answers. Baley opens the draft's question set when it gives the preview, and the rounds of PLN-R24 run before `plan approve`. When the set closes with an answer that rejects a recommended answer, the draft is not approved as written: `plan approve` on it is refused with `answer-not-applied`, and Baley issues the planner a revision work order carrying the draft and every answer and deferral on its set. The host session submits the revision as a new draft, whose questions are only decisions not yet made. A deferral leaves the plan on that question's recommended answer, and the preview shows it as deferred. | A plan written on a recommendation the owner turned down must not be approved as written, and the revision starts from the owner's answers. | PLN-R11, PLN-R15, PLN-R26 | Active |
 
 ## 4. Roles and actors
@@ -157,7 +157,7 @@ Every change follows submit (preview and digest), approve (owner, by digest), re
   | `truth-id` | Blank or colliding truth id within the story | PLN-R4 |
   | `question-open` | `approve` while a question of the story's latest set is open | PLN-R26 |
   | `no-such-question-set` | `submit` names a set that does not exist or belongs to another story | PLN-R24 |
-  | `question-set-abandoned` | `submit` names a set that is not the story's latest | PLN-R25 |
+  | `question-set-abandoned` | `submit` names a set that is not the story's latest, or `approve` holds a draft drafted from one | PLN-R25, PLN-R26 |
   | `no-such-story` | | PRJ-R18 |
   | `stale-draft`, `unknown-draft` | | PLN-R15 |
 
@@ -244,7 +244,7 @@ Every change follows submit (preview and digest), approve (owner, by digest), re
 | `questions` | list of questions | See below |
 | `at` | time | When Baley recorded the set |
 
-A set's state (open, closed, abandoned) and each question's state (waiting, in the current round, answered, deferred) are derived from these records, the answers and deferrals on them, later sets for the same story, and the drafts Baley holds; they are never stored.
+A set's state (open, closed, abandoned) and each question's state (waiting, in the current round, answered, deferred) are derived from these records, the answers and deferrals on them, and `questions.abandoned`; they are never stored.
 
 ### question (part of `questions.opened` and of a plan's `questions`)
 
@@ -267,6 +267,16 @@ A set's state (open, closed, abandoned) and each question's state (waiting, in t
 | `owner`, `at` | owner, time | Who settled it and when |
 
 One `questions answer` call writes its answers and deferrals in one transaction.
+
+### questions.abandoned (event, same stream as its set)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `set` | set id | The set abandoned |
+| `cause` | `superseded`, `draft-replaced`, `session-ended` | A later set for the same story; the plan draft replaced; the session that held the plan draft ended |
+| `at` | time | When Baley recorded it |
+
+Baley records it in the same transaction as the later set's `questions.opened` or the new draft, and when it discards a draft because its session ended.
 
 ### plan.checked (event, `phase/<n>` stream)
 
@@ -355,11 +365,11 @@ stateDiagram-v2
     Waiting --> Deferred: question.deferred with a reason
   }
   Open --> Closed: every question answered or deferred
-  Open --> Abandoned: a later set for the story, or its plan draft discarded
-  Closed --> Abandoned: a later set for the story, or its plan draft discarded
+  Open --> Abandoned: questions.abandoned
+  Closed --> Abandoned: questions.abandoned
 ```
 
-*Figure 7. States of a question set and, inside it, of each question. The current round is every question in InRound. A question that waits on a deferred question never enters a round and closes only by its own deferral. Abandoned is terminal and keeps every recorded answer and deferral. The figure is numbered after the workflows so that the figure numbers other documents cite stay fixed.*
+*Figure 7. States of a question set and, inside it, of each question. A set is abandoned when a later set for the same story is opened or its plan draft is discarded. The current round is every question in InRound. A question that waits on a deferred question never enters a round and closes only by its own deferral. Abandoned is terminal and keeps every recorded answer and deferral. The figure is numbered after the workflows so that the figure numbers other documents cite stay fixed.*
 
 ## 8. Workflows
 
