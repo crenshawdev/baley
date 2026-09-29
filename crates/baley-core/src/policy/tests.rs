@@ -866,3 +866,267 @@ fn the_route_names_the_setting_and_layer_of_its_model_and_effort() {
         }
     );
 }
+
+// Project ids below are written by hand from D-10 and RFC 9562: version
+// nibble at byte 14, variant nibble at byte 19.
+
+#[test]
+fn a_project_id_with_any_rfc_variant_nibble_is_not_refused() {
+    for id in [
+        "6f1c2a4e-8b1d-4c3a-8e2f-0a5b7c9d1e3f",
+        "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f",
+        "6f1c2a4e-8b1d-4c3a-ae2f-0a5b7c9d1e3f",
+        "6f1c2a4e-8b1d-4c3a-be2f-0a5b7c9d1e3f",
+    ] {
+        assert!(is_project_id(id), "{id}");
+    }
+}
+
+#[test]
+fn an_upper_case_project_id_is_not_folded_to_lower_case() {
+    assert!(!is_project_id("6F1C2A4E-8B1D-4C3A-9E2F-0A5B7C9D1E3F"));
+}
+
+#[test]
+fn a_project_id_of_another_uuid_version_is_refused() {
+    for id in [
+        "6f1c2a4e-8b1d-1c3a-9e2f-0a5b7c9d1e3f",
+        "6f1c2a4e-8b1d-7c3a-9e2f-0a5b7c9d1e3f",
+    ] {
+        assert!(!is_project_id(id), "{id}");
+    }
+}
+
+#[test]
+fn a_project_id_outside_the_rfc_variant_is_refused() {
+    for id in [
+        "6f1c2a4e-8b1d-4c3a-ce2f-0a5b7c9d1e3f",
+        "6f1c2a4e-8b1d-4c3a-7e2f-0a5b7c9d1e3f",
+    ] {
+        assert!(!is_project_id(id), "{id}");
+    }
+}
+
+#[test]
+fn a_project_id_one_byte_short_or_long_is_refused() {
+    for id in [
+        "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3",
+        "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f0",
+    ] {
+        assert!(!is_project_id(id), "{id}");
+    }
+}
+
+#[test]
+fn a_project_id_with_a_hyphen_out_of_place_is_refused() {
+    assert!(!is_project_id("6f1c2a4e8-b1d-4c3a-9e2f-0a5b7c9d1e3f"));
+}
+
+#[test]
+fn a_project_id_holding_a_letter_past_f_is_refused() {
+    assert!(!is_project_id("6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3g"));
+}
+
+const ID: &str = "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f";
+
+fn project_fault(text: &str) -> Unavailable {
+    read_project(&file(PROJECT, text)).expect_err(text)
+}
+
+#[test]
+fn a_valid_project_table_gives_back_its_id_and_name() {
+    let text = format!("escalate_on_failure = true\n[project]\nid = \"{ID}\"\nname = \"baley\"\n");
+    assert_eq!(
+        read_project(&file(PROJECT, &text)),
+        Ok(ProjectIdentity {
+            id: ID.into(),
+            name: "baley".into(),
+        })
+    );
+}
+
+#[test]
+fn a_project_id_that_is_not_a_lower_case_uuid_v4_is_refused_at_its_value() {
+    for id in [
+        "6F1C2A4E-8B1D-4C3A-9E2F-0A5B7C9D1E3F",
+        "6f1c2a4e-8b1d-1c3a-9e2f-0a5b7c9d1e3f",
+        "6f1c2a4e-8b1d-4c3a-ce2f-0a5b7c9d1e3f",
+    ] {
+        let refusal = project_fault(&format!("[project]\nid = \"{id}\"\nname = \"x\"\n"));
+        assert_eq!(
+            refusal,
+            Unavailable {
+                path: PROJECT.into(),
+                fault: Fault::Project {
+                    name: "project.id",
+                    problem: ProjectProblem::NotAnId { written: id.into() },
+                    position: Some((2, 6)),
+                },
+            },
+            "{id}"
+        );
+        assert_eq!(refusal.code(), "config-unavailable");
+    }
+    assert_eq!(
+        project_fault("[project]\nid = \"6F1C2A4E-8B1D-4C3A-9E2F-0A5B7C9D1E3F\"\nname = \"x\"\n")
+            .to_string(),
+        "config-unavailable: /r/baley.toml:2:6: project.id is \"6F1C2A4E-8B1D-4C3A-9E2F-0A5B7C9D1E3F\", which is not a lower-case UUID version 4"
+    );
+}
+
+#[test]
+fn a_project_table_without_an_id_is_refused() {
+    let refusal = project_fault("[project]\nname = \"x\"\n");
+    assert_eq!(
+        refusal.fault,
+        Fault::Project {
+            name: "project.id",
+            problem: ProjectProblem::Missing,
+            position: None,
+        }
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /r/baley.toml: project.id is missing; the [project] table needs an id and a string name"
+    );
+}
+
+#[test]
+fn a_project_table_without_a_name_is_refused() {
+    let refusal = project_fault(&format!("[project]\nid = \"{ID}\"\n"));
+    assert_eq!(
+        refusal,
+        Unavailable {
+            path: PROJECT.into(),
+            fault: Fault::Project {
+                name: "project.name",
+                problem: ProjectProblem::Missing,
+                position: None,
+            },
+        }
+    );
+}
+
+#[test]
+fn a_project_name_that_is_not_a_string_is_refused() {
+    let refusal = project_fault(&format!("[project]\nid = \"{ID}\"\nname = 7\n"));
+    assert_eq!(
+        refusal.fault,
+        Fault::Project {
+            name: "project.name",
+            problem: ProjectProblem::WrongType { found: "integer" },
+            position: Some((3, 8)),
+        }
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /r/baley.toml:3:8: project.name is an integer, not a string"
+    );
+}
+
+#[test]
+fn a_project_file_without_a_project_table_is_not_an_empty_project() {
+    let refusal = project_fault("escalate_on_failure = true\n");
+    assert_eq!(
+        refusal,
+        Unavailable {
+            path: PROJECT.into(),
+            fault: Fault::Project {
+                name: "project",
+                problem: ProjectProblem::Missing,
+                position: None,
+            },
+        }
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /r/baley.toml: there is no [project] table; the project file needs one with an id and a string name"
+    );
+}
+
+/// `text` as a `toml` table with its `project` table taken out.
+fn without_project(text: &str) -> (toml::Table, Option<toml::Value>) {
+    let mut table: toml::Table = text.parse().expect(text);
+    let project = table.remove("project");
+    (table, project)
+}
+
+/// The settings a project file writes, positions aside.
+fn settings_of(text: &str) -> Vec<(String, Option<Host>, Value)> {
+    let parsed = parse_layer(&file(PROJECT, text), FileLayer::Project, Schema::standard());
+    let parsed = parsed.expect(text);
+    parsed
+        .values
+        .into_iter()
+        .map(|written| (written.name, written.host, written.value))
+        .collect()
+}
+
+#[test]
+fn rendering_a_new_id_keeps_every_other_table_and_value() {
+    let before = "escalate_on_failure = true\n\
+                  [roles.planner]\n\
+                  effort = \"low\"\n\
+                  [host.codex.roles.checker]\n\
+                  effort = \"xhigh\"\n\
+                  [review]\n\
+                  depth = 3\n\
+                  [project]\n\
+                  id = \"0b8e2f4a-1c3d-4e5f-a6b7-c8d9e0f1a2b3\"\n\
+                  name = \"old\"\n\
+                  owner = \"kept\"\n";
+    let bytes = render_project(ID, "baley", Some(&file(PROJECT, before))).unwrap();
+    let after = String::from_utf8(bytes).unwrap();
+    assert_eq!(
+        read_project(&file(PROJECT, &after)),
+        Ok(ProjectIdentity {
+            id: ID.into(),
+            name: "baley".into(),
+        }),
+        "{after}"
+    );
+    let (rest_before, _) = without_project(before);
+    let (rest_after, project_after) = without_project(&after);
+    assert_eq!(rest_after, rest_before, "{after}");
+    let mut project = toml::Table::new();
+    project.insert("id".into(), ID.into());
+    project.insert("name".into(), "baley".into());
+    project.insert("owner".into(), "kept".into());
+    assert_eq!(project_after, Some(toml::Value::Table(project)), "{after}");
+    let settings = settings_of(before);
+    assert_eq!(settings.len(), 3);
+    assert_eq!(settings_of(&after), settings, "{after}");
+}
+
+#[test]
+fn rendering_without_a_file_writes_only_the_project_table() {
+    let after = String::from_utf8(render_project(ID, "baley", None).unwrap()).unwrap();
+    let mut project = toml::Table::new();
+    project.insert("id".into(), ID.into());
+    project.insert("name".into(), "baley".into());
+    let mut expected = toml::Table::new();
+    expected.insert("project".into(), toml::Value::Table(project));
+    assert_eq!(after.parse::<toml::Table>(), Ok(expected), "{after}");
+}
+
+#[test]
+fn rendering_over_a_file_that_is_not_toml_refuses_naming_it() {
+    let refusal = render_project(ID, "baley", Some(&file(PROJECT, "roles = [\n"))).unwrap_err();
+    assert_eq!(refusal.path, std::path::PathBuf::from(PROJECT));
+    assert!(
+        matches!(
+            refusal.fault,
+            Fault::Parse {
+                position: Some((1, 10)),
+                ..
+            }
+        ),
+        "{refusal}"
+    );
+    assert!(
+        refusal
+            .to_string()
+            .starts_with("config-unavailable: /r/baley.toml:1:10: "),
+        "{refusal}"
+    );
+}

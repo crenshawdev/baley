@@ -91,6 +91,12 @@ fn git_subprocesses_run_under_a_deadline() {
             "git fetch origin",
             60,
         ),
+        (
+            Caller::ProjectHead,
+            &["ls-tree", "HEAD", "--", "baley.toml"],
+            "git ls-tree HEAD -- baley.toml",
+            60,
+        ),
     ];
     for &(caller, args, command, seconds) in rows {
         let args: Vec<OsString> = args.iter().map(OsString::from).collect();
@@ -140,6 +146,7 @@ fn registered_callers_select_their_deadlines() {
         (Caller::RecallHistory, 60, 60),
         (Caller::ReadDocumentHead, 60, 60),
         (Caller::LandingGit, 60, 60),
+        (Caller::ProjectHead, 60, 60),
     ] {
         assert_eq!(
             deadline(caller).nominal,

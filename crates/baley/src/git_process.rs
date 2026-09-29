@@ -26,6 +26,8 @@ pub enum Caller {
     LandingGit,
     /// Anchor tag transport.
     AnchorForge,
+    /// HEAD's copy of the project file.
+    ProjectHead,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,7 +65,8 @@ pub fn deadline(caller: Caller) -> Deadline {
         | Caller::RecallHistory
         | Caller::ReadDocumentHead
         | Caller::LandingGit
-        | Caller::AnchorForge => Deadline {
+        | Caller::AnchorForge
+        | Caller::ProjectHead => Deadline {
             nominal: OTHER_GIT_DEADLINE,
             work: OTHER_GIT_DEADLINE,
         },
