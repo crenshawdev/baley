@@ -21,7 +21,7 @@ pub use parse::{
     CONFIG_UNAVAILABLE, Diagnostic, DiagnosticKind, Expected, Fault, FileLayer, ParsedLayer,
     SettingsFile, Unavailable, Value, Written, line_and_column, parse_layer,
 };
-pub use project::{ProjectIdentity, ProjectProblem, is_project_id, read_project};
+pub use project::{ProjectIdentity, ProjectProblem, is_project_id, read_project, render_project};
 pub use route::{
     AcceptedNames, Route, RouteRefusal, RouteRequest, RungMap, SettingSource, UNKNOWN_MODEL,
     resolve_route,

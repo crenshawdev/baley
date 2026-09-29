@@ -1,8 +1,8 @@
 //! The `[project]` table of the project file: the project's id and name
 //! (design 0003, CFG-R3, ADR 0004).
 
-use toml::Spanned;
 use toml::de::DeValue;
+use toml::{Spanned, Table, Value};
 
 use super::parse::{Fault, SettingsFile, Unavailable, document, line_and_column};
 
@@ -99,4 +99,42 @@ pub fn read_project(file: &SettingsFile) -> Result<ProjectIdentity, Unavailable>
         id: id.to_owned(),
         name: name.to_owned(),
     })
+}
+
+/// The complete bytes of a project file whose `[project]` table holds `id`
+/// and `name`, with every other table and value of `existing` kept.
+///
+/// The file is written whole, so comments and key order are not kept (ADR
+/// 0027). Other keys in `[project]` are kept, and a `project` that is not a
+/// table is replaced by one. The id is written as given and the settings are
+/// not judged: `read_project` and `parse_layer` do that when the file is read
+/// back. An `existing` file that is not UTF-8 or not TOML gives the fault
+/// `read_project` gives. Nothing is written to disk.
+pub fn render_project(
+    id: &str,
+    name: &str,
+    existing: Option<&SettingsFile>,
+) -> Result<Vec<u8>, Unavailable> {
+    let mut table = match existing {
+        None => Table::new(),
+        Some(file) => {
+            let (text, _) = document(file)?;
+            // `document` has already judged the text, so this parse agrees.
+            text.parse::<Table>().map_err(|error| Unavailable {
+                path: file.path.clone(),
+                fault: Fault::Parse {
+                    position: error.span().map(|span| line_and_column(text, span.start)),
+                    message: error.message().to_owned(),
+                },
+            })?
+        }
+    };
+    let mut project = match table.remove("project") {
+        Some(Value::Table(project)) => project,
+        _ => Table::new(),
+    };
+    project.insert("id".into(), Value::String(id.into()));
+    project.insert("name".into(), Value::String(name.into()));
+    table.insert("project".into(), Value::Table(project));
+    Ok(table.to_string().into_bytes())
 }

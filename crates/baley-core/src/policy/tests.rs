@@ -1043,3 +1043,90 @@ fn a_project_file_without_a_project_table_is_not_an_empty_project() {
         "config-unavailable: /r/baley.toml: there is no [project] table; the project file needs one with an id and a string name"
     );
 }
+
+/// `text` as a `toml` table with its `project` table taken out.
+fn without_project(text: &str) -> (toml::Table, Option<toml::Value>) {
+    let mut table: toml::Table = text.parse().expect(text);
+    let project = table.remove("project");
+    (table, project)
+}
+
+/// The settings a project file writes, positions aside.
+fn settings_of(text: &str) -> Vec<(String, Option<Host>, Value)> {
+    let parsed = parse_layer(&file(PROJECT, text), FileLayer::Project, Schema::standard());
+    let parsed = parsed.expect(text);
+    parsed
+        .values
+        .into_iter()
+        .map(|written| (written.name, written.host, written.value))
+        .collect()
+}
+
+#[test]
+fn rendering_a_new_id_keeps_every_other_table_and_value() {
+    let before = "escalate_on_failure = true\n\
+                  [roles.planner]\n\
+                  effort = \"low\"\n\
+                  [host.codex.roles.checker]\n\
+                  effort = \"xhigh\"\n\
+                  [review]\n\
+                  depth = 3\n\
+                  [project]\n\
+                  id = \"0b8e2f4a-1c3d-4e5f-a6b7-c8d9e0f1a2b3\"\n\
+                  name = \"old\"\n\
+                  owner = \"kept\"\n";
+    let bytes = render_project(ID, "baley", Some(&file(PROJECT, before))).unwrap();
+    let after = String::from_utf8(bytes).unwrap();
+    assert_eq!(
+        read_project(&file(PROJECT, &after)),
+        Ok(ProjectIdentity {
+            id: ID.into(),
+            name: "baley".into(),
+        }),
+        "{after}"
+    );
+    let (rest_before, _) = without_project(before);
+    let (rest_after, project_after) = without_project(&after);
+    assert_eq!(rest_after, rest_before, "{after}");
+    let mut project = toml::Table::new();
+    project.insert("id".into(), ID.into());
+    project.insert("name".into(), "baley".into());
+    project.insert("owner".into(), "kept".into());
+    assert_eq!(project_after, Some(toml::Value::Table(project)), "{after}");
+    let settings = settings_of(before);
+    assert_eq!(settings.len(), 3);
+    assert_eq!(settings_of(&after), settings, "{after}");
+}
+
+#[test]
+fn rendering_without_a_file_writes_only_the_project_table() {
+    let after = String::from_utf8(render_project(ID, "baley", None).unwrap()).unwrap();
+    let mut project = toml::Table::new();
+    project.insert("id".into(), ID.into());
+    project.insert("name".into(), "baley".into());
+    let mut expected = toml::Table::new();
+    expected.insert("project".into(), toml::Value::Table(project));
+    assert_eq!(after.parse::<toml::Table>(), Ok(expected), "{after}");
+}
+
+#[test]
+fn rendering_over_a_file_that_is_not_toml_refuses_naming_it() {
+    let refusal = render_project(ID, "baley", Some(&file(PROJECT, "roles = [\n"))).unwrap_err();
+    assert_eq!(refusal.path, std::path::PathBuf::from(PROJECT));
+    assert!(
+        matches!(
+            refusal.fault,
+            Fault::Parse {
+                position: Some((1, 10)),
+                ..
+            }
+        ),
+        "{refusal}"
+    );
+    assert!(
+        refusal
+            .to_string()
+            .starts_with("config-unavailable: /r/baley.toml:1:10: "),
+        "{refusal}"
+    );
+}
