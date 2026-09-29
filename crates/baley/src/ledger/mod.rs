@@ -5,7 +5,6 @@ mod clock;
 mod commands;
 mod display;
 mod forge;
-mod ids;
 pub(crate) mod open;
 mod remotes;
 #[cfg(test)]

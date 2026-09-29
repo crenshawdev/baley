@@ -483,13 +483,6 @@ fn acknowledgement_prints_the_remote_identity() {
     );
 }
 #[test]
-fn uuid_sets_version_and_variant_bits() {
-    assert_eq!(
-        ids::uuid_v4_text([0; 16]),
-        "00000000-0000-4000-8000-000000000000"
-    );
-}
-#[test]
 fn trace_bridge_keeps_every_field() {
     let e = trace::trace_entry(TraceRecord {
         at: "T".into(),

@@ -30,6 +30,7 @@ serde_json = { version = "1", features = ["preserve_order", "float_roundtrip", "
 schemars = "1"
 clap = { version = "4", features = ["derive", "env"] }
 libc = "0.2"
+uuid = { version = "1.26", features = ["v4"] }
 # ripgrep as a library: Baley ships one static binary per target with no
 # runtime dependency on an external search program.
 # The grep crates serve record search and risk diffs.

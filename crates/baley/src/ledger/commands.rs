@@ -5,7 +5,6 @@ use super::{
     clock::SystemClock,
     display::{self, Render},
     forge::GitForge,
-    ids::fresh_request_id,
     remotes::anchor_plan,
     ticker::ThreadTicker,
     trace::StoreTrace,
@@ -20,9 +19,8 @@ use std::{
 };
 
 type Forge = GitForge<crate::process::System>;
-fn new_request_id() -> Result<RequestId, Render> {
-    fresh_request_id()
-        .map_err(|e| display::store_error(&StoreError::Unavailable(e.to_string()), None))
+fn new_request_id() -> RequestId {
+    RequestId(uuid::Uuid::new_v4().to_string())
 }
 fn require_remote(forge: &mut Forge, name: &str) -> Result<(), Render> {
     forge.require_remote(name).map_err(|e| Render::refusal(e.0))
@@ -131,7 +129,7 @@ fn purge(
     reason: &str,
 ) -> Result<Render, Render> {
     hashes.sort();
-    let request_id = new_request_id()?;
+    let request_id = new_request_id();
     println!("request {}", request_id.0);
     let digest = request_digest(&json!({"kind":"payload.purge","project":project.0,"actor":"owner","policy_version":0,"hashes":hashes.iter().map(|h| h.to_hex()).collect::<Vec<_>>(),"reason":reason,"scope":[]})).map_err(|e|Render::refusal(e.to_string()))?;
     let command = Command {
@@ -186,12 +184,12 @@ fn anchor(
     started_at: String,
 ) -> Result<Render, Render> {
     require_remote(forge, &remote)?;
-    let request_id = new_request_id()?;
+    let request_id = new_request_id();
     println!("request {}", request_id.0);
     let request = AnchorRequest {
         project: project.clone(),
         request_id,
-        reconcile_request_id: new_request_id()?,
+        reconcile_request_id: new_request_id(),
         actor: Actor::Owner,
         owner: ClaimOwner {
             process: std::process::id().to_string(),
@@ -238,7 +236,7 @@ fn acknowledge(
     require_remote(forge, &remote)?;
     let request = AcknowledgeRestore {
         project: project.clone(),
-        request_id: new_request_id()?,
+        request_id: new_request_id(),
         actor: Actor::Owner,
         policy_version: 0,
         remote: remote.clone(),
