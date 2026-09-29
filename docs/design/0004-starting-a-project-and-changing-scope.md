@@ -102,7 +102,7 @@ Every operation here is a typed operation on the host interface, reachable from 
   | `project-name-required` | The repository root has no folder name Baley can use as the project's name (fix: `baley init --name <name>`) | EVD-R17 |
   | `project-already-started` | The project already has a roadmap | PRJ-R6 |
   | `brief-unreadable` | The brief cannot be read (names the file) | PRJ-R5 |
-  | `config-unavailable` | The settings cannot be read after the interview | CFG-R9 |
+  | `config-unavailable` | `baley.toml` does not parse, lacks the project's id or name, or holds an id that is not a lower-case UUID version 4 (names the file), inherited from `baley init`, or the settings cannot be read after the interview | EVD-R17, CFG-R9 |
 
 ### scope submit
 
@@ -314,7 +314,7 @@ sequenceDiagram
   else roadmap exists
     B-->>H: project-already-started
   else
-    B->>B: baley init when no project file
+    B->>B: baley init unless already done
     alt brief named and unreadable
       B-->>H: brief-unreadable
     else
