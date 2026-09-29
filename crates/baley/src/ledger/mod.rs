@@ -1,9 +1,9 @@
 //! Owner commands over the evidence ledger.
 mod answer;
 mod args;
-mod clock;
-mod commands;
-mod display;
+pub(crate) mod clock;
+pub(crate) mod commands;
+pub(crate) mod display;
 mod forge;
 pub(crate) mod open;
 mod remotes;

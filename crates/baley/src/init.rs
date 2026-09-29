@@ -2,18 +2,26 @@
 //! The judges here take plain values; the command gathers them.
 use std::collections::BTreeMap;
 use std::fmt;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
-use baley_core::policy::{ProjectIdentity, Unavailable, render_project};
+use baley_core::policy::{ProjectIdentity, Unavailable, read_project, render_project};
 use baley_core::{PROJECT_INITIALIZED, PROJECT_INITIALIZED_VERSION};
 use baley_store::{
     Actor, Admin, Command, CommandKind, Decision, EventMatch, Ledger, NewEvent, Observed,
     OutcomeKind, ProjectId, Refusal, RequestId, StoreError, StreamName, request_digest,
 };
+use clap::Args;
 use serde_json::json;
 
-use crate::discovery::{Discovery, PROJECT_FILE};
-use crate::replace;
+use crate::discovery::{self, Discovery, PROJECT_FILE};
+use crate::folders::{Environment, Folders, Platform};
+use crate::ledger::clock::SystemClock;
+use crate::ledger::commands::new_request_id;
+use crate::ledger::display::{self, Render};
+use crate::ledger::open;
+use crate::{replace, settings};
 
 /// The working directory is not inside a git repository.
 pub const NOT_A_REPOSITORY: &str = "not-a-repository";
@@ -230,6 +238,103 @@ pub fn record_initialized(
         })
     })?;
     Ok(appended)
+}
+
+/// Arguments for `baley init`.
+#[derive(Args, Debug, Clone)]
+pub struct InitArgs {
+    /// The project's name for a new baley.toml. Defaults to the repository
+    /// folder's name. An existing file's name is never changed.
+    #[arg(long, value_name = "NAME")]
+    pub name: Option<String>,
+}
+
+/// Runs `baley init` in the working directory and prints what it did.
+pub fn run(args: InitArgs) -> ExitCode {
+    let started_at = SystemClock::now();
+    let result = initialize(&args, &started_at).unwrap_or_else(|e| e);
+    for line in result.lines {
+        if result.error {
+            eprintln!("baley: {line}");
+        } else {
+            println!("{line}");
+        }
+    }
+    ExitCode::from(result.code)
+}
+
+fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
+    let refuse = |refusal: &dyn fmt::Display| Render::refusal(refusal.to_string());
+    let unavailable =
+        |error: io::Error| display::store_error(&StoreError::Unavailable(error.to_string()), None);
+    let folders =
+        Folders::resolve(Platform::current(), &Environment::read()).map_err(|e| refuse(&e))?;
+    let cwd = std::env::current_dir().map_err(unavailable)?;
+    let ancestors = discovery::ancestors(&cwd).map_err(unavailable)?;
+    let canonical = ancestors
+        .first()
+        .map_or(cwd.as_path(), |a| a.path.as_path());
+    let root = locate(&discovery::discover(&ancestors), canonical).map_err(|e| refuse(&e))?;
+    let path = root.join(PROJECT_FILE);
+    let file = settings::read(&path).map_err(|e| refuse(&e))?;
+    let existing = file
+        .as_ref()
+        .map(read_project)
+        .transpose()
+        .map_err(|e| refuse(&e))?;
+    let naming = name(&root, args.name.as_deref(), existing.as_ref()).map_err(|e| refuse(&e))?;
+
+    // Nothing above opens the store, so a refusal leaves no ledger home behind.
+    let store = open::store(&folders.home, started_at, open::options())
+        .map_err(|e| display::store_error(&e, None))?;
+    let mut lines: Vec<String> = naming.note.into_iter().collect();
+    let mut acted = false;
+    let identity = match existing {
+        Some(identity) => identity,
+        None => {
+            let (identity, bytes) = new_project(&naming.name).map_err(|e| refuse(&e))?;
+            write_project_file(&root, &bytes).map_err(|failure| match failure {
+                replace::Failure::Refused(conflict) => refuse(&conflict),
+                other => Render {
+                    lines: vec![other.to_string()],
+                    code: 3,
+                    error: true,
+                },
+            })?;
+            lines.push(format!("wrote {} (commit this file)", path.display()));
+            acted = true;
+            identity
+        }
+    };
+    let failed = |e: StoreError| display::store_error(&e, Some(&identity.id));
+    if create_project(&store, &identity, started_at).map_err(failed)? {
+        lines.push(format!(
+            "created project {} in the ledger at {}",
+            identity.id,
+            folders.home.display()
+        ));
+        acted = true;
+    }
+    if record_initialized(&store, &identity, new_request_id(), started_at).map_err(failed)? {
+        lines.push(format!(
+            "recorded project.initialized for project {}",
+            identity.id
+        ));
+        acted = true;
+    }
+    if !acted {
+        lines.push(format!(
+            "already initialized: {} names project {}, and the ledger at {} holds it",
+            path.display(),
+            identity.id,
+            folders.home.display()
+        ));
+    }
+    Ok(Render {
+        lines,
+        code: 0,
+        error: false,
+    })
 }
 
 #[cfg(test)]

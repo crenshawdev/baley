@@ -19,7 +19,7 @@ use std::{
 };
 
 type Forge = GitForge<crate::process::System>;
-fn new_request_id() -> RequestId {
+pub(crate) fn new_request_id() -> RequestId {
     RequestId(uuid::Uuid::new_v4().to_string())
 }
 fn require_remote(forge: &mut Forge, name: &str) -> Result<(), Render> {
