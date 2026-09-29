@@ -926,3 +926,120 @@ fn a_project_id_with_a_hyphen_out_of_place_is_refused() {
 fn a_project_id_holding_a_letter_past_f_is_refused() {
     assert!(!is_project_id("6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3g"));
 }
+
+const ID: &str = "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f";
+
+fn project_fault(text: &str) -> Unavailable {
+    read_project(&file(PROJECT, text)).expect_err(text)
+}
+
+#[test]
+fn a_valid_project_table_gives_back_its_id_and_name() {
+    let text = format!("escalate_on_failure = true\n[project]\nid = \"{ID}\"\nname = \"baley\"\n");
+    assert_eq!(
+        read_project(&file(PROJECT, &text)),
+        Ok(ProjectIdentity {
+            id: ID.into(),
+            name: "baley".into(),
+        })
+    );
+}
+
+#[test]
+fn a_project_id_that_is_not_a_lower_case_uuid_v4_is_refused_at_its_value() {
+    for id in [
+        "6F1C2A4E-8B1D-4C3A-9E2F-0A5B7C9D1E3F",
+        "6f1c2a4e-8b1d-1c3a-9e2f-0a5b7c9d1e3f",
+        "6f1c2a4e-8b1d-4c3a-ce2f-0a5b7c9d1e3f",
+    ] {
+        let refusal = project_fault(&format!("[project]\nid = \"{id}\"\nname = \"x\"\n"));
+        assert_eq!(
+            refusal,
+            Unavailable {
+                path: PROJECT.into(),
+                fault: Fault::Project {
+                    name: "project.id",
+                    problem: ProjectProblem::NotAnId { written: id.into() },
+                    position: Some((2, 6)),
+                },
+            },
+            "{id}"
+        );
+        assert_eq!(refusal.code(), "config-unavailable");
+    }
+    assert_eq!(
+        project_fault("[project]\nid = \"6F1C2A4E-8B1D-4C3A-9E2F-0A5B7C9D1E3F\"\nname = \"x\"\n")
+            .to_string(),
+        "config-unavailable: /r/baley.toml:2:6: project.id is \"6F1C2A4E-8B1D-4C3A-9E2F-0A5B7C9D1E3F\", which is not a lower-case UUID version 4"
+    );
+}
+
+#[test]
+fn a_project_table_without_an_id_is_refused() {
+    let refusal = project_fault("[project]\nname = \"x\"\n");
+    assert_eq!(
+        refusal.fault,
+        Fault::Project {
+            name: "project.id",
+            problem: ProjectProblem::Missing,
+            position: None,
+        }
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /r/baley.toml: project.id is missing; the [project] table needs an id and a string name"
+    );
+}
+
+#[test]
+fn a_project_table_without_a_name_is_refused() {
+    let refusal = project_fault(&format!("[project]\nid = \"{ID}\"\n"));
+    assert_eq!(
+        refusal,
+        Unavailable {
+            path: PROJECT.into(),
+            fault: Fault::Project {
+                name: "project.name",
+                problem: ProjectProblem::Missing,
+                position: None,
+            },
+        }
+    );
+}
+
+#[test]
+fn a_project_name_that_is_not_a_string_is_refused() {
+    let refusal = project_fault(&format!("[project]\nid = \"{ID}\"\nname = 7\n"));
+    assert_eq!(
+        refusal.fault,
+        Fault::Project {
+            name: "project.name",
+            problem: ProjectProblem::WrongType { found: "integer" },
+            position: Some((3, 8)),
+        }
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /r/baley.toml:3:8: project.name is an integer, not a string"
+    );
+}
+
+#[test]
+fn a_project_file_without_a_project_table_is_not_an_empty_project() {
+    let refusal = project_fault("escalate_on_failure = true\n");
+    assert_eq!(
+        refusal,
+        Unavailable {
+            path: PROJECT.into(),
+            fault: Fault::Project {
+                name: "project",
+                problem: ProjectProblem::Missing,
+                position: None,
+            },
+        }
+    );
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /r/baley.toml: there is no [project] table; the project file needs one with an id and a string name"
+    );
+}

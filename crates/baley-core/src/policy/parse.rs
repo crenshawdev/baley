@@ -9,6 +9,7 @@ use toml::Spanned;
 use toml::de::{DeString, DeTable, DeValue};
 
 use super::merge::FileRef;
+use super::project::ProjectProblem;
 use super::schema::{Entry, Host, Kind, Rung, Schema, Scope};
 
 /// The code of every refusal that leaves the policy unbuilt.
@@ -163,6 +164,15 @@ pub enum Fault {
         /// The column of the value.
         column: u32,
     },
+    /// The project file's `[project]` table does not give an id and a name.
+    Project {
+        /// The key as written: `project`, `project.id` or `project.name`.
+        name: &'static str,
+        /// What is wrong with it.
+        problem: ProjectProblem,
+        /// The value's line and column, when the file holds one.
+        position: Option<(u32, u32)>,
+    },
 }
 impl Fault {
     fn position(&self) -> Option<(u32, u32)> {
@@ -170,7 +180,7 @@ impl Fault {
             Fault::NotUtf8 { line, column }
             | Fault::WrongType { line, column, .. }
             | Fault::OutsideGrammar { line, column, .. } => Some((*line, *column)),
-            Fault::Parse { position, .. } => *position,
+            Fault::Parse { position, .. } | Fault::Project { position, .. } => *position,
             Fault::NotRegular | Fault::Unreadable { .. } => None,
         }
     }
@@ -231,11 +241,7 @@ impl fmt::Display for Unavailable {
                 line,
                 column,
             } => {
-                let article = if found.starts_with(['a', 'e', 'i', 'o', 'u']) {
-                    "an"
-                } else {
-                    "a"
-                };
+                let article = article(found);
                 let expected = match expected {
                     Expected::Table => "a table".to_owned(),
                     Expected::Bool => "a boolean".to_owned(),
@@ -263,7 +269,47 @@ impl fmt::Display for Unavailable {
                     Kind::Bool => write!(f, "\"{written}\", which is not a boolean"),
                 }
             }
+            Fault::Project {
+                name,
+                problem,
+                position,
+            } => {
+                match position {
+                    Some((line, column)) => write!(f, "{path}:{line}:{column}: ")?,
+                    None => write!(f, "{path}: ")?,
+                }
+                match problem {
+                    ProjectProblem::Missing if *name == "project" => f.write_str(
+                        "there is no [project] table; the project file needs one with an id and a string name",
+                    ),
+                    ProjectProblem::Missing => write!(
+                        f,
+                        "{name} is missing; the [project] table needs an id and a string name"
+                    ),
+                    ProjectProblem::WrongType { found } => {
+                        let expected = if *name == "project" {
+                            "a table"
+                        } else {
+                            "a string"
+                        };
+                        write!(f, "{name} is {} {found}, not {expected}", article(found))
+                    }
+                    ProjectProblem::NotAnId { written } => write!(
+                        f,
+                        "{name} is \"{}\", which is not a lower-case UUID version 4",
+                        written.escape_debug()
+                    ),
+                }
+            }
         }
+    }
+}
+
+fn article(found: &str) -> &'static str {
+    if found.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
     }
 }
 
@@ -320,6 +366,44 @@ pub fn parse_layer(
     layer: FileLayer,
     schema: &Schema,
 ) -> Result<ParsedLayer, Unavailable> {
+    let (text, table) = document(file)?;
+    let mut walk = Walk {
+        text,
+        path: &file.path,
+        layer,
+        entries: schema
+            .entries()
+            .iter()
+            .map(|entry| (entry.name.split('.').collect(), entry))
+            .collect(),
+        values: Vec::new(),
+        diagnostics: Vec::new(),
+        faults: Vec::new(),
+    };
+    walk.table(table.get_ref(), &[], None);
+    if let Some(fault) = walk.faults.into_iter().min_by_key(Fault::position) {
+        return Err(Unavailable {
+            path: file.path.clone(),
+            fault,
+        });
+    }
+    // Dotted keys interleave subtrees, so the walk alone is not file order.
+    walk.diagnostics.sort_by_key(|d| (d.line, d.column));
+    Ok(ParsedLayer {
+        file: FileRef {
+            path: file.path.clone(),
+            digest: file.digest.clone(),
+        },
+        layer,
+        values: walk.values,
+        diagnostics: walk.diagnostics,
+    })
+}
+
+/// The file's text and its TOML document, or the `NotUtf8` or `Parse` fault
+/// that stops either. Every reader of a settings file goes through here, so
+/// they name the same position and message for the same bytes.
+pub(super) fn document(file: &SettingsFile) -> Result<(&str, Spanned<DeTable<'_>>), Unavailable> {
     let unavailable = |fault| Unavailable {
         path: file.path.clone(),
         fault,
@@ -336,34 +420,7 @@ pub fn parse_layer(
             message: error.message().to_owned(),
         })
     })?;
-    let mut walk = Walk {
-        text,
-        path: &file.path,
-        layer,
-        entries: schema
-            .entries()
-            .iter()
-            .map(|entry| (entry.name.split('.').collect(), entry))
-            .collect(),
-        values: Vec::new(),
-        diagnostics: Vec::new(),
-        faults: Vec::new(),
-    };
-    walk.table(table.get_ref(), &[], None);
-    if let Some(fault) = walk.faults.into_iter().min_by_key(Fault::position) {
-        return Err(unavailable(fault));
-    }
-    // Dotted keys interleave subtrees, so the walk alone is not file order.
-    walk.diagnostics.sort_by_key(|d| (d.line, d.column));
-    Ok(ParsedLayer {
-        file: FileRef {
-            path: file.path.clone(),
-            digest: file.digest.clone(),
-        },
-        layer,
-        values: walk.values,
-        diagnostics: walk.diagnostics,
-    })
+    Ok((text, table))
 }
 
 /// The one-based line and column of a byte offset, by the rule `toml` 1.1.6
@@ -467,7 +524,7 @@ impl<'a> Walk<'a> {
             let segment: &'t str = key.get_ref();
             let path: Vec<&'t str> = prefix.iter().copied().chain([segment]).collect();
             if top && segment == "project" && self.layer == FileLayer::Project {
-                // The project's identity table, read by discovery, not a setting.
+                // The project's identity, read by `project::read_project`, not a setting.
                 continue;
             }
             if top && segment == "host" {
