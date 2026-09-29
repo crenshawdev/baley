@@ -97,7 +97,9 @@ Every operation here is a typed operation on the host interface, reachable from 
 
   | Code | When | Requirement |
   |---|---|---|
-  | `not-a-repository` | The directory is not inside a git repository, or is below the root (names the root) | EVD-R17 |
+  | `not-a-repository` | The directory is not inside a git repository | EVD-R17 |
+  | `not-repository-root` | The directory is inside a git repository but is not its root (names the root) | EVD-R17 |
+  | `project-name-required` | The repository root has no folder name Baley can use as the project's name (fix: `baley init --name <name>`) | EVD-R17 |
   | `project-already-started` | The project already has a roadmap | PRJ-R6 |
   | `brief-unreadable` | The brief cannot be read (names the file) | PRJ-R5 |
   | `config-unavailable` | The settings cannot be read after the interview | CFG-R9 |
@@ -305,8 +307,10 @@ sequenceDiagram
   O->>H: start the project (optionally naming a brief)
   H->>B: project start
   B->>B: inside a repository? project file present? roadmap present?
-  alt not a repository or below its root
+  alt not inside a repository
     B-->>H: not-a-repository
+  else below the repository root
+    B-->>H: not-repository-root naming the root
   else roadmap exists
     B-->>H: project-already-started
   else
