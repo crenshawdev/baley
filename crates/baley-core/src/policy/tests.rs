@@ -587,6 +587,21 @@ fn a_parse_error_names_its_line_and_column() {
 }
 
 #[test]
+fn a_parse_error_without_a_span_is_named_without_a_position() {
+    let refusal = Unavailable {
+        path: GLOBAL.into(),
+        fault: Fault::Parse {
+            position: None,
+            message: "unexpected end".into(),
+        },
+    };
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /c/config.toml: unexpected end"
+    );
+}
+
+#[test]
 fn a_parse_error_at_the_end_of_file_or_at_a_non_ascii_character_keeps_tomls_position() {
     for (text, position) in [("x = \"\"\"abc\n", (1, 12)), ("\"é\" = é", (1, 8))] {
         let Fault::Parse {
