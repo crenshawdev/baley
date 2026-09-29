@@ -1,0 +1,201 @@
+//! The settings files as bytes: where the global file is, and one reader that
+//! gathers a file and judges what it found (design 0003, CFG-R2, CFG-R9).
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+
+use baley_core::policy::{Fault, SettingsFile, Unavailable};
+use sha2::{Digest, Sha256};
+
+use crate::folders::Folders;
+
+/// The global file's name in the config folder.
+pub const GLOBAL_FILE: &str = "config.toml";
+
+/// The global file: `config.toml` in the config folder.
+pub fn global_path(folders: &Folders) -> PathBuf {
+    folders.config.join(GLOBAL_FILE)
+}
+
+/// A settings file from its path and exact bytes, with the lower-case hex
+/// SHA-256 of the bytes as its digest.
+pub fn file(path: &Path, bytes: Vec<u8>) -> SettingsFile {
+    let digest = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    SettingsFile {
+        path: path.into(),
+        bytes,
+        digest,
+    }
+}
+
+/// Reads one settings file: `None` when it does not exist, `config-unavailable`
+/// when it exists but is not a regular file or cannot be read.
+pub fn read(path: &Path) -> Result<Option<SettingsFile>, Unavailable> {
+    judge(path, gather(path))
+}
+
+/// What one read of a settings path found.
+pub(crate) enum Seen {
+    Missing,
+    NotRegular,
+    Unreadable { cause: String },
+    Opened(Vec<u8>),
+}
+
+/// Opens the path, following a link, and reads the file if it is a regular one.
+pub(crate) fn gather(path: &Path) -> Seen {
+    // Non-blocking, so a FIFO with no writer cannot hang the open before its
+    // kind is judged; the flag changes nothing for a regular file.
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Seen::Missing,
+        Err(error) => {
+            return Seen::Unreadable {
+                cause: error.to_string(),
+            };
+        }
+    };
+    match file.metadata() {
+        Err(error) => Seen::Unreadable {
+            cause: error.to_string(),
+        },
+        Ok(meta) if !meta.is_file() => Seen::NotRegular,
+        Ok(_) => {
+            let mut bytes = Vec::new();
+            match file.read_to_end(&mut bytes) {
+                Ok(_) => Seen::Opened(bytes),
+                Err(error) => Seen::Unreadable {
+                    cause: error.to_string(),
+                },
+            }
+        }
+    }
+}
+
+/// A missing file is no layer; a file Baley cannot read leaves the policy
+/// unavailable, since the owner's settings are in it.
+pub(crate) fn judge(path: &Path, seen: Seen) -> Result<Option<SettingsFile>, Unavailable> {
+    let unavailable = |fault| Unavailable {
+        path: path.into(),
+        fault,
+    };
+    match seen {
+        Seen::Missing => Ok(None),
+        Seen::NotRegular => Err(unavailable(Fault::NotRegular)),
+        Seen::Unreadable { cause } => Err(unavailable(Fault::Unreadable { cause })),
+        Seen::Opened(bytes) => Ok(Some(file(path, bytes))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    const PATH: &str = "/c/config.toml";
+
+    #[test]
+    fn a_missing_file_is_no_layer_and_an_unreadable_one_is_unavailable() {
+        let path = Path::new(PATH);
+        assert_eq!(judge(path, Seen::Missing), Ok(None));
+
+        let refusal = judge(path, Seen::NotRegular).unwrap_err();
+        assert_eq!(
+            refusal,
+            Unavailable {
+                path: PATH.into(),
+                fault: Fault::NotRegular,
+            }
+        );
+        assert_eq!(
+            refusal.to_string(),
+            "config-unavailable: /c/config.toml is not a regular file"
+        );
+
+        let cause = "Permission denied (os error 13)";
+        let refusal = judge(
+            path,
+            Seen::Unreadable {
+                cause: cause.into(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            refusal.fault,
+            Fault::Unreadable {
+                cause: cause.into()
+            }
+        );
+        assert_eq!(
+            refusal.to_string(),
+            "config-unavailable: cannot read /c/config.toml: Permission denied (os error 13)"
+        );
+    }
+
+    #[test]
+    fn the_digest_is_the_sha256_of_the_bytes() {
+        // Fixed from `sha256sum`, not from this code.
+        for (bytes, digest) in [
+            (
+                b"abc".as_slice(),
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            ),
+            (
+                b"".as_slice(),
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            ),
+            (
+                b"abc\n".as_slice(),
+                "edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb",
+            ),
+        ] {
+            let read = judge(Path::new(PATH), Seen::Opened(bytes.to_vec()))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                read,
+                SettingsFile {
+                    path: PATH.into(),
+                    bytes: bytes.to_vec(),
+                    digest: digest.into(),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn the_global_file_is_config_toml_in_the_config_folder() {
+        let folders = Folders {
+            config: "/c".into(),
+            home: "/h".into(),
+        };
+        assert_eq!(global_path(&folders), Path::new("/c/config.toml"));
+    }
+
+    #[test]
+    fn read_follows_a_link_and_returns_the_targets_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("settings.toml");
+        let link = dir.path().join("config.toml");
+        std::fs::write(&target, b"abc").unwrap();
+        symlink(&target, &link).unwrap();
+
+        let found = read(&link).unwrap().unwrap();
+        assert_eq!(found.path, link);
+        assert_eq!(found.bytes, b"abc");
+        assert_eq!(
+            found.digest,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(read(&dir.path().join("absent")), Ok(None));
+        assert_eq!(read(dir.path()).unwrap_err().fault, Fault::NotRegular);
+    }
+}

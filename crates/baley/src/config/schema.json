@@ -1,14 +1,4 @@
 {
-  "granularity": {
-    "type": "enum",
-    "values": [
-      "fine",
-      "standard",
-      "coarse"
-    ],
-    "default": "standard",
-    "src": "repo"
-  },
   "model.escalate_on_failure": {
     "type": "bool",
     "default": false
@@ -109,36 +99,9 @@
     ],
     "default": "low"
   },
-  "workflow.research": {
-    "type": "bool",
-    "default": false
-  },
-  "workflow.plan_check": {
-    "type": "bool",
-    "default": false
-  },
-  "workflow.verifier": {
-    "type": "bool",
-    "default": true
-  },
   "workflow.skip_discuss": {
     "type": "bool",
     "default": false
-  },
-  "workflow.inline_plan_threshold": {
-    "type": "int",
-    "min": 0,
-    "default": 3
-  },
-  "workflow.max_plan_tasks": {
-    "type": "int",
-    "min": 1,
-    "default": 8
-  },
-  "workflow.max_plan_bytes": {
-    "type": "int",
-    "min": 1,
-    "default": 675000
   },
   "workflow.test_command": {
     "type": "string_or_null",
@@ -193,18 +156,6 @@
   "git.base_branch": {
     "type": "string_or_null",
     "default": null
-  },
-  "git.create_tag": {
-    "type": "bool",
-    "default": true
-  },
-  "git.on_land_cleanup": {
-    "type": "bool",
-    "default": true
-  },
-  "git.issue_check": {
-    "type": "bool",
-    "default": true
   },
   "git.forge_provider": {
     "type": "enum",
@@ -479,26 +430,5 @@
     "type": "int",
     "min": 1,
     "default": 3
-  },
-  "review.decision_review.tier": {
-    "type": "enum",
-    "values": [
-      "flagship",
-      "balanced",
-      "cheap"
-    ],
-    "default": "flagship",
-    "src": "repo"
-  },
-  "review.decision_review.effort": {
-    "type": "enum",
-    "values": [
-      "minimal",
-      "low",
-      "medium",
-      "high"
-    ],
-    "default": "high",
-    "src": "repo"
   }
 }

@@ -6,6 +6,7 @@
 
 pub mod anchor;
 pub mod forge;
+pub mod policy;
 pub mod reconcile;
 pub mod registry;
 pub mod restore;
@@ -23,6 +24,13 @@ pub use anchor::{
 pub use forge::{
     FetchObservation, Forge, PushObservation, TagQuery, anchor_annotation, anchor_tag,
     parse_annotation, parse_tag_anchor, tag_sequence,
+};
+pub use policy::{
+    AcceptedNames, CONFIG_UNAVAILABLE, Diagnostic, DiagnosticKind, Effective, EffectivePolicy,
+    Entry, Expected, Fault, FileLayer, FileRef, Host, Kind, Layer, ParsedLayer, Role, Route,
+    RouteRefusal, RouteRequest, Rung, RungMap, Schema, Scope, SettingSource, SettingsFile, Source,
+    UNKNOWN_MODEL, Unavailable, Value, Written, effective_policy, line_and_column, merge,
+    parse_layer, resolve_route,
 };
 pub use reconcile::{AnchorFinding, AnchorIntent, RemoteTag, anchor_reconciliation, judge_anchor};
 pub use registry::{
