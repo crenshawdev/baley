@@ -343,8 +343,8 @@ pub trait Views {
 
 /// What the owner does to the store as a whole.
 pub trait Admin {
-    /// Creates an empty project. Slice 1 creates projects only this way;
-    /// `baley init` arrives with slice 2.
+    /// Creates an empty project. `baley init` creates projects through this
+    /// call; a second call for the same id refuses with `ProjectExists`.
     fn create_project(&self, project: &ProjectId, name: &str, at: &str) -> Result<(), StoreError>;
 
     /// Lists project ids and names in id order.
