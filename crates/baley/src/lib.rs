@@ -49,3 +49,5 @@ pub mod folders;
 pub mod keys;
 /// Owner commands over the evidence ledger.
 pub mod ledger;
+/// The two settings files as bytes: the global file's path and one reader.
+pub mod settings;
