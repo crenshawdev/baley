@@ -1,9 +1,16 @@
 //! `baley init`: ties a repository to a ledger project (design 0001, EVD-R17).
 //! The judges here take plain values; the command gathers them.
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use baley_core::policy::{ProjectIdentity, Unavailable, render_project};
+use baley_core::{PROJECT_INITIALIZED, PROJECT_INITIALIZED_VERSION};
+use baley_store::{
+    Actor, Admin, Command, CommandKind, Decision, EventMatch, Ledger, NewEvent, Observed,
+    OutcomeKind, ProjectId, Refusal, RequestId, StoreError, StreamName, request_digest,
+};
+use serde_json::json;
 
 use crate::discovery::{Discovery, PROJECT_FILE};
 use crate::replace;
@@ -147,6 +154,84 @@ pub fn write_project_file(root: &Path, bytes: &[u8]) -> Result<PathBuf, replace:
     Ok(path)
 }
 
+/// The command kind `baley init` records its request under.
+pub const INIT_COMMAND: &str = "project.init";
+/// The stream `project.initialized` goes to.
+pub const PROJECT_STREAM: &str = "project";
+
+/// Creates the project in the ledger. True when this run created it, false
+/// when it was already there, as after an interrupted init or a second one.
+pub fn create_project(
+    store: &impl Admin,
+    identity: &ProjectIdentity,
+    at: &str,
+) -> Result<bool, StoreError> {
+    let project = ProjectId(identity.id.clone());
+    match store.create_project(&project, &identity.name, at) {
+        Ok(()) => Ok(true),
+        Err(StoreError::Refused(Refusal::ProjectExists(_))) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Records `project.initialized` once. True when this run appended it. The
+/// check runs inside the transaction, so a racing second init records only
+/// its `command.completed`.
+pub fn record_initialized(
+    store: &impl Ledger,
+    identity: &ProjectIdentity,
+    request_id: RequestId,
+    at: &str,
+) -> Result<bool, StoreError> {
+    let actor = Actor::Owner;
+    let digest = request_digest(&json!({
+        "kind": INIT_COMMAND,
+        "project": identity.id,
+        "actor": actor.as_str(),
+        "policy_version": 0,
+        "name": identity.name,
+        "scope": [],
+    }))
+    .map_err(|error| StoreError::Refused(Refusal::InvalidEvent(error.to_string())))?;
+    let command = Command {
+        project: ProjectId(identity.id.clone()),
+        kind: CommandKind(INIT_COMMAND.into()),
+        request_id,
+        digest,
+        scope: vec![],
+        policy_version: 0,
+        recorded_at: at.into(),
+        actor,
+    };
+    let initialized = EventMatch {
+        type_name: PROJECT_INITIALIZED.into(),
+        stream: Some(StreamName(PROJECT_STREAM.into())),
+        fields: BTreeMap::new(),
+    };
+    let mut appended = false;
+    store.transact(&command, &mut |tx| {
+        appended = !tx.event_exists(&initialized)?;
+        if appended {
+            tx.append(NewEvent {
+                stream: StreamName(PROJECT_STREAM.into()),
+                type_name: PROJECT_INITIALIZED.into(),
+                type_version: PROJECT_INITIALIZED_VERSION,
+                git: None,
+                payload: json!({ "name": identity.name }),
+                attachments: vec![],
+            })?;
+        }
+        Ok(Decision {
+            kind: OutcomeKind::Done,
+            answer: json!({ "recorded": appended }),
+            sensitive: false,
+            observed: Observed::default(),
+            git: None,
+        })
+    })?;
+    Ok(appended)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,5 +361,95 @@ mod tests {
                 note: None,
             }
         );
+    }
+
+    const T0: &str = "2026-09-29T10:00:00Z";
+    const T1: &str = "2026-09-29T10:00:01Z";
+
+    /// A real store in a private home under a fresh temporary directory.
+    fn store() -> (tempfile::TempDir, baley_store_sqlite::SqliteStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let store = crate::ledger::open::store(&home, T0, crate::ledger::open::options()).unwrap();
+        (dir, store)
+    }
+
+    fn request(n: u8) -> RequestId {
+        RequestId(format!("00000000-0000-4000-8000-0000000000{n:02}"))
+    }
+
+    fn events(
+        store: &baley_store_sqlite::SqliteStore,
+        id: &str,
+        stream: &str,
+    ) -> Vec<baley_store::Event> {
+        let page = baley_store::PageRequest {
+            limit: 100,
+            after: None,
+        };
+        let project = ProjectId(id.into());
+        store
+            .stream(&project, &StreamName(stream.into()), 1, page)
+            .unwrap()
+            .items
+    }
+
+    #[test]
+    fn a_first_init_creates_the_project_and_records_one_initialized_event_as_specified() {
+        let (_dir, store) = store();
+        let project = identity("sample");
+        assert!(create_project(&store, &project, T0).unwrap());
+        assert!(record_initialized(&store, &project, request(1), T1).unwrap());
+
+        assert_eq!(
+            store.projects().unwrap(),
+            vec![(ProjectId(project.id.clone()), "sample".to_string())]
+        );
+        let recorded = events(&store, &project.id, "project");
+        assert_eq!(recorded.len(), 1);
+        let event = &recorded[0];
+        assert_eq!(event.type_name, "project.initialized");
+        assert_eq!(event.type_version, 1);
+        assert_eq!(event.payload, serde_json::json!({ "name": "sample" }));
+        assert_eq!(event.policy_version, 0);
+        assert_eq!(event.actor, Actor::Owner);
+        let completed = events(&store, &project.id, "command/project.init");
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].type_name, "command.completed");
+    }
+
+    #[test]
+    fn a_second_record_does_not_duplicate_project_initialized() {
+        let (_dir, store) = store();
+        let project = identity("sample");
+        let id = ProjectId(project.id.clone());
+        store.create_project(&id, "sample", T0).unwrap();
+        assert!(record_initialized(&store, &project, request(1), T1).unwrap());
+        let before = store.head(&id).unwrap().unwrap().seq;
+
+        assert!(!record_initialized(&store, &project, request(2), T1).unwrap());
+
+        let initialized: Vec<_> = events(&store, &project.id, "project")
+            .into_iter()
+            .filter(|event| event.type_name == "project.initialized")
+            .collect();
+        assert_eq!(initialized.len(), 1);
+        assert_eq!(store.head(&id).unwrap().unwrap().seq, before + 1);
+        let completed = events(&store, &project.id, "command/project.init");
+        assert_eq!(completed.len(), 2);
+        assert_eq!(completed[1].seq, before + 1);
+    }
+
+    #[test]
+    fn an_existing_project_is_taken_as_present_not_as_a_failure() {
+        let (_dir, store) = store();
+        let project = identity("sample");
+        store
+            .create_project(&ProjectId(project.id.clone()), "sample", T0)
+            .unwrap();
+
+        assert!(!create_project(&store, &project, T1).unwrap());
+        assert!(record_initialized(&store, &project, request(1), T1).unwrap());
+        assert_eq!(events(&store, &project.id, "project").len(), 1);
     }
 }

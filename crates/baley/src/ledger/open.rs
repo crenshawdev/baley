@@ -3,7 +3,7 @@ use baley_core::{Registry, register_anchor_events, register_project_events};
 use baley_store_sqlite::Options;
 
 /// Registers exactly the anchor types and `project.initialized` understood by the CLI.
-pub(super) fn options() -> Options {
+pub(crate) fn options() -> Options {
     let mut registry = Registry::new();
     register_anchor_events(&mut registry).expect("unique anchor types");
     register_project_events(&mut registry).expect("unique project types");
