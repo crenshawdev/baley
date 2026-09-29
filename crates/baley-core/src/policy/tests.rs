@@ -866,3 +866,63 @@ fn the_route_names_the_setting_and_layer_of_its_model_and_effort() {
         }
     );
 }
+
+// Project ids below are written by hand from D-10 and RFC 9562: version
+// nibble at byte 14, variant nibble at byte 19.
+
+#[test]
+fn a_project_id_with_any_rfc_variant_nibble_is_not_refused() {
+    for id in [
+        "6f1c2a4e-8b1d-4c3a-8e2f-0a5b7c9d1e3f",
+        "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f",
+        "6f1c2a4e-8b1d-4c3a-ae2f-0a5b7c9d1e3f",
+        "6f1c2a4e-8b1d-4c3a-be2f-0a5b7c9d1e3f",
+    ] {
+        assert!(is_project_id(id), "{id}");
+    }
+}
+
+#[test]
+fn an_upper_case_project_id_is_not_folded_to_lower_case() {
+    assert!(!is_project_id("6F1C2A4E-8B1D-4C3A-9E2F-0A5B7C9D1E3F"));
+}
+
+#[test]
+fn a_project_id_of_another_uuid_version_is_refused() {
+    for id in [
+        "6f1c2a4e-8b1d-1c3a-9e2f-0a5b7c9d1e3f",
+        "6f1c2a4e-8b1d-7c3a-9e2f-0a5b7c9d1e3f",
+    ] {
+        assert!(!is_project_id(id), "{id}");
+    }
+}
+
+#[test]
+fn a_project_id_outside_the_rfc_variant_is_refused() {
+    for id in [
+        "6f1c2a4e-8b1d-4c3a-ce2f-0a5b7c9d1e3f",
+        "6f1c2a4e-8b1d-4c3a-7e2f-0a5b7c9d1e3f",
+    ] {
+        assert!(!is_project_id(id), "{id}");
+    }
+}
+
+#[test]
+fn a_project_id_one_byte_short_or_long_is_refused() {
+    for id in [
+        "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3",
+        "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f0",
+    ] {
+        assert!(!is_project_id(id), "{id}");
+    }
+}
+
+#[test]
+fn a_project_id_with_a_hyphen_out_of_place_is_refused() {
+    assert!(!is_project_id("6f1c2a4e8-b1d-4c3a-9e2f-0a5b7c9d1e3f"));
+}
+
+#[test]
+fn a_project_id_holding_a_letter_past_f_is_refused() {
+    assert!(!is_project_id("6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3g"));
+}
