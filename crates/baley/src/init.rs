@@ -3,9 +3,10 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use baley_core::policy::ProjectIdentity;
+use baley_core::policy::{ProjectIdentity, Unavailable, render_project};
 
 use crate::discovery::{Discovery, PROJECT_FILE};
+use crate::replace;
 
 /// The working directory is not inside a git repository.
 pub const NOT_A_REPOSITORY: &str = "not-a-repository";
@@ -124,6 +125,28 @@ pub fn name(
     })
 }
 
+/// A new project: a fresh id, the chosen name, and the bytes of a project file
+/// naming both. The id is a lower-case hyphenated UUID version 4, the one form
+/// `read_project` accepts.
+pub fn new_project(name: &str) -> Result<(ProjectIdentity, Vec<u8>), Unavailable> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let bytes = render_project(&id, name, None)?;
+    let identity = ProjectIdentity {
+        id,
+        name: name.into(),
+    };
+    Ok((identity, bytes))
+}
+
+/// Writes a new `baley.toml` at the root and returns its path. Only an absent
+/// file is written, so the expected digest is none: `replace` refuses a file
+/// that appeared since it was read, and a link. The file gets the umask's mode.
+pub fn write_project_file(root: &Path, bytes: &[u8]) -> Result<PathBuf, replace::Failure> {
+    let path = root.join(PROJECT_FILE);
+    replace::replace(&path, bytes, None)?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +255,15 @@ mod tests {
             assert_eq!(naming.name, "kept");
             assert_eq!(naming.note, None, "given {given:?}");
         }
+    }
+
+    #[test]
+    fn a_new_project_file_reads_back_the_id_and_name_it_was_rendered_from() {
+        let (identity, bytes) = new_project("sample").unwrap();
+        let file = crate::settings::file(Path::new("/r/baley.toml"), bytes);
+        let read = baley_core::policy::read_project(&file).unwrap();
+        assert_eq!(read, identity);
+        assert_eq!(read.name, "sample");
     }
 
     #[test]
