@@ -94,7 +94,7 @@ graph LR
 | Layer | One source of settings: the built-in defaults, the global file, its host section, the project file, or its host section. |
 | Host section | A table inside a settings file, `[host.<name>]`, whose values apply only when that host is connected. Host names are those the host adapter recognizes: `claude-code`, `codex`. |
 | Scope | Where a setting may be set: `global`, `project`, or `both`. A value in a layer outside its scope is ignored and reported. |
-| Effective policy | The result of merging every layer for one project and one host, plus the layer each value came from. |
+| Effective policy | The result of merging every layer for one project and the connected host, if there is one, plus the layer each value came from. |
 | Policy version | The identity of one recorded effective policy. Every command records the version it ran under. |
 | Role | A kind of worker Baley dispatches: planner, analyzer (the refinement role that asks the owner questions and drafts truths), plan checker, executor, verifier, reviewer. |
 | Rung | One of Baley's five effort levels, in order: `low`, `medium`, `high`, `xhigh`, `max`. |
@@ -510,7 +510,7 @@ The binary crate holds the inherited engine. It reads JSON files under `.plannin
 | CFG-R2 | Built | Platform config folders and `BALEY_HOME` in `crates/baley/src/folders.rs:83-134`; the global file's path and reader in `crates/baley/src/settings.rs:13-96`. The inherited engine still reads its own JSON global file. |
 | CFG-R3 | Not built | The project file is read only as bytes supplied to the policy module; discovery and the committed copy are Build 2 T5. |
 | CFG-R4 | Partly built | Bash guard walks up to `.planning` (`crates/baley/src/guard/bash.rs:27-44`); the server binds one project per process (`crates/baley/src/server.rs:810-817`); Write/Edit guard does not walk (`crates/baley/src/guard/mod.rs:323-334`) |
-| CFG-R5 | Partly built | Scopes in the schema and the scope diagnostic in the walk (`crates/baley-core/src/policy/schema.rs:123-132`, `crates/baley-core/src/policy/parse.rs:518-568`); the command-line refusal `wrong-layer` is Build 2 T10. The inherited `GLOBAL_ONLY` and `repo_only` flags (`crates/baley/src/config/mod.rs:14-18`, `crates/baley/src/config/merge.rs:59-87`) stay until Build 9. |
+| CFG-R5 | Partly built | Scopes in the schema and the scope diagnostic in the walk (`crates/baley-core/src/policy/schema.rs:123-132`, `crates/baley-core/src/policy/parse.rs:518-568`); the command-line refusal `wrong-layer` is Build 2 T10. The inherited `GLOBAL_ONLY` list, applied at merge (`crates/baley/src/config/mod.rs:14-18`, `crates/baley/src/config/merge.rs:59-89`), and the `repo_only` flag in `crates/baley/src/config/schema.json`, refused at write (`crates/baley/src/config/write.rs:97-101`), stay until Build 9. |
 | CFG-R6 | Built | In the policy module: five layers in order and only the connected host's section (`crates/baley-core/src/policy/merge.rs:139-203`); the command line connects no host. The inherited merge of defaults, global and repo (`crates/baley/src/config/merge.rs:131-177`) has no host sections and stays until Build 9. |
 | CFG-R7 | Partly built | An unknown name is ignored with a diagnostic (`crates/baley-core/src/policy/parse.rs:464-497`, `crates/baley-core/src/policy/parse.rs:570-587`); the twelve settings without readers are gone from `crates/baley/src/config/schema.json`; the command-line refusal `unknown-setting` is Build 2 T10. |
 | CFG-R8 | Not built | routes persist config inputs only (`crates/baley/src/config/reload.rs:168-181`) |

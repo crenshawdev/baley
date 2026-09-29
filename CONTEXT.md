@@ -54,7 +54,7 @@ Two notes on history:
 | Layer | One source of settings: the built-in defaults, the global file, its host section, the project file or its host section ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | level, profile |
 | Host section | A table `[host.<name>]` in a settings file whose values apply only when that host is connected ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | host profile, override block |
 | Setting scope | Where a setting may be set: `global`, `project` or `both` ([0003](docs/design/0003-configuration-and-routing.md#2-terms), where it is called Scope). | scope alone (scope is also a project's description, stories and roadmap) |
-| Effective policy | The result of merging every layer for one project and one host, with the layer each value came from ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | config, merged settings |
+| Effective policy | The result of merging every layer for one project and the connected host, if there is one, with the layer each value came from ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | config, merged settings |
 | Policy version | The identity of one recorded effective policy; every command records the version it ran under ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | config hash, revision |
 | Rung | One of Baley's five effort levels, in order: `low`, `medium`, `high`, `xhigh`, `max` ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | effort tier, level |
 | Route | The model and rung resolved for one role and one dispatch, with the settings that decided them ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | model choice, routing table |
