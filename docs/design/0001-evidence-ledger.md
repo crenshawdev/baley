@@ -995,7 +995,18 @@ Development builds set `BALEY_HOME` so they never touch the owner's real ledger.
 
 #### Project identity and policy (EVD-R17)
 
-A project is initialized once with `baley init`. That creates the project in the ledger with a new random project id (UUID version 4) and writes the project file, `baley.toml`, at the repository root, which the owner commits. TOML is a format people already read, diff and edit by hand; when Baley writes the file, comments and key order in it are not kept ([ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)). The file holds the project id, the project name, and the project's policy: reviewers, routing and protected branches, the project-level settings (0002, SYS-R13). Its location and discovery are designed in [0003](0003-configuration-and-routing.md) (CFG-R3, CFG-R4).
+A project is initialized with `baley init`, run at the repository root. It takes three steps, in this order. It writes the project file, `baley.toml`, at the root, with a new random project id (a lower-case UUID version 4) and the project's name, which is the root folder's name unless `--name` gives another; the owner commits the file. It then creates the project in the ledger. Last, it records `project.initialized` version 1, payload `{"name"}`, on the `project` stream with policy version 0.
+
+Each step is skipped when its result already exists. An interrupted init is finished by running it again, and a checkout where the file, the project and the event all exist records nothing, not even a completed command. A second init racing the first records one `project.initialized`, because the check for it runs in the same transaction that appends it. An existing project file is never changed: its id and name are used, and a `--name` that differs is reported as not applied. A clone on another machine has the committed file but not the project, so `baley init` there creates the project in that machine's ledger from the committed id and records its `project.initialized`.
+
+`baley init` refuses, before it writes anything or opens the ledger, when:
+
+- the working directory is not inside a git repository: `not-a-repository`;
+- the working directory is inside a repository but below its root: `not-repository-root`, naming the root;
+- no project file exists, no `--name` is given, and the root has no folder name Baley can use as the project's name (a repository at `/`, or a folder name that is not UTF-8): `project-name-required`;
+- the project file does not parse, lacks the project's id or name, or holds an id that is not a lower-case UUID version 4: `config-unavailable`, naming the file.
+
+TOML is a format people already read, diff and edit by hand; when Baley writes the file, comments and key order in it are not kept ([ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)). The file holds the project id, the project name, and the project's policy: reviewers, routing and protected branches, the project-level settings (0002, SYS-R13). Its location and discovery are designed in [0003](0003-configuration-and-routing.md) (CFG-R3, CFG-R4).
 
 Baley finds a checkout's project the way git finds a repository: it walks up from the working directory to the first directory holding the project file, stopping at the repository root. The guard uses the same discovery. A directory with no project file is not managed and the guard stays silent. Every checkout Baley sees is recorded with `checkout.seen` (path, root commit, remote URL) for diagnosis only. If two checkouts whose remotes differ claim the same project id (a fork cloned beside its upstream), Baley refuses to record for the second and tells the owner to give it its own id with `baley init --new-id`.
 
@@ -1026,7 +1037,7 @@ The owner reads records with `baley show <thing>` (for example `baley show plan 
 
 Baley's records never live in the working tree (EVD-R18). The only writes Baley makes there are:
 
-- the project file, at `baley init` and when the owner changes policy through Baley;
+- the project file, when `baley init` finds none at the root and when the owner changes policy through Baley;
 - exports, to a path the owner names;
 - the git operations that belong to commands: undo's revert, the release manifest bump, pause's work-in-progress commit, and landing.
 
