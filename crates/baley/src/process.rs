@@ -8,7 +8,8 @@
 //! The environment travels in the `Launch` rather than being fixed here,
 //! because the call sites disagree: `rail::git::run` removes
 //! `GIT_LITERAL_PATHSPECS` where `pause::git::run` sets it to 1, and
-//! `recall::history` adds `GIT_NO_LAZY_FETCH` that no other git call sets.
+//! `recall::history` and `committed` add `GIT_NO_LAZY_FETCH` that no other
+//! git call sets.
 //! Fixing one environment here would change behavior at those sites.
 
 use std::ffi::{OsStr, OsString};
