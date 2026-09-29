@@ -30,6 +30,11 @@ pub enum Pending {
         /// The working-tree file.
         path: PathBuf,
     },
+    /// The working-tree file's bytes differ from HEAD's copy.
+    Differs {
+        /// The working-tree file.
+        path: PathBuf,
+    },
 }
 
 impl fmt::Display for Pending {
@@ -38,6 +43,11 @@ impl fmt::Display for Pending {
             Self::Absent { path } => write!(
                 f,
                 "{} is not committed at HEAD, so its settings apply once committed",
+                path.display()
+            ),
+            Self::Differs { path } => write!(
+                f,
+                "{} differs from HEAD's copy, so its changes apply once committed",
                 path.display()
             ),
         }
@@ -88,9 +98,18 @@ pub fn read(
     let bytes = blob(&cat, git_process::run(&cat, process)).map_err(refuse)?;
     // The digest is of the bytes, never the object id, so both file layers
     // carry one digest kind.
+    let layer = settings::file(&working.path, bytes);
     Ok(Committed {
-        layer: Some(settings::file(&working.path, bytes)),
-        pending: None,
+        pending: differs(working, &layer),
+        layer: Some(layer),
+    })
+}
+
+/// The note for a working-tree file whose bytes are not HEAD's. Both digests
+/// are SHA-256 of the bytes, so comparing them compares the bytes.
+fn differs(working: &SettingsFile, head: &SettingsFile) -> Option<Pending> {
+    (working.digest != head.digest).then(|| Pending::Differs {
+        path: working.path.clone(),
     })
 }
 
@@ -392,5 +411,45 @@ mod tests {
             fake.arguments()[1],
             ["ls-tree", "HEAD", "--", "sub/baley.toml"]
         );
+    }
+
+    #[test]
+    fn differing_bytes_give_the_note_that_changes_apply_once_committed() {
+        let working = settings::file(Path::new("/r/baley.toml"), b"a".to_vec());
+        let head = settings::file(Path::new("/r/baley.toml"), b"b".to_vec());
+        let pending = differs(&working, &head).unwrap();
+        assert_eq!(
+            pending.to_string(),
+            "/r/baley.toml differs from HEAD's copy, so its changes apply once committed"
+        );
+    }
+
+    #[test]
+    fn identical_bytes_give_no_note_rather_than_one_always_shown() {
+        let working = settings::file(Path::new("/r/baley.toml"), b"a".to_vec());
+        let head = settings::file(Path::new("/r/baley.toml"), b"a".to_vec());
+        assert_eq!(differs(&working, &head), None);
+    }
+
+    #[test]
+    fn the_reader_compares_heads_bytes_with_the_working_tree_files() {
+        let differing = b"abc".to_vec();
+        let equal = working("/r/baley.toml").bytes;
+        for (blob, pending) in [
+            (
+                differing,
+                Some(Pending::Differs {
+                    path: "/r/baley.toml".into(),
+                }),
+            ),
+            (equal, None),
+        ] {
+            let mut fake = Recorded::new()
+                .out(HEAD)
+                .out(format!("100644 blob {OID}\tbaley.toml\n"))
+                .out(blob);
+            let committed = read_at("/r/baley.toml", &mut fake).unwrap();
+            assert_eq!(committed.pending, pending);
+        }
     }
 }
