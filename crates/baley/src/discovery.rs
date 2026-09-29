@@ -1,7 +1,9 @@
 //! Finding the checkout's project from a working directory (design 0003,
 //! CFG-R3 and CFG-R4): the nearest `baley.toml` at or below the repository
 //! root, never one above it.
-use std::path::PathBuf;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 
 /// The project file's name in a project's folder.
 pub const PROJECT_FILE: &str = "baley.toml";
@@ -55,6 +57,27 @@ pub fn discover(ancestors: &[Ancestor]) -> Discovery {
         }
     }
     Discovery::Outside
+}
+
+/// Observes every ancestor of the working directory, nearest first, for
+/// `discover`. No production caller until `baley init` (Build 2 T6).
+///
+/// The directory is canonicalized first, so the root is the checkout's
+/// canonical path. `baley.toml` is followed through a link, as settings reads
+/// are; `.git` is only checked for presence, never followed or read, so a
+/// linked worktree's `.git` file marks a root as a directory does. A directory
+/// that cannot be canonicalized is an error, not evidence of no repository.
+pub fn ancestors(cwd: &Path) -> io::Result<Vec<Ancestor>> {
+    let cwd = fs::canonicalize(cwd)?;
+    Ok(cwd
+        .ancestors()
+        .map(|path| Ancestor {
+            path: path.into(),
+            has_project_file: fs::metadata(path.join(PROJECT_FILE))
+                .is_ok_and(|meta| meta.is_file()),
+            has_git: fs::symlink_metadata(path.join(".git")).is_ok(),
+        })
+        .collect())
 }
 
 #[cfg(test)]
