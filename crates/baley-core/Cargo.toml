@@ -13,3 +13,5 @@ publish = false
 [dependencies]
 baley-store = { path = "../baley-store" }
 serde_json = "1"
+# The settings files (ADR 0027).
+toml = "1.1.6"
