@@ -457,7 +457,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 7. Finding the project and its policy on a request.*
+*Figure 7. Finding the project and its policy on a request. The steps built so far serve the command line: the walk up to the nearest `baley.toml`, stopping at the git root (`discover`), the read of the project file at the checkout's HEAD (`committed::read`), and the merge with the global file and host sections. No command calls the walk or the read yet; their first callers are Build 2 T6 and T9. Recording `checkout.seen` arrives in Build 2 T13, recording `policy.effective` when the merged result changes in T9, and the host's request through the host interface in Build 3.*
 
 ## 9. Settings
 
