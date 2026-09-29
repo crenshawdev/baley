@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status includes Build 2 T1 to T5 merged, as of origin/main `487831c4`, on 2026-09-29, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status includes Build 2 T1 to T5 merged and T6 in progress, as of origin/main `8d4a30b7`, on 2026-09-29, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
 
 ## The path to the first release
 
@@ -135,8 +135,10 @@ flowchart LR
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
+    classDef progress fill:#9a6700,stroke:#7d4e00,color:#ffffff
     class T1,T2,T3,T4,T5 done
-    class T6,T7,T8,T9,T10,T11,T12,T13 planned
+    class T6 progress
+    class T7,T8,T9,T10,T11,T12,T13 planned
 ```
 
 Figure 3. Build 2's tasks. Arrows point from a task to what waits on it. One pull request per task.
@@ -148,7 +150,7 @@ Figure 3. Build 2's tasks. Arrows point from a task to what waits on it. One pul
 | T3 | `baley exec --key` | [#154](https://github.com/crenshawdev/baley/pull/154) | Merged |
 | T4 | Settings: the schema, the two files, the merge and route resolution | [#156](https://github.com/crenshawdev/baley/pull/156) | Merged |
 | T5 | The project file and discovery | [#158](https://github.com/crenshawdev/baley/pull/158) | Merged |
-| T6 | `baley init` | | Planned |
+| T6 | `baley init` | | In progress |
 | T7 | The model catalog | | Planned |
 | T8 | Detection | | Planned |
 | T9 | The recorded policy | | Planned |
