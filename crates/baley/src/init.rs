@@ -6,11 +6,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use baley_core::policy::{ProjectIdentity, Unavailable, read_project, render_project};
+use baley_core::policy::{
+    ProjectIdentity, SettingsFile, Unavailable, read_project, render_project,
+};
 use baley_core::{PROJECT_INITIALIZED, PROJECT_INITIALIZED_VERSION};
 use baley_store::{
-    Actor, Admin, Command, CommandKind, Decision, EventMatch, Ledger, NewEvent, Observed,
-    OutcomeKind, ProjectId, Refusal, RequestId, StoreError, StreamName, request_digest,
+    Actor, Admin, Command, CommandKind, Decision, EVENT_PAGE_BOUND, EventMatch, Ledger, NewEvent,
+    Observed, OutcomeKind, PageRequest, ProjectId, Refusal, RequestId, StoreError, StreamName,
+    request_digest,
 };
 use clap::Args;
 use serde_json::json;
@@ -240,6 +243,92 @@ pub fn record_initialized(
     Ok(appended)
 }
 
+/// One action of `baley init`, in the order the plan lists them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// Write a new `baley.toml` with a fresh id.
+    WriteFile,
+    /// Create the project in the ledger.
+    CreateProject,
+    /// Record `project.initialized`.
+    RecordInitialized,
+}
+
+/// What the ledger holds for the file's project, read outside any transaction.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LedgerObservation {
+    /// The project is in the ledger.
+    pub project: bool,
+    /// Its `project` stream holds a `project.initialized`.
+    pub initialized: bool,
+}
+
+/// Decides which actions this run takes, from what was observed before any
+/// of them. A fully initialized checkout plans nothing, so a rerun appends
+/// nothing to the chain.
+///
+/// Later work adds its actions here and to the ledger step: the detection
+/// trigger (Build 2 T8), the first `policy.effective` and the policy step
+/// (T9), and checkout admission with `--new-id` (T13).
+pub fn plan(file: Option<&ProjectIdentity>, ledger: LedgerObservation) -> Vec<Step> {
+    match (file, ledger) {
+        // A new id has nothing to look up.
+        (None, _) => vec![
+            Step::WriteFile,
+            Step::CreateProject,
+            Step::RecordInitialized,
+        ],
+        (Some(_), LedgerObservation { project: false, .. }) => {
+            vec![Step::CreateProject, Step::RecordInitialized]
+        }
+        (
+            Some(_),
+            LedgerObservation {
+                initialized: false, ..
+            },
+        ) => vec![Step::RecordInitialized],
+        (Some(_), _) => vec![],
+    }
+}
+
+/// The project file as the plan sees it: absent only when there is no file.
+/// A file that cannot be read, is not TOML or holds a bad id is refused,
+/// never planned over as absent.
+pub fn observe_file(
+    read: Result<Option<SettingsFile>, Unavailable>,
+) -> Result<Option<ProjectIdentity>, Unavailable> {
+    read?.as_ref().map(read_project).transpose()
+}
+
+/// Reads whether the project is in the ledger and, when it is, whether its
+/// `project` stream holds a `project.initialized`, following every page.
+pub fn observe_ledger(
+    store: &(impl Admin + Ledger),
+    id: &str,
+) -> Result<LedgerObservation, StoreError> {
+    let project = ProjectId(id.into());
+    if !store.projects()?.iter().any(|(known, _)| *known == project) {
+        return Ok(LedgerObservation::default());
+    }
+    let stream = StreamName(PROJECT_STREAM.into());
+    let mut after = None;
+    loop {
+        let limit = EVENT_PAGE_BOUND;
+        let page = store.stream(&project, &stream, 1, PageRequest { limit, after })?;
+        let initialized = page
+            .items
+            .iter()
+            .any(|event| event.type_name == PROJECT_INITIALIZED);
+        if initialized || page.next.is_none() {
+            return Ok(LedgerObservation {
+                project: true,
+                initialized,
+            });
+        }
+        after = page.next;
+    }
+}
+
 /// Arguments for `baley init`.
 #[derive(Args, Debug, Clone)]
 pub struct InitArgs {
@@ -276,21 +365,24 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
         .map_or(cwd.as_path(), |a| a.path.as_path());
     let root = locate(&discovery::discover(&ancestors), canonical).map_err(|e| refuse(&e))?;
     let path = root.join(PROJECT_FILE);
-    let file = settings::read(&path).map_err(|e| refuse(&e))?;
-    let existing = file
-        .as_ref()
-        .map(read_project)
-        .transpose()
-        .map_err(|e| refuse(&e))?;
+    let existing = observe_file(settings::read(&path)).map_err(|e| refuse(&e))?;
     let naming = name(&root, args.name.as_deref(), existing.as_ref()).map_err(|e| refuse(&e))?;
 
     // Nothing above opens the store, so a refusal leaves no ledger home behind.
     let store = open::store(&folders.home, started_at, open::options())
         .map_err(|e| display::store_error(&e, None))?;
+    // A new id is in no ledger, so only an existing file's project is looked up.
+    let observed = match &existing {
+        Some(identity) => observe_ledger(&store, &identity.id)
+            .map_err(|e| display::store_error(&e, Some(&identity.id)))?,
+        None => LedgerObservation::default(),
+    };
+    let steps = plan(existing.as_ref(), observed);
     let mut lines: Vec<String> = naming.note.into_iter().collect();
     let mut acted = false;
     let identity = match existing {
         Some(identity) => identity,
+        // The plan writes the file exactly when there is none.
         None => {
             let (identity, bytes) = new_project(&naming.name).map_err(|e| refuse(&e))?;
             write_project_file(&root, &bytes).map_err(|failure| match failure {
@@ -307,7 +399,9 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
         }
     };
     let failed = |e: StoreError| display::store_error(&e, Some(&identity.id));
-    if create_project(&store, &identity, started_at).map_err(failed)? {
+    if steps.contains(&Step::CreateProject)
+        && create_project(&store, &identity, started_at).map_err(failed)?
+    {
         lines.push(format!(
             "created project {} in the ledger at {}",
             identity.id,
@@ -315,7 +409,9 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
         ));
         acted = true;
     }
-    if record_initialized(&store, &identity, new_request_id(), started_at).map_err(failed)? {
+    if steps.contains(&Step::RecordInitialized)
+        && record_initialized(&store, &identity, new_request_id(), started_at).map_err(failed)?
+    {
         lines.push(format!(
             "recorded project.initialized for project {}",
             identity.id
@@ -556,5 +652,110 @@ mod tests {
         assert!(!create_project(&store, &project, T1).unwrap());
         assert!(record_initialized(&store, &project, request(1), T1).unwrap());
         assert_eq!(events(&store, &project.id, "project").len(), 1);
+    }
+
+    const ALL: [LedgerObservation; 2] = [
+        LedgerObservation {
+            project: false,
+            initialized: false,
+        },
+        LedgerObservation {
+            project: true,
+            initialized: true,
+        },
+    ];
+
+    #[test]
+    fn a_first_run_plans_write_create_record_in_that_order() {
+        for observed in ALL {
+            assert_eq!(
+                plan(None, observed),
+                vec![
+                    Step::WriteFile,
+                    Step::CreateProject,
+                    Step::RecordInitialized
+                ],
+                "observed {observed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_without_a_project_is_not_taken_as_a_finished_init() {
+        let observed = LedgerObservation::default();
+        assert_eq!(
+            plan(Some(&identity("kept")), observed),
+            vec![Step::CreateProject, Step::RecordInitialized]
+        );
+    }
+
+    #[test]
+    fn a_project_row_without_its_event_is_not_taken_as_a_finished_init() {
+        let observed = LedgerObservation {
+            project: true,
+            initialized: false,
+        };
+        assert_eq!(
+            plan(Some(&identity("kept")), observed),
+            vec![Step::RecordInitialized]
+        );
+    }
+
+    #[test]
+    fn a_rerun_on_a_finished_init_plans_nothing() {
+        let observed = LedgerObservation {
+            project: true,
+            initialized: true,
+        };
+        assert_eq!(plan(Some(&identity("kept")), observed), vec![]);
+    }
+
+    #[test]
+    fn a_bad_project_file_is_refused_naming_it_not_planned_as_absent() {
+        let path = Path::new("/r/baley.toml");
+        let bad = [
+            b"[project\nid = ".to_vec(),
+            b"[project]\nid = \"0B5C1F6E-2A7D-4C3E-9F10-5A6B7C8D9E0F\"\nname = \"r\"\n".to_vec(),
+        ];
+        for bytes in bad {
+            let refusal = observe_file(Ok(Some(crate::settings::file(path, bytes)))).unwrap_err();
+            assert_eq!(refusal.path, path);
+            assert!(
+                refusal.to_string().starts_with("config-unavailable: "),
+                "{refusal}"
+            );
+        }
+        assert_eq!(observe_file(Ok(None)), Ok(None));
+    }
+
+    #[test]
+    fn the_ledger_observation_sees_the_recorded_event_so_a_rerun_appends_nothing() {
+        let (_dir, store) = store();
+        let project = identity("sample");
+        assert_eq!(
+            observe_ledger(&store, &project.id).unwrap(),
+            LedgerObservation {
+                project: false,
+                initialized: false,
+            }
+        );
+        create_project(&store, &project, T0).unwrap();
+        assert_eq!(
+            observe_ledger(&store, &project.id).unwrap(),
+            LedgerObservation {
+                project: true,
+                initialized: false,
+            }
+        );
+        record_initialized(&store, &project, request(1), T1).unwrap();
+        let observed = observe_ledger(&store, &project.id).unwrap();
+        assert_eq!(
+            observed,
+            LedgerObservation {
+                project: true,
+                initialized: true,
+            }
+        );
+        assert_eq!(plan(Some(&project), observed), vec![]);
     }
 }
