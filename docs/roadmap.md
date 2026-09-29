@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status includes Build 2 T1 and T2 merged, as of origin/main `8f278c41`, on 2026-09-28, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status includes Build 2 T1, T2 and T3 merged, as of origin/main `ff33d8ce`, on 2026-09-28, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
 
 ## The path to the first release
 
@@ -135,9 +135,7 @@ flowchart LR
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
-    classDef progress fill:#9a6700,stroke:#7d4e00,color:#ffffff
-    class T1,T2 done
-    class T3 progress
+    class T1,T2,T3 done
     class T4,T5,T6,T7,T8,T9,T10,T11,T12,T13 planned
 ```
 
@@ -147,7 +145,7 @@ Figure 3. Build 2's tasks. Arrows point from a task to what waits on it. One pul
 |---|---|---|---|
 | T1 | Folders, the home and the open checks | [#149](https://github.com/crenshawdev/baley/pull/149) | Merged |
 | T2 | The keys file reader | [#152](https://github.com/crenshawdev/baley/pull/152) | Merged |
-| T3 | `baley exec --key` | [#154](https://github.com/crenshawdev/baley/pull/154) | In progress |
+| T3 | `baley exec --key` | [#154](https://github.com/crenshawdev/baley/pull/154) | Merged |
 | T4 | Settings: the schema, the two files, the merge and route resolution | | Planned |
 | T5 | The project file and discovery | | Planned |
 | T6 | `baley init` | | Planned |
