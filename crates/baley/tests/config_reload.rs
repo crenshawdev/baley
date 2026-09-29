@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 /// every read fails.
 type Files = Arc<Mutex<Vec<(PathBuf, Vec<u8>)>>>;
 
-/// What an evaluator was handed: the verifier value and the generation number.
+/// What an evaluator was handed: the escalation value and the generation number.
 type Seen = Arc<Mutex<Vec<(Option<Value>, u64)>>>;
 
 type Evaluate = Box<dyn FnMut(&MutationContext<'_>, &Generation) -> Result<()> + Send>;
@@ -79,14 +79,14 @@ fn paths() -> Paths {
     }
 }
 
-fn verifier(generation: &Generation) -> Option<Value> {
-    merge::get(&generation.effective.values, "workflow.verifier").cloned()
+fn escalate(generation: &Generation) -> Option<Value> {
+    merge::get(&generation.effective.values, "model.escalate_on_failure").cloned()
 }
 
 #[test]
 fn unchanged_layers_return_the_same_generation() {
     let layers = Layers::default();
-    layers.write(REPO, json!({"workflow":{"verifier":true}}));
+    layers.write(REPO, json!({"model":{"escalate_on_failure":false}}));
     let mut reload = Reload::new(paths(), layers);
     let first = reload.refresh().unwrap();
     assert_eq!(reload.refresh().unwrap().number, first.number);
@@ -95,19 +95,19 @@ fn unchanged_layers_return_the_same_generation() {
 #[test]
 fn a_changed_layer_makes_a_new_generation_with_its_values() {
     let layers = Layers::default();
-    layers.write(REPO, json!({"workflow":{"verifier":true}}));
+    layers.write(REPO, json!({"model":{"escalate_on_failure":false}}));
     let mut reload = Reload::new(paths(), layers.clone());
     let first = reload.refresh().unwrap();
-    layers.write(REPO, json!({"workflow":{"verifier":false}}));
+    layers.write(REPO, json!({"model":{"escalate_on_failure":true}}));
     let changed = reload.refresh().unwrap();
     assert!(changed.number > first.number);
-    assert_eq!(verifier(&changed), Some(json!(false)));
+    assert_eq!(escalate(&changed), Some(json!(true)));
 }
 
 #[test]
 fn a_failed_read_discards_the_cached_generation_so_the_next_read_is_a_new_one() {
     let layers = Layers::default();
-    layers.write(REPO, json!({"workflow":{"verifier":true}}));
+    layers.write(REPO, json!({"model":{"escalate_on_failure":false}}));
     let mut reload = Reload::new(paths(), layers.clone());
     let first = reload.refresh().unwrap();
     layers.fail(true);
@@ -125,7 +125,7 @@ fn a_failed_read_discards_the_cached_generation_so_the_next_read_is_a_new_one() 
 #[test]
 fn an_invalid_layer_is_refused_rather_than_answered_from_the_cached_generation() {
     let layers = Layers::default();
-    layers.write(REPO, json!({"workflow":{"verifier":true}}));
+    layers.write(REPO, json!({"model":{"escalate_on_failure":false}}));
     let mut reload = Reload::new(paths(), layers.clone());
     reload.refresh().unwrap();
     layers.write_bytes(REPO, b"{");
@@ -136,7 +136,7 @@ fn snapshot() -> Snapshot {
     Snapshot::new(1, b"", b"", Value::Null).unwrap()
 }
 
-/// A policy over `layers` whose evaluator records the verifier value and
+/// A policy over `layers` whose evaluator records the escalation value and
 /// generation number it was handed, and allows everything.
 fn policy(layers: Layers) -> (ConfigPolicy<Layers, Evaluate>, Seen) {
     let seen = Seen::default();
@@ -145,7 +145,7 @@ fn policy(layers: Layers) -> (ConfigPolicy<Layers, Evaluate>, Seen) {
         record
             .lock()
             .unwrap()
-            .push((verifier(generation), generation.number));
+            .push((escalate(generation), generation.number));
         Ok(())
     });
     (
@@ -160,7 +160,7 @@ fn policy(layers: Layers) -> (ConfigPolicy<Layers, Evaluate>, Seen) {
 #[test]
 fn each_policy_check_hands_the_evaluator_the_config_as_it_is_now() {
     let layers = Layers::default();
-    layers.write(REPO, json!({"workflow":{"verifier":true}}));
+    layers.write(REPO, json!({"model":{"escalate_on_failure":false}}));
     let (mut policy, seen) = policy(layers.clone());
     let snapshot = snapshot();
     let context = MutationContext {
@@ -168,14 +168,14 @@ fn each_policy_check_hands_the_evaluator_the_config_as_it_is_now() {
         snapshot: &snapshot,
     };
     policy.validate(&context).unwrap();
-    layers.write(REPO, json!({"workflow":{"verifier":false}}));
+    layers.write(REPO, json!({"model":{"escalate_on_failure":true}}));
     policy.validate(&context).unwrap();
     let seen = seen.lock().unwrap();
     assert_eq!(
         seen.iter()
             .map(|(value, _)| value.clone())
             .collect::<Vec<_>>(),
-        [Some(json!(true)), Some(json!(false))]
+        [Some(json!(false)), Some(json!(true))]
     );
     assert!(seen[1].1 > seen[0].1);
 }
@@ -183,7 +183,7 @@ fn each_policy_check_hands_the_evaluator_the_config_as_it_is_now() {
 #[test]
 fn a_policy_check_whose_config_cannot_be_read_fails_without_evaluating() {
     let layers = Layers::default();
-    layers.write(REPO, json!({"workflow":{"verifier":true}}));
+    layers.write(REPO, json!({"model":{"escalate_on_failure":false}}));
     layers.fail(true);
     let (mut policy, seen) = policy(layers);
     let snapshot = snapshot();

@@ -38,8 +38,11 @@ fn merge_keeps_both_raw_layers_records_each_winning_layer_and_fills_defaults() {
     );
     assert_eq!(merged.sources["roles.bal-executor.model"], Layer::Repo);
     assert_eq!(merged.sources["roles.bal-planner.effort"], Layer::Global);
-    assert!(get(&merged.repo, "workflow.verifier").is_none());
-    assert_eq!(get(&merged.values, "workflow.verifier"), Some(&json!(true)));
+    assert!(get(&merged.repo, "model.escalate_on_failure").is_none());
+    assert_eq!(
+        get(&merged.values, "model.escalate_on_failure"),
+        Some(&json!(false))
+    );
 }
 
 #[test]
@@ -223,7 +226,7 @@ fn aliased(
     let paths = config_paths(dir);
     write_json(
         &paths.repo,
-        json!({"workflow":{"verifier":false,"test_command":"repo-command"}}),
+        json!({"model":{"escalate_on_failure":true},"workflow":{"test_command":"repo-command"}}),
     );
     symlink(&paths.repo, paths.global.as_ref().unwrap()).unwrap();
     let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -243,7 +246,10 @@ fn a_global_path_aliasing_the_repo_file_is_read_once_as_the_repo_layer() {
     let shared = reader.refresh().unwrap();
     assert!(shared.global.is_none());
     assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert_eq!(shared.effective.sources["workflow.verifier"], Layer::Repo);
+    assert_eq!(
+        shared.effective.sources["model.escalate_on_failure"],
+        Layer::Repo
+    );
     assert_eq!(
         get(&shared.effective.values, "workflow.test_command"),
         Some(&json!("repo-command"))
@@ -295,7 +301,7 @@ fn malformed_and_nonobject_layers_are_unavailable() {
         std::fs::write(&paths.repo, bytes).unwrap();
         assert!(reader.refresh().is_err(), "{bytes}");
     }
-    write_json(&paths.repo, json!({"workflow":{"verifier":true}}));
+    write_json(&paths.repo, json!({"model":{"escalate_on_failure":false}}));
     assert!(reader.refresh().is_ok());
 }
 
@@ -319,7 +325,7 @@ fn a_layer_that_cannot_be_read_is_unavailable_until_it_reads_again() {
             }
             Ok(reload::Input {
                 identity: path.into(),
-                bytes: Some(br#"{"workflow":{"verifier":true}}"#.to_vec()),
+                bytes: Some(br#"{"model":{"escalate_on_failure":false}}"#.to_vec()),
                 stamp: None,
             })
         }
