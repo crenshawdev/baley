@@ -51,7 +51,7 @@ Two notes on history:
 | Term | Meaning | Avoid |
 |---|---|---|
 | Setting | One named value Baley reads, such as `git.on_protected`, with a type, a default and a scope ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | option, flag, config key |
-| Layer | One source of settings: the built-in defaults, the global file or the project file ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | level, profile |
+| Layer | One source of settings: the built-in defaults, the global file, its host section, the project file or its host section ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | level, profile |
 | Host section | A table `[host.<name>]` in a settings file whose values apply only when that host is connected ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | host profile, override block |
 | Setting scope | Where a setting may be set: `global`, `project` or `both` ([0003](docs/design/0003-configuration-and-routing.md#2-terms), where it is called Scope). | scope alone (scope is also a project's description, stories and roadmap) |
 | Effective policy | The result of merging every layer for one project and one host, with the layer each value came from ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | config, merged settings |
