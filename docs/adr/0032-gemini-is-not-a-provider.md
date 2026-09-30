@@ -43,7 +43,7 @@ Chosen option: **1**. The providers are OpenAI and DeepSeek. Every `baley models
 
 ### Negative
 
-- A `GEMINI_API_KEY` line in `keys.env` is read by nothing.
+- Detection no longer reads a `GEMINI_API_KEY` line in `keys.env`. Such a line is read only when `baley exec --key GEMINI_API_KEY` injects it into one command (CFG-R27).
 - The review engine, design 0008, the Outside reviewers system of design 0002 and the C4 model, and ADR 0013's provider list still name Gemini until Build 4.
 - A ledger event naming a `gemini` catalog would be refused by the catalog projector. None exists: Baley has no release, and every store so far is a test's.
 
