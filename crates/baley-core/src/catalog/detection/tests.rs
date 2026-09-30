@@ -415,11 +415,11 @@ fn candidate(name: &str, tier: Tier, high_effort: bool, created: Option<u64>) ->
 #[test]
 fn best_fit_takes_the_candidate_sharing_the_longest_run_of_segments() {
     let candidates = [
-        candidate("gemini-3.8-flash", Tier::Cheap, false, None),
-        candidate("gemini-3.8-pro", Tier::Flagship, true, None),
+        candidate("deepseek-v9-flash", Tier::Cheap, false, None),
+        candidate("deepseek-v9-pro", Tier::Flagship, true, None),
     ];
     assert_eq!(
-        best_fit("gemini-3.8-pro-exp", &candidates),
+        best_fit("deepseek-v9-pro-exp", &candidates),
         Tag {
             tier: Tier::Flagship,
             high_effort: true,
@@ -428,11 +428,11 @@ fn best_fit_takes_the_candidate_sharing_the_longest_run_of_segments() {
     );
     // The longer run wins though the other candidate would take every tie.
     let shorter_but_newer = [
-        candidate("gemini-3.8-pro", Tier::Flagship, true, None),
-        candidate("gemini-3.8-zeta", Tier::Cheap, false, Some(999)),
+        candidate("deepseek-v9-pro", Tier::Flagship, true, None),
+        candidate("deepseek-v9-prover", Tier::Cheap, false, Some(999)),
     ];
     assert_eq!(
-        best_fit("gemini-3.8-pro-exp", &shorter_but_newer).tier,
+        best_fit("deepseek-v9-pro-exp", &shorter_but_newer).tier,
         Tier::Flagship
     );
 }
@@ -529,27 +529,16 @@ fn document(provider: &str, entries: Vec<Value>) -> Value {
     json!({"catalog": provider, "entries": entries})
 }
 
-// An OpenAI or Gemini body listing `ids`, each with its creation time.
+// A provider's body listing `ids`, each with its creation time.
 fn listing_of(provider: Provider, ids: &[(&str, Option<u64>)]) -> ProviderListing {
-    let body = match provider {
-        Provider::Gemini => {
-            let models: Vec<Value> = ids
-                .iter()
-                .map(|(id, _)| json!({"name": format!("models/{id}")}))
-                .collect();
-            json!({"models": models})
-        }
-        _ => {
-            let data: Vec<Value> = ids
-                .iter()
-                .map(|(id, created)| match created {
-                    Some(at) => json!({"id": id, "created": at}),
-                    None => json!({"id": id}),
-                })
-                .collect();
-            json!({"object": "list", "data": data})
-        }
-    };
+    let data: Vec<Value> = ids
+        .iter()
+        .map(|(id, created)| match created {
+            Some(at) => json!({"id": id, "created": at}),
+            None => json!({"id": id}),
+        })
+        .collect();
+    let body = json!({"object": "list", "data": data});
     parse_body(provider, body.to_string().as_bytes()).expect("a sound body")
 }
 
@@ -653,9 +642,9 @@ fn unlisted_seed_and_detected_ids_are_removed_but_owner_entries_and_removals_are
 fn a_new_id_takes_its_family_tier_from_each_kind_of_candidate() {
     let family = |tier: &str, high_effort: bool, placed: &str, source: &str| {
         document(
-            "gemini",
+            "deepseek",
             vec![entry(
-                "gemini-9-pro",
+                "deepseek-v9-pro",
                 source,
                 Some(tier),
                 high_effort,
@@ -683,11 +672,11 @@ fn a_new_id_takes_its_family_tier_from_each_kind_of_candidate() {
             false,
         ),
     ];
-    let listing = listing_of(Provider::Gemini, &[("gemini-9-pro-exp", None)]);
+    let listing = listing_of(Provider::DeepSeek, &[("deepseek-v9-pro-exp", None)]);
     for (kind, doc, tier, high_effort) in cases {
-        let diff = diff(Provider::Gemini, &listing, &[], &[], Some(&doc));
+        let diff = diff(Provider::DeepSeek, &listing, &[], &[], Some(&doc));
         assert_eq!(
-            added_tag(&diff, "gemini-9-pro-exp"),
+            added_tag(&diff, "deepseek-v9-pro-exp"),
             tagged(tier, high_effort, Placement::BestFit),
             "{kind}"
         );
@@ -708,9 +697,9 @@ fn a_new_id_takes_nothing_from_a_best_fit_entry_or_an_untiered_owner_entry() {
     let fallback = tagged(Tier::Balanced, false, Placement::BestFit);
     let docs = [
         document(
-            "gemini",
+            "deepseek",
             vec![entry(
-                "gemini-9-pro",
+                "deepseek-v9-pro",
                 "detected",
                 Some("flagship"),
                 true,
@@ -718,14 +707,14 @@ fn a_new_id_takes_nothing_from_a_best_fit_entry_or_an_untiered_owner_entry() {
             )],
         ),
         document(
-            "gemini",
-            vec![entry("gemini-9-pro", "owner", None, true, "owner")],
+            "deepseek",
+            vec![entry("deepseek-v9-pro", "owner", None, true, "owner")],
         ),
     ];
-    let listing = listing_of(Provider::Gemini, &[("gemini-9-pro-exp", None)]);
+    let listing = listing_of(Provider::DeepSeek, &[("deepseek-v9-pro-exp", None)]);
     for doc in docs {
-        let diff = diff(Provider::Gemini, &listing, &[], &[], Some(&doc));
-        assert_eq!(added_tag(&diff, "gemini-9-pro-exp"), fallback, "{doc}");
+        let diff = diff(Provider::DeepSeek, &listing, &[], &[], Some(&doc));
+        assert_eq!(added_tag(&diff, "deepseek-v9-pro-exp"), fallback, "{doc}");
     }
 }
 
@@ -877,21 +866,21 @@ fn a_listing_records_detected_with_the_compiled_hint_and_given_catalog_versions(
 #[test]
 fn an_incomplete_listing_records_models_detection_failed_with_no_removed() {
     let doc = document(
-        "gemini",
+        "deepseek",
         vec![entry(
-            "gemini-9-pro",
+            "deepseek-v9-pro",
             "detected",
             Some("flagship"),
             true,
             "best-fit",
         )],
     );
-    let chosen = choose_event(Provider::Gemini, Err(Category::Incomplete), Some(&doc), 4);
+    let chosen = choose_event(Provider::DeepSeek, Err(Category::Incomplete), Some(&doc), 4);
     assert_eq!(chosen.type_name, MODELS_DETECTION_FAILED);
     assert_eq!(chosen.type_version, MODELS_DETECTION_FAILED_VERSION);
     assert_eq!(
         chosen.payload,
-        json!({"provider": "gemini", "category": "incomplete", "catalog_version": 4})
+        json!({"provider": "deepseek", "category": "incomplete", "catalog_version": 4})
     );
     assert_eq!(chosen.outcome, Outcome::Failed(Category::Incomplete));
 }

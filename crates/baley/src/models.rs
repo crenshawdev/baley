@@ -611,6 +611,7 @@ mod tests {
         Catalog, EXACT_HINTS, MODEL_CATALOG_VIEW, Placement, Provider, Source, Tier, USER_PROJECT,
         accepted_names, catalog_key, listing, read_state, state_key,
     };
+    use baley_core::policy::Host;
     use baley_store::{
         Actor, Admin, Command, CommandKind, Decision, Ledger, NewEvent, Observed, OutcomeKind,
         ProjectId, RequestId, StreamName, Views, request_digest,
@@ -1093,8 +1094,8 @@ mod tests {
         ]);
         let seq = append(&store, 1, &[seeded(rows)])[0];
         let deepseek = catalog_key(Catalog::Provider(Provider::DeepSeek));
-        let gemini = catalog_key(Catalog::Provider(Provider::Gemini));
-        let keys = [deepseek.clone(), state_key(), gemini, catalog_key(OPENAI)];
+        let codex = catalog_key(Catalog::Host(Host::Codex));
+        let keys = [deepseek.clone(), state_key(), codex, catalog_key(OPENAI)];
 
         let documents = store.get_many(&user(), MODEL_CATALOG_VIEW, &keys).unwrap();
 
@@ -1102,7 +1103,7 @@ mod tests {
         let [deepseek_doc, state, absent, openai] = [0, 1, 2, 3].map(|i| documents[i].as_ref());
         assert_eq!(deepseek_doc.unwrap().key, deepseek);
         assert_eq!(state.unwrap().key, state_key());
-        assert!(absent.is_none(), "gemini holds no entry");
+        assert!(absent.is_none(), "the seed writes no codex document");
         assert_eq!(openai.unwrap().key, catalog_key(OPENAI));
         let state = state.map(|document| &document.body);
         let names = |catalog: &str, document: Option<&baley_store::Document>| {
@@ -1201,16 +1202,16 @@ mod tests {
         #[test]
         fn a_named_keyless_provider_with_no_detected_entries_says_it_has_none() {
             let missing = ProviderOutcome::Missing {
-                key: "GEMINI_API_KEY",
+                key: "DEEPSEEK_API_KEY",
                 entries: vec![],
             };
             let printed = lines(&run(
                 false,
-                [ProviderOutcome::Skipped, missing, ProviderOutcome::Skipped],
+                [ProviderOutcome::Skipped, ProviderOutcome::Skipped, missing],
             ));
             assert_eq!(printed.len(), 2, "{printed:?}");
-            assert!(printed[0].contains("GEMINI_API_KEY"));
-            assert_eq!(printed[1], "gemini: no detected entries");
+            assert!(printed[0].contains("DEEPSEEK_API_KEY"));
+            assert_eq!(printed[1], "deepseek: no detected entries");
         }
 
         #[test]
@@ -1387,8 +1388,8 @@ mod tests {
 
         #[test]
         fn a_repeated_provider_counts_once() {
-            let named = named_providers(&names(&["openai", "gemini", "openai"])).unwrap();
-            assert_eq!(named, vec![Provider::OpenAi, Provider::Gemini]);
+            let named = named_providers(&names(&["openai", "deepseek", "openai"])).unwrap();
+            assert_eq!(named, vec![Provider::OpenAi, Provider::DeepSeek]);
         }
 
         #[test]

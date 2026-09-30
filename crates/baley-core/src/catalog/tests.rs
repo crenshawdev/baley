@@ -145,8 +145,8 @@ fn an_owner_removal_payload_holds_exactly_catalog_name_change_and_version() {
 fn a_seed_payload_keeps_every_field_name_and_flag_of_its_rows() {
     let rows = [
         HintRow {
-            provider: Provider::Gemini,
-            id: "gem-a",
+            provider: Provider::OpenAi,
+            id: "gpt-a",
             tier: Tier::Flagship,
             high_effort: true,
         },
@@ -163,7 +163,7 @@ fn a_seed_payload_keeps_every_field_name_and_flag_of_its_rows() {
             "hint_version": 3,
             "catalog_version": 12,
             "rows": [
-                {"provider": "gemini", "name": "gem-a", "tier": "flagship", "high_effort": true},
+                {"provider": "openai", "name": "gpt-a", "tier": "flagship", "high_effort": true},
                 {"provider": "deepseek", "name": "deep-b", "tier": "cheap", "high_effort": false},
             ]
         })
@@ -272,7 +272,7 @@ fn a_first_seed_records_every_row_and_moves_both_versions() {
     let mut docs = BTreeMap::new();
     let rows = json!([
         {"provider": "openai", "name": "oa-1", "tier": "flagship", "high_effort": true},
-        {"provider": "gemini", "name": "gm-1", "tier": "cheap", "high_effort": false},
+        {"provider": "deepseek", "name": "ds-1", "tier": "cheap", "high_effort": false},
     ]);
     project(&mut docs, &seeded(1, "2026-09-29T10:00:00Z", 1, rows));
     let expected = documents(&[
@@ -289,11 +289,11 @@ fn a_first_seed_records_every_row_and_moves_both_versions() {
             ),
         ),
         (
-            "gemini",
+            "deepseek",
             doc(
-                "gemini",
+                "deepseek",
                 json!([{
-                    "id": "gm-1", "source": "seed", "tier": "cheap", "high_effort": false,
+                    "id": "ds-1", "source": "seed", "tier": "cheap", "high_effort": false,
                     "placed": "hint", "first_seen": "2026-09-29T10:00:00Z", "accepted_seq": 1,
                     "owner_removed": false,
                 }]),
@@ -342,7 +342,7 @@ fn a_seed_drops_a_withdrawn_seed_id_but_never_a_detected_one() {
         ),
     ]);
     let rows =
-        json!([{"provider": "gemini", "name": "gm-1", "tier": "cheap", "high_effort": false}]);
+        json!([{"provider": "deepseek", "name": "ds-1", "tier": "cheap", "high_effort": false}]);
     project(&mut docs, &seeded(7, "2026-09-29T10:00:00Z", 2, rows));
     assert_eq!(docs[&key("openai")], doc("openai", json!([detected])));
     assert_eq!(docs[&key("state")], state(7, Some(2)));
@@ -524,12 +524,12 @@ fn a_detection_never_brings_back_an_id_the_owner_removed() {
 #[test]
 fn a_failed_detection_names_no_document_and_leaves_the_version() {
     let mut docs = BTreeMap::new();
-    let found = json!([{"id": "gm-1", "tier": "cheap", "high_effort": true, "placed": "prefix"}]);
+    let found = json!([{"id": "ds-1", "tier": "cheap", "high_effort": true, "placed": "prefix"}]);
     project(
         &mut docs,
-        &detected(3, "2026-09-29T13:00:00Z", "gemini", found, json!([])),
+        &detected(3, "2026-09-29T13:00:00Z", "deepseek", found, json!([])),
     );
-    let payload = json!({"provider": "gemini", "category": "auth", "catalog_version": 3});
+    let payload = json!({"provider": "deepseek", "category": "auth", "catalog_version": 3});
     let failed = event(
         4,
         "models.detection_failed",
