@@ -3,6 +3,8 @@
 //! 2026-09-30, and expected values come from design 0003 and the phase's
 //! decisions, never from running this code.
 
+use serde_json::json;
+
 use super::*;
 use crate::catalog::Provider;
 
@@ -173,4 +175,241 @@ fn a_continuation_is_followed_after_each_of_pages_1_to_19() {
 fn a_20th_page_that_still_continues_cuts_the_listing_short_and_is_not_followed() {
     assert_eq!(PAGE_BOUND, 20);
     assert_eq!(paging(20, Some("t21".to_owned())), Paging::CutShort);
+}
+
+// A key-shaped marker that must never reach a category, a Debug or a payload.
+const SENTINEL: &str = "sk-SENTINEL-4f1c9e";
+
+fn response(status: u16, body: &[u8]) -> ObservedResponse {
+    ObservedResponse {
+        status,
+        body: body.to_vec(),
+        cut_short: false,
+    }
+}
+
+fn observed(responses: Vec<ObservedResponse>) -> Observation {
+    Observation {
+        responses,
+        ..Observation::default()
+    }
+}
+
+fn gemini_error(reason: &str) -> Vec<u8> {
+    json!({"error": {
+        "code": 400,
+        "message": "API key not valid. Please pass a valid API key.",
+        "status": "INVALID_ARGUMENT",
+        "details": [{
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": reason,
+            "domain": "googleapis.com",
+        }],
+    }})
+    .to_string()
+    .into_bytes()
+}
+
+#[test]
+fn a_401_or_403_is_unauthorized_for_every_provider() {
+    for provider in Provider::ALL {
+        for status in [401, 403] {
+            let observation = observed(vec![response(status, b"{}")]);
+            assert_eq!(
+                classify(provider, &observation),
+                Err(Category::Unauthorized),
+                "{provider:?} {status}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_gemini_400_is_unauthorized_only_for_an_api_key_invalid_reason() {
+    let invalid = observed(vec![response(400, &gemini_error("API_KEY_INVALID"))]);
+    assert_eq!(
+        classify(Provider::Gemini, &invalid),
+        Err(Category::Unauthorized)
+    );
+    let other = observed(vec![response(400, &gemini_error("FIELD_INVALID"))]);
+    assert_eq!(classify(Provider::Gemini, &other), Err(Category::Http(400)));
+}
+
+#[test]
+fn the_gemini_400_rule_never_applies_to_openai() {
+    let body = gemini_error("API_KEY_INVALID");
+    let observation = observed(vec![response(400, &body)]);
+    assert_eq!(
+        classify(Provider::OpenAi, &observation),
+        Err(Category::Http(400))
+    );
+}
+
+#[test]
+fn a_429_is_rate_limited_and_other_statuses_keep_their_number() {
+    let cases = [
+        (429, Category::RateLimited),
+        (503, Category::Http(503)),
+        (301, Category::Http(301)),
+    ];
+    for (status, category) in cases {
+        let observation = observed(vec![response(status, b"")]);
+        assert_eq!(
+            classify(Provider::DeepSeek, &observation),
+            Err(category),
+            "{status}"
+        );
+    }
+}
+
+#[test]
+fn a_200_outside_the_list_shape_or_with_one_bad_item_is_malformed() {
+    let shape = observed(vec![response(200, br#"{"error":"nope"}"#)]);
+    assert_eq!(classify(Provider::OpenAi, &shape), Err(Category::Malformed));
+    let bad_item = observed(vec![response(
+        200,
+        br#"{"data":[{"id":"gpt-a"},{"id":null}]}"#,
+    )]);
+    assert_eq!(
+        classify(Provider::OpenAi, &bad_item),
+        Err(Category::Malformed)
+    );
+}
+
+#[test]
+fn a_malformed_later_page_rejects_the_listing_though_the_first_was_sound() {
+    let observation = observed(vec![
+        response(
+            200,
+            br#"{"models":[{"name":"models/g-a"}],"nextPageToken":"t2"}"#,
+        ),
+        response(200, br#"{"models":"broken"}"#),
+    ]);
+    assert_eq!(
+        classify(Provider::Gemini, &observation),
+        Err(Category::Malformed)
+    );
+}
+
+#[test]
+fn a_transport_failure_after_a_good_page_is_offline_not_a_listing() {
+    let observation = Observation {
+        responses: vec![response(
+            200,
+            br#"{"models":[{"name":"models/g-a"}],"nextPageToken":"t2"}"#,
+        )],
+        transport_failed: true,
+        page_bound_hit: false,
+    };
+    assert_eq!(
+        classify(Provider::Gemini, &observation),
+        Err(Category::Offline)
+    );
+}
+
+#[test]
+fn a_200_body_cut_short_is_incomplete_even_when_what_was_kept_parses() {
+    let mut cut = response(200, br#"{"data":[{"id":"gpt-a"}]}"#);
+    cut.cut_short = true;
+    assert_eq!(
+        classify(Provider::OpenAi, &observed(vec![cut])),
+        Err(Category::Incomplete)
+    );
+}
+
+#[test]
+fn good_pages_stopped_by_the_page_bound_are_incomplete_not_a_listing() {
+    let page = response(
+        200,
+        br#"{"models":[{"name":"models/g-a"}],"nextPageToken":"more"}"#,
+    );
+    let observation = Observation {
+        responses: vec![page; PAGE_BOUND],
+        transport_failed: false,
+        page_bound_hit: true,
+    };
+    assert_eq!(
+        classify(Provider::Gemini, &observation),
+        Err(Category::Incomplete)
+    );
+}
+
+#[test]
+fn two_good_gemini_pages_give_the_union_of_their_ids() {
+    let observation = observed(vec![
+        response(
+            200,
+            br#"{"models":[{"name":"models/g-a"},{"name":"models/g-b"}],"nextPageToken":"t2"}"#,
+        ),
+        response(
+            200,
+            br#"{"models":[{"name":"models/g-b"},{"name":"models/g-c"}]}"#,
+        ),
+    ]);
+    let listing = classify(Provider::Gemini, &observation).expect("a listing");
+    assert_eq!(
+        models(&listing),
+        [("g-a", None), ("g-b", None), ("g-c", None)]
+    );
+}
+
+#[test]
+fn a_200_empty_list_is_a_valid_empty_listing() {
+    let observation = observed(vec![response(200, br#"{"object":"list","data":[]}"#)]);
+    assert_eq!(
+        classify(Provider::OpenAi, &observation),
+        Ok(ProviderListing::default())
+    );
+}
+
+#[test]
+fn an_observation_with_no_response_is_a_category_never_an_empty_listing() {
+    assert_eq!(
+        classify(Provider::OpenAi, &Observation::default()),
+        Err(Category::Offline)
+    );
+}
+
+#[test]
+fn each_category_is_recorded_under_exactly_its_name() {
+    let cases = [
+        (Category::Offline, "offline"),
+        (Category::Incomplete, "incomplete"),
+        (Category::Malformed, "malformed"),
+        (Category::Unauthorized, "unauthorized"),
+        (Category::RateLimited, "rate-limited"),
+        (Category::Http(503), "http-503"),
+        (Category::KeysFileExposed, "keys-file-exposed"),
+        (Category::KeysFileInvalid, "keys-file-invalid"),
+        (Category::KeysFileUnreadable, "keys-file-unreadable"),
+    ];
+    for (category, name) in cases {
+        assert_eq!(category.name(), name);
+    }
+}
+
+#[test]
+fn a_401_echoing_the_key_gives_a_category_without_it() {
+    let body = json!({"error": {
+        "message": format!("Incorrect API key provided: {SENTINEL}."),
+        "type": "invalid_request_error",
+        "code": "invalid_api_key",
+    }})
+    .to_string();
+    let observation = observed(vec![response(401, body.as_bytes())]);
+    let category = classify(Provider::OpenAi, &observation).expect_err("a failure");
+    assert!(!category.name().contains(SENTINEL));
+    assert!(!format!("{category:?}").contains(SENTINEL));
+}
+
+#[test]
+fn an_observations_debug_shows_body_lengths_never_body_bytes() {
+    let body = format!(r#"{{"error":{{"message":"bad key {SENTINEL}"}}}}"#);
+    let observation = observed(vec![response(401, body.as_bytes())]);
+    let shown = format!("{observation:?}");
+    assert!(!shown.contains(SENTINEL), "{shown}");
+    assert!(
+        shown.contains(&format!("body_len: {}", body.len())),
+        "{shown}"
+    );
 }

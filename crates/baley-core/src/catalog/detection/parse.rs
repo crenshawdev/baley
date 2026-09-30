@@ -35,6 +35,12 @@ impl ProviderListing {
     fn insert(&mut self, id: &str, created: Option<u64>) {
         self.models.entry(id.to_owned()).or_insert(created);
     }
+
+    pub(super) fn merge(&mut self, page: ProviderListing) {
+        for (id, created) in page.models {
+            self.insert(&id, created);
+        }
+    }
 }
 
 /// One 2xx page body read into its ids, or `None` when it is malformed. One

@@ -1,0 +1,143 @@
+//! One provider's observation judged: its listing, or exactly one failure
+//! category (design 0003 section 6, CFG-R21).
+
+use std::fmt;
+
+use serde_json::Value;
+
+use super::parse::{ProviderListing, parse_page};
+use crate::catalog::Provider;
+
+/// Why one provider's detection failed. A category holds at most a status
+/// number, never text, so no body, error or key text can reach a payload
+/// through it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Category {
+    /// DNS, connect, TLS, a timeout, or a connection dropped mid-body.
+    Offline,
+    /// A body cut short at its bound, or the page bound reached.
+    Incomplete,
+    /// A 2xx body outside the provider's list shape.
+    Malformed,
+    /// 401, 403, or Gemini's 400 for an invalid key.
+    Unauthorized,
+    /// 429.
+    RateLimited,
+    /// Any other status that is not 2xx, an unfollowed 3xx included.
+    Http(u16),
+    /// `keys.env` refused as exposed. The binary records it; `classify`
+    /// never gives it.
+    KeysFileExposed,
+    /// `keys.env` refused as invalid. The binary records it; `classify`
+    /// never gives it.
+    KeysFileInvalid,
+    /// `keys.env` refused as unreadable. The binary records it; `classify`
+    /// never gives it.
+    KeysFileUnreadable,
+}
+impl Category {
+    /// The name recorded as `category`.
+    pub fn name(self) -> String {
+        match self {
+            Category::Offline => "offline".into(),
+            Category::Incomplete => "incomplete".into(),
+            Category::Malformed => "malformed".into(),
+            Category::Unauthorized => "unauthorized".into(),
+            Category::RateLimited => "rate-limited".into(),
+            Category::Http(status) => format!("http-{status}"),
+            Category::KeysFileExposed => "keys-file-exposed".into(),
+            Category::KeysFileInvalid => "keys-file-invalid".into(),
+            Category::KeysFileUnreadable => "keys-file-unreadable".into(),
+        }
+    }
+}
+
+/// One response the lister received.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ObservedResponse {
+    /// The HTTP status.
+    pub status: u16,
+    /// The body bytes kept, up to the per-response bound.
+    pub body: Vec<u8>,
+    /// Whether the body was cut short at that bound.
+    pub cut_short: bool,
+}
+
+// An error body can echo part of the key, so only its length is shown.
+impl fmt::Debug for ObservedResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ObservedResponse")
+            .field("status", &self.status)
+            .field("body_len", &self.body.len())
+            .field("cut_short", &self.cut_short)
+            .finish()
+    }
+}
+
+/// What one provider's lister call saw. It holds no error text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Observation {
+    /// Each response received, in order.
+    pub responses: Vec<ObservedResponse>,
+    /// A transport failure ended the call.
+    pub transport_failed: bool,
+    /// The page bound stopped the call with a continuation left.
+    pub page_bound_hit: bool,
+}
+
+/// The listing the observation shows, or the one category it fails with.
+/// The first rule that matches wins: a transport failure, the last
+/// response's status, a body cut short, the page bound, a malformed page.
+pub fn classify(
+    provider: Provider,
+    observation: &Observation,
+) -> Result<ProviderListing, Category> {
+    if observation.transport_failed {
+        return Err(Category::Offline);
+    }
+    // The lister never returns this, and an empty listing here would remove
+    // every id.
+    let Some(last) = observation.responses.last() else {
+        return Err(Category::Offline);
+    };
+    if !(200..300).contains(&last.status) {
+        return Err(match last.status {
+            401 | 403 => Category::Unauthorized,
+            429 => Category::RateLimited,
+            400 if provider == Provider::Gemini && gemini_key_invalid(&last.body) => {
+                Category::Unauthorized
+            }
+            status => Category::Http(status),
+        });
+    }
+    if observation
+        .responses
+        .iter()
+        .any(|response| response.cut_short)
+    {
+        return Err(Category::Incomplete);
+    }
+    if observation.page_bound_hit {
+        return Err(Category::Incomplete);
+    }
+    let mut listing = ProviderListing::default();
+    for response in &observation.responses {
+        listing.merge(parse_page(provider, &response.body).ok_or(Category::Malformed)?);
+    }
+    Ok(listing)
+}
+
+/// Whether a Gemini 400 body is Google's error for an invalid key: some
+/// `error.details` item whose `reason` is `API_KEY_INVALID`.
+fn gemini_key_invalid(body: &[u8]) -> bool {
+    let Ok(body) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    body.pointer("/error/details")
+        .and_then(Value::as_array)
+        .is_some_and(|details| {
+            details.iter().any(|detail| {
+                detail.get("reason").and_then(Value::as_str) == Some("API_KEY_INVALID")
+            })
+        })
+}
