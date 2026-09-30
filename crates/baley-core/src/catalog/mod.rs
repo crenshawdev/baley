@@ -25,7 +25,7 @@ pub use events::{
     register_model_events, seeded_payload,
 };
 pub use lookup::{Listing, ListingRow, accepted_names, listing};
-pub use owner::{judge_alias_removal, judge_held_removal};
+pub use owner::{judge_alias_addition, judge_alias_removal, judge_held_removal};
 pub use seed::{seed_due, seed_payload};
 pub use tables::{EXACT_HINTS, HINT_VERSION, HintRow, PREFIX_HINTS, PrefixRow, host_aliases};
 pub use view::{
@@ -41,6 +41,9 @@ pub const UNKNOWN_PROVIDER: &str = "unknown-provider";
 
 /// The code of a removal of a host's compiled alias.
 pub const ALIAS_NOT_REMOVABLE: &str = "alias-not-removable";
+
+/// The code of an addition of a host's compiled alias as an owner entry.
+pub const ALIAS_NOT_ADDABLE: &str = "alias-not-addable";
 
 /// The reserved per-user project that holds the model catalog.
 ///
@@ -166,6 +169,13 @@ pub enum CatalogRefusal {
         /// The alias.
         name: String,
     },
+    /// The name is a compiled alias of the host, which already accepts it.
+    AliasNotAddable {
+        /// The host.
+        host: Host,
+        /// The alias.
+        name: String,
+    },
     /// The catalog does not hold the name, or the owner already removed it.
     UnknownModel {
         /// The catalog.
@@ -180,6 +190,7 @@ impl CatalogRefusal {
         match self {
             CatalogRefusal::UnknownProvider { .. } => UNKNOWN_PROVIDER,
             CatalogRefusal::AliasNotRemovable { .. } => ALIAS_NOT_REMOVABLE,
+            CatalogRefusal::AliasNotAddable { .. } => ALIAS_NOT_ADDABLE,
             CatalogRefusal::UnknownModel { .. } => UNKNOWN_MODEL,
         }
     }
@@ -198,7 +209,8 @@ impl fmt::Display for CatalogRefusal {
                     accepted.join(", ")
                 )
             }
-            CatalogRefusal::AliasNotRemovable { host, name } => write!(
+            CatalogRefusal::AliasNotRemovable { host, name }
+            | CatalogRefusal::AliasNotAddable { host, name } => write!(
                 f,
                 "{code}: {name:?} is a {} alias; the binary owns its aliases and the host resolves them",
                 host.name()

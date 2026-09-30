@@ -786,6 +786,25 @@ fn removing_a_claude_code_alias_is_refused_before_it_reaches_the_ledger() {
 }
 
 #[test]
+fn adding_a_claude_code_alias_is_refused_before_it_reaches_the_ledger() {
+    let refusal = judge_alias_addition(Catalog::Host(Host::ClaudeCode), "sonnet").unwrap_err();
+    assert_eq!(refusal.code(), "alias-not-addable");
+    assert_eq!(
+        refusal.to_string(),
+        "alias-not-addable: \"sonnet\" is a claude-code alias; \
+         the binary owns its aliases and the host resolves them"
+    );
+    assert_eq!(
+        judge_alias_addition(Catalog::Host(Host::Codex), "sonnet"),
+        Ok(())
+    );
+    assert_eq!(
+        judge_alias_addition(Catalog::Provider(Provider::OpenAi), "sonnet"),
+        Ok(())
+    );
+}
+
+#[test]
 fn removing_opus_from_codex_is_no_alias_removal_but_a_name_codex_does_not_hold() {
     let codex = Catalog::Host(Host::Codex);
     assert_eq!(judge_alias_removal(codex, "opus"), Ok(()));

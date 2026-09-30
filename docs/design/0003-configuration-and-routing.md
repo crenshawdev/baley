@@ -213,16 +213,17 @@ There is no command that sets, removes or lists keys (CFG-R25): the owner writes
 
 - **Inputs:** a host or provider name, one of `claude-code`, `codex`, `openai`, `gemini` or `deepseek`, and a model name, which is never empty; `add` takes an optional `--tier` of `flagship`, `balanced` or `cheap`. A missing or empty name or any other tier is a usage error, exit 2.
 - **Outputs:** the change and the new catalog version, such as `added "gpt-test-1" to openai at tier cheap; catalog version 3`, with `models.owner_changed` recorded in the per-user project `user` (section 6).
-  - Adding a name the catalog already holds makes it the owner's entry. With `--tier` it takes that tier and shows as placed by the owner, and it keeps its high-effort flag, since `--tier` says nothing about effort.
+  - Adding a name the catalog already holds, other than a host alias, makes it the owner's entry. With `--tier` it takes that tier and shows as placed by the owner, and it keeps its high-effort flag, since `--tier` says nothing about effort.
   - Adding a name the owner removed accepts it again.
   - Removing a seeded or detected id hides it, and no later seed or detection brings it back. Only an owner addition does.
   - A change that leaves every catalog's accepted names as they were, such as a change of tier alone, leaves the catalog version.
   - Like every `baley models` command, it first seeds the catalog when the binary's hint table version differs from the latest one recorded, higher or lower (section 6). The seed is its own command, recorded before the owner's.
-- **Refusals:** each on stderr as `baley: <code>: ...`, exit 2. `baley-home-invalid`, `user-home-invalid`, `unknown-provider` and `alias-not-removable` refuse before the ledger is opened, so a refused command creates no ledger home. `unknown-model` is judged inside the removal's own transaction, after the seeding step, and the refused removal records only its `command.completed`.
+- **Refusals:** each on stderr as `baley: <code>: ...`, exit 2. `baley-home-invalid`, `user-home-invalid`, `unknown-provider`, `alias-not-addable` and `alias-not-removable` refuse before the ledger is opened, so a refused command creates no ledger home. `unknown-model` is judged inside the removal's own transaction, after the seeding step, and the refused removal records only its `command.completed`.
 
   | Code | When | Requirement |
   |---|---|---|
   | `unknown-provider` | The name is none of the five catalogs, `anthropic` included, since nothing seeds or detects an Anthropic catalog | CFG-R22 |
+  | `alias-not-addable` | `add` names a host alias compiled into Baley, which the host already accepts; an owner entry for it would change no accepted name and could never be removed | CFG-R19 |
   | `alias-not-removable` | `remove` names a host alias compiled into Baley, which the host resolves whatever the catalog says | CFG-R19 |
   | `unknown-model` | `remove` names a name the catalog does not hold, or one the owner already removed | CFG-R22 |
 

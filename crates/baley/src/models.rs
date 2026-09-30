@@ -8,8 +8,8 @@ use std::process::ExitCode;
 use baley_core::catalog::{
     Catalog, HINT_VERSION, MODEL_CATALOG_VIEW, MODELS_OWNER_CHANGED, MODELS_OWNER_CHANGED_VERSION,
     MODELS_SEEDED, MODELS_SEEDED_VERSION, MODELS_STREAM, OwnerChange, Placement, Tier,
-    USER_PROJECT, catalog_key, judge_alias_removal, judge_held_removal, listing,
-    owner_changed_payload, read_state, seed_due, seed_payload, state_key,
+    USER_PROJECT, catalog_key, judge_alias_addition, judge_alias_removal, judge_held_removal,
+    listing, owner_changed_payload, read_state, seed_due, seed_payload, state_key,
 };
 use baley_store::{
     Actor, Admin, Answer, Command, CommandKind, Decision, DocKey, Ledger, NewEvent, Observed,
@@ -415,8 +415,9 @@ fn owner(
 ) -> Result<Render, Render> {
     let folders = folders()?;
     let catalog = Catalog::parse(catalog).map_err(|e| refuse(&e))?;
-    if change == OwnerChange::Removed {
-        judge_alias_removal(catalog, name).map_err(|e| refuse(&e))?;
+    match change {
+        OwnerChange::Added(_) => judge_alias_addition(catalog, name).map_err(|e| refuse(&e))?,
+        OwnerChange::Removed => judge_alias_removal(catalog, name).map_err(|e| refuse(&e))?,
     }
     let mut lines = Vec::new();
     let store = open_seeded(&folders, started_at, &mut lines)?;
