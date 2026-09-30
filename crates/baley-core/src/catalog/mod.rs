@@ -11,6 +11,10 @@ use std::fmt;
 
 use crate::policy::Host;
 
+pub mod tables;
+
+pub use tables::{EXACT_HINTS, HINT_VERSION, HintRow, PREFIX_HINTS, PrefixRow, host_aliases};
+
 #[cfg(test)]
 mod tests;
 
