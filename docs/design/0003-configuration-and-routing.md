@@ -229,7 +229,7 @@ There is no command that sets, removes or lists keys (CFG-R25): the owner writes
 ### baley models list
 
 - **Inputs:** an optional host or provider name (default: every catalog).
-- **Outputs:** the line `catalog version <n>`, then a table with the columns `CATALOG`, `NAME`, `SOURCE`, `TIER` and `PLACED`: every accepted name with its source (`alias` for a host alias, `seed`, `detected` or `owner`), its tier, and how it was placed (`hint`, `prefix`, `best-fit` or `owner`). A `-` stands for no tier (a host alias, or an owner entry added without `--tier`) and for no placement (a host alias). Rows run by catalog in the order of the inputs above, then by name. A name that is both a host alias and an owner entry has both rows, and a name the owner removed has none. The version and the rows are read from one snapshot of the view. The first use on a fresh ledger creates the per-user project `user` and records `models.seeded` before it lists, and says so first: `seeded the model catalog with hint table version <n>`.
+- **Outputs:** the line `catalog version <n>`, then a table with the columns `CATALOG`, `NAME`, `SOURCE`, `TIER` and `PLACED`: every accepted name with its source (`alias` for a host alias, `seed`, `detected` or `owner`), its tier, and how it was placed (`hint`, `prefix`, `best-fit` or `owner`). A `-` stands for no tier (a host alias, or a name the owner added new to the catalog without `--tier`) and for no placement (a host alias). Rows run by catalog in the order of the inputs above, then by name. A name that is both a host alias and an owner entry has both rows, and a name the owner removed has none. The version and the rows are read from one snapshot of the view. The first use on a fresh ledger creates the per-user project `user` and records `models.seeded` before it lists, and says so first: `seeded the model catalog with hint table version <n>`.
 - **Refusals:** `unknown-provider` for a name that is no host or provider, on stderr, exit 2, before the ledger is opened (CFG-R22).
 
 ### Route resolution (internal)
@@ -314,7 +314,7 @@ The view holds one document per catalog, keyed by the catalog's name (`claude-co
 |---|---|
 | `id` | The model name |
 | `source` | `seed`, `detected` or `owner`. There is no `alias` source: host aliases are compiled into Baley, never recorded, and the lookup adds them. |
-| `tier` | `flagship`, `balanced` or `cheap`; absent only for an owner entry added without `--tier` |
+| `tier` | `flagship`, `balanced` or `cheap`; absent only for a name the owner added new to the catalog without `--tier` |
 | `high_effort` | Whether the model accepts high effort |
 | `placed` | How it got its tier: `hint`, `prefix`, `best-fit` or `owner` |
 | `first_seen` | The recorded time of the event that first put the id there |
