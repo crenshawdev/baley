@@ -39,16 +39,20 @@ pub fn detection_request(provider: Provider, trigger: &Trigger) -> Value {
 pub struct Recording {
     /// The report of a listing, or the category of a failure.
     pub outcome: Outcome,
-    /// The catalog version once the command committed.
+    /// The catalog version this command committed, read inside its own
+    /// transaction.
     pub version: u64,
 }
 
 /// Records `provider`'s outcome: what the lister saw, or the category the
 /// judge gave without listing. The diff runs inside the transaction on the
 /// documents read there, so an owner change committed since the listing is
-/// never overwritten. It assumes `user` exists: the run seeds first.
+/// never overwritten. The version it returns is read inside the same
+/// transaction, after the event, so a command another process commits
+/// later is never paired with this report. It assumes `user` exists: the
+/// run seeds first.
 pub fn record(
-    store: &(impl Ledger + Views),
+    store: &impl Ledger,
     provider: Provider,
     trigger: &Trigger,
     seen: Result<&Observation, Category>,
@@ -68,7 +72,7 @@ pub fn record(
         recorded_at: at.into(),
         actor: trigger.actor(),
     };
-    let mut outcome = None;
+    let mut recording = None;
     store.transact(&command, &mut |tx| {
         let state = tx.get(MODEL_CATALOG_VIEW, &state_key())?;
         let version = read_state(state.as_ref().map(|document| &document.body)).catalog_version;
@@ -90,8 +94,14 @@ pub fn record(
             payload: chosen.payload,
             attachments: vec![],
         })?;
+        // Reads see this transaction's own projected writes, so this is the
+        // version the command commits, whatever lands after it.
+        let after = tx.get(MODEL_CATALOG_VIEW, &state_key())?;
         let answer = answer(chosen.type_name, &chosen.outcome);
-        outcome = Some(chosen.outcome);
+        recording = Some(Recording {
+            outcome: chosen.outcome,
+            version: read_state(after.as_ref().map(|document| &document.body)).catalog_version,
+        });
         Ok(Decision {
             kind: OutcomeKind::Done,
             answer,
@@ -101,12 +111,9 @@ pub fn record(
         })
     })?;
     // A fresh request id is never answered before, so the decision ran.
-    let outcome = outcome.ok_or_else(|| {
+    recording.ok_or_else(|| {
         StoreError::Unavailable("a fresh detection request was answered before".into())
-    })?;
-    let state = store.get(&user(), MODEL_CATALOG_VIEW, &state_key())?;
-    let version = read_state(state.as_ref().map(|document| &document.body)).catalog_version;
-    Ok(Recording { outcome, version })
+    })
 }
 
 // Small on purpose: counts or a category name, never an id or a body.
@@ -152,7 +159,12 @@ pub fn unverifiable(
 mod tests {
     use baley_core::catalog::detection::ObservedResponse;
     use baley_core::catalog::{HINT_VERSION, OwnerChange, Placement, Tier, accepted_names};
-    use baley_store::{Actor, Event, PageRequest};
+    use std::ops::RangeInclusive;
+
+    use baley_store::{
+        Actor, Anchor, Claim, ClaimId, ClaimOwner, Claimed, Decide, DecideClaim, DecideReconcile,
+        Event, Head, HistoryFilter, Page, PageRequest, ReconcileAuthority, Recorded, VerifyReport,
+    };
     use baley_store_sqlite::SqliteStore;
 
     use super::*;
@@ -587,5 +599,136 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// The real store, with an owner removal committed right after each
+    /// command commits and before the caller runs again: the window in
+    /// which another process can commit.
+    struct CommitsAfter<'a> {
+        store: &'a SqliteStore,
+        removes: &'a str,
+    }
+
+    impl Ledger for CommitsAfter<'_> {
+        fn transact(
+            &self,
+            command: &Command,
+            decide: &mut Decide<'_>,
+        ) -> Result<Recorded, StoreError> {
+            let recorded = Ledger::transact(self.store, command, decide)?;
+            let removal = OwnerChange::Removed;
+            change(
+                self.store,
+                OPENAI,
+                self.removes,
+                removal,
+                request(9),
+                &at(9),
+            )?;
+            Ok(recorded)
+        }
+
+        fn claim(
+            &self,
+            command: &Command,
+            decide: &mut DecideClaim<'_>,
+        ) -> Result<Claimed, StoreError> {
+            Ledger::claim(self.store, command, decide)
+        }
+
+        fn renew_lease(
+            &self,
+            project: &ProjectId,
+            claim: &ClaimId,
+            owner: &ClaimOwner,
+            at: &str,
+        ) -> Result<(), StoreError> {
+            Ledger::renew_lease(self.store, project, claim, owner, at)
+        }
+
+        fn complete(
+            &self,
+            command: &Command,
+            owner: &ClaimOwner,
+            decide: &mut Decide<'_>,
+        ) -> Result<Recorded, StoreError> {
+            Ledger::complete(self.store, command, owner, decide)
+        }
+
+        fn reconcile(
+            &self,
+            command: &Command,
+            claim: &ClaimId,
+            authority: ReconcileAuthority,
+            decide: &mut DecideReconcile<'_>,
+        ) -> Result<Recorded, StoreError> {
+            Ledger::reconcile(self.store, command, claim, authority, decide)
+        }
+
+        fn open_claims(&self, project: &ProjectId) -> Result<Vec<Claim>, StoreError> {
+            Ledger::open_claims(self.store, project)
+        }
+
+        fn stream(
+            &self,
+            project: &ProjectId,
+            stream: &StreamName,
+            from_version: u64,
+            page: PageRequest,
+        ) -> Result<Page<Event>, StoreError> {
+            Ledger::stream(self.store, project, stream, from_version, page)
+        }
+
+        fn history(
+            &self,
+            project: &ProjectId,
+            range: RangeInclusive<u64>,
+            filter: &HistoryFilter,
+            page: PageRequest,
+        ) -> Result<Page<Event>, StoreError> {
+            Ledger::history(self.store, project, range, filter, page)
+        }
+
+        fn head(&self, project: &ProjectId) -> Result<Option<Head>, StoreError> {
+            Ledger::head(self.store, project)
+        }
+
+        fn verify(
+            &self,
+            project: &ProjectId,
+            anchor: Option<&Anchor>,
+        ) -> Result<VerifyReport, StoreError> {
+            Ledger::verify(self.store, project, anchor)
+        }
+    }
+
+    #[test]
+    fn a_catalog_change_committed_after_the_detection_is_not_reported_as_its_version() {
+        let (_dir, store) = seeded();
+        let page = openai_page(&["gpt-6-astra", "whisper-9"]);
+        let racing = CommitsAfter {
+            store: &store,
+            removes: "whisper-9",
+        };
+
+        let recording = record(
+            &racing,
+            Provider::OpenAi,
+            &Trigger::Automatic,
+            Ok(&page),
+            request(2),
+            &at(2),
+        )
+        .unwrap();
+
+        // The catalog version is the sequence of the event that last changed
+        // the accepted set: the detection's for its report, the removal's now.
+        let recorded = events(&store, "models");
+        let detected = &recorded[1];
+        let removed = &recorded[2];
+        assert_eq!(detected.type_name, "models.detected");
+        assert_eq!(removed.type_name, "models.owner_changed");
+        assert_eq!(state_version(&store), removed.seq, "the removal landed");
+        assert_eq!(recording.version, detected.seq);
     }
 }
