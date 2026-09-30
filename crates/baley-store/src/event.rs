@@ -9,8 +9,10 @@ use serde_json::{Map, Value};
 use crate::canonical::{CanonicalError, canonical_json};
 use crate::chain::chain_hash;
 
-/// The project an event belongs to: a UUID v4 in its text form. An identity,
-/// not an authorization (design 0001).
+/// The project an event belongs to: a UUID v4 in its text form, or the
+/// reserved per-user id `user`, which holds the model catalog's records. That
+/// id is never a UUID, so no `baley.toml` can name it (design 0003). An
+/// identity, not an authorization (design 0001).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ProjectId(pub String);
