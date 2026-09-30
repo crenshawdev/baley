@@ -306,7 +306,7 @@ The ledger may record that a key was used and how, such as a review by OpenAI th
 
 ### model catalog (view and events)
 
-The model catalog is the `model_catalog` view of the reserved per-user project `user`. Its id is no UUID, so no `baley.toml` can name it. It holds only the `models` stream, its records carry policy version 0 since the catalog runs no policy step, and the first catalog use creates it.
+The model catalog is the `model_catalog` view of the reserved per-user project `user`. Its id is no UUID, so no `baley.toml` can name it. It holds the `models` stream for the catalog events and the `command/<kind>` streams for its commands' records, such as the `command.completed` that is all a refused removal records. Its records carry policy version 0 since the catalog runs no policy step, and the first catalog use creates it.
 
 The view holds one document per catalog, keyed by the catalog's name (`claude-code`, `codex`, `openai`, `gemini` or `deepseek`), and one state document, keyed `state`, holding the catalog version and the latest seeded hint table version. A catalog nothing has been recorded into has no document and reads as empty. A catalog document holds its entries in id order, and each entry holds:
 
@@ -318,7 +318,7 @@ The view holds one document per catalog, keyed by the catalog's name (`claude-co
 | `high_effort` | Whether the model accepts high effort |
 | `placed` | How it got its tier: `hint`, `prefix`, `best-fit` or `owner` |
 | `first_seen` | The recorded time of the event that first put the id there |
-| `last_verified` | The recorded time of the latest detection of its provider that did not remove it; absent until one runs |
+| `last_verified` | The recorded time of the latest detection of its provider that ran while the entry was accepted and did not remove it; absent until one runs. A detection leaves it on an entry the owner removed, so a hidden entry keeps the time it had. |
 | `accepted_seq` | The catalog version that last made the id accepted, which is that event's sequence; absent for an id the owner removed before anything accepted it |
 | `owner_removed` | The owner removed the id. The entry is kept, hidden, so no seed or detection brings it back. |
 
