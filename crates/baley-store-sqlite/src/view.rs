@@ -1364,6 +1364,22 @@ impl Views for SqliteStore {
         })
     }
 
+    /// Every document at `keys` from the one snapshot that found the
+    /// generation current; see `read_current`.
+    fn get_many(
+        &self,
+        project: &ProjectId,
+        view: &str,
+        keys: &[DocKey],
+    ) -> Result<Vec<Option<Document>>, StoreError> {
+        let table = self.views().table(view)?;
+        self.read_current(project, |conn, generation| {
+            keys.iter()
+                .map(|key| get_document(conn, table, project, generation, key))
+                .collect()
+        })
+    }
+
     /// A page by a declared index, read in the snapshot that found the
     /// generation current; see `find_documents` and `read_current`.
     fn find(

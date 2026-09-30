@@ -341,13 +341,6 @@ fn folders() -> Result<Folders, Render> {
     Folders::resolve(Platform::current(), &Environment::read()).map_err(|e| refuse(&e))
 }
 
-fn body(store: &SqliteStore, key: &DocKey) -> Result<Option<Value>, Render> {
-    let document = store
-        .get(&user(), MODEL_CATALOG_VIEW, key)
-        .map_err(failed)?;
-    Ok(document.map(|document| document.body))
-}
-
 fn list(catalog: Option<&str>, started_at: &str) -> Result<Render, Render> {
     let folders = folders()?;
     let catalogs = match catalog {
@@ -356,14 +349,21 @@ fn list(catalog: Option<&str>, started_at: &str) -> Result<Render, Render> {
     };
     let mut lines = Vec::new();
     let store = open_seeded(&folders, started_at, &mut lines)?;
-    let state = body(&store, &state_key())?;
-    let mut documents = Vec::new();
-    for catalog in catalogs {
-        documents.push((catalog, body(&store, &catalog_key(catalog))?));
-    }
-    let documents: Vec<(Catalog, Option<&Value>)> = documents
+    // One snapshot, so the printed version describes the rows beside it.
+    let keys: Vec<DocKey> = std::iter::once(state_key())
+        .chain(catalogs.iter().map(|catalog| catalog_key(*catalog)))
+        .collect();
+    let mut bodies = store
+        .get_many(&user(), MODEL_CATALOG_VIEW, &keys)
+        .map_err(failed)?
+        .into_iter()
+        .map(|document| document.map(|document| document.body));
+    let state = bodies.next().flatten();
+    let bodies: Vec<Option<Value>> = bodies.collect();
+    let documents: Vec<(Catalog, Option<&Value>)> = catalogs
         .iter()
-        .map(|(catalog, body)| (*catalog, body.as_ref()))
+        .copied()
+        .zip(bodies.iter().map(Option::as_ref))
         .collect();
     let listing = listing(&documents, state.as_ref());
     lines.push(format!("catalog version {}", listing.version));
@@ -945,5 +945,35 @@ mod tests {
         let removal = events(&store, "models")[1].seq;
         assert_eq!(outcome, OwnerOutcome::Changed { version: removal });
         assert!(!accepts(&store, hinted.id));
+    }
+
+    #[test]
+    fn a_snapshot_read_returns_each_document_at_its_own_key_in_the_order_asked() {
+        let (_dir, store) = store();
+        let rows = json!([
+            {"provider": "openai", "name": "gpt-a", "tier": "flagship", "high_effort": true},
+            {"provider": "deepseek", "name": "ds-a", "tier": "cheap", "high_effort": false},
+        ]);
+        let seq = append(&store, 1, &[seeded(rows)])[0];
+        let deepseek = catalog_key(Catalog::Provider(Provider::DeepSeek));
+        let gemini = catalog_key(Catalog::Provider(Provider::Gemini));
+        let keys = [deepseek.clone(), state_key(), gemini, catalog_key(OPENAI)];
+
+        let documents = store.get_many(&user(), MODEL_CATALOG_VIEW, &keys).unwrap();
+
+        assert_eq!(documents.len(), 4);
+        let [deepseek_doc, state, absent, openai] = [0, 1, 2, 3].map(|i| documents[i].as_ref());
+        assert_eq!(deepseek_doc.unwrap().key, deepseek);
+        assert_eq!(state.unwrap().key, state_key());
+        assert!(absent.is_none(), "gemini holds no entry");
+        assert_eq!(openai.unwrap().key, catalog_key(OPENAI));
+        let state = state.map(|document| &document.body);
+        let names = |catalog: &str, document: Option<&baley_store::Document>| {
+            accepted_names(catalog, document.map(|document| &document.body), state).unwrap()
+        };
+        let deepseek_names = names("deepseek", deepseek_doc);
+        assert_eq!(deepseek_names.names, ["ds-a".to_string()].into());
+        assert_eq!(deepseek_names.version, seq);
+        assert_eq!(names("openai", openai).names, ["gpt-a".to_string()].into());
     }
 }
