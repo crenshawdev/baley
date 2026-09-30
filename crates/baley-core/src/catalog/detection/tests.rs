@@ -366,8 +366,10 @@ fn best_fit_matches_whole_segments_not_characters() {
 #[test]
 fn best_fit_breaks_an_equal_run_toward_the_newest_creation_time() {
     let candidates = [
-        candidate("gpt-7-b", Tier::Cheap, false, Some(200)),
-        candidate("gpt-7-a", Tier::Flagship, false, Some(100)),
+        // The newest sorts first by name, so the name fallback alone would pick
+        // gpt-7-b.
+        candidate("gpt-7-a", Tier::Cheap, false, Some(200)),
+        candidate("gpt-7-b", Tier::Flagship, false, Some(100)),
     ];
     assert_eq!(best_fit("gpt-7-z", &candidates).tier, Tier::Cheap);
     let reversed = [candidates[1], candidates[0]];
