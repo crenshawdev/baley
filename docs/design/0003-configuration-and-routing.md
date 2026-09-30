@@ -99,11 +99,11 @@ graph LR
 | Role | A kind of worker Baley dispatches: planner, analyzer (the refinement role that asks the owner questions and drafts truths), plan checker, executor, verifier, reviewer. |
 | Rung | One of Baley's five effort levels, in order: `low`, `medium`, `high`, `xhigh`, `max`. |
 | Route | The result of resolving one role for one dispatch: model, rung, the settings that decided them, and whether a retry moved the rung. |
-| Model catalog | The list of model names Baley accepts, per host and per provider, with the source each name came from. |
-| Host alias | A short model name a host resolves itself, such as `opus` in Claude Code. Aliases follow new model releases without any change on Baley's side. |
+| Model catalog | The list of model names Baley accepts, per host and per provider, with the source each name came from. It is the `model_catalog` view of the reserved per-user ledger project `user` (section 6). |
+| Host alias | A short model name a host resolves itself, such as `opus` in Claude Code. Aliases follow new model releases without any change on Baley's side. Each host's aliases are compiled into Baley and never recorded. |
 | Provider | An outside model vendor reached by API key or its own command-line login: Anthropic, OpenAI, Gemini, DeepSeek. |
 | Detection | Asking a provider's list endpoint, with the owner's key, which model names that key can use. |
-| Hint table | A table compiled into Baley that tags known model names with a tier (`flagship`, `balanced`, `cheap`) and whether they accept high effort. |
+| Hint table | A table compiled into Baley that tags known model names with a tier (`flagship`, `balanced`, `cheap`) and whether they accept high effort. It has a version, raised whenever a row changes. Its exact-id rows are seeded into the catalog; its prefix rows tag, for detection, the ids that start with a known prefix and that no exact row names. |
 | Config folder | Baley's own folder under the crenshawdev vendor folder: `$XDG_CONFIG_HOME/crenshawdev/baley` on Linux (an empty or relative `XDG_CONFIG_HOME` counts as unset), `~/Library/Application Support/crenshawdev/baley` on macOS, or `BALEY_HOME` when it is set. It holds the global file and the keys file. |
 | Keys file | `keys.env` in the config folder: one `NAME=value` line per provider API key, written by the owner by hand and only read by Baley. |
 | Key name | The name on the left of a line in the keys file, such as `OPENAI_API_KEY`. |
@@ -304,15 +304,44 @@ A symbolic link is followed, and the opened file's kind, owner and mode are judg
 
 The ledger may record that a key was used and how, such as a review by OpenAI through its API with `OPENAI_API_KEY`, never the key's value (CFG-R26).
 
-### model catalog (table and events)
+### model catalog (view and events)
 
-The `model_catalog` table holds per entry: host or provider, name, source (`alias`, `seed`, `detected`, `owner`), tier, high-effort flag, first seen, last verified, and the catalog version that added it.
+The model catalog is the `model_catalog` view of the reserved per-user project `user`. Its id is no UUID, so no `baley.toml` can name it. It holds only the `models` stream, its records carry policy version 0 since the catalog runs no policy step, and the first catalog use creates it.
 
-| Event | Fields |
+The view holds one document per catalog, keyed by the catalog's name (`claude-code`, `codex`, `openai`, `gemini` or `deepseek`), and one state document, keyed `state`, holding the catalog version and the latest seeded hint table version. A catalog nothing has been recorded into has no document and reads as empty. A catalog document holds its entries in id order, and each entry holds:
+
+| Field | Meaning |
 |---|---|
-| `models.detected` | provider, ids added, ids removed, catalog version, hint-table version |
-| `models.detection_failed` | provider, reason, catalog version left in place |
-| `models.owner_changed` | host or provider, name, added or removed, catalog version |
+| `id` | The model name |
+| `source` | `seed`, `detected` or `owner`. There is no `alias` source: host aliases are compiled into Baley, never recorded, and the lookup adds them. |
+| `tier` | `flagship`, `balanced` or `cheap`; absent only for an owner entry added without `--tier` |
+| `high_effort` | Whether the model accepts high effort |
+| `placed` | How it got its tier: `hint`, `prefix`, `best-fit` or `owner` |
+| `first_seen` | The recorded time of the event that first put the id there |
+| `last_verified` | The recorded time of the latest detection of its provider that did not remove it; absent until one runs |
+| `accepted_seq` | The catalog version that last made the id accepted, which is that event's sequence; absent for an id the owner removed before anything accepted it |
+| `owner_removed` | The owner removed the id. The entry is kept, hidden, so no seed or detection brings it back. |
+
+Every event is on stream `models` at version 1. First-seen and last-verified times come from the event's recorded time, never from a payload field.
+
+| Event | Recorded by | Fields |
+|---|---|---|
+| `models.seeded` | Baley, as command `models.seed` | `hint_version`; `catalog_version`; `rows`, one `{provider, name, tier, high_effort}` per exact-id row of the hint table |
+| `models.owner_changed` | The owner, as command `models.add` or `models.remove` | `catalog` (a host or provider); `name`; `change`, `added` or `removed`; `tier`, absent when `--tier` is not given and on every removal; `catalog_version` |
+| `models.detected` | Detection (Build 2 T8) | `provider`; `added`, one `{id, tier, high_effort, placed}` per id, with `placed` one of `hint`, `prefix` or `best-fit`; `removed`, a list of ids; `catalog_version`; `hint_version` |
+| `models.detection_failed` | Detection (Build 2 T8) | `provider`; `category`; `catalog_version` |
+
+The catalog version is the sequence of the latest event that changed the accepted names of some catalog, and 0 before any. A seed or owner change that only changes a tier leaves it, `models.detection_failed` leaves the view as it was, and a detection that adds and removes nothing moves last-verified only. Each event's `catalog_version` is the version before it, read from the state document inside the recording transaction: 0 when nothing is recorded.
+
+The projector applies these rules:
+
+- It reads only its events and documents, never the compiled hint table, so a later binary's table changes no replayed tier and a rebuild gives the same catalog.
+- A seed makes each provider's seeded entries exactly its rows: a seeded id the rows no longer name is dropped, a seeded id they still name takes their tier and high-effort flag, and detected and owner entries are left as they are.
+- Owner entries win over seeds and detection. A seed leaves them as they are, and a detection sets only an owner entry's high-effort flag, since the owner has no way to set one. An owner addition over a seeded or detected id makes it the owner's, and with `--tier` it takes that tier and `placed` becomes `owner`. An owner removal hides the id, and no later seed or detection brings it back. Only an owner addition does.
+- A detection adds the ids it names that the catalog lacks, makes a seeded or detected id it names a detected entry with the event's tier, flag and placement, drops the seeded and detected ids it removes, and sets last-verified on every other accepted entry of its provider.
+- A host accepts its compiled aliases and its owner entries. A provider accepts its seeded, detected and owner entries.
+
+The binary records `models.seeded` at the first catalog use after an install or upgrade: every `baley models` command first compares the compiled hint table version with the latest one recorded, and seeds on any difference, a downgrade included. A match records nothing. The comparison runs again inside the transaction, so two runs racing record one seed.
 
 ## 7. States
 
