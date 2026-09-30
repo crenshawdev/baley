@@ -1,11 +1,11 @@
-//! Gathers one provider's model listing with its key. It follows the paging
-//! decisions `baley_core` makes and judges nothing itself.
+//! Gathers one provider's model listing with its key, in one request. It
+//! judges nothing itself.
 
 use std::future::Future;
 use std::time::Duration;
 
 use baley_core::catalog::Provider;
-use baley_core::catalog::detection::{Observation, ObservedResponse, Paging, next_page, paging};
+use baley_core::catalog::detection::{Observation, ObservedResponse};
 
 use crate::keys::{Key, list_request};
 
@@ -18,7 +18,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Lists one provider's models with its key.
 pub trait ModelLister {
-    /// What one provider's list endpoint answered, every page followed.
+    /// What one provider's list endpoint answered to one request.
     fn list(&self, provider: Provider, key: &Key) -> impl Future<Output = Observation>;
 }
 
@@ -53,52 +53,37 @@ impl ModelLister for HttpLister {
             observation.transport_failed = true;
             return observation;
         };
-        let mut continuation: Option<String> = None;
+        // No error text is kept: a transport error can quote the request.
+        let Ok(request) = list_request(provider, key) else {
+            observation.transport_failed = true;
+            return observation;
+        };
+        let Ok(mut response) = client.execute(request).await else {
+            observation.transport_failed = true;
+            return observation;
+        };
+        let status = response.status().as_u16();
+        let mut body = Vec::new();
+        let mut cut_short = false;
         loop {
-            // No error text is kept: a transport error can quote the request.
-            let Ok(request) = list_request(provider, key, continuation.as_deref()) else {
-                observation.transport_failed = true;
-                return observation;
-            };
-            let Ok(mut response) = client.execute(request).await else {
-                observation.transport_failed = true;
-                return observation;
-            };
-            let status = response.status().as_u16();
-            let mut body = Vec::new();
-            let mut cut_short = false;
-            loop {
-                match response.chunk().await {
-                    Ok(Some(chunk)) if body.len() + chunk.len() > MAX_BODY_BYTES => {
-                        cut_short = true;
-                        break;
-                    }
-                    Ok(Some(chunk)) => body.extend_from_slice(&chunk),
-                    Ok(None) => break,
-                    Err(_) => {
-                        observation.transport_failed = true;
-                        return observation;
-                    }
+            match response.chunk().await {
+                Ok(Some(chunk)) if body.len() + chunk.len() > MAX_BODY_BYTES => {
+                    cut_short = true;
+                    break;
                 }
-            }
-            let whole_2xx = (200..300).contains(&status) && !cut_short;
-            let next = whole_2xx.then(|| next_page(provider, &body));
-            observation.responses.push(ObservedResponse {
-                status,
-                body,
-                cut_short,
-            });
-            let Some(next) = next else {
-                return observation;
-            };
-            match paging(observation.responses.len(), next) {
-                Paging::Complete => return observation,
-                Paging::Follow(token) => continuation = Some(token),
-                Paging::CutShort => {
-                    observation.page_bound_hit = true;
+                Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+                Ok(None) => break,
+                Err(_) => {
+                    observation.transport_failed = true;
                     return observation;
                 }
             }
         }
+        observation.responses.push(ObservedResponse {
+            status,
+            body,
+            cut_short,
+        });
+        observation
     }
 }

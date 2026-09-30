@@ -47,25 +47,15 @@ impl fmt::Debug for Key {
     }
 }
 
-/// The most ids Gemini returns per page, as its `models.list` reference
-/// gives it. Fewer pages keep a real listing well inside the page bound.
-const GEMINI_PAGE_SIZE: &str = "1000";
-
 /// A key whose bytes cannot be sent in a header. The file grammar refuses
 /// every control byte, so no accepted key gives this, and it holds no text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct KeyNotSendable;
 
-/// The GET for one page of `provider`'s model list. The key goes only in
-/// the provider's key header, marked sensitive so a `Debug` of the request
-/// prints `Sensitive` for it, and never in the URL. Gemini also gets its
-/// page size and, given one, the `continuation` as `pageToken`; OpenAI and
-/// DeepSeek do not page.
-pub(crate) fn list_request(
-    provider: Provider,
-    key: &Key,
-    continuation: Option<&str>,
-) -> Result<Request, KeyNotSendable> {
+/// The GET for `provider`'s model list. The key goes only in the
+/// provider's key header, marked sensitive so a `Debug` of the request
+/// prints `Sensitive` for it, and never in the URL.
+pub(crate) fn list_request(provider: Provider, key: &Key) -> Result<Request, KeyNotSendable> {
     let (url, header, value) = match provider {
         Provider::OpenAi => (
             "https://api.openai.com/v1/models",
@@ -83,14 +73,7 @@ pub(crate) fn list_request(
             key.expose().to_owned(),
         ),
     };
-    let mut url = Url::parse(url).expect("a compiled list URL parses");
-    if provider == Provider::Gemini {
-        let mut query = url.query_pairs_mut();
-        query.append_pair("pageSize", GEMINI_PAGE_SIZE);
-        if let Some(token) = continuation {
-            query.append_pair("pageToken", token);
-        }
-    }
+    let url = Url::parse(url).expect("a compiled list URL parses");
     let mut value = HeaderValue::from_str(&value).map_err(|_| KeyNotSendable)?;
     value.set_sensitive(true);
     let mut request = Request::new(Method::GET, url);
@@ -974,7 +957,7 @@ mod tests {
     fn an_openai_list_request_carries_the_key_only_in_a_sensitive_bearer_header() {
         let keys = sentinel_key("OPENAI_API_KEY");
         let key = keys.get("OPENAI_API_KEY").unwrap();
-        let request = list_request(Provider::OpenAi, key, None).unwrap();
+        let request = list_request(Provider::OpenAi, key).unwrap();
         assert_key_only_in_header(
             &request,
             "https://api.openai.com",
@@ -989,7 +972,7 @@ mod tests {
     fn a_deepseek_list_request_carries_the_key_only_in_a_sensitive_bearer_header() {
         let keys = sentinel_key("DEEPSEEK_API_KEY");
         let key = keys.get("DEEPSEEK_API_KEY").unwrap();
-        let request = list_request(Provider::DeepSeek, key, None).unwrap();
+        let request = list_request(Provider::DeepSeek, key).unwrap();
         assert_key_only_in_header(
             &request,
             "https://api.deepseek.com",
@@ -1004,7 +987,7 @@ mod tests {
     fn a_gemini_list_request_carries_the_key_only_in_a_sensitive_goog_header() {
         let keys = sentinel_key("GEMINI_API_KEY");
         let key = keys.get("GEMINI_API_KEY").unwrap();
-        let request = list_request(Provider::Gemini, key, None).unwrap();
+        let request = list_request(Provider::Gemini, key).unwrap();
         assert_key_only_in_header(
             &request,
             "https://generativelanguage.googleapis.com",
@@ -1012,35 +995,7 @@ mod tests {
             "x-goog-api-key",
             SENTINEL,
         );
-        let query: Vec<(String, String)> = request.url().query_pairs().into_owned().collect();
-        assert_eq!(query, vec![("pageSize".into(), "1000".into())]);
-    }
-
-    #[test]
-    fn a_gemini_continuation_is_encoded_as_page_token_and_never_joined_by_a_key_parameter() {
-        let keys = sentinel_key("GEMINI_API_KEY");
-        let key = keys.get("GEMINI_API_KEY").unwrap();
-        let request = list_request(Provider::Gemini, key, Some("a/b+c=")).unwrap();
-        assert_eq!(
-            request.url().query(),
-            Some("pageSize=1000&pageToken=a%2Fb%2Bc%3D")
-        );
-        let query: Vec<(String, String)> = request.url().query_pairs().into_owned().collect();
-        assert_eq!(
-            query,
-            vec![
-                ("pageSize".into(), "1000".into()),
-                ("pageToken".into(), "a/b+c=".into()),
-            ]
-        );
-        assert!(!query.iter().any(|(name, _)| name == "key"));
-        assert_key_only_in_header(
-            &request,
-            "https://generativelanguage.googleapis.com",
-            "/v1beta/models",
-            "x-goog-api-key",
-            SENTINEL,
-        );
+        assert_eq!(request.url().query(), None);
     }
 
     #[test]
@@ -1049,7 +1004,7 @@ mod tests {
             name: "OPENAI_API_KEY".into(),
             value: format!("{SENTINEL}\n"),
         };
-        let refused = list_request(Provider::OpenAi, &key, None).unwrap_err();
+        let refused = list_request(Provider::OpenAi, &key).unwrap_err();
         assert!(!format!("{refused:?}").contains(SENTINEL));
     }
 
