@@ -162,6 +162,7 @@ pub use views::{
     a_read_of_an_unknown_view_is_refused, equality_on_an_index_prefix_keeps_the_rest_of_the_order,
     equality_values_that_do_not_fit_the_index_are_refused, no_page_exceeds_the_views_bound,
     pages_follow_the_declared_order_without_gaps_or_repeats,
+    several_keys_read_at_once_come_back_in_the_order_asked,
 };
 mod rebuild;
 pub use rebuild::{
@@ -261,6 +262,7 @@ macro_rules! conformance_suite {
             a_key_that_does_not_fit_the_view_is_refused,
             equality_values_that_do_not_fit_the_index_are_refused,
             a_cursor_from_another_query_is_refused,
+            several_keys_read_at_once_come_back_in_the_order_asked,
             live_projection_equals_the_hand_written_documents,
             a_rebuild_ignores_a_corrupted_live_document,
             a_command_during_a_rebuild_reaches_the_new_generation,
