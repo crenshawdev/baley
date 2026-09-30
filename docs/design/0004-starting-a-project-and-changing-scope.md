@@ -394,7 +394,7 @@ The binary crate holds the inherited engine. It parses and edits `ROADMAP.md` an
 | PRJ-R1, PRJ-R2, PRJ-R5, PRJ-R7 | Not built | No start operation exists |
 | PRJ-R3 | Partly built | Context submissions are validated field by field (`crates/baley/src/context/validation.rs:17-103`); no scope submission exists |
 | PRJ-R4 | Not built | `REQUIREMENTS.md` rows are seeded at plan-submit (`crates/baley/src/plan_service.rs:410-437`); no assignment check |
-| PRJ-R6 | Partly built | `baley init` is built as its own command (`crates/baley/src/init.rs:341-353`); the start operation that runs it is Build 4 (#25) |
+| PRJ-R6 | Partly built | `baley init` is built as its own command (`crates/baley/src/init.rs:343-355`); the start operation that runs it is Build 4 (#25) |
 | PRJ-R8, PRJ-R9 | Not built | |
 | PRJ-R10 | Not built | Phase ids parsed as floating-point numbers (`crates/baley/src/derivation/model.rs:22`); order is the textual order of `ROADMAP.md` (`crates/baley/src/derivation/parse.rs:150-191`) |
 | PRJ-R11, PRJ-R12, PRJ-R13 | Not built | No phase declaration, edit or withdraw; `ROADMAP.md` is edited only to tick a phase (`crates/baley/src/verification/completion.rs:266-303`) |
