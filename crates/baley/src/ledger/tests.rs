@@ -139,6 +139,56 @@ fn doctor_refuses_an_unknown_project() {
         "baley: project Z is not in the ledger"
     );
 }
+fn with_user(ids: &[&str]) -> Vec<(ProjectId, String)> {
+    ids.iter()
+        .map(|id| (ProjectId((*id).into()), format!("{id} name")))
+        .collect()
+}
+#[test]
+fn doctor_does_not_refuse_until_the_owner_names_user() {
+    let plan = remotes::anchor_plan(
+        &with_user(&["P", "user"]),
+        &[("P".into(), "origin".into())],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        plan,
+        std::collections::BTreeMap::from([
+            (ProjectId("P".into()), Some("origin".into())),
+            (ProjectId("user".into()), None)
+        ])
+    );
+}
+#[test]
+fn doctor_takes_an_explicit_local_only_user_without_a_duplicate() {
+    let plan = remotes::anchor_plan(
+        &with_user(&["P", "user"]),
+        &[("P".into(), "origin".into())],
+        &["user".into()],
+    )
+    .unwrap();
+    assert_eq!(
+        plan,
+        std::collections::BTreeMap::from([
+            (ProjectId("P".into()), Some("origin".into())),
+            (ProjectId("user".into()), None)
+        ])
+    );
+}
+#[test]
+fn doctor_still_refuses_an_unnamed_project_beside_user_and_not_user() {
+    assert_eq!(
+        remotes::anchor_plan(
+            &with_user(&["P", "Q", "user"]),
+            &[("P".into(), "origin".into())],
+            &[]
+        )
+        .unwrap_err()
+        .to_string(),
+        "baley: doctor needs --remote Q=REMOTE or --local-only Q for project Q (Q name)"
+    );
+}
 
 fn clean() -> VerifyReport {
     VerifyReport {
