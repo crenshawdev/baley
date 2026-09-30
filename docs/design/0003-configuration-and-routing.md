@@ -72,12 +72,13 @@ graph LR
     8-. "<div>Reads</div><div style='font-size: 70%'></div>" .->13
     8-. "<div>Checks model names</div><div style='font-size: 70%'></div>" .->10
     8-. "<div>Records the effective policy<br />and each route</div><div style='font-size: 70%'></div>" .->11
-    4-. "<div>Settings and model commands</div><div style='font-size: 70%'></div>" .->8
+    4-. "<div>Settings commands</div><div style='font-size: 70%'></div>" .->8
+    4-. "<div>Model commands</div><div style='font-size: 70%'></div>" .->10
     4-. "<div>Injects a key into one<br />command</div><div style='font-size: 70%'></div>" .->9
     9-. "<div>Reads</div><div style='font-size: 70%'></div>" .->14
     10-. "<div>Key for detection</div><div style='font-size: 70%'></div>" .->9
     10-. "<div>Lists models</div><div style='font-size: 70%'></div>" .->18
-    10-. "<div>Records detections</div><div style='font-size: 70%'></div>" .->11
+    10-. "<div>Records seeds, owner changes<br />and detections</div><div style='font-size: 70%'></div>" .->11
     11-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->12
 
   end
