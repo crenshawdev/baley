@@ -1,9 +1,9 @@
-//! Each provider's list page read into its ids. The shapes follow each
+//! Each provider's list body read into its ids. The shapes follow each
 //! provider's API reference as read on 2026-09-30: OpenAI answers
-//! `{"object": "list", "data": [{"id", "created", ...}]}` in one page;
+//! `{"object": "list", "data": [{"id", "created", ...}]}` in one response;
 //! DeepSeek answers the same shape without `created`; Gemini answers
-//! `{"models": [{"name": "models/<id>", ...}], "nextPageToken"}` and leaves
-//! out an empty list, as the proto3 JSON mapping does.
+//! `{"models": [{"name": "models/<id>", ...}]}` and leaves out an empty
+//! list, as the proto3 JSON mapping does.
 
 use std::collections::BTreeMap;
 
@@ -35,24 +35,18 @@ impl ProviderListing {
     fn insert(&mut self, id: &str, created: Option<u64>) {
         self.models.entry(id.to_owned()).or_insert(created);
     }
-
-    pub(super) fn merge(&mut self, page: ProviderListing) {
-        for (id, created) in page.models {
-            self.insert(&id, created);
-        }
-    }
 }
 
-/// One 2xx page body read into its ids, or `None` when it is malformed. One
-/// bad item rejects the whole page: skipping it would make detection remove
+/// One 2xx list body read into its ids, or `None` when it is malformed. One
+/// bad item rejects the whole body: skipping it would make detection remove
 /// an id the provider still serves.
-pub fn parse_page(provider: Provider, body: &[u8]) -> Option<ProviderListing> {
-    let page: Value = serde_json::from_slice(body).ok()?;
-    let page = page.as_object()?;
+pub fn parse_body(provider: Provider, body: &[u8]) -> Option<ProviderListing> {
+    let list: Value = serde_json::from_slice(body).ok()?;
+    let list = list.as_object()?;
     let mut listing = ProviderListing::default();
     match provider {
         Provider::OpenAi | Provider::DeepSeek => {
-            for item in page.get("data")?.as_array()? {
+            for item in list.get("data")?.as_array()? {
                 let id = item.get("id")?.as_str().filter(|id| !id.is_empty())?;
                 // The time only breaks best-fit ties, so an odd one is
                 // dropped, not the id.
@@ -61,14 +55,7 @@ pub fn parse_page(provider: Provider, body: &[u8]) -> Option<ProviderListing> {
             }
         }
         Provider::Gemini => {
-            // A broken continuation must never end a listing as complete.
-            if page
-                .get("nextPageToken")
-                .is_some_and(|token| !token.is_string())
-            {
-                return None;
-            }
-            let Some(models) = page.get("models") else {
+            let Some(models) = list.get("models") else {
                 return Some(listing);
             };
             for item in models.as_array()? {

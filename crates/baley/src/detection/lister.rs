@@ -79,7 +79,7 @@ impl ModelLister for HttpLister {
                 }
             }
         }
-        observation.responses.push(ObservedResponse {
+        observation.response = Some(ObservedResponse {
             status,
             body,
             cut_short,

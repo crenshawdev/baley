@@ -5,7 +5,7 @@ use std::fmt;
 
 use serde_json::Value;
 
-use super::parse::{ProviderListing, parse_page};
+use super::parse::{ProviderListing, parse_body};
 use crate::catalog::Provider;
 
 /// Why one provider's detection failed. A category holds at most a status
@@ -15,7 +15,7 @@ use crate::catalog::Provider;
 pub enum Category {
     /// DNS, connect, TLS, a timeout, or a connection dropped mid-body.
     Offline,
-    /// A body cut short at its bound, or the page bound reached.
+    /// A body cut short at the 4 MiB bound.
     Incomplete,
     /// A 2xx body outside the provider's list shape.
     Malformed,
@@ -77,17 +77,15 @@ impl fmt::Debug for ObservedResponse {
 /// What one provider's lister call saw. It holds no error text.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Observation {
-    /// Each response received, in order.
-    pub responses: Vec<ObservedResponse>,
+    /// The response received, if the call got that far.
+    pub response: Option<ObservedResponse>,
     /// A transport failure ended the call.
     pub transport_failed: bool,
-    /// The page bound stopped the call with a continuation left.
-    pub page_bound_hit: bool,
 }
 
 /// The listing the observation shows, or the one category it fails with.
-/// The first rule that matches wins: a transport failure, the last
-/// response's status, a body cut short, the page bound, a malformed page.
+/// The first rule that matches wins: a transport failure, the response's
+/// status, a body cut short, a malformed body.
 pub fn classify(
     provider: Provider,
     observation: &Observation,
@@ -97,34 +95,23 @@ pub fn classify(
     }
     // The lister never returns this, and an empty listing here would remove
     // every id.
-    let Some(last) = observation.responses.last() else {
+    let Some(response) = &observation.response else {
         return Err(Category::Offline);
     };
-    if !(200..300).contains(&last.status) {
-        return Err(match last.status {
+    if !(200..300).contains(&response.status) {
+        return Err(match response.status {
             401 | 403 => Category::Unauthorized,
             429 => Category::RateLimited,
-            400 if provider == Provider::Gemini && gemini_key_invalid(&last.body) => {
+            400 if provider == Provider::Gemini && gemini_key_invalid(&response.body) => {
                 Category::Unauthorized
             }
             status => Category::Http(status),
         });
     }
-    if observation
-        .responses
-        .iter()
-        .any(|response| response.cut_short)
-    {
+    if response.cut_short {
         return Err(Category::Incomplete);
     }
-    if observation.page_bound_hit {
-        return Err(Category::Incomplete);
-    }
-    let mut listing = ProviderListing::default();
-    for response in &observation.responses {
-        listing.merge(parse_page(provider, &response.body).ok_or(Category::Malformed)?);
-    }
-    Ok(listing)
+    parse_body(provider, &response.body).ok_or(Category::Malformed)
 }
 
 /// Whether a Gemini 400 body is Google's error for an invalid key: some

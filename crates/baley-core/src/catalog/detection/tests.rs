@@ -16,12 +16,12 @@ fn models(listing: &ProviderListing) -> Vec<(&str, Option<u64>)> {
 }
 
 #[test]
-fn an_openai_page_gives_each_id_with_its_creation_time() {
+fn an_openai_body_gives_each_id_with_its_creation_time() {
     let body = br#"{"object":"list","data":[
         {"id":"gpt-6-astra","object":"model","created":1686935002,"owned_by":"openai"},
         {"id":"gpt-6-luna","object":"model","created":1700000000,"owned_by":"system"}
     ]}"#;
-    let listing = parse_page(Provider::OpenAi, body).expect("a sound page");
+    let listing = parse_body(Provider::OpenAi, body).expect("a sound body");
     assert_eq!(
         models(&listing),
         [
@@ -32,12 +32,12 @@ fn an_openai_page_gives_each_id_with_its_creation_time() {
 }
 
 #[test]
-fn a_deepseek_page_without_created_gives_its_ids_without_a_time() {
+fn a_deepseek_body_without_created_gives_its_ids_without_a_time() {
     let body = br#"{"object":"list","data":[
         {"id":"deepseek-v4-pro","object":"model","owned_by":"deepseek"},
         {"id":"deepseek-flash","object":"model","owned_by":"deepseek"}
     ]}"#;
-    let listing = parse_page(Provider::DeepSeek, body).expect("a sound page");
+    let listing = parse_body(Provider::DeepSeek, body).expect("a sound body");
     assert_eq!(
         models(&listing),
         [("deepseek-flash", None), ("deepseek-v4-pro", None)]
@@ -47,29 +47,29 @@ fn a_deepseek_page_without_created_gives_its_ids_without_a_time() {
 #[test]
 fn a_gemini_name_loses_its_models_prefix() {
     let body = br#"{"models":[{"name":"models/gemini-x","displayName":"Gemini X"}]}"#;
-    let listing = parse_page(Provider::Gemini, body).expect("a sound page");
+    let listing = parse_body(Provider::Gemini, body).expect("a sound body");
     assert_eq!(models(&listing), [("gemini-x", None)]);
 }
 
 #[test]
 fn an_empty_openai_list_and_an_empty_gemini_object_are_valid_empty_listings() {
-    let openai = parse_page(Provider::OpenAi, br#"{"object":"list","data":[]}"#);
+    let openai = parse_body(Provider::OpenAi, br#"{"object":"list","data":[]}"#);
     assert_eq!(openai, Some(ProviderListing::default()));
-    let gemini = parse_page(Provider::Gemini, b"{}");
+    let gemini = parse_body(Provider::Gemini, b"{}");
     assert_eq!(gemini, Some(ProviderListing::default()));
 }
 
 #[test]
 fn a_repeated_id_counts_once() {
     let body = br#"{"data":[{"id":"gpt-x","created":5},{"id":"gpt-x","created":9}]}"#;
-    let listing = parse_page(Provider::OpenAi, body).expect("a sound page");
+    let listing = parse_body(Provider::OpenAi, body).expect("a sound body");
     assert_eq!(models(&listing).len(), 1);
 }
 
 #[test]
 fn an_odd_created_drops_the_time_but_keeps_the_id() {
     let body = br#"{"data":[{"id":"gpt-a","created":"yesterday"},{"id":"gpt-b","created":1.5}]}"#;
-    let listing = parse_page(Provider::OpenAi, body).expect("a sound page");
+    let listing = parse_body(Provider::OpenAi, body).expect("a sound body");
     assert_eq!(models(&listing), [("gpt-a", None), ("gpt-b", None)]);
 }
 
@@ -91,12 +91,12 @@ fn a_body_outside_the_list_shape_is_malformed_not_a_listing() {
         ),
     ];
     for (provider, body, why) in cases {
-        assert_eq!(parse_page(provider, body), None, "{why}");
+        assert_eq!(parse_body(provider, body), None, "{why}");
     }
 }
 
 #[test]
-fn one_bad_item_among_good_ones_rejects_the_whole_page() {
+fn one_bad_item_among_good_ones_rejects_the_whole_body() {
     let cases: [(Provider, &[u8], &str); 5] = [
         (
             Provider::OpenAi,
@@ -125,59 +125,8 @@ fn one_bad_item_among_good_ones_rejects_the_whole_page() {
         ),
     ];
     for (provider, body, why) in cases {
-        assert_eq!(parse_page(provider, body), None, "{why}");
+        assert_eq!(parse_body(provider, body), None, "{why}");
     }
-}
-
-#[test]
-fn a_gemini_page_with_a_numeric_continuation_is_malformed_though_its_items_parse() {
-    let body = br#"{"models":[{"name":"models/g-a"}],"nextPageToken":42}"#;
-    assert_eq!(parse_page(Provider::Gemini, body), None);
-}
-
-#[test]
-fn a_gemini_page_gives_its_next_page_token() {
-    let body = br#"{"models":[{"name":"models/g-a"}],"nextPageToken":"t2"}"#;
-    assert_eq!(next_page(Provider::Gemini, body), Some("t2".to_owned()));
-}
-
-#[test]
-fn a_last_gemini_page_with_no_or_an_empty_token_gives_no_next_page() {
-    let last = br#"{"models":[{"name":"models/g-a"}]}"#;
-    assert_eq!(next_page(Provider::Gemini, last), None);
-    let empty = br#"{"models":[],"nextPageToken":""}"#;
-    assert_eq!(next_page(Provider::Gemini, empty), None);
-    assert_eq!(next_page(Provider::Gemini, b"not json"), None);
-}
-
-#[test]
-fn openai_and_deepseek_never_page_even_when_a_body_carries_a_token() {
-    let body = br#"{"object":"list","data":[{"id":"x"}],"nextPageToken":"t2"}"#;
-    assert_eq!(next_page(Provider::OpenAi, body), None);
-    assert_eq!(next_page(Provider::DeepSeek, body), None);
-}
-
-#[test]
-fn a_page_without_a_continuation_completes_the_listing_up_to_the_20th() {
-    assert_eq!(paging(1, None), Paging::Complete);
-    assert_eq!(paging(20, None), Paging::Complete);
-}
-
-#[test]
-fn a_continuation_is_followed_after_each_of_pages_1_to_19() {
-    for page in 1..=19 {
-        assert_eq!(
-            paging(page, Some(format!("t{}", page + 1))),
-            Paging::Follow(format!("t{}", page + 1)),
-            "page {page}"
-        );
-    }
-}
-
-#[test]
-fn a_20th_page_that_still_continues_cuts_the_listing_short_and_is_not_followed() {
-    assert_eq!(PAGE_BOUND, 20);
-    assert_eq!(paging(20, Some("t21".to_owned())), Paging::CutShort);
 }
 
 // A key-shaped marker that must never reach a category, a Debug or a payload.
@@ -191,9 +140,9 @@ fn response(status: u16, body: &[u8]) -> ObservedResponse {
     }
 }
 
-fn observed(responses: Vec<ObservedResponse>) -> Observation {
+fn observed(response: ObservedResponse) -> Observation {
     Observation {
-        responses,
+        response: Some(response),
         ..Observation::default()
     }
 }
@@ -217,7 +166,7 @@ fn gemini_error(reason: &str) -> Vec<u8> {
 fn a_401_or_403_is_unauthorized_for_every_provider() {
     for provider in Provider::ALL {
         for status in [401, 403] {
-            let observation = observed(vec![response(status, b"{}")]);
+            let observation = observed(response(status, b"{}"));
             assert_eq!(
                 classify(provider, &observation),
                 Err(Category::Unauthorized),
@@ -229,19 +178,19 @@ fn a_401_or_403_is_unauthorized_for_every_provider() {
 
 #[test]
 fn a_gemini_400_is_unauthorized_only_for_an_api_key_invalid_reason() {
-    let invalid = observed(vec![response(400, &gemini_error("API_KEY_INVALID"))]);
+    let invalid = observed(response(400, &gemini_error("API_KEY_INVALID")));
     assert_eq!(
         classify(Provider::Gemini, &invalid),
         Err(Category::Unauthorized)
     );
-    let other = observed(vec![response(400, &gemini_error("FIELD_INVALID"))]);
+    let other = observed(response(400, &gemini_error("FIELD_INVALID")));
     assert_eq!(classify(Provider::Gemini, &other), Err(Category::Http(400)));
 }
 
 #[test]
 fn the_gemini_400_rule_never_applies_to_openai() {
     let body = gemini_error("API_KEY_INVALID");
-    let observation = observed(vec![response(400, &body)]);
+    let observation = observed(response(400, &body));
     assert_eq!(
         classify(Provider::OpenAi, &observation),
         Err(Category::Http(400))
@@ -256,7 +205,7 @@ fn a_429_is_rate_limited_and_other_statuses_keep_their_number() {
         (301, Category::Http(301)),
     ];
     for (status, category) in cases {
-        let observation = observed(vec![response(status, b"")]);
+        let observation = observed(response(status, b""));
         assert_eq!(
             classify(Provider::DeepSeek, &observation),
             Err(category),
@@ -267,12 +216,9 @@ fn a_429_is_rate_limited_and_other_statuses_keep_their_number() {
 
 #[test]
 fn a_200_outside_the_list_shape_or_with_one_bad_item_is_malformed() {
-    let shape = observed(vec![response(200, br#"{"error":"nope"}"#)]);
+    let shape = observed(response(200, br#"{"error":"nope"}"#));
     assert_eq!(classify(Provider::OpenAi, &shape), Err(Category::Malformed));
-    let bad_item = observed(vec![response(
-        200,
-        br#"{"data":[{"id":"gpt-a"},{"id":null}]}"#,
-    )]);
+    let bad_item = observed(response(200, br#"{"data":[{"id":"gpt-a"},{"id":null}]}"#));
     assert_eq!(
         classify(Provider::OpenAi, &bad_item),
         Err(Category::Malformed)
@@ -280,32 +226,16 @@ fn a_200_outside_the_list_shape_or_with_one_bad_item_is_malformed() {
 }
 
 #[test]
-fn a_malformed_later_page_rejects_the_listing_though_the_first_was_sound() {
-    let observation = observed(vec![
-        response(
-            200,
-            br#"{"models":[{"name":"models/g-a"}],"nextPageToken":"t2"}"#,
-        ),
-        response(200, br#"{"models":"broken"}"#),
-    ]);
-    assert_eq!(
-        classify(Provider::Gemini, &observation),
-        Err(Category::Malformed)
-    );
-}
-
-#[test]
-fn a_transport_failure_after_a_good_page_is_offline_not_a_listing() {
+fn a_transport_failure_beside_a_good_response_is_offline_not_a_listing() {
     let observation = Observation {
-        responses: vec![response(
+        response: Some(response(
             200,
-            br#"{"models":[{"name":"models/g-a"}],"nextPageToken":"t2"}"#,
-        )],
+            br#"{"object":"list","data":[{"id":"gpt-a","created":5}]}"#,
+        )),
         transport_failed: true,
-        page_bound_hit: false,
     };
     assert_eq!(
-        classify(Provider::Gemini, &observation),
+        classify(Provider::OpenAi, &observation),
         Err(Category::Offline)
     );
 }
@@ -315,50 +245,14 @@ fn a_200_body_cut_short_is_incomplete_even_when_what_was_kept_parses() {
     let mut cut = response(200, br#"{"data":[{"id":"gpt-a"}]}"#);
     cut.cut_short = true;
     assert_eq!(
-        classify(Provider::OpenAi, &observed(vec![cut])),
+        classify(Provider::OpenAi, &observed(cut)),
         Err(Category::Incomplete)
-    );
-}
-
-#[test]
-fn good_pages_stopped_by_the_page_bound_are_incomplete_not_a_listing() {
-    let page = response(
-        200,
-        br#"{"models":[{"name":"models/g-a"}],"nextPageToken":"more"}"#,
-    );
-    let observation = Observation {
-        responses: vec![page; PAGE_BOUND],
-        transport_failed: false,
-        page_bound_hit: true,
-    };
-    assert_eq!(
-        classify(Provider::Gemini, &observation),
-        Err(Category::Incomplete)
-    );
-}
-
-#[test]
-fn two_good_gemini_pages_give_the_union_of_their_ids() {
-    let observation = observed(vec![
-        response(
-            200,
-            br#"{"models":[{"name":"models/g-a"},{"name":"models/g-b"}],"nextPageToken":"t2"}"#,
-        ),
-        response(
-            200,
-            br#"{"models":[{"name":"models/g-b"},{"name":"models/g-c"}]}"#,
-        ),
-    ]);
-    let listing = classify(Provider::Gemini, &observation).expect("a listing");
-    assert_eq!(
-        models(&listing),
-        [("g-a", None), ("g-b", None), ("g-c", None)]
     );
 }
 
 #[test]
 fn a_200_empty_list_is_a_valid_empty_listing() {
-    let observation = observed(vec![response(200, br#"{"object":"list","data":[]}"#)]);
+    let observation = observed(response(200, br#"{"object":"list","data":[]}"#));
     assert_eq!(
         classify(Provider::OpenAi, &observation),
         Ok(ProviderListing::default())
@@ -399,7 +293,7 @@ fn a_401_echoing_the_key_gives_a_category_without_it() {
         "code": "invalid_api_key",
     }})
     .to_string();
-    let observation = observed(vec![response(401, body.as_bytes())]);
+    let observation = observed(response(401, body.as_bytes()));
     let category = classify(Provider::OpenAi, &observation).expect_err("a failure");
     assert!(!category.name().contains(SENTINEL));
     assert!(!format!("{category:?}").contains(SENTINEL));
@@ -408,7 +302,7 @@ fn a_401_echoing_the_key_gives_a_category_without_it() {
 #[test]
 fn an_observations_debug_shows_body_lengths_never_body_bytes() {
     let body = format!(r#"{{"error":{{"message":"bad key {SENTINEL}"}}}}"#);
-    let observation = observed(vec![response(401, body.as_bytes())]);
+    let observation = observed(response(401, body.as_bytes()));
     let shown = format!("{observation:?}");
     assert!(!shown.contains(SENTINEL), "{shown}");
     assert!(
@@ -635,7 +529,7 @@ fn document(provider: &str, entries: Vec<Value>) -> Value {
     json!({"catalog": provider, "entries": entries})
 }
 
-// An OpenAI or Gemini page listing `ids`, each with its creation time.
+// An OpenAI or Gemini body listing `ids`, each with its creation time.
 fn listing_of(provider: Provider, ids: &[(&str, Option<u64>)]) -> ProviderListing {
     let body = match provider {
         Provider::Gemini => {
@@ -656,7 +550,7 @@ fn listing_of(provider: Provider, ids: &[(&str, Option<u64>)]) -> ProviderListin
             json!({"object": "list", "data": data})
         }
     };
-    parse_page(provider, body.to_string().as_bytes()).expect("a sound page")
+    parse_body(provider, body.to_string().as_bytes()).expect("a sound body")
 }
 
 fn added_tag(diff: &Diff, id: &str) -> Option<Tag> {
@@ -1009,7 +903,7 @@ fn text_beside_the_ids_in_a_200_body_never_reaches_the_detected_payload() {
         {"id": "gpt-6-luna", "object": "model", "created": 2, "owned_by": SENTINEL},
     ]})
     .to_string();
-    let observation = observed(vec![response(200, body.as_bytes())]);
+    let observation = observed(response(200, body.as_bytes()));
     let classified = classify(Provider::OpenAi, &observation);
     let chosen = choose_event(Provider::OpenAi, classified, None, 0);
     assert_eq!(chosen.type_name, MODELS_DETECTED);
@@ -1019,7 +913,7 @@ fn text_beside_the_ids_in_a_200_body_never_reaches_the_detected_payload() {
 #[test]
 fn a_401_body_echoing_the_key_never_reaches_the_failure_payload() {
     let body = format!(r#"{{"error":{{"message":"Incorrect API key provided: {SENTINEL}"}}}}"#);
-    let observation = observed(vec![response(401, body.as_bytes())]);
+    let observation = observed(response(401, body.as_bytes()));
     let classified = classify(Provider::DeepSeek, &observation);
     let chosen = choose_event(Provider::DeepSeek, classified, None, 0);
     assert_eq!(chosen.type_name, MODELS_DETECTION_FAILED);

@@ -199,17 +199,17 @@ mod tests {
 
     fn answered(status: u16, body: &str) -> Observation {
         Observation {
-            responses: vec![ObservedResponse {
+            response: Some(ObservedResponse {
                 status,
                 body: body.as_bytes().to_vec(),
                 cut_short: false,
-            }],
+            }),
             ..Observation::default()
         }
     }
 
-    /// An OpenAI 200 page listing `ids`.
-    fn openai_page(ids: &[&str]) -> Observation {
+    /// An OpenAI 200 body listing `ids`.
+    fn openai_body(ids: &[&str]) -> Observation {
         let data: Vec<Value> = ids
             .iter()
             .map(|id| json!({"id": id, "object": "model", "created": 1_780_000_000, "owned_by": "openai"}))
@@ -307,13 +307,13 @@ mod tests {
             let (_dir, store) = seeded();
             let before = state_version(&store);
             assert!(before > 0, "seeding moved the version");
-            let page = openai_page(&["gpt-6-astra", "gpt-6-luna-2026-09-01", "whisper-9"]);
+            let listed = openai_body(&["gpt-6-astra", "gpt-6-luna-2026-09-01", "whisper-9"]);
 
             record(
                 &store,
                 Provider::OpenAi,
                 &trigger,
-                Ok(&page),
+                Ok(&listed),
                 request(2),
                 &at(2),
             )
@@ -345,7 +345,7 @@ mod tests {
             r#"{"object": "list", "data": [{"id": "deepseek-v4-pro", "object": "model"}]}"#,
         );
 
-        let openai = openai_page(&["gpt-6-astra"]);
+        let openai = openai_body(&["gpt-6-astra"]);
         record(
             &store,
             Provider::OpenAi,
@@ -385,12 +385,12 @@ mod tests {
     #[test]
     fn a_failure_of_any_category_after_a_detection_keeps_every_accepted_id_and_the_version() {
         let (_dir, store) = seeded();
-        let page = openai_page(&["gpt-6-astra", "gpt-6-luna", "whisper-9"]);
+        let listed = openai_body(&["gpt-6-astra", "gpt-6-luna", "whisper-9"]);
         record(
             &store,
             Provider::OpenAi,
             &Trigger::Automatic,
-            Ok(&page),
+            Ok(&listed),
             request(2),
             &at(2),
         )
@@ -434,7 +434,7 @@ mod tests {
     #[test]
     fn an_owner_removal_committed_after_listing_is_not_undone_by_the_recorded_diff() {
         let (_dir, store) = seeded();
-        let page = openai_page(&["gpt-6-astra", "gpt-6-luna"]);
+        let listed = openai_body(&["gpt-6-astra", "gpt-6-luna"]);
         change(
             &store,
             OPENAI,
@@ -449,7 +449,7 @@ mod tests {
             &store,
             Provider::OpenAi,
             &Trigger::Automatic,
-            Ok(&page),
+            Ok(&listed),
             request(3),
             &at(3),
         )
@@ -538,12 +538,12 @@ mod tests {
         assert_eq!(store.projects().unwrap(), vec![]);
 
         assert!(seed(&store, request(1), &at(1)).unwrap());
-        let page = openai_page(&["gpt-6-astra", "whisper-9", "dall-e-9"]);
+        let listed = openai_body(&["gpt-6-astra", "whisper-9", "dall-e-9"]);
         record(
             &store,
             Provider::OpenAi,
             &Trigger::Automatic,
-            Ok(&page),
+            Ok(&listed),
             request(2),
             &at(2),
         )
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn a_catalog_change_committed_after_the_detection_is_not_reported_as_its_version() {
         let (_dir, store) = seeded();
-        let page = openai_page(&["gpt-6-astra", "whisper-9"]);
+        let listed = openai_body(&["gpt-6-astra", "whisper-9"]);
         let racing = CommitsAfter {
             store: &store,
             removes: "whisper-9",
@@ -715,7 +715,7 @@ mod tests {
             &racing,
             Provider::OpenAi,
             &Trigger::Automatic,
-            Ok(&page),
+            Ok(&listed),
             request(2),
             &at(2),
         )
