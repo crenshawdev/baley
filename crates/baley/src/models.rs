@@ -8,8 +8,8 @@ use std::process::ExitCode;
 use baley_core::catalog::{
     Catalog, HINT_VERSION, MODEL_CATALOG_VIEW, MODELS_OWNER_CHANGED, MODELS_OWNER_CHANGED_VERSION,
     MODELS_SEEDED, MODELS_SEEDED_VERSION, MODELS_STREAM, OwnerChange, Placement, Tier,
-    USER_PROJECT, catalog_key, judge_held_removal, listing, owner_changed_payload, read_state,
-    seed_due, seed_payload, state_key,
+    USER_PROJECT, catalog_key, judge_alias_removal, judge_held_removal, listing,
+    owner_changed_payload, read_state, seed_due, seed_payload, state_key,
 };
 use baley_store::{
     Actor, Admin, Answer, Command, CommandKind, Decision, DocKey, Ledger, NewEvent, Observed,
@@ -263,6 +263,28 @@ enum ModelsCommand {
         #[arg(value_name = "CATALOG")]
         catalog: Option<String>,
     },
+    /// Accept a name in a catalog, placed at --tier when given.
+    Add {
+        /// claude-code, codex, openai, gemini or deepseek.
+        #[arg(value_name = "CATALOG")]
+        catalog: String,
+        /// The model name.
+        #[arg(value_name = "NAME", value_parser = model_name)]
+        name: String,
+        /// flagship, balanced or cheap.
+        #[arg(long, value_parser = tier)]
+        tier: Option<Tier>,
+    },
+    /// Stop accepting a seeded, detected or owner name. A host's compiled
+    /// aliases cannot be removed.
+    Remove {
+        /// claude-code, codex, openai, gemini or deepseek.
+        #[arg(value_name = "CATALOG")]
+        catalog: String,
+        /// The model name.
+        #[arg(value_name = "NAME", value_parser = model_name)]
+        name: String,
+    },
 }
 
 /// Runs one `baley models` command and prints what it did.
@@ -270,6 +292,14 @@ pub fn run(args: ModelsArgs) -> ExitCode {
     let started_at = SystemClock::now();
     let result = match args.command {
         ModelsCommand::List { catalog } => list(catalog.as_deref(), &started_at),
+        ModelsCommand::Add {
+            catalog,
+            name,
+            tier,
+        } => owner(&catalog, &name, OwnerChange::Added(tier), &started_at),
+        ModelsCommand::Remove { catalog, name } => {
+            owner(&catalog, &name, OwnerChange::Removed, &started_at)
+        }
     }
     .unwrap_or_else(|e| e);
     for line in result.lines {
@@ -354,6 +384,59 @@ fn list(catalog: Option<&str>, started_at: &str) -> Result<Render, Render> {
         ["CATALOG", "NAME", "SOURCE", "TIER", "PLACED"],
         &table,
     ));
+    Ok(Render {
+        lines,
+        code: 0,
+        error: false,
+    })
+}
+
+// An empty entry could never match a setting's model name.
+fn model_name(text: &str) -> Result<String, String> {
+    if text.is_empty() {
+        Err("a model name is never empty".into())
+    } else {
+        Ok(text.into())
+    }
+}
+
+fn tier(text: &str) -> Result<Tier, String> {
+    Tier::parse(text).ok_or_else(|| {
+        let tiers: Vec<&str> = Tier::ALL.iter().map(|tier| tier.name()).collect();
+        format!("tiers: {}", tiers.join(", "))
+    })
+}
+
+fn owner(
+    catalog: &str,
+    name: &str,
+    change: OwnerChange,
+    started_at: &str,
+) -> Result<Render, Render> {
+    let folders = folders()?;
+    let catalog = Catalog::parse(catalog).map_err(|e| refuse(&e))?;
+    if change == OwnerChange::Removed {
+        judge_alias_removal(catalog, name).map_err(|e| refuse(&e))?;
+    }
+    let mut lines = Vec::new();
+    let store = open_seeded(&folders, started_at, &mut lines)?;
+    let outcome = self::change(&store, catalog, name, change, new_request_id(), started_at)
+        .map_err(failed)?;
+    let version = match outcome {
+        OwnerOutcome::Refused(text) => return Err(refuse(&text)),
+        OwnerOutcome::Changed { version } => version,
+    };
+    // Debug quoting escapes control bytes from the command line.
+    let done = match change {
+        OwnerChange::Added(Some(tier)) => format!(
+            "added {name:?} to {} at tier {}",
+            catalog.name(),
+            tier.name()
+        ),
+        OwnerChange::Added(None) => format!("added {name:?} to {}", catalog.name()),
+        OwnerChange::Removed => format!("removed {name:?} from {}", catalog.name()),
+    };
+    lines.push(format!("{done}; catalog version {version}"));
     Ok(Render {
         lines,
         code: 0,
