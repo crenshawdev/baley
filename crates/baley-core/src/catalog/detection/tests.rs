@@ -6,7 +6,7 @@
 use serde_json::json;
 
 use super::*;
-use crate::catalog::Provider;
+use crate::catalog::{HintRow, Placement, PrefixRow, Provider, Tier};
 
 fn models(listing: &ProviderListing) -> Vec<(&str, Option<u64>)> {
     listing.models().collect()
@@ -412,4 +412,96 @@ fn an_observations_debug_shows_body_lengths_never_body_bytes() {
         shown.contains(&format!("body_len: {}", body.len())),
         "{shown}"
     );
+}
+
+const fn exact_row(provider: Provider, id: &'static str, tier: Tier, high_effort: bool) -> HintRow {
+    HintRow {
+        provider,
+        id,
+        tier,
+        high_effort,
+    }
+}
+
+const fn prefix_row(
+    provider: Provider,
+    prefix: &'static str,
+    tier: Tier,
+    high_effort: bool,
+) -> PrefixRow {
+    PrefixRow {
+        provider,
+        prefix,
+        tier,
+        high_effort,
+    }
+}
+
+fn tagged(tier: Tier, high_effort: bool, placed: Placement) -> Option<Tag> {
+    Some(Tag {
+        tier,
+        high_effort,
+        placed,
+    })
+}
+
+#[test]
+fn an_exact_row_beats_a_prefix_row_that_also_matches() {
+    let exact = [exact_row(
+        Provider::OpenAi,
+        "gpt-6-astra",
+        Tier::Cheap,
+        false,
+    )];
+    let prefixes = [prefix_row(Provider::OpenAi, "gpt-6", Tier::Flagship, true)];
+    assert_eq!(
+        tag(Provider::OpenAi, "gpt-6-astra", &exact, &prefixes),
+        tagged(Tier::Cheap, false, Placement::Hint)
+    );
+}
+
+#[test]
+fn the_longest_matching_prefix_row_wins_whatever_its_place_in_the_table() {
+    let long_last = [
+        prefix_row(Provider::OpenAi, "gpt-6", Tier::Balanced, false),
+        prefix_row(Provider::OpenAi, "gpt-6-astra", Tier::Flagship, true),
+    ];
+    let long_first = [long_last[1], long_last[0]];
+    for prefixes in [long_last, long_first] {
+        assert_eq!(
+            tag(Provider::OpenAi, "gpt-6-astra-2026-09-01", &[], &prefixes),
+            tagged(Tier::Flagship, true, Placement::Prefix)
+        );
+    }
+}
+
+#[test]
+fn another_providers_row_never_tags_an_id_with_the_same_text() {
+    let exact = [exact_row(
+        Provider::DeepSeek,
+        "shared-1",
+        Tier::Flagship,
+        true,
+    )];
+    let prefixes = [prefix_row(Provider::DeepSeek, "shared", Tier::Cheap, true)];
+    assert_eq!(tag(Provider::OpenAi, "shared-1", &exact, &prefixes), None);
+    assert_eq!(tag(Provider::OpenAi, "shared-2", &exact, &prefixes), None);
+}
+
+#[test]
+fn an_id_no_row_names_or_starts_is_left_untagged() {
+    let exact = [exact_row(
+        Provider::OpenAi,
+        "gpt-6-astra",
+        Tier::Flagship,
+        true,
+    )];
+    let prefixes = [prefix_row(
+        Provider::OpenAi,
+        "gpt-6-astra",
+        Tier::Flagship,
+        true,
+    )];
+    assert_eq!(tag(Provider::OpenAi, "gpt-6", &exact, &prefixes), None);
+    assert_eq!(tag(Provider::OpenAi, "o9-mini", &exact, &prefixes), None);
 }
