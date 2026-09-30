@@ -13,6 +13,7 @@ use crate::policy::Host;
 
 pub mod events;
 pub mod lookup;
+pub mod seed;
 pub mod tables;
 pub mod view;
 
@@ -23,6 +24,7 @@ pub use events::{
     register_model_events, seeded_payload,
 };
 pub use lookup::{Listing, ListingRow, accepted_names, listing};
+pub use seed::{seed_due, seed_payload};
 pub use tables::{EXACT_HINTS, HINT_VERSION, HintRow, PREFIX_HINTS, PrefixRow, host_aliases};
 pub use view::{
     CatalogState, MODEL_CATALOG_VIEW, ModelCatalogProjector, Placement, Source, catalog_key,

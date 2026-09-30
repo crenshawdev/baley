@@ -724,3 +724,32 @@ fn the_listing_shows_aliases_untiered_detected_placement_and_no_removed_id() {
     };
     assert_eq!(shown, expected);
 }
+
+#[test]
+fn a_recorded_hint_version_equal_to_the_compiled_one_is_not_seeded_again() {
+    assert!(!seed_due(4, Some(4)));
+}
+
+#[test]
+fn a_higher_lower_or_missing_recorded_hint_version_is_seeded() {
+    assert!(seed_due(4, Some(5)));
+    assert!(seed_due(4, Some(3)));
+    assert!(seed_due(4, None));
+}
+
+#[test]
+fn the_seed_payload_carries_every_exact_row_once_and_no_prefix_row() {
+    let payload = seed_payload(11);
+    assert_eq!(payload["hint_version"], HINT_VERSION);
+    assert_eq!(payload["catalog_version"], 11);
+    let rows = payload["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), EXACT_HINTS.len());
+    for row in EXACT_HINTS {
+        let expected = json!({
+            "provider": row.provider.name(), "name": row.id,
+            "tier": row.tier.name(), "high_effort": row.high_effort,
+        });
+        let times = rows.iter().filter(|seeded| **seeded == expected).count();
+        assert_eq!(times, 1, "{row:?}");
+    }
+}
