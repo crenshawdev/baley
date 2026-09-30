@@ -394,21 +394,25 @@ stateDiagram-v2
   Unreadable --> Present: the owner replaces the file or fixes its permissions
 ```
 
-*Figure 2. States of a provider key as Baley finds it when it reads `keys.env`. Every transition is the owner's edit; Baley never writes the file. An exposed file makes `baley exec --key` refuse with `keys-file-exposed`, naming the fix (`chmod 600`, with the file, or `chown`); an invalid file makes it refuse with `keys-file-invalid`, naming each line by number and never its text; an unreadable file makes it refuse with `keys-file-unreadable`, naming the file and the cause. A missing file leaves every key Absent. Any of the three refusals makes detection record `models.detection_failed` for every provider, leaving the catalog as it was. The reader and `baley exec` are built; detection is a later Build 2 task (section 11).*
+*Figure 2. States of a provider key as Baley finds it when it reads `keys.env`. Every transition is the owner's edit; Baley never writes the file. An exposed file makes `baley exec --key` refuse with `keys-file-exposed`, naming the fix (`chmod 600`, with the file, or `chown`); an invalid file makes it refuse with `keys-file-invalid`, naming each line by number and never its text; an unreadable file makes it refuse with `keys-file-unreadable`, naming the file and the cause. A missing file leaves every key Absent. Any of the three refusals makes detection record `models.detection_failed` for every provider the run covers, leaving the catalog as it was. The reader, `baley exec` and detection, in `baley models update` and `baley init`, are built (section 11).*
 
 ```mermaid
 stateDiagram-v2
   [*] --> Seeded: first catalog use after install or upgrade
+  [*] --> Detected: models.detected lists an id the catalog lacks
   Seeded --> Detected: models.detected
+  Seeded --> [*]: models.seeded of a table that no longer names the id
+  Seeded --> [*]: models.detected from a listing that lacks the id
   Detected --> Detected: models.detected (refresh)
+  Detected --> [*]: models.detected from a listing that lacks the id
   Detected --> Suspect: model-not-found or deprecated error on a call
   Suspect --> Detected: models.detected after the trouble-triggered refresh
   Suspect --> Suspect: detection failed (previous list kept)
-  Detected --> Unverifiable: detection finds no key for the provider
-  Unverifiable --> Detected: detection runs with the key present
+  Detected --> Unverifiable: baley models update names the provider and keys.env has no key for it
+  Unverifiable --> Detected: models.detected with the key present
 ```
 
-*Figure 3. States of one provider's catalog entries. Host aliases and owner entries have no lifecycle: they are present until the binary or the owner changes them. An owner removal hides a seeded or detected id in any state, and no later seed or detection brings it back. Only an owner addition does. Unverifiable is reported by the detection that found no key for the provider and is not recorded: the entries keep their last-verified time. Suspect arrives in Build 4, with the model-not-found and deprecated-model trigger. Seeding is built. Detection itself is Build 2 T8, and the view already applies its two events (section 6).*
+*Figure 3. States of one provider's catalog entries. Host aliases and owner entries have no lifecycle: they are present until the binary or the owner changes them, and an owner addition takes a seeded or detected id out of this one. An owner removal hides a seeded or detected id in any state, and no later seed or detection brings it back. Only an owner addition does. A failed detection leaves every entry where it was. Unverifiable is reported by `baley models update` for a provider the owner named that has no key in `keys.env`, and is never recorded: the entries keep their last-verified time. Seeding and detection, in `baley models update` and `baley init`, are built. Suspect arrives in Build 4, with the model-not-found and deprecated-model trigger.*
 
 ## 8. Workflows
 
@@ -478,37 +482,47 @@ sequenceDiagram
   participant F as keys.env
   participant C as Command line
   participant S as Keys
+  participant G as Lister
   participant V as Provider list endpoint
-  participant K as Model catalog
+  participant K as Model catalog (pure)
   participant L as Ledger
   O->>F: add the OPENAI_API_KEY line by hand
   O->>C: baley models update openai
-  C->>K: detect(openai)
-  K->>S: key named OPENAI_API_KEY
+  C->>S: load keys.env
   S->>F: read
   alt keys.env refused
-    S-->>K: keys-file-exposed naming the fix, keys-file-invalid naming each line, or keys-file-unreadable naming the file and the cause
-    K->>L: models.detection_failed for every provider
-    C-->>O: the refusal, previous list kept
+    S-->>C: keys-file-exposed naming the fix, keys-file-invalid naming each line, or keys-file-unreadable naming the file and the cause
+    C->>L: models.seeded first, when the hint table version differs
+    C->>L: models.detection_failed with the refusal's code, one command for every provider the run covers
+    C-->>O: the refusal, and each provider's previous list kept
   else no OPENAI_API_KEY line
-    S-->>K: no key
-    K->>K: openai entries become unverifiable, no failure recorded
-    C-->>O: OPENAI_API_KEY is missing from keys.env
+    S-->>C: the keys, without that name
+    C->>L: read openai's detected entries, record nothing
+    C-->>O: OPENAI_API_KEY is not in keys.env, its detected entries are unverifiable
   else key found
-    S-->>K: the key, for this one call
-    K->>V: GET list endpoint with the key
-    alt request fails
-      K->>L: models.detection_failed
-      C-->>O: detection failed, previous list kept
-    else
-      K->>K: tag ids from the hint table, place unknown ids by best fit
-      K->>L: models.detected, new catalog version
-      C-->>O: models found, tiers, catalog version
+    S-->>C: the keys, holding that name
+    C->>L: models.seeded first, when the hint table version differs
+    C->>G: list openai with the key
+    G->>V: one GET, the key only in its sensitive authorization header
+    V-->>G: status and body, at most 4 MiB of it kept
+    G-->>C: one observation, holding no error text
+    C->>K: classify the observation
+    alt a failure
+      K-->>C: offline, unauthorized, rate-limited, an http status, incomplete or malformed
+      C->>L: models.detection_failed in the provider's own command
+      C-->>O: detection failed with its category, previous list kept
+    else a listing
+      K-->>C: the listed ids
+      C->>L: open the provider's own command, read its document and the version
+      C->>K: tag, place by best fit and diff against that document
+      K-->>C: added, removed and the report
+      C->>L: models.detected in that command, new catalog version
+      C-->>O: ids added, removed and unchanged with tier and placement, catalog version
     end
   end
 ```
 
-*Figure 6. Detecting a provider's models with the key the owner wrote into `keys.env`. The same detection runs at install, at `baley init` and after a model-not-found or deprecated-model failure (CFG-R20); there, a provider with no key is skipped quietly instead of being named to the owner (CFG-R21).*
+*Figure 6. Detecting a provider's models with the key the owner wrote into `keys.env`. The command line reads the keys and calls the lister, which sends one request per provider. The catalog's pure code classifies what the lister saw, tags and places the ids and diffs them against the catalog, and the command line records each provider in a command of its own. With no provider named, every provider whose key is in `keys.env` is listed, concurrently, and a provider without a key is skipped quietly. `baley init` runs the same detection silently after its ledger steps, also skipping a provider with no key quietly. Install is Build 3's trigger, and a model-not-found or deprecated-model failure is Build 4's (CFG-R20). Detection sends no prompt and no project content.*
 
 ```mermaid
 sequenceDiagram
