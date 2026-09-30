@@ -1,4 +1,4 @@
-//! Detection: refreshes the OpenAI, Gemini and DeepSeek catalogs from each
+//! Detection: refreshes the OpenAI and DeepSeek catalogs from each
 //! provider's model-list endpoint (design 0003 section 6, CFG-R20,
 //! CFG-R21). The judging lives in `baley_core::catalog::detection`; this
 //! module gathers each listing with its key and records the outcome.
@@ -90,11 +90,11 @@ pub async fn detect(
             }
         }
     };
-    let [openai, gemini, deepseek] = &steps.0;
-    let (openai, gemini, deepseek) = tokio::join!(list(openai), list(gemini), list(deepseek));
+    let [openai, deepseek] = &steps.0;
+    let (openai, deepseek) = tokio::join!(list(openai), list(deepseek));
 
-    let mut providers = Vec::with_capacity(3);
-    for ((provider, action), observation) in steps.0.into_iter().zip([openai, gemini, deepseek]) {
+    let mut providers = Vec::with_capacity(2);
+    for ((provider, action), observation) in steps.0.into_iter().zip([openai, deepseek]) {
         let outcome = match (action, observation) {
             (_, Some(observation)) => ProviderOutcome::Recorded(record(
                 store,

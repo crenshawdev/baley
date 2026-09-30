@@ -60,20 +60,17 @@ pub const USER_PROJECT: &str = "user";
 pub enum Provider {
     /// OpenAI.
     OpenAi,
-    /// Google's Gemini.
-    Gemini,
     /// DeepSeek.
     DeepSeek,
 }
 impl Provider {
     /// Every provider, in the catalog's order.
-    pub const ALL: [Provider; 3] = [Provider::OpenAi, Provider::Gemini, Provider::DeepSeek];
+    pub const ALL: [Provider; 2] = [Provider::OpenAi, Provider::DeepSeek];
 
     /// The name commands and events use.
     pub fn name(self) -> &'static str {
         match self {
             Provider::OpenAi => "openai",
-            Provider::Gemini => "gemini",
             Provider::DeepSeek => "deepseek",
         }
     }
@@ -126,11 +123,10 @@ pub enum Catalog {
 }
 impl Catalog {
     /// Every catalog, in the order listings and the docs use.
-    pub const ALL: [Catalog; 5] = [
+    pub const ALL: [Catalog; 4] = [
         Catalog::Host(Host::ClaudeCode),
         Catalog::Host(Host::Codex),
         Catalog::Provider(Provider::OpenAi),
-        Catalog::Provider(Provider::Gemini),
         Catalog::Provider(Provider::DeepSeek),
     ];
 

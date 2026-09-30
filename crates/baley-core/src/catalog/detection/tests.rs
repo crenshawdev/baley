@@ -21,7 +21,7 @@ fn an_openai_body_gives_each_id_with_its_creation_time() {
         {"id":"gpt-6-astra","object":"model","created":1686935002,"owned_by":"openai"},
         {"id":"gpt-6-luna","object":"model","created":1700000000,"owned_by":"system"}
     ]}"#;
-    let listing = parse_body(Provider::OpenAi, body).expect("a sound body");
+    let listing = parse_body(body).expect("a sound body");
     assert_eq!(
         models(&listing),
         [
@@ -37,7 +37,7 @@ fn a_deepseek_body_without_created_gives_its_ids_without_a_time() {
         {"id":"deepseek-v4-pro","object":"model","owned_by":"deepseek"},
         {"id":"deepseek-flash","object":"model","owned_by":"deepseek"}
     ]}"#;
-    let listing = parse_body(Provider::DeepSeek, body).expect("a sound body");
+    let listing = parse_body(body).expect("a sound body");
     assert_eq!(
         models(&listing),
         [("deepseek-flash", None), ("deepseek-v4-pro", None)]
@@ -45,87 +45,53 @@ fn a_deepseek_body_without_created_gives_its_ids_without_a_time() {
 }
 
 #[test]
-fn a_gemini_name_loses_its_models_prefix() {
-    let body = br#"{"models":[{"name":"models/gemini-x","displayName":"Gemini X"}]}"#;
-    let listing = parse_body(Provider::Gemini, body).expect("a sound body");
-    assert_eq!(models(&listing), [("gemini-x", None)]);
-}
-
-#[test]
-fn an_empty_openai_list_and_an_empty_gemini_object_are_valid_empty_listings() {
-    let openai = parse_body(Provider::OpenAi, br#"{"object":"list","data":[]}"#);
-    assert_eq!(openai, Some(ProviderListing::default()));
-    let gemini = parse_body(Provider::Gemini, b"{}");
-    assert_eq!(gemini, Some(ProviderListing::default()));
+fn an_empty_data_list_is_a_valid_empty_listing_not_malformed() {
+    let empty = parse_body(br#"{"object":"list","data":[]}"#);
+    assert_eq!(empty, Some(ProviderListing::default()));
 }
 
 #[test]
 fn a_repeated_id_counts_once() {
     let body = br#"{"data":[{"id":"gpt-x","created":5},{"id":"gpt-x","created":9}]}"#;
-    let listing = parse_body(Provider::OpenAi, body).expect("a sound body");
+    let listing = parse_body(body).expect("a sound body");
     assert_eq!(models(&listing).len(), 1);
 }
 
 #[test]
 fn an_odd_created_drops_the_time_but_keeps_the_id() {
     let body = br#"{"data":[{"id":"gpt-a","created":"yesterday"},{"id":"gpt-b","created":1.5}]}"#;
-    let listing = parse_body(Provider::OpenAi, body).expect("a sound body");
+    let listing = parse_body(body).expect("a sound body");
     assert_eq!(models(&listing), [("gpt-a", None), ("gpt-b", None)]);
 }
 
 #[test]
 fn a_body_outside_the_list_shape_is_malformed_not_a_listing() {
-    let cases: [(Provider, &[u8], &str); 5] = [
-        (Provider::OpenAi, b"<html>502</html>", "not JSON"),
-        (Provider::OpenAi, br#"[{"id":"gpt-x"}]"#, "a JSON array"),
-        (
-            Provider::DeepSeek,
-            br#"{"data":{"id":"x"}}"#,
-            "data not a list",
-        ),
-        (Provider::OpenAi, br#"{"object":"list"}"#, "no data"),
-        (
-            Provider::Gemini,
-            br#"{"models":{"name":"models/x"}}"#,
-            "models not a list",
-        ),
+    let cases: [(&[u8], &str); 4] = [
+        (b"<html>502</html>", "not JSON"),
+        (br#"[{"id":"gpt-x"}]"#, "a JSON array"),
+        (br#"{"data":{"id":"x"}}"#, "data not a list"),
+        (br#"{"object":"list"}"#, "no data"),
     ];
-    for (provider, body, why) in cases {
-        assert_eq!(parse_body(provider, body), None, "{why}");
+    for (body, why) in cases {
+        assert_eq!(parse_body(body), None, "{why}");
     }
 }
 
 #[test]
 fn one_bad_item_among_good_ones_rejects_the_whole_body() {
-    let cases: [(Provider, &[u8], &str); 5] = [
+    let cases: [(&[u8], &str); 3] = [
         (
-            Provider::OpenAi,
             br#"{"data":[{"id":"gpt-a"},{"id":7},{"id":"gpt-b"}]}"#,
             "a numeric id",
         ),
         (
-            Provider::DeepSeek,
             br#"{"data":[{"id":"ds-a"},{"object":"model"}]}"#,
             "an item with no id",
         ),
-        (
-            Provider::Gemini,
-            br#"{"models":[{"name":"models/g-a"},{"name":"g-b"}]}"#,
-            "a name without models/",
-        ),
-        (
-            Provider::OpenAi,
-            br#"{"data":[{"id":"gpt-a"},{"id":""}]}"#,
-            "an empty id",
-        ),
-        (
-            Provider::Gemini,
-            br#"{"models":[{"name":"models/g-a"},{"name":"models/"}]}"#,
-            "an empty Gemini id",
-        ),
+        (br#"{"data":[{"id":"gpt-a"},{"id":""}]}"#, "an empty id"),
     ];
-    for (provider, body, why) in cases {
-        assert_eq!(parse_body(provider, body), None, "{why}");
+    for (body, why) in cases {
+        assert_eq!(parse_body(body), None, "{why}");
     }
 }
 
@@ -147,82 +113,38 @@ fn observed(response: ObservedResponse) -> Observation {
     }
 }
 
-fn gemini_error(reason: &str) -> Vec<u8> {
-    json!({"error": {
-        "code": 400,
-        "message": "API key not valid. Please pass a valid API key.",
-        "status": "INVALID_ARGUMENT",
-        "details": [{
-            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-            "reason": reason,
-            "domain": "googleapis.com",
-        }],
-    }})
-    .to_string()
-    .into_bytes()
-}
-
 #[test]
-fn a_401_or_403_is_unauthorized_for_every_provider() {
-    for provider in Provider::ALL {
-        for status in [401, 403] {
-            let observation = observed(response(status, b"{}"));
-            assert_eq!(
-                classify(provider, &observation),
-                Err(Category::Unauthorized),
-                "{provider:?} {status}"
-            );
-        }
-    }
-}
-
-#[test]
-fn a_gemini_400_is_unauthorized_only_for_an_api_key_invalid_reason() {
-    let invalid = observed(response(400, &gemini_error("API_KEY_INVALID")));
-    assert_eq!(
-        classify(Provider::Gemini, &invalid),
-        Err(Category::Unauthorized)
-    );
-    let other = observed(response(400, &gemini_error("FIELD_INVALID")));
-    assert_eq!(classify(Provider::Gemini, &other), Err(Category::Http(400)));
-}
-
-#[test]
-fn the_gemini_400_rule_never_applies_to_openai() {
-    let body = gemini_error("API_KEY_INVALID");
-    let observation = observed(response(400, &body));
-    assert_eq!(
-        classify(Provider::OpenAi, &observation),
-        Err(Category::Http(400))
-    );
-}
-
-#[test]
-fn a_429_is_rate_limited_and_other_statuses_keep_their_number() {
-    let cases = [
-        (429, Category::RateLimited),
-        (503, Category::Http(503)),
-        (301, Category::Http(301)),
-    ];
-    for (status, category) in cases {
-        let observation = observed(response(status, b""));
+fn a_401_or_403_is_unauthorized_not_an_http_status() {
+    for status in [401, 403] {
+        let observation = observed(response(status, b"{}"));
         assert_eq!(
-            classify(Provider::DeepSeek, &observation),
-            Err(category),
+            classify(&observation),
+            Err(Category::Unauthorized),
             "{status}"
         );
     }
 }
 
 #[test]
+fn a_429_is_rate_limited_and_other_statuses_keep_their_number() {
+    let cases = [
+        (429, Category::RateLimited),
+        (400, Category::Http(400)),
+        (503, Category::Http(503)),
+        (301, Category::Http(301)),
+    ];
+    for (status, category) in cases {
+        let observation = observed(response(status, b""));
+        assert_eq!(classify(&observation), Err(category), "{status}");
+    }
+}
+
+#[test]
 fn a_200_outside_the_list_shape_or_with_one_bad_item_is_malformed() {
     let shape = observed(response(200, br#"{"error":"nope"}"#));
-    assert_eq!(classify(Provider::OpenAi, &shape), Err(Category::Malformed));
+    assert_eq!(classify(&shape), Err(Category::Malformed));
     let bad_item = observed(response(200, br#"{"data":[{"id":"gpt-a"},{"id":null}]}"#));
-    assert_eq!(
-        classify(Provider::OpenAi, &bad_item),
-        Err(Category::Malformed)
-    );
+    assert_eq!(classify(&bad_item), Err(Category::Malformed));
 }
 
 #[test]
@@ -234,37 +156,25 @@ fn a_transport_failure_beside_a_good_response_is_offline_not_a_listing() {
         )),
         transport_failed: true,
     };
-    assert_eq!(
-        classify(Provider::OpenAi, &observation),
-        Err(Category::Offline)
-    );
+    assert_eq!(classify(&observation), Err(Category::Offline));
 }
 
 #[test]
 fn a_200_body_cut_short_is_incomplete_even_when_what_was_kept_parses() {
     let mut cut = response(200, br#"{"data":[{"id":"gpt-a"}]}"#);
     cut.cut_short = true;
-    assert_eq!(
-        classify(Provider::OpenAi, &observed(cut)),
-        Err(Category::Incomplete)
-    );
+    assert_eq!(classify(&observed(cut)), Err(Category::Incomplete));
 }
 
 #[test]
 fn a_200_empty_list_is_a_valid_empty_listing() {
     let observation = observed(response(200, br#"{"object":"list","data":[]}"#));
-    assert_eq!(
-        classify(Provider::OpenAi, &observation),
-        Ok(ProviderListing::default())
-    );
+    assert_eq!(classify(&observation), Ok(ProviderListing::default()));
 }
 
 #[test]
 fn an_observation_with_no_response_is_a_category_never_an_empty_listing() {
-    assert_eq!(
-        classify(Provider::OpenAi, &Observation::default()),
-        Err(Category::Offline)
-    );
+    assert_eq!(classify(&Observation::default()), Err(Category::Offline));
 }
 
 #[test]
@@ -294,7 +204,7 @@ fn a_401_echoing_the_key_gives_a_category_without_it() {
     }})
     .to_string();
     let observation = observed(response(401, body.as_bytes()));
-    let category = classify(Provider::OpenAi, &observation).expect_err("a failure");
+    let category = classify(&observation).expect_err("a failure");
     assert!(!category.name().contains(SENTINEL));
     assert!(!format!("{category:?}").contains(SENTINEL));
 }
@@ -529,8 +439,8 @@ fn document(provider: &str, entries: Vec<Value>) -> Value {
     json!({"catalog": provider, "entries": entries})
 }
 
-// A provider's body listing `ids`, each with its creation time.
-fn listing_of(provider: Provider, ids: &[(&str, Option<u64>)]) -> ProviderListing {
+// A list body naming `ids`, each with its creation time.
+fn listing_of(ids: &[(&str, Option<u64>)]) -> ProviderListing {
     let data: Vec<Value> = ids
         .iter()
         .map(|(id, created)| match created {
@@ -539,7 +449,7 @@ fn listing_of(provider: Provider, ids: &[(&str, Option<u64>)]) -> ProviderListin
         })
         .collect();
     let body = json!({"object": "list", "data": data});
-    parse_body(provider, body.to_string().as_bytes()).expect("a sound body")
+    parse_body(body.to_string().as_bytes()).expect("a sound body")
 }
 
 fn added_tag(diff: &Diff, id: &str) -> Option<Tag> {
@@ -566,7 +476,7 @@ fn a_listed_seeded_id_is_added_again_placed_hint_and_counted_unchanged() {
         "openai",
         vec![entry("gpt-6-astra", "seed", Some("flagship"), true, "hint")],
     );
-    let listing = listing_of(Provider::OpenAi, &[("gpt-6-astra", Some(10))]);
+    let listing = listing_of(&[("gpt-6-astra", Some(10))]);
     let diff = diff(Provider::OpenAi, &listing, &ASTRA, &[], Some(&doc));
     assert_eq!(
         added_tag(&diff, "gpt-6-astra"),
@@ -594,7 +504,7 @@ fn a_best_fit_id_matched_by_a_prefix_row_now_is_added_placed_prefix() {
         Tier::Flagship,
         true,
     )];
-    let listing = listing_of(Provider::OpenAi, &[("gpt-7-nova-0901", None)]);
+    let listing = listing_of(&[("gpt-7-nova-0901", None)]);
     let diff = diff(Provider::OpenAi, &listing, &[], &prefixes, Some(&doc));
     assert_eq!(
         added_tag(&diff, "gpt-7-nova-0901"),
@@ -605,7 +515,7 @@ fn a_best_fit_id_matched_by_a_prefix_row_now_is_added_placed_prefix() {
 #[test]
 fn a_listed_id_the_owner_removed_is_neither_added_nor_reported() {
     let doc = document("openai", vec![owner_removed("gpt-6-astra")]);
-    let listing = listing_of(Provider::OpenAi, &[("gpt-6-astra", None)]);
+    let listing = listing_of(&[("gpt-6-astra", None)]);
     let diff = diff(Provider::OpenAi, &listing, &ASTRA, &[], Some(&doc));
     assert!(diff.added.is_empty(), "{diff:?}");
     assert!(diff.report.rows.is_empty(), "{diff:?}");
@@ -629,7 +539,7 @@ fn unlisted_seed_and_detected_ids_are_removed_but_owner_entries_and_removals_are
             },
         ],
     );
-    let listing = listing_of(Provider::OpenAi, &[]);
+    let listing = listing_of(&[]);
     let diff = diff(Provider::OpenAi, &listing, &ASTRA, &[], Some(&doc));
     assert_eq!(diff.removed, ["gpt-6-astra", "gpt-old"]);
     assert_eq!(
@@ -672,7 +582,7 @@ fn a_new_id_takes_its_family_tier_from_each_kind_of_candidate() {
             false,
         ),
     ];
-    let listing = listing_of(Provider::DeepSeek, &[("deepseek-v9-pro-exp", None)]);
+    let listing = listing_of(&[("deepseek-v9-pro-exp", None)]);
     for (kind, doc, tier, high_effort) in cases {
         let diff = diff(Provider::DeepSeek, &listing, &[], &[], Some(&doc));
         assert_eq!(
@@ -684,7 +594,7 @@ fn a_new_id_takes_its_family_tier_from_each_kind_of_candidate() {
 
     // A tagged id of this same listing, with no document at all.
     let rows = [exact_row(Provider::OpenAi, "gpt-9", Tier::Cheap, true)];
-    let listing = listing_of(Provider::OpenAi, &[("gpt-9", None), ("gpt-9-mini", None)]);
+    let listing = listing_of(&[("gpt-9", None), ("gpt-9-mini", None)]);
     let diff = diff(Provider::OpenAi, &listing, &rows, &[], None);
     assert_eq!(
         added_tag(&diff, "gpt-9-mini"),
@@ -711,7 +621,7 @@ fn a_new_id_takes_nothing_from_a_best_fit_entry_or_an_untiered_owner_entry() {
             vec![entry("deepseek-v9-pro", "owner", None, true, "owner")],
         ),
     ];
-    let listing = listing_of(Provider::DeepSeek, &[("deepseek-v9-pro-exp", None)]);
+    let listing = listing_of(&[("deepseek-v9-pro-exp", None)]);
     for doc in docs {
         let diff = diff(Provider::DeepSeek, &listing, &[], &[], Some(&doc));
         assert_eq!(added_tag(&diff, "deepseek-v9-pro-exp"), fallback, "{doc}");
@@ -729,7 +639,7 @@ fn an_id_placed_by_best_fit_this_run_is_no_candidate_for_another() {
             entry("gem-a-z", "seed", Some("cheap"), false, "hint"),
         ],
     );
-    let listing = listing_of(Provider::OpenAi, &[("gem-a-x", Some(5)), ("gem-a-y", None)]);
+    let listing = listing_of(&[("gem-a-x", Some(5)), ("gem-a-y", None)]);
     let diff = diff(Provider::OpenAi, &listing, &[], &[], Some(&doc));
     assert_eq!(
         added_tag(&diff, "gem-a-x").map(|tag| tag.tier),
@@ -747,10 +657,7 @@ fn an_embedding_id_of_no_known_family_is_added_balanced_by_best_fit() {
         "openai",
         vec![entry("gpt-6-astra", "seed", Some("flagship"), true, "hint")],
     );
-    let listing = listing_of(
-        Provider::OpenAi,
-        &[("gpt-6-astra", None), ("text-embedding-3-large", None)],
-    );
+    let listing = listing_of(&[("gpt-6-astra", None), ("text-embedding-3-large", None)]);
     let diff = diff(Provider::OpenAi, &listing, &ASTRA, &[], Some(&doc));
     assert_eq!(
         added_tag(&diff, "text-embedding-3-large"),
@@ -764,7 +671,7 @@ fn a_listed_owner_entry_reports_its_own_tier_and_placement_and_is_unchanged() {
         "openai",
         vec![entry("gpt-6-astra", "owner", Some("cheap"), false, "owner")],
     );
-    let listing = listing_of(Provider::OpenAi, &[("gpt-6-astra", None)]);
+    let listing = listing_of(&[("gpt-6-astra", None)]);
     let diff = diff(Provider::OpenAi, &listing, &ASTRA, &[], Some(&doc));
     assert_eq!(
         row(&diff, "gpt-6-astra"),
@@ -790,15 +697,12 @@ fn the_counts_are_taken_against_the_document_before_the_event() {
             owner_removed("gpt-gone"),
         ],
     );
-    let listing = listing_of(
-        Provider::OpenAi,
-        &[
-            ("gpt-6-astra", None),
-            ("gpt-kept", None),
-            ("gpt-new", None),
-            ("gpt-gone", None),
-        ],
-    );
+    let listing = listing_of(&[
+        ("gpt-6-astra", None),
+        ("gpt-kept", None),
+        ("gpt-new", None),
+        ("gpt-gone", None),
+    ]);
     let diff = diff(Provider::OpenAi, &listing, &ASTRA, &[], Some(&doc));
     assert_eq!(diff.report.count(IdChange::New), 1);
     assert_eq!(diff.report.count(IdChange::Unchanged), 2);
@@ -814,7 +718,7 @@ fn added_and_removed_are_in_id_order() {
             entry("gpt-a-old", "detected", Some("cheap"), false, "best-fit"),
         ],
     );
-    let listing = listing_of(Provider::OpenAi, &[("gpt-z", None), ("gpt-a", None)]);
+    let listing = listing_of(&[("gpt-z", None), ("gpt-a", None)]);
     let diff = diff(Provider::OpenAi, &listing, &[], &[], Some(&doc));
     let added: Vec<&str> = diff.added.iter().map(|added| added.id.as_str()).collect();
     assert_eq!(added, ["gpt-a", "gpt-z"]);
@@ -831,13 +735,10 @@ fn a_listing_records_detected_with_the_compiled_hint_and_given_catalog_versions(
             entry("gpt-6-luna", "seed", Some("cheap"), true, "hint"),
         ],
     );
-    let listing = listing_of(
-        Provider::OpenAi,
-        &[
-            ("gpt-6-astra", Some(1)),
-            ("text-embedding-3-large", Some(2)),
-        ],
-    );
+    let listing = listing_of(&[
+        ("gpt-6-astra", Some(1)),
+        ("text-embedding-3-large", Some(2)),
+    ]);
     let chosen = choose_event(Provider::OpenAi, Ok(listing), Some(&doc), 7);
     assert_eq!(chosen.type_name, MODELS_DETECTED);
     assert_eq!(chosen.type_version, MODELS_DETECTED_VERSION);
@@ -893,7 +794,7 @@ fn text_beside_the_ids_in_a_200_body_never_reaches_the_detected_payload() {
     ]})
     .to_string();
     let observation = observed(response(200, body.as_bytes()));
-    let classified = classify(Provider::OpenAi, &observation);
+    let classified = classify(&observation);
     let chosen = choose_event(Provider::OpenAi, classified, None, 0);
     assert_eq!(chosen.type_name, MODELS_DETECTED);
     assert!(!chosen.payload.to_string().contains(SENTINEL));
@@ -903,7 +804,7 @@ fn text_beside_the_ids_in_a_200_body_never_reaches_the_detected_payload() {
 fn a_401_body_echoing_the_key_never_reaches_the_failure_payload() {
     let body = format!(r#"{{"error":{{"message":"Incorrect API key provided: {SENTINEL}"}}}}"#);
     let observation = observed(response(401, body.as_bytes()));
-    let classified = classify(Provider::DeepSeek, &observation);
+    let classified = classify(&observation);
     let chosen = choose_event(Provider::DeepSeek, classified, None, 0);
     assert_eq!(chosen.type_name, MODELS_DETECTION_FAILED);
     assert!(!chosen.payload.to_string().contains(SENTINEL));

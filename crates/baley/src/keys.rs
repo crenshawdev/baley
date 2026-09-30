@@ -7,7 +7,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use baley_core::catalog::Provider;
-use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
+use reqwest::header::{AUTHORIZATION, HeaderValue};
 use reqwest::{Method, Request, Url};
 
 /// The file exposes its keys to another user.
@@ -66,11 +66,6 @@ pub(crate) fn list_request(provider: Provider, key: &Key) -> Result<Request, Key
             "https://api.deepseek.com/models",
             AUTHORIZATION,
             format!("Bearer {}", key.expose()),
-        ),
-        Provider::Gemini => (
-            "https://generativelanguage.googleapis.com/v1beta/models",
-            HeaderName::from_static("x-goog-api-key"),
-            key.expose().to_owned(),
         ),
     };
     let url = Url::parse(url).expect("a compiled list URL parses");
@@ -979,21 +974,6 @@ mod tests {
             "/models",
             "authorization",
             &format!("Bearer {SENTINEL}"),
-        );
-        assert_eq!(request.url().query(), None);
-    }
-
-    #[test]
-    fn a_gemini_list_request_carries_the_key_only_in_a_sensitive_goog_header() {
-        let keys = sentinel_key("GEMINI_API_KEY");
-        let key = keys.get("GEMINI_API_KEY").unwrap();
-        let request = list_request(Provider::Gemini, key).unwrap();
-        assert_key_only_in_header(
-            &request,
-            "https://generativelanguage.googleapis.com",
-            "/v1beta/models",
-            "x-goog-api-key",
-            SENTINEL,
         );
         assert_eq!(request.url().query(), None);
     }

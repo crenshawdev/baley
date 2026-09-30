@@ -72,8 +72,6 @@ const fn prefix(
 }
 
 /// The exact-id rows, from the OpenAI and DeepSeek published model lists.
-/// Gemini has no rows: the owner ruled it out on 2026-09-30, so its catalog
-/// fills only from detection and owner additions.
 pub const EXACT_HINTS: &[HintRow] = &[
     exact(OpenAi, "gpt-6-astra", Flagship, true),
     exact(OpenAi, "gpt-6.1-sol", Balanced, true),

@@ -1,15 +1,11 @@
 //! Each provider's list body read into its ids. The shapes follow each
 //! provider's API reference as read on 2026-09-30: OpenAI answers
 //! `{"object": "list", "data": [{"id", "created", ...}]}` in one response;
-//! DeepSeek answers the same shape without `created`; Gemini answers
-//! `{"models": [{"name": "models/<id>", ...}]}` and leaves out an empty
-//! list, as the proto3 JSON mapping does.
+//! DeepSeek answers the same shape without `created`.
 
 use std::collections::BTreeMap;
 
 use serde_json::Value;
-
-use crate::catalog::Provider;
 
 /// The ids one provider listed, each once and in id order, with the
 /// creation time it reported in whole seconds, if any. No kind of model is
@@ -40,30 +36,16 @@ impl ProviderListing {
 /// One 2xx list body read into its ids, or `None` when it is malformed. One
 /// bad item rejects the whole body: skipping it would make detection remove
 /// an id the provider still serves.
-pub fn parse_body(provider: Provider, body: &[u8]) -> Option<ProviderListing> {
+pub fn parse_body(body: &[u8]) -> Option<ProviderListing> {
     let list: Value = serde_json::from_slice(body).ok()?;
     let list = list.as_object()?;
     let mut listing = ProviderListing::default();
-    match provider {
-        Provider::OpenAi | Provider::DeepSeek => {
-            for item in list.get("data")?.as_array()? {
-                let id = item.get("id")?.as_str().filter(|id| !id.is_empty())?;
-                // The time only breaks best-fit ties, so an odd one is
-                // dropped, not the id.
-                let created = item.get("created").and_then(Value::as_u64);
-                listing.insert(id, created);
-            }
-        }
-        Provider::Gemini => {
-            let Some(models) = list.get("models") else {
-                return Some(listing);
-            };
-            for item in models.as_array()? {
-                let name = item.get("name")?.as_str()?;
-                let id = name.strip_prefix("models/").filter(|id| !id.is_empty())?;
-                listing.insert(id, None);
-            }
-        }
+    for item in list.get("data")?.as_array()? {
+        let id = item.get("id")?.as_str().filter(|id| !id.is_empty())?;
+        // The time only breaks best-fit ties, so an odd one is dropped, not
+        // the id.
+        let created = item.get("created").and_then(Value::as_u64);
+        listing.insert(id, created);
     }
     Some(listing)
 }

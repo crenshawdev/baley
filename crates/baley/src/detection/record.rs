@@ -59,7 +59,7 @@ pub fn record(
     request_id: RequestId,
     at: &str,
 ) -> Result<Recording, StoreError> {
-    let classified = seen.and_then(|observation| classify(provider, observation));
+    let classified = seen.and_then(classify);
     let digest = request_digest(&detection_request(provider, trigger))
         .map_err(|error| StoreError::Refused(Refusal::InvalidEvent(error.to_string())))?;
     let command = Command {

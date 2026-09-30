@@ -29,7 +29,6 @@ fn each_catalog_name_parses_to_its_own_catalog_and_round_trips() {
         ("claude-code", Catalog::Host(Host::ClaudeCode)),
         ("codex", Catalog::Host(Host::Codex)),
         ("openai", Catalog::Provider(Provider::OpenAi)),
-        ("gemini", Catalog::Provider(Provider::Gemini)),
         ("deepseek", Catalog::Provider(Provider::DeepSeek)),
     ];
     for (name, catalog) in expected {
@@ -47,7 +46,7 @@ fn anthropic_a_case_variant_and_the_empty_name_are_unknown_providers() {
     assert_eq!(
         Catalog::parse("anthropic").unwrap_err().to_string(),
         "unknown-provider: \"anthropic\" is no model catalog; \
-         catalogs: claude-code, codex, openai, gemini, deepseek"
+         catalogs: claude-code, codex, openai, deepseek"
     );
 }
 
@@ -83,16 +82,13 @@ fn no_two_prefix_rows_share_a_provider_and_prefix() {
 }
 
 #[test]
-fn openai_and_deepseek_have_exact_hint_rows_and_gemini_has_none() {
-    let has_rows = |provider| EXACT_HINTS.iter().any(|row| row.provider == provider);
-    assert!(has_rows(Provider::OpenAi));
-    assert!(has_rows(Provider::DeepSeek));
-    assert!(!has_rows(Provider::Gemini));
-    assert!(
-        !PREFIX_HINTS
-            .iter()
-            .any(|row| row.provider == Provider::Gemini)
-    );
+fn no_provider_is_left_without_an_exact_hint_row() {
+    for provider in Provider::ALL {
+        assert!(
+            EXACT_HINTS.iter().any(|row| row.provider == provider),
+            "{provider:?}"
+        );
+    }
 }
 
 #[test]
@@ -451,7 +447,7 @@ fn keys_name_the_state_and_every_document_the_event_changes() {
     let seed = seeded(1, "2026-09-29T10:00:00Z", 1, json!([]));
     assert_eq!(
         projector.keys(&seed),
-        vec![key("state"), key("openai"), key("gemini"), key("deepseek")]
+        vec![key("state"), key("openai"), key("deepseek")]
     );
     let change = owner(2, "claude-code", "claude-x", "added", None);
     assert_eq!(

@@ -17,7 +17,6 @@ pub const DETECT_COMMAND: &str = "models.detect";
 pub fn key_name(provider: Provider) -> &'static str {
     match provider {
         Provider::OpenAi => "OPENAI_API_KEY",
-        Provider::Gemini => "GEMINI_API_KEY",
         Provider::DeepSeek => "DEEPSEEK_API_KEY",
     }
 }
@@ -97,7 +96,7 @@ pub enum Action {
 
 /// Each provider's step in one run, in [`Provider::ALL`] order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Steps(pub [(Provider, Action); 3]);
+pub struct Steps(pub [(Provider, Action); 2]);
 impl Steps {
     /// Whether any provider records, which is when the run seeds first.
     pub fn records(&self) -> bool {
@@ -108,7 +107,7 @@ impl Steps {
 }
 
 /// Decides each provider's step. A run covers the providers the owner
-/// named, or all three. A refused file fails every covered provider with
+/// named, or both. A refused file fails every covered provider with
 /// its code. Otherwise a covered provider with its key is listed, and one
 /// without is reported only when the owner named it.
 pub fn judge(trigger: &Trigger, keys: &KeysRead) -> Steps {
@@ -132,7 +131,7 @@ pub fn judge(trigger: &Trigger, keys: &KeysRead) -> Steps {
 mod tests {
     use std::path::PathBuf;
 
-    use baley_core::catalog::Provider::{DeepSeek, Gemini, OpenAi};
+    use baley_core::catalog::Provider::{DeepSeek, OpenAi};
 
     use super::*;
     use crate::keys::{KEYS_FILE_UNREADABLE, KeysRefusal};
@@ -141,27 +140,21 @@ mod tests {
         KeysRead::Present(names.to_vec())
     }
 
-    fn steps([openai, gemini, deepseek]: [Action; 3]) -> Steps {
-        Steps([(OpenAi, openai), (Gemini, gemini), (DeepSeek, deepseek)])
+    fn steps([openai, deepseek]: [Action; 2]) -> Steps {
+        Steps([(OpenAi, openai), (DeepSeek, deepseek)])
     }
 
     #[test]
     fn the_automatic_trigger_with_no_keys_lists_reports_and_records_nothing() {
         let steps_taken = judge(&Trigger::Automatic, &present(&[]));
-        assert_eq!(
-            steps_taken,
-            steps([Action::Skip, Action::Skip, Action::Skip])
-        );
+        assert_eq!(steps_taken, steps([Action::Skip, Action::Skip]));
         assert!(!steps_taken.records());
     }
 
     #[test]
     fn an_update_naming_none_lists_only_providers_with_a_key_and_skips_the_rest_quietly() {
         let steps_taken = judge(&Trigger::Owner(vec![]), &present(&["OPENAI_API_KEY"]));
-        assert_eq!(
-            steps_taken,
-            steps([Action::List, Action::Skip, Action::Skip])
-        );
+        assert_eq!(steps_taken, steps([Action::List, Action::Skip]));
         assert!(steps_taken.records());
     }
 
@@ -170,46 +163,35 @@ mod tests {
         let steps_taken = judge(&Trigger::Owner(vec![OpenAi]), &present(&[]));
         assert_eq!(
             steps_taken,
-            steps([
-                Action::ReportMissing("OPENAI_API_KEY"),
-                Action::Skip,
-                Action::Skip,
-            ])
+            steps([Action::ReportMissing("OPENAI_API_KEY"), Action::Skip,])
         );
         assert!(!steps_taken.records());
     }
 
     #[test]
-    fn a_named_run_reports_the_keyless_lists_the_keyed_and_leaves_the_unnamed() {
+    fn a_named_run_lists_the_named_provider_and_skips_an_unnamed_one_though_keyed() {
         let steps_taken = judge(
-            &Trigger::Owner(vec![OpenAi, Gemini]),
-            &present(&["GEMINI_API_KEY", "DEEPSEEK_API_KEY"]),
+            &Trigger::Owner(vec![DeepSeek]),
+            &present(&["OPENAI_API_KEY", "DEEPSEEK_API_KEY"]),
         );
-        assert_eq!(
-            steps_taken,
-            steps([
-                Action::ReportMissing("OPENAI_API_KEY"),
-                Action::List,
-                Action::Skip,
-            ])
-        );
+        assert_eq!(steps_taken, steps([Action::Skip, Action::List]));
     }
 
     #[test]
-    fn a_refused_file_fails_all_three_when_none_is_named_and_seeds() {
+    fn a_refused_file_fails_both_when_none_is_named_and_seeds() {
         let steps_taken = judge(
             &Trigger::Owner(vec![]),
             &KeysRead::Refused(KEYS_FILE_EXPOSED),
         );
         let failed = Action::RecordFailure(Category::KeysFileExposed);
-        assert_eq!(steps_taken, steps([failed.clone(), failed.clone(), failed]));
+        assert_eq!(steps_taken, steps([failed.clone(), failed]));
         assert!(steps_taken.records());
     }
 
     #[test]
     fn a_refused_file_fails_only_the_named_provider() {
         let steps_taken = judge(
-            &Trigger::Owner(vec![Gemini]),
+            &Trigger::Owner(vec![DeepSeek]),
             &KeysRead::Refused(KEYS_FILE_EXPOSED),
         );
         assert_eq!(
@@ -217,16 +199,15 @@ mod tests {
             steps([
                 Action::Skip,
                 Action::RecordFailure(Category::KeysFileExposed),
-                Action::Skip,
             ])
         );
     }
 
     #[test]
-    fn a_refused_file_fails_all_three_on_the_automatic_trigger() {
+    fn a_refused_file_fails_both_on_the_automatic_trigger() {
         let steps_taken = judge(&Trigger::Automatic, &KeysRead::Refused(KEYS_FILE_INVALID));
         let failed = Action::RecordFailure(Category::KeysFileInvalid);
-        assert_eq!(steps_taken, steps([failed.clone(), failed.clone(), failed]));
+        assert_eq!(steps_taken, steps([failed.clone(), failed]));
     }
 
     #[test]
@@ -272,11 +253,7 @@ mod tests {
 
     #[test]
     fn each_provider_is_listed_under_its_own_key_name() {
-        let names = [
-            (OpenAi, "OPENAI_API_KEY"),
-            (Gemini, "GEMINI_API_KEY"),
-            (DeepSeek, "DEEPSEEK_API_KEY"),
-        ];
+        let names = [(OpenAi, "OPENAI_API_KEY"), (DeepSeek, "DEEPSEEK_API_KEY")];
         for (provider, name) in names {
             let steps_taken = judge(&Trigger::Automatic, &present(&[name]));
             for (listed, action) in steps_taken.0 {

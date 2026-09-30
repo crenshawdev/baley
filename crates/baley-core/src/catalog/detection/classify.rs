@@ -3,10 +3,7 @@
 
 use std::fmt;
 
-use serde_json::Value;
-
 use super::parse::{ProviderListing, parse_body};
-use crate::catalog::Provider;
 
 /// Why one provider's detection failed. A category holds at most a status
 /// number, never text, so no body, error or key text can reach a payload
@@ -19,7 +16,7 @@ pub enum Category {
     Incomplete,
     /// A 2xx body outside the provider's list shape.
     Malformed,
-    /// 401, 403, or Gemini's 400 for an invalid key.
+    /// 401 or 403.
     Unauthorized,
     /// 429.
     RateLimited,
@@ -86,10 +83,7 @@ pub struct Observation {
 /// The listing the observation shows, or the one category it fails with.
 /// The first rule that matches wins: a transport failure, the response's
 /// status, a body cut short, a malformed body.
-pub fn classify(
-    provider: Provider,
-    observation: &Observation,
-) -> Result<ProviderListing, Category> {
+pub fn classify(observation: &Observation) -> Result<ProviderListing, Category> {
     if observation.transport_failed {
         return Err(Category::Offline);
     }
@@ -102,29 +96,11 @@ pub fn classify(
         return Err(match response.status {
             401 | 403 => Category::Unauthorized,
             429 => Category::RateLimited,
-            400 if provider == Provider::Gemini && gemini_key_invalid(&response.body) => {
-                Category::Unauthorized
-            }
             status => Category::Http(status),
         });
     }
     if response.cut_short {
         return Err(Category::Incomplete);
     }
-    parse_body(provider, &response.body).ok_or(Category::Malformed)
-}
-
-/// Whether a Gemini 400 body is Google's error for an invalid key: some
-/// `error.details` item whose `reason` is `API_KEY_INVALID`.
-fn gemini_key_invalid(body: &[u8]) -> bool {
-    let Ok(body) = serde_json::from_slice::<Value>(body) else {
-        return false;
-    };
-    body.pointer("/error/details")
-        .and_then(Value::as_array)
-        .is_some_and(|details| {
-            details.iter().any(|detail| {
-                detail.get("reason").and_then(Value::as_str) == Some("API_KEY_INVALID")
-            })
-        })
+    parse_body(&response.body).ok_or(Category::Malformed)
 }

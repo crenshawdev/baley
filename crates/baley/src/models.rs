@@ -263,14 +263,14 @@ enum ModelsCommand {
     /// List every accepted name with its source, tier and placement, and
     /// the catalog version.
     List {
-        /// One catalog: claude-code, codex, openai, gemini or deepseek.
+        /// One catalog: claude-code, codex, openai or deepseek.
         /// Every catalog when absent.
         #[arg(value_name = "CATALOG")]
         catalog: Option<String>,
     },
     /// Accept a name in a catalog, placed at --tier when given.
     Add {
-        /// claude-code, codex, openai, gemini or deepseek.
+        /// claude-code, codex, openai or deepseek.
         #[arg(value_name = "CATALOG")]
         catalog: String,
         /// The model name.
@@ -283,18 +283,18 @@ enum ModelsCommand {
     /// Stop accepting a seeded, detected or owner name. A host's compiled
     /// aliases cannot be removed.
     Remove {
-        /// claude-code, codex, openai, gemini or deepseek.
+        /// claude-code, codex, openai or deepseek.
         #[arg(value_name = "CATALOG")]
         catalog: String,
         /// The model name.
         #[arg(value_name = "NAME", value_parser = model_name)]
         name: String,
     },
-    /// Refresh the openai, gemini and deepseek catalogs from each provider's
-    /// model list, with the keys in keys.env. Every provider with a key when
-    /// none is named. A failed detection is reported and exits 0.
+    /// Refresh the openai and deepseek catalogs from each provider's model
+    /// list, with the keys in keys.env. Every provider with a key when none
+    /// is named. A failed detection is reported and exits 0.
     Update {
-        /// openai, gemini or deepseek.
+        /// openai or deepseek.
         #[arg(value_name = "PROVIDER")]
         providers: Vec<String>,
     },
@@ -1127,7 +1127,7 @@ mod tests {
 
         const KEYS_FILE: &str = "/c/keys.env";
 
-        fn run(seeded: bool, outcomes: [ProviderOutcome; 3]) -> Detection {
+        fn run(seeded: bool, outcomes: [ProviderOutcome; 2]) -> Detection {
             Detection {
                 seeded,
                 providers: Provider::ALL.into_iter().zip(outcomes).collect(),
@@ -1175,7 +1175,7 @@ mod tests {
             };
             let skipped = || ProviderOutcome::Skipped;
 
-            let printed = lines(&run(false, [missing, skipped(), skipped()]));
+            let printed = lines(&run(false, [missing, skipped()]));
 
             assert!(printed[0].starts_with("openai: "), "{printed:?}");
             assert!(printed[0].contains("OPENAI_API_KEY"), "{printed:?}");
@@ -1205,10 +1205,7 @@ mod tests {
                 key: "DEEPSEEK_API_KEY",
                 entries: vec![],
             };
-            let printed = lines(&run(
-                false,
-                [ProviderOutcome::Skipped, ProviderOutcome::Skipped, missing],
-            ));
+            let printed = lines(&run(false, [ProviderOutcome::Skipped, missing]));
             assert_eq!(printed.len(), 2, "{printed:?}");
             assert!(printed[0].contains("DEEPSEEK_API_KEY"));
             assert_eq!(printed[1], "deepseek: no detected entries");
@@ -1241,10 +1238,7 @@ mod tests {
                 7,
             );
 
-            let printed = lines(&run(
-                false,
-                [report, ProviderOutcome::Skipped, ProviderOutcome::Skipped],
-            ));
+            let printed = lines(&run(false, [report, ProviderOutcome::Skipped]));
 
             assert_eq!(
                 printed[0],
@@ -1272,10 +1266,7 @@ mod tests {
                 outcome: Outcome::Failed(Category::RateLimited),
                 version: 3,
             });
-            let printed = lines(&run(
-                false,
-                [ProviderOutcome::Skipped, ProviderOutcome::Skipped, failed],
-            ));
+            let printed = lines(&run(false, [ProviderOutcome::Skipped, failed]));
             assert_eq!(
                 printed,
                 vec!["deepseek: detection failed: rate-limited; the previous list is kept"]
@@ -1284,22 +1275,25 @@ mod tests {
 
         #[test]
         fn a_skipped_provider_is_never_named() {
-            let failed = ProviderOutcome::Recorded(Recording {
-                outcome: Outcome::Failed(Category::Offline),
-                version: 1,
-            });
-            let printed = lines(&run(
-                false,
-                [ProviderOutcome::Skipped, failed, ProviderOutcome::Skipped],
-            ));
-            assert_eq!(printed.len(), 1);
-            for skipped in ["openai", "deepseek"] {
+            let failed = || {
+                ProviderOutcome::Recorded(Recording {
+                    outcome: Outcome::Failed(Category::Offline),
+                    version: 1,
+                })
+            };
+            let runs = [
+                ([failed(), ProviderOutcome::Skipped], "deepseek"),
+                ([ProviderOutcome::Skipped, failed()], "openai"),
+            ];
+            for (outcomes, skipped) in runs {
+                let printed = lines(&run(false, outcomes));
+                assert_eq!(printed.len(), 1);
                 assert!(
                     !printed.iter().any(|line| line.contains(skipped)),
                     "{printed:?}"
                 );
             }
-            let nothing = lines(&run(false, [(); 3].map(|()| ProviderOutcome::Skipped)));
+            let nothing = lines(&run(false, [(); 2].map(|()| ProviderOutcome::Skipped)));
             assert_eq!(nothing, Vec::<String>::new());
         }
 
@@ -1315,12 +1309,12 @@ mod tests {
                 "seeded the model catalog with hint table version {}",
                 baley_core::catalog::HINT_VERSION
             );
-            let seeded = lines(&run(true, [failed(), failed(), failed()]));
+            let seeded = lines(&run(true, [failed(), failed()]));
             assert_eq!(seeded[0], seed);
-            assert_eq!(seeded.len(), 4);
-            let unseeded = lines(&run(false, [failed(), failed(), failed()]));
+            assert_eq!(seeded.len(), 3);
+            let unseeded = lines(&run(false, [failed(), failed()]));
             assert!(!unseeded.contains(&seed));
-            assert_eq!(unseeded.len(), 3);
+            assert_eq!(unseeded.len(), 2);
         }
 
         #[test]
@@ -1337,7 +1331,7 @@ mod tests {
                     version: 1,
                 })
             };
-            let detection = run(true, [failed(), failed(), failed()]);
+            let detection = run(true, [failed(), failed()]);
 
             let printed = update_lines(&detection, Some(&refusal), Path::new(KEYS_FILE));
 
@@ -1348,7 +1342,6 @@ mod tests {
                 &printed[2..],
                 [
                     "openai: detection failed: keys-file-exposed; the previous list is kept",
-                    "gemini: detection failed: keys-file-exposed; the previous list is kept",
                     "deepseek: detection failed: keys-file-exposed; the previous list is kept",
                 ]
             );
@@ -1373,7 +1366,7 @@ mod tests {
                     .and_then(|rest| rest.split_once(" is no provider Baley detects; providers: "))
                     .unwrap_or_else(|| panic!("{refusal}"));
                 assert_eq!(subject, format!("{name:?}"));
-                assert_eq!(list, "openai, gemini, deepseek");
+                assert_eq!(list, "openai, deepseek");
             }
         }
 
