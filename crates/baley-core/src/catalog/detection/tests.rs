@@ -129,3 +129,48 @@ fn a_gemini_page_with_a_numeric_continuation_is_malformed_though_its_items_parse
     let body = br#"{"models":[{"name":"models/g-a"}],"nextPageToken":42}"#;
     assert_eq!(parse_page(Provider::Gemini, body), None);
 }
+
+#[test]
+fn a_gemini_page_gives_its_next_page_token() {
+    let body = br#"{"models":[{"name":"models/g-a"}],"nextPageToken":"t2"}"#;
+    assert_eq!(next_page(Provider::Gemini, body), Some("t2".to_owned()));
+}
+
+#[test]
+fn a_last_gemini_page_with_no_or_an_empty_token_gives_no_next_page() {
+    let last = br#"{"models":[{"name":"models/g-a"}]}"#;
+    assert_eq!(next_page(Provider::Gemini, last), None);
+    let empty = br#"{"models":[],"nextPageToken":""}"#;
+    assert_eq!(next_page(Provider::Gemini, empty), None);
+    assert_eq!(next_page(Provider::Gemini, b"not json"), None);
+}
+
+#[test]
+fn openai_and_deepseek_never_page_even_when_a_body_carries_a_token() {
+    let body = br#"{"object":"list","data":[{"id":"x"}],"nextPageToken":"t2"}"#;
+    assert_eq!(next_page(Provider::OpenAi, body), None);
+    assert_eq!(next_page(Provider::DeepSeek, body), None);
+}
+
+#[test]
+fn a_page_without_a_continuation_completes_the_listing_up_to_the_20th() {
+    assert_eq!(paging(1, None), Paging::Complete);
+    assert_eq!(paging(20, None), Paging::Complete);
+}
+
+#[test]
+fn a_continuation_is_followed_after_each_of_pages_1_to_19() {
+    for page in 1..=19 {
+        assert_eq!(
+            paging(page, Some(format!("t{}", page + 1))),
+            Paging::Follow(format!("t{}", page + 1)),
+            "page {page}"
+        );
+    }
+}
+
+#[test]
+fn a_20th_page_that_still_continues_cuts_the_listing_short_and_is_not_followed() {
+    assert_eq!(PAGE_BOUND, 20);
+    assert_eq!(paging(20, Some("t21".to_owned())), Paging::CutShort);
+}
