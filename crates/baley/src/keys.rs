@@ -1,9 +1,14 @@
-//! Provider keys read from the owner's file, with pure exposure and grammar checks.
+//! Provider keys read from the owner's file, with pure exposure and grammar
+//! checks, and the model-list request that carries a key in its header.
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+
+use baley_core::catalog::Provider;
+use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
+use reqwest::{Method, Request, Url};
 
 /// The file exposes its keys to another user.
 pub const KEYS_FILE_EXPOSED: &str = "keys-file-exposed";
@@ -31,7 +36,7 @@ impl Key {
     }
 
     /// The value for the child environment and the redactor in `baley exec`,
-    /// and, from Build 2 T8, detection's request header.
+    /// and for the key header of [`list_request`].
     pub(crate) fn expose(&self) -> &str {
         &self.value
     }
@@ -40,6 +45,58 @@ impl fmt::Debug for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.placeholder())
     }
+}
+
+/// The most ids Gemini returns per page, as its `models.list` reference
+/// gives it. Fewer pages keep a real listing well inside the page bound.
+const GEMINI_PAGE_SIZE: &str = "1000";
+
+/// A key whose bytes cannot be sent in a header. The file grammar refuses
+/// every control byte, so no accepted key gives this, and it holds no text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct KeyNotSendable;
+
+/// The GET for one page of `provider`'s model list. The key goes only in
+/// the provider's key header, marked sensitive so a `Debug` of the request
+/// prints `Sensitive` for it, and never in the URL. Gemini also gets its
+/// page size and, given one, the `continuation` as `pageToken`; OpenAI and
+/// DeepSeek do not page.
+#[cfg_attr(not(test), expect(dead_code, reason = "the lister calls it next"))]
+pub(crate) fn list_request(
+    provider: Provider,
+    key: &Key,
+    continuation: Option<&str>,
+) -> Result<Request, KeyNotSendable> {
+    let (url, header, value) = match provider {
+        Provider::OpenAi => (
+            "https://api.openai.com/v1/models",
+            AUTHORIZATION,
+            format!("Bearer {}", key.expose()),
+        ),
+        Provider::DeepSeek => (
+            "https://api.deepseek.com/models",
+            AUTHORIZATION,
+            format!("Bearer {}", key.expose()),
+        ),
+        Provider::Gemini => (
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            HeaderName::from_static("x-goog-api-key"),
+            key.expose().to_owned(),
+        ),
+    };
+    let mut url = Url::parse(url).expect("a compiled list URL parses");
+    if provider == Provider::Gemini {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("pageSize", GEMINI_PAGE_SIZE);
+        if let Some(token) = continuation {
+            query.append_pair("pageToken", token);
+        }
+    }
+    let mut value = HeaderValue::from_str(&value).map_err(|_| KeyNotSendable)?;
+    value.set_sensitive(true);
+    let mut request = Request::new(Method::GET, url);
+    request.headers_mut().insert(header, value);
+    Ok(request)
 }
 
 /// The accepted keys and the configured path they came from.
@@ -874,6 +931,129 @@ mod tests {
             );
         }
     }
+    const SENTINEL: &str = "sk-SENTINEL-7d31";
+
+    fn sentinel_key(name: &str) -> Keys {
+        Keys::parsed(
+            Path::new("/c/keys.env"),
+            format!("{name}={SENTINEL}").as_bytes(),
+        )
+    }
+
+    /// Asserts the request is a GET to exactly `origin` and `path`, with
+    /// the sentinel only in `header` as `value`, marked sensitive, and
+    /// nowhere in the URL or the request's `Debug`.
+    fn assert_key_only_in_header(
+        request: &Request,
+        origin: &str,
+        path: &str,
+        header: &str,
+        value: &str,
+    ) {
+        assert_eq!(request.method(), Method::GET);
+        let url = request.url();
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(format!("https://{}", url.host_str().unwrap()), origin);
+        assert_eq!(url.port(), None);
+        assert_eq!(url.path(), path);
+        let sent = request.headers().get(header).unwrap();
+        assert_eq!(sent.as_bytes(), value.as_bytes());
+        assert!(sent.is_sensitive());
+        for (name, other) in request.headers() {
+            if name.as_str() != header {
+                let text = String::from_utf8_lossy(other.as_bytes());
+                assert!(!text.contains(SENTINEL), "{name} holds the key");
+            }
+        }
+        assert!(!url.as_str().contains(SENTINEL));
+        let debug = format!("{request:?}");
+        assert!(!debug.contains(SENTINEL), "{debug}");
+        assert!(debug.contains("Sensitive"), "{debug}");
+    }
+
+    #[test]
+    fn an_openai_list_request_carries_the_key_only_in_a_sensitive_bearer_header() {
+        let keys = sentinel_key("OPENAI_API_KEY");
+        let key = keys.get("OPENAI_API_KEY").unwrap();
+        let request = list_request(Provider::OpenAi, key, None).unwrap();
+        assert_key_only_in_header(
+            &request,
+            "https://api.openai.com",
+            "/v1/models",
+            "authorization",
+            &format!("Bearer {SENTINEL}"),
+        );
+        assert_eq!(request.url().query(), None);
+    }
+
+    #[test]
+    fn a_deepseek_list_request_carries_the_key_only_in_a_sensitive_bearer_header() {
+        let keys = sentinel_key("DEEPSEEK_API_KEY");
+        let key = keys.get("DEEPSEEK_API_KEY").unwrap();
+        let request = list_request(Provider::DeepSeek, key, None).unwrap();
+        assert_key_only_in_header(
+            &request,
+            "https://api.deepseek.com",
+            "/models",
+            "authorization",
+            &format!("Bearer {SENTINEL}"),
+        );
+        assert_eq!(request.url().query(), None);
+    }
+
+    #[test]
+    fn a_gemini_list_request_carries_the_key_only_in_a_sensitive_goog_header() {
+        let keys = sentinel_key("GEMINI_API_KEY");
+        let key = keys.get("GEMINI_API_KEY").unwrap();
+        let request = list_request(Provider::Gemini, key, None).unwrap();
+        assert_key_only_in_header(
+            &request,
+            "https://generativelanguage.googleapis.com",
+            "/v1beta/models",
+            "x-goog-api-key",
+            SENTINEL,
+        );
+        let query: Vec<(String, String)> = request.url().query_pairs().into_owned().collect();
+        assert_eq!(query, vec![("pageSize".into(), "1000".into())]);
+    }
+
+    #[test]
+    fn a_gemini_continuation_is_encoded_as_page_token_and_never_joined_by_a_key_parameter() {
+        let keys = sentinel_key("GEMINI_API_KEY");
+        let key = keys.get("GEMINI_API_KEY").unwrap();
+        let request = list_request(Provider::Gemini, key, Some("a/b+c=")).unwrap();
+        assert_eq!(
+            request.url().query(),
+            Some("pageSize=1000&pageToken=a%2Fb%2Bc%3D")
+        );
+        let query: Vec<(String, String)> = request.url().query_pairs().into_owned().collect();
+        assert_eq!(
+            query,
+            vec![
+                ("pageSize".into(), "1000".into()),
+                ("pageToken".into(), "a/b+c=".into()),
+            ]
+        );
+        assert!(!query.iter().any(|(name, _)| name == "key"));
+        assert_key_only_in_header(
+            &request,
+            "https://generativelanguage.googleapis.com",
+            "/v1beta/models",
+            "x-goog-api-key",
+            SENTINEL,
+        );
+    }
+
+    #[test]
+    fn a_key_that_cannot_be_a_header_is_refused_without_its_text() {
+        let key = Key {
+            name: "OPENAI_API_KEY".into(),
+            value: format!("{SENTINEL}\n"),
+        };
+        let refused = list_request(Provider::OpenAi, &key, None).unwrap_err();
+        assert!(!format!("{refused:?}").contains(SENTINEL));
+    }
+
     #[test]
     fn gatherer_reads_keys_through_a_symbolic_link() {
         let dir = tempfile::tempdir().unwrap();
