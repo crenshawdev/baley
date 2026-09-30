@@ -83,13 +83,16 @@ fn no_two_prefix_rows_share_a_provider_and_prefix() {
 }
 
 #[test]
-fn no_provider_is_left_out_of_the_exact_hint_rows() {
-    for provider in Provider::ALL {
-        assert!(
-            EXACT_HINTS.iter().any(|row| row.provider == provider),
-            "{provider:?}"
-        );
-    }
+fn openai_and_deepseek_have_exact_hint_rows_and_gemini_has_none() {
+    let has_rows = |provider| EXACT_HINTS.iter().any(|row| row.provider == provider);
+    assert!(has_rows(Provider::OpenAi));
+    assert!(has_rows(Provider::DeepSeek));
+    assert!(!has_rows(Provider::Gemini));
+    assert!(
+        !PREFIX_HINTS
+            .iter()
+            .any(|row| row.provider == Provider::Gemini)
+    );
 }
 
 #[test]

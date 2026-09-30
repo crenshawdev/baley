@@ -1,7 +1,7 @@
 //! The tables compiled into the binary: each host's aliases and the hint
 //! table (design 0003, CFG-R19 and CFG-R20).
 
-use super::Provider::{DeepSeek, Gemini, OpenAi};
+use super::Provider::{DeepSeek, OpenAi};
 use super::Tier::{Balanced, Cheap, Flagship};
 use super::{Provider, Tier};
 use crate::policy::Host;
@@ -71,18 +71,13 @@ const fn prefix(
     }
 }
 
-/// The exact-id rows, from each provider's published model list.
+/// The exact-id rows, from the OpenAI and DeepSeek published model lists.
+/// Gemini has no rows: the owner ruled it out on 2026-09-30, so its catalog
+/// fills only from detection and owner additions.
 pub const EXACT_HINTS: &[HintRow] = &[
     exact(OpenAi, "gpt-6-astra", Flagship, true),
     exact(OpenAi, "gpt-6.1-sol", Balanced, true),
     exact(OpenAi, "gpt-6-luna", Cheap, true),
-    exact(Gemini, "gemini-3.8-flash", Flagship, true),
-    exact(Gemini, "gemini-3.1-pro-preview", Flagship, true),
-    exact(Gemini, "gemini-3.7-flash", Balanced, true),
-    exact(Gemini, "gemini-3.6-flash", Balanced, true),
-    exact(Gemini, "gemini-3.5-flash", Balanced, true),
-    exact(Gemini, "gemini-3.5-flash-lite", Cheap, true),
-    exact(Gemini, "gemini-3.1-flash-lite", Cheap, false),
     exact(DeepSeek, "deepseek-v4-pro", Flagship, true),
     exact(DeepSeek, "deepseek-flash", Cheap, true),
 ];
@@ -94,8 +89,6 @@ pub const PREFIX_HINTS: &[PrefixRow] = &[
     prefix(OpenAi, "gpt-6.1-sol", Balanced, true),
     prefix(OpenAi, "gpt-6-sol", Balanced, true),
     prefix(OpenAi, "gpt-6-luna", Cheap, true),
-    prefix(Gemini, "gemini-3.1-pro", Flagship, true),
-    prefix(Gemini, "gemini-3.5-flash-lite", Cheap, true),
     prefix(DeepSeek, "deepseek-v4-pro", Flagship, true),
     prefix(DeepSeek, "deepseek-v4-flash", Cheap, true),
 ];
