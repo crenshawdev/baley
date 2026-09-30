@@ -3,8 +3,10 @@
 //! reserved `user` project; the judges live in `baley_core::catalog`.
 
 use std::fmt;
+use std::path::Path;
 use std::process::ExitCode;
 
+use baley_core::catalog::detection::{IdChange, Outcome};
 use baley_core::catalog::{
     Catalog, HINT_VERSION, MODEL_CATALOG_VIEW, MODELS_OWNER_CHANGED, MODELS_OWNER_CHANGED_VERSION,
     MODELS_SEEDED, MODELS_SEEDED_VERSION, MODELS_STREAM, OwnerChange, Placement, Tier,
@@ -19,7 +21,9 @@ use baley_store::{
 use baley_store_sqlite::SqliteStore;
 use serde_json::{Value, json};
 
+use crate::detection::{Detection, ProviderOutcome, Recording};
 use crate::folders::{Environment, Folders, Platform};
+use crate::keys::KeysRefusal;
 use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
@@ -330,9 +334,7 @@ fn open_seeded(
     let store = open::store(&folders.home, started_at, open::options())
         .map_err(|e| display::store_error(&e, None))?;
     if seed(&store, new_request_id(), started_at).map_err(failed)? {
-        lines.push(format!(
-            "seeded the model catalog with hint table version {HINT_VERSION}"
-        ));
+        lines.push(seed_line());
     }
     Ok(store)
 }
@@ -443,6 +445,92 @@ fn owner(
         code: 0,
         error: false,
     })
+}
+
+fn seed_line() -> String {
+    format!("seeded the model catalog with hint table version {HINT_VERSION}")
+}
+
+/// The lines `baley models update` prints for one run: the seed line when
+/// it seeded, a refused `keys.env`'s own text once, then each provider the
+/// run did not skip. No error or response text reaches them.
+pub fn update_lines(
+    detection: &Detection,
+    refusal: Option<&KeysRefusal>,
+    keys_file: &Path,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if detection.seeded {
+        lines.push(seed_line());
+    }
+    if let Some(refusal) = refusal {
+        lines.push(refusal.to_string());
+    }
+    const HEADER: [&str; 5] = ["PROVIDER", "ID", "STATUS", "TIER", "PLACED"];
+    for (provider, outcome) in &detection.providers {
+        let name = provider.name();
+        match outcome {
+            ProviderOutcome::Skipped => {}
+            ProviderOutcome::Recorded(Recording {
+                outcome: Outcome::Detected(report),
+                version,
+            }) => {
+                lines.push(format!(
+                    "{name}: detected {} added, {} removed, {} unchanged; catalog version {version}",
+                    report.count(IdChange::New),
+                    report.count(IdChange::Removed),
+                    report.count(IdChange::Unchanged),
+                ));
+                let rows: Vec<[&str; 5]> = report
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        let change = match row.change {
+                            IdChange::New => "added",
+                            IdChange::Unchanged => "unchanged",
+                            IdChange::Removed => "removed",
+                        };
+                        let tier = row.tier.map_or("-", Tier::name);
+                        [name, row.id.as_str(), change, tier, row.placed.name()]
+                    })
+                    .collect();
+                if !rows.is_empty() {
+                    lines.extend(columns(HEADER, &rows));
+                }
+            }
+            ProviderOutcome::Recorded(Recording {
+                outcome: Outcome::Failed(category),
+                ..
+            }) => lines.push(format!(
+                "{name}: detection failed: {}; the previous list is kept",
+                category.name()
+            )),
+            ProviderOutcome::Missing { key, entries } => {
+                lines.push(format!(
+                    "{name}: {key} is not in {}, so its detected entries are unverifiable",
+                    keys_file.display()
+                ));
+                let rows: Vec<[&str; 5]> = entries
+                    .iter()
+                    .map(|entry| {
+                        [
+                            name,
+                            entry.name.as_str(),
+                            "unverifiable",
+                            entry.tier.map_or("-", Tier::name),
+                            entry.placed.map_or("-", Placement::name),
+                        ]
+                    })
+                    .collect();
+                if rows.is_empty() {
+                    lines.push(format!("{name}: no detected entries"));
+                } else {
+                    lines.extend(columns(HEADER, &rows));
+                }
+            }
+        }
+    }
+    lines
 }
 
 // Pads every column but the last to its widest cell.
@@ -976,5 +1064,245 @@ mod tests {
         assert_eq!(deepseek_names.names, ["ds-a".to_string()].into());
         assert_eq!(deepseek_names.version, seq);
         assert_eq!(names("openai", openai).names, ["gpt-a".to_string()].into());
+    }
+
+    mod update_lines {
+        use std::path::{Path, PathBuf};
+
+        use baley_core::catalog::detection::{Category, IdChange, Outcome, Report, ReportRow};
+        use baley_core::catalog::{Catalog, ListingRow, Placement, Provider, Source, Tier};
+
+        use crate::detection::{Detection, ProviderOutcome, Recording};
+        use crate::keys::KeysRefusal;
+        use crate::models::update_lines;
+
+        const KEYS_FILE: &str = "/c/keys.env";
+
+        fn run(seeded: bool, outcomes: [ProviderOutcome; 3]) -> Detection {
+            Detection {
+                seeded,
+                providers: Provider::ALL.into_iter().zip(outcomes).collect(),
+            }
+        }
+
+        fn lines(detection: &Detection) -> Vec<String> {
+            update_lines(detection, None, Path::new(KEYS_FILE))
+        }
+
+        fn detected(rows: Vec<ReportRow>, version: u64) -> ProviderOutcome {
+            ProviderOutcome::Recorded(Recording {
+                outcome: Outcome::Detected(Report { rows }),
+                version,
+            })
+        }
+
+        fn row(id: &str, change: IdChange, tier: Option<Tier>, placed: Placement) -> ReportRow {
+            ReportRow {
+                id: id.into(),
+                change,
+                tier,
+                placed,
+            }
+        }
+
+        fn entry(name: &str, tier: Tier, placed: Placement) -> ListingRow {
+            ListingRow {
+                catalog: Catalog::Provider(Provider::OpenAi),
+                name: name.into(),
+                source: Source::Detected,
+                tier: Some(tier),
+                placed: Some(placed),
+            }
+        }
+
+        #[test]
+        fn a_named_keyless_provider_names_its_missing_key_and_marks_each_entry_unverifiable() {
+            let missing = ProviderOutcome::Missing {
+                key: "OPENAI_API_KEY",
+                entries: vec![
+                    entry("gpt-6-astra", Tier::Flagship, Placement::Hint),
+                    entry("whisper-9", Tier::Balanced, Placement::BestFit),
+                ],
+            };
+            let skipped = || ProviderOutcome::Skipped;
+
+            let printed = lines(&run(false, [missing, skipped(), skipped()]));
+
+            assert!(printed[0].starts_with("openai: "), "{printed:?}");
+            assert!(printed[0].contains("OPENAI_API_KEY"), "{printed:?}");
+            assert!(printed[0].contains(KEYS_FILE), "{printed:?}");
+            let rows: Vec<Vec<&str>> = printed[2..]
+                .iter()
+                .map(|line| line.split_whitespace().collect())
+                .collect();
+            assert_eq!(
+                rows,
+                vec![
+                    vec!["openai", "gpt-6-astra", "unverifiable", "flagship", "hint"],
+                    vec![
+                        "openai",
+                        "whisper-9",
+                        "unverifiable",
+                        "balanced",
+                        "best-fit"
+                    ],
+                ]
+            );
+        }
+
+        #[test]
+        fn a_named_keyless_provider_with_no_detected_entries_says_it_has_none() {
+            let missing = ProviderOutcome::Missing {
+                key: "GEMINI_API_KEY",
+                entries: vec![],
+            };
+            let printed = lines(&run(
+                false,
+                [ProviderOutcome::Skipped, missing, ProviderOutcome::Skipped],
+            ));
+            assert_eq!(printed.len(), 2, "{printed:?}");
+            assert!(printed[0].contains("GEMINI_API_KEY"));
+            assert_eq!(printed[1], "gemini: no detected entries");
+        }
+
+        #[test]
+        fn a_detection_shows_its_counts_version_and_each_ids_change_tier_and_placement() {
+            let report = detected(
+                vec![
+                    row(
+                        "gpt-6-astra",
+                        IdChange::Unchanged,
+                        Some(Tier::Flagship),
+                        Placement::Hint,
+                    ),
+                    row(
+                        "gpt-6-luna",
+                        IdChange::Removed,
+                        Some(Tier::Cheap),
+                        Placement::Hint,
+                    ),
+                    row("gpt-mine", IdChange::Unchanged, None, Placement::Owner),
+                    row(
+                        "gpt-6-sol-9",
+                        IdChange::New,
+                        Some(Tier::Balanced),
+                        Placement::Prefix,
+                    ),
+                ],
+                7,
+            );
+
+            let printed = lines(&run(
+                false,
+                [report, ProviderOutcome::Skipped, ProviderOutcome::Skipped],
+            ));
+
+            assert_eq!(
+                printed[0],
+                "openai: detected 1 added, 1 removed, 2 unchanged; catalog version 7"
+            );
+            let rows: Vec<Vec<&str>> = printed[1..]
+                .iter()
+                .map(|line| line.split_whitespace().collect())
+                .collect();
+            assert_eq!(
+                rows,
+                vec![
+                    vec!["PROVIDER", "ID", "STATUS", "TIER", "PLACED"],
+                    vec!["openai", "gpt-6-astra", "unchanged", "flagship", "hint"],
+                    vec!["openai", "gpt-6-luna", "removed", "cheap", "hint"],
+                    vec!["openai", "gpt-mine", "unchanged", "-", "owner"],
+                    vec!["openai", "gpt-6-sol-9", "added", "balanced", "prefix"],
+                ]
+            );
+        }
+
+        #[test]
+        fn a_failure_prints_its_category_and_nothing_a_detection_would() {
+            let failed = ProviderOutcome::Recorded(Recording {
+                outcome: Outcome::Failed(Category::RateLimited),
+                version: 3,
+            });
+            let printed = lines(&run(
+                false,
+                [ProviderOutcome::Skipped, ProviderOutcome::Skipped, failed],
+            ));
+            assert_eq!(
+                printed,
+                vec!["deepseek: detection failed: rate-limited; the previous list is kept"]
+            );
+        }
+
+        #[test]
+        fn a_skipped_provider_is_never_named() {
+            let failed = ProviderOutcome::Recorded(Recording {
+                outcome: Outcome::Failed(Category::Offline),
+                version: 1,
+            });
+            let printed = lines(&run(
+                false,
+                [ProviderOutcome::Skipped, failed, ProviderOutcome::Skipped],
+            ));
+            assert_eq!(printed.len(), 1);
+            for skipped in ["openai", "deepseek"] {
+                assert!(
+                    !printed.iter().any(|line| line.contains(skipped)),
+                    "{printed:?}"
+                );
+            }
+            let nothing = lines(&run(false, [(); 3].map(|()| ProviderOutcome::Skipped)));
+            assert_eq!(nothing, Vec::<String>::new());
+        }
+
+        #[test]
+        fn the_seed_line_comes_first_and_only_when_the_run_seeded() {
+            let failed = || {
+                ProviderOutcome::Recorded(Recording {
+                    outcome: Outcome::Failed(Category::KeysFileExposed),
+                    version: 1,
+                })
+            };
+            let seed = format!(
+                "seeded the model catalog with hint table version {}",
+                baley_core::catalog::HINT_VERSION
+            );
+            let seeded = lines(&run(true, [failed(), failed(), failed()]));
+            assert_eq!(seeded[0], seed);
+            assert_eq!(seeded.len(), 4);
+            let unseeded = lines(&run(false, [failed(), failed(), failed()]));
+            assert!(!unseeded.contains(&seed));
+            assert_eq!(unseeded.len(), 3);
+        }
+
+        #[test]
+        fn a_refused_keys_file_prints_its_own_text_once_after_the_seed_line() {
+            let refusal = KeysRefusal::Exposed {
+                path: PathBuf::from(KEYS_FILE),
+                user: 1000,
+                owner: None,
+                mode: Some(0o644),
+            };
+            let failed = || {
+                ProviderOutcome::Recorded(Recording {
+                    outcome: Outcome::Failed(Category::KeysFileExposed),
+                    version: 1,
+                })
+            };
+            let detection = run(true, [failed(), failed(), failed()]);
+
+            let printed = update_lines(&detection, Some(&refusal), Path::new(KEYS_FILE));
+
+            assert_eq!(printed[1], refusal.to_string());
+            let text = refusal.to_string();
+            assert_eq!(printed.iter().filter(|line| **line == text).count(), 1);
+            assert_eq!(
+                &printed[2..],
+                [
+                    "openai: detection failed: keys-file-exposed; the previous list is kept",
+                    "gemini: detection failed: keys-file-exposed; the previous list is kept",
+                    "deepseek: detection failed: keys-file-exposed; the previous list is kept",
+                ]
+            );
+        }
     }
 }
