@@ -11,6 +11,7 @@ use std::fmt;
 
 use crate::policy::{Host, UNKNOWN_MODEL};
 
+pub mod detection;
 pub mod events;
 pub mod lookup;
 pub mod owner;
