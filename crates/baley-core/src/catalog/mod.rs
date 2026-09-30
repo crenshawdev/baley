@@ -11,8 +11,15 @@ use std::fmt;
 
 use crate::policy::Host;
 
+pub mod events;
 pub mod tables;
 
+pub use events::{
+    MODELS_DETECTED, MODELS_DETECTED_VERSION, MODELS_DETECTION_FAILED,
+    MODELS_DETECTION_FAILED_VERSION, MODELS_OWNER_CHANGED, MODELS_OWNER_CHANGED_VERSION,
+    MODELS_SEEDED, MODELS_SEEDED_VERSION, MODELS_STREAM, OwnerChange, owner_changed_payload,
+    register_model_events, seeded_payload,
+};
 pub use tables::{EXACT_HINTS, HINT_VERSION, HintRow, PREFIX_HINTS, PrefixRow, host_aliases};
 
 #[cfg(test)]
