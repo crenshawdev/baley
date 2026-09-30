@@ -9,9 +9,10 @@ use std::process::ExitCode;
 use baley_core::catalog::detection::{IdChange, Outcome};
 use baley_core::catalog::{
     Catalog, HINT_VERSION, MODEL_CATALOG_VIEW, MODELS_OWNER_CHANGED, MODELS_OWNER_CHANGED_VERSION,
-    MODELS_SEEDED, MODELS_SEEDED_VERSION, MODELS_STREAM, OwnerChange, Placement, Tier,
-    USER_PROJECT, catalog_key, judge_alias_addition, judge_alias_removal, judge_held_removal,
-    listing, owner_changed_payload, read_state, seed_due, seed_payload, state_key,
+    MODELS_SEEDED, MODELS_SEEDED_VERSION, MODELS_STREAM, OwnerChange, Placement, Provider, Tier,
+    UNKNOWN_PROVIDER, USER_PROJECT, catalog_key, judge_alias_addition, judge_alias_removal,
+    judge_held_removal, listing, owner_changed_payload, read_state, seed_due, seed_payload,
+    state_key,
 };
 use baley_store::{
     Actor, Admin, Answer, Command, CommandKind, Decision, DocKey, Ledger, NewEvent, Observed,
@@ -21,9 +22,9 @@ use baley_store::{
 use baley_store_sqlite::SqliteStore;
 use serde_json::{Value, json};
 
-use crate::detection::{Detection, ProviderOutcome, Recording};
+use crate::detection::{Detection, ProviderOutcome, Recording, Trigger, detect_blocking};
 use crate::folders::{Environment, Folders, Platform};
-use crate::keys::KeysRefusal;
+use crate::keys::{self, KeysRefusal};
 use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
@@ -289,6 +290,14 @@ enum ModelsCommand {
         #[arg(value_name = "NAME", value_parser = model_name)]
         name: String,
     },
+    /// Refresh the openai, gemini and deepseek catalogs from each provider's
+    /// model list, with the keys in keys.env. Every provider with a key when
+    /// none is named. A failed detection is reported and exits 0.
+    Update {
+        /// openai, gemini or deepseek.
+        #[arg(value_name = "PROVIDER")]
+        providers: Vec<String>,
+    },
 }
 
 /// Runs one `baley models` command and prints what it did.
@@ -304,6 +313,7 @@ pub fn run(args: ModelsArgs) -> ExitCode {
         ModelsCommand::Remove { catalog, name } => {
             owner(&catalog, &name, OwnerChange::Removed, &started_at)
         }
+        ModelsCommand::Update { providers } => update(&providers, &started_at),
     }
     .unwrap_or_else(|e| e);
     for line in result.lines {
@@ -406,6 +416,44 @@ fn tier(text: &str) -> Result<Tier, String> {
     Tier::parse(text).ok_or_else(|| {
         let tiers: Vec<&str> = Tier::ALL.iter().map(|tier| tier.name()).collect();
         format!("tiers: {}", tiers.join(", "))
+    })
+}
+
+/// The providers `baley models update` names, each once, or none. Only a
+/// provider Baley detects is accepted: a host or any other name is refused
+/// with `unknown-provider`, before any store opens. Case is not folded.
+pub fn named_providers(names: &[String]) -> Result<Vec<Provider>, String> {
+    let mut named = Vec::new();
+    for name in names {
+        let Some(provider) = Provider::parse(name) else {
+            let providers: Vec<&str> = Provider::ALL.iter().map(|p| p.name()).collect();
+            // Debug quoting shows an empty name and escapes control bytes.
+            return Err(format!(
+                "{UNKNOWN_PROVIDER}: {name:?} is no provider Baley detects; providers: {}",
+                providers.join(", ")
+            ));
+        };
+        if !named.contains(&provider) {
+            named.push(provider);
+        }
+    }
+    Ok(named)
+}
+
+fn update(names: &[String], started_at: &str) -> Result<Render, Render> {
+    let folders = folders()?;
+    let named = named_providers(names).map_err(|e| refuse(&e))?;
+    let keys = keys::load(&folders.config);
+    // Opened without seeding: the run seeds only when it records.
+    let store = open::store(&folders.home, started_at, open::options())
+        .map_err(|e| display::store_error(&e, None))?;
+    let detection = detect_blocking(&store, keys.as_ref(), &Trigger::Owner(named), started_at)
+        .map_err(failed)?;
+    let keys_file = folders.config.join("keys.env");
+    Ok(Render {
+        lines: update_lines(&detection, keys.as_ref().err(), &keys_file),
+        code: 0,
+        error: false,
     })
 }
 
@@ -1303,6 +1351,49 @@ mod tests {
                     "deepseek: detection failed: keys-file-exposed; the previous list is kept",
                 ]
             );
+        }
+    }
+
+    mod named_providers {
+        use baley_core::catalog::Provider;
+
+        use crate::models::named_providers;
+
+        fn names(given: &[&str]) -> Vec<String> {
+            given.iter().map(|name| name.to_string()).collect()
+        }
+
+        #[test]
+        fn a_host_a_vendor_without_detection_a_cased_or_an_empty_name_is_no_provider() {
+            for name in ["claude-code", "codex", "anthropic", "OpenAI", ""] {
+                let refusal = named_providers(&names(&[name])).unwrap_err();
+                let (subject, list) = refusal
+                    .strip_prefix("unknown-provider: ")
+                    .and_then(|rest| rest.split_once(" is no provider Baley detects; providers: "))
+                    .unwrap_or_else(|| panic!("{refusal}"));
+                assert_eq!(subject, format!("{name:?}"));
+                assert_eq!(list, "openai, gemini, deepseek");
+            }
+        }
+
+        #[test]
+        fn a_refusal_anywhere_in_the_names_refuses_the_whole_run() {
+            let refusal = named_providers(&names(&["openai", "codex"])).unwrap_err();
+            assert!(
+                refusal.starts_with("unknown-provider: \"codex\" "),
+                "{refusal}"
+            );
+        }
+
+        #[test]
+        fn a_repeated_provider_counts_once() {
+            let named = named_providers(&names(&["openai", "gemini", "openai"])).unwrap();
+            assert_eq!(named, vec![Provider::OpenAi, Provider::Gemini]);
+        }
+
+        #[test]
+        fn no_name_is_the_none_named_case() {
+            assert_eq!(named_providers(&[]).unwrap(), Vec::<Provider>::new());
         }
     }
 }

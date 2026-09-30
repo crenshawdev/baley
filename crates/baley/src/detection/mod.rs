@@ -122,3 +122,20 @@ pub async fn detect(
     }
     Ok(Detection { seeded, providers })
 }
+
+/// Runs [`detect`] with the HTTPS lister on a current-thread runtime of its
+/// own, for a command outside tokio. A runtime that will not start is
+/// reported as the store being unavailable.
+pub(crate) fn detect_blocking(
+    store: &(impl Admin + Views + Ledger),
+    keys: Result<&Keys, &KeysRefusal>,
+    trigger: &Trigger,
+    at: &str,
+) -> Result<Detection, StoreError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .map_err(|error| StoreError::Unavailable(format!("detection cannot start: {error}")))?;
+    runtime.block_on(detect(store, &HttpLister::new(), keys, trigger, at))
+}

@@ -30,7 +30,7 @@ enum Command {
     Exec(baley::exec::ExecArgs),
     /// Tie this repository to a ledger project: write baley.toml and record project.initialized.
     Init(baley::init::InitArgs),
-    /// List, add and remove the model names Baley accepts per host and provider.
+    /// List, add, remove and update the model names Baley accepts per host and provider.
     Models(baley::models::ModelsArgs),
     /// Owner operations on the evidence ledger.
     #[command(flatten)]
