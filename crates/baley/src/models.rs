@@ -2,15 +2,26 @@
 //! 0003, CFG-R19, CFG-R22). The catalog is the `model_catalog` view of the
 //! reserved `user` project; the judges live in `baley_core::catalog`.
 
+use std::fmt;
+use std::process::ExitCode;
+
 use baley_core::catalog::{
-    HINT_VERSION, MODEL_CATALOG_VIEW, MODELS_SEEDED, MODELS_SEEDED_VERSION, MODELS_STREAM,
-    USER_PROJECT, read_state, seed_due, seed_payload, state_key,
+    Catalog, HINT_VERSION, MODEL_CATALOG_VIEW, MODELS_SEEDED, MODELS_SEEDED_VERSION, MODELS_STREAM,
+    Placement, Tier, USER_PROJECT, catalog_key, listing, read_state, seed_due, seed_payload,
+    state_key,
 };
 use baley_store::{
-    Actor, Admin, Command, CommandKind, Decision, Ledger, NewEvent, Observed, OutcomeKind,
+    Actor, Admin, Command, CommandKind, Decision, DocKey, Ledger, NewEvent, Observed, OutcomeKind,
     ProjectId, Refusal, RequestId, StoreError, StreamName, Views, request_digest,
 };
-use serde_json::json;
+use baley_store_sqlite::SqliteStore;
+use serde_json::{Value, json};
+
+use crate::folders::{Environment, Folders, Platform};
+use crate::ledger::clock::SystemClock;
+use crate::ledger::commands::new_request_id;
+use crate::ledger::display::{self, Render};
+use crate::ledger::open;
 
 /// The command kind the seeding step records under.
 pub const SEED_COMMAND: &str = "models.seed";
@@ -120,6 +131,145 @@ pub fn seed(
     }
     create_user(store, at)?;
     record_seed(store, request_id, at)
+}
+
+/// Arguments for `baley models`.
+#[derive(clap::Args, Debug, Clone)]
+pub struct ModelsArgs {
+    #[command(subcommand)]
+    command: ModelsCommand,
+}
+
+#[derive(clap::Subcommand, Debug, Clone)]
+enum ModelsCommand {
+    /// List every accepted name with its source, tier and placement, and
+    /// the catalog version.
+    List {
+        /// One catalog: claude-code, codex, openai, gemini or deepseek.
+        /// Every catalog when absent.
+        #[arg(value_name = "CATALOG")]
+        catalog: Option<String>,
+    },
+}
+
+/// Runs one `baley models` command and prints what it did.
+pub fn run(args: ModelsArgs) -> ExitCode {
+    let started_at = SystemClock::now();
+    let result = match args.command {
+        ModelsCommand::List { catalog } => list(catalog.as_deref(), &started_at),
+    }
+    .unwrap_or_else(|e| e);
+    for line in result.lines {
+        if result.error {
+            eprintln!("baley: {line}");
+        } else {
+            println!("{line}");
+        }
+    }
+    ExitCode::from(result.code)
+}
+
+fn refuse(refusal: &dyn fmt::Display) -> Render {
+    Render::refusal(refusal.to_string())
+}
+
+fn failed(error: StoreError) -> Render {
+    display::store_error(&error, Some(USER_PROJECT))
+}
+
+/// Resolves the folders, opens the store and seeds. Every refusal that
+/// needs no store comes before this, so it leaves no ledger home behind.
+fn open_seeded(
+    folders: &Folders,
+    started_at: &str,
+    lines: &mut Vec<String>,
+) -> Result<SqliteStore, Render> {
+    let store = open::store(&folders.home, started_at, open::options())
+        .map_err(|e| display::store_error(&e, None))?;
+    if seed(&store, new_request_id(), started_at).map_err(failed)? {
+        lines.push(format!(
+            "seeded the model catalog with hint table version {HINT_VERSION}"
+        ));
+    }
+    Ok(store)
+}
+
+fn folders() -> Result<Folders, Render> {
+    Folders::resolve(Platform::current(), &Environment::read()).map_err(|e| refuse(&e))
+}
+
+fn body(store: &SqliteStore, key: &DocKey) -> Result<Option<Value>, Render> {
+    let document = store
+        .get(&user(), MODEL_CATALOG_VIEW, key)
+        .map_err(failed)?;
+    Ok(document.map(|document| document.body))
+}
+
+fn list(catalog: Option<&str>, started_at: &str) -> Result<Render, Render> {
+    let folders = folders()?;
+    let catalogs = match catalog {
+        Some(name) => vec![Catalog::parse(name).map_err(|e| refuse(&e))?],
+        None => Catalog::ALL.to_vec(),
+    };
+    let mut lines = Vec::new();
+    let store = open_seeded(&folders, started_at, &mut lines)?;
+    let state = body(&store, &state_key())?;
+    let mut documents = Vec::new();
+    for catalog in catalogs {
+        documents.push((catalog, body(&store, &catalog_key(catalog))?));
+    }
+    let documents: Vec<(Catalog, Option<&Value>)> = documents
+        .iter()
+        .map(|(catalog, body)| (*catalog, body.as_ref()))
+        .collect();
+    let listing = listing(&documents, state.as_ref());
+    lines.push(format!("catalog version {}", listing.version));
+    let table: Vec<[&str; 5]> = listing
+        .rows
+        .iter()
+        .map(|row| {
+            [
+                row.catalog.name(),
+                row.name.as_str(),
+                row.source.name(),
+                row.tier.map_or("-", Tier::name),
+                row.placed.map_or("-", Placement::name),
+            ]
+        })
+        .collect();
+    lines.extend(columns(
+        ["CATALOG", "NAME", "SOURCE", "TIER", "PLACED"],
+        &table,
+    ));
+    Ok(Render {
+        lines,
+        code: 0,
+        error: false,
+    })
+}
+
+// Pads every column but the last to its widest cell.
+fn columns(header: [&str; 5], rows: &[[&str; 5]]) -> Vec<String> {
+    let mut widths = header.map(str::len);
+    for row in rows {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(cell.len());
+        }
+    }
+    std::iter::once(&header)
+        .chain(rows)
+        .map(|row| {
+            let mut line = String::new();
+            for (index, cell) in row.iter().enumerate() {
+                if index + 1 < row.len() {
+                    line.push_str(&format!("{cell:<width$}  ", width = widths[index]));
+                } else {
+                    line.push_str(cell);
+                }
+            }
+            line
+        })
+        .collect()
 }
 
 #[cfg(test)]

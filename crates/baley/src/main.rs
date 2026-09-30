@@ -30,6 +30,8 @@ enum Command {
     Exec(baley::exec::ExecArgs),
     /// Tie this repository to a ledger project: write baley.toml and record project.initialized.
     Init(baley::init::InitArgs),
+    /// List, add and remove the model names Baley accepts per host and provider.
+    Models(baley::models::ModelsArgs),
     /// Owner operations on the evidence ledger.
     #[command(flatten)]
     Ledger(baley::ledger::LedgerCommand),
@@ -107,10 +109,11 @@ fn run_command(command: Command) -> std::process::ExitCode {
         Command::Ledger(command) => return baley::ledger::run(command),
         Command::Exec(args) => return baley::exec::run(args),
         Command::Init(args) => return baley::init::run(args),
+        Command::Models(args) => return baley::models::run(args),
         other => other,
     };
     let arguments: Vec<&str> = match &command {
-        Command::Ledger(_) | Command::Exec(_) | Command::Init(_) => {
+        Command::Ledger(_) | Command::Exec(_) | Command::Init(_) | Command::Models(_) => {
             unreachable!("dispatched above")
         }
         Command::Serve => return run_serve(None),
