@@ -9,8 +9,9 @@
 
 use serde_json::{Map, Value, json};
 
+use super::detection::{Added, Category};
 use super::tables::HintRow;
-use super::{Catalog, Tier};
+use super::{Catalog, Provider, Tier};
 use crate::registry::{Registry, RegistryError};
 
 /// The stream every catalog event is on.
@@ -33,14 +34,14 @@ pub const MODELS_OWNER_CHANGED_VERSION: u32 = 1;
 /// One provider's list endpoint answered:
 /// `{provider, added: [{id, tier, high_effort, placed}], removed: [id, ...],
 /// catalog_version, hint_version}`. `placed` is `hint`, `prefix` or
-/// `best-fit`. Detection (Build 2 T8) records it.
+/// `best-fit`. Built by [`detected_payload`].
 pub const MODELS_DETECTED: &str = "models.detected";
 /// The current `models.detected` payload version.
 pub const MODELS_DETECTED_VERSION: u32 = 1;
 
 /// One provider's detection failed and its catalog was left as it was:
-/// `{provider, category, catalog_version}`. Detection (Build 2 T8) records
-/// it.
+/// `{provider, category, catalog_version}`. Built by
+/// [`detection_failed_payload`].
 pub const MODELS_DETECTION_FAILED: &str = "models.detection_failed";
 /// The current `models.detection_failed` payload version.
 pub const MODELS_DETECTION_FAILED_VERSION: u32 = 1;
@@ -105,4 +106,48 @@ pub fn owner_changed_payload(
     payload.insert("change".into(), change.into());
     payload.insert("catalog_version".into(), catalog_version.into());
     Value::Object(payload)
+}
+
+/// The `models.detected` payload for one provider's listing: each id in
+/// `added` with its tag, the ids in `removed`, the catalog version before
+/// the event and the hint table's version.
+pub fn detected_payload(
+    provider: Provider,
+    added: &[Added],
+    removed: &[String],
+    catalog_version: u64,
+    hint_version: u64,
+) -> Value {
+    let added: Vec<Value> = added
+        .iter()
+        .map(|added| {
+            json!({
+                "id": added.id,
+                "tier": added.tag.tier.name(),
+                "high_effort": added.tag.high_effort,
+                "placed": added.tag.placed.name(),
+            })
+        })
+        .collect();
+    json!({
+        "provider": provider.name(),
+        "added": added,
+        "removed": removed,
+        "catalog_version": catalog_version,
+        "hint_version": hint_version,
+    })
+}
+
+/// The `models.detection_failed` payload for one provider. It names the
+/// category only, and holds no `removed`: a failed listing removes nothing.
+pub fn detection_failed_payload(
+    provider: Provider,
+    category: Category,
+    catalog_version: u64,
+) -> Value {
+    json!({
+        "provider": provider.name(),
+        "category": category.name(),
+        "catalog_version": catalog_version,
+    })
 }

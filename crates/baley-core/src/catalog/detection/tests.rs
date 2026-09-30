@@ -6,7 +6,10 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::catalog::{HintRow, Placement, PrefixRow, Provider, Tier};
+use crate::catalog::{
+    HINT_VERSION, HintRow, MODELS_DETECTED, MODELS_DETECTED_VERSION, MODELS_DETECTION_FAILED,
+    MODELS_DETECTION_FAILED_VERSION, Placement, PrefixRow, Provider, Tier,
+};
 
 fn models(listing: &ProviderListing) -> Vec<(&str, Option<u64>)> {
     listing.models().collect()
@@ -933,4 +936,92 @@ fn added_and_removed_are_in_id_order() {
     let added: Vec<&str> = diff.added.iter().map(|added| added.id.as_str()).collect();
     assert_eq!(added, ["gpt-a", "gpt-z"]);
     assert_eq!(diff.removed, ["gpt-a-old", "gpt-z-old"]);
+}
+
+#[test]
+fn a_listing_records_detected_with_the_compiled_hint_and_given_catalog_versions() {
+    // The compiled rows tag `gpt-6-astra`; nothing places the embedding id.
+    let doc = document(
+        "openai",
+        vec![
+            entry("gpt-6-astra", "seed", Some("flagship"), true, "hint"),
+            entry("gpt-6-luna", "seed", Some("cheap"), true, "hint"),
+        ],
+    );
+    let listing = listing_of(
+        Provider::OpenAi,
+        &[
+            ("gpt-6-astra", Some(1)),
+            ("text-embedding-3-large", Some(2)),
+        ],
+    );
+    let chosen = choose_event(Provider::OpenAi, Ok(listing), Some(&doc), 7);
+    assert_eq!(chosen.type_name, MODELS_DETECTED);
+    assert_eq!(chosen.type_version, MODELS_DETECTED_VERSION);
+    assert_eq!(
+        chosen.payload,
+        json!({
+            "provider": "openai",
+            "added": [
+                {"id": "gpt-6-astra", "tier": "flagship", "high_effort": true, "placed": "hint"},
+                {
+                    "id": "text-embedding-3-large", "tier": "balanced",
+                    "high_effort": false, "placed": "best-fit"
+                },
+            ],
+            "removed": ["gpt-6-luna"],
+            "catalog_version": 7,
+            "hint_version": HINT_VERSION,
+        })
+    );
+    let Outcome::Detected(report) = chosen.outcome else {
+        panic!("a listing is reported as detected");
+    };
+    assert_eq!(report.count(IdChange::New), 1);
+}
+
+#[test]
+fn an_incomplete_listing_records_models_detection_failed_with_no_removed() {
+    let doc = document(
+        "gemini",
+        vec![entry(
+            "gemini-9-pro",
+            "detected",
+            Some("flagship"),
+            true,
+            "best-fit",
+        )],
+    );
+    let chosen = choose_event(Provider::Gemini, Err(Category::Incomplete), Some(&doc), 4);
+    assert_eq!(chosen.type_name, MODELS_DETECTION_FAILED);
+    assert_eq!(chosen.type_version, MODELS_DETECTION_FAILED_VERSION);
+    assert_eq!(
+        chosen.payload,
+        json!({"provider": "gemini", "category": "incomplete", "catalog_version": 4})
+    );
+    assert_eq!(chosen.outcome, Outcome::Failed(Category::Incomplete));
+}
+
+#[test]
+fn text_beside_the_ids_in_a_200_body_never_reaches_the_detected_payload() {
+    let body = json!({"object": "list", "data": [
+        {"id": "gpt-6-astra", "object": "model", "created": 1, "owned_by": SENTINEL},
+        {"id": "gpt-6-luna", "object": "model", "created": 2, "owned_by": SENTINEL},
+    ]})
+    .to_string();
+    let observation = observed(vec![response(200, body.as_bytes())]);
+    let classified = classify(Provider::OpenAi, &observation);
+    let chosen = choose_event(Provider::OpenAi, classified, None, 0);
+    assert_eq!(chosen.type_name, MODELS_DETECTED);
+    assert!(!chosen.payload.to_string().contains(SENTINEL));
+}
+
+#[test]
+fn a_401_body_echoing_the_key_never_reaches_the_failure_payload() {
+    let body = format!(r#"{{"error":{{"message":"Incorrect API key provided: {SENTINEL}"}}}}"#);
+    let observation = observed(vec![response(401, body.as_bytes())]);
+    let classified = classify(Provider::DeepSeek, &observation);
+    let chosen = choose_event(Provider::DeepSeek, classified, None, 0);
+    assert_eq!(chosen.type_name, MODELS_DETECTION_FAILED);
+    assert!(!chosen.payload.to_string().contains(SENTINEL));
 }

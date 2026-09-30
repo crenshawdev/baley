@@ -22,8 +22,8 @@ pub mod view;
 pub use events::{
     MODELS_DETECTED, MODELS_DETECTED_VERSION, MODELS_DETECTION_FAILED,
     MODELS_DETECTION_FAILED_VERSION, MODELS_OWNER_CHANGED, MODELS_OWNER_CHANGED_VERSION,
-    MODELS_SEEDED, MODELS_SEEDED_VERSION, MODELS_STREAM, OwnerChange, owner_changed_payload,
-    register_model_events, seeded_payload,
+    MODELS_SEEDED, MODELS_SEEDED_VERSION, MODELS_STREAM, OwnerChange, detected_payload,
+    detection_failed_payload, owner_changed_payload, register_model_events, seeded_payload,
 };
 pub use lookup::{Listing, ListingRow, accepted_names, listing};
 pub use owner::{judge_alias_addition, judge_alias_removal, judge_held_removal};
