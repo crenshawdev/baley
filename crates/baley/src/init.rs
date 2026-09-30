@@ -18,13 +18,14 @@ use baley_store::{
 use clap::Args;
 use serde_json::json;
 
+use crate::detection::{Trigger, detect_blocking};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{Environment, Folders, Platform};
 use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
 use crate::ledger::open;
-use crate::{replace, settings};
+use crate::{keys, replace, settings};
 
 /// The working directory is not inside a git repository.
 pub const NOT_A_REPOSITORY: &str = "not-a-repository";
@@ -267,9 +268,10 @@ pub struct LedgerObservation {
 /// of them. A fully initialized checkout plans nothing, so a rerun appends
 /// nothing to the chain.
 ///
-/// Later work adds its actions here and to the ledger step: the detection
-/// trigger (Build 2 T8), the first `policy.effective` and the policy step
-/// (T9), and checkout admission with `--new-id` (T13).
+/// Later work adds its actions here and to the ledger step: the first
+/// `policy.effective` and the policy step (T9), and checkout admission with
+/// `--new-id` (T13). Detection is not a step: it runs after the steps on
+/// every run that passes the refusals, outside the plan.
 pub fn plan(file: Option<&ProjectIdentity>, ledger: LedgerObservation) -> Vec<Step> {
     match (file, ledger) {
         // A new id has nothing to look up.
@@ -426,6 +428,11 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
             folders.home.display()
         ));
     }
+    // Silent whatever it finds: its outcome never changes what init prints
+    // or returns. The providers run side by side, so a dead network costs
+    // one request timeout.
+    let keys = keys::load(&folders.config);
+    let _ = detect_blocking(&store, keys.as_ref(), &Trigger::Automatic, started_at);
     Ok(Render {
         lines,
         code: 0,
