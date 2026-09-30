@@ -406,6 +406,7 @@ Streams used by the record families:
 | `guard` | `guard.allowed`, `guard.asked`, `guard.refused`, `guard.policy_recorded` |
 | `command/<kind>` | `command.claimed`, `command.completed`, `command.reconciled` |
 | `retention` | `payload.reduced`, `payload.purged` |
+| `models` | `models.seeded`, `models.owner_changed`, `models.detected`, `models.detection_failed`. The stream lives only in the reserved per-user project `user`, whose records carry policy version 0 ([0003](0003-configuration-and-routing.md)) |
 
 The full mapping from today's namespaces is in [Appendix A](#appendix-a-mapping-from-the-current-store).
 
@@ -746,6 +747,7 @@ The store-owned `request` view is at version 2. It projects `command.claimed` to
 | `capture` | (project, item id) | phase, disposition | The capture queue |
 | `request` | (project, command kind, request id) | state | Each request's open claim, held claim or outcome, for retries and open claims |
 | `claim_scope` | (project, scope token) | | The open claim holding each scope token, for the scope check |
+| `model_catalog` | (project, catalog) | | The model names each host and provider accepts, with their source, tier and placement, and the catalog version ([0003](0003-configuration-and-routing.md)) |
 
 Hardin reads only views, and confirms authority against events. The next-action rules, progress and gate checks become queries over `phase`, `plan`, `dispatch`, `verification`, `review_queue`, `pause` and `capture`, not a walk over the whole store.
 
