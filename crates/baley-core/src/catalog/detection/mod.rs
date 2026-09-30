@@ -15,7 +15,7 @@ mod tagging;
 pub use classify::{Category, Observation, ObservedResponse, classify};
 pub use paging::{PAGE_BOUND, Paging, next_page, paging};
 pub use parse::{ProviderListing, parse_page};
-pub use tagging::{Tag, tag};
+pub use tagging::{Candidate, Tag, best_fit, tag};
 
 #[cfg(test)]
 mod tests;

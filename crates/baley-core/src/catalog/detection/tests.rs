@@ -505,3 +505,106 @@ fn an_id_no_row_names_or_starts_is_left_untagged() {
     assert_eq!(tag(Provider::OpenAi, "gpt-6", &exact, &prefixes), None);
     assert_eq!(tag(Provider::OpenAi, "o9-mini", &exact, &prefixes), None);
 }
+
+fn candidate(name: &str, tier: Tier, high_effort: bool, created: Option<u64>) -> Candidate<'_> {
+    Candidate {
+        name,
+        tier,
+        high_effort,
+        created,
+    }
+}
+
+#[test]
+fn best_fit_takes_the_candidate_sharing_the_longest_run_of_segments() {
+    let candidates = [
+        candidate("gemini-3.8-flash", Tier::Cheap, false, None),
+        candidate("gemini-3.8-pro", Tier::Flagship, true, None),
+    ];
+    assert_eq!(
+        best_fit("gemini-3.8-pro-exp", &candidates),
+        Tag {
+            tier: Tier::Flagship,
+            high_effort: true,
+            placed: Placement::BestFit
+        }
+    );
+    // The longer run wins though the other candidate would take every tie.
+    let shorter_but_newer = [
+        candidate("gemini-3.8-pro", Tier::Flagship, true, None),
+        candidate("gemini-3.8-zeta", Tier::Cheap, false, Some(999)),
+    ];
+    assert_eq!(
+        best_fit("gemini-3.8-pro-exp", &shorter_but_newer).tier,
+        Tier::Flagship
+    );
+}
+
+#[test]
+fn best_fit_matches_whole_segments_not_characters() {
+    let candidates = [
+        candidate("gpt-6", Tier::Flagship, true, None),
+        candidate("gpt-60", Tier::Cheap, false, None),
+    ];
+    assert_eq!(best_fit("gpt-60-mini", &candidates).tier, Tier::Cheap);
+    // Characters would pick `gpt-6` (5 shared against 4). Segments tie at one,
+    // and the name that sorts last wins.
+    let tied = [
+        candidate("gpt-6", Tier::Flagship, true, None),
+        candidate("gpt-x", Tier::Cheap, false, None),
+    ];
+    assert_eq!(best_fit("gpt-60-mini", &tied).tier, Tier::Cheap);
+}
+
+#[test]
+fn best_fit_breaks_an_equal_run_toward_the_newest_creation_time() {
+    let candidates = [
+        candidate("gpt-7-b", Tier::Cheap, false, Some(200)),
+        candidate("gpt-7-a", Tier::Flagship, false, Some(100)),
+    ];
+    assert_eq!(best_fit("gpt-7-z", &candidates).tier, Tier::Cheap);
+    let reversed = [candidates[1], candidates[0]];
+    assert_eq!(best_fit("gpt-7-z", &reversed).tier, Tier::Cheap);
+}
+
+#[test]
+fn best_fit_breaks_an_equal_run_toward_a_candidate_with_a_time() {
+    let candidates = [
+        candidate("gpt-7-b", Tier::Flagship, false, None),
+        candidate("gpt-7-a", Tier::Cheap, false, Some(100)),
+    ];
+    assert_eq!(best_fit("gpt-7-z", &candidates).tier, Tier::Cheap);
+}
+
+#[test]
+fn best_fit_breaks_an_equal_run_without_times_toward_the_name_that_sorts_last() {
+    let candidates = [
+        candidate("gpt-7-b", Tier::Cheap, false, None),
+        candidate("gpt-7-a", Tier::Flagship, false, None),
+    ];
+    assert_eq!(best_fit("gpt-7-z", &candidates).tier, Tier::Cheap);
+    let reversed = [candidates[1], candidates[0]];
+    assert_eq!(best_fit("gpt-7-z", &reversed).tier, Tier::Cheap);
+}
+
+#[test]
+fn best_fit_takes_the_winners_high_effort_flag_not_another_candidates() {
+    let candidates = [
+        candidate("deepseek-v5-pro", Tier::Flagship, false, None),
+        candidate("deepseek-v5", Tier::Balanced, true, None),
+    ];
+    let placed = best_fit("deepseek-v5-pro-0930", &candidates);
+    assert_eq!((placed.tier, placed.high_effort), (Tier::Flagship, false));
+}
+
+#[test]
+fn an_id_of_no_known_family_is_balanced_without_high_effort_placed_best_fit() {
+    let fallback = Tag {
+        tier: Tier::Balanced,
+        high_effort: false,
+        placed: Placement::BestFit,
+    };
+    let candidates = [candidate("gpt-6", Tier::Flagship, true, Some(1))];
+    assert_eq!(best_fit("text-embedding-3-large", &candidates), fallback);
+    assert_eq!(best_fit("whisper-1", &[]), fallback);
+}
