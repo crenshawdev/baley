@@ -363,7 +363,7 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Seeded: install or upgrade
+  [*] --> Seeded: first catalog use after install or upgrade
   Seeded --> Detected: models.detected
   Detected --> Detected: models.detected (refresh)
   Detected --> Suspect: model-not-found or deprecated error on a call
@@ -373,7 +373,7 @@ stateDiagram-v2
   Unverifiable --> Detected: detection runs with the key present
 ```
 
-*Figure 3. States of one provider's catalog entries. Host aliases and owner entries have no lifecycle: they are present until the binary or the owner changes them.*
+*Figure 3. States of one provider's catalog entries. Host aliases and owner entries have no lifecycle: they are present until the binary or the owner changes them. An owner removal hides a seeded or detected id in any state, and no later seed or detection brings it back. Only an owner addition does. Unverifiable is reported by the detection that found no key for the provider and is not recorded: the entries keep their last-verified time. Suspect arrives in Build 4, with the model-not-found and deprecated-model trigger. Seeding is built. Detection itself is Build 2 T8, and the view already applies its two events (section 6).*
 
 ## 8. Workflows
 
