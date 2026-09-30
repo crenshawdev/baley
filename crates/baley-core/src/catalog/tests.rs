@@ -753,3 +753,64 @@ fn the_seed_payload_carries_every_exact_row_once_and_no_prefix_row() {
         assert_eq!(times, 1, "{row:?}");
     }
 }
+
+#[test]
+fn removing_a_claude_code_alias_is_refused_before_it_reaches_the_ledger() {
+    let refusal = judge_alias_removal(Catalog::Host(Host::ClaudeCode), "opus").unwrap_err();
+    assert_eq!(refusal.code(), "alias-not-removable");
+    assert_eq!(
+        refusal.to_string(),
+        "alias-not-removable: \"opus\" is a claude-code alias; \
+         the binary owns its aliases and the host resolves them"
+    );
+}
+
+#[test]
+fn removing_opus_from_codex_is_no_alias_removal_but_a_name_codex_does_not_hold() {
+    let codex = Catalog::Host(Host::Codex);
+    assert_eq!(judge_alias_removal(codex, "opus"), Ok(()));
+    let refusal = judge_held_removal(codex, "opus", None).unwrap_err();
+    assert_eq!(refusal.code(), "unknown-model");
+}
+
+#[test]
+fn removing_a_seeded_provider_id_is_allowed() {
+    let openai = doc(
+        "openai",
+        json!([stored("oa-seed", "seed", "cheap", false, "hint", json!({}))]),
+    );
+    let catalog = Catalog::Provider(Provider::OpenAi);
+    assert_eq!(
+        judge_held_removal(catalog, "oa-seed", Some(&openai)),
+        Ok(())
+    );
+}
+
+#[test]
+fn removing_an_id_the_owner_already_removed_is_refused() {
+    let hidden = json!({"owner_removed": true});
+    let openai = doc(
+        "openai",
+        json!([stored("oa-gone", "seed", "cheap", false, "hint", hidden)]),
+    );
+    let catalog = Catalog::Provider(Provider::OpenAi);
+    let refusal = judge_held_removal(catalog, "oa-gone", Some(&openai)).unwrap_err();
+    assert_eq!(
+        refusal.to_string(),
+        "unknown-model: the openai catalog does not hold \"oa-gone\""
+    );
+}
+
+#[test]
+fn removing_a_hosts_owner_entry_is_allowed() {
+    let codex = doc(
+        "codex",
+        json!([{
+            "id": "o-own", "source": "owner", "high_effort": false, "placed": "owner",
+            "first_seen": "2026-09-29T12:00:00Z", "accepted_seq": 3, "owner_removed": false,
+        }]),
+    );
+    let catalog = Catalog::Host(Host::Codex);
+    assert_eq!(judge_alias_removal(catalog, "o-own"), Ok(()));
+    assert_eq!(judge_held_removal(catalog, "o-own", Some(&codex)), Ok(()));
+}

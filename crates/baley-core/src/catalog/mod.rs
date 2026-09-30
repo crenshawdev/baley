@@ -9,10 +9,11 @@
 
 use std::fmt;
 
-use crate::policy::Host;
+use crate::policy::{Host, UNKNOWN_MODEL};
 
 pub mod events;
 pub mod lookup;
+pub mod owner;
 pub mod seed;
 pub mod tables;
 pub mod view;
@@ -24,6 +25,7 @@ pub use events::{
     register_model_events, seeded_payload,
 };
 pub use lookup::{Listing, ListingRow, accepted_names, listing};
+pub use owner::{judge_alias_removal, judge_held_removal};
 pub use seed::{seed_due, seed_payload};
 pub use tables::{EXACT_HINTS, HINT_VERSION, HintRow, PREFIX_HINTS, PrefixRow, host_aliases};
 pub use view::{
@@ -36,6 +38,9 @@ mod tests;
 
 /// The code of a name that is no host or provider catalog (CFG-R22).
 pub const UNKNOWN_PROVIDER: &str = "unknown-provider";
+
+/// The code of a removal of a host's compiled alias.
+pub const ALIAS_NOT_REMOVABLE: &str = "alias-not-removable";
 
 /// The reserved per-user project that holds the model catalog.
 ///
@@ -154,21 +159,37 @@ pub enum CatalogRefusal {
         /// The name given.
         name: String,
     },
+    /// The name is a compiled alias of the host, which the binary owns.
+    AliasNotRemovable {
+        /// The host.
+        host: Host,
+        /// The alias.
+        name: String,
+    },
+    /// The catalog does not hold the name, or the owner already removed it.
+    UnknownModel {
+        /// The catalog.
+        catalog: Catalog,
+        /// The name given.
+        name: String,
+    },
 }
 impl CatalogRefusal {
     /// The stable refusal code.
     pub fn code(&self) -> &'static str {
         match self {
             CatalogRefusal::UnknownProvider { .. } => UNKNOWN_PROVIDER,
+            CatalogRefusal::AliasNotRemovable { .. } => ALIAS_NOT_REMOVABLE,
+            CatalogRefusal::UnknownModel { .. } => UNKNOWN_MODEL,
         }
     }
 }
 impl fmt::Display for CatalogRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Debug quoting shows an empty name and escapes control bytes from
+        // the command line.
         let code = self.code();
         match self {
-            // Debug quoting shows an empty name and escapes control bytes
-            // from the command line.
             CatalogRefusal::UnknownProvider { name } => {
                 let accepted: Vec<&str> = Catalog::ALL.iter().map(|c| c.name()).collect();
                 write!(
@@ -177,6 +198,16 @@ impl fmt::Display for CatalogRefusal {
                     accepted.join(", ")
                 )
             }
+            CatalogRefusal::AliasNotRemovable { host, name } => write!(
+                f,
+                "{code}: {name:?} is a {} alias; the binary owns its aliases and the host resolves them",
+                host.name()
+            ),
+            CatalogRefusal::UnknownModel { catalog, name } => write!(
+                f,
+                "{code}: the {} catalog does not hold {name:?}",
+                catalog.name()
+            ),
         }
     }
 }
