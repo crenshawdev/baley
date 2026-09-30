@@ -6,13 +6,15 @@ use std::fmt;
 use std::process::ExitCode;
 
 use baley_core::catalog::{
-    Catalog, HINT_VERSION, MODEL_CATALOG_VIEW, MODELS_SEEDED, MODELS_SEEDED_VERSION, MODELS_STREAM,
-    Placement, Tier, USER_PROJECT, catalog_key, listing, read_state, seed_due, seed_payload,
-    state_key,
+    Catalog, HINT_VERSION, MODEL_CATALOG_VIEW, MODELS_OWNER_CHANGED, MODELS_OWNER_CHANGED_VERSION,
+    MODELS_SEEDED, MODELS_SEEDED_VERSION, MODELS_STREAM, OwnerChange, Placement, Tier,
+    USER_PROJECT, catalog_key, judge_held_removal, listing, owner_changed_payload, read_state,
+    seed_due, seed_payload, state_key,
 };
 use baley_store::{
-    Actor, Admin, Command, CommandKind, Decision, DocKey, Ledger, NewEvent, Observed, OutcomeKind,
-    ProjectId, Refusal, RequestId, StoreError, StreamName, Views, request_digest,
+    Actor, Admin, Answer, Command, CommandKind, Decision, DocKey, Ledger, NewEvent, Observed,
+    OutcomeKind, ProjectId, Recorded, Refusal, RequestId, StoreError, StreamName, Views,
+    request_digest,
 };
 use baley_store_sqlite::SqliteStore;
 use serde_json::{Value, json};
@@ -131,6 +133,117 @@ pub fn seed(
     }
     create_user(store, at)?;
     record_seed(store, request_id, at)
+}
+
+/// The request-digest input of an owner change (D-15). `tier` is in it only
+/// when `--tier` was given, so two additions that differ only in `--tier`
+/// never share an identity.
+pub fn owner_request(catalog: Catalog, name: &str, change: OwnerChange) -> Value {
+    let kind = match change {
+        OwnerChange::Added(_) => ADD_COMMAND,
+        OwnerChange::Removed => REMOVE_COMMAND,
+    };
+    let mut input = json!({
+        "kind": kind,
+        "project": USER_PROJECT,
+        "actor": Actor::Owner.as_str(),
+        "policy_version": 0,
+        "catalog": catalog.name(),
+        "name": name,
+        "scope": [],
+    });
+    if let OwnerChange::Added(Some(tier)) = change {
+        input["tier"] = tier.name().into();
+    }
+    input
+}
+
+/// What an owner change came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnerOutcome {
+    /// Recorded; the catalog version after it.
+    Changed {
+        /// Read once the command committed.
+        version: u64,
+    },
+    /// Refused on the merits, with the refusal's `<code>: ...` text. Only
+    /// its `command.completed` was recorded.
+    Refused(String),
+}
+
+/// Records one owner addition or removal of `name` in `catalog`. A removal
+/// of a name the catalog does not hold is refused inside the transaction,
+/// on the document read there. It assumes `user` exists: the seeding step
+/// runs first.
+pub fn change(
+    store: &(impl Ledger + Views),
+    catalog: Catalog,
+    name: &str,
+    change: OwnerChange,
+    request_id: RequestId,
+    at: &str,
+) -> Result<OwnerOutcome, StoreError> {
+    let kind = match change {
+        OwnerChange::Added(_) => ADD_COMMAND,
+        OwnerChange::Removed => REMOVE_COMMAND,
+    };
+    let command = Command {
+        project: user(),
+        kind: CommandKind(kind.into()),
+        request_id,
+        digest: request_digest(&owner_request(catalog, name, change)).map_err(invalid)?,
+        scope: vec![],
+        policy_version: 0,
+        recorded_at: at.into(),
+        actor: Actor::Owner,
+    };
+    let recorded = store.transact(&command, &mut |tx| {
+        if change == OwnerChange::Removed {
+            let stored = tx.get(MODEL_CATALOG_VIEW, &catalog_key(catalog))?;
+            let document = stored.as_ref().map(|document| &document.body);
+            if let Err(refusal) = judge_held_removal(catalog, name, document) {
+                return Ok(Decision {
+                    kind: OutcomeKind::Refused,
+                    answer: json!({ "code": refusal.code(), "refusal": refusal.to_string() }),
+                    sensitive: false,
+                    observed: Observed::default(),
+                    git: None,
+                });
+            }
+        }
+        let stored = tx.get(MODEL_CATALOG_VIEW, &state_key())?;
+        let version = read_state(stored.as_ref().map(|document| &document.body)).catalog_version;
+        tx.append(NewEvent {
+            stream: StreamName(MODELS_STREAM.into()),
+            type_name: MODELS_OWNER_CHANGED.into(),
+            type_version: MODELS_OWNER_CHANGED_VERSION,
+            git: None,
+            payload: owner_changed_payload(catalog, name, change, version),
+            attachments: vec![],
+        })?;
+        Ok(Decision {
+            kind: OutcomeKind::Done,
+            answer: json!({ "recorded": true }),
+            sensitive: false,
+            observed: Observed::default(),
+            git: None,
+        })
+    })?;
+    let outcome = match recorded {
+        Recorded::New { outcome, .. } | Recorded::Replayed { outcome } => outcome,
+    };
+    if outcome.kind == OutcomeKind::Refused {
+        // Owner answers are small and never sensitive, so they are inline.
+        let text = match &outcome.answer {
+            Answer::Inline(answer) => answer["refusal"].as_str(),
+            _ => None,
+        };
+        let text = text.unwrap_or("the removal was refused; its answer cannot be read");
+        return Ok(OwnerOutcome::Refused(text.into()));
+    }
+    let state = store.get(&user(), MODEL_CATALOG_VIEW, &state_key())?;
+    let version = read_state(state.as_ref().map(|document| &document.body)).catalog_version;
+    Ok(OwnerOutcome::Changed { version })
 }
 
 /// Arguments for `baley models`.
@@ -284,7 +397,10 @@ mod tests {
     };
     use serde_json::{Value, json};
 
-    use super::{HINT_VERSION, SEED_COMMAND, USER_PROJECT_NAME, record_seed, seed};
+    use super::{
+        HINT_VERSION, OwnerChange, OwnerOutcome, SEED_COMMAND, USER_PROJECT_NAME, change,
+        owner_request, record_seed, seed,
+    };
 
     const T0: &str = "2026-09-29T10:00:00Z";
 
@@ -638,5 +754,113 @@ mod tests {
         assert_eq!(recorded.len(), 2);
         assert_eq!(recorded[1].payload["hint_version"], json!(HINT_VERSION));
         assert_eq!(recorded[1].payload["catalog_version"], json!(first));
+    }
+
+    fn digest(change: OwnerChange) -> baley_store::Hash {
+        request_digest(&owner_request(OPENAI, "gpt-test", change)).unwrap()
+    }
+
+    #[test]
+    fn an_owner_change_identity_covers_its_kind_and_tier_and_nothing_else() {
+        let cheap = digest(OwnerChange::Added(Some(Tier::Cheap)));
+        let flagship = digest(OwnerChange::Added(Some(Tier::Flagship)));
+        let untiered = digest(OwnerChange::Added(None));
+        let removed = digest(OwnerChange::Removed);
+        assert_ne!(cheap, flagship);
+        assert_ne!(cheap, untiered);
+        assert_ne!(flagship, untiered);
+        assert_ne!(untiered, removed);
+
+        let expected = json!({
+            "kind": "models.add",
+            "project": "user",
+            "actor": "owner",
+            "policy_version": 0,
+            "catalog": "openai",
+            "name": "gpt-test",
+            "tier": "cheap",
+            "scope": [],
+        });
+        assert_eq!(cheap, request_digest(&expected).unwrap());
+    }
+
+    #[test]
+    fn an_addition_records_the_version_before_it_and_returns_the_one_after() {
+        let (_dir, store) = open();
+        seed(&store, request(1), &at(1)).unwrap();
+        let seeded = events(&store, "models")[0].seq;
+
+        let added = OwnerChange::Added(Some(Tier::Cheap));
+        let outcome = change(&store, OPENAI, "gpt-test", added, request(2), &at(2)).unwrap();
+
+        let recorded = events(&store, "models");
+        assert_eq!(recorded.len(), 2);
+        let event = &recorded[1];
+        assert_eq!(event.type_name, "models.owner_changed");
+        assert_eq!(event.type_version, 1);
+        assert_eq!(event.actor, Actor::Owner);
+        assert_eq!(event.policy_version, 0);
+        assert_eq!(
+            event.payload,
+            json!({
+                "catalog": "openai",
+                "name": "gpt-test",
+                "change": "added",
+                "tier": "cheap",
+                "catalog_version": seeded,
+            })
+        );
+        let completed = events(&store, "command/models.add");
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].type_name, "command.completed");
+        assert_eq!(outcome, OwnerOutcome::Changed { version: event.seq });
+    }
+
+    #[test]
+    fn a_removal_of_a_name_nobody_held_is_refused_and_records_no_model_event() {
+        let (_dir, store) = open();
+        seed(&store, request(1), &at(1)).unwrap();
+
+        let outcome = change(
+            &store,
+            OPENAI,
+            "no-such-model",
+            OwnerChange::Removed,
+            request(2),
+            &at(2),
+        )
+        .unwrap();
+
+        let OwnerOutcome::Refused(text) = outcome else {
+            panic!("removal not refused: {outcome:?}")
+        };
+        assert_eq!(
+            text,
+            "unknown-model: the openai catalog does not hold \"no-such-model\""
+        );
+        assert_eq!(events(&store, "models").len(), 1);
+    }
+
+    #[test]
+    fn a_removal_of_a_seeded_id_is_applied_to_the_catalog() {
+        let (_dir, store) = open();
+        seed(&store, request(1), &at(1)).unwrap();
+        let hinted = EXACT_HINTS[0];
+        assert_eq!(hinted.provider, Provider::OpenAi);
+        assert!(accepts(&store, hinted.id));
+
+        let outcome = change(
+            &store,
+            OPENAI,
+            hinted.id,
+            OwnerChange::Removed,
+            request(2),
+            &at(2),
+        )
+        .unwrap();
+
+        let removal = events(&store, "models")[1].seq;
+        assert_eq!(outcome, OwnerOutcome::Changed { version: removal });
+        assert!(!accepts(&store, hinted.id));
     }
 }
