@@ -97,7 +97,7 @@ pub enum Action {
 
 /// Each provider's step in one run, in [`Provider::ALL`] order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Steps(pub Vec<(Provider, Action)>);
+pub struct Steps(pub [(Provider, Action); 3]);
 impl Steps {
     /// Whether any provider records, which is when the run seeds first.
     pub fn records(&self) -> bool {
@@ -125,12 +125,7 @@ pub fn judge(trigger: &Trigger, keys: &KeysRead) -> Steps {
             KeysRead::Present(_) => Action::Skip,
         }
     };
-    Steps(
-        Provider::ALL
-            .into_iter()
-            .map(|provider| (provider, action(provider)))
-            .collect(),
-    )
+    Steps(Provider::ALL.map(|provider| (provider, action(provider))))
 }
 
 #[cfg(test)]
@@ -146,8 +141,8 @@ mod tests {
         KeysRead::Present(names.to_vec())
     }
 
-    fn steps(actions: [Action; 3]) -> Steps {
-        Steps(Provider::ALL.into_iter().zip(actions).collect())
+    fn steps([openai, gemini, deepseek]: [Action; 3]) -> Steps {
+        Steps([(OpenAi, openai), (Gemini, gemini), (DeepSeek, deepseek)])
     }
 
     #[test]
