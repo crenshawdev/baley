@@ -610,3 +610,117 @@ fn a_detected_id_keeps_the_events_tier_and_flag_not_the_compiled_tables() {
     assert_eq!(entry["tier"], other.name());
     assert_eq!(entry["high_effort"], !row.high_effort);
 }
+
+#[test]
+fn opus_is_a_claude_code_name_and_no_codex_name_with_no_documents() {
+    let claude = accepted_names("claude-code", None, None).unwrap();
+    let codex = accepted_names("codex", None, None).unwrap();
+    assert!(claude.names.contains("opus"));
+    assert!(!codex.names.contains("opus"));
+    assert_eq!((claude.version, codex.version), (0, 0));
+}
+
+#[test]
+fn the_lookup_refuses_anthropic_and_a_case_variant_as_unknown_providers() {
+    for name in ["anthropic", "Claude-Code"] {
+        let refusal = accepted_names(name, None, None).unwrap_err();
+        assert_eq!(refusal.code(), "unknown-provider", "{name}");
+    }
+}
+
+#[test]
+fn the_lookup_returns_the_state_documents_catalog_version() {
+    let found = accepted_names("openai", None, Some(&state(7, Some(1)))).unwrap();
+    assert_eq!(found.version, 7);
+}
+
+#[test]
+fn a_provider_accepts_its_seed_detected_and_owner_ids_but_not_a_removed_one() {
+    let openai = doc(
+        "openai",
+        json!([
+            stored("oa-seed", "seed", "cheap", false, "hint", json!({})),
+            stored("oa-det", "detected", "balanced", true, "prefix", json!({})),
+            stored("oa-own", "owner", "flagship", false, "owner", json!({})),
+            stored(
+                "oa-gone",
+                "detected",
+                "cheap",
+                false,
+                "hint",
+                json!({"owner_removed": true})
+            ),
+        ]),
+    );
+    let found = accepted_names("openai", Some(&openai), None).unwrap();
+    let expected: BTreeSet<String> = ["oa-seed", "oa-det", "oa-own"].map(String::from).into();
+    assert_eq!(found.names, expected);
+}
+
+#[test]
+fn a_hosts_owner_entries_are_accepted_beside_its_aliases() {
+    let codex = doc(
+        "codex",
+        json!([{
+            "id": "o-own", "source": "owner", "high_effort": false, "placed": "owner",
+            "first_seen": "2026-09-29T12:00:00Z", "accepted_seq": 3, "owner_removed": false,
+        }]),
+    );
+    let found = accepted_names("codex", Some(&codex), None).unwrap();
+    assert_eq!(found.names, BTreeSet::from(["o-own".to_owned()]));
+}
+
+#[test]
+fn the_listing_shows_aliases_untiered_detected_placement_and_no_removed_id() {
+    let openai = doc(
+        "openai",
+        json!([
+            stored(
+                "oa-gone",
+                "seed",
+                "cheap",
+                false,
+                "hint",
+                json!({"owner_removed": true})
+            ),
+            stored(
+                "oa-det",
+                "detected",
+                "balanced",
+                false,
+                "best-fit",
+                json!({})
+            ),
+        ]),
+    );
+    let claude = Catalog::Host(Host::ClaudeCode);
+    let open_ai = Catalog::Provider(Provider::OpenAi);
+    let shown = listing(
+        &[(open_ai, Some(&openai)), (claude, None)],
+        Some(&state(9, Some(1))),
+    );
+    let alias = |name: &str| ListingRow {
+        catalog: claude,
+        name: name.into(),
+        source: Source::Alias,
+        tier: None,
+        placed: None,
+    };
+    let expected = Listing {
+        version: 9,
+        rows: vec![
+            alias("fable"),
+            alias("haiku"),
+            alias("opus"),
+            alias("sonnet"),
+            ListingRow {
+                catalog: open_ai,
+                name: "oa-det".into(),
+                source: Source::Detected,
+                tier: Some(Tier::Balanced),
+                placed: Some(Placement::BestFit),
+            },
+        ],
+    };
+    assert_eq!(shown, expected);
+}
