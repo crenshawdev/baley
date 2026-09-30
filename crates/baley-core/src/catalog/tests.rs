@@ -465,3 +465,148 @@ fn an_owner_change_without_a_name_is_refused_not_applied() {
     let error = projector.apply(&broken, &[]).unwrap_err();
     assert!(error.0.contains("name"), "{}", error.0);
 }
+
+fn detected(seq: u64, at: &str, provider: &str, added: Value, removed: Value) -> Event {
+    let payload = json!({
+        "provider": provider, "added": added, "removed": removed,
+        "catalog_version": 0, "hint_version": 1,
+    });
+    event(seq, "models.detected", at, payload)
+}
+
+#[test]
+fn a_detection_removing_an_owner_entry_leaves_it_accepted_with_its_tier() {
+    let owner_entry = stored("oa-own", "owner", "cheap", false, "owner", json!({}));
+    let openai = doc("openai", json!([owner_entry]));
+    let mut docs = documents(&[("state", state(2, None)), ("openai", openai.clone())]);
+    project(
+        &mut docs,
+        &detected(
+            3,
+            "2026-09-29T13:00:00Z",
+            "openai",
+            json!([]),
+            json!(["oa-own"]),
+        ),
+    );
+    assert_eq!(docs[&key("openai")], openai);
+    assert_eq!(docs[&key("state")], state(2, None));
+}
+
+#[test]
+fn a_detection_never_brings_back_an_id_the_owner_removed() {
+    let mut docs = BTreeMap::new();
+    let found =
+        json!([{"id": "oa-1", "tier": "balanced", "high_effort": false, "placed": "best-fit"}]);
+    project(
+        &mut docs,
+        &detected(
+            1,
+            "2026-09-29T13:00:00Z",
+            "openai",
+            found.clone(),
+            json!([]),
+        ),
+    );
+    project(&mut docs, &owner(2, "openai", "oa-1", "removed", None));
+    project(
+        &mut docs,
+        &detected(3, "2026-09-30T13:00:00Z", "openai", found, json!([])),
+    );
+    let entry = &docs[&key("openai")]["entries"][0];
+    assert_eq!(entry["owner_removed"], true);
+    assert_eq!(docs[&key("state")], state(2, None));
+}
+
+#[test]
+fn a_failed_detection_names_no_document_and_leaves_the_version() {
+    let mut docs = BTreeMap::new();
+    let found = json!([{"id": "gm-1", "tier": "cheap", "high_effort": true, "placed": "prefix"}]);
+    project(
+        &mut docs,
+        &detected(3, "2026-09-29T13:00:00Z", "gemini", found, json!([])),
+    );
+    let payload = json!({"provider": "gemini", "category": "auth", "catalog_version": 3});
+    let failed = event(
+        4,
+        "models.detection_failed",
+        "2026-09-29T14:00:00Z",
+        payload,
+    );
+    assert_eq!(
+        ModelCatalogProjector::new().keys(&failed),
+        Vec::<DocKey>::new()
+    );
+    assert_eq!(project(&mut docs, &failed), Vec::<Change>::new());
+    assert_eq!(docs[&key("state")], state(3, None));
+}
+
+#[test]
+fn an_empty_detection_verifies_every_entry_of_its_provider_and_leaves_the_version() {
+    let seed = stored("oa-seed", "seed", "cheap", false, "hint", json!({}));
+    let owner_entry = stored("oa-own", "owner", "flagship", true, "owner", json!({}));
+    let mut docs = documents(&[
+        ("state", state(4, Some(1))),
+        ("openai", doc("openai", json!([owner_entry, seed]))),
+    ]);
+    let refresh = detected(5, "2026-09-29T15:00:00Z", "openai", json!([]), json!([]));
+    assert_eq!(
+        ModelCatalogProjector::new().keys(&refresh),
+        vec![key("state"), key("openai")]
+    );
+    project(&mut docs, &refresh);
+    let seen = json!({"last_verified": "2026-09-29T15:00:00Z"});
+    let expected = doc(
+        "openai",
+        json!([
+            stored("oa-own", "owner", "flagship", true, "owner", seen.clone()),
+            stored("oa-seed", "seed", "cheap", false, "hint", seen),
+        ]),
+    );
+    assert_eq!(docs[&key("openai")], expected);
+    assert_eq!(docs[&key("state")], state(4, Some(1)));
+}
+
+#[test]
+fn a_detection_removing_a_detected_id_drops_it_and_moves_the_version() {
+    let gone = stored("oa-old", "detected", "cheap", false, "best-fit", json!({}));
+    let mut docs = documents(&[
+        ("state", state(2, None)),
+        ("openai", doc("openai", json!([gone]))),
+    ]);
+    project(
+        &mut docs,
+        &detected(
+            6,
+            "2026-09-29T16:00:00Z",
+            "openai",
+            json!([]),
+            json!(["oa-old"]),
+        ),
+    );
+    assert_eq!(docs[&key("openai")], doc("openai", json!([])));
+    assert_eq!(docs[&key("state")], state(6, None));
+}
+
+#[test]
+fn a_detected_id_keeps_the_events_tier_and_flag_not_the_compiled_tables() {
+    let row = EXACT_HINTS
+        .first()
+        .expect("the hint table has an exact row");
+    let other = Tier::ALL
+        .into_iter()
+        .find(|tier| *tier != row.tier)
+        .unwrap();
+    let found = json!([{
+        "id": row.id, "tier": other.name(), "high_effort": !row.high_effort, "placed": "best-fit",
+    }]);
+    let mut docs = BTreeMap::new();
+    let provider = row.provider.name();
+    project(
+        &mut docs,
+        &detected(1, "2026-09-29T17:00:00Z", provider, found, json!([])),
+    );
+    let entry = &docs[&key(provider)]["entries"][0];
+    assert_eq!(entry["tier"], other.name());
+    assert_eq!(entry["high_effort"], !row.high_effort);
+}

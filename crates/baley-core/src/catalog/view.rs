@@ -13,7 +13,9 @@ use baley_store::{
 };
 use serde_json::{Map, Value, json};
 
-use super::events::{MODELS_OWNER_CHANGED, MODELS_SEEDED};
+use super::events::{
+    MODELS_DETECTED, MODELS_DETECTION_FAILED, MODELS_OWNER_CHANGED, MODELS_SEEDED,
+};
 use super::{Catalog, Provider, Tier};
 
 /// The view's name.
@@ -336,6 +338,8 @@ fn touched(event: &Event) -> Result<Vec<Catalog>, String> {
     match event.type_name.as_str() {
         MODELS_SEEDED => Ok(Provider::ALL.map(Catalog::Provider).to_vec()),
         MODELS_OWNER_CHANGED => Ok(vec![catalog(&event.payload)?]),
+        MODELS_DETECTED => Ok(vec![Catalog::Provider(provider(&event.payload)?)]),
+        MODELS_DETECTION_FAILED => Ok(Vec::new()),
         other => Err(format!("{MODEL_CATALOG_VIEW} does not apply {other}")),
     }
 }
@@ -346,12 +350,21 @@ impl Projector for ModelCatalogProjector {
     }
 
     fn handles(&self) -> &[&str] {
-        &[MODELS_SEEDED, MODELS_OWNER_CHANGED]
+        &[
+            MODELS_SEEDED,
+            MODELS_OWNER_CHANGED,
+            MODELS_DETECTED,
+            MODELS_DETECTION_FAILED,
+        ]
     }
 
-    // A payload too broken to name its catalog still names the state
-    // document; `apply` refuses it.
+    // A failed detection leaves the catalog as it was and needs nothing. A
+    // payload too broken to name its catalog still names the state document;
+    // `apply` refuses it.
     fn keys(&self, event: &Event) -> Vec<DocKey> {
+        if event.type_name == MODELS_DETECTION_FAILED {
+            return Vec::new();
+        }
         let mut keys = vec![state_key()];
         keys.extend(
             touched(event)
@@ -379,6 +392,10 @@ impl Projector for ModelCatalogProjector {
                 .find(|(found, _)| found == key)
                 .map(|(_, body)| body)
         };
+        if event.type_name == MODELS_DETECTION_FAILED {
+            provider(&event.payload).map_err(refuse)?;
+            return Ok(Vec::new());
+        }
         let mut books = Vec::new();
         for catalog in touched(event).map_err(refuse)? {
             let body = stored(&catalog_key(catalog));
@@ -403,6 +420,7 @@ impl Projector for ModelCatalogProjector {
             MODELS_SEEDED => {
                 state.hint_version = Some(seed(event, &mut books).map_err(refuse)?);
             }
+            MODELS_DETECTED => detect(event, &mut books[0].entries).map_err(refuse)?,
             _ => owner_change(event, &mut books[0].entries).map_err(refuse)?,
         }
 
@@ -547,6 +565,70 @@ fn owner_change(event: &Event, entries: &mut BTreeMap<String, Entry>) -> Result<
             }
         },
         other => return Err(format!("change {other:?} is neither added nor removed")),
+    }
+    Ok(())
+}
+
+/// A detection refreshes one provider. It never touches an owner entry's
+/// tier and never brings back an id the owner removed, and it takes each
+/// tier and flag from the event, never from the compiled table. Every entry
+/// it did not name as removed was seen now.
+fn detect(event: &Event, entries: &mut BTreeMap<String, Entry>) -> Result<(), String> {
+    let payload = &event.payload;
+    let added = payload
+        .get("added")
+        .and_then(Value::as_array)
+        .ok_or("added is missing or not a list")?;
+    let removed = payload
+        .get("removed")
+        .and_then(Value::as_array)
+        .ok_or("removed is missing or not a list")?;
+    for (index, item) in added.iter().enumerate() {
+        let at = |message: String| format!("added[{index}]: {message}");
+        let id = text(item, "id").map_err(at)?;
+        let tier = tier(item).map_err(at)?;
+        let high_effort = flag(item, "high_effort").map_err(at)?;
+        let name = text(item, "placed").map_err(at)?;
+        let placed = Placement::parse(name)
+            .filter(|placed| *placed != Placement::Owner)
+            .ok_or(at(format!(
+                "placed {name:?} is not hint, prefix or best-fit"
+            )))?;
+        match entries.get_mut(id) {
+            None => {
+                let entry = Entry {
+                    id: id.to_owned(),
+                    source: Source::Detected,
+                    tier: Some(tier),
+                    high_effort,
+                    placed,
+                    first_seen: event.recorded_at.clone(),
+                    last_verified: Some(event.recorded_at.clone()),
+                    accepted_seq: Some(event.seq),
+                    owner_removed: false,
+                };
+                entries.insert(id.to_owned(), entry);
+            }
+            Some(entry) if entry.owner_removed || entry.source == Source::Owner => {}
+            Some(entry) => {
+                entry.source = Source::Detected;
+                entry.tier = Some(tier);
+                entry.high_effort = high_effort;
+                entry.placed = placed;
+            }
+        }
+    }
+    let mut gone = BTreeSet::new();
+    for (index, id) in removed.iter().enumerate() {
+        gone.insert(id.as_str().ok_or(format!("removed[{index}] is not text"))?);
+    }
+    entries.retain(|id, entry| {
+        entry.owner_removed || entry.source == Source::Owner || !gone.contains(id.as_str())
+    });
+    for entry in entries.values_mut() {
+        if entry.accepted() && !gone.contains(entry.id.as_str()) {
+            entry.last_verified = Some(event.recorded_at.clone());
+        }
     }
     Ok(())
 }
