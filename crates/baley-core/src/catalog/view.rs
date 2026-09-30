@@ -569,10 +569,12 @@ fn owner_change(event: &Event, entries: &mut BTreeMap<String, Entry>) -> Result<
     Ok(())
 }
 
-/// A detection refreshes one provider. It never touches an owner entry's
-/// tier and never brings back an id the owner removed, and it takes each
-/// tier and flag from the event, never from the compiled table. Every entry
-/// it did not name as removed was seen now.
+/// A detection refreshes one provider. It takes each tier and flag from the
+/// event, never from the compiled table. On an owner entry it sets only the
+/// high-effort flag, since the owner has no way to set one: it never drops
+/// one or changes its source, tier or placement. It never touches an id the
+/// owner removed. Every accepted entry it did not name as removed was seen
+/// now.
 fn detect(event: &Event, entries: &mut BTreeMap<String, Entry>) -> Result<(), String> {
     let payload = &event.payload;
     let added = payload
@@ -609,7 +611,8 @@ fn detect(event: &Event, entries: &mut BTreeMap<String, Entry>) -> Result<(), St
                 };
                 entries.insert(id.to_owned(), entry);
             }
-            Some(entry) if entry.owner_removed || entry.source == Source::Owner => {}
+            Some(entry) if entry.owner_removed => {}
+            Some(entry) if entry.source == Source::Owner => entry.high_effort = high_effort,
             Some(entry) => {
                 entry.source = Source::Detected;
                 entry.tier = Some(tier);

@@ -612,6 +612,26 @@ fn a_detected_id_keeps_the_events_tier_and_flag_not_the_compiled_tables() {
 }
 
 #[test]
+fn a_detection_sets_an_owner_entrys_high_effort_flag_but_not_its_tier() {
+    let mut docs = BTreeMap::new();
+    project(
+        &mut docs,
+        &owner(1, "openai", "oa-own", "added", Some("cheap")),
+    );
+    let found =
+        json!([{"id": "oa-own", "tier": "flagship", "high_effort": true, "placed": "best-fit"}]);
+    project(
+        &mut docs,
+        &detected(2, "2026-09-29T18:00:00Z", "openai", found, json!([])),
+    );
+    let entry = &docs[&key("openai")]["entries"][0];
+    assert_eq!(entry["high_effort"], true);
+    assert_eq!(entry["tier"], "cheap");
+    assert_eq!(entry["placed"], "owner");
+    assert_eq!(entry["source"], "owner");
+}
+
+#[test]
 fn opus_is_a_claude_code_name_and_no_codex_name_with_no_documents() {
     let claude = accepted_names("claude-code", None, None).unwrap();
     let codex = accepted_names("codex", None, None).unwrap();
