@@ -43,6 +43,8 @@ pub mod why;
 
 /// HEAD's copy of the project file, read through git as the project layer.
 pub mod committed;
+/// Detection: refreshes each provider's catalog from its model-list endpoint.
+pub mod detection;
 /// Finds the checkout's project: the nearest `baley.toml` at or below the repository root.
 pub mod discovery;
 /// Runs one command with a provider key in its environment and redacted from its output.

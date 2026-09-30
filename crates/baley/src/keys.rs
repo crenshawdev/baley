@@ -61,7 +61,6 @@ pub(crate) struct KeyNotSendable;
 /// prints `Sensitive` for it, and never in the URL. Gemini also gets its
 /// page size and, given one, the `continuation` as `pageToken`; OpenAI and
 /// DeepSeek do not page.
-#[cfg_attr(not(test), expect(dead_code, reason = "the lister calls it next"))]
 pub(crate) fn list_request(
     provider: Provider,
     key: &Key,
