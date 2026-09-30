@@ -211,15 +211,26 @@ There is no command that sets, removes or lists keys (CFG-R25): the owner writes
 
 ### baley models add, baley models remove
 
-- **Inputs:** a host or provider name and a model name; `add` takes an optional tier.
-- **Outputs:** the new catalog version.
-- **Refusals:** `unknown-provider` (CFG-R22).
+- **Inputs:** a host or provider name, one of `claude-code`, `codex`, `openai`, `gemini` or `deepseek`, and a model name, which is never empty; `add` takes an optional `--tier` of `flagship`, `balanced` or `cheap`. A missing or empty name or any other tier is a usage error, exit 2.
+- **Outputs:** the change and the new catalog version, such as `added "gpt-test-1" to openai at tier cheap; catalog version 3`, with `models.owner_changed` recorded in the per-user project `user` (section 6).
+  - Adding a name the catalog already holds makes it the owner's entry. With `--tier` it takes that tier and shows as placed by the owner, and it keeps its high-effort flag, since `--tier` says nothing about effort.
+  - Adding a name the owner removed accepts it again.
+  - Removing a seeded or detected id hides it, and no later seed or detection brings it back. Only an owner addition does.
+  - A change that leaves every catalog's accepted names as they were, such as a change of tier alone, leaves the catalog version.
+  - Like every `baley models` command, it first seeds the catalog when the binary's hint table version differs from the latest one recorded, higher or lower (section 6). The seed is its own command, recorded before the owner's.
+- **Refusals:** each on stderr as `baley: <code>: ...`, exit 2. `baley-home-invalid`, `user-home-invalid`, `unknown-provider` and `alias-not-removable` refuse before the ledger is opened, so a refused command creates no ledger home. `unknown-model` is judged inside the removal's own transaction, after the seeding step, and the refused removal records only its `command.completed`.
+
+  | Code | When | Requirement |
+  |---|---|---|
+  | `unknown-provider` | The name is none of the five catalogs, `anthropic` included, since nothing seeds or detects an Anthropic catalog | CFG-R22 |
+  | `alias-not-removable` | `remove` names a host alias compiled into Baley, which the host resolves whatever the catalog says | CFG-R19 |
+  | `unknown-model` | `remove` names a name the catalog does not hold, or one the owner already removed | CFG-R22 |
 
 ### baley models list
 
-- **Inputs:** optional host or provider name.
-- **Outputs:** every accepted name with its source (host alias, seed, detected, owner), tier and the catalog version.
-- **Refusals:** none.
+- **Inputs:** an optional host or provider name (default: every catalog).
+- **Outputs:** the line `catalog version <n>`, then a table with the columns `CATALOG`, `NAME`, `SOURCE`, `TIER` and `PLACED`: every accepted name with its source (`alias` for a host alias, `seed`, `detected` or `owner`), its tier, and how it was placed (`hint`, `prefix`, `best-fit` or `owner`). A `-` stands for no tier (a host alias, or an owner entry added without `--tier`) and for no placement (a host alias). Rows run by catalog in the order of the inputs above, then by name. A name that is both a host alias and an owner entry has both rows, and a name the owner removed has none. The version and the rows are read from one snapshot of the view. The first use on a fresh ledger creates the per-user project `user` and records `models.seeded` before it lists, and says so first: `seeded the model catalog with hint table version <n>`.
+- **Refusals:** `unknown-provider` for a name that is no host or provider, on stderr, exit 2, before the ledger is opened (CFG-R22).
 
 ### Route resolution (internal)
 
