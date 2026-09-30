@@ -3,7 +3,7 @@
 //! 2026-09-30, and expected values come from design 0003 and the phase's
 //! decisions, never from running this code.
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
 use crate::catalog::{HintRow, Placement, PrefixRow, Provider, Tier};
@@ -607,4 +607,330 @@ fn an_id_of_no_known_family_is_balanced_without_high_effort_placed_best_fit() {
     let candidates = [candidate("gpt-6", Tier::Flagship, true, Some(1))];
     assert_eq!(best_fit("text-embedding-3-large", &candidates), fallback);
     assert_eq!(best_fit("whisper-1", &[]), fallback);
+}
+
+// A catalog document entry as the projector stores it.
+fn entry(id: &str, source: &str, tier: Option<&str>, high_effort: bool, placed: &str) -> Value {
+    let mut entry = json!({
+        "id": id, "source": source, "high_effort": high_effort, "placed": placed,
+        "first_seen": "2026-09-01T00:00:00Z", "accepted_seq": 1, "owner_removed": false,
+    });
+    if let Some(tier) = tier {
+        entry["tier"] = tier.into();
+    }
+    entry
+}
+
+fn owner_removed(id: &str) -> Value {
+    let mut removed = entry(id, "owner", None, false, "owner");
+    removed["owner_removed"] = true.into();
+    removed.as_object_mut().unwrap().remove("accepted_seq");
+    removed
+}
+
+fn document(provider: &str, entries: Vec<Value>) -> Value {
+    json!({"catalog": provider, "entries": entries})
+}
+
+// An OpenAI or Gemini page listing `ids`, each with its creation time.
+fn listing_of(provider: Provider, ids: &[(&str, Option<u64>)]) -> ProviderListing {
+    let body = match provider {
+        Provider::Gemini => {
+            let models: Vec<Value> = ids
+                .iter()
+                .map(|(id, _)| json!({"name": format!("models/{id}")}))
+                .collect();
+            json!({"models": models})
+        }
+        _ => {
+            let data: Vec<Value> = ids
+                .iter()
+                .map(|(id, created)| match created {
+                    Some(at) => json!({"id": id, "created": at}),
+                    None => json!({"id": id}),
+                })
+                .collect();
+            json!({"object": "list", "data": data})
+        }
+    };
+    parse_page(provider, body.to_string().as_bytes()).expect("a sound page")
+}
+
+fn added_tag(diff: &Diff, id: &str) -> Option<Tag> {
+    diff.added
+        .iter()
+        .find(|added| added.id == id)
+        .map(|added| added.tag)
+}
+
+fn row<'a>(diff: &'a Diff, id: &str) -> Option<&'a ReportRow> {
+    diff.report.rows.iter().find(|row| row.id == id)
+}
+
+const ASTRA: [HintRow; 1] = [exact_row(
+    Provider::OpenAi,
+    "gpt-6-astra",
+    Tier::Flagship,
+    true,
+)];
+
+#[test]
+fn a_listed_seeded_id_is_added_again_placed_hint_and_counted_unchanged() {
+    let doc = document(
+        "openai",
+        vec![entry("gpt-6-astra", "seed", Some("flagship"), true, "hint")],
+    );
+    let listing = listing_of(Provider::OpenAi, &[("gpt-6-astra", Some(10))]);
+    let diff = diff(Provider::OpenAi, &listing, &ASTRA, &[], Some(&doc));
+    assert_eq!(
+        added_tag(&diff, "gpt-6-astra"),
+        tagged(Tier::Flagship, true, Placement::Hint)
+    );
+    assert_eq!(diff.report.count(IdChange::Unchanged), 1);
+    assert_eq!(diff.report.count(IdChange::New), 0);
+}
+
+#[test]
+fn a_best_fit_id_matched_by_a_prefix_row_now_is_added_placed_prefix() {
+    let doc = document(
+        "openai",
+        vec![entry(
+            "gpt-7-nova-0901",
+            "detected",
+            Some("balanced"),
+            false,
+            "best-fit",
+        )],
+    );
+    let prefixes = [prefix_row(
+        Provider::OpenAi,
+        "gpt-7-nova",
+        Tier::Flagship,
+        true,
+    )];
+    let listing = listing_of(Provider::OpenAi, &[("gpt-7-nova-0901", None)]);
+    let diff = diff(Provider::OpenAi, &listing, &[], &prefixes, Some(&doc));
+    assert_eq!(
+        added_tag(&diff, "gpt-7-nova-0901"),
+        tagged(Tier::Flagship, true, Placement::Prefix)
+    );
+}
+
+#[test]
+fn a_listed_id_the_owner_removed_is_neither_added_nor_reported() {
+    let doc = document("openai", vec![owner_removed("gpt-6-astra")]);
+    let listing = listing_of(Provider::OpenAi, &[("gpt-6-astra", None)]);
+    let diff = diff(Provider::OpenAi, &listing, &ASTRA, &[], Some(&doc));
+    assert!(diff.added.is_empty(), "{diff:?}");
+    assert!(diff.report.rows.is_empty(), "{diff:?}");
+}
+
+#[test]
+fn unlisted_seed_and_detected_ids_are_removed_but_owner_entries_and_removals_are_not() {
+    let doc = document(
+        "openai",
+        vec![
+            entry("gpt-6-astra", "seed", Some("flagship"), true, "hint"),
+            entry("gpt-old", "detected", Some("cheap"), false, "best-fit"),
+            entry("gpt-mine", "owner", Some("cheap"), false, "owner"),
+            entry("gpt-untiered", "owner", None, false, "owner"),
+            owner_removed("gpt-gone"),
+            // The owner removed a seeded id: the projector keeps its source.
+            {
+                let mut seeded = entry("gpt-6-luna", "seed", Some("cheap"), true, "hint");
+                seeded["owner_removed"] = true.into();
+                seeded
+            },
+        ],
+    );
+    let listing = listing_of(Provider::OpenAi, &[]);
+    let diff = diff(Provider::OpenAi, &listing, &ASTRA, &[], Some(&doc));
+    assert_eq!(diff.removed, ["gpt-6-astra", "gpt-old"]);
+    assert_eq!(
+        row(&diff, "gpt-old").map(|row| (row.change, row.tier, row.placed)),
+        Some((IdChange::Removed, Some(Tier::Cheap), Placement::BestFit))
+    );
+}
+
+#[test]
+fn a_new_id_takes_its_family_tier_from_each_kind_of_candidate() {
+    let family = |tier: &str, high_effort: bool, placed: &str, source: &str| {
+        document(
+            "gemini",
+            vec![entry(
+                "gemini-9-pro",
+                source,
+                Some(tier),
+                high_effort,
+                placed,
+            )],
+        )
+    };
+    let cases = [
+        (
+            "hint",
+            family("cheap", true, "hint", "seed"),
+            Tier::Cheap,
+            true,
+        ),
+        (
+            "prefix",
+            family("flagship", false, "prefix", "detected"),
+            Tier::Flagship,
+            false,
+        ),
+        (
+            "owner",
+            family("cheap", false, "owner", "owner"),
+            Tier::Cheap,
+            false,
+        ),
+    ];
+    let listing = listing_of(Provider::Gemini, &[("gemini-9-pro-exp", None)]);
+    for (kind, doc, tier, high_effort) in cases {
+        let diff = diff(Provider::Gemini, &listing, &[], &[], Some(&doc));
+        assert_eq!(
+            added_tag(&diff, "gemini-9-pro-exp"),
+            tagged(tier, high_effort, Placement::BestFit),
+            "{kind}"
+        );
+    }
+
+    // A tagged id of this same listing, with no document at all.
+    let rows = [exact_row(Provider::OpenAi, "gpt-9", Tier::Cheap, true)];
+    let listing = listing_of(Provider::OpenAi, &[("gpt-9", None), ("gpt-9-mini", None)]);
+    let diff = diff(Provider::OpenAi, &listing, &rows, &[], None);
+    assert_eq!(
+        added_tag(&diff, "gpt-9-mini"),
+        tagged(Tier::Cheap, true, Placement::BestFit)
+    );
+}
+
+#[test]
+fn a_new_id_takes_nothing_from_a_best_fit_entry_or_an_untiered_owner_entry() {
+    let fallback = tagged(Tier::Balanced, false, Placement::BestFit);
+    let docs = [
+        document(
+            "gemini",
+            vec![entry(
+                "gemini-9-pro",
+                "detected",
+                Some("flagship"),
+                true,
+                "best-fit",
+            )],
+        ),
+        document(
+            "gemini",
+            vec![entry("gemini-9-pro", "owner", None, true, "owner")],
+        ),
+    ];
+    let listing = listing_of(Provider::Gemini, &[("gemini-9-pro-exp", None)]);
+    for doc in docs {
+        let diff = diff(Provider::Gemini, &listing, &[], &[], Some(&doc));
+        assert_eq!(added_tag(&diff, "gemini-9-pro-exp"), fallback, "{doc}");
+    }
+}
+
+#[test]
+fn an_id_placed_by_best_fit_this_run_is_no_candidate_for_another() {
+    // `gem-a-x` takes flagship from `gem-a-x-base`. Were it a candidate, its
+    // creation time would win `gem-a-y` its tie against `gem-a-z` (cheap).
+    let doc = document(
+        "openai",
+        vec![
+            entry("gem-a-x-base", "seed", Some("flagship"), true, "hint"),
+            entry("gem-a-z", "seed", Some("cheap"), false, "hint"),
+        ],
+    );
+    let listing = listing_of(Provider::OpenAi, &[("gem-a-x", Some(5)), ("gem-a-y", None)]);
+    let diff = diff(Provider::OpenAi, &listing, &[], &[], Some(&doc));
+    assert_eq!(
+        added_tag(&diff, "gem-a-x").map(|tag| tag.tier),
+        Some(Tier::Flagship)
+    );
+    assert_eq!(
+        added_tag(&diff, "gem-a-y").map(|tag| tag.tier),
+        Some(Tier::Cheap)
+    );
+}
+
+#[test]
+fn an_embedding_id_of_no_known_family_is_added_balanced_by_best_fit() {
+    let doc = document(
+        "openai",
+        vec![entry("gpt-6-astra", "seed", Some("flagship"), true, "hint")],
+    );
+    let listing = listing_of(
+        Provider::OpenAi,
+        &[("gpt-6-astra", None), ("text-embedding-3-large", None)],
+    );
+    let diff = diff(Provider::OpenAi, &listing, &ASTRA, &[], Some(&doc));
+    assert_eq!(
+        added_tag(&diff, "text-embedding-3-large"),
+        tagged(Tier::Balanced, false, Placement::BestFit)
+    );
+}
+
+#[test]
+fn a_listed_owner_entry_reports_its_own_tier_and_placement_and_is_unchanged() {
+    let doc = document(
+        "openai",
+        vec![entry("gpt-6-astra", "owner", Some("cheap"), false, "owner")],
+    );
+    let listing = listing_of(Provider::OpenAi, &[("gpt-6-astra", None)]);
+    let diff = diff(Provider::OpenAi, &listing, &ASTRA, &[], Some(&doc));
+    assert_eq!(
+        row(&diff, "gpt-6-astra"),
+        Some(&ReportRow {
+            id: "gpt-6-astra".into(),
+            change: IdChange::Unchanged,
+            tier: Some(Tier::Cheap),
+            placed: Placement::Owner,
+        })
+    );
+}
+
+#[test]
+fn the_counts_are_taken_against_the_document_before_the_event() {
+    let doc = document(
+        "openai",
+        vec![
+            entry("gpt-6-astra", "seed", Some("flagship"), true, "hint"),
+            entry("gpt-kept", "detected", Some("cheap"), false, "best-fit"),
+            entry("gpt-old-1", "detected", Some("cheap"), false, "best-fit"),
+            entry("gpt-old-2", "seed", Some("cheap"), false, "hint"),
+            entry("gpt-old-3", "detected", Some("cheap"), false, "best-fit"),
+            owner_removed("gpt-gone"),
+        ],
+    );
+    let listing = listing_of(
+        Provider::OpenAi,
+        &[
+            ("gpt-6-astra", None),
+            ("gpt-kept", None),
+            ("gpt-new", None),
+            ("gpt-gone", None),
+        ],
+    );
+    let diff = diff(Provider::OpenAi, &listing, &ASTRA, &[], Some(&doc));
+    assert_eq!(diff.report.count(IdChange::New), 1);
+    assert_eq!(diff.report.count(IdChange::Unchanged), 2);
+    assert_eq!(diff.report.count(IdChange::Removed), 3);
+}
+
+#[test]
+fn added_and_removed_are_in_id_order() {
+    let doc = document(
+        "openai",
+        vec![
+            entry("gpt-z-old", "detected", Some("cheap"), false, "best-fit"),
+            entry("gpt-a-old", "detected", Some("cheap"), false, "best-fit"),
+        ],
+    );
+    let listing = listing_of(Provider::OpenAi, &[("gpt-z", None), ("gpt-a", None)]);
+    let diff = diff(Provider::OpenAi, &listing, &[], &[], Some(&doc));
+    let added: Vec<&str> = diff.added.iter().map(|added| added.id.as_str()).collect();
+    assert_eq!(added, ["gpt-a", "gpt-z"]);
+    assert_eq!(diff.removed, ["gpt-a-old", "gpt-z-old"]);
 }
