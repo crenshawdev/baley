@@ -55,6 +55,8 @@ pub mod init;
 pub mod keys;
 /// Owner commands over the evidence ledger.
 pub mod ledger;
+/// `baley models`: the per-user model catalog and the seeding step before each use.
+pub mod models;
 /// Replaces a settings file whole, refusing when it changed since it was read.
 pub mod replace;
 /// The two settings files as bytes: the global file's path and one reader.
