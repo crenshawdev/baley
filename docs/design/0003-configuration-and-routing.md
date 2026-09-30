@@ -206,24 +206,32 @@ There is no command that sets, removes or lists keys (CFG-R25): the owner writes
 
 ### baley models update
 
-- **Inputs:** optional provider names (default: every provider whose key is in `keys.env`).
-- **Outputs:** per provider: ids added, removed and unchanged, the tier each got and from what (hint table, best fit, owner), and the new catalog version; a `models.detected` or `models.detection_failed` event per provider. A provider named here that has no key in `keys.env` gets no event: the output names the key missing from `keys.env`, and its detected entries become unverifiable (CFG-R21).
-- **Refusals:** none; a failed detection is reported, not refused (CFG-R21).
+- **Inputs:** optional provider names, each `openai` or `deepseek`; a name given twice counts once. With none, every provider whose key is in `keys.env` runs, and the rest are skipped quietly.
+- **Outputs:** on stdout, in this order.
+  - `seeded the model catalog with hint table version <n>`, when the run seeded. `update` seeds first only when it will record something: some provider it covers has a key, or `keys.env` is refused. Otherwise it creates no per-user project `user` and records nothing.
+  - A refused `keys.env` prints the refusal's own text once, such as `keys-file-exposed: ... (fix: chmod 600 ...)`, and every provider the run covers records `models.detection_failed` with the refusal's code as its category.
+  - A provider detected prints `<provider>: detected <n> added, <n> removed, <n> unchanged; catalog version <v>`, then a table with the columns `PROVIDER`, `ID`, `STATUS`, `TIER` and `PLACED`. It has one row per listed or removed id, in id order: its status (`added`, `unchanged` or `removed`), the tier it holds (`-` for none) and how it was placed (`hint`, `prefix`, `best-fit` or `owner`). A listing with no ids and no removals prints no table. The version is the one this provider's command committed.
+  - A provider whose detection failed prints `<provider>: detection failed: <category>; the previous list is kept`, with a category of section 6. A body cut short at the 4 MiB bound fails as `incomplete` and removes no id. Each endpoint answers its whole list in one response, so that bound is the only one.
+  - A provider named here with no key in `keys.env` gets no event. The output names the missing key, `<provider>: OPENAI_API_KEY is not in <keys file>, so its detected entries are unverifiable`, then lists that provider's detected entries in the same table with status `unverifiable`, or says `<provider>: no detected entries`. Nothing is stored, so each entry keeps its last-verified time (CFG-R21, CFG-R28).
+  - A provider the run does not cover, or one without a key that the owner did not name, prints nothing.
+
+  Each provider records in its own command, `models.update`, in the per-user project `user` (section 6). The command exits 0 whether detection succeeds or fails.
+- **Refusals:** each on stderr as `baley: <code>: ...`, exit 2, before the ledger is opened: `baley-home-invalid` and `user-home-invalid` when Baley's folders cannot be resolved ([0001](0001-evidence-ledger.md)), and `unknown-provider` for a host (`claude-code`, `codex`) or any name other than the two providers, `gemini` included, as `unknown-provider: "<name>" is no provider Baley detects; providers: openai, deepseek`. A failed detection is reported, not refused (CFG-R21).
 
 ### baley models add, baley models remove
 
-- **Inputs:** a host or provider name, one of `claude-code`, `codex`, `openai`, `gemini` or `deepseek`, and a model name, which is never empty; `add` takes an optional `--tier` of `flagship`, `balanced` or `cheap`. A missing or empty name or any other tier is a usage error, exit 2.
+- **Inputs:** a host or provider name, one of `claude-code`, `codex`, `openai` or `deepseek`, and a model name, which is never empty; `add` takes an optional `--tier` of `flagship`, `balanced` or `cheap`. A missing or empty name or any other tier is a usage error, exit 2.
 - **Outputs:** the change and the new catalog version, such as `added "gpt-test-1" to openai at tier cheap; catalog version 3`, with `models.owner_changed` recorded in the per-user project `user` (section 6).
   - Adding a name the catalog already holds, other than a host alias, makes it the owner's entry. With `--tier` it takes that tier and shows as placed by the owner, and it keeps its high-effort flag, since `--tier` says nothing about effort.
   - Adding a name the owner removed accepts it again.
   - Removing a seeded or detected id hides it, and no later seed or detection brings it back. Only an owner addition does.
   - A change that leaves every catalog's accepted names as they were, such as a change of tier alone, leaves the catalog version.
-  - Like every `baley models` command, it first seeds the catalog when the binary's hint table version differs from the latest one recorded, higher or lower (section 6). The seed is its own command, recorded before the owner's.
+  - Like `baley models list`, it first seeds the catalog when the binary's hint table version differs from the latest one recorded, higher or lower (section 6), while `baley models update` seeds only when it records. The seed is its own command, recorded before the owner's.
 - **Refusals:** each on stderr as `baley: <code>: ...`, exit 2. `baley-home-invalid`, `user-home-invalid`, `unknown-provider`, `alias-not-addable` and `alias-not-removable` refuse before the ledger is opened, so a refused command creates no ledger home. `unknown-model` is judged inside the removal's own transaction, after the seeding step, and the refused removal records only its `command.completed`.
 
   | Code | When | Requirement |
   |---|---|---|
-  | `unknown-provider` | The name is none of the five catalogs, `anthropic` included, since nothing seeds or detects an Anthropic catalog | CFG-R22 |
+  | `unknown-provider` | The name is none of the four catalogs, `anthropic` and `gemini` included, since nothing seeds or detects a catalog for either | CFG-R22 |
   | `alias-not-addable` | `add` names a host alias compiled into Baley, which the host already accepts; an owner entry for it would change no accepted name and could never be removed | CFG-R19 |
   | `alias-not-removable` | `remove` names a host alias compiled into Baley, which the host resolves whatever the catalog says | CFG-R19 |
   | `unknown-model` | `remove` names a name the catalog does not hold, or one the owner already removed | CFG-R22 |
