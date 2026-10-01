@@ -166,6 +166,8 @@ fn no_faults() -> command_plan::DoctorSettings {
         discovered: None,
         remote: anchor_plan::RemoteState::NotSet,
         faults: vec![],
+        diagnostics: vec![],
+        pending: None,
     }
 }
 fn ledger(ids: &[&str]) -> Vec<(ProjectId, String)> {
@@ -1163,12 +1165,24 @@ fn managed(
     global: Result<Option<policy::SettingsFile>, policy::Unavailable>,
     head: Option<Result<crate::committed::Committed, policy::Unavailable>>,
 ) -> command_plan::Settings {
+    let reads = crate::policy_step::Reads { global, head };
     command_plan::Settings {
         project_file: Some(command_plan::ProjectFile {
             path: CHECKOUT_FILE.into(),
             id,
         }),
-        policy: crate::policy_step::build(&crate::policy_step::Reads { global, head }),
+        policy: crate::policy_step::build(&reads),
+        pending: command_plan::pending_note(&reads),
+    }
+}
+fn outside_settings(
+    global: Result<Option<policy::SettingsFile>, policy::Unavailable>,
+) -> command_plan::Settings {
+    let reads = crate::policy_step::Reads { global, head: None };
+    command_plan::Settings {
+        project_file: None,
+        policy: crate::policy_step::build(&reads),
+        pending: command_plan::pending_note(&reads),
     }
 }
 fn origin_settings() -> command_plan::Settings {
@@ -1343,13 +1357,7 @@ fn anchor_does_not_take_a_checkout_file_without_an_id_as_no_project() {
 }
 #[test]
 fn anchor_outside_a_checkout_is_refused_with_no_operation() {
-    let settings = command_plan::Settings {
-        project_file: None,
-        policy: crate::policy_step::build(&crate::policy_step::Reads {
-            global: Ok(None),
-            head: None,
-        }),
-    };
+    let settings = outside_settings(Ok(None));
     let refusal = anchor_next(Some(&settings), None, None).unwrap_err();
     assert!(refusal.contains("no baley.toml was found"), "{refusal}");
     assert!(refusal.contains("baley anchor"), "{refusal}");
@@ -1505,13 +1513,7 @@ fn the_flagged_verify_forms_request_no_settings_read_before_any_facts() {
 }
 #[test]
 fn anchored_verify_outside_a_checkout_points_to_the_local_only_form() {
-    let outside = command_plan::Settings {
-        project_file: None,
-        policy: crate::policy_step::build(&crate::policy_step::Reads {
-            global: Ok(None),
-            head: None,
-        }),
-    };
+    let outside = outside_settings(Ok(None));
     let none = verify_next(anchored(), Some(&outside), None).unwrap_err();
     assert!(none.contains("verify --local-only <project>"), "{none}");
     let named = command_plan::Form::Anchored { named: Some("P") };
@@ -1613,13 +1615,7 @@ fn an_unreadable_global_file_and_a_wrong_typed_heads_copy_are_each_a_fault() {
 }
 #[test]
 fn outside_a_checkout_an_invalid_global_file_is_a_fault_in_doctor() {
-    let outside = command_plan::Settings {
-        project_file: None,
-        policy: crate::policy_step::build(&crate::policy_step::Reads {
-            global: global_file("escalate_on_failure = [\n"),
-            head: None,
-        }),
-    };
+    let outside = outside_settings(global_file("escalate_on_failure = [\n"));
     let judged = command_plan::doctor_settings(&outside);
     assert_eq!(judged.discovered, None);
     assert_eq!(judged.faults.len(), 1);
@@ -1690,6 +1686,113 @@ fn doctor_labels_a_project_whose_settings_could_not_be_read() {
         &no_faults(),
     ));
     assert!(r.contains("project P (One): local only, the settings could not be read"));
+}
+fn differs() -> crate::committed::Pending {
+    crate::committed::Pending::Differs {
+        path: CHECKOUT_FILE.into(),
+    }
+}
+fn head_pending(
+    text: &str,
+    pending: crate::committed::Pending,
+) -> Option<Result<crate::committed::Committed, policy::Unavailable>> {
+    Some(Ok(crate::committed::Committed {
+        layer: Some(checkout_file(text)),
+        pending: Some(pending),
+    }))
+}
+const IGNORED_GLOBAL: &str = "unknown = 1\n[git]\nremote = \"origin\"\n";
+const IGNORED_HEAD: &str = "[host.cursor]\nescalate_on_failure = 3\n";
+fn ignoring_settings() -> command_plan::Settings {
+    managed(
+        valid_id(),
+        global_file(IGNORED_GLOBAL),
+        head_pending(IGNORED_HEAD, differs()),
+    )
+}
+#[test]
+fn doctor_passes_the_policys_diagnostics_global_file_first_then_heads_copy() {
+    let judged = command_plan::doctor_settings(&ignoring_settings());
+    let lines: Vec<String> = judged.diagnostics.iter().map(ToString::to_string).collect();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(
+        lines[0].starts_with(GLOBAL_FILE) && lines[0].contains("unknown is not a setting"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[1].starts_with(GLOBAL_FILE)
+            && lines[1]
+                .contains("git.remote is a project setting and was ignored in the global file"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[2].starts_with(CHECKOUT_FILE)
+            && lines[2].contains("host.cursor is not a host Baley knows"),
+        "{lines:?}"
+    );
+    assert_eq!(judged.faults, Vec::<String>::new());
+}
+#[test]
+fn doctor_passes_the_note_of_heads_copy_even_when_a_fault_stops_the_policy() {
+    let judged = command_plan::doctor_settings(&ignoring_settings());
+    assert_eq!(judged.pending, Some(differs()));
+    let faulted = managed(
+        valid_id(),
+        Ok(None),
+        head_pending("escalate_on_failure = \"yes\"\n", differs()),
+    );
+    let judged = command_plan::doctor_settings(&faulted);
+    assert_eq!(judged.faults.len(), 1);
+    assert_eq!(judged.diagnostics, vec![]);
+    assert_eq!(judged.pending, Some(differs()));
+}
+#[test]
+fn no_note_is_passed_when_heads_copy_was_not_read_or_failed() {
+    let none = crate::policy_step::Reads {
+        global: Ok(None),
+        head: None,
+    };
+    assert_eq!(command_plan::pending_note(&none), None);
+    let failed = crate::policy_step::Reads {
+        global: Ok(None),
+        head: Some(Err(policy::Unavailable {
+            path: CHECKOUT_FILE.into(),
+            fault: policy::Fault::Unreadable {
+                cause: "git failed".into(),
+            },
+        })),
+    };
+    assert_eq!(command_plan::pending_note(&failed), None);
+}
+#[test]
+fn doctor_prints_each_diagnostic_with_its_file_then_the_pending_note_before_any_project() {
+    let judged = command_plan::doctor_settings(&ignoring_settings());
+    let r = display::doctor(&health(), &projects(), &no_reasons(), &judged);
+    let at = |needle: &str| {
+        r.lines
+            .iter()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no line holds {needle}: {:?}", r.lines))
+    };
+    let (unknown, scope, host) = (
+        at("unknown is not a setting"),
+        at("git.remote is a project setting"),
+        at("host.cursor"),
+    );
+    let note = at(&format!(
+        "{CHECKOUT_FILE} differs from HEAD's copy, so its changes apply once committed"
+    ));
+    assert!(at("database ") < unknown);
+    assert!(unknown < scope && scope < host && host < note);
+    assert!(note < at("project P (One)"));
+}
+#[test]
+fn doctor_diagnostics_and_the_pending_note_alone_leave_the_exit_code_at_zero() {
+    let judged = command_plan::doctor_settings(&ignoring_settings());
+    assert_eq!(
+        display::doctor(&health(), &projects(), &no_reasons(), &judged).code,
+        0
+    );
 }
 #[test]
 fn the_anchor_request_carries_the_step_version_and_remote_in_its_digest() {

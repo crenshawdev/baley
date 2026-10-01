@@ -312,6 +312,7 @@ fn gather_settings(cwd: &Path, config: &Path) -> Result<Gathered, Render> {
                 settings: Settings {
                     project_file: Some(ProjectFile { path, id }),
                     policy: policy_step::build(&reads),
+                    pending: command_plan::pending_note(&reads),
                 },
                 root: Some(root),
             }
@@ -325,6 +326,7 @@ fn gather_settings(cwd: &Path, config: &Path) -> Result<Gathered, Render> {
                 settings: Settings {
                     project_file: None,
                     policy: policy_step::build(&reads),
+                    pending: command_plan::pending_note(&reads),
                 },
                 root: None,
             }

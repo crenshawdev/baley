@@ -3,7 +3,11 @@
 //! next, in order, or its refusal. Pure: the wiring performs each operation
 //! and asks again, so a refusal always comes before the operation after it.
 use super::anchor_plan::{self, RemoteState, TargetRefusal};
-use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, ProjectIdentity, Unavailable};
+use crate::committed::Pending;
+use crate::policy_step::Reads;
+use baley_core::policy::{
+    CONFIG_UNAVAILABLE, Diagnostic, EffectivePolicy, ProjectIdentity, Unavailable,
+};
 use std::path::{Path, PathBuf};
 
 /// A ledger command the plan covers.
@@ -85,6 +89,8 @@ pub(super) struct Settings {
     pub(super) project_file: Option<ProjectFile>,
     /// The policy built from the two settings files, or what stops it.
     pub(super) policy: Result<EffectivePolicy, Unavailable>,
+    /// The note about the working-tree file, set when HEAD's copy was read.
+    pub(super) pending: Option<Pending>,
 }
 impl Settings {
     /// The id of the discovered project, or the refusal for a managed
@@ -125,6 +131,10 @@ pub(super) struct DoctorSettings {
     /// Each settings problem as its `config-unavailable` text, which names
     /// the file. `doctor` reports them and keeps checking.
     pub(super) faults: Vec<String>,
+    /// What the merged policy ignored, the global file's first.
+    pub(super) diagnostics: Vec<Diagnostic>,
+    /// The note about an uncommitted project file, faults included.
+    pub(super) pending: Option<Pending>,
 }
 
 /// Judges the gathered settings for `doctor`. A problem is a finding, not a
@@ -137,24 +147,37 @@ pub(super) fn doctor_settings(settings: &Settings) -> DoctorSettings {
         faults.push(fault);
         None
     });
-    let remote = match &settings.policy {
-        Ok(policy) => discovered
-            .as_ref()
-            .and_then(|_| anchor_plan::remote_of(policy))
-            .map_or(RemoteState::NotSet, RemoteState::Name),
+    let (remote, diagnostics) = match &settings.policy {
+        Ok(policy) => (
+            discovered
+                .as_ref()
+                .and_then(|_| anchor_plan::remote_of(policy))
+                .map_or(RemoteState::NotSet, RemoteState::Name),
+            policy.diagnostics.clone(),
+        ),
         Err(unavailable) => {
             faults.push(unavailable.to_string());
-            RemoteState::Unknown
+            (RemoteState::Unknown, Vec::new())
         }
     };
     DoctorSettings {
         discovered,
         remote,
         faults,
+        diagnostics,
+        pending: settings.pending.clone(),
     }
 }
 
+/// The note about the working-tree project file, set only when HEAD's copy
+/// of it was read.
+pub(super) fn pending_note(reads: &Reads) -> Option<Pending> {
+    let committed = reads.head.as_ref()?.as_ref().ok()?;
+    committed.pending.clone()
+}
+
 /// What is known so far.
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Facts<'a> {
     /// The command.

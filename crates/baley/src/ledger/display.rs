@@ -302,7 +302,9 @@ fn local_text(reason: LocalReason) -> &'static str {
     }
 }
 /// Reports every project even when another project has failed. `reasons`
-/// says why a project was checked without a remote.
+/// says why a project was checked without a remote, and `settings` carries
+/// the settings faults, ignored settings and pending note, printed before
+/// the first project.
 pub(super) fn doctor(
     health: &Health,
     projects: &[(ProjectId, String)],
@@ -332,6 +334,13 @@ pub(super) fn doctor(
         result.lines.push(format!("settings finding: {fault}"));
         result.code = 1;
     }
+    // Ignored settings and the pending note are notices, never a failure.
+    result
+        .lines
+        .extend(settings.diagnostics.iter().map(ToString::to_string));
+    result
+        .lines
+        .extend(settings.pending.iter().map(ToString::to_string));
     for p in &health.projects {
         let name = projects
             .iter()
