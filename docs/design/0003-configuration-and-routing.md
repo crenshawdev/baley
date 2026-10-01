@@ -70,6 +70,7 @@ graph LR
     1-. "<div>Writes provider keys by hand</div><div style='font-size: 70%'></div>" .->14
     7-. "<div>Resolves role, model and<br />effort</div><div style='font-size: 70%'></div>" .->8
     8-. "<div>Reads</div><div style='font-size: 70%'></div>" .->13
+    4-. "<div>Writes a settings file whole,<br />for config set</div><div style='font-size: 70%'></div>" .->13
     8-. "<div>Checks model names</div><div style='font-size: 70%'></div>" .->10
     8-. "<div>Records the effective policy<br />and each route</div><div style='font-size: 70%'></div>" .->11
     4-. "<div>Settings commands</div><div style='font-size: 70%'></div>" .->8
@@ -144,12 +145,12 @@ graph LR
 | CFG-R28 | A provider the owner reaches by its own command-line login needs no line in the keys file; every command that needs a key names the key missing from the file, and no command forces the owner to add one. | No one is forced to hand over a key. | SYS-R10 | Active |
 | CFG-R29 | `git.forge_provider` accepts `github`, `gitlab` and `forgejo`; the first release acts on `github` only, and choosing another value is accepted and reported as not yet supported by [0011: Landing](0011-milestones-landing-undo-pause.md). | All three forges are planned; the setting must not need to change when they arrive. | | Active |
 
-Which policy each command runs under (CFG-R8, CFG-R9). Policy version 0 means that no recorded policy applies. The policy step runs before every command that appends to a project's chain from a checkout: it re-reads both files, records `policy.effective` when the merged result changed, and returns the version in force for the command's own record. A command that appends to no chain runs no step. Records in the per-user project `user` carry 0 and build no policy. `purge` is the one chain-writing command that may run outside a checkout, and records 0 there.
+Which policy each command runs under (CFG-R8, CFG-R9). Policy version 0 means that no recorded policy applies. The policy step runs before every command that appends to a project's chain from a checkout: it re-reads both files, records `policy.effective` when the merged result changed, and returns the version in force for the command's own record. A command that appends to no chain runs no step. Records in the per-user project `user` carry 0 and build no policy. `purge` is the one chain-writing command that may run outside a checkout, and records 0 there. A `baley config set` outside any project, one in a project that is not in this machine's ledger, and one that changes nothing run no step. The first two give 0, since no recorded policy applies, and one that changes nothing gives the version in force.
 
 | Command | Project from | Policy step | Version recorded |
 |---|---|---|---|
 | `baley init` | discovery at the repository root | yes, after `project.initialized` | 0 on `project.initialized` |
-| `baley config set` in a project | discovery | yes, after the write | the version in force after it |
+| `baley config set` in a project | discovery | yes, after the write, when the project is in this machine's ledger | the version in force after it, or 0 when the project is not in this machine's ledger, where `baley init` records the policy |
 | `anchor`, `acknowledge-restore` | discovery | yes | the version in force |
 | `purge` | its argument | only when run from a checkout of that project | the version in force there, otherwise 0 |
 | `verify`, `doctor`, `export`, `rebuild`, `scrub` | their argument (`scrub` takes none), or discovery for the anchor remote | no: no event is appended | none |
@@ -179,28 +180,57 @@ All operations of this area are command-line commands run by the owner. Nothing 
 
 ### baley config show
 
-- **Inputs:** optional `--host <name>` (default: none, which shows every host section), optional setting names.
-- **Outputs:** for each setting: the schema (type, default, scope), the stored global and project values, the effective value, the layer it came from, and every diagnostic (scope, unknown name, invalid value); the paths of both files.
-- **Refusals:**
+- **Inputs:** optional `--host <name>`, optional setting names. An unknown host name is refused when the arguments are parsed. With no `--host`, which is how the command line runs, every host section's stored values are shown and the effective value applies no host section. With `--host`, only that host's section is shown, and its sections apply to the effective value. With no setting names, every setting is shown, in the schema's order.
+- **Outputs:**
+  - for each setting: its type, default and scope;
+  - its stored global values, each host section included;
+  - its stored project values, read from the working-tree `baley.toml`. Where HEAD's committed value differs, it is shown beside the working-tree value with the note that it applies once committed;
+  - its effective value, with the layer and the file it came from. The effective value is merged from the global file and HEAD's copy of `baley.toml`, since HEAD's copy is the policy the ledger records;
+  - then the diagnostics of the global file and HEAD's copy: scope, unknown name and unknown host. A value that fails its type or grammar makes the file unavailable and is refused, so it is not listed;
+  - the note that the project file's changes apply once committed, when the working-tree file differs from HEAD's copy or is not committed;
+  - the path of the global file, and the path of the project file when the directory is in a project.
+
+  `config show` opens no ledger, runs no policy step and records nothing.
+- **Refusals,** in the order judged. The names are judged first, since they need no file. Then each file is read in the order global file, working-tree `baley.toml`, HEAD's copy, and then each is parsed in that order.
 
   | Code | When | Requirement |
   |---|---|---|
-  | `not-a-project` | The directory has no project file and a project-scoped setting was asked for | CFG-R4 |
+  | `unknown-setting` | A named setting is not in the schema | CFG-R7 |
+  | `not-a-project` | The directory has no project file and a project-scoped setting was named | CFG-R4 |
+  | `config-unavailable` | The global file, the working-tree `baley.toml` or HEAD's copy cannot be read or is invalid, naming the file and the fault and, for a parse, type or grammar fault, its line and column. A fault in HEAD's copy is named as HEAD's copy of the file, since the working-tree file at that path may not share it | CFG-R9 |
 
 ### baley config set
 
-- **Inputs:** `--global` or `--project` (required), optional `--host <name>`, one or more `name=value` pairs; `name=null` resets.
-- **Outputs:** the settings changed, the file written, and the facts as `config show` returns them; a new `policy.effective` when the merged result changed. Baley writes the whole file to a temporary file in the same folder and renames it over the old one; comments and key order in the file are not kept ([ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)).
-- **Refusals:**
+- **Inputs:**
+  - `--global` or `--project`, exactly one, required;
+  - optional `--host <name>`, refused when the arguments are parsed if the name is unknown. With it, each value is written in that host's `[host.<name>]` section;
+  - one or more `name=value` pairs, split at the first `=`.
+
+  A value is read by its setting's type and is never parsed as TOML: `true` or `false` for a boolean, a rung name written exactly as the scale spells it, or a non-empty model name. A file that should hold a default has the default written as its value.
+- **Outputs:**
+  - **A project-file set:** the file written, each setting changed with its new value, that the change applies at the next commit, and the policy version in force. The step reads HEAD's copy of the file, so the version is usually the one already recorded until the change is committed.
+  - **A global set:** each setting changed, the file written and the policy version. A global file applies as soon as it is written, so it never says next commit.
+  - **A set that changes nothing,** where every value is already in the file: nothing is written and no policy step runs. The output says nothing changed and gives the policy version in force.
+  - **Version 0:** the output says what it means. Outside a project no recorded policy applies. In a project not in this machine's ledger, such as a fresh clone, no recorded policy applies to the project and `baley init` records it.
+  - **The write:**
+    - Baley writes the whole file to a temporary file in the same folder and renames it over the old one. Comments and key order in the file are not kept ([ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)). Every other key the file holds is kept.
+    - The config folder is created private when it is missing.
+    - A `--project` set is rewritten from the working-tree `baley.toml`'s own bytes, never from HEAD's copy, so uncommitted edits in that file are kept.
+  - **The policy step:** in a project in this machine's ledger, the step runs after the write. It re-reads both files, taking the project layer from HEAD's copy, and records `policy.effective` when the merged result changed. A project-file change is therefore recorded once it is committed and a later command that writes the chain runs.
+  - A refusal exits 2. A write that fails for another reason exits 3.
+- **Refusals,** in the order judged. Each check runs over every pair before the next begins, and nothing is written until all have passed:
 
   | Code | When | Requirement |
   |---|---|---|
-  | `unknown-setting` | The name is not in the schema | CFG-R7 |
-  | `invalid-value` | The value is off type, outside its bounds or enum, or fails its grammar | CFG-R9 |
-  | `wrong-layer` | The setting's scope excludes the requested layer | CFG-R5 |
-  | `unknown-model` | A `roles.<role>.model` value is not in the catalog for that host or provider | CFG-R14 |
-  | `config-conflict` | The file changed between read and write | CFG-R9 |
   | `not-a-project` | `--project` outside a project | CFG-R4 |
+  | `unknown-setting` | The name is not in the schema | CFG-R7 |
+  | `wrong-layer` | The setting's scope excludes the requested layer | CFG-R5 |
+  | `invalid-value` | The value is not of the setting's type, or fails its grammar | CFG-R9 |
+  | `config-unavailable` | A file the set checks cannot be read or is invalid: the working-tree project file and its project id, then the global file and, in a project, HEAD's copy, then the file the set writes. A fault in HEAD's copy is named as HEAD's copy of the file | CFG-R9 |
+  | `unknown-model` | A `roles.<role>.model` value is not in the catalog of the host `--host` names, or with no `--host`, in no host's catalog. The refusal names the entries each catalog accepts | CFG-R14 |
+  | `config-conflict` | The file to write is a symbolic link, or the file changed between read and write | CFG-R9 |
+
+  A symbolic link is refused before the catalog is read, so a set that changes nothing refuses on one as a changing set does. A file that changed between read and write is found at the write itself, when the file's bytes no longer match the ones the new file was rendered from. The catalog is read, after it is seeded, only when a pair sets a model.
 
 ### baley config interview
 
@@ -437,28 +467,53 @@ sequenceDiagram
   participant O as Owner
   participant C as Command line
   participant P as Policy
+  participant F as Settings files
+  participant G as Git
   participant L as Ledger
-  O->>C: baley config set --project git.on_protected=refuse
-  C->>P: validate (schema, scope, grammar, catalog)
-  alt invalid
-    P-->>C: unknown-setting / invalid-value / wrong-layer / unknown-model
+  O->>C: baley config set --project roles.planner.effort=high
+  C->>P: judge each pair against the schema, the layer and the value's type
+  alt a pair is refused
+    P-->>C: not-a-project, unknown-setting, wrong-layer or invalid-value
     C-->>O: refusal naming the setting and the fault
-  else valid
-    P->>P: re-read the file, compare digest
-    alt file changed since read
-      P-->>C: config-conflict
-      C-->>O: refusal, retry
-    else unchanged
-      P->>P: write the file
-      P->>L: policy.effective (merged values, sources, diagnostics)
-      L-->>P: policy version
-      P-->>C: receipt and facts
-      C-->>O: what changed, which file, the policy version
+  end
+  C->>F: read the file to write and the other file
+  C->>G: in a project, read HEAD's copy of baley.toml
+  alt a file is unreadable or invalid
+    C-->>O: config-unavailable naming the file, the fault and its line and column
+  end
+  alt the file to write is a symbolic link
+    C-->>O: config-conflict
+  end
+  opt a pair sets a model
+    C->>L: seed the model catalog and read each host's accepted names
+    L-->>C: accepted names
+    C->>P: judge each model name
+    alt a name is not accepted
+      P-->>C: unknown-model naming the names accepted
+      C-->>O: refusal
     end
+  end
+  C->>P: compare each value with the file to write
+  alt every value is already in the file
+    C-->>O: nothing changed, with the policy version in force
+  else a value changes
+    alt project file
+      C->>F: write baley.toml whole from its own bytes
+    else global file
+      C->>F: create the config folder when missing, then write config.toml whole
+    end
+    F-->>C: written, or config-conflict when the file changed since it was read
+    opt the project is in this machine's ledger
+      C->>F: read config.toml again
+      C->>G: read HEAD's copy of baley.toml again
+      C->>L: policy.effective, when the merged result changed
+      L-->>C: policy version
+    end
+    C-->>O: each change and the file written, for a project file that it applies at the next commit, and the policy version
   end
 ```
 
-*Figure 4. Writing a setting.*
+*Figure 4. Writing a setting with `baley config set`. Every pair is judged before anything is read or written, in the order `not-a-project`, `unknown-setting`, `wrong-layer`, `invalid-value`. Then the file to write, the other file and, in a project, HEAD's copy are read, and any that cannot be read or is invalid refuses with `config-unavailable`. A file to write that is a symbolic link is refused as `config-conflict`. A model name is checked against each host's accepted names after the catalog is seeded, and a name no catalog accepts refuses with `unknown-model`. A set whose every value is already in the file writes nothing and runs no policy step. Otherwise a project-file set rewrites the working-tree `baley.toml` from its own bytes, and a global set rewrites `config.toml` and creates the config folder when it is missing. Either ends in `config-conflict` when the file changed after it was read. In a project in this machine's ledger the policy step then runs. It reads both files again, the project file from HEAD's copy, so a project-file change is recorded once it is committed and a later command that writes the chain runs, and a global change is recorded at once. Elsewhere the version is 0.*
 
 ```mermaid
 sequenceDiagram
@@ -567,7 +622,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 7. Finding the project and its policy on a request. The steps built so far serve the command line: the walk up to the nearest `baley.toml`, stopping at the git root (`discover`), the read of the project file at the checkout's HEAD (`committed::read`), and the merge with the global file and host sections. `baley init` and `purge` call the walk, and read HEAD's copy through the policy step. Recording `policy.effective` when the merged result changes is built for the command line: `baley init` records it after `project.initialized`, and `purge` from a checkout of the project it names. The command line connects no host, so no host section applies to it. An invalid or unreadable settings file, or a checkout or settings path that is not UTF-8, refuses with `config-unavailable` before the step records anything, and `baley init` refuses before it writes a file or opens the ledger. Recording `checkout.seen` arrives in Build 2 T13, and the host's request through the host interface in Build 3.*
+*Figure 7. Finding the project and its policy on a request. The steps built so far serve the command line: the walk up to the nearest `baley.toml`, stopping at the git root (`discover`), the read of the project file at the checkout's HEAD (`committed::read`), and the merge with the global file and host sections. `baley init`, `purge`, `baley config set` and `baley config show` call the walk. The first three read HEAD's copy through the policy step, and `config show` reads it through the step's gatherer and records nothing. Recording `policy.effective` when the merged result changes is built for the command line: `baley init` records it after `project.initialized`, `purge` from a checkout of the project it names, and `config set` after its write in a project in this machine's ledger. The command line connects no host, so no host section applies to it. An invalid or unreadable settings file, or a checkout or settings path that is not UTF-8, refuses with `config-unavailable` before the step records anything, and `baley init` refuses before it writes a file or opens the ledger. Recording `checkout.seen` arrives in Build 2 T13, and the host's request through the host interface in Build 3.*
 
 ## 9. Settings
 
@@ -616,19 +671,19 @@ The binary crate holds the inherited engine. It reads JSON files under `.plannin
 
 | Requirement | Status | Where |
 |---|---|---|
-| CFG-R1 | Partly built | The policy module reads `config.toml` and `baley.toml` as TOML (`crates/baley-core/src/policy/parse.rs:358-424`, `crates/baley/src/settings.rs:21-96`); the inherited engine still reads its JSON layers (`crates/baley/src/config/write.rs:19-24`, `crates/baley/src/server.rs:224-230`) until Build 9. |
+| CFG-R1 | Partly built | The policy module reads `config.toml` and `baley.toml` as TOML (`crates/baley-core/src/policy/parse.rs:383-449`, `crates/baley/src/settings.rs:21-96`); the inherited engine still reads its JSON layers (`crates/baley/src/config/write.rs:19-24`, `crates/baley/src/server.rs:224-230`) until Build 9. |
 | CFG-R2 | Built | Platform config folders and `BALEY_HOME` in `crates/baley/src/folders.rs:83-134`; the global file's path and reader in `crates/baley/src/settings.rs:13-96`. The inherited engine still reads its own JSON global file. |
-| CFG-R3 | Built | Discovery takes the nearest `baley.toml` at or below the repository root (`crates/baley/src/discovery.rs:41-60`). The policy module reads and checks the project id and name in its `[project]` table and renders the file whole (`crates/baley-core/src/policy/project.rs:36-140`), and the project's settings come from the copy committed at HEAD, read through git (`crates/baley/src/committed.rs:57-106`). `baley init` writes the file at the repository root when none exists (`crates/baley/src/init.rs:162-169`). |
-| CFG-R4 | Partly built | The walk for the command line: `discover` judges the ancestors of the working directory that its gatherer observes, nearest first, stops at the first `.git` and never uses a file above it, and the nearest of nested files applies alone (`crates/baley/src/discovery.rs:41-81`). `baley init` and `purge` call it (`crates/baley/src/init.rs:394-398`, `crates/baley/src/ledger/commands.rs:160-171`), and Build 2 T10, T12 and T13 follow; the guard and the server take the same walk per request in Build 3. Until then the Bash guard walks up to `.planning` (`crates/baley/src/guard/bash.rs:27-44`), the server binds one project per process (`crates/baley/src/server.rs:810-817`), and the Write/Edit guard does not walk (`crates/baley/src/guard/mod.rs:323-334`). |
-| CFG-R5 | Partly built | Scopes in the schema and the scope diagnostic in the walk (`crates/baley-core/src/policy/schema.rs:123-132`, `crates/baley-core/src/policy/parse.rs:575-625`); the command-line refusal `wrong-layer` is Build 2 T10. The inherited `GLOBAL_ONLY` list, applied at merge (`crates/baley/src/config/mod.rs:14-18`, `crates/baley/src/config/merge.rs:59-89`), and the `repo_only` flag in `crates/baley/src/config/schema.json`, refused at write (`crates/baley/src/config/write.rs:97-101`), stay until Build 9. |
-| CFG-R6 | Built | In the policy module: five layers in order and only the connected host's section (`crates/baley-core/src/policy/merge.rs:139-203`); the command line connects no host. The inherited merge of defaults, global and repo (`crates/baley/src/config/merge.rs:131-177`) has no host sections and stays until Build 9. |
-| CFG-R7 | Partly built | An unknown name is ignored with a diagnostic (`crates/baley-core/src/policy/parse.rs:521-554`, `crates/baley-core/src/policy/parse.rs:627-644`); the twelve settings without readers are gone from `crates/baley/src/config/schema.json`; the command-line refusal `unknown-setting` is Build 2 T10. |
-| CFG-R8 | Partly built | The `policy.effective` event, registered at version 1, and its payload built from the merged policy (`crates/baley-core/src/policy/recorded/event.rs:14-25`, `crates/baley-core/src/policy/recorded/event.rs:74-169`); the `policy` view and `PolicyProjector`, which keep the latest record per checkout and host (`crates/baley-core/src/policy/recorded/view.rs:13-124`); and the judge of whether to record (`crates/baley-core/src/policy/recorded/judge.rs:8-49`). The binary's policy step holds the recorder, which appends `policy.effective` as Baley's own `policy.record` command only when the judge finds a change (`crates/baley/src/policy_step/record.rs:18-143`), and the entry point, which reads the catalog version and returns the version in force (`crates/baley/src/policy_step/mod.rs:16-45`). The command line's store registers the event and the view at view set version 4 (`crates/baley/src/ledger/open.rs:9-27`). `baley init` runs the step after `project.initialized` (`crates/baley/src/init.rs:459-463`). `purge` runs it only from a checkout of the project it names and records the version in force, otherwise 0 (`crates/baley-core/src/policy/recorded/purge.rs:12-25`, `crates/baley/src/ledger/commands.rs:131-188`, `crates/baley/src/ledger/commands.rs:210-240`). `config set` runs it in Build 2 T10, `anchor` and `acknowledge-restore` in T12, and the server and guard per request in Build 3. The inherited engine's routes persist its config inputs only (`crates/baley/src/config/reload.rs:168-181`) until Build 9. |
-| CFG-R9 | Partly built | Validation and `config-unavailable` naming file, line, column and fault (`crates/baley-core/src/policy/parse.rs:218-306`, `crates/baley-core/src/policy/parse.rs:358-448`), and a file that is not a regular file or cannot be read (`crates/baley/src/settings.rs:83-96`). The policy step's read gathers the global file and HEAD's copy of the project file and builds the policy from them, refusing with the first fault (`crates/baley/src/policy_step/read.rs:21-40`). A checkout or settings path that is not UTF-8 is refused with `config-unavailable` naming the path (`crates/baley-core/src/policy/recorded/event.rs:27-53`, `crates/baley-core/src/policy/recorded/event.rs:74-103`). `baley init` runs the read and build before it writes a file or opens the ledger (`crates/baley/src/init.rs:318-336`, `crates/baley/src/init.rs:399-407`), and `purge` runs them from a checkout of the project it names, refusing a managed checkout whose `baley.toml` yields no id (`crates/baley/src/ledger/commands.rs:152-208`). `config set` follows in Build 2 T10, `anchor` and `acknowledge-restore` in T12, and the server and guard in Build 3. The inherited engine re-reads and validates its JSON layers before each write (`crates/baley/src/config/reload.rs:300-312`, `crates/baley/src/session/mod.rs:498-509`) until Build 9. |
+| CFG-R3 | Built | Discovery takes the nearest `baley.toml` at or below the repository root (`crates/baley/src/discovery.rs:41-60`). The policy module reads and checks the project id and name in its `[project]` table and renders the file whole (`crates/baley-core/src/policy/project.rs:36-140`), and the project's settings come from the copy committed at HEAD, read through git (`crates/baley/src/committed.rs:57-106`). `baley init` writes the file at the repository root when none exists (`crates/baley/src/init.rs:162-169`), and `baley config set --project` rewrites the working-tree file whole from its own bytes, keeping its `[project]` table and every other key (`crates/baley-core/src/policy/config_command/file.rs:26-62`, `crates/baley/src/config_command/set.rs:133-139`). |
+| CFG-R4 | Partly built | The walk for the command line: `discover` judges the ancestors of the working directory that its gatherer observes, nearest first, stops at the first `.git` and never uses a file above it, and the nearest of nested files applies alone (`crates/baley/src/discovery.rs:41-82`). `baley init`, `purge`, `baley config set` and `baley config show` call it (`crates/baley/src/init.rs:394-398`, `crates/baley/src/ledger/commands.rs:160-171`, `crates/baley/src/config_command/set.rs:49-57`, `crates/baley/src/config_command/show.rs:28-55`). A project-file set outside a project is refused with `not-a-project`, as is `config show` for a project-scoped setting asked outside one (`crates/baley-core/src/policy/config_command/set.rs:183-185`, `crates/baley-core/src/policy/config_command/show.rs:100-110`). Build 2 T12 and T13 follow; the guard and the server take the same walk per request in Build 3. Until then the Bash guard walks up to `.planning` (`crates/baley/src/guard/bash.rs:27-44`), the server binds one project per process (`crates/baley/src/server.rs:810-817`), and the Write/Edit guard does not walk (`crates/baley/src/guard/mod.rs:323-334`). |
+| CFG-R5 | Partly built | Scopes in the schema and the scope diagnostic in the walk (`crates/baley-core/src/policy/schema.rs:123-132`, `crates/baley-core/src/policy/parse.rs:600-650`); the command-line refusal `wrong-layer` is built, judged over every pair of a `config set` before anything is read (`crates/baley-core/src/policy/config_command/set.rs:146-151`, `crates/baley-core/src/policy/config_command/set.rs:194-202`). Build 2's standard schema holds only `both` settings, so only a test schema produces it. The inherited `GLOBAL_ONLY` list, applied at merge (`crates/baley/src/config/mod.rs:14-18`, `crates/baley/src/config/merge.rs:59-89`), and the `repo_only` flag in `crates/baley/src/config/schema.json`, refused at write (`crates/baley/src/config/write.rs:97-101`), stay until Build 9. |
+| CFG-R6 | Built | In the policy module: five layers in order and only the connected host's section (`crates/baley-core/src/policy/merge.rs:139-203`); the command line connects no host, so `config show` applies none unless `--host` names one, and then shows the effective values that host would run under (`crates/baley-core/src/policy/config_command/show.rs:200-215`). The inherited merge of defaults, global and repo (`crates/baley/src/config/merge.rs:131-177`) has no host sections and stays until Build 9. |
+| CFG-R7 | Partly built | An unknown name is ignored with a diagnostic (`crates/baley-core/src/policy/parse.rs:546-579`, `crates/baley-core/src/policy/parse.rs:652-669`); the twelve settings without readers are gone from `crates/baley/src/config/schema.json`; the command-line refusal `unknown-setting` is built for `config set` and `config show` (`crates/baley-core/src/policy/config_command/set.rs:187-193`, `crates/baley-core/src/policy/config_command/show.rs:94-99`). The inherited engine's JSON schema and writer stay until Build 9. |
+| CFG-R8 | Partly built | The `policy.effective` event, registered at version 1, and its payload built from the merged policy (`crates/baley-core/src/policy/recorded/event.rs:14-25`, `crates/baley-core/src/policy/recorded/event.rs:74-169`); the `policy` view and `PolicyProjector`, which keep the latest record per checkout and host (`crates/baley-core/src/policy/recorded/view.rs:13-124`); and the judge of whether to record (`crates/baley-core/src/policy/recorded/judge.rs:8-49`). The binary's policy step holds the recorder, which appends `policy.effective` as Baley's own `policy.record` command only when the judge finds a change (`crates/baley/src/policy_step/record.rs:18-143`), and the entry point, which reads the catalog version and returns the version in force (`crates/baley/src/policy_step/mod.rs:16-45`). The command line's store registers the event and the view at view set version 4 (`crates/baley/src/ledger/open.rs:9-27`). `baley init` runs the step after `project.initialized` (`crates/baley/src/init.rs:459-463`). `purge` runs it only from a checkout of the project it names and records the version in force, otherwise 0 (`crates/baley-core/src/policy/recorded/purge.rs:12-25`, `crates/baley/src/ledger/commands.rs:131-188`, `crates/baley/src/ledger/commands.rs:210-240`). `config set` runs it after its write, in a project in this machine's ledger, and reports the version it returns (`crates/baley/src/config_command/set.rs:141-153`, `crates/baley/src/config_command/set.rs:229-246`). A set outside a project or in a project the ledger does not hold runs no step and reports 0, and one that changes nothing reports the version in force (`crates/baley-core/src/policy/config_command/outcome.rs:57-69`). `anchor` and `acknowledge-restore` follow in T12, and the server and guard per request in Build 3. The inherited engine's routes persist its config inputs only (`crates/baley/src/config/reload.rs:168-181`) until Build 9. |
+| CFG-R9 | Partly built | Validation and `config-unavailable` naming file, line, column and fault (`crates/baley-core/src/policy/parse.rs:239-331`, `crates/baley-core/src/policy/parse.rs:383-473`), and a file that is not a regular file or cannot be read (`crates/baley/src/settings.rs:83-96`). The policy step's read gathers the global file and HEAD's copy of the project file and builds the policy from them, refusing with the first fault (`crates/baley/src/policy_step/read.rs:23-51`). A parse, type or grammar fault in HEAD's copy is named as HEAD's copy of the file, since that copy carries the working-tree path (`crates/baley-core/src/policy/parse.rs:224-236`, `crates/baley-core/src/policy/config_command/show.rs:122-127`). A checkout or settings path that is not UTF-8 is refused with `config-unavailable` naming the path (`crates/baley-core/src/policy/recorded/event.rs:27-53`, `crates/baley-core/src/policy/recorded/event.rs:74-103`). `baley init` runs the read and build before it writes a file or opens the ledger (`crates/baley/src/init.rs:318-336`, `crates/baley/src/init.rs:399-407`), and `purge` runs them from a checkout of the project it names, refusing a managed checkout whose `baley.toml` yields no id (`crates/baley/src/ledger/commands.rs:152-208`). `config set` refuses `config-unavailable` before it writes or opens the ledger (`crates/baley/src/config_command/set.rs:292-333`), and `config show` before it prints anything, opening no ledger at all (`crates/baley-core/src/policy/config_command/show.rs:86-129`). `config-conflict` comes from the replace's decision, which refuses a file that is not the one read (`crates/baley/src/replace.rs:58-66`), and from its whole-file replace, which writes through a temporary file and refuses a link (`crates/baley/src/replace.rs:115-165`, `crates/baley/src/replace.rs:181-214`). `config set` also refuses a link before it reads the catalog, so a set that changes nothing refuses on one (`crates/baley/src/config_command/set.rs:338-345`). `anchor` and `acknowledge-restore` follow in T12, and the server and guard in Build 3. The inherited engine re-reads and validates its JSON layers before each write (`crates/baley/src/config/reload.rs:300-312`, `crates/baley/src/session/mod.rs:498-509`) until Build 9. |
 | CFG-R10 | Built | `crates/baley/src/config/reload.rs:210-221`, `crates/baley/src/execution/boundary.rs:172` |
-| CFG-R11 | Partly built | guard denies both config paths (`crates/baley/src/guard/mod.rs:186-207`); the MCP `config-apply` and interview operations still exist (`crates/baley/src/config_service.rs:19-31`) |
+| CFG-R11 | Partly built | `baley config set` writes either settings file whole (`crates/baley/src/config_command/set.rs:364-377`), and `baley init` writes the project file when none exists (`crates/baley/src/init.rs:162-169`); guard denies both config paths (`crates/baley/src/guard/mod.rs:186-207`); the MCP `config-apply` and interview operations still exist (`crates/baley/src/config_service.rs:19-31`) |
 | CFG-R12, CFG-R13 | Built | In the policy module: the six roles and their defaults (`crates/baley-core/src/policy/schema.rs:208-243`), and an absent model passed as none (`crates/baley-core/src/policy/route.rs:176-279`). The inherited `crates/baley/src/config/roles.rs:7-14` keeps its `bal-*` roles until Build 9. |
-| CFG-R14 | Partly built | Resolution refuses `unknown-model` against the supplied accepted names (`crates/baley-core/src/policy/route.rs:200-211`). The catalog lookup gives each host's and provider's accepted names with the catalog version (`crates/baley-core/src/catalog/lookup.rs:24-41`); resolution's production caller, which passes them, is Build 4, and the write-time check is Build 2 T10. The inherited `crates/baley/src/config/roles.rs:132-142` still drops unsupported names at dispatch. |
+| CFG-R14 | Partly built | Resolution refuses `unknown-model` against the supplied accepted names (`crates/baley-core/src/policy/route.rs:200-211`). The catalog lookup gives each host's and provider's accepted names with the catalog version (`crates/baley-core/src/catalog/lookup.rs:24-41`); resolution's production caller, which passes them, is Build 4. The write-time check is built for `config set`: `judge_models` checks each model name against the accepted names of the host `--host` names, or of at least one host with none, and never against a provider's catalog (`crates/baley-core/src/policy/config_command/set.rs:229-274`). The names are read from the `model_catalog` view after the seeding step, which runs only when a pair sets a model. Inside a project the store opens for every set, to learn whether this machine's ledger holds the project, and outside one only when a pair sets a model (`crates/baley/src/config_command/set.rs:95-117`, `crates/baley/src/config_command/set.rs:185-205`). The interview's check comes with it in T11. The inherited `crates/baley/src/config/roles.rs:132-142` still drops unsupported names at dispatch. |
 | CFG-R15 | Partly built | The five rungs and the rung map argument of `resolve_route`, whose mapped value the route carries as `host_effort` (`crates/baley-core/src/policy/schema.rs:52-95`, `crates/baley-core/src/policy/route.rs:25-40`, `crates/baley-core/src/policy/route.rs:219`); each host's map is Build 3. The inherited resolution maps a rung to one of 30 agent names (`crates/baley/src/config/roles.rs:15-60`) until Build 9. |
 | CFG-R16 | Partly built | The escalation rule in `resolve_route` (`crates/baley-core/src/policy/route.rs:212-218`); Build 4 supplies the attempt. The inherited resolution (`crates/baley/src/config/roles.rs:127-131`) is called with attempt `None` everywhere (#69). |
 | CFG-R17 | Partly built | The route type carries every field of section 6 (`crates/baley-core/src/policy/route.rs:72-99`); a work order carrying it is Build 4. The inherited resolution (`crates/baley/src/config/roles.rs:143-180`) has no policy or catalog version. |
