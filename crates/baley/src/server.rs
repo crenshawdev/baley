@@ -7,7 +7,7 @@ use baley::execution::{
 use rmcp::handler::server::wrapper::Json;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
@@ -960,8 +960,8 @@ where
 }
 
 /// The server's answer to the host's initialize request.
-pub(crate) fn info() -> ServerInfo {
-    let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+pub(crate) fn info() -> ServerConfig {
+    let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
         .with_server_info(Implementation::new("baley", env!("CARGO_PKG_VERSION")));
     info.instructions = Some(baley::read::instructions::CONTRACT.to_owned());
     info
@@ -988,7 +988,7 @@ pub(crate) fn tools() -> Vec<Tool> {
 }
 
 impl ServerHandler for PublicServer {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         info()
     }
 
