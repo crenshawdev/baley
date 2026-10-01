@@ -505,7 +505,7 @@ fn stored_epoch(conn: &Connection) -> Result<Option<u32>, StoreError> {
 }
 
 fn schema_digest() -> String {
-    format!("{:x}", Sha256::digest(SCHEMA.as_bytes()))
+    Hash(Sha256::digest(SCHEMA.as_bytes()).into()).to_hex()
 }
 
 /// Creates the file settings and the schema under the writer queue. A
