@@ -1605,6 +1605,20 @@ fn a_report_that_names_a_remote_names_kind_as_a_model_name_is_caught() {
 }
 
 #[test]
+fn a_remote_name_reported_without_its_quotes_or_across_lines_is_caught() {
+    let lines = set_lines(
+        FileLayer::Global,
+        "/c/config.toml",
+        &[remote("origin"), remote("a\nb \"c\"")],
+        Place::LedgeredProject,
+        1,
+    );
+    assert_eq!(lines[0], "set example.remote = \"origin\"");
+    assert_eq!(lines[1], "set example.remote = \"a\\nb \\\"c\\\"\"");
+    assert!(lines.iter().all(|line| !line.contains('\n')), "{lines:?}");
+}
+
+#[test]
 fn the_standard_schema_accepting_git_remote_in_the_global_file_is_caught() {
     let refusal = judge_pairs(
         Schema::standard(),
