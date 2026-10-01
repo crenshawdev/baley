@@ -1214,3 +1214,285 @@ fn a_global_only_setting_in_the_project_file_is_a_diagnostic_not_a_refusal_when_
     .expect("valid file");
     assert_eq!(layers.working.expect("working tree").diagnostics.len(), 1);
 }
+
+fn layer_at(layer: FileLayer, path: &str, text: &str) -> crate::policy::ParsedLayer {
+    parse_layer(&settings_file(path, text), layer, &schema()).expect("a valid file")
+}
+
+fn global(text: &str) -> Option<crate::policy::ParsedLayer> {
+    Some(layer_at(FileLayer::Global, "/c/config.toml", text))
+}
+
+fn project(text: &str) -> Option<crate::policy::ParsedLayer> {
+    Some(layer_at(FileLayer::Project, "/r/baley.toml", text))
+}
+
+/// The report in a project at `/r`, with the global file at `/c/config.toml`.
+fn report(
+    host: Option<Host>,
+    names: &[&str],
+    layers: &ShowLayers,
+    pending: Option<&str>,
+) -> Vec<String> {
+    render_show(&ShowRequest {
+        schema: &schema(),
+        host,
+        names,
+        layers,
+        pending,
+        global_path: std::path::Path::new("/c/config.toml"),
+        project_path: Some(std::path::Path::new("/r/baley.toml")),
+    })
+}
+
+const PENDING: &str = "baley.toml has changes that are not in HEAD, which apply once committed";
+
+#[test]
+fn a_report_that_takes_the_effective_value_from_the_working_tree_or_hides_heads_is_caught() {
+    let layers = ShowLayers {
+        global: None,
+        working: project("roles.planner.effort = \"medium\"\n"),
+        head: project("roles.planner.effort = \"high\"\n"),
+    };
+    let lines = report(None, &["roles.planner.effort"], &layers, Some(PENDING));
+    assert_eq!(
+        lines,
+        vec![
+            "roles.planner.effort: kind rung, default \"high\", scope both",
+            "  global: not set",
+            "  project: \"medium\" (HEAD has \"high\", applies once committed)",
+            "  effective: \"high\" from project (/r/baley.toml)",
+            PENDING,
+            "global file: /c/config.toml",
+            "project file: /r/baley.toml",
+        ]
+    );
+}
+
+#[test]
+fn a_report_that_shows_heads_value_when_it_equals_the_working_trees_is_caught() {
+    let same = "roles.planner.effort = \"low\"\n";
+    let layers = ShowLayers {
+        global: None,
+        working: project(same),
+        head: project(same),
+    };
+    let lines = report(None, &["roles.planner.effort"], &layers, None);
+    assert_eq!(
+        lines,
+        vec![
+            "roles.planner.effort: kind rung, default \"high\", scope both",
+            "  global: not set",
+            "  project: \"low\"",
+            "  effective: \"low\" from project (/r/baley.toml)",
+            "global file: /c/config.toml",
+            "project file: /r/baley.toml",
+        ]
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("applies once committed"))
+    );
+}
+
+#[test]
+fn a_value_only_in_the_working_tree_or_only_in_head_is_not_shown_as_settled() {
+    let only_working = ShowLayers {
+        global: None,
+        working: project("roles.planner.effort = \"low\"\n"),
+        head: None,
+    };
+    let lines = report(None, &["roles.planner.effort"], &only_working, None);
+    assert_eq!(
+        lines[2],
+        "  project: \"low\" (HEAD has no value, applies once committed)"
+    );
+    assert_eq!(lines[3], "  effective: \"high\" from default");
+
+    let only_head = ShowLayers {
+        global: None,
+        working: project("example.flag = true\n"),
+        head: project("roles.planner.effort = \"max\"\n"),
+    };
+    let lines = report(None, &["roles.planner.effort"], &only_head, None);
+    assert_eq!(
+        lines[2],
+        "  project: not set (HEAD has \"max\", applies once committed)"
+    );
+    assert_eq!(
+        lines[3],
+        "  effective: \"max\" from project (/r/baley.toml)"
+    );
+}
+
+#[test]
+fn a_host_section_value_is_not_reported_from_the_wrong_layer_when_a_host_is_given() {
+    let layers = ShowLayers {
+        global: global("roles.planner.effort = \"low\"\n"),
+        working: None,
+        head: project("[host.claude-code.roles.planner]\neffort = \"max\"\n"),
+    };
+    let lines = report(
+        Some(Host::ClaudeCode),
+        &["roles.planner.effort"],
+        &layers,
+        None,
+    );
+    assert!(
+        lines.contains(&"  effective: \"max\" from project-host (/r/baley.toml)".to_owned()),
+        "{lines:?}"
+    );
+    assert!(lines.contains(&"  global: \"low\"".to_owned()), "{lines:?}");
+}
+
+#[test]
+fn a_report_with_no_host_that_leaves_out_a_host_section_or_applies_one_is_caught() {
+    let layers = ShowLayers {
+        global: global(
+            "[host.codex.roles.planner]\neffort = \"low\"\n\
+             [host.claude-code.roles.planner]\neffort = \"max\"\n",
+        ),
+        working: None,
+        head: None,
+    };
+    let lines = report(None, &["roles.planner.effort"], &layers, None);
+    assert_eq!(
+        &lines[..5],
+        [
+            "roles.planner.effort: kind rung, default \"high\", scope both",
+            "  global [host.claude-code]: \"max\"",
+            "  global [host.codex]: \"low\"",
+            "  project: not set",
+            "  effective: \"high\" from default",
+        ]
+    );
+    // With a host given, the other host's section is not listed.
+    let lines = report(Some(Host::Codex), &["roles.planner.effort"], &layers, None);
+    assert!(
+        lines.iter().all(|line| !line.contains("claude-code")),
+        "{lines:?}"
+    );
+    assert!(lines.contains(&"  global [host.codex]: \"low\"".to_owned()));
+    assert!(lines.contains(&"  effective: \"low\" from global-host (/c/config.toml)".to_owned()));
+}
+
+#[test]
+fn a_settings_line_missing_its_kind_default_or_scope_is_caught() {
+    let layers = ShowLayers {
+        global: None,
+        working: None,
+        head: None,
+    };
+    let lines = report(None, &[], &layers, None);
+    let headers: Vec<&str> = lines
+        .iter()
+        .filter(|line| line.contains(": kind "))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        headers,
+        [
+            "roles.planner.model: kind model name, default absent, scope both",
+            "roles.planner.effort: kind rung, default \"high\", scope both",
+            "example.flag: kind boolean, default false, scope both",
+            "example.project_only: kind boolean, default false, scope project",
+            "example.global_only: kind boolean, default false, scope global",
+        ]
+    );
+    assert!(lines.contains(&"  effective: absent from default".to_owned()));
+}
+
+#[test]
+fn a_global_value_is_not_reported_without_its_layer_and_file() {
+    let layers = ShowLayers {
+        global: global("example.flag = true\n"),
+        working: None,
+        head: None,
+    };
+    let lines = report(None, &["example.flag"], &layers, None);
+    assert_eq!(lines[1], "  global: true");
+    assert_eq!(lines[3], "  effective: true from global (/c/config.toml)");
+}
+
+#[test]
+fn an_ignored_name_in_the_global_or_head_file_is_not_left_out_or_reworded() {
+    let layers = ShowLayers {
+        global: global("mystery = 1\n"),
+        working: project("only_in_the_working_tree = 2\n"),
+        head: project("example.global_only = true\n"),
+    };
+    let lines = report(None, &["example.flag"], &layers, None);
+    // Each is the diagnostic's own text, written out from its Display.
+    assert!(
+        lines.contains(
+            &"/c/config.toml:1:1: mystery is not a setting Baley reads and was ignored".to_owned()
+        ),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(
+            &"/r/baley.toml:1:9: example.global_only is a global setting and was ignored in the project file"
+                .to_owned()
+        ),
+        "{lines:?}"
+    );
+    // The policy is merged from HEAD's copy, so the working tree's own
+    // diagnostics are not part of it.
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.contains("only_in_the_working_tree"))
+    );
+}
+
+#[test]
+fn a_report_outside_a_project_that_prints_a_project_path_is_caught() {
+    let layers = ShowLayers {
+        global: global("example.flag = true\n"),
+        working: None,
+        head: None,
+    };
+    let lines = render_show(&ShowRequest {
+        schema: &schema(),
+        host: None,
+        names: &["example.flag"],
+        layers: &layers,
+        pending: None,
+        global_path: std::path::Path::new("/c/config.toml"),
+        project_path: None,
+    });
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some("global file: /c/config.toml")
+    );
+    assert!(
+        lines.iter().all(|line| !line.contains("project file")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.contains("baley.toml")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn asked_names_that_do_not_limit_or_order_the_settings_shown_are_caught() {
+    let layers = ShowLayers {
+        global: None,
+        working: None,
+        head: None,
+    };
+    let lines = report(
+        None,
+        &["example.flag", "roles.planner.effort"],
+        &layers,
+        None,
+    );
+    let headers: Vec<&str> = lines
+        .iter()
+        .filter(|line| line.contains(": kind "))
+        .map(|line| line.split(':').next().unwrap())
+        .collect();
+    assert_eq!(headers, ["example.flag", "roles.planner.effort"]);
+}
