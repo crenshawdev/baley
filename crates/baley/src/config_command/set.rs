@@ -593,7 +593,7 @@ mod tests {
 
         let text = refusal.to_string();
         assert!(
-            text.starts_with("config-unavailable: /r/app/baley.toml:1:"),
+            text.starts_with("config-unavailable: HEAD's copy of /r/app/baley.toml:1:"),
             "{text}"
         );
     }

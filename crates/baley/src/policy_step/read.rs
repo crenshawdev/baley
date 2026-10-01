@@ -3,7 +3,9 @@
 
 use std::path::Path;
 
-use baley_core::policy::{EffectivePolicy, Schema, SettingsFile, Unavailable, effective_policy};
+use baley_core::policy::{
+    EffectivePolicy, FileLayer, Schema, SettingsFile, Unavailable, merge, parse_layer,
+};
 
 use crate::committed::{self, Committed};
 use crate::settings;
@@ -29,14 +31,23 @@ pub fn gather(config: &Path, root: &Path, working: Option<&SettingsFile>) -> Rea
 /// The command line's policy from `reads`, or the first refusal: the global
 /// read's, then HEAD's, then the global file's parse, then the project
 /// file's. The project layer is HEAD's copy alone, so the pending note and
-/// any uncommitted edit never reach the policy.
+/// any uncommitted edit never reach the policy. A fault in HEAD's copy is
+/// labelled as HEAD's, since it carries the working-tree file's path.
 pub fn build(reads: &Reads) -> Result<EffectivePolicy, Unavailable> {
     let global = reads.global.as_ref().map_err(Clone::clone)?;
     let project = match &reads.head {
         None => None,
         Some(head) => head.as_ref().map_err(Clone::clone)?.layer.as_ref(),
     };
-    effective_policy(Schema::standard(), None, global.as_ref(), project)
+    let schema = Schema::standard();
+    let global = global
+        .as_ref()
+        .map(|file| parse_layer(file, FileLayer::Global, schema))
+        .transpose()?;
+    let project = project
+        .map(|file| parse_layer(file, FileLayer::Project, schema).map_err(Unavailable::at_head))
+        .transpose()?;
+    Ok(merge(schema, None, global.as_ref(), project.as_ref()))
 }
 
 #[cfg(test)]
@@ -97,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn a_wrong_type_in_heads_copy_is_refused_naming_baley_toml_line_and_column() {
+    fn a_wrong_type_in_heads_copy_is_refused_as_heads_not_the_working_trees() {
         let reads = Reads {
             global: Ok(None),
             head: head("escalate_on_failure = \"yes\"\n", None),
@@ -105,13 +116,16 @@ mod tests {
         let refusal = build(&reads).unwrap_err();
         assert_eq!(refusal.path, Path::new(PROJECT));
         assert!(
-            matches!(refusal.fault, Fault::WrongType { line: 1, column, .. } if column > 0),
+            matches!(
+                &refusal.fault,
+                Fault::AtHead { fault } if matches!(**fault, Fault::WrongType { line: 1, column, .. } if column > 0)
+            ),
             "{:?}",
             refusal.fault
         );
         let text = refusal.to_string();
         assert!(
-            text.starts_with("config-unavailable: /r/baley.toml:1:"),
+            text.starts_with("config-unavailable: HEAD's copy of /r/baley.toml:1:"),
             "{text}"
         );
         assert!(text.contains("escalate_on_failure"), "{text}");

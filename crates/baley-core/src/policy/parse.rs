@@ -173,6 +173,12 @@ pub enum Fault {
         /// The value's line and column, when the file holds one.
         position: Option<(u32, u32)>,
     },
+    /// A fault in HEAD's copy of the project file. HEAD's copy carries the
+    /// working-tree file's path, and the file on disk may not share the fault.
+    AtHead {
+        /// The fault as parsing found it.
+        fault: Box<Fault>,
+    },
 }
 impl Fault {
     fn position(&self) -> Option<(u32, u32)> {
@@ -182,6 +188,7 @@ impl Fault {
             | Fault::OutsideGrammar { line, column, .. } => Some((*line, *column)),
             Fault::Parse { position, .. } | Fault::Project { position, .. } => *position,
             Fault::NotRegular | Fault::Unreadable { .. } => None,
+            Fault::AtHead { fault } => fault.position(),
         }
     }
 }
@@ -213,72 +220,91 @@ impl Unavailable {
     pub fn code(&self) -> &'static str {
         CONFIG_UNAVAILABLE
     }
+
+    /// The same refusal labelled as HEAD's copy, so the owner does not look
+    /// for the fault in the working-tree file at the same path.
+    pub fn at_head(self) -> Unavailable {
+        if matches!(self.fault, Fault::AtHead { .. }) {
+            return self;
+        }
+        Unavailable {
+            path: self.path,
+            fault: Fault::AtHead {
+                fault: Box::new(self.fault),
+            },
+        }
+    }
 }
 
 impl fmt::Display for Unavailable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let path = self.path.display();
         write!(f, "{}: ", self.code())?;
-        match &self.fault {
-            Fault::NotRegular => write!(f, "{path} is not a regular file"),
-            Fault::Unreadable { cause } => write!(f, "cannot read {path}: {cause}"),
-            Fault::NotUtf8 { line, column } => write!(
+        describe(f, &self.path.display().to_string(), &self.fault)
+    }
+}
+
+fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Result {
+    match fault {
+        Fault::AtHead { fault } => describe(f, &format!("HEAD's copy of {path}"), fault),
+        Fault::NotRegular => write!(f, "{path} is not a regular file"),
+        Fault::Unreadable { cause } => write!(f, "cannot read {path}: {cause}"),
+        Fault::NotUtf8 { line, column } => write!(
+            f,
+            "{path}:{line}:{column}: the file is not UTF-8 from this point"
+        ),
+        Fault::Parse {
+            position: Some((line, column)),
+            message,
+        } => write!(f, "{path}:{line}:{column}: {message}"),
+        Fault::Parse {
+            position: None,
+            message,
+        } => write!(f, "{path}: {message}"),
+        Fault::WrongType {
+            name,
+            expected,
+            found,
+            line,
+            column,
+        } => {
+            let article = article(found);
+            let expected = match expected {
+                Expected::Table => "a table".to_owned(),
+                Expected::Bool => "a boolean".to_owned(),
+                Expected::Rung => format!("a rung ({})", rungs()),
+                Expected::ModelName => "a model name".to_owned(),
+            };
+            write!(
                 f,
-                "{path}:{line}:{column}: the file is not UTF-8 from this point"
-            ),
-            Fault::Parse {
-                position: Some((line, column)),
-                message,
-            } => write!(f, "{path}:{line}:{column}: {message}"),
-            Fault::Parse {
-                position: None,
-                message,
-            } => write!(f, "{path}: {message}"),
-            Fault::WrongType {
-                name,
-                expected,
-                found,
-                line,
-                column,
-            } => {
-                let article = article(found);
-                let expected = match expected {
-                    Expected::Table => "a table".to_owned(),
-                    Expected::Bool => "a boolean".to_owned(),
-                    Expected::Rung => format!("a rung ({})", rungs()),
-                    Expected::ModelName => "a model name".to_owned(),
-                };
-                write!(
-                    f,
-                    "{path}:{line}:{column}: {name} is {article} {found}, not {expected}"
-                )
+                "{path}:{line}:{column}: {name} is {article} {found}, not {expected}"
+            )
+        }
+        Fault::OutsideGrammar {
+            name,
+            kind,
+            written,
+            line,
+            column,
+        } => {
+            write!(f, "{path}:{line}:{column}: {name} is ")?;
+            // Escaped so a value holding a line break stays on one line.
+            let written = written.escape_debug();
+            match kind {
+                Kind::Rung => write!(f, "\"{written}\", which is not a rung ({})", rungs()),
+                Kind::ModelName => f.write_str("empty; write a model name or remove the line"),
+                Kind::Bool => write!(f, "\"{written}\", which is not a boolean"),
             }
-            Fault::OutsideGrammar {
-                name,
-                kind,
-                written,
-                line,
-                column,
-            } => {
-                write!(f, "{path}:{line}:{column}: {name} is ")?;
-                // Escaped so a value holding a line break stays on one line.
-                let written = written.escape_debug();
-                match kind {
-                    Kind::Rung => write!(f, "\"{written}\", which is not a rung ({})", rungs()),
-                    Kind::ModelName => f.write_str("empty; write a model name or remove the line"),
-                    Kind::Bool => write!(f, "\"{written}\", which is not a boolean"),
-                }
+        }
+        Fault::Project {
+            name,
+            problem,
+            position,
+        } => {
+            match position {
+                Some((line, column)) => write!(f, "{path}:{line}:{column}: ")?,
+                None => write!(f, "{path}: ")?,
             }
-            Fault::Project {
-                name,
-                problem,
-                position,
-            } => {
-                match position {
-                    Some((line, column)) => write!(f, "{path}:{line}:{column}: ")?,
-                    None => write!(f, "{path}: ")?,
-                }
-                match problem {
+            match problem {
                     ProjectProblem::Missing if *name == "project" => f.write_str(
                         "there is no [project] table; the project file needs one with an id and a string name",
                     ),
@@ -300,7 +326,6 @@ impl fmt::Display for Unavailable {
                         written.escape_debug()
                     ),
                 }
-            }
         }
     }
 }

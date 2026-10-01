@@ -80,7 +80,8 @@ impl fmt::Display for ShowRefusal {
 /// setting is asked for, so nothing is refused for being project-scoped.
 /// Then the three reads are judged in order (global, working tree, HEAD), and
 /// only then the parses in the same order, as the policy step does. Each
-/// `config-unavailable` is the reader's `Unavailable` unchanged. The global
+/// `config-unavailable` is the reader's `Unavailable`, a parse fault in
+/// HEAD's copy labelled as HEAD's, since it carries the working-tree path. The global
 /// file is a global layer, the working tree and HEAD's copy project layers.
 pub fn judge_show(
     schema: &Schema,
@@ -118,7 +119,12 @@ pub fn judge_show(
     Ok(ShowLayers {
         global: parse(global, FileLayer::Global)?,
         working: parse(working, FileLayer::Project)?,
-        head: parse(head, FileLayer::Project)?,
+        head: parse(head, FileLayer::Project).map_err(|refusal| match refusal {
+            ShowRefusal::Unavailable(unavailable) => {
+                ShowRefusal::Unavailable(unavailable.at_head())
+            }
+            other => other,
+        })?,
     })
 }
 

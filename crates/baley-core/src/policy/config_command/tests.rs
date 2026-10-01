@@ -1140,6 +1140,25 @@ fn an_invalid_global_working_tree_or_head_file_is_not_shown_and_is_named_with_it
 }
 
 #[test]
+fn a_fault_in_heads_copy_is_not_named_as_the_working_tree_files() {
+    // HEAD's copy carries the working-tree path, so only the label tells the
+    // owner the fault is not in the file on disk.
+    let bad = "example.flag = 3\n";
+    let head = show(&[], true, NONE, NONE, read("/r/baley.toml", bad)).expect_err("HEAD's copy");
+    assert_eq!(
+        head.to_string(),
+        "config-unavailable: HEAD's copy of /r/baley.toml:1:16: example.flag is an integer, \
+         not a boolean"
+    );
+    let working =
+        show(&[], true, NONE, read("/r/baley.toml", bad), NONE).expect_err("the working tree");
+    assert_eq!(
+        working.to_string(),
+        "config-unavailable: /r/baley.toml:1:16: example.flag is an integer, not a boolean"
+    );
+}
+
+#[test]
 fn an_unreadable_head_copy_is_not_shown_and_is_named_with_its_cause() {
     let refusal = show(
         &[],

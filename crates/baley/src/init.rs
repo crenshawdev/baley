@@ -861,14 +861,14 @@ mod tests {
     }
 
     #[test]
-    fn a_wrong_type_in_heads_copy_is_refused_naming_baley_toml() {
+    fn a_wrong_type_in_heads_copy_is_refused_as_heads_not_the_working_trees() {
         let working = project_text("");
         let head = project_text("escalate_on_failure = \"yes\"\n");
         let observed = reads(None, Some(Ok(&head)));
         let file = Ok(Some(settings_file(WORKING, &working)));
         let refusal = prepare(Path::new("/r"), None, file, &observed).unwrap_err();
         assert!(
-            refusal.starts_with("config-unavailable: /r/baley.toml:1:"),
+            refusal.starts_with("config-unavailable: HEAD's copy of /r/baley.toml:1:"),
             "{refusal}"
         );
     }
