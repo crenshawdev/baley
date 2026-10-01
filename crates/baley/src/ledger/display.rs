@@ -120,17 +120,15 @@ pub(crate) fn store_error(error: &StoreError, project: Option<&str>) -> Render {
     }
 }
 /// Preserves uncertainty after an anchor claim or push.
-pub(super) fn anchor_error(
-    error: &StoreError,
-    request: &str,
-    project: &str,
-    remote: &str,
-) -> Render {
+pub(super) fn anchor_error(error: &StoreError, request: &str, remote: Option<&str>) -> Render {
+    let reached = remote.map_or(String::new(), |remote| {
+        format!(" and its tag may have reached {remote}")
+    });
     Render {
         lines: vec![
             format!("anchor request {request} failed: {error}"),
             format!(
-                "its claim may already be recorded and its tag may have reached {remote}; once the claim's lease has expired (60 s), baley anchor {project} --remote {remote} reconciles it from the remote"
+                "its claim may already be recorded{reached}; once the claim's lease has expired (60 s), running baley anchor again from this checkout reconciles it from the remote"
             ),
         ],
         code: exit_class(error),

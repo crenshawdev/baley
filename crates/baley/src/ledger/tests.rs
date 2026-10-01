@@ -33,7 +33,6 @@ rejects!(
 rejects!(export_requires_a_destination, &["export", "P"]);
 rejects!(purge_requires_a_reason, &["purge", "P", &"ab".repeat(32)]);
 rejects!(purge_requires_hashes, &["purge", "P", "--reason", "r"]);
-rejects!(anchor_requires_a_remote, &["anchor", "P"]);
 #[test]
 fn verify_binds_project_and_remote() {
     assert!(
@@ -238,10 +237,12 @@ fn busy_exits_three() {
 }
 #[test]
 fn anchor_errors_do_not_promise_a_clean_noop() {
-    let r = display::anchor_error(&StoreError::Busy, "REQ", "P", "origin");
+    let r = display::anchor_error(&StoreError::Busy, "REQ", Some("origin"));
     assert_eq!(r.code, 3);
     assert!(text(&r).contains("anchor request REQ failed"));
-    assert!(text(&r).contains("baley anchor P --remote origin reconciles"));
+    assert!(text(&r).contains("tag may have reached origin"));
+    assert!(text(&r).contains("running baley anchor again from this checkout reconciles"));
+    assert!(!text(&r).contains("--remote"));
     assert!(!text(&r).contains("nothing was recorded"));
 }
 #[test]
@@ -1002,6 +1003,257 @@ fn purge_command_does_not_keep_policy_version_0_in_its_digest_or_itself() {
     assert_eq!(command.digest, expected);
     assert_eq!(command.actor, Actor::Owner);
     assert_eq!(command.kind, CommandKind("payload.purge".into()));
+}
+
+const PROJECT_ID: &str = "0b5c1f6e-2a7d-4c3e-9f10-5a6b7c8d9e0f";
+const GLOBAL_FILE: &str = "/c/config.toml";
+type Observed = Result<Option<policy::ProjectIdentity>, policy::Unavailable>;
+fn valid_id() -> Observed {
+    let bytes = policy::render_project(PROJECT_ID, "r", None).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    crate::init::observe_file(Ok(Some(checkout_file(&text))))
+}
+fn head_copy(text: &str) -> Option<Result<crate::committed::Committed, policy::Unavailable>> {
+    Some(Ok(crate::committed::Committed {
+        layer: Some(checkout_file(text)),
+        pending: None,
+    }))
+}
+fn global_file(text: &str) -> Result<Option<policy::SettingsFile>, policy::Unavailable> {
+    Ok(Some(crate::settings::file(
+        std::path::Path::new(GLOBAL_FILE),
+        text.as_bytes().to_vec(),
+    )))
+}
+fn managed(
+    id: Observed,
+    global: Result<Option<policy::SettingsFile>, policy::Unavailable>,
+    head: Option<Result<crate::committed::Committed, policy::Unavailable>>,
+) -> command_plan::Settings {
+    command_plan::Settings {
+        project_file: Some(command_plan::ProjectFile {
+            path: CHECKOUT_FILE.into(),
+            id,
+        }),
+        policy: crate::policy_step::build(&crate::policy_step::Reads { global, head }),
+    }
+}
+fn origin_settings() -> command_plan::Settings {
+    managed(
+        valid_id(),
+        Ok(None),
+        head_copy("[git]\nremote = \"origin\"\n"),
+    )
+}
+fn unset_settings() -> command_plan::Settings {
+    managed(valid_id(), Ok(None), head_copy(""))
+}
+fn anchor_next(
+    settings: Option<&command_plan::Settings>,
+    check: Option<&Result<(), String>>,
+    named: Option<&str>,
+) -> Result<Vec<command_plan::Op>, String> {
+    command_plan::next(&command_plan::Facts {
+        command: command_plan::Verb::Anchor { named },
+        settings,
+        remote_check: check,
+    })
+}
+fn anchors(remote: Option<&str>) -> command_plan::Op {
+    command_plan::Op::Anchor {
+        project: PROJECT_ID.into(),
+        remote: remote.map(Into::into),
+    }
+}
+#[test]
+fn anchor_parses_with_and_without_a_project() {
+    assert!(matches!(
+        parse(&["anchor"]).unwrap(),
+        LedgerCommand::Anchor { project: None }
+    ));
+    assert!(
+        matches!(parse(&["anchor", "P"]).unwrap(), LedgerCommand::Anchor { project: Some(p) } if p == "P")
+    );
+}
+#[test]
+fn anchor_no_longer_takes_a_remote_flag() {
+    assert_eq!(
+        parse(&["anchor", "P", "--remote", "o"])
+            .unwrap_err()
+            .exit_code(),
+        2
+    );
+}
+#[test]
+fn a_policy_names_the_remote_in_heads_copy_and_none_when_unset() {
+    let named = origin_settings();
+    assert_eq!(
+        anchor_plan::remote_of(named.policy.as_ref().unwrap()),
+        Some("origin".to_string())
+    );
+    let unset = unset_settings();
+    assert_eq!(anchor_plan::remote_of(unset.policy.as_ref().unwrap()), None);
+}
+#[test]
+fn a_name_equal_to_the_discovered_project_is_taken_and_a_missing_name_takes_it_too() {
+    assert_eq!(
+        anchor_plan::judge_target(Some("P"), Some("P")),
+        Ok(Some("P".into()))
+    );
+    assert_eq!(
+        anchor_plan::judge_target(Some("P"), None),
+        Ok(Some("P".into()))
+    );
+}
+#[test]
+fn a_name_that_differs_from_the_discovered_project_is_refused_naming_both() {
+    assert_eq!(
+        anchor_plan::judge_target(Some("P"), Some("Q")),
+        Err(anchor_plan::TargetRefusal::Differs {
+            named: "Q".into(),
+            discovered: "P".into()
+        })
+    );
+}
+#[test]
+fn a_name_with_no_project_discovered_is_refused_and_no_name_gives_no_project() {
+    assert_eq!(
+        anchor_plan::judge_target(None, Some("Q")),
+        Err(anchor_plan::TargetRefusal::NoneDiscovered { named: "Q".into() })
+    );
+    assert_eq!(anchor_plan::judge_target(None, None), Ok(None));
+}
+#[test]
+fn anchor_reads_the_settings_before_it_requests_anything_else() {
+    assert_eq!(
+        anchor_next(None, None, None),
+        Ok(vec![command_plan::Op::ReadSettings])
+    );
+}
+#[test]
+fn anchor_checks_a_set_remote_before_it_requests_the_step() {
+    assert_eq!(
+        anchor_next(Some(&origin_settings()), None, None),
+        Ok(vec![command_plan::Op::CheckRemote("origin".into())])
+    );
+}
+#[test]
+fn anchor_requests_the_step_then_the_anchor_on_the_remote_once_it_is_checked() {
+    assert_eq!(
+        anchor_next(Some(&origin_settings()), Some(&Ok(())), None),
+        Ok(vec![command_plan::Op::Step, anchors(Some("origin"))])
+    );
+}
+#[test]
+fn an_unconfigured_remote_refuses_anchor_with_no_operation() {
+    let refused = Err("remote origin is not configured in the git repository at /r".to_string());
+    assert_eq!(
+        anchor_next(Some(&origin_settings()), Some(&refused), None),
+        refused.map(|()| vec![])
+    );
+}
+#[test]
+fn anchor_with_no_remote_set_requests_the_step_and_an_anchor_with_none_and_no_check() {
+    assert_eq!(
+        anchor_next(Some(&unset_settings()), None, None),
+        Ok(vec![command_plan::Op::Step, anchors(None)])
+    );
+}
+#[test]
+fn anchor_refuses_an_invalid_global_file_naming_it_and_requests_nothing() {
+    let settings = managed(
+        valid_id(),
+        global_file("escalate_on_failure = [\n"),
+        head_copy("[git]\nremote = \"origin\"\n"),
+    );
+    let refusal = anchor_next(Some(&settings), None, None).unwrap_err();
+    assert!(refusal.starts_with("config-unavailable: "), "{refusal}");
+    assert!(refusal.contains(GLOBAL_FILE), "{refusal}");
+}
+#[test]
+fn anchor_refuses_a_wrong_typed_value_in_heads_copy_naming_the_file() {
+    let settings = managed(
+        valid_id(),
+        Ok(None),
+        head_copy("escalate_on_failure = \"yes\"\n"),
+    );
+    let refusal = anchor_next(Some(&settings), None, None).unwrap_err();
+    assert!(refusal.starts_with("config-unavailable: "), "{refusal}");
+    assert!(refusal.contains(CHECKOUT_FILE), "{refusal}");
+}
+#[test]
+fn anchor_does_not_take_a_checkout_file_without_an_id_as_no_project() {
+    let bad_id = "[project]\nid = \"0B5C1F6E-2A7D-4C3E-9F10-5A6B7C8D9E0F\"\nname = \"r\"\n";
+    let observations = [
+        (
+            "not TOML",
+            crate::init::observe_file(Ok(Some(checkout_file("[project\nid = ")))),
+        ),
+        (
+            "a bad id",
+            crate::init::observe_file(Ok(Some(checkout_file(bad_id)))),
+        ),
+        (
+            "removed since the walk",
+            crate::init::observe_file(Ok(None)),
+        ),
+    ];
+    for (case, observed) in observations {
+        let settings = managed(observed, Ok(None), head_copy(""));
+        let refusal = anchor_next(Some(&settings), None, None).unwrap_err();
+        assert!(
+            refusal.starts_with("config-unavailable: "),
+            "{case}: {refusal}"
+        );
+        assert!(refusal.contains(CHECKOUT_FILE), "{case}: {refusal}");
+    }
+}
+#[test]
+fn anchor_outside_a_checkout_is_refused_with_no_operation() {
+    let settings = command_plan::Settings {
+        project_file: None,
+        policy: crate::policy_step::build(&crate::policy_step::Reads {
+            global: Ok(None),
+            head: None,
+        }),
+    };
+    let refusal = anchor_next(Some(&settings), None, None).unwrap_err();
+    assert!(refusal.contains("no baley.toml was found"), "{refusal}");
+    assert!(refusal.contains("baley anchor"), "{refusal}");
+}
+#[test]
+fn anchor_refuses_a_named_project_that_is_not_the_checkouts_and_requests_nothing() {
+    let other = "7c1f0a52-3d4e-4b6a-8c9d-1e2f3a4b5c6d";
+    let refusal = anchor_next(Some(&origin_settings()), None, Some(other)).unwrap_err();
+    assert!(refusal.contains(other), "{refusal}");
+    assert!(refusal.contains(PROJECT_ID), "{refusal}");
+    assert_eq!(
+        anchor_next(Some(&origin_settings()), None, Some(PROJECT_ID)),
+        Ok(vec![command_plan::Op::CheckRemote("origin".into())])
+    );
+}
+#[test]
+fn the_anchor_request_carries_the_step_version_and_remote_in_its_digest() {
+    let owner = || ClaimOwner {
+        process: "1".into(),
+        host_session: "cli".into(),
+        started_at: "T".into(),
+    };
+    let id = |n: &str| RequestId(format!("00000000-0000-4000-8000-00000000000{n}"));
+    let build = |version| {
+        commands::anchor_request(
+            &ProjectId("P".into()),
+            Some("origin"),
+            version,
+            id("1"),
+            id("2"),
+            owner(),
+        )
+    };
+    let request = build(7);
+    assert_eq!(request.policy_version, 7);
+    assert_eq!(request.remote.as_deref(), Some("origin"));
+    assert_ne!(request.digest().unwrap(), build(0).digest().unwrap());
 }
 
 /// A stream whose every write fails with one error kind.

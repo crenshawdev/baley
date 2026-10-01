@@ -56,13 +56,10 @@ pub enum LedgerCommand {
         /// Ledger project id.
         project: String,
     },
-    /// Anchor a project on a configured git remote.
+    /// Anchor the checkout's project on the remote its `git.remote` names.
     Anchor {
-        /// Ledger project id.
-        project: String,
-        /// Configured git remote.
-        #[arg(long)]
-        remote: String,
+        /// Ledger project id; only the checkout's own project is accepted.
+        project: Option<String>,
     },
     /// Accept a restored chain behind its remote anchor.
     AcknowledgeRestore {

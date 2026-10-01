@@ -3,6 +3,7 @@ use super::{
     LedgerCommand,
     answer::answer_value,
     clock::SystemClock,
+    command_plan::{self, Facts, Op, ProjectFile, Settings, Verb},
     display::{self, Render},
     forge::GitForge,
     remotes::anchor_plan,
@@ -64,9 +65,14 @@ pub(super) fn dispatch(
         } => purge(&store, config, &cwd, &ProjectId(project), hashes, &reason),
         LedgerCommand::Scrub => scrub(&store),
         LedgerCommand::Rebuild { project } => rebuild(&store, &ProjectId(project)),
-        LedgerCommand::Anchor { project, remote } => {
-            anchor(store, &mut forge, ProjectId(project), remote, started_at)
-        }
+        LedgerCommand::Anchor { project } => anchor(
+            store,
+            &mut forge,
+            config,
+            &cwd,
+            project.as_deref(),
+            started_at,
+        ),
         LedgerCommand::AcknowledgeRestore { project, remote } => {
             acknowledge(&store, &mut forge, ProjectId(project), remote)
         }
@@ -267,29 +273,162 @@ fn rebuild(store: &SqliteStore, project: &ProjectId) -> Result<Render, Render> {
         })
         .map_err(|e| display::store_error(&e, Some(&project.0)))
 }
+/// What the checkout's settings reads found, with the repository root the
+/// policy step records.
+struct Gathered {
+    settings: Settings,
+    root: Option<PathBuf>,
+}
+
+/// Finds the project from `cwd`, as `purge` does, and reads both settings
+/// files once. The `--project-root` flag is not read here.
+fn gather_settings(cwd: &Path, config: &Path) -> Result<Gathered, Render> {
+    let ancestors = discovery::ancestors(cwd)
+        .map_err(|e| display::store_error(&StoreError::Unavailable(e.to_string()), None))?;
+    Ok(match discovery::discover(&ancestors) {
+        Discovery::Managed { folder, root } => {
+            let path = folder.join(PROJECT_FILE);
+            let read = settings::read(&path);
+            let id = init::observe_file(read.clone());
+            let reads =
+                policy_step::gather(config, &root, read.as_ref().ok().and_then(Option::as_ref));
+            Gathered {
+                settings: Settings {
+                    project_file: Some(ProjectFile { path, id }),
+                    policy: policy_step::build(&reads),
+                },
+                root: Some(root),
+            }
+        }
+        Discovery::Unmanaged { .. } | Discovery::Outside => {
+            let reads = policy_step::Reads {
+                global: settings::read(&config.join(settings::GLOBAL_FILE)),
+                head: None,
+            };
+            Gathered {
+                settings: Settings {
+                    project_file: None,
+                    policy: policy_step::build(&reads),
+                },
+                root: None,
+            }
+        }
+    })
+}
+
+/// Asks the plan and performs the reads and the check it requests, until it
+/// gives the operations that follow them or a refusal.
+fn settle(
+    command: Verb<'_>,
+    forge: &mut Forge,
+    config: &Path,
+    cwd: &Path,
+) -> Result<(Vec<Op>, Option<Gathered>), Render> {
+    let plan = |settings: Option<&Settings>, remote_check: Option<&Result<(), String>>| {
+        command_plan::next(&Facts {
+            command,
+            settings,
+            remote_check,
+        })
+        .map_err(Render::refusal)
+    };
+    let mut ops = plan(None, None)?;
+    let mut gathered = None;
+    if ops == [Op::ReadSettings] {
+        let read = gather_settings(cwd, config)?;
+        ops = plan(Some(&read.settings), None)?;
+        gathered = Some(read);
+    }
+    if let [Op::CheckRemote(name)] = ops.as_slice() {
+        let verdict = forge.require_remote(name).map_err(|refusal| refusal.0);
+        ops = plan(gathered.as_ref().map(|g| &g.settings), Some(&verdict))?;
+    }
+    Ok((ops, gathered))
+}
+
+/// A plan that asked for an operation its facts cannot carry out.
+fn unexpected_plan() -> Render {
+    Render::refusal("internal error: the command plan asked for an operation it has no facts for")
+}
+
+/// Runs the policy step for the checkout and returns the version in force.
+fn run_step(
+    store: &SqliteStore,
+    gathered: Option<&Gathered>,
+    project: &ProjectId,
+) -> Result<u64, Render> {
+    let Some(Gathered {
+        settings: Settings {
+            policy: Ok(policy), ..
+        },
+        root: Some(root),
+    }) = gathered
+    else {
+        return Err(unexpected_plan());
+    };
+    let recorded = recorded_policy(root, policy).map_err(|e| Render::refusal(e.to_string()))?;
+    policy_step::step(
+        store,
+        project,
+        &recorded,
+        new_request_id(),
+        &SystemClock::now(),
+    )
+    .map_err(|e| display::store_error(&e, Some(&project.0)))
+}
+
+/// The anchor request, carrying the version the policy step returned in both
+/// its digest and itself.
+pub(super) fn anchor_request(
+    project: &ProjectId,
+    remote: Option<&str>,
+    policy_version: u64,
+    request_id: RequestId,
+    reconcile_request_id: RequestId,
+    owner: ClaimOwner,
+) -> AnchorRequest {
+    AnchorRequest {
+        project: project.clone(),
+        request_id,
+        reconcile_request_id,
+        actor: Actor::Owner,
+        owner,
+        remote: remote.map(Into::into),
+        policy_version,
+    }
+}
+
 fn anchor(
     store: Arc<SqliteStore>,
     forge: &mut Forge,
-    project: ProjectId,
-    remote: String,
+    config: &Path,
+    cwd: &Path,
+    named: Option<&str>,
     started_at: String,
 ) -> Result<Render, Render> {
-    require_remote(forge, &remote)?;
+    let (ops, gathered) = settle(Verb::Anchor { named }, forge, config, cwd)?;
+    let [Op::Step, Op::Anchor { project, remote }] = ops.as_slice() else {
+        return Err(unexpected_plan());
+    };
+    let project = ProjectId(project.clone());
+    // Owner: T13 (phase 9) adds the checkout's admission here, between the
+    // settings read above and the policy step below.
+    let policy_version = run_step(&store, gathered.as_ref(), &project)?;
     let request_id = new_request_id();
     display::request_line(&mut std::io::stdout(), &request_id.0);
-    let request = AnchorRequest {
-        project: project.clone(),
-        request_id,
-        reconcile_request_id: new_request_id(),
-        actor: Actor::Owner,
-        owner: ClaimOwner {
-            process: std::process::id().to_string(),
-            host_session: "cli".into(),
-            started_at,
-        },
-        remote: Some(remote.clone()),
-        policy_version: 0,
+    let owner = ClaimOwner {
+        process: std::process::id().to_string(),
+        host_session: "cli".into(),
+        started_at,
     };
+    let request = anchor_request(
+        &project,
+        remote.as_deref(),
+        policy_version,
+        request_id,
+        new_request_id(),
+        owner,
+    );
     let mut ticker = ThreadTicker::new(Arc::new(SystemClock::now));
     let trace = StoreTrace(store.clone());
     let report = anchor_command(
@@ -302,7 +441,7 @@ fn anchor(
             now: &mut SystemClock::now,
         },
     )
-    .map_err(|e| display::anchor_error(&e, &request.request_id.0, &project.0, &remote))?;
+    .map_err(|e| display::anchor_error(&e, &request.request_id.0, remote.as_deref()))?;
     let outcome = match &report.outcome {
         AnchorOutcome::Recorded { outcome, .. }
         | AnchorOutcome::LateReplay { outcome, .. }
