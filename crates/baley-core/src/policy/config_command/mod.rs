@@ -13,7 +13,7 @@ mod set;
 #[cfg(test)]
 mod tests;
 
-pub use set::{SetRefusal, TypedPair, judge_pairs};
+pub use set::{SetRefusal, TypedPair, collapse_repeats, judge_models, judge_pairs, needs_catalog};
 
 /// The code of a name the schema does not hold.
 pub const UNKNOWN_SETTING: &str = "unknown-setting";

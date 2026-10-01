@@ -1,10 +1,13 @@
 //! The judges of `config set`'s arguments (design 0003 section 5, CFG-R4,
 //! CFG-R5, CFG-R7, CFG-R9).
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use super::{INVALID_VALUE, NOT_A_PROJECT, UNKNOWN_SETTING, WRONG_LAYER};
-use crate::policy::{FileLayer, Host, Kind, Rung, Schema, Scope, Value};
+use crate::policy::{
+    AcceptedNames, FileLayer, Host, Kind, Rung, Schema, Scope, UNKNOWN_MODEL, Value,
+};
 
 /// One pair of a set after its name and value are judged.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +48,17 @@ pub enum SetRefusal {
         /// The setting's kind.
         kind: Kind,
     },
+    /// No catalog checked accepts the model name (CFG-R14).
+    UnknownModel {
+        /// The setting that holds it.
+        setting: String,
+        /// The model name as given.
+        model: String,
+        /// The host whose catalog was asked, `None` when any host's would do.
+        host: Option<Host>,
+        /// Each host checked and the names it accepts, sorted.
+        checked: Vec<(Host, Vec<String>)>,
+    },
 }
 impl SetRefusal {
     /// The stable refusal code.
@@ -54,6 +68,7 @@ impl SetRefusal {
             SetRefusal::UnknownSetting { .. } => UNKNOWN_SETTING,
             SetRefusal::WrongLayer { .. } => WRONG_LAYER,
             SetRefusal::InvalidValue { .. } => INVALID_VALUE,
+            SetRefusal::UnknownModel { .. } => UNKNOWN_MODEL,
         }
     }
 }
@@ -96,6 +111,32 @@ impl fmt::Display for SetRefusal {
                     name.escape_debug(),
                     value.escape_debug()
                 )
+            }
+            SetRefusal::UnknownModel {
+                setting,
+                model,
+                host,
+                checked,
+            } => {
+                let who = match host {
+                    Some(host) => format!("the {} catalog does not accept it", host.name()),
+                    None => "no host's catalog accepts it".to_owned(),
+                };
+                write!(
+                    f,
+                    "{} is \"{}\", which {who}",
+                    setting.escape_debug(),
+                    model.escape_debug()
+                )?;
+                for (host, names) in checked {
+                    let names = if names.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        names.join(", ")
+                    };
+                    write!(f, "; {} accepts: {names}", host.name())?;
+                }
+                Ok(())
             }
         }
     }
@@ -175,4 +216,75 @@ pub fn judge_pairs(
         });
     }
     Ok(typed)
+}
+
+/// Whether any pair sets a model name, which is the only case that needs the
+/// hosts' catalogs: the binary opens and seeds the store only then.
+pub fn needs_catalog(pairs: &[TypedPair]) -> bool {
+    pairs
+        .iter()
+        .any(|pair| matches!(pair.value, Value::ModelName(_)))
+}
+
+/// Checks every model name given against the hosts' accepted names (CFG-R14).
+///
+/// With a host, that host's names must hold the model. With none, at least
+/// one host's names must, and a provider's catalog never counts. A host
+/// missing from `accepted` accepts nothing. The first pair to fail is
+/// refused, so a setting given twice has each of its values checked: collapse
+/// repeats only after this.
+pub fn judge_models(
+    pairs: &[TypedPair],
+    host: Option<Host>,
+    accepted: &BTreeMap<Host, AcceptedNames>,
+) -> Result<(), SetRefusal> {
+    let checked: Vec<Host> = match host {
+        Some(host) => vec![host],
+        None => Host::ALL.to_vec(),
+    };
+    let holds = |host: &Host, model: &str| {
+        accepted
+            .get(host)
+            .is_some_and(|catalog| catalog.names.contains(model))
+    };
+    for pair in pairs {
+        let Value::ModelName(model) = &pair.value else {
+            continue;
+        };
+        if checked.iter().any(|host| holds(host, model)) {
+            continue;
+        }
+        return Err(SetRefusal::UnknownModel {
+            setting: pair.name.clone(),
+            model: model.clone(),
+            host,
+            checked: checked
+                .iter()
+                .map(|host| {
+                    let names = accepted
+                        .get(host)
+                        .map(|catalog| catalog.names.iter().cloned().collect())
+                        .unwrap_or_default();
+                    (*host, names)
+                })
+                .collect(),
+        });
+    }
+    Ok(())
+}
+
+/// Holds a setting given twice once, at its first position, with its last
+/// value, so the renderer and the no-op judge never see a repeat.
+pub fn collapse_repeats(pairs: Vec<TypedPair>) -> Vec<TypedPair> {
+    let mut held: Vec<TypedPair> = Vec::with_capacity(pairs.len());
+    for pair in pairs {
+        match held
+            .iter_mut()
+            .find(|earlier| earlier.name == pair.name && earlier.host == pair.host)
+        {
+            Some(earlier) => earlier.value = pair.value,
+            None => held.push(pair),
+        }
+    }
+    held
 }

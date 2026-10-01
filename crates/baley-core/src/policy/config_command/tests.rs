@@ -2,9 +2,11 @@
 //! written out from design 0003 section 5 and the phase's decisions, never
 //! from running this code.
 
+use std::collections::BTreeMap;
+
 use super::*;
 use crate::policy::schema::Default as Builtin;
-use crate::policy::{Entry, FileLayer, Host, Kind, Rung, Schema, Scope, Value};
+use crate::policy::{AcceptedNames, Entry, FileLayer, Host, Kind, Rung, Schema, Scope, Value};
 
 fn entry(name: &str, kind: Kind, default: Builtin, scope: Scope) -> Entry {
     Entry {
@@ -295,4 +297,144 @@ fn the_judge_reading_the_standard_schema_instead_of_its_parameter_is_caught() {
             name: "roles.executor.effort".into()
         }
     );
+}
+
+fn names(list: &[&str]) -> AcceptedNames {
+    AcceptedNames {
+        names: list.iter().map(|name| name.to_string()).collect(),
+        version: 1,
+    }
+}
+
+/// Claude Code accepts four names and Codex none.
+fn accepted() -> BTreeMap<Host, AcceptedNames> {
+    BTreeMap::from([
+        (
+            Host::ClaudeCode,
+            names(&["opus", "sonnet", "haiku", "fable"]),
+        ),
+        (Host::Codex, names(&[])),
+    ])
+}
+
+fn model(value: &str) -> TypedPair {
+    pair("roles.planner.model", None, Value::ModelName(value.into()))
+}
+
+fn models(pairs: &[TypedPair], host: Option<Host>) -> Result<(), SetRefusal> {
+    judge_models(pairs, host, &accepted())
+}
+
+#[test]
+fn a_model_the_named_host_holds_is_not_refused() {
+    assert_eq!(models(&[model("opus")], Some(Host::ClaudeCode)), Ok(()));
+}
+
+#[test]
+fn a_model_the_named_host_lacks_is_not_accepted_because_another_host_holds_it() {
+    // AC3: opus is claude-code's, so codex refuses it.
+    let refusal = models(&[model("opus")], Some(Host::Codex)).expect_err("codex lacks opus");
+    assert_eq!(refusal.code(), "unknown-model");
+    assert_eq!(
+        refusal,
+        SetRefusal::UnknownModel {
+            setting: "roles.planner.model".into(),
+            model: "opus".into(),
+            host: Some(Host::Codex),
+            checked: vec![(Host::Codex, vec![])],
+        }
+    );
+    let text = refusal.to_string();
+    assert!(text.starts_with("unknown-model: "), "{text}");
+    assert!(text.contains("roles.planner.model"), "{text}");
+    assert!(text.contains("opus"), "{text}");
+    assert!(text.contains("codex accepts: none"), "{text}");
+    assert!(!text.contains("claude-code"), "{text}");
+}
+
+#[test]
+fn a_model_one_host_holds_is_not_refused_when_no_host_is_named() {
+    assert_eq!(models(&[model("opus")], None), Ok(()));
+    // Codex's names hold it and Claude Code's do not: still enough.
+    let only_codex = BTreeMap::from([
+        (Host::ClaudeCode, names(&[])),
+        (Host::Codex, names(&["gpt-x"])),
+    ]);
+    assert_eq!(judge_models(&[model("gpt-x")], None, &only_codex), Ok(()));
+}
+
+#[test]
+fn a_model_no_host_holds_is_not_accepted_and_both_hosts_are_named() {
+    let refusal = models(&[model("mystery")], None).expect_err("no host holds it");
+    let text = refusal.to_string();
+    assert!(text.starts_with("unknown-model: "), "{text}");
+    assert!(text.contains("mystery"), "{text}");
+    assert!(
+        text.contains("claude-code accepts: fable, haiku, opus, sonnet"),
+        "{text}"
+    );
+    assert!(text.contains("codex accepts: none"), "{text}");
+}
+
+#[test]
+fn a_host_missing_from_the_supplied_names_is_not_taken_to_accept_anything() {
+    let only_claude = BTreeMap::from([(Host::ClaudeCode, names(&["opus"]))]);
+    let refusal = judge_models(&[model("opus")], Some(Host::Codex), &only_claude)
+        .expect_err("codex supplied no names");
+    assert!(refusal.to_string().contains("codex accepts: none"));
+}
+
+#[test]
+fn a_model_name_matched_by_prefix_or_case_is_not_accepted() {
+    assert!(models(&[model("Opus")], Some(Host::ClaudeCode)).is_err());
+    assert!(models(&[model("opu")], Some(Host::ClaudeCode)).is_err());
+}
+
+#[test]
+fn a_set_with_no_model_pair_is_not_said_to_need_the_catalog() {
+    let pairs = [
+        pair("roles.planner.effort", None, Value::Rung(Rung::High)),
+        pair("example.flag", None, Value::Bool(true)),
+    ];
+    assert!(!needs_catalog(&pairs));
+    assert!(needs_catalog(&[
+        pairs[0].clone(),
+        model("opus"),
+        pairs[1].clone()
+    ]));
+    // With no model pair, the judge accepts without any names supplied.
+    assert_eq!(judge_models(&pairs, None, &BTreeMap::new()), Ok(()));
+}
+
+#[test]
+fn a_bad_model_overwritten_by_a_good_one_in_the_same_set_is_not_forgiven() {
+    let pairs = [model("mystery"), model("opus")];
+    let refusal = models(&pairs, None).expect_err("the first value is unknown");
+    assert!(refusal.to_string().contains("mystery"));
+    // Collapsing first would hide it, which is why the order is fixed.
+    assert_eq!(models(&collapse_repeats(pairs.to_vec()), None), Ok(()));
+}
+
+#[test]
+fn the_first_failing_model_pair_is_not_skipped_for_a_later_one() {
+    let refusal = models(
+        &[model("opus"), model("first-bad"), model("second-bad")],
+        None,
+    )
+    .expect_err("two unknown models");
+    assert!(refusal.to_string().contains("first-bad"));
+}
+
+#[test]
+fn a_repeated_setting_is_not_kept_at_its_last_position_or_with_its_first_value() {
+    let flag = |value| pair("example.flag", None, Value::Bool(value));
+    let effort = pair("roles.planner.effort", None, Value::Rung(Rung::Low));
+    let collapsed = collapse_repeats(vec![
+        flag(true),
+        effort.clone(),
+        flag(false),
+        model("opus"),
+        model("sonnet"),
+    ]);
+    assert_eq!(collapsed, vec![flag(false), effort, model("sonnet")]);
 }
