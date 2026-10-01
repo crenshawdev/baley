@@ -35,6 +35,35 @@ impl Render {
         }
     }
 }
+/// Writes `render` and returns the exit code: refusal lines to `err` with the
+/// `baley: ` prefix, the rest to `out`. A reader that closes early, as `head`
+/// does, ends the output and keeps the command's code, since the command
+/// already ran. Any other failed write exits 1 or the command's own failure.
+pub(crate) fn emit(
+    render: &Render,
+    out: &mut impl std::io::Write,
+    err: &mut impl std::io::Write,
+) -> u8 {
+    let (stream, prefix): (&mut dyn std::io::Write, &str) = if render.error {
+        (err, "baley: ")
+    } else {
+        (out, "")
+    };
+    let written = render
+        .lines
+        .iter()
+        .try_for_each(|line| writeln!(stream, "{prefix}{line}"))
+        .and_then(|()| stream.flush());
+    match written {
+        Err(error) if error.kind() != std::io::ErrorKind::BrokenPipe => render.code.max(1),
+        _ => render.code,
+    }
+}
+/// Prints a command's request id before it runs. A failed write never stops
+/// the command; its report meets the same stream at the end.
+pub(super) fn request_line(out: &mut impl std::io::Write, request_id: &str) {
+    let _ = writeln!(out, "request {request_id}");
+}
 /// Classifies store errors independently of prior commits.
 pub(super) fn exit_class(error: &StoreError) -> u8 {
     match error {

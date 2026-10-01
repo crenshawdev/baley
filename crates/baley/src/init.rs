@@ -377,14 +377,11 @@ pub struct InitArgs {
 pub fn run(args: InitArgs) -> ExitCode {
     let started_at = SystemClock::now();
     let result = initialize(&args, &started_at).unwrap_or_else(|e| e);
-    for line in result.lines {
-        if result.error {
-            eprintln!("baley: {line}");
-        } else {
-            println!("{line}");
-        }
-    }
-    ExitCode::from(result.code)
+    ExitCode::from(display::emit(
+        &result,
+        &mut std::io::stdout().lock(),
+        &mut std::io::stderr().lock(),
+    ))
 }
 
 fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {

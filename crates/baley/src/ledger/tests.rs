@@ -1003,3 +1003,60 @@ fn purge_command_does_not_keep_policy_version_0_in_its_digest_or_itself() {
     assert_eq!(command.actor, Actor::Owner);
     assert_eq!(command.kind, CommandKind("payload.purge".into()));
 }
+
+/// A stream whose every write fails with one error kind.
+struct Failing(std::io::ErrorKind);
+impl std::io::Write for Failing {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(self.0.into())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+fn report(code: u8) -> display::Render {
+    display::Render {
+        lines: vec!["a".into(), "b".into()],
+        code,
+        error: false,
+    }
+}
+#[test]
+fn a_closed_reader_is_not_turned_into_a_failure_or_a_panic() {
+    let closed = || Failing(std::io::ErrorKind::BrokenPipe);
+    for code in [0, 1, 3] {
+        assert_eq!(
+            display::emit(&report(code), &mut closed(), &mut Vec::new()),
+            code
+        );
+    }
+    let refusal = display::Render::refusal("no");
+    assert_eq!(display::emit(&refusal, &mut Vec::new(), &mut closed()), 2);
+}
+#[test]
+fn a_failed_write_is_not_reported_as_success() {
+    let full = || Failing(std::io::ErrorKind::Other);
+    assert_eq!(display::emit(&report(0), &mut full(), &mut Vec::new()), 1);
+    assert_eq!(display::emit(&report(3), &mut full(), &mut Vec::new()), 3);
+    let refusal = display::Render::refusal("no");
+    assert_eq!(display::emit(&refusal, &mut Vec::new(), &mut full()), 2);
+}
+#[test]
+fn refusal_lines_do_not_reach_stdout_or_lose_their_prefix() {
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    assert_eq!(display::emit(&report(0), &mut out, &mut err), 0);
+    assert_eq!((out.as_slice(), err.as_slice()), (&b"a\nb\n"[..], &b""[..]));
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    display::emit(&display::Render::refusal("no"), &mut out, &mut err);
+    assert_eq!(
+        (out.as_slice(), err.as_slice()),
+        (&b""[..], &b"baley: no\n"[..])
+    );
+}
+#[test]
+fn a_closed_reader_does_not_stop_a_command_at_its_request_line() {
+    let mut out = Vec::new();
+    display::request_line(&mut out, "R");
+    assert_eq!(out, b"request R\n");
+    display::request_line(&mut Failing(std::io::ErrorKind::BrokenPipe), "R");
+}

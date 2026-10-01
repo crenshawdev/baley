@@ -139,7 +139,7 @@ fn purge(
     hashes.sort();
     let policy_version = purge_policy_version(store, config, cwd, project)?;
     let request_id = new_request_id();
-    println!("request {}", request_id.0);
+    display::request_line(&mut std::io::stdout(), &request_id.0);
     let at = SystemClock::now();
     let command = purge_command(project, policy_version, &hashes, reason, request_id, &at)
         .map_err(|e| Render::refusal(e.to_string()))?;
@@ -276,7 +276,7 @@ fn anchor(
 ) -> Result<Render, Render> {
     require_remote(forge, &remote)?;
     let request_id = new_request_id();
-    println!("request {}", request_id.0);
+    display::request_line(&mut std::io::stdout(), &request_id.0);
     let request = AnchorRequest {
         project: project.clone(),
         request_id,
@@ -332,7 +332,7 @@ fn acknowledge(
         policy_version: 0,
         remote: remote.clone(),
     };
-    println!("request {}", request.request_id.0);
+    display::request_line(&mut std::io::stdout(), &request.request_id.0);
     let result = acknowledge_restore(&request, store, forge, &mut SystemClock::now)
         .map_err(|e| display::acknowledgement_error(&e, &project.0, &remote))?;
     let outcome = match result {
