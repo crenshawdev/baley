@@ -6,7 +6,10 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::policy::schema::Default as Builtin;
-use crate::policy::{AcceptedNames, Entry, FileLayer, Host, Kind, Rung, Schema, Scope, Value};
+use crate::policy::{
+    AcceptedNames, Entry, Fault, FileLayer, Host, Kind, Rung, Schema, Scope, SettingsFile,
+    Unavailable, Value, parse_layer,
+};
 
 fn entry(name: &str, kind: Kind, default: Builtin, scope: Scope) -> Entry {
     Entry {
@@ -437,4 +440,234 @@ fn a_repeated_setting_is_not_kept_at_its_last_position_or_with_its_first_value()
         model("sonnet"),
     ]);
     assert_eq!(collapsed, vec![flag(false), effort, model("sonnet")]);
+}
+
+fn settings_file(path: &str, text: &str) -> SettingsFile {
+    SettingsFile {
+        path: path.into(),
+        bytes: text.as_bytes().to_vec(),
+        digest: format!("digest of {path}"),
+    }
+}
+
+/// The table a hand-written TOML text holds.
+fn table(text: &str) -> toml::Table {
+    text.parse().expect("the expected text is TOML")
+}
+
+fn rendered(
+    layer: FileLayer,
+    base: Option<&SettingsFile>,
+    pairs: &[TypedPair],
+) -> Result<toml::Table, Unavailable> {
+    let bytes = render_file(&schema(), layer, base, pairs)?;
+    Ok(String::from_utf8(bytes)
+        .expect("the file is UTF-8")
+        .parse()
+        .expect("the file is TOML"))
+}
+
+const PROJECT_ID: &str = "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f";
+
+#[test]
+fn a_rendered_file_that_drops_or_rewrites_another_key_of_the_base_is_caught() {
+    let base = settings_file(
+        "/r/baley.toml",
+        &format!(
+            "# a comment the render may lose\n\
+             unknown_name = 3\n\
+             example.global_only = true\n\
+             example.flag = false\n\
+             \n\
+             [project]\n\
+             id = \"{PROJECT_ID}\"\n\
+             name = \"demo\"\n\
+             \n\
+             [host.claude-code.roles.planner]\n\
+             effort = \"max\"\n"
+        ),
+    );
+    let pairs = [
+        pair("roles.planner.effort", None, Value::Rung(Rung::High)),
+        pair("roles.planner.model", None, Value::ModelName("opus".into())),
+    ];
+    let out = rendered(FileLayer::Project, Some(&base), &pairs).expect("a valid base");
+    let expected = table(&format!(
+        "unknown_name = 3\n\
+         [example]\n\
+         global_only = true\n\
+         flag = false\n\
+         [project]\n\
+         id = \"{PROJECT_ID}\"\n\
+         name = \"demo\"\n\
+         [host.claude-code.roles.planner]\n\
+         effort = \"max\"\n\
+         [roles.planner]\n\
+         effort = \"high\"\n\
+         model = \"opus\"\n"
+    ));
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn a_host_value_written_at_the_top_level_or_over_the_host_table_is_caught() {
+    let base = settings_file(
+        "/c/config.toml",
+        "roles.planner.effort = \"low\"\n\
+         [host.codex]\n\
+         example.flag = true\n\
+         [host.claude-code.roles.planner]\n\
+         model = \"kept\"\n",
+    );
+    let pairs = [pair(
+        "roles.planner.effort",
+        Some(Host::Codex),
+        Value::Rung(Rung::Xhigh),
+    )];
+    let out = rendered(FileLayer::Global, Some(&base), &pairs).expect("a valid base");
+    let expected = table(
+        "[roles.planner]\n\
+         effort = \"low\"\n\
+         [host.codex]\n\
+         example.flag = true\n\
+         [host.codex.roles.planner]\n\
+         effort = \"xhigh\"\n\
+         [host.claude-code.roles.planner]\n\
+         model = \"kept\"\n",
+    );
+    assert_eq!(out, expected);
+}
+
+#[test]
+fn a_new_file_that_holds_a_value_a_read_would_refuse_or_misplace_is_caught() {
+    let pairs = [
+        pair(
+            "roles.planner.effort",
+            Some(Host::Codex),
+            Value::Rung(Rung::Max),
+        ),
+        pair("example.flag", Some(Host::Codex), Value::Bool(true)),
+        pair(
+            "roles.planner.model",
+            Some(Host::Codex),
+            Value::ModelName("gpt-x".into()),
+        ),
+    ];
+    let out = rendered(FileLayer::Global, None, &pairs).expect("no base");
+    assert_eq!(
+        out,
+        table(
+            "[host.codex.roles.planner]\n\
+             effort = \"max\"\n\
+             model = \"gpt-x\"\n\
+             [host.codex.example]\n\
+             flag = true\n"
+        )
+    );
+    // The bytes read back through the parser with each value's type and host.
+    let bytes = render_file(&schema(), FileLayer::Global, None, &pairs).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    let parsed = parse_layer(
+        &settings_file("/c/config.toml", &text),
+        FileLayer::Global,
+        &schema(),
+    )
+    .expect("the file reads back");
+    let mut read: Vec<_> = parsed
+        .values
+        .iter()
+        .map(|w| (w.name.as_str(), w.host, w.value.clone()))
+        .collect();
+    read.sort_by(|a, b| a.0.cmp(b.0));
+    assert_eq!(
+        read,
+        vec![
+            ("example.flag", Some(Host::Codex), Value::Bool(true)),
+            (
+                "roles.planner.effort",
+                Some(Host::Codex),
+                Value::Rung(Rung::Max)
+            ),
+            (
+                "roles.planner.model",
+                Some(Host::Codex),
+                Value::ModelName("gpt-x".into())
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_model_name_with_quotes_and_a_line_break_is_not_written_so_it_reads_back_changed() {
+    let name = "odd \"name\"\nsecond line \\ end";
+    let pairs = [pair(
+        "roles.planner.model",
+        None,
+        Value::ModelName(name.into()),
+    )];
+    let bytes = render_file(&schema(), FileLayer::Global, None, &pairs).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    let parsed = parse_layer(
+        &settings_file("/c/config.toml", &text),
+        FileLayer::Global,
+        &schema(),
+    )
+    .expect("the file reads back");
+    assert_eq!(parsed.values[0].value, Value::ModelName(name.into()));
+}
+
+#[test]
+fn a_value_at_a_path_the_base_holds_is_not_added_beside_it_or_allowed_to_drop_its_siblings() {
+    let base = settings_file(
+        "/c/config.toml",
+        "[roles.planner]\neffort = \"low\"\nmodel = \"keep\"\n",
+    );
+    let pairs = [pair("roles.planner.effort", None, Value::Rung(Rung::Max))];
+    let out = rendered(FileLayer::Global, Some(&base), &pairs).expect("a valid base");
+    assert_eq!(
+        out,
+        table("[roles.planner]\neffort = \"max\"\nmodel = \"keep\"\n")
+    );
+}
+
+#[test]
+fn a_base_whose_schema_prefix_is_not_a_table_is_not_overwritten() {
+    let base = settings_file("/r/baley.toml", "roles = 5\n");
+    let pairs = [pair("roles.planner.effort", None, Value::Rung(Rung::High))];
+    let refusal = render_file(&schema(), FileLayer::Project, Some(&base), &pairs)
+        .expect_err("roles is an integer");
+    assert_eq!(refusal.code(), "config-unavailable");
+    assert_eq!(refusal.path, std::path::PathBuf::from("/r/baley.toml"));
+    assert_eq!(
+        refusal.fault,
+        Fault::WrongType {
+            name: "roles".into(),
+            expected: crate::policy::Expected::Table,
+            found: "integer",
+            line: 1,
+            column: 9,
+        }
+    );
+}
+
+#[test]
+fn a_base_that_is_not_toml_is_not_replaced_by_a_fresh_file() {
+    let base = settings_file("/c/config.toml", "this is not toml\n");
+    let pairs = [pair("example.flag", None, Value::Bool(true))];
+    let refusal = render_file(&schema(), FileLayer::Global, Some(&base), &pairs)
+        .expect_err("the base does not parse");
+    assert!(matches!(refusal.fault, Fault::Parse { .. }), "{refusal:?}");
+    assert_eq!(refusal.path, std::path::PathBuf::from("/c/config.toml"));
+}
+
+#[test]
+fn a_base_holding_an_invalid_value_is_not_repaired_by_the_set_that_replaces_it() {
+    let base = settings_file("/c/config.toml", "roles.planner.effort = \"HIGH\"\n");
+    let pairs = [pair("roles.planner.effort", None, Value::Rung(Rung::High))];
+    let refusal = render_file(&schema(), FileLayer::Global, Some(&base), &pairs)
+        .expect_err("the base holds an invalid rung");
+    assert!(
+        matches!(refusal.fault, Fault::OutsideGrammar { .. }),
+        "{refusal:?}"
+    );
 }
