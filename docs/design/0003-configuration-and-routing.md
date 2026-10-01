@@ -179,28 +179,57 @@ All operations of this area are command-line commands run by the owner. Nothing 
 
 ### baley config show
 
-- **Inputs:** optional `--host <name>` (default: none, which shows every host section), optional setting names.
-- **Outputs:** for each setting: the schema (type, default, scope), the stored global and project values, the effective value, the layer it came from, and every diagnostic (scope, unknown name, invalid value); the paths of both files.
-- **Refusals:**
+- **Inputs:** optional `--host <name>`, optional setting names. An unknown host name is refused when the arguments are parsed. With no `--host`, which is how the command line runs, every host section's stored values are shown and the effective value applies no host section. With `--host`, only that host's section is shown, and its sections apply to the effective value. With no setting names, every setting is shown, in the schema's order.
+- **Outputs:**
+  - for each setting: its type, default and scope;
+  - its stored global values, each host section included;
+  - its stored project values, read from the working-tree `baley.toml`. Where HEAD's committed value differs, it is shown beside the working-tree value with the note that it applies once committed;
+  - its effective value, with the layer and the file it came from. The effective value is merged from the global file and HEAD's copy of `baley.toml`, since HEAD's copy is the policy the ledger records;
+  - then the diagnostics of the global file and HEAD's copy: scope, unknown name and unknown host. A value that fails its type or grammar makes the file unavailable and is refused, so it is not listed;
+  - the note that the project file's changes apply once committed, when the working-tree file differs from HEAD's copy or is not committed;
+  - the path of the global file, and the path of the project file when the directory is in a project.
+
+  `config show` opens no ledger, runs no policy step and records nothing.
+- **Refusals,** in the order judged. The names are judged first, since they need no file. Then each file is read in the order global file, working-tree `baley.toml`, HEAD's copy, and then each is parsed in that order.
 
   | Code | When | Requirement |
   |---|---|---|
-  | `not-a-project` | The directory has no project file and a project-scoped setting was asked for | CFG-R4 |
+  | `unknown-setting` | A named setting is not in the schema | CFG-R7 |
+  | `not-a-project` | The directory has no project file and a project-scoped setting was named | CFG-R4 |
+  | `config-unavailable` | The global file, the working-tree `baley.toml` or HEAD's copy cannot be read or is invalid, naming the file and the fault and, for a parse, type or grammar fault, its line and column | CFG-R9 |
 
 ### baley config set
 
-- **Inputs:** `--global` or `--project` (required), optional `--host <name>`, one or more `name=value` pairs; `name=null` resets.
-- **Outputs:** the settings changed, the file written, and the facts as `config show` returns them; a new `policy.effective` when the merged result changed. Baley writes the whole file to a temporary file in the same folder and renames it over the old one; comments and key order in the file are not kept ([ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)).
-- **Refusals:**
+- **Inputs:**
+  - `--global` or `--project`, exactly one, required;
+  - optional `--host <name>`, refused when the arguments are parsed if the name is unknown. With it, each value is written in that host's `[host.<name>]` section;
+  - one or more `name=value` pairs, split at the first `=`.
+
+  A value is read by its setting's type and is never parsed as TOML: `true` or `false` for a boolean, a rung name written exactly as the scale spells it, or a non-empty model name. A file that should hold a default has the default written as its value.
+- **Outputs:**
+  - **A project-file set:** the file written, each setting changed with its new value, that the change applies at the next commit, and the policy version in force. The step reads HEAD's copy of the file, so the version is usually the one already recorded until the change is committed.
+  - **A global set:** each setting changed, the file written and the policy version. A global file applies as soon as it is written, so it never says next commit.
+  - **A set that changes nothing,** where every value is already in the file: nothing is written and no policy step runs. The output says nothing changed and gives the policy version in force.
+  - **Version 0:** the output says what it means. Outside a project no recorded policy applies. In a project not in this machine's ledger, such as a fresh clone, no recorded policy applies to the project and `baley init` records it.
+  - **The write:**
+    - Baley writes the whole file to a temporary file in the same folder and renames it over the old one. Comments and key order in the file are not kept ([ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)). Every other key the file holds is kept.
+    - The config folder is created private when it is missing.
+    - A `--project` set is rewritten from the working-tree `baley.toml`'s own bytes, never from HEAD's copy, so uncommitted edits in that file are kept.
+  - **The policy step:** in a project in this machine's ledger, the step runs after the write. It re-reads both files, taking the project layer from HEAD's copy, and records `policy.effective` when the merged result changed. A project-file change is therefore recorded once it is committed and a later command that writes the chain runs.
+  - A refusal exits 2. A write that fails for another reason exits 3.
+- **Refusals,** in the order judged. Each check runs over every pair before the next begins, and nothing is written until all have passed:
 
   | Code | When | Requirement |
   |---|---|---|
-  | `unknown-setting` | The name is not in the schema | CFG-R7 |
-  | `invalid-value` | The value is off type, outside its bounds or enum, or fails its grammar | CFG-R9 |
-  | `wrong-layer` | The setting's scope excludes the requested layer | CFG-R5 |
-  | `unknown-model` | A `roles.<role>.model` value is not in the catalog for that host or provider | CFG-R14 |
-  | `config-conflict` | The file changed between read and write | CFG-R9 |
   | `not-a-project` | `--project` outside a project | CFG-R4 |
+  | `unknown-setting` | The name is not in the schema | CFG-R7 |
+  | `wrong-layer` | The setting's scope excludes the requested layer | CFG-R5 |
+  | `invalid-value` | The value is not of the setting's type, or fails its grammar | CFG-R9 |
+  | `config-unavailable` | A file the set checks cannot be read or is invalid: the working-tree project file and its project id, then the global file and, in a project, HEAD's copy, then the file the set writes | CFG-R9 |
+  | `unknown-model` | A `roles.<role>.model` value is not in the catalog of the host `--host` names, or with no `--host`, in no host's catalog. The refusal names the entries each catalog accepts | CFG-R14 |
+  | `config-conflict` | The file to write is a symbolic link, or the file changed between read and write | CFG-R9 |
+
+  A symbolic link is refused before the catalog is read, so a set that changes nothing refuses on one as a changing set does. A file that changed between read and write is found at the write itself, when the file's bytes no longer match the ones the new file was rendered from. The catalog is read, after it is seeded, only when a pair sets a model.
 
 ### baley config interview
 
