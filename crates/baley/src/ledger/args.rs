@@ -1,24 +1,22 @@
 //! Arguments for owner operations on the ledger.
 use baley_store::Hash;
-use clap::{ArgGroup, Subcommand};
+use clap::Subcommand;
 use std::path::PathBuf;
 
 /// Ledger commands, beside the inherited command surface.
 #[derive(Debug, Clone, Subcommand)]
 pub enum LedgerCommand {
-    /// Check the chain against a remote, locally, or compare replayed views.
-    #[command(group(ArgGroup::new("check").required(true).args(["remote", "local_only", "views"])))]
+    /// Check the chain. With no flag it checks the checkout's project against
+    /// the remote its `git.remote` names, or locally when none is set.
+    /// `--local-only` and `--views` name the project and need no checkout.
     Verify {
-        /// Ledger project id.
-        project: String,
-        /// Configured git remote.
-        #[arg(long)]
-        remote: Option<String>,
-        /// Check without a remote witness.
-        #[arg(long)]
+        /// Ledger project id; required with `--local-only` or `--views`.
+        project: Option<String>,
+        /// Check the named project without a remote witness.
+        #[arg(long, requires = "project", conflicts_with = "views")]
         local_only: bool,
-        /// Compare views with a replay.
-        #[arg(long)]
+        /// Compare the named project's views with a replay.
+        #[arg(long, requires = "project")]
         views: bool,
     },
     /// Report the health of every project.

@@ -19,17 +19,52 @@ pub(super) enum Verb<'a> {
         /// The project the owner named.
         named: Option<&'a str>,
     },
+    /// `baley verify`, in one of its three forms.
+    Verify(Form<'a>),
+}
+
+/// The forms of `baley verify`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Form<'a> {
+    /// No flag: the checkout's project against its `git.remote`.
+    Anchored {
+        /// The project the owner named.
+        named: Option<&'a str>,
+    },
+    /// `--local-only PROJECT`.
+    LocalOnly(&'a str),
+    /// `--views PROJECT`.
+    Views(&'a str),
+}
+
+/// The form the arguments name. The parser already refuses a flag with no
+/// project and both flags together, so the refusal here is a second guard.
+pub(super) fn verify_form(
+    project: Option<&str>,
+    local_only: bool,
+    views: bool,
+) -> Result<Form<'_>, String> {
+    match (project, local_only, views) {
+        (named, false, false) => Ok(Form::Anchored { named }),
+        (Some(project), true, false) => Ok(Form::LocalOnly(project)),
+        (Some(project), false, true) => Ok(Form::Views(project)),
+        _ => Err("verify takes --local-only or --views, not both, and each needs a project".into()),
+    }
 }
 impl<'a> Verb<'a> {
     fn name(self) -> &'static str {
         match self {
             Self::Anchor { .. } => "anchor",
             Self::AcknowledgeRestore { .. } => "acknowledge-restore",
+            Self::Verify(_) => "verify",
         }
     }
     fn named(self) -> Option<&'a str> {
         match self {
-            Self::Anchor { named } | Self::AcknowledgeRestore { named } => named,
+            Self::Anchor { named }
+            | Self::AcknowledgeRestore { named }
+            | Self::Verify(Form::Anchored { named }) => named,
+            Self::Verify(Form::LocalOnly(project) | Form::Views(project)) => Some(project),
         }
     }
 }
@@ -106,6 +141,15 @@ pub(super) enum Op {
         /// The remote its `git.remote` names.
         remote: Option<String>,
     },
+    /// Verify the project against the remote, or locally when there is none.
+    Verify {
+        /// The project to verify.
+        project: String,
+        /// The remote its `git.remote` names.
+        remote: Option<String>,
+    },
+    /// Compare the project's views with a replay.
+    Views(String),
     /// Accept the restored chain of the project behind the anchor on the
     /// remote.
     Acknowledge {
@@ -116,13 +160,38 @@ pub(super) enum Op {
     },
 }
 
-fn target_text(command: &str, refusal: &TargetRefusal) -> String {
+/// Where the owner goes instead of the checkout, for `project`.
+fn instead(command: Verb, project: &str) -> String {
+    match command {
+        Verb::Verify(_) => {
+            format!("run baley verify --local-only {project} to check without a checkout")
+        }
+        _ => format!("run baley {} from a checkout of {project}", command.name()),
+    }
+}
+
+fn target_text(command: Verb, refusal: &TargetRefusal) -> String {
     match refusal {
         TargetRefusal::Differs { named, discovered } => format!(
-            "project {named} is not the project of this checkout ({discovered}); run baley {command} from a checkout of {named}"
+            "project {named} is not the project of this checkout ({discovered}); {}",
+            instead(command, named)
         ),
         TargetRefusal::NoneDiscovered { named } => format!(
-            "no baley.toml was found from this directory; run baley {command} from a checkout of {named}"
+            "no baley.toml was found from this directory; {}",
+            instead(command, named)
+        ),
+    }
+}
+
+fn no_project_text(command: Verb) -> String {
+    match command {
+        Verb::Verify(_) => format!(
+            "no baley.toml was found from this directory; {}",
+            instead(command, "<project>")
+        ),
+        _ => format!(
+            "no baley.toml was found from this directory; baley {} runs from a checkout of the project",
+            command.name()
         ),
     }
 }
@@ -131,18 +200,24 @@ fn target_text(command: &str, refusal: &TargetRefusal) -> String {
 /// before the policy step, so a refused command records nothing.
 pub(super) fn next(facts: &Facts) -> Result<Vec<Op>, String> {
     let command = facts.command;
+    // The two flagged forms read no settings file, so no file can refuse them.
+    match command {
+        Verb::Verify(Form::LocalOnly(project)) => {
+            return Ok(vec![Op::Verify {
+                project: project.into(),
+                remote: None,
+            }]);
+        }
+        Verb::Verify(Form::Views(project)) => return Ok(vec![Op::Views(project.into())]),
+        _ => {}
+    }
     let Some(settings) = facts.settings else {
         return Ok(vec![Op::ReadSettings]);
     };
     let discovered = settings.discovered()?;
     let project = anchor_plan::judge_target(discovered.as_deref(), command.named())
-        .map_err(|refusal| target_text(command.name(), &refusal))?
-        .ok_or_else(|| {
-            format!(
-                "no baley.toml was found from this directory; baley {} runs from a checkout of the project",
-                command.name()
-            )
-        })?;
+        .map_err(|refusal| target_text(command, &refusal))?
+        .ok_or_else(|| no_project_text(command))?;
     let policy = settings.policy.as_ref().map_err(ToString::to_string)?;
     let remote = anchor_plan::remote_of(policy);
     if let Some(name) = &remote {
@@ -155,6 +230,9 @@ pub(super) fn next(facts: &Facts) -> Result<Vec<Op>, String> {
     // Owner: T13 (phase 9). Its admission of the checkout is requested here,
     // between the settings read and the policy step.
     let last = match (command, remote) {
+        // Anchored verify only reads: it requests no policy step and appends
+        // nothing.
+        (Verb::Verify(_), remote) => return Ok(vec![Op::Verify { project, remote }]),
         (Verb::Anchor { .. }, remote) => Op::Anchor { project, remote },
         (Verb::AcknowledgeRestore { .. }, Some(remote)) => Op::Acknowledge { project, remote },
         // The core's acknowledgement holds a remote name, not an absence, so

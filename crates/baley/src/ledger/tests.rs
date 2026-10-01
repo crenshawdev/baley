@@ -21,24 +21,75 @@ macro_rules! rejects {
         }
     };
 }
-rejects!(verify_requires_a_witness_choice, &["verify", "P"]);
-rejects!(
-    verify_cannot_combine_remote_and_local,
-    &["verify", "P", "--remote", "o", "--local-only"]
-);
-rejects!(
-    verify_views_cannot_fetch,
-    &["verify", "P", "--views", "--remote", "o"]
-);
+fn exit_code(args: &[&str]) -> i32 {
+    parse(args).unwrap_err().exit_code()
+}
+#[test]
+fn verify_with_no_flag_is_the_anchored_form_with_or_without_a_project() {
+    assert!(matches!(
+        parse(&["verify"]).unwrap(),
+        LedgerCommand::Verify {
+            project: None,
+            local_only: false,
+            views: false
+        }
+    ));
+    assert!(
+        matches!(parse(&["verify", "P"]).unwrap(), LedgerCommand::Verify { project: Some(p), local_only: false, views: false } if p == "P")
+    );
+}
+#[test]
+fn verify_local_only_and_views_parse_with_a_project() {
+    assert!(
+        matches!(parse(&["verify", "--local-only", "P"]).unwrap(), LedgerCommand::Verify { project: Some(p), local_only: true, views: false } if p == "P")
+    );
+    assert!(
+        matches!(parse(&["verify", "P", "--views"]).unwrap(), LedgerCommand::Verify { project: Some(p), local_only: false, views: true } if p == "P")
+    );
+}
+#[test]
+fn verify_flags_without_a_project_exit_two() {
+    assert_eq!(exit_code(&["verify", "--local-only"]), 2);
+    assert_eq!(exit_code(&["verify", "--views"]), 2);
+}
+#[test]
+fn verify_flags_cannot_be_combined() {
+    assert_eq!(exit_code(&["verify", "P", "--local-only", "--views"]), 2);
+}
+#[test]
+fn every_remote_flag_is_gone_from_the_commands_that_had_one() {
+    assert_eq!(exit_code(&["verify", "P", "--remote", "o"]), 2);
+    assert_eq!(exit_code(&["verify", "--remote", "o"]), 2);
+}
+#[test]
+fn the_commands_that_keep_their_project_exit_two_without_it() {
+    let hash = "ab".repeat(32);
+    assert_eq!(exit_code(&["export", "--to", "/x"]), 2);
+    assert_eq!(exit_code(&["purge", &hash, "--reason", "r"]), 2);
+    assert_eq!(exit_code(&["rebuild"]), 2);
+}
+#[test]
+fn the_arguments_pick_the_form_verify_runs_in() {
+    use command_plan::{Form, verify_form};
+    assert_eq!(
+        verify_form(None, false, false),
+        Ok(Form::Anchored { named: None })
+    );
+    assert_eq!(
+        verify_form(Some("P"), false, false),
+        Ok(Form::Anchored { named: Some("P") })
+    );
+    assert_eq!(
+        verify_form(Some("P"), true, false),
+        Ok(Form::LocalOnly("P"))
+    );
+    assert_eq!(verify_form(Some("P"), false, true), Ok(Form::Views("P")));
+    assert!(verify_form(None, true, false).is_err());
+    assert!(verify_form(Some("P"), true, true).is_err());
+}
 rejects!(export_requires_a_destination, &["export", "P"]);
 rejects!(purge_requires_a_reason, &["purge", "P", &"ab".repeat(32)]);
 rejects!(purge_requires_hashes, &["purge", "P", "--reason", "r"]);
-#[test]
-fn verify_binds_project_and_remote() {
-    assert!(
-        matches!(parse(&["verify","P","--remote","origin"]).unwrap(),LedgerCommand::Verify { project,remote:Some(remote),views:false,local_only:false } if project == "P" && remote == "origin")
-    );
-}
 #[test]
 fn doctor_splits_project_from_remote() {
     assert!(
@@ -1356,6 +1407,109 @@ fn a_blocked_acknowledgement_tells_the_owner_to_run_anchor_with_no_remote_flag()
     assert!(text(&r).contains("an anchor claim held is interrupted"));
     assert!(text(&r).contains("run baley anchor first from this checkout"));
     assert!(!text(&r).contains("--remote"));
+}
+fn verify_next(
+    form: command_plan::Form<'_>,
+    settings: Option<&command_plan::Settings>,
+    check: Option<&Result<(), String>>,
+) -> Result<Vec<command_plan::Op>, String> {
+    command_plan::next(&command_plan::Facts {
+        command: command_plan::Verb::Verify(form),
+        settings,
+        remote_check: check,
+    })
+}
+fn anchored() -> command_plan::Form<'static> {
+    command_plan::Form::Anchored { named: None }
+}
+fn verifies(remote: Option<&str>) -> command_plan::Op {
+    command_plan::Op::Verify {
+        project: PROJECT_ID.into(),
+        remote: remote.map(Into::into),
+    }
+}
+#[test]
+fn anchored_verify_never_requests_the_policy_step_at_any_stage() {
+    let origin = origin_settings();
+    let unset = unset_settings();
+    let stages = [
+        verify_next(anchored(), None, None),
+        verify_next(anchored(), Some(&origin), None),
+        verify_next(anchored(), Some(&origin), Some(&Ok(()))),
+        verify_next(anchored(), Some(&unset), None),
+    ];
+    for stage in stages {
+        assert!(!stage.unwrap().contains(&command_plan::Op::Step));
+    }
+}
+#[test]
+fn anchored_verify_refuses_an_invalid_settings_file_but_the_flagged_forms_do_not() {
+    let settings = managed(
+        valid_id(),
+        global_file("escalate_on_failure = [\n"),
+        head_copy(""),
+    );
+    let refusal = verify_next(anchored(), Some(&settings), None).unwrap_err();
+    assert!(refusal.starts_with("config-unavailable: "), "{refusal}");
+    assert!(refusal.contains(GLOBAL_FILE), "{refusal}");
+    assert_eq!(
+        verify_next(command_plan::Form::LocalOnly("P"), Some(&settings), None),
+        Ok(vec![command_plan::Op::Verify {
+            project: "P".into(),
+            remote: None
+        }])
+    );
+    assert_eq!(
+        verify_next(command_plan::Form::Views("P"), Some(&settings), None),
+        Ok(vec![command_plan::Op::Views("P".into())])
+    );
+}
+#[test]
+fn the_flagged_verify_forms_request_no_settings_read_before_any_facts() {
+    assert_eq!(
+        verify_next(command_plan::Form::LocalOnly("P"), None, None),
+        Ok(vec![command_plan::Op::Verify {
+            project: "P".into(),
+            remote: None
+        }])
+    );
+    assert_eq!(
+        verify_next(command_plan::Form::Views("P"), None, None),
+        Ok(vec![command_plan::Op::Views("P".into())])
+    );
+}
+#[test]
+fn anchored_verify_outside_a_checkout_points_to_the_local_only_form() {
+    let outside = command_plan::Settings {
+        project_file: None,
+        policy: crate::policy_step::build(&crate::policy_step::Reads {
+            global: Ok(None),
+            head: None,
+        }),
+    };
+    let none = verify_next(anchored(), Some(&outside), None).unwrap_err();
+    assert!(none.contains("verify --local-only <project>"), "{none}");
+    let named = command_plan::Form::Anchored { named: Some("P") };
+    let refusal = verify_next(named, Some(&outside), None).unwrap_err();
+    assert!(refusal.contains("verify --local-only P"), "{refusal}");
+}
+#[test]
+fn anchored_verify_with_no_git_remote_verifies_locally_with_no_check() {
+    assert_eq!(
+        verify_next(anchored(), Some(&unset_settings()), None),
+        Ok(vec![verifies(None)])
+    );
+}
+#[test]
+fn anchored_verify_checks_the_remote_then_verifies_against_it() {
+    assert_eq!(
+        verify_next(anchored(), Some(&origin_settings()), None),
+        Ok(vec![command_plan::Op::CheckRemote("origin".into())])
+    );
+    assert_eq!(
+        verify_next(anchored(), Some(&origin_settings()), Some(&Ok(()))),
+        Ok(vec![verifies(Some("origin"))])
+    );
 }
 #[test]
 fn the_anchor_request_carries_the_step_version_and_remote_in_its_digest() {

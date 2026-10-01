@@ -3,7 +3,7 @@ use super::{
     LedgerCommand,
     answer::answer_value,
     clock::SystemClock,
-    command_plan::{self, Facts, Op, ProjectFile, Settings, Verb},
+    command_plan::{self, Facts, Form, Op, ProjectFile, Settings, Verb},
     display::{self, Render},
     forge::GitForge,
     remotes::anchor_plan,
@@ -44,16 +44,11 @@ pub(super) fn dispatch(
     let result = match command {
         LedgerCommand::Verify {
             project,
-            remote,
+            local_only,
             views,
-            ..
-        } => verify(
-            &store,
-            &mut forge,
-            &ProjectId(project),
-            remote.as_deref(),
-            views,
-        ),
+        } => command_plan::verify_form(project.as_deref(), local_only, views)
+            .map_err(Render::refusal)
+            .and_then(|form| verify(&store, &mut forge, config, &cwd, form)),
         LedgerCommand::Doctor { remote, local_only } => {
             doctor(&store, &mut forge, &remote, &local_only)
         }
@@ -83,25 +78,38 @@ pub(super) fn dispatch(
     }
     rendered
 }
+/// Anchored `verify` reads the settings and writes nothing. The flagged
+/// forms read no settings file.
 fn verify(
     store: &SqliteStore,
     forge: &mut Forge,
-    project: &ProjectId,
-    remote: Option<&str>,
-    views: bool,
+    config: &Path,
+    cwd: &Path,
+    form: Form<'_>,
 ) -> Result<Render, Render> {
-    if views {
-        return store
-            .verify_views(project)
-            .map(|r| display::views(&r))
-            .map_err(|e| display::store_error(&e, Some(&project.0)));
+    let (ops, _) = settle(Verb::Verify(form), forge, config, cwd)?;
+    match ops.as_slice() {
+        [Op::Views(project)] => {
+            let project = ProjectId(project.clone());
+            store
+                .verify_views(&project)
+                .map(|r| display::views(&r))
+                .map_err(|e| display::store_error(&e, Some(&project.0)))
+        }
+        [Op::Verify { project, remote }] => {
+            let project = ProjectId(project.clone());
+            verify_project(
+                store,
+                forge,
+                &project,
+                remote.as_deref(),
+                &mut SystemClock::now,
+            )
+            .map(|r| display::verification(&r, remote.as_deref()))
+            .map_err(|e| display::store_error(&e, Some(&project.0)))
+        }
+        _ => Err(unexpected_plan()),
     }
-    if let Some(remote) = remote {
-        require_remote(forge, remote)?;
-    }
-    verify_project(store, forge, project, remote, &mut SystemClock::now)
-        .map(|r| display::verification(&r, remote))
-        .map_err(|e| display::store_error(&e, Some(&project.0)))
 }
 fn doctor(
     store: &SqliteStore,
