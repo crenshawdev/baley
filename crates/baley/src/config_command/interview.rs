@@ -5,7 +5,8 @@
 
 use baley_core::policy::config_command::{SetRefusal, judge_show};
 use baley_core::policy::{
-    EffectivePolicy, FileLayer, Host, ParsedLayer, Role, Schema, SettingsFile, Unavailable, merge,
+    EffectivePolicy, FileLayer, Host, ParsedLayer, Role, Rung, Schema, SettingsFile, Unavailable,
+    merge,
 };
 use baley_store::StoreError;
 use std::io::{self, BufRead, Write};
@@ -181,6 +182,17 @@ fn default_layer(global: Option<&ParsedLayer>) -> FileLayer {
     }
 }
 
+/// What a question's answer must be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Takes {
+    /// A model name, any non-empty text. `config set` refuses an unknown one.
+    Model,
+    /// One of the five rungs.
+    Rung,
+    /// `true` or `false`.
+    Bool,
+}
+
 /// One question: a setting, the value in force and the layer it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Question {
@@ -190,6 +202,8 @@ struct Question {
     value: String,
     /// The layer the value came from.
     layer: &'static str,
+    /// What the answer must be.
+    takes: Takes,
 }
 
 impl Question {
@@ -212,12 +226,14 @@ fn questions(policy: &EffectivePolicy) -> Vec<Question> {
                 str::to_owned,
             ),
             layer: source.layer.name(),
+            takes: Takes::Model,
         });
         let (rung, source) = policy.effort(role);
         questions.push(Question {
             name: format!("roles.{}.effort", role.name()),
             value: rung.name().to_owned(),
             layer: source.layer.name(),
+            takes: Takes::Rung,
         });
     }
     let (escalate, source) = policy.escalate_on_failure();
@@ -225,6 +241,7 @@ fn questions(policy: &EffectivePolicy) -> Vec<Question> {
         name: "escalate_on_failure".to_owned(),
         value: escalate.to_string(),
         layer: source.layer.name(),
+        takes: Takes::Bool,
     });
     questions
 }
@@ -240,7 +257,9 @@ enum Collected {
 
 /// Writes the header and each question and reads one line per question.
 /// Surrounding whitespace is trimmed, and an answer that is empty after
-/// trimming keeps the value in force and gives no pair.
+/// trimming keeps the value in force and gives no pair. An answer its
+/// question cannot take is refused with a line and the question is asked
+/// again.
 fn ask(
     questions: &[Question],
     input: &mut impl BufRead,
@@ -252,18 +271,51 @@ fn ask(
     )?;
     let mut pairs = Vec::new();
     for question in questions {
-        write!(output, "{}", question.prompt())?;
-        output.flush()?;
-        let Some(answer) = read_answer(input)? else {
-            // The prompt holds the line, so end it before anything else prints.
-            writeln!(output)?;
-            return Ok(Collected::Stopped);
-        };
-        if !answer.is_empty() {
-            pairs.push((question.name.clone(), answer));
+        loop {
+            write!(output, "{}", question.prompt())?;
+            output.flush()?;
+            let Some(answer) = read_answer(input)? else {
+                // The prompt holds the line, so end it before anything else prints.
+                writeln!(output)?;
+                return Ok(Collected::Stopped);
+            };
+            if answer.is_empty() {
+                break;
+            }
+            match judge_answer(question.takes, &answer) {
+                Ok(()) => {
+                    pairs.push((question.name.clone(), answer));
+                    break;
+                }
+                Err(reason) => writeln!(output, "{reason}")?,
+            }
         }
     }
     Ok(Collected::Answers(pairs))
+}
+
+/// Whether `answer` is one its question can take, ignoring surrounding
+/// whitespace, and the line that asks again when it is not. Rungs are matched
+/// as `config set` matches them, so `High` is not one.
+fn judge_answer(takes: Takes, answer: &str) -> Result<(), String> {
+    let answer = answer.trim();
+    match takes {
+        Takes::Model => Ok(()),
+        Takes::Rung if Rung::parse(answer).is_some() => Ok(()),
+        Takes::Rung => {
+            let rungs: Vec<&str> = Rung::ALL.iter().map(|rung| rung.name()).collect();
+            Err(format!(
+                "\"{}\" is not a rung; answer one of {}",
+                answer.escape_debug(),
+                rungs.join(", ")
+            ))
+        }
+        Takes::Bool if matches!(answer, "true" | "false") => Ok(()),
+        Takes::Bool => Err(format!(
+            "\"{}\" is not true or false",
+            answer.escape_debug()
+        )),
+    }
 }
 
 /// One trimmed line, `None` at the end of the input.
@@ -863,5 +915,104 @@ mod tests {
             output.contains("The interview will write to /c/config.toml [host.codex]\n"),
             "{output}"
         );
+    }
+
+    #[test]
+    fn an_effort_is_taken_only_as_an_exact_rung() {
+        assert_eq!(judge_answer(Takes::Rung, "high"), Ok(()));
+        assert_eq!(judge_answer(Takes::Rung, " max "), Ok(()));
+        for answer in ["High", "bogus", "x high"] {
+            assert!(judge_answer(Takes::Rung, answer).is_err(), "{answer}");
+        }
+    }
+
+    #[test]
+    fn an_escalate_answer_is_taken_only_as_true_or_false() {
+        assert_eq!(judge_answer(Takes::Bool, "true"), Ok(()));
+        assert_eq!(judge_answer(Takes::Bool, "false"), Ok(()));
+        for answer in ["yes", "True", "1"] {
+            assert!(judge_answer(Takes::Bool, answer).is_err(), "{answer}");
+        }
+    }
+
+    #[test]
+    fn a_model_answer_is_taken_whatever_it_says() {
+        assert_eq!(judge_answer(Takes::Model, "claude-unknown-x"), Ok(()));
+        assert_eq!(judge_answer(Takes::Model, "high"), Ok(()));
+    }
+
+    #[test]
+    fn the_refusal_lines_name_the_answer_escaped_and_what_is_taken() {
+        assert_eq!(
+            judge_answer(Takes::Rung, "Hi\tgh").unwrap_err(),
+            "\"Hi\\tgh\" is not a rung; answer one of low, medium, high, xhigh, max"
+        );
+        assert_eq!(
+            judge_answer(Takes::Bool, "yes").unwrap_err(),
+            "\"yes\" is not true or false"
+        );
+    }
+
+    #[test]
+    fn a_bad_effort_is_asked_again_until_a_rung_is_given() {
+        // The planner's effort is the second question.
+        let input = format!("\nHigh\nbogus\nmax\n{}yes\n", blanks(11));
+
+        let (outcome, output) = converse_over(&input, None);
+
+        assert_eq!(pairs_of(&outcome), [("roles.planner.effort", "max")]);
+        assert_eq!(
+            output
+                .matches("roles.planner.effort is high from default: ")
+                .count(),
+            3
+        );
+        assert!(
+            output.contains("\"High\" is not a rung; answer one of"),
+            "{output}"
+        );
+        assert!(
+            output.contains("\"bogus\" is not a rung; answer one of"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn a_bad_escalate_answer_is_asked_again_and_false_is_taken() {
+        let input = format!("{}yes\nfalse\nyes\n", blanks(12));
+
+        let (outcome, output) = converse_over(&input, None);
+
+        assert_eq!(pairs_of(&outcome), [("escalate_on_failure", "false")]);
+        assert!(output.contains("\"yes\" is not true or false"), "{output}");
+    }
+
+    #[test]
+    fn a_blank_after_a_bad_answer_keeps_the_value_and_gives_no_pair() {
+        let input = format!("\nbogus\n\n{}", blanks(11));
+
+        let (outcome, _) = converse_over(&input, None);
+
+        assert_eq!(outcome, Outcome::Unchanged);
+    }
+
+    #[test]
+    fn input_ending_after_a_bad_answer_gives_no_request() {
+        let (outcome, _) = converse_over("\nbogus\n", None);
+
+        assert_eq!(outcome, Outcome::Declined);
+    }
+
+    #[test]
+    fn an_unknown_model_is_sent_on_not_asked_again() {
+        let input = format!("claude-unknown-x\n{}yes\n", blanks(12));
+
+        let (outcome, output) = converse_over(&input, None);
+
+        assert_eq!(
+            pairs_of(&outcome),
+            [("roles.planner.model", "claude-unknown-x")]
+        );
+        assert_eq!(output.matches("roles.planner.model is").count(), 1);
     }
 }
