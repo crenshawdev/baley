@@ -11,6 +11,7 @@
 mod file;
 mod outcome;
 mod set;
+mod show;
 
 #[cfg(test)]
 mod tests;
@@ -18,6 +19,7 @@ mod tests;
 pub use file::{changed_pairs, render_file};
 pub use outcome::{Place, SetOutcome, VersionSource, choose_outcome, render_set};
 pub use set::{SetRefusal, TypedPair, collapse_repeats, judge_models, judge_pairs, needs_catalog};
+pub use show::{ShowLayers, ShowRefusal, judge_show};
 
 /// The code of a name the schema does not hold.
 pub const UNKNOWN_SETTING: &str = "unknown-setting";

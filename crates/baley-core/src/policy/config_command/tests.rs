@@ -1021,3 +1021,196 @@ fn a_model_name_with_a_line_break_is_not_printed_across_lines() {
     assert_eq!(lines[0], "set roles.planner.model = \"a\\nb \\\"c\\\"\"");
     assert!(lines.iter().all(|line| !line.contains('\n')), "{lines:?}");
 }
+
+fn read(path: &str, text: &str) -> Result<Option<SettingsFile>, Unavailable> {
+    Ok(Some(settings_file(path, text)))
+}
+
+fn unreadable(path: &str, cause: &str) -> Result<Option<SettingsFile>, Unavailable> {
+    Err(Unavailable {
+        path: path.into(),
+        fault: Fault::Unreadable {
+            cause: cause.into(),
+        },
+    })
+}
+
+const NONE: Result<Option<SettingsFile>, Unavailable> = Ok(None);
+
+fn show(
+    names: &[&str],
+    in_project: bool,
+    global: Result<Option<SettingsFile>, Unavailable>,
+    working: Result<Option<SettingsFile>, Unavailable>,
+    head: Result<Option<SettingsFile>, Unavailable>,
+) -> Result<ShowLayers, ShowRefusal> {
+    judge_show(&schema(), names, in_project, global, working, head)
+}
+
+#[test]
+fn a_project_scoped_name_asked_outside_a_project_is_not_shown() {
+    let refusal =
+        show(&["example.project_only"], false, NONE, NONE, NONE).expect_err("outside a project");
+    assert_eq!(
+        refusal,
+        ShowRefusal::NotAProject {
+            name: "example.project_only".into()
+        }
+    );
+    assert_eq!(refusal.code(), "not-a-project");
+    let text = refusal.to_string();
+    assert!(text.starts_with("not-a-project: "), "{text}");
+    assert!(text.contains("example.project_only"), "{text}");
+}
+
+#[test]
+fn a_project_scoped_name_inside_a_project_or_no_names_outside_one_are_not_refused() {
+    assert!(show(&["example.project_only"], true, NONE, NONE, NONE).is_ok());
+    assert!(show(&[], false, NONE, NONE, NONE).is_ok());
+    // A both-scoped name needs no project.
+    assert!(show(&["example.flag"], false, NONE, NONE, NONE).is_ok());
+}
+
+#[test]
+fn a_name_not_in_the_schema_is_not_shown_and_is_named_before_a_project_scoped_one() {
+    let refusal = show(
+        &["example.project_only", "nonsense"],
+        false,
+        NONE,
+        NONE,
+        NONE,
+    )
+    .expect_err("an unknown name");
+    assert_eq!(
+        refusal,
+        ShowRefusal::UnknownSetting {
+            name: "nonsense".into()
+        }
+    );
+    assert_eq!(refusal.code(), "unknown-setting");
+    let text = refusal.to_string();
+    assert!(text.starts_with("unknown-setting: "), "{text}");
+    assert!(text.contains("nonsense"), "{text}");
+}
+
+#[test]
+fn an_invalid_global_working_tree_or_head_file_is_not_shown_and_is_named_with_its_line() {
+    let bad = "example.flag = 3\n";
+    let cases = [
+        (
+            show(&[], true, read("/c/config.toml", bad), NONE, NONE),
+            "/c/config.toml:1:16",
+        ),
+        (
+            show(&[], true, NONE, read("/r/baley.toml", bad), NONE),
+            "/r/baley.toml:1:16",
+        ),
+        (
+            show(&[], true, NONE, NONE, read("/r/baley.toml", bad)),
+            "/r/baley.toml:1:16",
+        ),
+    ];
+    for (result, place) in cases {
+        let refusal = result.expect_err(place);
+        assert_eq!(refusal.code(), "config-unavailable");
+        let text = refusal.to_string();
+        assert!(text.starts_with("config-unavailable: "), "{text}");
+        assert!(text.contains(place), "{text}");
+        assert!(
+            text.contains("example.flag is an integer, not a boolean"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn an_unreadable_head_copy_is_not_shown_and_is_named_with_its_cause() {
+    let refusal = show(
+        &[],
+        true,
+        NONE,
+        NONE,
+        unreadable("/r/baley.toml", "permission denied"),
+    )
+    .expect_err("an unreadable HEAD copy");
+    assert_eq!(refusal.code(), "config-unavailable");
+    let text = refusal.to_string();
+    assert!(
+        text.contains("cannot read /r/baley.toml: permission denied"),
+        "{text}"
+    );
+}
+
+#[test]
+fn an_unreadable_head_is_not_passed_over_for_an_invalid_global_file() {
+    let refusal = show(
+        &[],
+        true,
+        read("/c/config.toml", "example.flag = 3\n"),
+        NONE,
+        unreadable("/r/baley.toml", "permission denied"),
+    )
+    .expect_err("two faults");
+    assert!(refusal.to_string().contains("cannot read /r/baley.toml"));
+}
+
+#[test]
+fn an_unreadable_working_tree_is_not_passed_over_for_an_unreadable_head() {
+    let refusal = show(
+        &[],
+        true,
+        NONE,
+        unreadable("/r/baley.toml", "working tree"),
+        unreadable("/r/baley.toml", "head"),
+    )
+    .expect_err("two faults");
+    assert!(refusal.to_string().contains("working tree"));
+}
+
+#[test]
+fn an_invalid_global_file_is_not_passed_over_for_an_invalid_working_tree_file() {
+    let refusal = show(
+        &[],
+        true,
+        read("/c/config.toml", "example.flag = 3\n"),
+        read("/r/baley.toml", "example.flag = 4\n"),
+        NONE,
+    )
+    .expect_err("two faults");
+    assert!(refusal.to_string().contains("/c/config.toml:1:16"));
+}
+
+#[test]
+fn a_valid_set_of_files_is_not_returned_unparsed_or_under_the_wrong_layer() {
+    let layers = show(
+        &[],
+        true,
+        read("/c/config.toml", "example.flag = true\n"),
+        read("/r/baley.toml", "roles.planner.effort = \"low\"\n"),
+        read("/r/baley.toml", "roles.planner.effort = \"max\"\n"),
+    )
+    .expect("valid files");
+    let global = layers.global.expect("global");
+    assert_eq!(global.layer, FileLayer::Global);
+    assert_eq!(global.values[0].value, Value::Bool(true));
+    let working = layers.working.expect("working tree");
+    assert_eq!(working.layer, FileLayer::Project);
+    assert_eq!(working.values[0].value, Value::Rung(Rung::Low));
+    let head = layers.head.expect("head");
+    assert_eq!(head.layer, FileLayer::Project);
+    assert_eq!(head.values[0].value, Value::Rung(Rung::Max));
+}
+
+#[test]
+fn a_global_only_setting_in_the_project_file_is_a_diagnostic_not_a_refusal_when_shown() {
+    // A wrongly scoped name is ignored with a diagnostic, never refused.
+    let layers = show(
+        &[],
+        true,
+        NONE,
+        read("/r/baley.toml", "example.global_only = true\n"),
+        NONE,
+    )
+    .expect("valid file");
+    assert_eq!(layers.working.expect("working tree").diagnostics.len(), 1);
+}
