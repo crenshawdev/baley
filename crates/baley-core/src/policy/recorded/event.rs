@@ -108,6 +108,7 @@ fn value_json(value: Option<&Value>) -> Json {
         Some(Value::Bool(value)) => (*value).into(),
         Some(Value::Rung(rung)) => rung.name().into(),
         Some(Value::ModelName(name)) => name.clone().into(),
+        Some(Value::RemoteName(name)) => name.clone().into(),
     }
 }
 

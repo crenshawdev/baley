@@ -562,3 +562,24 @@ fn a_purge_from_another_projects_checkout_recording_that_projects_policy_is_caug
 fn a_purge_outside_any_checkout_running_the_policy_step_is_caught() {
     assert_eq!(purge_policy(None, PROJECT_ID), PurgePolicy::VersionZero);
 }
+
+fn remote_values(text: Option<&str>) -> Value {
+    let schema = Schema::new(vec![entry(
+        "git.remote",
+        Kind::RemoteName,
+        Builtin::Absent,
+        Scope::Both,
+    )]);
+    let project = text.map(|text| file(PROJECT, text, "p1"));
+    let policy = effective_policy(&schema, None, None, project.as_ref()).expect("valid file");
+    payload(&policy, 0)["values"].clone()
+}
+
+#[test]
+fn a_remote_name_recorded_as_anything_but_a_string_or_null_when_absent_is_caught() {
+    assert_eq!(
+        remote_values(Some("git.remote = \"origin\"\n")),
+        json!({"git.remote": "origin"})
+    );
+    assert_eq!(remote_values(None), json!({"git.remote": null}));
+}

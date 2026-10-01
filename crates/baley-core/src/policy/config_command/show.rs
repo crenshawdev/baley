@@ -153,6 +153,7 @@ fn kind_text(kind: Kind) -> &'static str {
         Kind::Bool => "boolean",
         Kind::Rung => "rung",
         Kind::ModelName => "model name",
+        Kind::RemoteName => "remote name",
     }
 }
 

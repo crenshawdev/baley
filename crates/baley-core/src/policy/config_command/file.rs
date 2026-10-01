@@ -75,12 +75,13 @@ fn child<'t>(table: &'t mut Table, key: &str) -> &'t mut Table {
 }
 
 /// The TOML type each kind reads back: a boolean, or a string for a rung
-/// name and a model name.
+/// name, a model name and a remote name.
 fn toml_value(value: &Value) -> TomlValue {
     match value {
         Value::Bool(value) => TomlValue::Boolean(*value),
         Value::Rung(rung) => TomlValue::String(rung.name().to_owned()),
         Value::ModelName(name) => TomlValue::String(name.clone()),
+        Value::RemoteName(name) => TomlValue::String(name.clone()),
     }
 }
 
@@ -113,22 +114,25 @@ pub(super) fn value_text(value: &Value) -> String {
     match value {
         Value::Bool(value) => value.to_string(),
         Value::Rung(rung) => format!("\"{}\"", rung.name()),
-        Value::ModelName(name) => {
-            let mut text = String::with_capacity(name.len() + 2);
-            text.push('"');
-            for c in name.chars() {
-                match c {
-                    '"' => text.push_str("\\\""),
-                    '\\' => text.push_str("\\\\"),
-                    '\n' => text.push_str("\\n"),
-                    '\r' => text.push_str("\\r"),
-                    '\t' => text.push_str("\\t"),
-                    c if c.is_control() => text.push_str(&format!("\\u{:04X}", u32::from(c))),
-                    c => text.push(c),
-                }
-            }
-            text.push('"');
-            text
+        Value::ModelName(name) | Value::RemoteName(name) => quoted(name),
+    }
+}
+
+/// A string as a TOML basic string.
+fn quoted(name: &str) -> String {
+    let mut text = String::with_capacity(name.len() + 2);
+    text.push('"');
+    for c in name.chars() {
+        match c {
+            '"' => text.push_str("\\\""),
+            '\\' => text.push_str("\\\\"),
+            '\n' => text.push_str("\\n"),
+            '\r' => text.push_str("\\r"),
+            '\t' => text.push_str("\\t"),
+            c if c.is_control() => text.push_str(&format!("\\u{:04X}", u32::from(c))),
+            c => text.push(c),
         }
     }
+    text.push('"');
+    text
 }

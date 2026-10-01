@@ -1130,3 +1130,46 @@ fn rendering_over_a_file_that_is_not_toml_refuses_naming_it() {
         "{refusal}"
     );
 }
+
+/// A schema of one remote-name setting, so the kind is tested apart from the
+/// standard schema.
+fn remote_schema() -> Schema {
+    Schema::new(vec![Entry {
+        name: "git.remote".into(),
+        kind: Kind::RemoteName,
+        default: Builtin::Absent,
+        scope: Scope::Both,
+        owner: "test",
+    }])
+}
+
+fn remote_policy(text: &str) -> Result<EffectivePolicy, Unavailable> {
+    effective_policy(&remote_schema(), None, Some(&file(GLOBAL, text)), None)
+}
+
+#[test]
+fn a_remote_name_read_as_a_model_name_is_caught() {
+    let policy = remote_policy("git.remote = \"origin\"\n").unwrap();
+    assert_eq!(
+        value_of(&policy, "git.remote").value,
+        Some(Value::RemoteName("origin".into()))
+    );
+}
+
+#[test]
+fn an_empty_remote_name_that_is_accepted_or_not_named_is_caught() {
+    let refusal = remote_policy("git.remote = \"\"\n").unwrap_err();
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /c/config.toml:1:14: git.remote is empty; write a remote name or remove the line"
+    );
+}
+
+#[test]
+fn a_remote_name_given_as_an_integer_that_is_not_a_type_fault_is_caught() {
+    let refusal = remote_policy("git.remote = 1\n").unwrap_err();
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /c/config.toml:1:14: git.remote is an integer, not a remote name"
+    );
+}

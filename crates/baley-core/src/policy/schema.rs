@@ -140,6 +140,9 @@ pub enum Kind {
     Rung,
     /// A non-empty string; whether a host accepts it is the catalog's question.
     ModelName,
+    /// A non-empty string naming a git remote. Whether the repository has that
+    /// remote is the forge's exact-name check, not the schema's.
+    RemoteName,
 }
 
 /// A setting's built-in value.
