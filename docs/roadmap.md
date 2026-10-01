@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status includes Build 2 T1 to T8 merged and T9 in progress, as of origin/main `5c3c13e4`, on 2026-10-01, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status includes Build 2 T1 to T9 merged, as of origin/main `5c3c13e4`, on 2026-10-01, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
 
 ## The path to the first release
 
@@ -135,9 +135,7 @@ flowchart LR
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
-    classDef progress fill:#9a6700,stroke:#7d4e00,color:#ffffff
-    class T1,T2,T3,T4,T5,T6,T7,T8 done
-    class T9 progress
+    class T1,T2,T3,T4,T5,T6,T7,T8,T9 done
     class T10,T11,T12,T13 planned
 ```
 
@@ -153,7 +151,7 @@ Figure 3. Build 2's tasks. Arrows point from a task to what waits on it. One pul
 | T6 | `baley init` | [#164](https://github.com/crenshawdev/baley/pull/164) | Merged |
 | T7 | The model catalog | [#165](https://github.com/crenshawdev/baley/pull/165) | Merged |
 | T8 | Detection | [#166](https://github.com/crenshawdev/baley/pull/166) | Merged |
-| T9 | The recorded policy | | In progress |
+| T9 | The recorded policy | [#167](https://github.com/crenshawdev/baley/pull/167) | Merged |
 | T10 | `baley config show` and `baley config set` | | Planned |
 | T11 | `baley config interview` | | Planned |
 | T12 | The anchor remote from the project's settings | | Planned |
