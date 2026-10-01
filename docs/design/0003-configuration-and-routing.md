@@ -466,28 +466,53 @@ sequenceDiagram
   participant O as Owner
   participant C as Command line
   participant P as Policy
+  participant F as Settings files
+  participant G as Git
   participant L as Ledger
-  O->>C: baley config set --project git.on_protected=refuse
-  C->>P: validate (schema, scope, grammar, catalog)
-  alt invalid
-    P-->>C: unknown-setting / invalid-value / wrong-layer / unknown-model
+  O->>C: baley config set --project roles.planner.effort=high
+  C->>P: judge each pair against the schema, the layer and the value's type
+  alt a pair is refused
+    P-->>C: not-a-project, unknown-setting, wrong-layer or invalid-value
     C-->>O: refusal naming the setting and the fault
-  else valid
-    P->>P: re-read the file, compare digest
-    alt file changed since read
-      P-->>C: config-conflict
-      C-->>O: refusal, retry
-    else unchanged
-      P->>P: write the file
-      P->>L: policy.effective (merged values, sources, diagnostics)
-      L-->>P: policy version
-      P-->>C: receipt and facts
-      C-->>O: what changed, which file, the policy version
+  end
+  C->>F: read the file to write and the other file
+  C->>G: in a project, read HEAD's copy of baley.toml
+  alt a file is unreadable or invalid
+    C-->>O: config-unavailable naming the file, the fault and its line and column
+  end
+  alt the file to write is a symbolic link
+    C-->>O: config-conflict
+  end
+  opt a pair sets a model
+    C->>L: seed the model catalog and read each host's accepted names
+    L-->>C: accepted names
+    C->>P: judge each model name
+    alt a name is not accepted
+      P-->>C: unknown-model naming the names accepted
+      C-->>O: refusal
     end
+  end
+  C->>P: compare each value with the file to write
+  alt every value is already in the file
+    C-->>O: nothing changed, with the policy version in force
+  else a value changes
+    alt project file
+      C->>F: write baley.toml whole from its own bytes
+    else global file
+      C->>F: create the config folder when missing, then write config.toml whole
+    end
+    F-->>C: written, or config-conflict when the file changed since it was read
+    opt the project is in this machine's ledger
+      C->>F: read config.toml again
+      C->>G: read HEAD's copy of baley.toml again
+      C->>L: policy.effective, when the merged result changed
+      L-->>C: policy version
+    end
+    C-->>O: each change and the file written, for a project file that it applies at the next commit, and the policy version
   end
 ```
 
-*Figure 4. Writing a setting.*
+*Figure 4. Writing a setting with `baley config set`. Every pair is judged before anything is read or written, in the order `not-a-project`, `unknown-setting`, `wrong-layer`, `invalid-value`. Then the file to write, the other file and, in a project, HEAD's copy are read, and any that cannot be read or is invalid refuses with `config-unavailable`. A file to write that is a symbolic link is refused as `config-conflict`. A model name is checked against each host's accepted names after the catalog is seeded, and a name no catalog accepts refuses with `unknown-model`. A set whose every value is already in the file writes nothing and runs no policy step. Otherwise a project-file set rewrites the working-tree `baley.toml` from its own bytes, and a global set rewrites `config.toml` and creates the config folder when it is missing. Either ends in `config-conflict` when the file changed after it was read. In a project in this machine's ledger the policy step then runs. It reads both files again, the project file from HEAD's copy, so a project-file change is recorded once it is committed and a later command that writes the chain runs, and a global change is recorded at once. Elsewhere the version is 0.*
 
 ```mermaid
 sequenceDiagram
@@ -596,7 +621,7 @@ sequenceDiagram
   end
 ```
 
-*Figure 7. Finding the project and its policy on a request. The steps built so far serve the command line: the walk up to the nearest `baley.toml`, stopping at the git root (`discover`), the read of the project file at the checkout's HEAD (`committed::read`), and the merge with the global file and host sections. `baley init` and `purge` call the walk, and read HEAD's copy through the policy step. Recording `policy.effective` when the merged result changes is built for the command line: `baley init` records it after `project.initialized`, and `purge` from a checkout of the project it names. The command line connects no host, so no host section applies to it. An invalid or unreadable settings file, or a checkout or settings path that is not UTF-8, refuses with `config-unavailable` before the step records anything, and `baley init` refuses before it writes a file or opens the ledger. Recording `checkout.seen` arrives in Build 2 T13, and the host's request through the host interface in Build 3.*
+*Figure 7. Finding the project and its policy on a request. The steps built so far serve the command line: the walk up to the nearest `baley.toml`, stopping at the git root (`discover`), the read of the project file at the checkout's HEAD (`committed::read`), and the merge with the global file and host sections. `baley init`, `purge`, `baley config set` and `baley config show` call the walk. The first three read HEAD's copy through the policy step, and `config show` reads it through the step's gatherer and records nothing. Recording `policy.effective` when the merged result changes is built for the command line: `baley init` records it after `project.initialized`, `purge` from a checkout of the project it names, and `config set` after its write in a project in this machine's ledger. The command line connects no host, so no host section applies to it. An invalid or unreadable settings file, or a checkout or settings path that is not UTF-8, refuses with `config-unavailable` before the step records anything, and `baley init` refuses before it writes a file or opens the ledger. Recording `checkout.seen` arrives in Build 2 T13, and the host's request through the host interface in Build 3.*
 
 ## 9. Settings
 
