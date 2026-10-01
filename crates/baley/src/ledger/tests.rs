@@ -79,9 +79,22 @@ fn purge_rejects_an_empty_reason() {
     );
 }
 #[test]
-fn acknowledge_restore_is_on_the_surface() {
+fn acknowledge_restore_parses_with_and_without_a_project() {
+    assert!(matches!(
+        parse(&["acknowledge-restore"]).unwrap(),
+        LedgerCommand::AcknowledgeRestore { project: None }
+    ));
     assert!(
-        matches!(parse(&["acknowledge-restore","P","--remote","o"]).unwrap(),LedgerCommand::AcknowledgeRestore { project,remote } if project == "P" && remote == "o")
+        matches!(parse(&["acknowledge-restore", "P"]).unwrap(), LedgerCommand::AcknowledgeRestore { project: Some(p) } if p == "P")
+    );
+}
+#[test]
+fn acknowledge_restore_no_longer_takes_a_remote_flag() {
+    assert_eq!(
+        parse(&["acknowledge-restore", "P", "--remote", "o"])
+            .unwrap_err()
+            .exit_code(),
+        2
     );
 }
 
@@ -500,7 +513,6 @@ fn nothing_to_acknowledge_is_a_refusal() {
     let r = display::acknowledgement_error(
         &AcknowledgeRestoreError::NothingToAcknowledge(AnchorCheck::RemoteAbsent),
         "P",
-        "o",
     );
     assert_eq!(r.code, 2);
     assert_eq!(text(&r), "nothing to acknowledge: no anchor yet");
@@ -1276,6 +1288,74 @@ fn anchor_refuses_a_named_project_that_is_not_the_checkouts_and_requests_nothing
         anchor_next(Some(&origin_settings()), None, Some(PROJECT_ID)),
         Ok(vec![command_plan::Op::CheckRemote("origin".into())])
     );
+}
+fn ack_next(
+    settings: Option<&command_plan::Settings>,
+    check: Option<&Result<(), String>>,
+) -> Result<Vec<command_plan::Op>, String> {
+    command_plan::next(&command_plan::Facts {
+        command: command_plan::Verb::AcknowledgeRestore { named: None },
+        settings,
+        remote_check: check,
+    })
+}
+#[test]
+fn acknowledge_restore_with_no_git_remote_refuses_naming_it_with_no_operation_and_no_check() {
+    let refusal = ack_next(Some(&unset_settings()), None).unwrap_err();
+    assert!(refusal.contains("git.remote"), "{refusal}");
+    assert!(refusal.contains("baley.toml"), "{refusal}");
+}
+#[test]
+fn acknowledge_restore_checks_the_remote_then_requests_the_step_and_the_acknowledgement() {
+    assert_eq!(
+        ack_next(Some(&origin_settings()), None),
+        Ok(vec![command_plan::Op::CheckRemote("origin".into())])
+    );
+    assert_eq!(
+        ack_next(Some(&origin_settings()), Some(&Ok(()))),
+        Ok(vec![
+            command_plan::Op::Step,
+            command_plan::Op::Acknowledge {
+                project: PROJECT_ID.into(),
+                remote: "origin".into()
+            }
+        ])
+    );
+}
+#[test]
+fn acknowledge_restore_refuses_an_invalid_settings_file_with_config_unavailable() {
+    let settings = managed(
+        valid_id(),
+        global_file("escalate_on_failure = [\n"),
+        head_copy(""),
+    );
+    let refusal = ack_next(Some(&settings), None).unwrap_err();
+    assert!(refusal.starts_with("config-unavailable: "), "{refusal}");
+    assert!(refusal.contains(GLOBAL_FILE), "{refusal}");
+}
+#[test]
+fn the_acknowledgement_carries_the_step_version_and_remote() {
+    let request = commands::acknowledge_request(
+        &ProjectId("P".into()),
+        "origin",
+        7,
+        RequestId("00000000-0000-4000-8000-000000000001".into()),
+    );
+    assert_eq!(request.policy_version, 7);
+    assert_eq!(request.remote, "origin");
+    assert_eq!(request.actor, Actor::Owner);
+}
+#[test]
+fn a_blocked_acknowledgement_tells_the_owner_to_run_anchor_with_no_remote_flag() {
+    let blocked = AcknowledgeRestoreError::Store(StoreError::Blocked(Block {
+        claim: claim().id,
+        state: ClaimState::Interrupted,
+    }));
+    let r = display::acknowledgement_error(&blocked, "P");
+    assert_eq!(r.code, 2);
+    assert!(text(&r).contains("an anchor claim held is interrupted"));
+    assert!(text(&r).contains("run baley anchor first from this checkout"));
+    assert!(!text(&r).contains("--remote"));
 }
 #[test]
 fn the_anchor_request_carries_the_step_version_and_remote_in_its_digest() {

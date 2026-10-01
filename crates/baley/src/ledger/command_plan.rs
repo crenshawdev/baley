@@ -14,16 +14,22 @@ pub(super) enum Verb<'a> {
         /// The project the owner named.
         named: Option<&'a str>,
     },
+    /// `baley acknowledge-restore [PROJECT]`.
+    AcknowledgeRestore {
+        /// The project the owner named.
+        named: Option<&'a str>,
+    },
 }
 impl<'a> Verb<'a> {
     fn name(self) -> &'static str {
         match self {
             Self::Anchor { .. } => "anchor",
+            Self::AcknowledgeRestore { .. } => "acknowledge-restore",
         }
     }
     fn named(self) -> Option<&'a str> {
         match self {
-            Self::Anchor { named } => named,
+            Self::Anchor { named } | Self::AcknowledgeRestore { named } => named,
         }
     }
 }
@@ -100,6 +106,14 @@ pub(super) enum Op {
         /// The remote its `git.remote` names.
         remote: Option<String>,
     },
+    /// Accept the restored chain of the project behind the anchor on the
+    /// remote.
+    Acknowledge {
+        /// The project whose restore is accepted.
+        project: String,
+        /// The remote holding the anchor.
+        remote: String,
+    },
 }
 
 fn target_text(command: &str, refusal: &TargetRefusal) -> String {
@@ -140,5 +154,14 @@ pub(super) fn next(facts: &Facts) -> Result<Vec<Op>, String> {
     }
     // Owner: T13 (phase 9). Its admission of the checkout is requested here,
     // between the settings read and the policy step.
-    Ok(vec![Op::Step, Op::Anchor { project, remote }])
+    let last = match (command, remote) {
+        (Verb::Anchor { .. }, remote) => Op::Anchor { project, remote },
+        (Verb::AcknowledgeRestore { .. }, Some(remote)) => Op::Acknowledge { project, remote },
+        // The core's acknowledgement holds a remote name, not an absence, so
+        // this refuses here rather than record a refusal of its own.
+        (Verb::AcknowledgeRestore { .. }, None) => {
+            return Err("git.remote is not set; acknowledge-restore needs the remote that holds the anchor, so set it in baley.toml and commit it".into());
+        }
+    };
+    Ok(vec![Op::Step, last])
 }

@@ -73,8 +73,8 @@ pub(super) fn dispatch(
             project.as_deref(),
             started_at,
         ),
-        LedgerCommand::AcknowledgeRestore { project, remote } => {
-            acknowledge(&store, &mut forge, ProjectId(project), remote)
+        LedgerCommand::AcknowledgeRestore { project } => {
+            acknowledge(&store, &mut forge, config, &cwd, project.as_deref())
         }
     };
     let mut rendered = result.unwrap_or_else(|e| e);
@@ -457,23 +457,41 @@ fn anchor(
         &request.request_id.0,
     ))
 }
+/// The acknowledgement, carrying the version the policy step returned.
+pub(super) fn acknowledge_request(
+    project: &ProjectId,
+    remote: &str,
+    policy_version: u64,
+    request_id: RequestId,
+) -> AcknowledgeRestore {
+    AcknowledgeRestore {
+        project: project.clone(),
+        request_id,
+        actor: Actor::Owner,
+        policy_version,
+        remote: remote.into(),
+    }
+}
+
 fn acknowledge(
     store: &SqliteStore,
     forge: &mut Forge,
-    project: ProjectId,
-    remote: String,
+    config: &Path,
+    cwd: &Path,
+    named: Option<&str>,
 ) -> Result<Render, Render> {
-    require_remote(forge, &remote)?;
-    let request = AcknowledgeRestore {
-        project: project.clone(),
-        request_id: new_request_id(),
-        actor: Actor::Owner,
-        policy_version: 0,
-        remote: remote.clone(),
+    let (ops, gathered) = settle(Verb::AcknowledgeRestore { named }, forge, config, cwd)?;
+    let [Op::Step, Op::Acknowledge { project, remote }] = ops.as_slice() else {
+        return Err(unexpected_plan());
     };
+    let project = ProjectId(project.clone());
+    // Owner: T13 (phase 9) adds the checkout's admission here, between the
+    // settings read above and the policy step below.
+    let policy_version = run_step(store, gathered.as_ref(), &project)?;
+    let request = acknowledge_request(&project, remote, policy_version, new_request_id());
     display::request_line(&mut std::io::stdout(), &request.request_id.0);
     let result = acknowledge_restore(&request, store, forge, &mut SystemClock::now)
-        .map_err(|e| display::acknowledgement_error(&e, &project.0, &remote))?;
+        .map_err(|e| display::acknowledgement_error(&e, &project.0))?;
     let outcome = match result {
         Recorded::New { outcome, .. } | Recorded::Replayed { outcome } => outcome,
     };

@@ -621,14 +621,10 @@ pub(super) fn anchor(
     result
 }
 /// Names acknowledgement refusals and their recovery.
-pub(super) fn acknowledgement_error(
-    error: &AcknowledgeRestoreError,
-    project: &str,
-    remote: &str,
-) -> Render {
+pub(super) fn acknowledgement_error(error: &AcknowledgeRestoreError, project: &str) -> Render {
     match error {
         AcknowledgeRestoreError::NothingToAcknowledge(check) => Render::refusal(format!("nothing to acknowledge: {}",check_text(check))),
-        AcknowledgeRestoreError::Store(StoreError::Blocked(b)) => Render::refusal(format!("an anchor claim {} is {}; run baley anchor {project} --remote {remote} first to reconcile it", b.claim.request_id.0,claim_state_text(b.state))),
+        AcknowledgeRestoreError::Store(StoreError::Blocked(b)) => Render::refusal(format!("an anchor claim {} is {}; run baley anchor first from this checkout to reconcile it", b.claim.request_id.0,claim_state_text(b.state))),
         AcknowledgeRestoreError::Store(StoreError::Stale(StaleInput::Head { .. })) => Render { lines: vec!["the chain moved after it was verified; nothing was recorded, run the command again".into()],code:3,error:true },
         AcknowledgeRestoreError::Store(e) => store_error(e,Some(project)),
     }
