@@ -59,6 +59,8 @@ pub mod keys;
 pub mod ledger;
 /// `baley models`: the per-user model catalog and the seeding step before each use.
 pub mod models;
+/// The policy step: records the effective policy a command ran under when it changed.
+pub mod policy_step;
 /// Replaces a settings file whole, refusing when it changed since it was read.
 pub mod replace;
 /// The two settings files as bytes: the global file's path and one reader.

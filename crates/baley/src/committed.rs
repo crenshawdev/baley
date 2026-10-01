@@ -57,7 +57,7 @@ impl fmt::Display for Pending {
 /// Reads HEAD's copy of `working`, the project file as `settings::read`
 /// returned it, from the repository at `root`. An unborn HEAD or a file absent
 /// at HEAD is an empty layer; any other failure is `config-unavailable`
-/// naming the working-tree file. No production caller until Build 2 T9.
+/// naming the working-tree file. The policy step's gatherer is its caller.
 pub fn read(
     root: &Path,
     working: &SettingsFile,
