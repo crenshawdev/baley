@@ -1,9 +1,14 @@
 version: 2
+# Version updates are held at zero open pull requests until the first release
+# candidate (rc1). Each one moved main under the open build pull requests, and
+# the strict required checks then made every one of them update and re-run.
+# Security updates are not subject to this limit and still open.
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     groups:
       github-actions:
         patterns:
@@ -12,6 +17,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     # Dependabot reads 0.10 -> 0.11 as a minor update, but for a 0.x crate it breaks.
     # Only patches are grouped; minor and major bumps arrive one per pull request.
     groups:
