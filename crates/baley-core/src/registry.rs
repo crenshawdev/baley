@@ -266,6 +266,18 @@ pub fn register_anchor_events(registry: &mut Registry) -> Result<(), RegistryErr
     registry.register(ANCHOR_FAILED, ANCHOR_FAILED_VERSION, [])
 }
 
+/// The event `baley init` records once per project, on the `project`
+/// stream, with the payload `{"name"}`.
+pub const PROJECT_INITIALIZED: &str = "project.initialized";
+/// The current `project.initialized` payload version.
+pub const PROJECT_INITIALIZED_VERSION: u32 = 1;
+
+/// Registers `project.initialized` at version 1, the event `baley init`
+/// records on the `project` stream with the payload `{"name"}`.
+pub fn register_project_events(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.register(PROJECT_INITIALIZED, PROJECT_INITIALIZED_VERSION, [])
+}
+
 /// The store fences a project holding an event this binary cannot read:
 /// an unknown type, version zero, or a version newer than the registered
 /// one. Older versions read through their upcasters.

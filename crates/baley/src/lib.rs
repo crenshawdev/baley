@@ -49,6 +49,8 @@ pub mod discovery;
 pub mod exec;
 /// Platform configuration and ledger folders.
 pub mod folders;
+/// `baley init`: ties a repository to a ledger project.
+pub mod init;
 /// The owner's provider keys, read from `keys.env`.
 pub mod keys;
 /// Owner commands over the evidence ledger.

@@ -28,6 +28,8 @@ struct Cli {
 enum Command {
     /// Run one command with a provider key and redact its output.
     Exec(baley::exec::ExecArgs),
+    /// Tie this repository to a ledger project: write baley.toml and record project.initialized.
+    Init(baley::init::InitArgs),
     /// Owner operations on the evidence ledger.
     #[command(flatten)]
     Ledger(baley::ledger::LedgerCommand),
@@ -104,10 +106,13 @@ fn run_command(command: Command) -> std::process::ExitCode {
     let command = match command {
         Command::Ledger(command) => return baley::ledger::run(command),
         Command::Exec(args) => return baley::exec::run(args),
+        Command::Init(args) => return baley::init::run(args),
         other => other,
     };
     let arguments: Vec<&str> = match &command {
-        Command::Ledger(_) | Command::Exec(_) => unreachable!("dispatched above"),
+        Command::Ledger(_) | Command::Exec(_) | Command::Init(_) => {
+            unreachable!("dispatched above")
+        }
         Command::Serve => return run_serve(None),
         Command::Guard => return guard::run(),
         Command::SkillDescription { name } => {

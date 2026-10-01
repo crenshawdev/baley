@@ -3,7 +3,7 @@ use baley_store::UtcInstant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The wall clock used by CLI gathering.
-pub(super) struct SystemClock;
+pub(crate) struct SystemClock;
 impl SystemClock {
     fn reading() -> (i64, u32) {
         match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -23,7 +23,7 @@ impl SystemClock {
         }
     }
     /// Formats the current wall time for the store.
-    pub(super) fn now() -> String {
+    pub(crate) fn now() -> String {
         let (seconds, nanos) = Self::reading();
         UtcInstant::from_unix(seconds, nanos)
             .expect("clock within years 0000 to 9999")

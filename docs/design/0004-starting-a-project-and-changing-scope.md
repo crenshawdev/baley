@@ -97,10 +97,12 @@ Every operation here is a typed operation on the host interface, reachable from 
 
   | Code | When | Requirement |
   |---|---|---|
-  | `not-a-repository` | The directory is not inside a git repository, or is below the root (names the root) | EVD-R17 |
+  | `not-a-repository` | The directory is not inside a git repository | EVD-R17 |
+  | `not-repository-root` | The directory is inside a git repository but is not its root (names the root) | EVD-R17 |
+  | `project-name-required` | The repository root has no folder name Baley can use as the project's name (fix: `baley init --name <name>`) | EVD-R17 |
   | `project-already-started` | The project already has a roadmap | PRJ-R6 |
   | `brief-unreadable` | The brief cannot be read (names the file) | PRJ-R5 |
-  | `config-unavailable` | The settings cannot be read after the interview | CFG-R9 |
+  | `config-unavailable` | `baley.toml` does not parse, lacks the project's id or name, or holds an id that is not a lower-case UUID version 4 (names the file), inherited from `baley init`, or the settings cannot be read after the interview | EVD-R17, CFG-R9 |
 
 ### scope submit
 
@@ -305,12 +307,14 @@ sequenceDiagram
   O->>H: start the project (optionally naming a brief)
   H->>B: project start
   B->>B: inside a repository? project file present? roadmap present?
-  alt not a repository or below its root
+  alt not inside a repository
     B-->>H: not-a-repository
+  else below the repository root
+    B-->>H: not-repository-root naming the root
   else roadmap exists
     B-->>H: project-already-started
   else
-    B->>B: baley init when no project file
+    B->>B: baley init unless already done
     alt brief named and unreadable
       B-->>H: brief-unreadable
     else
@@ -387,9 +391,10 @@ The binary crate holds the inherited engine. It parses and edits `ROADMAP.md` an
 
 | Requirement | Status | Where |
 |---|---|---|
-| PRJ-R1, PRJ-R2, PRJ-R5, PRJ-R6, PRJ-R7 | Not built | No start operation exists; `baley init` is not built (#23) |
+| PRJ-R1, PRJ-R2, PRJ-R5, PRJ-R7 | Not built | No start operation exists |
 | PRJ-R3 | Partly built | Context submissions are validated field by field (`crates/baley/src/context/validation.rs:17-103`); no scope submission exists |
 | PRJ-R4 | Not built | `REQUIREMENTS.md` rows are seeded at plan-submit (`crates/baley/src/plan_service.rs:410-437`); no assignment check |
+| PRJ-R6 | Partly built | `baley init` is built as its own command (`crates/baley/src/init.rs:341-353`); the start operation that runs it is Build 4 (#25) |
 | PRJ-R8, PRJ-R9 | Not built | |
 | PRJ-R10 | Not built | Phase ids parsed as floating-point numbers (`crates/baley/src/derivation/model.rs:22`); order is the textual order of `ROADMAP.md` (`crates/baley/src/derivation/parse.rs:150-191`) |
 | PRJ-R11, PRJ-R12, PRJ-R13 | Not built | No phase declaration, edit or withdraw; `ROADMAP.md` is edited only to tick a phase (`crates/baley/src/verification/completion.rs:266-303`) |

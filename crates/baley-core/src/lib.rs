@@ -34,8 +34,8 @@ pub use policy::{
 };
 pub use reconcile::{AnchorFinding, AnchorIntent, RemoteTag, anchor_reconciliation, judge_anchor};
 pub use registry::{
-    Current, Fence, FenceReason, Registry, RegistryError, UpcastError, Upcaster,
-    register_anchor_events,
+    Current, Fence, FenceReason, PROJECT_INITIALIZED, PROJECT_INITIALIZED_VERSION, Registry,
+    RegistryError, UpcastError, Upcaster, register_anchor_events, register_project_events,
 };
 pub use restore::{
     AcknowledgeRestore, AcknowledgeRestoreError, acknowledge_restore, acknowledgement,

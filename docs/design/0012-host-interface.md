@@ -315,7 +315,7 @@ The binary crate holds the inherited engine: one stdio server bound to one proje
 
 | Requirement | Status | Where |
 |---|---|---|
-| HST-R1, HST-R2, HST-R3 | Not built | `serve` binds one project per process on stdio (`crates/baley/src/main.rs:97, 167-171`, `crates/baley/src/server.rs:810-817`); no HTTP, no service, no launcher |
+| HST-R1, HST-R2, HST-R3 | Not built | `serve` binds one project per process on stdio (`crates/baley/src/main.rs:99, 172-176`, `crates/baley/src/server.rs:810-817`); no HTTP, no service, no launcher |
 | HST-R4 | Not built | No adapter; the host model list is Claude-only (`crates/baley/src/config/roles.rs:16`) |
 | HST-R5 | Built | Three tools (`crates/baley/src/server.rs:970-988`), append-only operation names asserted (`server.rs:474-511`), flat schema plus `schema` operation (`server.rs:617-664, 751-808`) |
 | HST-R6 | Built | Parts at 24,576 bytes (`crates/baley/src/read/instructions.rs:5`, `server.rs:751`); `document` and `document-search` only (`server.rs:301-304`) |
@@ -323,11 +323,11 @@ The binary crate holds the inherited engine: one stdio server bound to one proje
 | HST-R8 | Not built | Suite runs inside one call; Codex registration sets a 7,200 s tool timeout (`.codex/config.toml`) |
 | HST-R9, HST-R10 | Partly built | Owner questions are gate records answered by `execution-authorize` with any non-blank owner and time (`crates/baley/src/execution_service.rs:364-501`) |
 | HST-R11 | Built | Compiled instructions, no disk loader (`crates/baley/src/plan/instructions.rs:12-16`, `crates/baley/src/instruction_surfaces.rs:3-41`) |
-| HST-R12 | Not built | `*-instructions` commands print full skills to stdout (`crates/baley/src/main.rs:127-163`); no stub rendering, no install |
+| HST-R12 | Not built | `*-instructions` commands print full skills to stdout (`crates/baley/src/main.rs:132-168`); no stub rendering, no install |
 | HST-R13 | Not built | The full read contract is sent as instructions (`crates/baley/src/server.rs:963-968`) |
 | HST-R14 | Built | Dispatch answers id and route, never a prompt (`crates/baley/src/execution/boundary.rs:93-147`) |
 | HST-R15 | Partly built | `baley exec` sets the key in the command's environment and redacts both streams (`crates/baley/src/exec.rs:87-199`, `crates/baley/src/process.rs:125-131, 283-303` for `owner_command` and `stdio_plan`). The inherited review engine still makes provider calls with keys it reads itself (`crates/baley/src/review/provider/credentials.rs:52-112`) until Build 4 moves outside calls to the host session. |
-| HST-R16 | Partly built | The CLI has `serve`, `guard`, `skill-description`, the render commands, the ledger commands (`verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor`, `acknowledge-restore`) and `exec` (`crates/baley/src/main.rs:27-91`); the other commands are later builds. |
+| HST-R16 | Partly built | The CLI has `serve`, `guard`, `skill-description`, the render commands, the ledger commands (`verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor`, `acknowledge-restore`), `exec` and `init` (`crates/baley/src/main.rs:27-94`); the other commands are later builds. |
 | HST-R17 | Not built | Registrations are hand-written (`.mcp.json`, `.codex/config.toml`, `hooks/hooks.json`) |
 | HST-R18 | Partly built | Store failures are MCP errors (`crates/baley/src/server.rs:888-898`); refused applies recorded best effort (`server.rs:1912-1923`) |
 | HST-R19 | Partly built | Frames and hook input are bounded (`crates/baley/src/review_ingress.rs:17-23`, `crates/baley/src/guard/mod.rs:15`). Every git child runs with its registered deadline, enforced by `validate_launch` (`crates/baley/src/process.rs:218-249`, `crates/baley/src/git_process.rs`). The suite runner's `sh -c` (`crates/baley/src/execution/runner.rs`) runs with none, owned by Build 5; a command under `baley exec` runs with none by design. |

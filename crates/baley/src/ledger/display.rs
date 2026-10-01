@@ -9,17 +9,17 @@ pub(super) const LOG_WARNING_BYTES: u64 = 8_192_000;
 
 #[derive(Debug)]
 /// Plain output and its exit classification.
-pub(super) struct Render {
+pub(crate) struct Render {
     /// Lines printed in order.
-    pub(super) lines: Vec<String>,
+    pub(crate) lines: Vec<String>,
     /// The command's exit status.
-    pub(super) code: u8,
+    pub(crate) code: u8,
     /// Whether these lines describe a refusal or failure.
-    pub(super) error: bool,
+    pub(crate) error: bool,
 }
 impl Render {
     /// Builds one result line.
-    pub(super) fn line(text: impl Into<String>, code: u8) -> Self {
+    pub(crate) fn line(text: impl Into<String>, code: u8) -> Self {
         Self {
             lines: vec![text.into()],
             code,
@@ -27,7 +27,7 @@ impl Render {
         }
     }
     /// Builds a command refusal.
-    pub(super) fn refusal(text: impl Into<String>) -> Self {
+    pub(crate) fn refusal(text: impl Into<String>) -> Self {
         Self {
             lines: vec![text.into()],
             code: 2,
@@ -45,7 +45,7 @@ pub(super) fn exit_class(error: &StoreError) -> u8 {
     }
 }
 /// Renders a store failure with the owner's recovery text.
-pub(super) fn store_error(error: &StoreError, project: Option<&str>) -> Render {
+pub(crate) fn store_error(error: &StoreError, project: Option<&str>) -> Render {
     if let StoreError::Refused(Refusal::UnsafeHome(faults)) = error {
         let mut lines = vec![format!(
             "{UNSAFE_HOME}: the ledger's home is not safe to open"
