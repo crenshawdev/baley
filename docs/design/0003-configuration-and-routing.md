@@ -6,7 +6,7 @@
 | Design issue | none; build issue [#23](https://github.com/crenshawdev/baley/issues/23) |
 | Requirement prefix | CFG |
 | Applies | [0002: System design](0002-system-design.md) |
-| Related | ADRs: [0003](../adr/0003-per-user-database.md), [0004](../adr/0004-project-identity.md), [0009](../adr/0009-served-instructions.md), [0015](../adr/0015-settings-in-toml.md), [0016](../adr/0016-key-store.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md), [0028](../adr/0028-one-http-stack.md) · C4 view: configuration |
+| Related | ADRs: [0003](../adr/0003-per-user-database.md), [0004](../adr/0004-project-identity.md), [0009](../adr/0009-served-instructions.md), [0015](../adr/0015-settings-in-toml.md), [0016](../adr/0016-key-store.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md), [0028](../adr/0028-one-http-stack.md), [0032](../adr/0032-gemini-is-not-a-provider.md) · C4 view: configuration |
 
 The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
 
@@ -72,12 +72,13 @@ graph LR
     8-. "<div>Reads</div><div style='font-size: 70%'></div>" .->13
     8-. "<div>Checks model names</div><div style='font-size: 70%'></div>" .->10
     8-. "<div>Records the effective policy<br />and each route</div><div style='font-size: 70%'></div>" .->11
-    4-. "<div>Settings and model commands</div><div style='font-size: 70%'></div>" .->8
+    4-. "<div>Settings commands</div><div style='font-size: 70%'></div>" .->8
+    4-. "<div>Model commands</div><div style='font-size: 70%'></div>" .->10
     4-. "<div>Injects a key into one<br />command</div><div style='font-size: 70%'></div>" .->9
     9-. "<div>Reads</div><div style='font-size: 70%'></div>" .->14
     10-. "<div>Key for detection</div><div style='font-size: 70%'></div>" .->9
     10-. "<div>Lists models</div><div style='font-size: 70%'></div>" .->18
-    10-. "<div>Records detections</div><div style='font-size: 70%'></div>" .->11
+    10-. "<div>Records seeds, owner changes<br />and detections</div><div style='font-size: 70%'></div>" .->11
     11-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->12
 
   end
@@ -99,11 +100,11 @@ graph LR
 | Role | A kind of worker Baley dispatches: planner, analyzer (the refinement role that asks the owner questions and drafts truths), plan checker, executor, verifier, reviewer. |
 | Rung | One of Baley's five effort levels, in order: `low`, `medium`, `high`, `xhigh`, `max`. |
 | Route | The result of resolving one role for one dispatch: model, rung, the settings that decided them, and whether a retry moved the rung. |
-| Model catalog | The list of model names Baley accepts, per host and per provider, with the source each name came from. |
-| Host alias | A short model name a host resolves itself, such as `opus` in Claude Code. Aliases follow new model releases without any change on Baley's side. |
-| Provider | An outside model vendor reached by API key or its own command-line login: Anthropic, OpenAI, Gemini, DeepSeek. |
+| Model catalog | The list of model names Baley accepts, per host and per provider, with the source each name came from. It is the `model_catalog` view of the reserved per-user ledger project `user` (section 6). |
+| Host alias | A short model name a host resolves itself, such as `opus` in Claude Code. Aliases follow new model releases without any change on Baley's side. Each host's aliases are compiled into Baley and never recorded. |
+| Provider | An outside model vendor reached by API key or its own command-line login. OpenAI and DeepSeek are reached by key, and each has a catalog of its own that detection fills. Anthropic is reached only through the Claude Code login, so its names are the `claude-code` host catalog and `anthropic` is no catalog name. |
 | Detection | Asking a provider's list endpoint, with the owner's key, which model names that key can use. |
-| Hint table | A table compiled into Baley that tags known model names with a tier (`flagship`, `balanced`, `cheap`) and whether they accept high effort. |
+| Hint table | A table compiled into Baley that tags known model names with a tier (`flagship`, `balanced`, `cheap`) and whether they accept high effort. It has a version, raised whenever a row changes. Its exact-id rows are seeded into the catalog; its prefix rows tag, for detection, the ids that start with a known prefix and that no exact row names. |
 | Config folder | Baley's own folder under the crenshawdev vendor folder: `$XDG_CONFIG_HOME/crenshawdev/baley` on Linux (an empty or relative `XDG_CONFIG_HOME` counts as unset), `~/Library/Application Support/crenshawdev/baley` on macOS, or `BALEY_HOME` when it is set. It holds the global file and the keys file. |
 | Keys file | `keys.env` in the config folder: one `NAME=value` line per provider API key, written by the owner by hand and only read by Baley. |
 | Key name | The name on the left of a line in the keys file, such as `OPENAI_API_KEY`. |
@@ -120,8 +121,8 @@ graph LR
 | CFG-R5 | Each setting has a scope: `global`, `project` or `both`. Branch, forge and repository settings and the test and lint commands are `project`. Roles and the escalation switch are `both`. A value written in a layer outside the setting's scope is ignored and reported as a scope diagnostic; the command line refuses to write it. | Repository facts belong to the repository; per-user choices must not leak into a committed file by mistake. | SYS-R13 | Active |
 | CFG-R6 | Layers merge in this order, later winning per setting: built-in defaults, global file, global `[host.<name>]` section, project file, project `[host.<name>]` section. Only the section of the connected host applies. | The project overrides the user; a host section refines the file it is in. | CFG-R5 | Active |
 | CFG-R7 | Every setting in the schema has a reader in the code; a setting nothing reads is removed from the schema. An unknown name in a file is ignored and reported; the command line refuses to write it. | A setting that changes nothing misleads the owner. | | Active |
-| CFG-R8 | Whenever the merged result changes, for any layer, Baley records `policy.effective` with the full merged policy and the layer and file each value came from; every command records the policy version it ran under. | The record says what Baley acted under, not what the files say now. | EVD-R17 | Active |
-| CFG-R9 | The effective policy is re-read and re-validated before every command that writes to the ledger. An invalid file (unparseable, wrong type, value outside its grammar) makes the policy unavailable, and every command that needs it is refused with `config-unavailable` naming the file and the fault and, for a parse, type or grammar fault, its line and column. A missing file is an empty layer; a file that exists but is not a regular file or cannot be read makes the policy unavailable in the same way, naming the file and the cause. | Never act on a torn or half-edited policy. | CFG-R8 | Active |
+| CFG-R8 | Whenever the merged result changes, for any layer, Baley records `policy.effective` with the full merged policy and the layer and file each value came from; every command records the policy version it ran under, 0 when no recorded policy applies, as the table below says. | The record says what Baley acted under, not what the files say now. | EVD-R17 | Active |
+| CFG-R9 | The effective policy is re-read and re-validated before every command that appends to a project's chain from a checkout. An invalid file (unparseable, wrong type, value outside its grammar) makes the policy unavailable, and every command that needs it is refused with `config-unavailable` naming the file and the fault and, for a parse, type or grammar fault, its line and column. A missing file is an empty layer; a file that exists but is not a regular file or cannot be read makes the policy unavailable in the same way, naming the file and the cause. HEAD's copy of the project file, which holds the project's settings, makes the policy unavailable in the same way when git cannot read it. A checkout, or a settings file the policy reads, whose path is not UTF-8 makes the policy unavailable in the same way, naming the path, since the record holds paths as text. | Never act on a torn or half-edited policy. | CFG-R8 | Active |
 | CFG-R10 | A dispatch whose routing inputs changed between admission and its run is refused as `routing-inputs-changed`. | A worker must run under the route the owner's policy produced when it was admitted. | CFG-R8, SYS-R6 | Active |
 | CFG-R11 | Only Baley's command line and its interview write the settings files. The host sandbox and the guard refuse any agent write to Baley's config folder (the global file and the keys file) and to the project file. Instructions served to models never mention the files. | The owner sets policy; the model never does. | SYS-P11, SYS-R13 | Active |
 | CFG-R12 | Six roles are routed: `planner`, `analyzer`, `checker`, `executor`, `verifier`, `reviewer`. Each has `roles.<role>.model` (a model name, default absent) and `roles.<role>.effort` (a rung; defaults: planner, analyzer, executor and verifier `high`, reviewer `medium`, checker `low`). | Every worker Baley dispatches has an owner-set cost. | SYS-P1 | Active |
@@ -132,16 +133,29 @@ graph LR
 | CFG-R17 | Every route records the role, the model, the starting rung, the rung run, the attempt, the setting and layer that supplied the model and the effort, and each reason in plain words. The work order carries the route; nothing else does. | The owner can always see why a worker ran as it did. | SYS-P2, CFG-R8 | Active |
 | CFG-R18 | The plan-time risk floor never changes a model or a rung. | Effort is the owner's choice; risk changes the review gate ([0009](0009-risk.md)), not the cost. | | Active |
 | CFG-R19 | The model catalog is data in the per-user database, seeded from the binary at install and at every upgrade, never a setting. Host aliases (for Claude Code: `opus`, `sonnet`, `haiku`, `fable`) come from the host adapter's compiled table. Exact model ids are accepted beside aliases. | Aliases track new models by themselves; the owner's choice stays small. | ADR 0003 | Active |
-| CFG-R20 | For each provider whose key is in the keys file, the catalog is refreshed by detection: Baley calls the provider's list endpoint with that key, records every id returned, tags each id from the hint table, and places an untagged id by best fit (newest first) unless the owner chooses. Baley finds a provider's key by a small compiled table of key names: `OPENAI_API_KEY` for OpenAI, `GEMINI_API_KEY` for Gemini, `DEEPSEEK_API_KEY` for DeepSeek. Detection runs at install, at `baley init`, when a call fails with a model-not-found or deprecated-model error, and on `baley models update`. It never runs on a timer. Detection sends no prompt and no project content. | The vendor's list is the truth; Baley's table is a hint. Nothing waits on a Baley release. | CFG-R21, SYS-R9 | Active |
-| CFG-R21 | Detection that fails (offline, bad key, rate limit, or a keys file Baley refuses) leaves the previous catalog in place, is recorded as `models.detection_failed`, and never blocks a command. A refused keys file records the failure for every provider. A provider with no key in the keys file is not detected and is not recorded as a failure; its detected catalog entries become unverifiable (Figure 3). An automatic trigger skips it quietly; when the owner names it in `baley models update`, Baley says which key name is missing from the keys file (CFG-R28). | Setup and dispatch must not depend on a network call. | CFG-R20 | Active |
+| CFG-R20 | For each provider whose key is in the keys file, the catalog is refreshed by detection: Baley calls the provider's list endpoint with that key, records every id returned, tags each id from the hint table, and places an untagged id by best fit (newest first) unless the owner chooses. Baley finds a provider's key by a small compiled table of key names: `OPENAI_API_KEY` for OpenAI, `DEEPSEEK_API_KEY` for DeepSeek. Detection runs at install, at `baley init`, when a call fails with a model-not-found or deprecated-model error, and on `baley models update`. It never runs on a timer. Detection sends no prompt and no project content. | The vendor's list is the truth; Baley's table is a hint. Nothing waits on a Baley release. | CFG-R21, SYS-R9 | Active |
+| CFG-R21 | Detection that fails (offline, bad key, rate limit, or a keys file Baley refuses) leaves the previous catalog in place, is recorded as `models.detection_failed`, and never blocks a command. A refused keys file records the failure for every provider the run covers. A provider with no key in the keys file is not detected and is not recorded as a failure; its detected catalog entries become unverifiable (Figure 3). An automatic trigger skips it quietly; when the owner names it in `baley models update`, Baley says which key name is missing from the keys file (CFG-R28). | Setup and dispatch must not depend on a network call. | CFG-R20 | Active |
 | CFG-R22 | The owner can add or remove a catalog name by hand (`baley models add`, `baley models remove`); a hand-added name wins over detection and is never removed by it. | A model newer than every list is still usable at once. | CFG-R19 | Active |
 | CFG-R23 | Each route and each detection records the catalog version it was checked against. | The record says which list was in force. | CFG-R17, CFG-R20 | Active |
-| CFG-R24 | Provider API keys are plain `NAME=value` lines in one file, `keys.env`, in Baley's config folder beside `config.toml` (`$BALEY_HOME/keys.env` when `BALEY_HOME` is set). A missing file means no keys. A line is blank, a comment whose first byte is `#`, or `NAME=value` with an optional `export ` prefix. A name is `[A-Za-z_][A-Za-z0-9_]*` followed directly by `=`. Trailing spaces, tabs and carriage returns are removed. An unquoted value runs to the end of the line and holds no space or tab, since a shell reads such a line differently. A quoted value is everything between matching single or double quotes that end the line, with no escapes. A value, quoted or not, holds no control byte (`0x00` to `0x1F`, or `0x7F`) except a tab inside quotes; refusal catches a stray carriage return from a paste instead of sending a wrong key. Baley refuses the file with `keys-file-exposed` when a group or other read bit is set (`mode & 0o044`), naming the file and the `chmod 600` fix, or another user owns it, naming the numeric `chown` fix; both faults are named when both hold, owner first. Other mode bits are not judged. A fix named in a refusal tells the owner what to do: Baley never runs it, never checks that it works in the owner's shell, and never creates, changes or repairs the file. `keys-file-invalid` refuses a repeated name, an empty value or any other invalid line, including non-UTF-8 outside a comment, a byte-order mark on line 1, unquoted space or tab, and a forbidden control character. Every faulty line is named by number, never its text. `keys-file-unreadable` refuses a path that is not a regular file or cannot be read, naming the file and the cause. Any of these three refusals makes `baley exec` refuse and detection record `models.detection_failed` for every provider. A symbolic link to the file is followed. This check does not check the folder; where the folder is Baley's home (on macOS, or when `BALEY_HOME` is set), the home's own open checks apply when a command opens the ledger; `baley exec` opens none ([0001](0001-evidence-ledger.md), EVD-R22). Keys are not encrypted; there is no master key and no OS secret store. Stated limit: an agent under a host whose sandbox allows reads (Codex) can read the file, as it can any file the owner's user can read; that is the operating-system user boundary, not Baley's to close. | The file's mode protects the keys the way it protects any key the owner keeps in a file; nothing Baley added would protect them better from a process running as the owner. | SYS-R12, ADR 0027 | Active |
+| CFG-R24 | Provider API keys are plain `NAME=value` lines in one file, `keys.env`, in Baley's config folder beside `config.toml` (`$BALEY_HOME/keys.env` when `BALEY_HOME` is set). A missing file means no keys. A line is blank, a comment whose first byte is `#`, or `NAME=value` with an optional `export ` prefix. A name is `[A-Za-z_][A-Za-z0-9_]*` followed directly by `=`. Trailing spaces, tabs and carriage returns are removed. An unquoted value runs to the end of the line and holds no space or tab, since a shell reads such a line differently. A quoted value is everything between matching single or double quotes that end the line, with no escapes. A value, quoted or not, holds no control byte (`0x00` to `0x1F`, or `0x7F`) except a tab inside quotes; refusal catches a stray carriage return from a paste instead of sending a wrong key. Baley refuses the file with `keys-file-exposed` when a group or other read bit is set (`mode & 0o044`), naming the file and the `chmod 600` fix, or another user owns it, naming the numeric `chown` fix; both faults are named when both hold, owner first. Other mode bits are not judged. A fix named in a refusal tells the owner what to do: Baley never runs it, never checks that it works in the owner's shell, and never creates, changes or repairs the file. `keys-file-invalid` refuses a repeated name, an empty value or any other invalid line, including non-UTF-8 outside a comment, a byte-order mark on line 1, unquoted space or tab, and a forbidden control character. Every faulty line is named by number, never its text. `keys-file-unreadable` refuses a path that is not a regular file or cannot be read, naming the file and the cause. Any of these three refusals makes `baley exec` refuse and detection record `models.detection_failed` for every provider the run covers. A symbolic link to the file is followed. This check does not check the folder; where the folder is Baley's home (on macOS, or when `BALEY_HOME` is set), the home's own open checks apply when a command opens the ledger; `baley exec` opens none ([0001](0001-evidence-ledger.md), EVD-R22). Keys are not encrypted; there is no master key and no OS secret store. Stated limit: an agent under a host whose sandbox allows reads (Codex) can read the file, as it can any file the owner's user can read; that is the operating-system user boundary, not Baley's to close. | The file's mode protects the keys the way it protects any key the owner keeps in a file; nothing Baley added would protect them better from a process running as the owner. | SYS-R12, ADR 0027 | Active |
 | CFG-R25 | Baley only reads the keys file and never writes it; the owner edits it by hand. Baley has no command that sets, removes or lists keys. Keys come only from that file, never from an environment variable. | The owner holds the keys; Baley has no second copy to keep in step. | SYS-R12 | Active |
 | CFG-R26 | The ledger may record that a key was used and how (for example a review by OpenAI through its API with `OPENAI_API_KEY`), never the key's value. Keys never enter the ledger, exports or any view. | The record is shareable; the keys are not. | EVD-R14, CFG-R24 | Active |
 | CFG-R27 | Baley reads a key from the keys file for two uses only: to inject it into one command through `baley exec --key <NAME>` (SYS-R11) and to call a provider's list endpoint for detection (CFG-R20). | The fewest places a key can leak from. | SYS-R11, CFG-R20 | Active |
 | CFG-R28 | A provider the owner reaches by its own command-line login needs no line in the keys file; every command that needs a key names the key missing from the file, and no command forces the owner to add one. | No one is forced to hand over a key. | SYS-R10 | Active |
 | CFG-R29 | `git.forge_provider` accepts `github`, `gitlab` and `forgejo`; the first release acts on `github` only, and choosing another value is accepted and reported as not yet supported by [0011: Landing](0011-milestones-landing-undo-pause.md). | All three forges are planned; the setting must not need to change when they arrive. | | Active |
+
+Which policy each command runs under (CFG-R8, CFG-R9). Policy version 0 means that no recorded policy applies. The policy step runs before every command that appends to a project's chain from a checkout: it re-reads both files, records `policy.effective` when the merged result changed, and returns the version in force for the command's own record. A command that appends to no chain runs no step. Records in the per-user project `user` carry 0 and build no policy. `purge` is the one chain-writing command that may run outside a checkout, and records 0 there.
+
+| Command | Project from | Policy step | Version recorded |
+|---|---|---|---|
+| `baley init` | discovery at the repository root | yes, after `project.initialized` | 0 on `project.initialized` |
+| `baley config set` in a project | discovery | yes, after the write | the version in force after it |
+| `anchor`, `acknowledge-restore` | discovery | yes | the version in force |
+| `purge` | its argument | only when run from a checkout of that project | the version in force there, otherwise 0 |
+| `verify`, `doctor`, `export`, `rebuild`, `scrub` | their argument (`scrub` takes none), or discovery for the anchor remote | no: no event is appended | none |
+| `baley models add`, `remove` and `update`, detection, seeding | the per-user project `user` | no | 0 |
+| `policy.effective` itself | the command it belongs to | it is the step's own record | the version it replaces, 0 for the first of its key |
+
 
 ## 4. Roles and actors
 
@@ -205,21 +219,41 @@ There is no command that sets, removes or lists keys (CFG-R25): the owner writes
 
 ### baley models update
 
-- **Inputs:** optional provider names (default: every provider whose key is in `keys.env`).
-- **Outputs:** per provider: ids added, removed and unchanged, the tier each got and from what (hint table, best fit, owner), and the new catalog version; a `models.detected` or `models.detection_failed` event per provider. A provider named here that has no key in `keys.env` gets no event: the output names the key missing from `keys.env`, and its detected entries become unverifiable (CFG-R21).
-- **Refusals:** none; a failed detection is reported, not refused (CFG-R21).
+- **Inputs:** optional provider names, each `openai` or `deepseek`; a name given twice counts once. With none, every provider whose key is in `keys.env` runs, and the rest are skipped quietly.
+- **Outputs:** on stdout, in this order.
+  - `seeded the model catalog with hint table version <n>`, when the run seeded. `update` seeds first only when it will record something: some provider it covers has a key, or `keys.env` is refused. Otherwise it creates no per-user project `user` and records nothing.
+  - A refused `keys.env` prints the refusal's own text once, such as `keys-file-exposed: ... (fix: chmod 600 ...)`, and every provider the run covers records `models.detection_failed` with the refusal's code as its category.
+  - A provider detected prints `<provider>: detected <n> added, <n> removed, <n> unchanged; catalog version <v>`, then a table with the columns `PROVIDER`, `ID`, `STATUS`, `TIER` and `PLACED`. It has one row per listed or removed id, in id order: its status (`added`, `unchanged` or `removed`), the tier it holds (`-` for none) and how it was placed (`hint`, `prefix`, `best-fit` or `owner`). A listing with no ids and no removals prints no table. The version is the one this provider's command committed.
+  - A provider whose detection failed prints `<provider>: detection failed: <category>; the previous list is kept`, with a category of section 6. A body cut short at the 4 MiB bound fails as `incomplete` and removes no id. Each endpoint answers its whole list in one response, so that bound is the only one.
+  - A provider named here with no key in `keys.env` gets no event. The output names that provider's own key name from CFG-R20, `<provider>: <key name> is not in <keys file>, so its detected entries are unverifiable`, then lists that provider's detected entries in the same table with status `unverifiable`, or says `<provider>: no detected entries`. Nothing is stored, so each entry keeps its last-verified time (CFG-R21, CFG-R28).
+  - A provider the run does not cover, or one without a key that the owner did not name, prints nothing.
+
+  Each provider records in its own command, `models.update`, in the per-user project `user` (section 6). The command exits 0 whether detection succeeds or fails.
+- **Refusals:** each on stderr as `baley: <code>: ...`, exit 2, before the ledger is opened: `baley-home-invalid` and `user-home-invalid` when Baley's folders cannot be resolved ([0001](0001-evidence-ledger.md)), and `unknown-provider` for a host (`claude-code`, `codex`) or any name other than the two providers, `gemini` included, as `unknown-provider: "<name>" is no provider Baley detects; providers: openai, deepseek`. A failed detection is reported, not refused (CFG-R21).
 
 ### baley models add, baley models remove
 
-- **Inputs:** a host or provider name and a model name; `add` takes an optional tier.
-- **Outputs:** the new catalog version.
-- **Refusals:** `unknown-provider` (CFG-R22).
+- **Inputs:** a host or provider name, one of `claude-code`, `codex`, `openai` or `deepseek`, and a model name, which is never empty; `add` takes an optional `--tier` of `flagship`, `balanced` or `cheap`. A missing or empty name or any other tier is a usage error, exit 2.
+- **Outputs:** the change and the new catalog version, such as `added "gpt-test-1" to openai at tier cheap; catalog version 3`, with `models.owner_changed` recorded in the per-user project `user` (section 6).
+  - Adding a name the catalog already holds, other than a host alias, makes it the owner's entry. With `--tier` it takes that tier and shows as placed by the owner, and it keeps its high-effort flag, since `--tier` says nothing about effort.
+  - Adding a name the owner removed accepts it again.
+  - Removing a seeded or detected id hides it, and no later seed or detection brings it back. Only an owner addition does.
+  - A change that leaves every catalog's accepted names as they were, such as a change of tier alone, leaves the catalog version.
+  - Like `baley models list`, it first seeds the catalog when the binary's hint table version differs from the latest one recorded, higher or lower (section 6), while `baley models update` seeds only when it records. The seed is its own command, recorded before the owner's.
+- **Refusals:** each on stderr as `baley: <code>: ...`, exit 2. `baley-home-invalid`, `user-home-invalid`, `unknown-provider`, `alias-not-addable` and `alias-not-removable` refuse before the ledger is opened, so a refused command creates no ledger home. `unknown-model` is judged inside the removal's own transaction, after the seeding step, and the refused removal records only its `command.completed`.
+
+  | Code | When | Requirement |
+  |---|---|---|
+  | `unknown-provider` | The name is none of the four catalogs, `anthropic` and `gemini` included, since nothing seeds or detects a catalog for either | CFG-R22 |
+  | `alias-not-addable` | `add` names a host alias compiled into Baley, which the host already accepts; an owner entry for it would change no accepted name and could never be removed | CFG-R19 |
+  | `alias-not-removable` | `remove` names a host alias compiled into Baley, which the host resolves whatever the catalog says | CFG-R19 |
+  | `unknown-model` | `remove` names a name the catalog does not hold, or one the owner already removed | CFG-R22 |
 
 ### baley models list
 
-- **Inputs:** optional host or provider name.
-- **Outputs:** every accepted name with its source (host alias, seed, detected, owner), tier and the catalog version.
-- **Refusals:** none.
+- **Inputs:** an optional host or provider name (default: every catalog).
+- **Outputs:** the line `catalog version <n>`, then a table with the columns `CATALOG`, `NAME`, `SOURCE`, `TIER` and `PLACED`: every accepted name with its source (`alias` for a host alias, `seed`, `detected` or `owner`), its tier, and how it was placed (`hint`, `prefix`, `best-fit` or `owner`). A `-` stands for no tier (a host alias, or a name the owner added new to the catalog without `--tier`) and for no placement (a host alias). Rows run by catalog in the order of the inputs above, then by name. A name that is both a host alias and an owner entry has both rows, and a name the owner removed has none. The version and the rows are read from one snapshot of the view. The first use on a fresh ledger creates the per-user project `user` and records `models.seeded` before it lists, and says so first: `seeded the model catalog with hint table version <n>`.
+- **Refusals:** `unknown-provider` for a name that is no host or provider, on stderr, exit 2, before the ledger is opened (CFG-R22).
 
 ### Route resolution (internal)
 
@@ -261,13 +295,16 @@ Called by the work order composer for every dispatch, never by a host.
 | Field | Type | Meaning |
 |---|---|---|
 | `project` | project id | The project the policy is for |
-| `host` | string | The host name the host sections were taken for |
-| `values` | table | Every setting with its effective value |
-| `sources` | table | Per setting: the layer (`default`, `global`, `global-host`, `project`, `project-host`) and, for a file layer, the file's path and content digest |
-| `diagnostics` | list | Scope, unknown-name and grammar diagnostics found in the files |
-| `catalog_version` | integer | The model catalog version the model names were checked against |
+| `checkout` | string | The checkout: the canonical repository root that discovery gives, as text |
+| `host` | string, or `null` for the command line | The host name the host sections were taken for; `null` for the command line, where no host section applies |
+| `values` | table | Every setting with its effective value, `null` for an absent default |
+| `sources` | table | Per setting: the layer (`default`, `global`, `global-host`, `project`, `project-host`) and, for a file layer, the file's `path`, its content `digest` (the lower-case hex SHA-256 of its bytes), and the `line` and `column` the value was written at |
+| `diagnostics` | list | Each name a file wrote that the policy ignored, the global file's first, each in file order: its `layer` (`global` or `project`), the file's `path`, the `name` as written, its `line` and `column`, and its `kind` (`unknown-name`, `unknown-host` or `wrong-scope`), with the setting's `scope` (`global`, `project` or `both`) for `wrong-scope` |
+| `catalog_version` | integer | The model catalog version the model names were checked against: read from the per-user project `user`'s catalog state outside any transaction, and 0 when `user` is absent. The step never seeds the catalog. |
 
-The `policy` view holds the latest `policy.effective` per project and host. Its event sequence number is the policy version other records cite.
+The policy step records the event as a command of its own: kind `policy.record`, actor `baley`, on the project's `project` stream. The command's policy version is the version its event replaces, 0 for the first record of its key. The step compares the payload it would record with the latest record for the project, checkout and host, on values, sources, diagnostics and catalog version, and records only when one differs. When nothing differs it opens no command, so a rerun records nothing, not even a completed command. The project layer is HEAD's copy of `baley.toml`, and the "applies once committed" note and the whole-file refs of a file that supplies no setting are not recorded. So an uncommitted edit records nothing, and neither does a comment in a file that supplies no setting, unless it moves a name the policy ignores, since that name's diagnostic carries its line and column. Any byte change to a file that supplies a setting moves that setting's source digest and records. The command hands the store the `policy` document it observed. When another record of the key landed first, the store refuses the command as stale and the step observes again, at most three attempts in all, so the version a command carries is always the one its event replaces. The step returns the version in force, the new event's sequence or the stored record's, to the command that called it.
+
+The `policy` view holds the latest `policy.effective` per project, checkout and host. The project is the view's scope, and the checkout and host are its key, both text. The command line's host text is `""`, which no host name can take. A document's body is the event's payload with `host_key`, the host's key text, and `version`, the event's sequence. The view has no index and page bound 1, since every read is by key; Build 7 adds the listing index its report of checkouts under different policies needs. Its event sequence number is the policy version other records cite.
 
 ### route (part of a work order)
 
@@ -289,19 +326,73 @@ One `NAME=value` line per key, in the config folder beside `config.toml`, for ex
 
 Lines split on LF, with CRLF accepted. Trailing spaces, tabs and carriage returns are removed before interpreting a line. Blank lines and comments count in the one-based line numbers; a final LF does not start another line. Every line but a comment must be UTF-8. A comment starts at the first byte with `#`, and its remaining bytes are ignored without decoding. Line 1 must not start with a byte-order mark. The optional `export ` prefix has exactly one space. Names are compared exactly, and only accepted lines register a name for duplicate checks. Quoted values keep all bytes between their first and last matching quotes, including inner quotes and literal backslashes. Unquoted values hold no space or tab. No value holds a control byte (`0x00` to `0x1F`, or `0x7F`) except a tab inside quotes; a value that does is refused with `keys-file-invalid` naming its line. All faulty lines are reported in file order, by number and never by text.
 
-A symbolic link is followed, and the opened file's kind, owner and mode are judged before its lines. A known kind or exposure fault takes precedence over an incomplete read. A missing file or folder means no keys; a key looked up in it gives `no-such-key` naming the key and the configured file path and saying the file does not exist. Lookup is by exact name, without trimming or case folding. A key prints only as `[baley:<NAME>]` through `Debug` and has no `Display` or `Serialize`. Its crate-private value accessor is read by `baley exec`, for the command's environment and the redactor, and from Build 2 T8 by the detection request header. A launch's `Debug` prints each environment value as `[redacted]`, and the redactor has no `Debug`. Neither the file bytes nor the key strings are wiped from memory when dropped.
+A symbolic link is followed, and the opened file's kind, owner and mode are judged before its lines. A known kind or exposure fault takes precedence over an incomplete read. A missing file or folder means no keys; a key looked up in it gives `no-such-key` naming the key and the configured file path and saying the file does not exist. Lookup is by exact name, without trimming or case folding. A key prints only as `[baley:<NAME>]` through `Debug` and has no `Display` or `Serialize`. Its crate-private value accessor is read by `baley exec`, for the command's environment and the redactor, and by the detection list request. That request puts the key only in the provider's `authorization` header, marked sensitive so that the request's `Debug` prints `Sensitive` for it, and never in a URL. A launch's `Debug` prints each environment value as `[redacted]`, and the redactor has no `Debug`. Neither the file bytes nor the key strings are wiped from memory when dropped.
 
 The ledger may record that a key was used and how, such as a review by OpenAI through its API with `OPENAI_API_KEY`, never the key's value (CFG-R26).
 
-### model catalog (table and events)
+### model catalog (view and events)
 
-The `model_catalog` table holds per entry: host or provider, name, source (`alias`, `seed`, `detected`, `owner`), tier, high-effort flag, first seen, last verified, and the catalog version that added it.
+The model catalog is the `model_catalog` view of the reserved per-user project `user`. Its id is no UUID, so no `baley.toml` can name it. It holds the `models` stream for the catalog events and the `command/<kind>` streams for its commands' records, such as the `command.completed` that is all a refused removal records. Its records carry policy version 0 since the catalog runs no policy step, and the first catalog use creates it.
 
-| Event | Fields |
+The view holds one document per catalog, keyed by the catalog's name (`claude-code`, `codex`, `openai` or `deepseek`), and one state document, keyed `state`, holding the catalog version and the latest seeded hint table version. A catalog nothing has been recorded into has no document and reads as empty. A catalog document holds its entries in id order, and each entry holds:
+
+| Field | Meaning |
 |---|---|
-| `models.detected` | provider, ids added, ids removed, catalog version, hint-table version |
-| `models.detection_failed` | provider, reason, catalog version left in place |
-| `models.owner_changed` | host or provider, name, added or removed, catalog version |
+| `id` | The model name |
+| `source` | `seed`, `detected` or `owner`. There is no `alias` source: host aliases are compiled into Baley, never recorded, and the lookup adds them. |
+| `tier` | `flagship`, `balanced` or `cheap`; absent only for a name the owner added new to the catalog without `--tier` |
+| `high_effort` | Whether the model accepts high effort |
+| `placed` | How it got its tier: `hint`, `prefix`, `best-fit` or `owner` |
+| `first_seen` | The recorded time of the event that first put the id there |
+| `last_verified` | The recorded time of the latest detection of its provider that ran while the entry was accepted and did not remove it; absent until one runs. A detection leaves it on an entry the owner removed, so a hidden entry keeps the time it had. |
+| `accepted_seq` | The catalog version that last made the id accepted, which is that event's sequence; absent for an id the owner removed before anything accepted it |
+| `owner_removed` | The owner removed the id. The entry is kept, hidden, so no seed or detection brings it back. |
+
+Every event is on stream `models` at version 1. First-seen and last-verified times come from the event's recorded time, never from a payload field.
+
+| Event | Recorded by | Fields |
+|---|---|---|
+| `models.seeded` | Baley, as command `models.seed` | `hint_version`; `catalog_version`; `rows`, one `{provider, name, tier, high_effort}` per exact-id row of the hint table |
+| `models.owner_changed` | The owner, as command `models.add` or `models.remove` | `catalog` (a host or provider); `name`; `change`, `added` or `removed`; `tier`, absent when `--tier` is not given and on every removal; `catalog_version` |
+| `models.detected` | The owner, as command `models.update`, or Baley, as command `models.detect` at `baley init`; one command per provider | `provider`; `added`, one `{id, tier, high_effort, placed}` per id, with `placed` one of `hint`, `prefix` or `best-fit`; `removed`, a list of ids; `catalog_version`; `hint_version` |
+| `models.detection_failed` | The owner, as command `models.update`, or Baley, as command `models.detect` at `baley init`; one command per provider | `provider`; `category`, one of the categories below; `catalog_version` |
+
+The catalog version is the sequence of the latest event that changed the accepted names of some catalog, and 0 before any. A seed or owner change that only changes a tier leaves it, `models.detection_failed` leaves the view as it was, and a detection that adds and removes nothing moves last-verified only. Each event's `catalog_version` is the version before it, read from the state document inside the recording transaction: 0 when nothing is recorded.
+
+The projector applies these rules:
+
+- It reads only its events and documents, never the compiled hint table, so a later binary's table changes no replayed tier and a rebuild gives the same catalog.
+- A seed makes each provider's seeded entries exactly its rows: a seeded id the rows no longer name is dropped, a seeded id they still name takes their tier and high-effort flag, and detected and owner entries are left as they are.
+- Owner entries win over seeds and detection. A seed leaves them as they are, and a detection sets only an owner entry's high-effort flag, since the owner has no way to set one. An owner addition over a seeded or detected id makes it the owner's, and with `--tier` it takes that tier and `placed` becomes `owner`. An owner removal hides the id, and no later seed or detection brings it back. Only an owner addition does.
+- A detection adds the ids it names that the catalog lacks, makes a seeded or detected id it names a detected entry with the event's tier, flag and placement, drops the seeded and detected ids it removes, and sets last-verified on every other accepted entry of its provider.
+- A host accepts its compiled aliases and its owner entries. A provider accepts its seeded, detected and owner entries.
+
+A detection lists one provider and records one event in a command of its own on `user`: `models.update`, actor owner, when the owner runs `baley models update`, or `models.detect`, actor baley, when `baley init` runs it. Each command has its own request id, so one provider's store error rolls back no other's record. Its answer holds the event's name and the counts of ids added, removed and unchanged, or the event's name and the category, and its request digest covers the kind, the actor and the provider. Neither holds a key, an id or any text a provider sent.
+
+The request is a GET of OpenAI's `https://api.openai.com/v1/models` or DeepSeek's `https://api.deepseek.com/models`, with the key in an `authorization: Bearer` header and no query. The key reaches only that header, marked sensitive, and never a URL (the keys file, above). The client is https only, follows no redirect, and waits at most 20 seconds per request, body included. The two providers' requests run concurrently. Each endpoint answers its whole list in one response, so one request per provider is the whole listing, and at most 4 MiB of its body is kept. Detection sends no prompt and no project content.
+
+A 2xx body lists the models as `{"data": [{"id": ...}, ...]}`. Each item's string `id` is one id, and the `created` time OpenAI reports, in whole seconds, is kept to break best-fit ties; DeepSeek reports none. A repeated id counts once. Every id is recorded, with no filter by model kind: embedding, speech, image and moderation ids are placed like any other and stay accepted until the owner removes them with `baley models remove`.
+
+The listing is gathered before the recording transaction. The diff, the tags and best fit are computed inside it, from the provider's document and the state document read there, so an owner change committed since the listing is not overwritten. The event's `catalog_version` is the version read there, and its `hint_version` is the compiled table's, which is the recorded one because detection seeds first.
+
+- `added` holds every id the provider listed that the owner has not removed, not only new ones, each with the tier, high-effort flag and placement this run gave it. So a listed seeded id becomes a detected entry, an owner entry's high-effort flag is filled in, and a best-fit placement is redone with the current table on every run. The catalog version still moves only when some catalog's accepted names change.
+- `removed` holds the provider's accepted `seed` and `detected` ids that the listing did not return, never an owner entry or an id the owner removed. A seeded id removed this way stays gone until a new hint table version seeds again.
+
+Each listed id is placed from its own provider's rows: an exact row, else the longest matching prefix row, else best fit. Best fit's candidates are this listing's ids tagged by a row, and the document's accepted entries with a tier placed `hint`, `prefix` or `owner`, never an id placed by best fit and never the id itself. Segments are whole `-`-separated tokens, and the candidate sharing the longest leading run of segments with the id gives its tier and high-effort flag. Ties prefer a candidate with a creation time, the newest first, then the name that sorts last. An id sharing no first segment with any candidate is `balanced` without high effort. Either way the id is placed `best-fit`, and shows so until a later table's row tags it or the owner places it with `baley models add --tier`. The table has rows for OpenAI and DeepSeek families only, so an owner's `--tier` on one id of a family the table lacks is what places that family's later ids.
+
+A detection that fails records `models.detection_failed` with exactly one category and leaves the catalog as it was. The first that applies wins, in this order: a transport failure, the status, a body cut short, the body's shape.
+
+- `offline`: DNS, connect, TLS, a timeout, or a connection dropped mid-body.
+- `unauthorized`: 401 or 403.
+- `rate-limited`: 429.
+- `http-<status>`: any other status that is not 2xx, an unfollowed redirect included.
+- `incomplete`: the body passed the 4 MiB bound.
+- `malformed`: a 2xx body not in the list shape, or one item without a non-empty string `id`, which rejects the whole listing.
+- `keys-file-exposed`, `keys-file-invalid` and `keys-file-unreadable`: `keys.env` was refused, and the category is the refusal's own code. Nothing is listed.
+
+A category holds at most a status number. No error body and no transport error text is ever recorded or printed, since a provider's 401 body can echo part of the key. An empty 2xx list is a valid listing, so it removes that provider's seeded and detected ids. A failed or cut listing removes nothing. When `keys.env` is refused, one `models.detection_failed` is recorded for every provider the run covers: the providers the owner named, or both when none is named and at `baley init`. A provider with no key is not detected and records nothing (CFG-R21).
+
+The binary records `models.seeded` at the first catalog use after an install or upgrade: `baley models list`, `add` and `remove` first compare the compiled hint table version with the latest one recorded, and seed on any difference, a downgrade included. Detection, from `baley models update` or `baley init`, seeds the same way first, but only when it will record something: some provider it covers has a key, or `keys.env` is refused. With no key present, detection creates no `user` and appends nothing. A match records nothing. The comparison runs again inside the transaction, so two runs racing record one seed.
 
 ## 7. States
 
@@ -319,21 +410,25 @@ stateDiagram-v2
   Unreadable --> Present: the owner replaces the file or fixes its permissions
 ```
 
-*Figure 2. States of a provider key as Baley finds it when it reads `keys.env`. Every transition is the owner's edit; Baley never writes the file. An exposed file makes `baley exec --key` refuse with `keys-file-exposed`, naming the fix (`chmod 600`, with the file, or `chown`); an invalid file makes it refuse with `keys-file-invalid`, naming each line by number and never its text; an unreadable file makes it refuse with `keys-file-unreadable`, naming the file and the cause. A missing file leaves every key Absent. Any of the three refusals makes detection record `models.detection_failed` for every provider, leaving the catalog as it was. The reader and `baley exec` are built; detection is a later Build 2 task (section 11).*
+*Figure 2. States of a provider key as Baley finds it when it reads `keys.env`. Every transition is the owner's edit; Baley never writes the file. An exposed file makes `baley exec --key` refuse with `keys-file-exposed`, naming the fix (`chmod 600`, with the file, or `chown`); an invalid file makes it refuse with `keys-file-invalid`, naming each line by number and never its text; an unreadable file makes it refuse with `keys-file-unreadable`, naming the file and the cause. A missing file leaves every key Absent. Any of the three refusals makes detection record `models.detection_failed` for every provider the run covers, leaving the catalog as it was. The reader, `baley exec` and detection, in `baley models update` and `baley init`, are built (section 11).*
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Seeded: install or upgrade
+  [*] --> Seeded: first catalog use after install or upgrade
+  [*] --> Detected: models.detected lists an id the catalog lacks
   Seeded --> Detected: models.detected
+  Seeded --> [*]: models.seeded of a table that no longer names the id
+  Seeded --> [*]: models.detected from a listing that lacks the id
   Detected --> Detected: models.detected (refresh)
+  Detected --> [*]: models.detected from a listing that lacks the id
   Detected --> Suspect: model-not-found or deprecated error on a call
   Suspect --> Detected: models.detected after the trouble-triggered refresh
   Suspect --> Suspect: detection failed (previous list kept)
-  Detected --> Unverifiable: detection finds no key for the provider
-  Unverifiable --> Detected: detection runs with the key present
+  Detected --> Unverifiable: baley models update names the provider and keys.env has no key for it
+  Unverifiable --> Detected: models.detected with the key present
 ```
 
-*Figure 3. States of one provider's catalog entries. Host aliases and owner entries have no lifecycle: they are present until the binary or the owner changes them.*
+*Figure 3. States of one provider's catalog entries. Host aliases and owner entries have no lifecycle: they are present until the binary or the owner changes them, and an owner addition takes a seeded or detected id out of this one. An owner removal hides a seeded or detected id in any state, and no later seed or detection brings it back. Only an owner addition does. A failed detection leaves every entry where it was. Unverifiable is reported by `baley models update` for a provider the owner named that has no key in `keys.env`, and is never recorded: the entries keep their last-verified time. Seeding and detection, in `baley models update` and `baley init`, are built. Suspect arrives in Build 4, with the model-not-found and deprecated-model trigger.*
 
 ## 8. Workflows
 
@@ -403,37 +498,47 @@ sequenceDiagram
   participant F as keys.env
   participant C as Command line
   participant S as Keys
+  participant G as Lister
   participant V as Provider list endpoint
-  participant K as Model catalog
+  participant K as Model catalog (pure)
   participant L as Ledger
   O->>F: add the OPENAI_API_KEY line by hand
   O->>C: baley models update openai
-  C->>K: detect(openai)
-  K->>S: key named OPENAI_API_KEY
+  C->>S: load keys.env
   S->>F: read
   alt keys.env refused
-    S-->>K: keys-file-exposed naming the fix, keys-file-invalid naming each line, or keys-file-unreadable naming the file and the cause
-    K->>L: models.detection_failed for every provider
-    C-->>O: the refusal, previous list kept
+    S-->>C: keys-file-exposed naming the fix, keys-file-invalid naming each line, or keys-file-unreadable naming the file and the cause
+    C->>L: models.seeded first, when the hint table version differs
+    C->>L: models.detection_failed with the refusal's code, one command for every provider the run covers
+    C-->>O: the refusal, and each provider's previous list kept
   else no OPENAI_API_KEY line
-    S-->>K: no key
-    K->>K: openai entries become unverifiable, no failure recorded
-    C-->>O: OPENAI_API_KEY is missing from keys.env
+    S-->>C: the keys, without that name
+    C->>L: read openai's detected entries, record nothing
+    C-->>O: OPENAI_API_KEY is not in keys.env, its detected entries are unverifiable
   else key found
-    S-->>K: the key, for this one call
-    K->>V: GET list endpoint with the key
-    alt request fails
-      K->>L: models.detection_failed
-      C-->>O: detection failed, previous list kept
-    else
-      K->>K: tag ids from the hint table, place unknown ids by best fit
-      K->>L: models.detected, new catalog version
-      C-->>O: models found, tiers, catalog version
+    S-->>C: the keys, holding that name
+    C->>L: models.seeded first, when the hint table version differs
+    C->>G: list openai with the key
+    G->>V: one GET, the key only in its sensitive authorization header
+    V-->>G: status and body, at most 4 MiB of it kept
+    G-->>C: one observation, holding no error text
+    C->>K: classify the observation
+    alt a failure
+      K-->>C: offline, unauthorized, rate-limited, an http status, incomplete or malformed
+      C->>L: models.detection_failed in the provider's own command
+      C-->>O: detection failed with its category, previous list kept
+    else a listing
+      K-->>C: the listed ids
+      C->>L: open the provider's own command, read its document and the version
+      C->>K: tag, place by best fit and diff against that document
+      K-->>C: added, removed and the report
+      C->>L: models.detected in that command, new catalog version
+      C-->>O: ids added, removed and unchanged with tier and placement, catalog version
     end
   end
 ```
 
-*Figure 6. Detecting a provider's models with the key the owner wrote into `keys.env`. The same detection runs at install, at `baley init` and after a model-not-found or deprecated-model failure (CFG-R20); there, a provider with no key is skipped quietly instead of being named to the owner (CFG-R21).*
+*Figure 6. Detecting a provider's models with the key the owner wrote into `keys.env`. The command line reads the keys and calls the lister, which sends one request per provider. The catalog's pure code classifies what the lister saw, tags and places the ids and diffs them against the catalog, and the command line records each provider in a command of its own. With no provider named, every provider whose key is in `keys.env` is listed, concurrently, and a provider without a key is skipped quietly. `baley init` runs the same detection silently after its ledger steps, also skipping a provider with no key quietly. Install is Build 3's trigger, and a model-not-found or deprecated-model failure is Build 4's (CFG-R20). Detection sends no prompt and no project content.*
 
 ```mermaid
 sequenceDiagram
@@ -450,14 +555,19 @@ sequenceDiagram
   else found
     P->>L: checkout.seen if new
     P->>P: effective policy (project file at the checkout's HEAD, global file, host sections)
-    alt merged result changed
-      P->>L: policy.effective
+    alt a settings file is invalid or unreadable, or a path is not UTF-8
+      P-->>I: config-unavailable naming the file and the fault
+      I-->>H: the refusal, with no policy.effective recorded
+    else policy available
+      alt merged result changed
+        P->>L: policy.effective
+      end
+      P-->>I: project and policy version
     end
-    P-->>I: project and policy version
   end
 ```
 
-*Figure 7. Finding the project and its policy on a request. The steps built so far serve the command line: the walk up to the nearest `baley.toml`, stopping at the git root (`discover`), the read of the project file at the checkout's HEAD (`committed::read`), and the merge with the global file and host sections. `baley init` calls the walk. No command calls the read yet; its first caller is Build 2 T9. Recording `checkout.seen` arrives in Build 2 T13, recording `policy.effective` when the merged result changes in T9, and the host's request through the host interface in Build 3.*
+*Figure 7. Finding the project and its policy on a request. The steps built so far serve the command line: the walk up to the nearest `baley.toml`, stopping at the git root (`discover`), the read of the project file at the checkout's HEAD (`committed::read`), and the merge with the global file and host sections. `baley init` and `purge` call the walk, and read HEAD's copy through the policy step. Recording `policy.effective` when the merged result changes is built for the command line: `baley init` records it after `project.initialized`, and `purge` from a checkout of the project it names. The command line connects no host, so no host section applies to it. An invalid or unreadable settings file, or a checkout or settings path that is not UTF-8, refuses with `config-unavailable` before the step records anything, and `baley init` refuses before it writes a file or opens the ledger. Recording `checkout.seen` arrives in Build 2 T13, and the host's request through the host interface in Build 3.*
 
 ## 9. Settings
 
@@ -508,32 +618,34 @@ The binary crate holds the inherited engine. It reads JSON files under `.plannin
 |---|---|---|
 | CFG-R1 | Partly built | The policy module reads `config.toml` and `baley.toml` as TOML (`crates/baley-core/src/policy/parse.rs:358-424`, `crates/baley/src/settings.rs:21-96`); the inherited engine still reads its JSON layers (`crates/baley/src/config/write.rs:19-24`, `crates/baley/src/server.rs:224-230`) until Build 9. |
 | CFG-R2 | Built | Platform config folders and `BALEY_HOME` in `crates/baley/src/folders.rs:83-134`; the global file's path and reader in `crates/baley/src/settings.rs:13-96`. The inherited engine still reads its own JSON global file. |
-| CFG-R3 | Built | Discovery takes the nearest `baley.toml` at or below the repository root (`crates/baley/src/discovery.rs:41-60`). The policy module reads and checks the project id and name in its `[project]` table and renders the file whole (`crates/baley-core/src/policy/project.rs:36-140`), and the project's settings come from the copy committed at HEAD, read through git (`crates/baley/src/committed.rs:57-106`). `baley init` writes the file at the repository root when none exists (`crates/baley/src/init.rs:159-166`). |
-| CFG-R4 | Partly built | The walk for the command line: `discover` judges the ancestors of the working directory that its gatherer observes, nearest first, stops at the first `.git` and never uses a file above it, and the nearest of nested files applies alone (`crates/baley/src/discovery.rs:41-81`). `baley init` calls it (`crates/baley/src/init.rs:362-366`), and Build 2 T9, T10, T12 and T13 follow; the guard and the server take the same walk per request in Build 3. Until then the Bash guard walks up to `.planning` (`crates/baley/src/guard/bash.rs:27-44`), the server binds one project per process (`crates/baley/src/server.rs:810-817`), and the Write/Edit guard does not walk (`crates/baley/src/guard/mod.rs:323-334`). |
+| CFG-R3 | Built | Discovery takes the nearest `baley.toml` at or below the repository root (`crates/baley/src/discovery.rs:41-60`). The policy module reads and checks the project id and name in its `[project]` table and renders the file whole (`crates/baley-core/src/policy/project.rs:36-140`), and the project's settings come from the copy committed at HEAD, read through git (`crates/baley/src/committed.rs:57-106`). `baley init` writes the file at the repository root when none exists (`crates/baley/src/init.rs:162-169`). |
+| CFG-R4 | Partly built | The walk for the command line: `discover` judges the ancestors of the working directory that its gatherer observes, nearest first, stops at the first `.git` and never uses a file above it, and the nearest of nested files applies alone (`crates/baley/src/discovery.rs:41-81`). `baley init` and `purge` call it (`crates/baley/src/init.rs:394-398`, `crates/baley/src/ledger/commands.rs:160-171`), and Build 2 T10, T12 and T13 follow; the guard and the server take the same walk per request in Build 3. Until then the Bash guard walks up to `.planning` (`crates/baley/src/guard/bash.rs:27-44`), the server binds one project per process (`crates/baley/src/server.rs:810-817`), and the Write/Edit guard does not walk (`crates/baley/src/guard/mod.rs:323-334`). |
 | CFG-R5 | Partly built | Scopes in the schema and the scope diagnostic in the walk (`crates/baley-core/src/policy/schema.rs:123-132`, `crates/baley-core/src/policy/parse.rs:575-625`); the command-line refusal `wrong-layer` is Build 2 T10. The inherited `GLOBAL_ONLY` list, applied at merge (`crates/baley/src/config/mod.rs:14-18`, `crates/baley/src/config/merge.rs:59-89`), and the `repo_only` flag in `crates/baley/src/config/schema.json`, refused at write (`crates/baley/src/config/write.rs:97-101`), stay until Build 9. |
 | CFG-R6 | Built | In the policy module: five layers in order and only the connected host's section (`crates/baley-core/src/policy/merge.rs:139-203`); the command line connects no host. The inherited merge of defaults, global and repo (`crates/baley/src/config/merge.rs:131-177`) has no host sections and stays until Build 9. |
 | CFG-R7 | Partly built | An unknown name is ignored with a diagnostic (`crates/baley-core/src/policy/parse.rs:521-554`, `crates/baley-core/src/policy/parse.rs:627-644`); the twelve settings without readers are gone from `crates/baley/src/config/schema.json`; the command-line refusal `unknown-setting` is Build 2 T10. |
-| CFG-R8 | Not built | routes persist config inputs only (`crates/baley/src/config/reload.rs:168-181`) |
-| CFG-R9 | Partly built | Validation and `config-unavailable` naming file, line, column and fault (`crates/baley-core/src/policy/parse.rs:218-306`, `crates/baley-core/src/policy/parse.rs:358-448`), and a file that is not a regular file or cannot be read (`crates/baley/src/settings.rs:83-96`); re-reading before every ledger write is Build 2 T9. The inherited engine re-reads and validates its JSON layers before each write (`crates/baley/src/config/reload.rs:300-312`, `crates/baley/src/session/mod.rs:498-509`) until Build 9. |
+| CFG-R8 | Partly built | The `policy.effective` event, registered at version 1, and its payload built from the merged policy (`crates/baley-core/src/policy/recorded/event.rs:14-25`, `crates/baley-core/src/policy/recorded/event.rs:74-169`); the `policy` view and `PolicyProjector`, which keep the latest record per checkout and host (`crates/baley-core/src/policy/recorded/view.rs:13-124`); and the judge of whether to record (`crates/baley-core/src/policy/recorded/judge.rs:8-49`). The binary's policy step holds the recorder, which appends `policy.effective` as Baley's own `policy.record` command only when the judge finds a change (`crates/baley/src/policy_step/record.rs:18-143`), and the entry point, which reads the catalog version and returns the version in force (`crates/baley/src/policy_step/mod.rs:16-45`). The command line's store registers the event and the view at view set version 4 (`crates/baley/src/ledger/open.rs:9-27`). `baley init` runs the step after `project.initialized` (`crates/baley/src/init.rs:459-463`). `purge` runs it only from a checkout of the project it names and records the version in force, otherwise 0 (`crates/baley-core/src/policy/recorded/purge.rs:12-25`, `crates/baley/src/ledger/commands.rs:131-188`, `crates/baley/src/ledger/commands.rs:210-240`). `config set` runs it in Build 2 T10, `anchor` and `acknowledge-restore` in T12, and the server and guard per request in Build 3. The inherited engine's routes persist its config inputs only (`crates/baley/src/config/reload.rs:168-181`) until Build 9. |
+| CFG-R9 | Partly built | Validation and `config-unavailable` naming file, line, column and fault (`crates/baley-core/src/policy/parse.rs:218-306`, `crates/baley-core/src/policy/parse.rs:358-448`), and a file that is not a regular file or cannot be read (`crates/baley/src/settings.rs:83-96`). The policy step's read gathers the global file and HEAD's copy of the project file and builds the policy from them, refusing with the first fault (`crates/baley/src/policy_step/read.rs:21-40`). A checkout or settings path that is not UTF-8 is refused with `config-unavailable` naming the path (`crates/baley-core/src/policy/recorded/event.rs:27-53`, `crates/baley-core/src/policy/recorded/event.rs:74-103`). `baley init` runs the read and build before it writes a file or opens the ledger (`crates/baley/src/init.rs:318-336`, `crates/baley/src/init.rs:399-407`), and `purge` runs them from a checkout of the project it names, refusing a managed checkout whose `baley.toml` yields no id (`crates/baley/src/ledger/commands.rs:152-208`). `config set` follows in Build 2 T10, `anchor` and `acknowledge-restore` in T12, and the server and guard in Build 3. The inherited engine re-reads and validates its JSON layers before each write (`crates/baley/src/config/reload.rs:300-312`, `crates/baley/src/session/mod.rs:498-509`) until Build 9. |
 | CFG-R10 | Built | `crates/baley/src/config/reload.rs:210-221`, `crates/baley/src/execution/boundary.rs:172` |
 | CFG-R11 | Partly built | guard denies both config paths (`crates/baley/src/guard/mod.rs:186-207`); the MCP `config-apply` and interview operations still exist (`crates/baley/src/config_service.rs:19-31`) |
 | CFG-R12, CFG-R13 | Built | In the policy module: the six roles and their defaults (`crates/baley-core/src/policy/schema.rs:208-243`), and an absent model passed as none (`crates/baley-core/src/policy/route.rs:176-279`). The inherited `crates/baley/src/config/roles.rs:7-14` keeps its `bal-*` roles until Build 9. |
-| CFG-R14 | Partly built | Resolution refuses `unknown-model` against the supplied accepted names (`crates/baley-core/src/policy/route.rs:200-211`); the catalog is Build 2 T7 and the write-time check Build 2 T10. The inherited `crates/baley/src/config/roles.rs:132-142` still drops unsupported names at dispatch. |
+| CFG-R14 | Partly built | Resolution refuses `unknown-model` against the supplied accepted names (`crates/baley-core/src/policy/route.rs:200-211`). The catalog lookup gives each host's and provider's accepted names with the catalog version (`crates/baley-core/src/catalog/lookup.rs:24-41`); resolution's production caller, which passes them, is Build 4, and the write-time check is Build 2 T10. The inherited `crates/baley/src/config/roles.rs:132-142` still drops unsupported names at dispatch. |
 | CFG-R15 | Partly built | The five rungs and the rung map argument of `resolve_route`, whose mapped value the route carries as `host_effort` (`crates/baley-core/src/policy/schema.rs:52-95`, `crates/baley-core/src/policy/route.rs:25-40`, `crates/baley-core/src/policy/route.rs:219`); each host's map is Build 3. The inherited resolution maps a rung to one of 30 agent names (`crates/baley/src/config/roles.rs:15-60`) until Build 9. |
 | CFG-R16 | Partly built | The escalation rule in `resolve_route` (`crates/baley-core/src/policy/route.rs:212-218`); Build 4 supplies the attempt. The inherited resolution (`crates/baley/src/config/roles.rs:127-131`) is called with attempt `None` everywhere (#69). |
 | CFG-R17 | Partly built | The route type carries every field of section 6 (`crates/baley-core/src/policy/route.rs:72-99`); a work order carrying it is Build 4. The inherited resolution (`crates/baley/src/config/roles.rs:143-180`) has no policy or catalog version. |
 | CFG-R18 | Built | `crates/baley/src/config/policy.rs:108-129` |
-| CFG-R19 to CFG-R23 | Not built | fixed list at `crates/baley/src/config/roles.rs:16` |
-| CFG-R24 | Built | `crates/baley/src/keys.rs:8-480`: file gathering, exposure checks, grammar and exact lookup |
-| CFG-R25 | Partly built | `crates/baley/src/keys.rs:262-351` has no write and reads no environment variable. The inherited review engine still reads environment variables and `providers.env` (`crates/baley/src/review/provider/credentials.rs:52-112`) until Build 4 replaces `credentials.rs::resolve`. |
-| CFG-R26 | Partly built | The key type prints only `[baley:<NAME>]` and has no `Display` or `Serialize` (`crates/baley/src/keys.rs:17-74`). A launch's `Debug` prints environment values as `[redacted]` (`crates/baley/src/process.rs:61-92`), and `baley exec` records nothing (`crates/baley/src/exec.rs:188-203`). Detection's request is Build 2 T8; recording key use belongs to Build 4. |
-| CFG-R27 | Partly built | `baley exec --key` reads a key for one command (`crates/baley/src/exec.rs:188-203`); detection is Build 2 T8. The inherited review engine reads keys itself (`crates/baley/src/review/provider/credentials.rs:52-112`) until Build 4. |
-| CFG-R28 | Built | provider reviewers are optional (`crates/baley/src/config/policy.rs:78-93`) |
+| CFG-R19 | Partly built | The catalog is the `model_catalog` view of the per-user project `user` (`crates/baley-core/src/catalog/mod.rs:49-55`, `crates/baley-core/src/catalog/view.rs:316-458`). `baley models list`, `add` and `remove` run the seeding step first (`crates/baley/src/models.rs:334-347`), and detection runs it only when it will record (`crates/baley/src/detection/mod.rs:74-76`). The step records the hint table when the seeding judge finds its version differs from the latest one recorded (`crates/baley/src/models.rs:127-141`, `crates/baley-core/src/catalog/seed.rs:11-23`). The Claude Code alias table and the hint table with its version are compiled in (`crates/baley-core/src/catalog/tables.rs:9-92`). Seeding at install is Build 3's `baley install`, and Codex's alias table is filled in Build 3. The inherited engine's fixed list (`crates/baley/src/config/roles.rs:16`) stays until Build 9. |
+| CFG-R20, CFG-R21 | Partly built | Detection is built for OpenAI and DeepSeek. The pure module in `baley-core` reads a list body (`crates/baley-core/src/catalog/detection/parse.rs:36-51`), judges what the lister saw as a listing or one failure category (`crates/baley-core/src/catalog/detection/classify.rs:8-106`), tags and places each id (`crates/baley-core/src/catalog/detection/tagging.rs:20-89`), diffs the listing against the catalog document (`crates/baley-core/src/catalog/detection/diff.rs:73-191`) and chooses the event (`crates/baley-core/src/catalog/detection/event.rs:39-74`). The binary's detection module holds the lister seam and its HTTPS lister (`crates/baley/src/detection/lister.rs:12-89`), the trigger judge with the key-name table and the refused scope (`crates/baley/src/detection/trigger.rs:16-128`), the record step (`crates/baley/src/detection/record.rs:24-156`) and the entry point every trigger calls (`crates/baley/src/detection/mod.rs:50-141`). `baley models update` runs it (`crates/baley/src/models.rs:419-455`), and `baley init` runs it silently after its ledger steps (`crates/baley/src/init.rs:472-476`). Both events are registered at version 1 (`crates/baley-core/src/catalog/events.rs:49-55`), and the view applies `models.detected` (`crates/baley-core/src/catalog/view.rs:572-637`) and `models.detection_failed`, which changes nothing (`crates/baley-core/src/catalog/view.rs:395-398`). Detection at install is Build 3, and after a model-not-found or deprecated-model failure Build 4. |
+| CFG-R22 | Built | `baley models add` and `baley models remove` record `models.owner_changed` (`crates/baley/src/models.rs:179-252`, `crates/baley/src/models.rs:457-493`) and refuse a compiled alias and a name the catalog does not hold (`crates/baley-core/src/catalog/owner.rs:10-41`). The projector keeps owner entries over seeds and detection, and keeps an owner removal hidden from both (`crates/baley-core/src/catalog/view.rs:460-637`). |
+| CFG-R23 | Partly built | Every catalog event records the version before it, read in its own transaction: a seed and an owner change (`crates/baley/src/models.rs:101-115`, `crates/baley/src/models.rs:219-228`), and a detection (`crates/baley/src/detection/record.rs:76-88`), which reports the version its own command committed (`crates/baley/src/detection/record.rs:97-104`). A body cut short at the 4 MiB bound records `incomplete` with that version and removes nothing (`crates/baley-core/src/catalog/detection/classify.rs:102-104`, `crates/baley-core/src/catalog/detection/event.rs:67-72`). The view keeps the version as the sequence of the latest event that changed an accepted name (`crates/baley-core/src/catalog/view.rs:427-444`). The lookup returns it beside the names, which is what a route's `catalog_version` takes (`crates/baley-core/src/policy/route.rs:16-23`, `crates/baley-core/src/policy/route.rs:276`). Routes are recorded in Build 4. |
+| CFG-R24 | Built | `crates/baley/src/keys.rs:79-514`: file gathering, exposure checks, grammar and exact lookup |
+| CFG-R25 | Partly built | `crates/baley/src/keys.rs:296-385` has no write and reads no environment variable. The inherited review engine still reads environment variables and `providers.env` (`crates/baley/src/review/provider/credentials.rs:52-112`) until Build 4 replaces `credentials.rs::resolve`. |
+| CFG-R26 | Partly built | The key type prints only `[baley:<NAME>]` and has no `Display` or `Serialize` (`crates/baley/src/keys.rs:22-48`). Detection's list request puts the key only in an `authorization` header marked sensitive, so the request's `Debug` prints `Sensitive`, and never in its URL (`crates/baley/src/keys.rs:50-77`). Detection's answers and request digest hold no key, id or provider text, and its payloads hold only ids, tags and a category, which carries at most a status number; a response's `Debug` shows only its body's length (`crates/baley/src/detection/record.rs:24-35`, `crates/baley/src/detection/record.rs:119-133`, `crates/baley-core/src/catalog/events.rs:111-153`, `crates/baley-core/src/catalog/detection/classify.rs:8-81`). A launch's `Debug` prints environment values as `[redacted]` (`crates/baley/src/process.rs:61-92`), and `baley exec` records nothing (`crates/baley/src/exec.rs:188-203`). Recording that a key was used belongs to Build 4. |
+| CFG-R27 | Partly built | `baley exec --key` reads a key for one command (`crates/baley/src/exec.rs:188-203`), and detection reads each covered provider's key for its one list request (`crates/baley/src/detection/mod.rs:78-94`, `crates/baley/src/keys.rs:50-77`). The inherited review engine reads keys itself (`crates/baley/src/review/provider/credentials.rs:52-112`) until Build 4. |
+| CFG-R28 | Built | Provider reviewers are optional (`crates/baley/src/config/policy.rs:78-93`), and `baley models update` names the key missing from `keys.env` for a provider the owner named (`crates/baley/src/detection/trigger.rs:121-123`, `crates/baley/src/models.rs:553-575`). |
 | CFG-R29 | Partly built | enum in `crates/baley/src/config/schema.json`; no not-yet-supported report |
 
 ## 12. Open questions
 
 | Question | Decided by |
 |---|---|
-| The exact host alias tables at first release | [0012](0012-host-interface.md) HST-R4 names the hosts (`claude-code`, `codex`); the tables are filled when the adapters are built |
-| The tier hint table's contents for each provider at first release | The owner, when the model catalog is built |
+| The exact host alias tables at first release | Claude Code's table is compiled into the catalog (section 11, CFG-R19). Codex's is filled when its host adapter is built in Build 3. |

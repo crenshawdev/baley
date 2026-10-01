@@ -181,3 +181,25 @@ pub fn a_cursor_from_another_query_is_refused<F: StoreFactory>(factory: &F) {
         );
     }
 }
+/// Reads several keys at once. Catches a result out of the order asked, an
+/// absent key dropped instead of returned as `None`, and a many-key read
+/// that skips the view and key checks a single read makes.
+pub fn several_keys_read_at_once_come_back_in_the_order_asked<F: StoreFactory>(factory: &F) {
+    let store = stocked(factory);
+    let documents = store
+        .get_many(&project(), "item", &[id(4), id(9), id(1)])
+        .unwrap();
+    assert_eq!(documents.len(), 3);
+    assert!(documents[0].is_some() && documents[2].is_some());
+    assert_eq!(documents[0], store.get(&project(), "item", &id(4)).unwrap());
+    assert_eq!(documents[1], None);
+    assert_eq!(documents[2], store.get(&project(), "item", &id(1)).unwrap());
+    assert_eq!(store.get_many(&project(), "item", &[]).unwrap(), vec![]);
+    assert_eq!(
+        store.get_many(&project(), "missing", &[id(1)]),
+        Err(StoreError::Refused(Refusal::UnknownView("missing".into())))
+    );
+    assert!(
+        matches!(store.get_many(&project(), "item", &[id(1), DocKey(vec![])]), Err(StoreError::Refused(Refusal::MalformedKey { view, .. })) if view == "item")
+    );
+}

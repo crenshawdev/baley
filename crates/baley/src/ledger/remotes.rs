@@ -1,5 +1,7 @@
-//! Remote names are explicit until project discovery arrives.
+//! Remote names are explicit until project discovery arrives. The per-user
+//! project `user` is checked locally unless the owner names a remote for it.
 use super::CliRefusal;
+use baley_core::catalog::USER_PROJECT;
 use baley_store::ProjectId;
 use std::collections::BTreeMap;
 
@@ -7,7 +9,8 @@ use std::collections::BTreeMap;
 pub(super) fn configured(stdout: &str, name: &str) -> bool {
     stdout.lines().any(|line| line == name)
 }
-/// Requires exactly one remote choice for every ledger project.
+/// Requires exactly one remote choice for every ledger project but `user`,
+/// which is local only when not named.
 pub(super) fn anchor_plan(
     projects: &[(ProjectId, String)],
     remotes: &[(String, String)],
@@ -26,6 +29,11 @@ pub(super) fn anchor_plan(
         if plan.insert(project, remote).is_some() {
             return Err(CliRefusal(format!("project {id} is named more than once")));
         }
+    }
+    // Placed after the named projects, so an explicit choice for it stands.
+    let user = ProjectId(USER_PROJECT.into());
+    if projects.iter().any(|(p, _)| *p == user) {
+        plan.entry(user).or_insert(None);
     }
     let missing: Vec<_> = projects
         .iter()

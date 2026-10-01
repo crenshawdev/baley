@@ -333,6 +333,16 @@ pub trait Views {
         key: &DocKey,
     ) -> Result<Option<Document>, StoreError>;
 
+    /// The documents at `keys`, in the order asked and `None` for an absent
+    /// key, all read in one snapshot, so a caller joining several documents
+    /// never sees one from before a commit beside one from after it.
+    fn get_many(
+        &self,
+        project: &ProjectId,
+        view: &str,
+        keys: &[DocKey],
+    ) -> Result<Vec<Option<Document>>, StoreError>;
+
     fn find(
         &self,
         project: &ProjectId,

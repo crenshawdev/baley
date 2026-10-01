@@ -9,6 +9,10 @@ use super::{
     ticker::ThreadTicker,
     trace::StoreTrace,
 };
+use crate::discovery::{self, Discovery, PROJECT_FILE};
+use crate::{init, policy_step, settings};
+use baley_core::policy::recorded::{PurgePolicy, purge_policy, recorded_policy};
+use baley_core::policy::{CONFIG_UNAVAILABLE, ProjectIdentity, Unavailable};
 use baley_core::*;
 use baley_store::*;
 use baley_store_sqlite::SqliteStore;
@@ -26,14 +30,16 @@ fn require_remote(forge: &mut Forge, name: &str) -> Result<(), Render> {
     forge.require_remote(name).map_err(|e| Render::refusal(e.0))
 }
 
-/// Wires one owner command to the core and storage port.
+/// Wires one owner command to the core and storage port. `config` is the
+/// config folder, where `purge`'s policy step finds the global file.
 pub(super) fn dispatch(
     command: LedgerCommand,
     store: Arc<SqliteStore>,
     cwd: PathBuf,
+    config: &Path,
     started_at: String,
 ) -> Render {
-    let mut forge = GitForge::new(crate::process::System, cwd, SystemClock::seconds);
+    let mut forge = GitForge::new(crate::process::System, cwd.clone(), SystemClock::seconds);
     let result = match command {
         LedgerCommand::Verify {
             project,
@@ -55,7 +61,7 @@ pub(super) fn dispatch(
             project,
             hashes,
             reason,
-        } => purge(&store, &ProjectId(project), hashes, &reason),
+        } => purge(&store, config, &cwd, &ProjectId(project), hashes, &reason),
         LedgerCommand::Scrub => scrub(&store),
         LedgerCommand::Rebuild { project } => rebuild(&store, &ProjectId(project)),
         LedgerCommand::Anchor { project, remote } => {
@@ -124,28 +130,113 @@ fn export(store: &SqliteStore, project: &ProjectId, to: &Path) -> Result<Render,
 }
 fn purge(
     store: &SqliteStore,
+    config: &Path,
+    cwd: &Path,
     project: &ProjectId,
     mut hashes: Vec<Hash>,
     reason: &str,
 ) -> Result<Render, Render> {
     hashes.sort();
+    let policy_version = purge_policy_version(store, config, cwd, project)?;
     let request_id = new_request_id();
-    println!("request {}", request_id.0);
-    let digest = request_digest(&json!({"kind":"payload.purge","project":project.0,"actor":"owner","policy_version":0,"hashes":hashes.iter().map(|h| h.to_hex()).collect::<Vec<_>>(),"reason":reason,"scope":[]})).map_err(|e|Render::refusal(e.to_string()))?;
-    let command = Command {
+    display::request_line(&mut std::io::stdout(), &request_id.0);
+    let at = SystemClock::now();
+    let command = purge_command(project, policy_version, &hashes, reason, request_id, &at)
+        .map_err(|e| Render::refusal(e.to_string()))?;
+    store
+        .purge(&command, &hashes, reason)
+        .map(|r| display::purge(&r))
+        .map_err(|e| display::store_error(&e, Some(&project.0)))
+}
+
+/// The policy version purge records: the policy step's from a checkout of
+/// the project it names, 0 anywhere else, where no settings file is read.
+fn purge_policy_version(
+    store: &SqliteStore,
+    config: &Path,
+    cwd: &Path,
+    project: &ProjectId,
+) -> Result<u64, Render> {
+    let ancestors = discovery::ancestors(cwd)
+        .map_err(|e| display::store_error(&StoreError::Unavailable(e.to_string()), None))?;
+    let checkout = match discovery::discover(&ancestors) {
+        Discovery::Managed { folder, root } => {
+            let path = folder.join(PROJECT_FILE);
+            let read = settings::read(&path);
+            let id =
+                purge_project(&path, init::observe_file(read.clone())).map_err(Render::refusal)?;
+            Some((id, root, read.ok().flatten()))
+        }
+        Discovery::Unmanaged { .. } | Discovery::Outside => None,
+    };
+    let discovered = checkout.as_ref().map(|(id, ..)| id.as_str());
+    let choice = purge_policy(discovered, &project.0);
+    let (PurgePolicy::RunStep, Some((_, root, working))) = (choice, checkout) else {
+        return Ok(0);
+    };
+    let reads = policy_step::gather(config, &root, working.as_ref());
+    let policy = policy_step::build(&reads).map_err(|e| Render::refusal(e.to_string()))?;
+    let recorded = recorded_policy(&root, &policy).map_err(|e| Render::refusal(e.to_string()))?;
+    policy_step::step(
+        store,
+        project,
+        &recorded,
+        new_request_id(),
+        &SystemClock::now(),
+    )
+    .map_err(|e| display::store_error(&e, Some(&project.0)))
+}
+
+/// The project id of the checkout's `baley.toml` at `path`, from
+/// `init::observe_file`. A managed checkout whose file yields no id is
+/// refused, never taken as no project, since that would record version 0
+/// for a purge run in the project's own checkout.
+pub(super) fn purge_project(
+    path: &Path,
+    observed: Result<Option<ProjectIdentity>, Unavailable>,
+) -> Result<String, String> {
+    const OUTSIDE: &str =
+        "(a purge run outside a checkout of the project records policy version 0)";
+    match observed {
+        Ok(Some(identity)) => Ok(identity.id),
+        Ok(None) => Err(format!(
+            "{CONFIG_UNAVAILABLE}: {} was not found {OUTSIDE}",
+            path.display()
+        )),
+        Err(unavailable) => Err(format!("{unavailable} {OUTSIDE}")),
+    }
+}
+
+/// Purge's own command, carrying `policy_version` in both its digest and
+/// itself. `hashes` are sorted.
+pub(super) fn purge_command(
+    project: &ProjectId,
+    policy_version: u64,
+    hashes: &[Hash],
+    reason: &str,
+    request_id: RequestId,
+    at: &str,
+) -> Result<Command, CanonicalError> {
+    let hashes: Vec<String> = hashes.iter().map(|hash| hash.to_hex()).collect();
+    let digest = request_digest(&json!({
+        "kind": "payload.purge",
+        "project": project.0,
+        "actor": "owner",
+        "policy_version": policy_version,
+        "hashes": hashes,
+        "reason": reason,
+        "scope": [],
+    }))?;
+    Ok(Command {
         project: project.clone(),
         kind: CommandKind("payload.purge".into()),
         request_id,
         digest,
         scope: vec![],
-        policy_version: 0,
-        recorded_at: SystemClock::now(),
+        policy_version,
+        recorded_at: at.into(),
         actor: Actor::Owner,
-    };
-    store
-        .purge(&command, &hashes, reason)
-        .map(|r| display::purge(&r))
-        .map_err(|e| display::store_error(&e, Some(&project.0)))
+    })
 }
 fn scrub(store: &SqliteStore) -> Result<Render, Render> {
     store
@@ -185,7 +276,7 @@ fn anchor(
 ) -> Result<Render, Render> {
     require_remote(forge, &remote)?;
     let request_id = new_request_id();
-    println!("request {}", request_id.0);
+    display::request_line(&mut std::io::stdout(), &request_id.0);
     let request = AnchorRequest {
         project: project.clone(),
         request_id,
@@ -241,7 +332,7 @@ fn acknowledge(
         policy_version: 0,
         remote: remote.clone(),
     };
-    println!("request {}", request.request_id.0);
+    display::request_line(&mut std::io::stdout(), &request.request_id.0);
     let result = acknowledge_restore(&request, store, forge, &mut SystemClock::now)
         .map_err(|e| display::acknowledgement_error(&e, &project.0, &remote))?;
     let outcome = match result {

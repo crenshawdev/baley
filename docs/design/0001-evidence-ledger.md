@@ -256,6 +256,7 @@ classDiagram
   class Views {
     <<trait>>
     +get(project, view, key) Document
+    +get_many(project, view, keys) Documents
     +find(project, view, index_query) Page
   }
   class Payloads {
@@ -351,7 +352,7 @@ classDiagram
 - **`stream`, `history` and `head`** read stored events exactly as recorded, never upcast. `stream` returns a stream's events from a version on, in stream-version order; `history` returns a project's events in a sequence range, in sequence order, that have any of the named types (all types when none are named) and, when a commit is named, recorded it. Each page holds at most `min(limit, 100)` events, read with SQL `LIMIT`, and its cursor is bound to the project, the query and the page's last position; another query refuses it with `InvalidCursor`. `head` is `None` for a project with no events and `UnknownProject` for an absent one. None of the three reads a view, so they work on a project this binary may not write.
 - **`verify`** takes the anchor the core fetched from the forge, or none. It walks the project's whole chain through the pure verifier one stored event at a time, compares the latest local anchor row with the supplied anchor without trusting it, and streams every present body the project references and every excerpt a reduced body retains, hashing the uncompressed bytes and checking the stored length. The `VerifyReport` holds the chain report (`first_break`, an anchor verdict that can be `Acknowledged`, the raw unanchored range, `acknowledged_restores` and `age_unanchored_since`), each missing or corrupt body, the bodies checked, the tombstones counted, and the latest local row and its comparison (`NotCompared`, `Matches`, `MissingLocal`, `LocalBehind`, `LocalAhead` or `Conflict`).
 - **`expect`** additionally names the stream that serializes a contested decision, so two commands that would both pass their own checks are ordered by one version counter. Each contested decision names its stream in [Serializing streams](#serializing-streams).
-- **Views** are declared by the core as a `ViewSpec`: a name, a version, a key shape, indexed fields, the ordering of each index and a page-size bound. `find` reads by a declared index, never by scan, and returns a page with a cursor. A cursor is bound to the query, project, generation and view version that issued it and refused under any other. One query runs against one read snapshot, the same snapshot in which the adapter checks the project's live view versions.
+- **Views** are declared by the core as a `ViewSpec`: a name, a version, a key shape, indexed fields, the ordering of each index and a page-size bound. `find` reads by a declared index, never by scan, and returns a page with a cursor. A cursor is bound to the query, project, generation and view version that issued it and refused under any other. One query runs against one read snapshot, the same snapshot in which the adapter checks the project's live view versions. `get_many` reads several keys of one view as one query, so documents a caller joins, such as `baley models list`'s catalog version and rows, come from one committed state.
 - **`EventSchema`** is the core's registry of event types, handed to the adapter at open. `reads` says which types and versions this binary can read; a project holding any other is read-only for it. `projection_payload` gives an event's current type version and its payload upcast to that version. Projectors never see a stored event directly: ordinary projection and replay both hand them a copy carrying that version and payload.
 - **Payloads** are read through a stream on its own read-only connection and snapshot. A stream opened before a purge keeps reading its snapshot. A purged or reduced payload returns its status and tombstone. Bytes whose hash was reduced or purged cannot be stored again (`PayloadTombstoned`).
 - **Search** is a capability with defined semantics: terms and quoted phrases, scoped by project and optionally phase, results in descending relevance with stable tie-breaking by sequence. The SQLite adapter implements it with FTS5 and BM25; nothing in the core depends on FTS5 syntax.
@@ -405,6 +406,7 @@ Streams used by the record families:
 | `guard` | `guard.allowed`, `guard.asked`, `guard.refused`, `guard.policy_recorded` |
 | `command/<kind>` | `command.claimed`, `command.completed`, `command.reconciled` |
 | `retention` | `payload.reduced`, `payload.purged` |
+| `models` | `models.seeded`, `models.owner_changed`, `models.detected`, `models.detection_failed`. The stream lives only in the reserved per-user project `user`, whose records carry policy version 0 ([0003](0003-configuration-and-routing.md)) |
 
 The full mapping from today's namespaces is in [Appendix A](#appendix-a-mapping-from-the-current-store).
 
@@ -740,11 +742,12 @@ The store-owned `request` view is at version 2. It projects `command.claimed` to
 | `risk` | (project, phase) | | Observations and receipts |
 | `milestone` | (project, name) | state | Close, archive, release and landing state |
 | `pause` | project | | The active pause and its resume bindings |
-| `policy` | (project, checkout) | | Effective policy and its layers |
+| `policy` | (project, checkout, host) | | The latest `policy.effective` per checkout and host, with its version |
 | `guard_policy` | project | | The remembered denial policy |
 | `capture` | (project, item id) | phase, disposition | The capture queue |
 | `request` | (project, command kind, request id) | state | Each request's open claim, held claim or outcome, for retries and open claims |
 | `claim_scope` | (project, scope token) | | The open claim holding each scope token, for the scope check |
+| `model_catalog` | (project, catalog) | | The model names each host and provider accepts, with their source, tier and placement, and the catalog version ([0003](0003-configuration-and-routing.md)) |
 
 Hardin reads only views, and confirms authority against events. The next-action rules, progress and gate checks become queries over `phase`, `plan`, `dispatch`, `verification`, `review_queue`, `pause` and `capture`, not a walk over the whole store.
 
@@ -995,22 +998,39 @@ Development builds set `BALEY_HOME` so they never touch the owner's real ledger.
 
 #### Project identity and policy (EVD-R17)
 
-A project is initialized with `baley init`, run at the repository root. It takes three steps, in this order. It writes the project file, `baley.toml`, at the root, with a new random project id (a lower-case UUID version 4) and the project's name, which is the root folder's name unless `--name` gives another; the owner commits the file. It then creates the project in the ledger. Last, it records `project.initialized` version 1, payload `{"name"}`, on the `project` stream with policy version 0.
+A project is initialized with `baley init`, run at the repository root. It takes three steps, in this order. It writes the project file, `baley.toml`, at the root, with a new random project id (a lower-case UUID version 4) and the project's name, which is the root folder's name unless `--name` gives another; the owner commits the file. It then creates the project in the ledger. Last, it records `project.initialized` version 1, payload `{"name"}`, on the `project` stream with policy version 0. On every run that passes its refusals, init then runs the policy step, which records `policy.effective` when the policy changed, the first one on a new project, and last runs detection silently. The step is Baley's own command and records the first `policy.effective` at policy version 0, the version it replaces, while `project.initialized` keeps version 0.
 
-Each step is skipped when its result already exists. An interrupted init is finished by running it again, and a checkout where the file, the project and the event all exist records nothing, not even a completed command. A second init racing the first records one `project.initialized`, because the check for it runs in the same transaction that appends it. An existing project file is never changed: its id and name are used, and a `--name` that differs is reported as not applied. A clone on another machine has the committed file but not the project, so `baley init` there creates the project in that machine's ledger from the committed id and records its `project.initialized`.
+Each step is skipped when its result already exists. An interrupted init is finished by running it again, and a checkout where the file, the project and the event all exist and whose policy is unchanged records nothing in the project's chain, not even a completed command. A rerun after a policy change records only `policy.effective`, and init still reports the project as already initialized. A crash between `project.initialized` and the first `policy.effective` is finished by the next run, since the step runs on every run, not only on one that records `project.initialized`. A second init racing the first records one `project.initialized`, because the check for it runs in the same transaction that appends it. An existing project file is never changed: its id and name are used, and a `--name` that differs is reported as not applied. A clone on another machine has the committed file but not the project, so `baley init` there creates the project in that machine's ledger from the committed id and records its `project.initialized`.
 
-`baley init` refuses, before it writes anything or opens the ledger, when:
+`baley init` refuses, before it writes anything or opens the ledger, with the first of these that holds, in this order:
 
 - the working directory is not inside a git repository: `not-a-repository`;
 - the working directory is inside a repository but below its root: `not-repository-root`, naming the root;
+- the project file is not a regular file, cannot be read, does not parse, lacks the project's id or name, or holds an id that is not a lower-case UUID version 4: `config-unavailable`, naming the file;
 - no project file exists, no `--name` is given, and the root has no folder name Baley can use as the project's name (a repository at `/`, or a folder name that is not UTF-8): `project-name-required`;
-- the project file does not parse, lacks the project's id or name, or holds an id that is not a lower-case UUID version 4: `config-unavailable`, naming the file.
+- the global file is not a regular file, cannot be read or is invalid, or HEAD's copy of `baley.toml` cannot be read or is invalid: `config-unavailable`, naming the file and the fault; a file that cannot be read is named before a file that is invalid, and within each the global file before HEAD's copy;
+- the repository root, or a settings file's path, is not UTF-8: `config-unavailable`, naming the path.
 
 TOML is a format people already read, diff and edit by hand; when Baley writes the file, comments and key order in it are not kept ([ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)). The file holds the project id, the project name, and the project's policy: reviewers, routing and protected branches, the project-level settings (0002, SYS-R13). Its location and discovery are designed in [0003](0003-configuration-and-routing.md) (CFG-R3, CFG-R4).
 
 Baley finds a checkout's project the way git finds a repository: it walks up from the working directory to the first directory holding the project file, stopping at the repository root. The guard uses the same discovery. A directory with no project file is not managed and the guard stays silent. Every checkout Baley sees is recorded with `checkout.seen` (path, root commit, remote URL) for diagnosis only. If two checkouts whose remotes differ claim the same project id (a fork cloned beside its upstream), Baley refuses to record for the second and tells the owner to give it its own id with `baley init --new-id`.
 
-**Effective policy.** Policy has layers: built-in defaults, the owner's global settings and the project settings, merged as [0003](0003-configuration-and-routing.md) specifies (CFG-R5, CFG-R6), with each host's section applying only to that host (0002, SYS-R13). Whenever the merged result changes, for any layer, Baley records `policy.effective` with the full merged policy and the layer each value came from. Every command records the policy version it ran under. Each checkout runs under the project file committed at its own HEAD; if two checkouts of one project run under different policies, Hardin reports the divergence and names both. The project id is taken from the working-tree `baley.toml`, so a new project is managed before its first commit, while the project's settings come from the copy committed at HEAD. An unborn HEAD, or a project file not yet committed, gives an empty project layer; any other failure to read HEAD's copy refuses with `config-unavailable`, naming the file. When the working-tree file differs from HEAD's copy, or is not yet committed, Baley shows a diagnostic that its changes apply once committed. That diagnostic is a note about the file, not part of the effective policy Baley records, so an uncommitted edit is not a policy change, and `baley config set` on the project file likewise says the change applies once committed. The routing-admission rule is kept: a dispatch whose routing inputs changed since admission is refused.
+**Effective policy.** Policy has layers: built-in defaults, the owner's global settings and the project settings, merged as [0003](0003-configuration-and-routing.md) specifies (CFG-R5, CFG-R6), with each host's section applying only to that host (0002, SYS-R13). Whenever the merged result changes, for any layer, Baley records `policy.effective` with the full merged policy and the layer each value came from. Policy version 0 means that no recorded policy applies. Each command records a version as this table says, as in 0003 (CFG-R8, CFG-R9):
+
+| Command | Project from | Policy step | Version recorded |
+|---|---|---|---|
+| `baley init` | discovery at the repository root | yes, after `project.initialized` | 0 on `project.initialized` |
+| `baley config set` in a project | discovery | yes, after the write | the version in force after it |
+| `anchor`, `acknowledge-restore` | discovery | yes | the version in force |
+| `purge` | its argument | only when run from a checkout of that project | the version in force there, otherwise 0 |
+| `verify`, `doctor`, `export`, `rebuild`, `scrub` | their argument (`scrub` takes none), or discovery for the anchor remote | no: no event is appended | none |
+| `baley models add`, `remove` and `update`, detection, seeding | the per-user project `user` | no | 0 |
+| `policy.effective` itself | the command it belongs to | it is the step's own record | the version it replaces, 0 for the first of its key |
+
+The policy step runs before every command that appends to a project's chain from a checkout, and a command that appends to no chain runs no step. It re-reads both files and is a command of its own, `policy.record` by actor `baley`, and it opens no command when nothing changed. Records in the per-user project `user` carry 0 and build no policy. `purge` is the one chain-writing command that may run outside a checkout: it runs the step only from a checkout of the project it names, and anywhere else it reads no settings file and records 0. From a managed checkout whose `baley.toml` yields no id (it cannot be read, does not parse, or holds no valid id), `purge` refuses with `config-unavailable`, naming the file and saying that a purge run outside a checkout of the project records policy version 0.
+
+Each checkout runs under the project file committed at its own HEAD; if two checkouts of one project run under different policies, Hardin reports the divergence and names both. The project id is taken from the working-tree `baley.toml`, so a new project is managed before its first commit, while the project's settings come from the copy committed at HEAD. An unborn HEAD, or a project file not yet committed, gives an empty project layer; any other failure to read HEAD's copy refuses with `config-unavailable`, naming the file. When the working-tree file differs from HEAD's copy, or is not yet committed, `baley config show` and `baley doctor` show a diagnostic that its changes apply once committed; the policy step itself prints nothing. That diagnostic is a note about the file, not part of the effective policy Baley records, so an uncommitted edit is not a policy change, and `baley config set` on the project file likewise says the change applies once committed. The routing-admission rule is kept: a dispatch whose routing inputs changed since admission is refused.
+
 
 Agents may not edit the project file; the guard refuses writes to it.
 
@@ -1514,7 +1534,7 @@ Every read the MCP server serves today, and the view and key that serve it. All 
 | `why` | `event(project_id, git_commit)` index, then the events' streams | Sequence |
 | `suggest` | `risk` by phase; routing and outcome events by type | Newest first |
 | `risk-status` | `risk` (project, phase) | |
-| `route`, `config-entry`, `config-facts`, `config-interview` | `policy` (project, checkout) | |
+| `route`, `config-entry`, `config-facts`, `config-interview` | `policy` (project, checkout, host) | |
 | `milestone-read` | `milestone` (project, name) | |
 | `land-read` | `milestone` (project, name), landing steps | Step order |
 | `undo-read` | `phase` undo history; `request` for refusals | Newest first |

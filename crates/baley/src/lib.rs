@@ -43,6 +43,8 @@ pub mod why;
 
 /// HEAD's copy of the project file, read through git as the project layer.
 pub mod committed;
+/// Detection: refreshes each provider's catalog from its model-list endpoint.
+pub mod detection;
 /// Finds the checkout's project: the nearest `baley.toml` at or below the repository root.
 pub mod discovery;
 /// Runs one command with a provider key in its environment and redacted from its output.
@@ -55,6 +57,10 @@ pub mod init;
 pub mod keys;
 /// Owner commands over the evidence ledger.
 pub mod ledger;
+/// `baley models`: the per-user model catalog and the seeding step before each use.
+pub mod models;
+/// The policy step: records the effective policy a command ran under when it changed.
+pub mod policy_step;
 /// Replaces a settings file whole, refusing when it changed since it was read.
 pub mod replace;
 /// The two settings files as bytes: the global file's path and one reader.

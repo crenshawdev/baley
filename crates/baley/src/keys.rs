@@ -1,9 +1,14 @@
-//! Provider keys read from the owner's file, with pure exposure and grammar checks.
+//! Provider keys read from the owner's file, with pure exposure and grammar
+//! checks, and the model-list request that carries a key in its header.
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+
+use baley_core::catalog::Provider;
+use reqwest::header::{AUTHORIZATION, HeaderValue};
+use reqwest::{Method, Request, Url};
 
 /// The file exposes its keys to another user.
 pub const KEYS_FILE_EXPOSED: &str = "keys-file-exposed";
@@ -31,7 +36,7 @@ impl Key {
     }
 
     /// The value for the child environment and the redactor in `baley exec`,
-    /// and, from Build 2 T8, detection's request header.
+    /// and for the key header of [`list_request`].
     pub(crate) fn expose(&self) -> &str {
         &self.value
     }
@@ -40,6 +45,35 @@ impl fmt::Debug for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.placeholder())
     }
+}
+
+/// A key whose bytes cannot be sent in a header. The file grammar refuses
+/// every control byte, so no accepted key gives this, and it holds no text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct KeyNotSendable;
+
+/// The GET for `provider`'s model list. The key goes only in the
+/// provider's key header, marked sensitive so a `Debug` of the request
+/// prints `Sensitive` for it, and never in the URL.
+pub(crate) fn list_request(provider: Provider, key: &Key) -> Result<Request, KeyNotSendable> {
+    let (url, header, value) = match provider {
+        Provider::OpenAi => (
+            "https://api.openai.com/v1/models",
+            AUTHORIZATION,
+            format!("Bearer {}", key.expose()),
+        ),
+        Provider::DeepSeek => (
+            "https://api.deepseek.com/models",
+            AUTHORIZATION,
+            format!("Bearer {}", key.expose()),
+        ),
+    };
+    let url = Url::parse(url).expect("a compiled list URL parses");
+    let mut value = HeaderValue::from_str(&value).map_err(|_| KeyNotSendable)?;
+    value.set_sensitive(true);
+    let mut request = Request::new(Method::GET, url);
+    request.headers_mut().insert(header, value);
+    Ok(request)
 }
 
 /// The accepted keys and the configured path they came from.
@@ -874,6 +908,86 @@ mod tests {
             );
         }
     }
+    const SENTINEL: &str = "sk-SENTINEL-7d31";
+
+    fn sentinel_key(name: &str) -> Keys {
+        Keys::parsed(
+            Path::new("/c/keys.env"),
+            format!("{name}={SENTINEL}").as_bytes(),
+        )
+    }
+
+    /// Asserts the request is a GET to exactly `origin` and `path`, with
+    /// the sentinel only in `header` as `value`, marked sensitive, and
+    /// nowhere in the URL or the request's `Debug`.
+    fn assert_key_only_in_header(
+        request: &Request,
+        origin: &str,
+        path: &str,
+        header: &str,
+        value: &str,
+    ) {
+        assert_eq!(request.method(), Method::GET);
+        let url = request.url();
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(format!("https://{}", url.host_str().unwrap()), origin);
+        assert_eq!(url.port(), None);
+        assert_eq!(url.path(), path);
+        let sent = request.headers().get(header).unwrap();
+        assert_eq!(sent.as_bytes(), value.as_bytes());
+        assert!(sent.is_sensitive());
+        for (name, other) in request.headers() {
+            if name.as_str() != header {
+                let text = String::from_utf8_lossy(other.as_bytes());
+                assert!(!text.contains(SENTINEL), "{name} holds the key");
+            }
+        }
+        assert!(!url.as_str().contains(SENTINEL));
+        let debug = format!("{request:?}");
+        assert!(!debug.contains(SENTINEL), "{debug}");
+        assert!(debug.contains("Sensitive"), "{debug}");
+    }
+
+    #[test]
+    fn an_openai_list_request_carries_the_key_only_in_a_sensitive_bearer_header() {
+        let keys = sentinel_key("OPENAI_API_KEY");
+        let key = keys.get("OPENAI_API_KEY").unwrap();
+        let request = list_request(Provider::OpenAi, key).unwrap();
+        assert_key_only_in_header(
+            &request,
+            "https://api.openai.com",
+            "/v1/models",
+            "authorization",
+            &format!("Bearer {SENTINEL}"),
+        );
+        assert_eq!(request.url().query(), None);
+    }
+
+    #[test]
+    fn a_deepseek_list_request_carries_the_key_only_in_a_sensitive_bearer_header() {
+        let keys = sentinel_key("DEEPSEEK_API_KEY");
+        let key = keys.get("DEEPSEEK_API_KEY").unwrap();
+        let request = list_request(Provider::DeepSeek, key).unwrap();
+        assert_key_only_in_header(
+            &request,
+            "https://api.deepseek.com",
+            "/models",
+            "authorization",
+            &format!("Bearer {SENTINEL}"),
+        );
+        assert_eq!(request.url().query(), None);
+    }
+
+    #[test]
+    fn a_key_that_cannot_be_a_header_is_refused_without_its_text() {
+        let key = Key {
+            name: "OPENAI_API_KEY".into(),
+            value: format!("{SENTINEL}\n"),
+        };
+        let refused = list_request(Provider::OpenAi, &key).unwrap_err();
+        assert!(!format!("{refused:?}").contains(SENTINEL));
+    }
+
     #[test]
     fn gatherer_reads_keys_through_a_symbolic_link() {
         let dir = tempfile::tempdir().unwrap();
