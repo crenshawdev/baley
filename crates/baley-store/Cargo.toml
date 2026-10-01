@@ -19,4 +19,4 @@ serde = { version = "1", features = ["derive"] }
 # workspace build, and the canonical bytes must not depend on what else is
 # built alongside.
 serde_json = { version = "1", features = ["arbitrary_precision"] }
-sha2 = "0.10"
+sha2 = "0.11"
