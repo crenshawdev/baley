@@ -260,6 +260,7 @@ graph LR
     6-. "<div>Requests work orders</div><div style='font-size: 70%'></div>" .->7
     7-. "<div>Resolves role, model and<br />effort</div><div style='font-size: 70%'></div>" .->8
     8-. "<div>Reads</div><div style='font-size: 70%'></div>" .->13
+    4-. "<div>Writes a settings file whole,<br />for config set</div><div style='font-size: 70%'></div>" .->13
     8-. "<div>Checks model names</div><div style='font-size: 70%'></div>" .->10
     8-. "<div>Records the effective policy<br />and each route</div><div style='font-size: 70%'></div>" .->11
     4-. "<div>Settings commands</div><div style='font-size: 70%'></div>" .->8

@@ -35,6 +35,7 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         domain -> composer "Requests work orders"
         composer -> policy "Resolves role, model and effort"
         policy -> settings "Reads"
+        hostInterface -> settings "Writes a settings file whole, for config set"
         policy -> catalog "Checks model names"
         policy -> ports "Records the effective policy and each route"
         hostInterface -> policy "Settings commands"
