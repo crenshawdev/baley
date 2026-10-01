@@ -759,3 +759,75 @@ fn a_mixed_set_does_not_report_a_held_pair_or_lose_the_order_of_the_changed_ones
         vec![changed_b, changed_a]
     );
 }
+
+#[test]
+fn a_change_in_a_ledgered_project_is_not_written_without_the_step_or_the_steps_version() {
+    assert_eq!(
+        choose_outcome(true, Place::LedgeredProject),
+        SetOutcome {
+            write: true,
+            run_step: true,
+            version: VersionSource::Step,
+        }
+    );
+}
+
+#[test]
+fn a_change_in_a_project_not_in_the_ledger_is_not_given_a_step() {
+    assert_eq!(
+        choose_outcome(true, Place::ProjectNotInLedger),
+        SetOutcome {
+            write: true,
+            run_step: false,
+            version: VersionSource::NotInLedger,
+        }
+    );
+}
+
+#[test]
+fn a_change_outside_a_project_is_not_given_a_step() {
+    assert_eq!(
+        choose_outcome(true, Place::OutsideProject),
+        SetOutcome {
+            write: true,
+            run_step: false,
+            version: VersionSource::OutsideProject,
+        }
+    );
+}
+
+#[test]
+fn a_no_op_in_a_ledgered_project_is_not_written_stepped_or_printed_as_version_zero() {
+    assert_eq!(
+        choose_outcome(false, Place::LedgeredProject),
+        SetOutcome {
+            write: false,
+            run_step: false,
+            version: VersionSource::Stored,
+        }
+    );
+}
+
+#[test]
+fn a_no_op_in_a_project_not_in_the_ledger_is_not_written_or_stepped() {
+    assert_eq!(
+        choose_outcome(false, Place::ProjectNotInLedger),
+        SetOutcome {
+            write: false,
+            run_step: false,
+            version: VersionSource::NotInLedger,
+        }
+    );
+}
+
+#[test]
+fn a_no_op_outside_a_project_is_not_written_or_stepped() {
+    assert_eq!(
+        choose_outcome(false, Place::OutsideProject),
+        SetOutcome {
+            write: false,
+            run_step: false,
+            version: VersionSource::OutsideProject,
+        }
+    );
+}
