@@ -1603,3 +1603,62 @@ fn a_report_that_names_a_remote_names_kind_as_a_model_name_is_caught() {
         "example.remote: kind remote name, default absent, scope both"
     );
 }
+
+#[test]
+fn the_standard_schema_accepting_git_remote_in_the_global_file_is_caught() {
+    let refusal = judge_pairs(
+        Schema::standard(),
+        FileLayer::Global,
+        true,
+        None,
+        &[("git.remote", "origin")],
+    )
+    .expect_err("git.remote is a project setting");
+    assert_eq!(refusal.code(), "wrong-layer");
+    let text = refusal.to_string();
+    assert!(text.contains("git.remote"), "{text}");
+    assert!(text.contains("project"), "{text}");
+    assert!(text.contains("--project"), "{text}");
+}
+
+#[test]
+fn the_standard_schema_not_taking_git_remote_in_the_project_file_without_the_catalog_is_caught() {
+    let pairs = judge_pairs(
+        Schema::standard(),
+        FileLayer::Project,
+        true,
+        None,
+        &[("git.remote", "origin")],
+    )
+    .expect("the project file may set git.remote");
+    assert_eq!(
+        pairs,
+        vec![pair("git.remote", None, Value::RemoteName("origin".into()))]
+    );
+    assert!(!needs_catalog(&pairs));
+}
+
+#[test]
+fn the_standard_schema_accepting_an_empty_git_remote_is_caught() {
+    let refusal = judge_pairs(
+        Schema::standard(),
+        FileLayer::Project,
+        true,
+        None,
+        &[("git.remote", "")],
+    )
+    .expect_err("an empty remote name is refused");
+    assert_eq!(refusal.code(), "invalid-value");
+}
+
+#[test]
+fn the_standard_schema_showing_git_remote_outside_a_project_is_caught() {
+    let refusal = judge_show(Schema::standard(), &["git.remote"], false, NONE, NONE, NONE)
+        .expect_err("outside a project");
+    assert_eq!(
+        refusal,
+        ShowRefusal::NotAProject {
+            name: "git.remote".into()
+        }
+    );
+}

@@ -583,3 +583,13 @@ fn a_remote_name_recorded_as_anything_but_a_string_or_null_when_absent_is_caught
     );
     assert_eq!(remote_values(None), json!({"git.remote": null}));
 }
+
+#[test]
+fn the_standard_schemas_recorded_values_dropping_git_remote_is_caught() {
+    let project = file(PROJECT, "[git]\nremote = \"origin\"\n", "p1");
+    let set = effective_policy(Schema::standard(), None, None, Some(&project)).unwrap();
+    assert_eq!(payload(&set, 0)["values"]["git.remote"], json!("origin"));
+    let unset = effective_policy(Schema::standard(), None, None, None).unwrap();
+    let values = payload(&unset, 0)["values"].clone();
+    assert_eq!(values.get("git.remote"), Some(&json!(null)));
+}
