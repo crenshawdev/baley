@@ -144,12 +144,12 @@ graph LR
 | CFG-R28 | A provider the owner reaches by its own command-line login needs no line in the keys file; every command that needs a key names the key missing from the file, and no command forces the owner to add one. | No one is forced to hand over a key. | SYS-R10 | Active |
 | CFG-R29 | `git.forge_provider` accepts `github`, `gitlab` and `forgejo`; the first release acts on `github` only, and choosing another value is accepted and reported as not yet supported by [0011: Landing](0011-milestones-landing-undo-pause.md). | All three forges are planned; the setting must not need to change when they arrive. | | Active |
 
-Which policy each command runs under (CFG-R8, CFG-R9). Policy version 0 means that no recorded policy applies. The policy step runs before every command that appends to a project's chain from a checkout: it re-reads both files, records `policy.effective` when the merged result changed, and returns the version in force for the command's own record. A command that appends to no chain runs no step. Records in the per-user project `user` carry 0 and build no policy. `purge` is the one chain-writing command that may run outside a checkout, and records 0 there.
+Which policy each command runs under (CFG-R8, CFG-R9). Policy version 0 means that no recorded policy applies. The policy step runs before every command that appends to a project's chain from a checkout: it re-reads both files, records `policy.effective` when the merged result changed, and returns the version in force for the command's own record. A command that appends to no chain runs no step. Records in the per-user project `user` carry 0 and build no policy. `purge` is the one chain-writing command that may run outside a checkout, and records 0 there. A `baley config set` outside any project, one in a project that is not in this machine's ledger, and one that changes nothing run no step. The first two give 0, since no recorded policy applies, and one that changes nothing gives the version in force.
 
 | Command | Project from | Policy step | Version recorded |
 |---|---|---|---|
 | `baley init` | discovery at the repository root | yes, after `project.initialized` | 0 on `project.initialized` |
-| `baley config set` in a project | discovery | yes, after the write | the version in force after it |
+| `baley config set` in a project | discovery | yes, after the write, when the project is in this machine's ledger | the version in force after it, or 0 when the project is not in this machine's ledger, where `baley init` records the policy |
 | `anchor`, `acknowledge-restore` | discovery | yes | the version in force |
 | `purge` | its argument | only when run from a checkout of that project | the version in force there, otherwise 0 |
 | `verify`, `doctor`, `export`, `rebuild`, `scrub` | their argument (`scrub` takes none), or discovery for the anchor remote | no: no event is appended | none |
