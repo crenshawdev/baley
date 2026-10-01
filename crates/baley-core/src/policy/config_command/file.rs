@@ -6,7 +6,8 @@ use toml::{Table, Value as TomlValue};
 use super::set::TypedPair;
 use crate::policy::parse::document;
 use crate::policy::{
-    Fault, FileLayer, Schema, SettingsFile, Unavailable, Value, line_and_column, parse_layer,
+    Fault, FileLayer, ParsedLayer, Schema, SettingsFile, Unavailable, Value, line_and_column,
+    parse_layer,
 };
 
 /// The complete bytes of the settings file `base` becomes when `pairs` are
@@ -81,4 +82,27 @@ fn toml_value(value: &Value) -> TomlValue {
         Value::Rung(rung) => TomlValue::String(rung.name().to_owned()),
         Value::ModelName(name) => TomlValue::String(name.clone()),
     }
+}
+
+/// The pairs the target file does not already hold, in the order given.
+///
+/// A pair is held when the file's layer has a written value of the same
+/// name, at the same host (`None` for the top level) and equal to it. An
+/// empty result is a no-op: a set that writes nothing and runs no step
+/// (D-03). With no file, every pair is a change. Repeats must already be
+/// collapsed.
+pub fn changed_pairs(current: Option<&ParsedLayer>, pairs: &[TypedPair]) -> Vec<TypedPair> {
+    pairs
+        .iter()
+        .filter(|pair| {
+            !current.is_some_and(|layer| {
+                layer.values.iter().any(|written| {
+                    written.name == pair.name
+                        && written.host == pair.host
+                        && written.value == pair.value
+                })
+            })
+        })
+        .cloned()
+        .collect()
 }

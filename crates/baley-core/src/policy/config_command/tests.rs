@@ -671,3 +671,91 @@ fn a_base_holding_an_invalid_value_is_not_repaired_by_the_set_that_replaces_it()
         "{refusal:?}"
     );
 }
+
+fn parsed(layer: FileLayer, text: &str) -> crate::policy::ParsedLayer {
+    parse_layer(&settings_file("/c/config.toml", text), layer, &schema()).expect("a valid file")
+}
+
+const HELD_FILE: &str = "example.flag = true\n\
+                         roles.planner.effort = \"high\"\n\
+                         [host.codex.roles.planner]\n\
+                         model = \"gpt-x\"\n";
+
+#[test]
+fn a_set_whose_every_pair_the_file_holds_is_not_a_change() {
+    let file = parsed(FileLayer::Global, HELD_FILE);
+    let pairs = [
+        pair("example.flag", None, Value::Bool(true)),
+        pair("roles.planner.effort", None, Value::Rung(Rung::High)),
+        pair(
+            "roles.planner.model",
+            Some(Host::Codex),
+            Value::ModelName("gpt-x".into()),
+        ),
+    ];
+    assert_eq!(changed_pairs(Some(&file), &pairs), vec![]);
+}
+
+#[test]
+fn a_value_held_at_the_other_host_level_is_not_taken_as_held() {
+    let file = parsed(FileLayer::Global, HELD_FILE);
+    // Held at the top level, set under a host section.
+    let under_host = pair("example.flag", Some(Host::Codex), Value::Bool(true));
+    assert_eq!(
+        changed_pairs(Some(&file), std::slice::from_ref(&under_host)),
+        vec![under_host]
+    );
+    // Held in a host section, set at the top level.
+    let top = pair(
+        "roles.planner.model",
+        None,
+        Value::ModelName("gpt-x".into()),
+    );
+    assert_eq!(
+        changed_pairs(Some(&file), std::slice::from_ref(&top)),
+        vec![top]
+    );
+    // Held in codex's section, set in claude-code's.
+    let other = pair(
+        "roles.planner.model",
+        Some(Host::ClaudeCode),
+        Value::ModelName("gpt-x".into()),
+    );
+    assert_eq!(
+        changed_pairs(Some(&file), std::slice::from_ref(&other)),
+        vec![other]
+    );
+}
+
+#[test]
+fn a_different_value_at_a_held_path_is_not_taken_as_held() {
+    let file = parsed(FileLayer::Global, HELD_FILE);
+    let pairs = [pair("roles.planner.effort", None, Value::Rung(Rung::Low))];
+    assert_eq!(changed_pairs(Some(&file), &pairs), pairs.to_vec());
+}
+
+#[test]
+fn a_set_against_no_file_is_not_a_no_op() {
+    let pairs = [
+        pair("example.flag", None, Value::Bool(false)),
+        pair("roles.planner.effort", None, Value::Rung(Rung::High)),
+    ];
+    assert_eq!(changed_pairs(None, &pairs), pairs.to_vec());
+}
+
+#[test]
+fn a_mixed_set_does_not_report_a_held_pair_or_lose_the_order_of_the_changed_ones() {
+    let file = parsed(FileLayer::Global, HELD_FILE);
+    let changed_a = pair("roles.planner.effort", None, Value::Rung(Rung::Max));
+    let held = pair("example.flag", None, Value::Bool(true));
+    let changed_b = pair(
+        "roles.planner.model",
+        Some(Host::Codex),
+        Value::ModelName("other".into()),
+    );
+    let pairs = [changed_b.clone(), held, changed_a.clone()];
+    assert_eq!(
+        changed_pairs(Some(&file), &pairs),
+        vec![changed_b, changed_a]
+    );
+}
