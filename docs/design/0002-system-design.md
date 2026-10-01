@@ -184,7 +184,7 @@ graph LR
     15-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio or HTTP]</div>" .->3
     15-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->16
     15-. "<div>Outside review calls, with<br />prompts built by Baley</div><div style='font-size: 70%'></div>" .->18
-    3-. "<div>Reads</div><div style='font-size: 70%'></div>" .->13
+    3-. "<div>Reads, and writes a file<br />whole for config set</div><div style='font-size: 70%'></div>" .->13
     3-. "<div>Reads</div><div style='font-size: 70%'></div>" .->14
     3-. "<div>Lists models</div><div style='font-size: 70%'></div>" .->18
     3-. "<div>Appends events, reads views</div><div style='font-size: 70%'></div>" .->12

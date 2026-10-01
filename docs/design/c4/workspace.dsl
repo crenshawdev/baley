@@ -34,6 +34,9 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         hardin -> domain "Applies the area's rules"
         domain -> composer "Requests work orders"
         composer -> policy "Resolves role, model and effort"
+        # Explicit, so the container view shows the write beside the reads; the
+        # implied edge would carry only the first component relation.
+        binary -> settings "Reads, and writes a file whole for config set"
         policy -> settings "Reads"
         hostInterface -> settings "Writes a settings file whole, for config set"
         policy -> catalog "Checks model names"
