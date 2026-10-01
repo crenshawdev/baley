@@ -4,5 +4,7 @@
 //! policy changed. It prints nothing.
 
 mod read;
+mod record;
 
 pub use read::{Reads, build, gather};
+pub use record::{RECORD_COMMAND, record};
