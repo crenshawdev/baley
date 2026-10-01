@@ -69,16 +69,18 @@ fn attempt(
     let start = begin(Schema::standard(), file, host, seen)?;
 
     let questions = questions(&start.policy);
+    let failed = |error: io::Error| Render {
+        lines: vec![format!(
+            "the interview failed: {error}; nothing was written"
+        )],
+        code: 1,
+        error: true,
+    };
+    if let Some(note) = &start.note {
+        writeln!(output, "{note}").map_err(failed)?;
+    }
     let outcome =
-        converse(&questions, &start.target, start.layer, host, input, output).map_err(|error| {
-            Render {
-                lines: vec![format!(
-                    "the interview failed: {error}; nothing was written"
-                )],
-                code: 1,
-                error: true,
-            }
-        })?;
+        converse(&questions, &start.target, start.layer, host, input, output).map_err(failed)?;
     Ok(match outcome {
         Outcome::Declined => Render::line("Nothing was written.", 0),
         Outcome::Unchanged => {
@@ -108,27 +110,38 @@ struct Start {
     layer: FileLayer,
     /// That file's path, which the owner confirms.
     target: PathBuf,
+    /// The pending note, set when the target is the project file and the
+    /// working-tree file holds changes HEAD's copy does not.
+    note: Option<String>,
 }
 
 /// Judges the reads before the first question. A refusal is exit 2 and no
-/// question is asked. In order: `--project` outside a project, the reads and
-/// their parses, then a default file that comes out as the project file
-/// outside a project. HEAD's read becomes the judge's input as `show` makes
-/// it: no read is no file, a copy is its layer, and a failed read stays its
-/// refusal.
+/// question is asked. In order: `--project` outside a project, the working-tree
+/// file's id as `config set` checks it, the reads and their parses, then a
+/// default file that comes out as the project file outside a project. HEAD's
+/// read becomes the judge's input as `show` makes it: no read is no file, a
+/// copy is its layer, and a failed read stays its refusal.
 fn begin(
     schema: &Schema,
     file: Option<FileLayer>,
     host: Option<Host>,
     seen: Seen,
 ) -> Result<Start, Render> {
-    let project_file = seen.folder.map(|folder| folder.join(PROJECT_FILE));
+    let project_file = seen.folder.as_ref().map(|folder| folder.join(PROJECT_FILE));
     if file == Some(FileLayer::Project) && project_file.is_none() {
         return Err(not_a_project());
     }
+    if let Some(folder) = &seen.folder {
+        set::working_tree_id(folder, seen.working.clone())
+            .map_err(|refusal| Render::refusal(refusal.to_string()))?;
+    }
+    let mut pending = None;
     let head = match seen.reads.head {
         None => Ok(None),
-        Some(Ok(committed)) => Ok(committed.layer),
+        Some(Ok(committed)) => {
+            pending = committed.pending.map(|note| note.to_string());
+            Ok(committed.layer)
+        }
         Some(Err(refusal)) => Err(refusal),
     };
     let layers = judge_show(
@@ -150,6 +163,7 @@ fn begin(
         policy: merge(schema, host, layers.global.as_ref(), layers.head.as_ref()),
         layer,
         target,
+        note: pending.filter(|_| layer == FileLayer::Project),
     })
 }
 
@@ -429,7 +443,7 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    use crate::committed::Committed;
+    use crate::committed::{Committed, Pending};
     use baley_core::policy::{Fault, parse_layer};
 
     const GLOBAL: &str = "/c/config.toml";
@@ -638,11 +652,17 @@ mod tests {
         );
     }
 
+    /// A working-tree file that carries a valid project id.
+    const WORKING: &str =
+        "[project]\nid = \"6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f\"\nname = \"sample\"\n";
+
+    /// Reads for a project. With no working-tree text the file holds a valid
+    /// id and nothing else.
     fn seen(global: &str, working: Option<&str>, head: Option<&str>) -> Seen {
         Seen {
             folder: Some(PathBuf::from("/r")),
             global_path: GLOBAL.into(),
-            working: Ok(working.map(|text| file(PROJECT, text))),
+            working: Ok(Some(file(PROJECT, working.unwrap_or(WORKING)))),
             reads: Reads {
                 global: Ok(Some(file(GLOBAL, global))),
                 head: head.map(|text| {
@@ -691,11 +711,14 @@ mod tests {
 
     #[test]
     fn a_working_tree_file_with_a_wrong_typed_value_is_refused_naming_it() {
-        let (code, text) = refusal_text(seen("", Some("escalate_on_failure = 3\n"), None));
+        let working = format!("escalate_on_failure = 3\n{WORKING}");
+
+        let (code, text) = refusal_text(seen("", Some(&working), None));
 
         assert_eq!(code, 2);
         assert!(text.starts_with("config-unavailable: "), "{text}");
         assert!(text.contains(PROJECT), "{text}");
+        assert!(text.contains("escalate_on_failure"), "{text}");
         assert!(!text.contains("HEAD"), "{text}");
     }
 
@@ -1014,5 +1037,93 @@ mod tests {
             [("roles.planner.model", "claude-unknown-x")]
         );
         assert_eq!(output.matches("roles.planner.model is").count(), 1);
+    }
+
+    #[test]
+    fn a_working_tree_file_with_no_project_id_is_refused_naming_it() {
+        let (code, text) = refusal_text(seen("", Some("[project]\nname = \"sample\"\n"), None));
+
+        assert_eq!(code, 2);
+        assert!(text.starts_with("config-unavailable: "), "{text}");
+        assert!(text.contains(PROJECT), "{text}");
+    }
+
+    #[test]
+    fn the_working_tree_id_is_judged_before_the_global_file() {
+        let (code, text) = refusal_text(seen("[roles", Some("[project]\nname = \"s\"\n"), None));
+
+        assert_eq!(code, 2);
+        assert!(text.contains(PROJECT), "{text}");
+        assert!(!text.contains(GLOBAL), "{text}");
+    }
+
+    #[test]
+    fn a_global_target_in_a_project_still_refuses_a_working_tree_file_with_no_id() {
+        let seen = seen("", Some("[project]\nname = \"s\"\n"), None);
+
+        let render = begin(Schema::standard(), Some(FileLayer::Global), None, seen)
+            .err()
+            .unwrap();
+
+        assert!(render.lines[0].contains(PROJECT), "{render:?}");
+    }
+
+    fn differing_head(mut seen: Seen) -> Seen {
+        seen.reads.head = Some(Ok(Committed {
+            layer: Some(file(PROJECT, WORKING)),
+            pending: Some(Pending::Differs {
+                path: PROJECT.into(),
+            }),
+        }));
+        seen
+    }
+
+    #[test]
+    fn a_project_target_gets_the_pending_note_for_a_working_tree_file_that_differs() {
+        let seen = differing_head(seen("", None, None));
+
+        let start = begin(Schema::standard(), Some(FileLayer::Project), None, seen);
+
+        assert_eq!(
+            start.ok().unwrap().note.as_deref(),
+            Some("/r/baley.toml differs from HEAD's copy, so its changes apply once committed")
+        );
+    }
+
+    #[test]
+    fn a_project_target_gets_the_note_for_a_file_not_committed_at_head() {
+        let mut seen = seen("", None, None);
+        seen.reads.head = Some(Ok(Committed {
+            layer: None,
+            pending: Some(Pending::Absent {
+                path: PROJECT.into(),
+            }),
+        }));
+
+        let start = begin(Schema::standard(), Some(FileLayer::Project), None, seen);
+
+        let note = start.ok().unwrap().note.unwrap();
+        assert!(note.contains("is not committed at HEAD"), "{note}");
+    }
+
+    #[test]
+    fn a_global_target_in_the_same_project_gets_no_pending_note() {
+        let seen = differing_head(seen("", None, None));
+
+        let start = begin(Schema::standard(), Some(FileLayer::Global), None, seen);
+
+        assert_eq!(start.ok().unwrap().note, None);
+    }
+
+    #[test]
+    fn a_project_target_with_no_pending_change_gets_no_note() {
+        let start = begin(
+            Schema::standard(),
+            Some(FileLayer::Project),
+            None,
+            seen("", None, None),
+        );
+
+        assert_eq!(start.ok().unwrap().note, None);
     }
 }
