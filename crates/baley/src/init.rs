@@ -6,6 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use baley_core::policy::recorded::{RecordedPolicy, recorded_policy};
 use baley_core::policy::{
     ProjectIdentity, SettingsFile, Unavailable, read_project, render_project,
 };
@@ -25,6 +26,7 @@ use crate::ledger::clock::SystemClock;
 use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
 use crate::ledger::open;
+use crate::policy_step::{self, Reads};
 use crate::{keys, replace, settings};
 
 /// The working directory is not inside a git repository.
@@ -268,10 +270,10 @@ pub struct LedgerObservation {
 /// of them. A fully initialized checkout plans nothing, so a rerun appends
 /// nothing to the chain.
 ///
-/// Later work adds its actions here and to the ledger step: the first
-/// `policy.effective` and the policy step (T9), and checkout admission with
-/// `--new-id` (T13). Detection is not a step: it runs after the steps on
-/// every run that passes the refusals, outside the plan.
+/// The policy step, like detection, is not a step of the plan: on every run
+/// that passes the refusals it runs after the steps and before detection,
+/// and it appends nothing while the policy is unchanged. Checkout admission
+/// with `--new-id` (T13) is later work here.
 pub fn plan(file: Option<&ProjectIdentity>, ledger: LedgerObservation) -> Vec<Step> {
     match (file, ledger) {
         // A new id has nothing to look up.
@@ -300,6 +302,37 @@ pub fn observe_file(
     read: Result<Option<SettingsFile>, Unavailable>,
 ) -> Result<Option<ProjectIdentity>, Unavailable> {
     read?.as_ref().map(read_project).transpose()
+}
+
+/// What init's steps need, judged before anything is written or opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prepared {
+    /// The working-tree file's project, `None` when there is no file.
+    pub existing: Option<ProjectIdentity>,
+    /// The project's name.
+    pub naming: Naming,
+    /// The checkout and the policy the step records.
+    pub recorded: RecordedPolicy,
+}
+
+/// Judges init's observations before the store opens or a file is written:
+/// the working-tree file's read, `--name`, the policy from `reads`, then the
+/// root as the recorded policy holds it. Returns the first refusal's text.
+pub fn prepare(
+    root: &Path,
+    given: Option<&str>,
+    file: Result<Option<SettingsFile>, Unavailable>,
+    reads: &Reads,
+) -> Result<Prepared, String> {
+    let existing = observe_file(file).map_err(|e| e.to_string())?;
+    let naming = name(root, given, existing.as_ref()).map_err(|e| e.to_string())?;
+    let policy = policy_step::build(reads).map_err(|e| e.to_string())?;
+    let recorded = recorded_policy(root, &policy).map_err(|e| e.to_string())?;
+    Ok(Prepared {
+        existing,
+        naming,
+        recorded,
+    })
 }
 
 /// Reads whether the project is in the ledger and, when it is, whether its
@@ -367,8 +400,14 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
         .map_or(cwd.as_path(), |a| a.path.as_path());
     let root = locate(&discovery::discover(&ancestors), canonical).map_err(|e| refuse(&e))?;
     let path = root.join(PROJECT_FILE);
-    let existing = observe_file(settings::read(&path)).map_err(|e| refuse(&e))?;
-    let naming = name(&root, args.name.as_deref(), existing.as_ref()).map_err(|e| refuse(&e))?;
+    let file = settings::read(&path);
+    let working = file.as_ref().ok().and_then(Option::as_ref);
+    let reads = policy_step::gather(&folders.config, &root, working);
+    let Prepared {
+        existing,
+        naming,
+        recorded,
+    } = prepare(&root, args.name.as_deref(), file, &reads).map_err(Render::refusal)?;
 
     // Nothing above opens the store, so a refusal leaves no ledger home behind.
     let store = open::store(&folders.home, started_at, open::options())
@@ -420,6 +459,11 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
         ));
         acted = true;
     }
+    // Outside the plan, so a rerun finishes a crash between
+    // `project.initialized` and the first `policy.effective`. It prints
+    // nothing, and init's own events keep policy version 0.
+    let project = ProjectId(identity.id.clone());
+    policy_step::step(&store, &project, &recorded, new_request_id(), started_at).map_err(failed)?;
     if !acted {
         lines.push(format!(
             "already initialized: {} names project {}, and the ledger at {} holds it",
@@ -764,5 +808,119 @@ mod tests {
             }
         );
         assert_eq!(plan(Some(&project), observed), vec![]);
+    }
+
+    const ID: &str = "0b5c1f6e-2a7d-4c3e-9f10-5a6b7c8d9e0f";
+    const GLOBAL: &str = "/c/config.toml";
+    const WORKING: &str = "/r/baley.toml";
+
+    fn settings_file(path: &str, text: &str) -> SettingsFile {
+        crate::settings::file(Path::new(path), text.as_bytes().to_vec())
+    }
+
+    /// A valid project file naming `kept`, with `settings` above its table.
+    fn project_text(settings: &str) -> String {
+        let table = render_project(ID, "kept", None).unwrap();
+        format!("{settings}{}", String::from_utf8(table).unwrap())
+    }
+
+    fn reads(global: Option<&str>, head: Option<Result<&str, Unavailable>>) -> Reads {
+        Reads {
+            global: Ok(global.map(|text| settings_file(GLOBAL, text))),
+            head: head.map(|read| {
+                read.map(|text| crate::committed::Committed {
+                    layer: Some(settings_file(WORKING, text)),
+                    pending: None,
+                })
+            }),
+        }
+    }
+
+    fn unreadable(path: &str, cause: &str) -> Unavailable {
+        Unavailable {
+            path: path.into(),
+            fault: baley_core::policy::Fault::Unreadable {
+                cause: cause.into(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_first_init_with_an_invalid_global_file_is_refused_before_the_file_is_written() {
+        let root = Path::new("/r");
+        let invalid = reads(Some("escalate_on_failure = [\n"), None);
+        let refusal = prepare(root, None, Ok(None), &invalid).unwrap_err();
+        assert!(
+            refusal.starts_with("config-unavailable: /c/config.toml:"),
+            "{refusal}"
+        );
+
+        // The same observations with a valid global file plan the write.
+        let valid = reads(Some("escalate_on_failure = true\n"), None);
+        let prepared = prepare(root, None, Ok(None), &valid).unwrap();
+        assert_eq!(prepared.existing, None);
+        let steps = plan(prepared.existing.as_ref(), LedgerObservation::default());
+        assert_eq!(steps.first(), Some(&Step::WriteFile));
+    }
+
+    #[test]
+    fn a_wrong_type_in_heads_copy_is_refused_naming_baley_toml() {
+        let working = project_text("");
+        let head = project_text("escalate_on_failure = \"yes\"\n");
+        let observed = reads(None, Some(Ok(&head)));
+        let file = Ok(Some(settings_file(WORKING, &working)));
+        let refusal = prepare(Path::new("/r"), None, file, &observed).unwrap_err();
+        assert!(
+            refusal.starts_with("config-unavailable: /r/baley.toml:1:"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_failed_read_of_heads_copy_is_refused_with_its_cause() {
+        let failed = unreadable(WORKING, "HEAD's copy: git exited with status 128");
+        let observed = reads(None, Some(Err(failed.clone())));
+        let file = Ok(Some(settings_file(WORKING, &project_text(""))));
+        let refusal = prepare(Path::new("/r"), None, file, &observed).unwrap_err();
+        assert_eq!(refusal, failed.to_string());
+    }
+
+    #[test]
+    fn the_global_file_is_not_judged_before_an_invalid_working_tree_file() {
+        let observed = reads(Some("escalate_on_failure = [\n"), None);
+        let file = Ok(Some(settings_file(WORKING, "[project\nid = ")));
+        let refusal = prepare(Path::new("/r"), None, file, &observed).unwrap_err();
+        assert!(
+            refusal.starts_with("config-unavailable: /r/baley.toml:"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_root_that_is_not_utf8_is_refused_rather_than_recorded_lossily() {
+        let root = Path::new(OsStr::from_bytes(b"/w/caf\xe9"));
+        let refusal = prepare(root, Some("cafe"), Ok(None), &reads(None, None)).unwrap_err();
+        assert!(refusal.starts_with("config-unavailable: "), "{refusal}");
+        assert!(
+            refusal.contains(&format!("{} is not UTF-8", root.display())),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn valid_observations_do_not_lose_the_identity_naming_or_either_files_source() {
+        let head = project_text("roles.reviewer.effort = \"high\"\n");
+        let observed = reads(Some("escalate_on_failure = true\n"), Some(Ok(&head)));
+        let file = Ok(Some(settings_file(WORKING, &head)));
+
+        let prepared = prepare(Path::new("/r"), Some("other"), file, &observed).unwrap();
+
+        assert_eq!(prepared.existing, Some(identity("kept")));
+        assert_eq!(prepared.naming.name, "kept");
+        let payload = baley_core::policy::recorded::effective_payload(&prepared.recorded, ID, 0);
+        assert_eq!(payload["checkout"], "/r");
+        assert_eq!(payload["sources"]["escalate_on_failure"]["path"], GLOBAL);
+        assert_eq!(payload["sources"]["roles.reviewer.effort"]["path"], WORKING);
+        assert_eq!(payload["values"]["roles.reviewer.effort"], "high");
     }
 }
