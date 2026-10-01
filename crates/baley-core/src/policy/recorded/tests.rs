@@ -541,3 +541,24 @@ fn a_comment_in_a_global_file_that_sets_a_value_left_unrecorded_is_caught() {
         PolicyJudgement::Record
     );
 }
+
+#[test]
+fn a_purge_in_a_checkout_of_the_named_project_skipping_the_policy_step_is_caught() {
+    assert_eq!(
+        purge_policy(Some(PROJECT_ID), PROJECT_ID),
+        PurgePolicy::RunStep
+    );
+}
+
+#[test]
+fn a_purge_from_another_projects_checkout_recording_that_projects_policy_is_caught() {
+    assert_eq!(
+        purge_policy(Some("0b9e8d7c-6a5f-4e3d-8c2b-1a0f9e8d7c6b"), PROJECT_ID),
+        PurgePolicy::VersionZero
+    );
+}
+
+#[test]
+fn a_purge_outside_any_checkout_running_the_policy_step_is_caught() {
+    assert_eq!(purge_policy(None, PROJECT_ID), PurgePolicy::VersionZero);
+}
