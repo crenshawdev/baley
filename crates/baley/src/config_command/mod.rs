@@ -7,6 +7,7 @@
 //! `lib.rs` and `main.rs` until Build 9.
 
 mod set;
+mod show;
 
 use std::process::ExitCode;
 
@@ -26,6 +27,18 @@ pub struct ConfigArgs {
 enum ConfigCommand {
     /// Write one or more settings into the global file or the project file.
     Set(SetArgs),
+    /// Show every setting with its layer, its diagnostics and where it was set.
+    Show(ShowArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+struct ShowArgs {
+    /// Apply this host's sections, claude-code or codex.
+    #[arg(long, value_name = "NAME", value_parser = host)]
+    host: Option<Host>,
+    /// The settings to show, every setting when none is named.
+    #[arg(value_name = "NAME")]
+    names: Vec<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -80,6 +93,7 @@ fn pair(text: &str) -> Result<(String, String), String> {
 pub fn run(args: ConfigArgs) -> ExitCode {
     let result = match args.command {
         ConfigCommand::Set(args) => set::set(args.layer.layer(), args.host, &args.pairs),
+        ConfigCommand::Show(args) => show::show(args.host, &args.names),
     };
     ExitCode::from(display::emit(
         &result,
@@ -112,7 +126,9 @@ mod tests {
             .into_iter()
             .chain(args.iter().copied());
         let Top::Config(config) = Cli::try_parse_from(argv)?.command;
-        let ConfigCommand::Set(set) = config.command;
+        let ConfigCommand::Set(set) = config.command else {
+            panic!("not a set");
+        };
         Ok(set)
     }
 
@@ -121,6 +137,40 @@ mod tests {
             .iter()
             .map(|(n, v)| (n.as_str(), v.as_str()))
             .collect()
+    }
+
+    fn parse_show(args: &[&str]) -> Result<ShowArgs, clap::Error> {
+        let argv = ["baley", "config", "show"]
+            .into_iter()
+            .chain(args.iter().copied());
+        let Top::Config(config) = Cli::try_parse_from(argv)?.command;
+        let ConfigCommand::Show(show) = config.command else {
+            panic!("not a show");
+        };
+        Ok(show)
+    }
+
+    #[test]
+    fn show_alone_asks_for_every_setting_on_the_command_line() {
+        let show = parse_show(&[]).unwrap();
+        assert!(show.names.is_empty());
+        assert_eq!(show.host, None);
+    }
+
+    #[test]
+    fn show_keeps_the_names_asked_in_order() {
+        let show = parse_show(&["roles.planner.effort", "escalate_on_failure"]).unwrap();
+        assert_eq!(show.names, ["roles.planner.effort", "escalate_on_failure"]);
+    }
+
+    #[test]
+    fn show_takes_a_known_host_and_refuses_an_unknown_one_with_exit_2() {
+        assert_eq!(
+            parse_show(&["--host", "codex"]).unwrap().host,
+            Some(Host::Codex)
+        );
+        let error = parse_show(&["--host", "gemini"]).unwrap_err();
+        assert_eq!(error.exit_code(), 2);
     }
 
     #[test]
