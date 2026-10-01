@@ -10,13 +10,15 @@ use baley_core::policy::config_command::{
     Place, changed_pairs, choose_outcome, collapse_repeats, judge_pairs, render_file, render_set,
 };
 use baley_core::policy::{
-    FileLayer, Host, ParsedLayer, Schema, SettingsFile, Unavailable, parse_layer,
+    Fault, FileLayer, Host, ParsedLayer, Schema, SettingsFile, Unavailable, parse_layer,
 };
+use baley_store::StoreError;
 
+use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{self, Environment, Folders, Platform};
-use crate::ledger::display::Render;
+use crate::ledger::display::{self, Render};
 use crate::policy_step::{self, Reads};
-use crate::{replace, settings};
+use crate::{init, replace, settings};
 
 /// Writes `pairs` into the file `layer` names and returns what the command
 /// prints. Every pair is judged before anything is written, then one file
@@ -35,25 +37,54 @@ fn attempt(
     pairs: &[(String, String)],
 ) -> Result<Render, Render> {
     let folders = Folders::resolve(Platform::current(), &Environment::read()).map_err(refusal)?;
+    let unavailable =
+        |error: io::Error| display::store_error(&StoreError::Unavailable(error.to_string()), None);
+    let cwd = std::env::current_dir().map_err(unavailable)?;
+    let ancestors = discovery::ancestors(&cwd).map_err(unavailable)?;
+    let found = match discovery::discover(&ancestors) {
+        Discovery::Managed { folder, root } => Some((folder, root)),
+        Discovery::Unmanaged { .. } | Discovery::Outside => None,
+    };
+
     let schema = Schema::standard();
     let named: Vec<(&str, &str)> = pairs
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect();
-    // No project is found yet, so a project-file set refuses here.
-    let typed = judge_pairs(schema, layer, false, host, &named).map_err(refusal)?;
+    let typed = judge_pairs(schema, layer, found.is_some(), host, &named).map_err(refusal)?;
 
     let global_path = settings::global_path(&folders);
-    let reads = Reads {
-        global: settings::read(&global_path),
-        head: None,
+    let (project, reads) = match found {
+        Some((folder, root)) => {
+            let working = settings::read(&folder.join(PROJECT_FILE));
+            let head = working.as_ref().ok().and_then(Option::as_ref);
+            let reads = policy_step::gather(&folders.config, &root, head);
+            (
+                Some(ProjectSeen {
+                    folder,
+                    root,
+                    working,
+                }),
+                reads,
+            )
+        }
+        None => {
+            let global = settings::read(&global_path);
+            (None, Reads { global, head: None })
+        }
     };
-    let prepared = prepare(layer, &global_path, &reads, schema).map_err(refusal)?;
+    let prepared =
+        prepare(layer, &global_path, project.as_ref(), &reads, schema).map_err(refusal)?;
     refuse_link(&prepared.target).map_err(refusal)?;
 
     let typed = collapse_repeats(typed);
     let changed = changed_pairs(prepared.current.as_ref(), &typed);
-    let outcome = choose_outcome(!changed.is_empty(), Place::OutsideProject);
+    // The ledger read is the next task's: every project counts as not in it.
+    let place = match prepared.project {
+        Some(_) => Place::ProjectNotInLedger,
+        None => Place::OutsideProject,
+    };
+    let outcome = choose_outcome(!changed.is_empty(), place);
     if outcome.write {
         let bytes =
             render_file(schema, layer, prepared.base.as_ref(), &changed).map_err(refusal)?;
@@ -69,6 +100,26 @@ fn attempt(
     })
 }
 
+/// The project the working directory is in, with its project file as read.
+#[derive(Debug, Clone)]
+struct ProjectSeen {
+    /// The folder holding `baley.toml`.
+    folder: PathBuf,
+    /// The repository root.
+    root: PathBuf,
+    /// The working-tree `baley.toml` as `settings::read` returned it.
+    working: Result<Option<SettingsFile>, Unavailable>,
+}
+
+/// The project a set runs in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Project {
+    /// The id the working-tree file names.
+    id: String,
+    /// The repository root, the checkout the policy step records.
+    root: PathBuf,
+}
+
 /// What the checks before a write found: the file to write and its base.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Prepared {
@@ -79,27 +130,57 @@ struct Prepared {
     base: Option<SettingsFile>,
     /// The base parsed as the target's layer, for the no-op judge.
     current: Option<ParsedLayer>,
+    /// The project, when the set runs in one.
+    project: Option<Project>,
 }
 
 /// Judges the supplied reads before anything is written, as `init::prepare`
-/// does: the policy builds from the reads, then the target parses as its
-/// layer. The first refusal is returned.
+/// does. In order: the working-tree file's read and id, the policy from the
+/// reads (global, then HEAD's copy), then the target as its layer. The first
+/// refusal is returned.
+///
+/// A project-file set is based on the working-tree file, never on HEAD's
+/// copy: HEAD's digest would refuse every file with uncommitted edits, and
+/// HEAD's bytes would throw those edits away.
 fn prepare(
     layer: FileLayer,
     global_path: &Path,
+    project: Option<&ProjectSeen>,
     reads: &Reads,
     schema: &Schema,
 ) -> Result<Prepared, Unavailable> {
+    let seen = match project {
+        Some(seen) => {
+            let identity =
+                init::observe_file(seen.working.clone())?.ok_or_else(|| Unavailable {
+                    path: seen.folder.join(PROJECT_FILE),
+                    fault: Fault::Unreadable {
+                        cause: "the file was not found".to_owned(),
+                    },
+                })?;
+            Some((seen, identity.id))
+        }
+        None => None,
+    };
     policy_step::build(reads)?;
-    let base = reads.global.clone()?;
+    let (target, base) = match (layer, &seen) {
+        (FileLayer::Project, Some((seen, _))) => {
+            (seen.folder.join(PROJECT_FILE), seen.working.clone()?)
+        }
+        _ => (global_path.to_owned(), reads.global.clone()?),
+    };
     let current = base
         .as_ref()
         .map(|file| parse_layer(file, layer, schema))
         .transpose()?;
     Ok(Prepared {
-        target: global_path.to_owned(),
+        target,
         base,
         current,
+        project: seen.map(|(seen, id)| Project {
+            id,
+            root: seen.root.clone(),
+        }),
     })
 }
 
@@ -168,6 +249,142 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     use super::*;
+
+    const GLOBAL: &str = "/c/config.toml";
+    const FOLDER: &str = "/r/app";
+    const ROOT: &str = "/r";
+    const ID: &str = "6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f";
+    const PROJECT_TEXT: &str =
+        "[project]\nid = \"6f1c2a4e-8b1d-4c3a-9e2f-0a5b7c9d1e3f\"\nname = \"sample\"\n";
+
+    fn file(path: &str, text: &str) -> SettingsFile {
+        settings::file(Path::new(path), text.as_bytes().to_vec())
+    }
+
+    fn working(text: &str) -> Result<Option<SettingsFile>, Unavailable> {
+        Ok(Some(file("/r/app/baley.toml", text)))
+    }
+
+    fn seen(working: Result<Option<SettingsFile>, Unavailable>) -> ProjectSeen {
+        ProjectSeen {
+            folder: FOLDER.into(),
+            root: ROOT.into(),
+            working,
+        }
+    }
+
+    fn reads(global: Option<&str>, head: Option<&str>) -> Reads {
+        Reads {
+            global: Ok(global.map(|text| file(GLOBAL, text))),
+            head: Some(Ok(crate::committed::Committed {
+                layer: head.map(|text| file("/r/app/baley.toml", text)),
+                pending: None,
+            })),
+        }
+    }
+
+    fn prepare_in_project(
+        layer: FileLayer,
+        seen: &ProjectSeen,
+        reads: &Reads,
+    ) -> Result<Prepared, Unavailable> {
+        prepare(
+            layer,
+            Path::new(GLOBAL),
+            Some(seen),
+            reads,
+            Schema::standard(),
+        )
+    }
+
+    #[test]
+    fn a_project_file_set_is_based_on_the_working_tree_not_heads_copy() {
+        let edited = format!("escalate_on_failure = true\n{PROJECT_TEXT}");
+        let seen = seen(working(&edited));
+
+        let prepared =
+            prepare_in_project(FileLayer::Project, &seen, &reads(None, Some(PROJECT_TEXT)))
+                .unwrap();
+
+        let base = prepared.base.unwrap();
+        assert_eq!(base.bytes, edited.as_bytes());
+        assert_eq!(base.digest, file("/r/app/baley.toml", &edited).digest);
+        assert_ne!(base.digest, file("/r/app/baley.toml", PROJECT_TEXT).digest);
+        assert_eq!(prepared.target, Path::new("/r/app/baley.toml"));
+        assert_eq!(
+            prepared.project,
+            Some(Project {
+                id: ID.into(),
+                root: ROOT.into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_global_set_in_a_project_is_refused_for_a_wrong_type_in_heads_copy() {
+        let seen = seen(working(PROJECT_TEXT));
+        let head = format!("escalate_on_failure = \"yes\"\n{PROJECT_TEXT}");
+
+        let refusal = prepare_in_project(
+            FileLayer::Global,
+            &seen,
+            &reads(Some("escalate_on_failure = true\n"), Some(&head)),
+        )
+        .unwrap_err();
+
+        let text = refusal.to_string();
+        assert!(
+            text.starts_with("config-unavailable: /r/app/baley.toml:1:"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_project_file_set_is_refused_for_a_wrong_type_in_the_working_tree() {
+        let edited = format!("escalate_on_failure = \"yes\"\n{PROJECT_TEXT}");
+        let seen = seen(working(&edited));
+
+        let refusal =
+            prepare_in_project(FileLayer::Project, &seen, &reads(None, Some(PROJECT_TEXT)))
+                .unwrap_err();
+
+        let text = refusal.to_string();
+        assert!(
+            text.starts_with("config-unavailable: /r/app/baley.toml:1:"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_working_tree_file_with_no_valid_id_is_refused_before_an_unreadable_global_file() {
+        let seen = seen(working("[project]\nname = \"sample\"\n"));
+        let mut reads = reads(None, None);
+        reads.global = Err(Unavailable {
+            path: GLOBAL.into(),
+            fault: Fault::Unreadable {
+                cause: "Permission denied (os error 13)".into(),
+            },
+        });
+
+        let refusal = prepare_in_project(FileLayer::Global, &seen, &reads).unwrap_err();
+
+        assert_eq!(refusal.path, Path::new("/r/app/baley.toml"));
+    }
+
+    #[test]
+    fn a_working_tree_read_of_no_file_in_a_project_is_refused_not_a_new_file() {
+        let seen = seen(Ok(None));
+
+        let refusal =
+            prepare_in_project(FileLayer::Project, &seen, &reads(None, None)).unwrap_err();
+
+        let text = refusal.to_string();
+        assert!(text.starts_with("config-unavailable:"), "{text}");
+        assert!(
+            text.contains("/r/app/baley.toml") && text.contains("not found"),
+            "{text}"
+        );
+    }
 
     #[test]
     fn a_missing_config_folder_is_created_and_the_file_written() {
