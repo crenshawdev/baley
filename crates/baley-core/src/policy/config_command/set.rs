@@ -119,8 +119,8 @@ impl fmt::Display for SetRefusal {
                 checked,
             } => {
                 let who = match host {
-                    Some(host) => format!("the {} catalog does not accept it", host.name()),
-                    None => "no host's catalog accepts it".to_owned(),
+                    Some(host) => format!("the {} catalog does not accept", host.name()),
+                    None => "no host's catalog accepts".to_owned(),
                 };
                 write!(
                     f,

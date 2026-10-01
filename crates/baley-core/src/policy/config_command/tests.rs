@@ -380,6 +380,22 @@ fn a_model_no_host_holds_is_not_accepted_and_both_hosts_are_named() {
 }
 
 #[test]
+fn an_unknown_model_refusal_that_garbles_its_sentence_is_caught() {
+    let named = models(&[model("opus")], Some(Host::Codex)).expect_err("codex lacks opus");
+    assert_eq!(
+        named.to_string(),
+        "unknown-model: roles.planner.model is \"opus\", which the codex catalog does not \
+         accept; codex accepts: none"
+    );
+    let unnamed = models(&[model("mystery")], None).expect_err("no host holds it");
+    assert_eq!(
+        unnamed.to_string(),
+        "unknown-model: roles.planner.model is \"mystery\", which no host's catalog accepts; \
+         claude-code accepts: fable, haiku, opus, sonnet; codex accepts: none"
+    );
+}
+
+#[test]
 fn a_host_missing_from_the_supplied_names_is_not_taken_to_accept_anything() {
     let only_claude = BTreeMap::from([(Host::ClaudeCode, names(&["opus"]))]);
     let refusal = judge_models(&[model("opus")], Some(Host::Codex), &only_claude)
