@@ -419,3 +419,125 @@ fn a_payload_without_a_checkout_projected_under_some_key_is_caught() {
         "policy.effective at seq 4: checkout is missing, not text or empty"
     );
 }
+
+/// The `policy` document the projector writes for `payload` at `seq`.
+fn stored_at(seq: u64, payload: Value) -> Value {
+    put(PolicyProjector::new()
+        .apply(&event(seq, payload), &[])
+        .unwrap())
+    .1
+}
+
+/// The payload for a global and a project text with their digests.
+fn judged(global: (&str, &str), project: (&str, &str), catalog_version: u64) -> Value {
+    let global = file(GLOBAL, global.0, global.1);
+    let project = file(PROJECT, project.0, project.1);
+    payload(
+        &policy(None, Some(&global), Some(&project)),
+        catalog_version,
+    )
+}
+
+const FIRST_GLOBAL: (&str, &str) = ("escalate = true\nnope = 1\n", "g1");
+const FIRST_PROJECT: (&str, &str) = ("only_project = false\n", "p1");
+
+fn first_record() -> Value {
+    stored_at(12, judged(FIRST_GLOBAL, FIRST_PROJECT, 4))
+}
+
+#[test]
+fn an_unchanged_policy_recorded_again_or_given_the_wrong_version_in_force_is_caught() {
+    let payload = judged(FIRST_GLOBAL, FIRST_PROJECT, 4);
+    assert_eq!(
+        judge_policy(&payload, Some(&first_record())),
+        PolicyJudgement::Unchanged { version: 12 }
+    );
+}
+
+#[test]
+fn a_changed_global_value_left_unrecorded_is_caught() {
+    let payload = judged(("escalate = false\nnope = 1\n", "g1"), FIRST_PROJECT, 4);
+    assert_eq!(
+        judge_policy(&payload, Some(&first_record())),
+        PolicyJudgement::Record
+    );
+}
+
+#[test]
+fn a_changed_project_value_left_unrecorded_is_caught() {
+    let payload = judged(FIRST_GLOBAL, ("only_project = true\n", "p1"), 4);
+    assert_eq!(
+        judge_policy(&payload, Some(&first_record())),
+        PolicyJudgement::Record
+    );
+}
+
+#[test]
+fn a_changed_source_digest_left_unrecorded_is_caught() {
+    let payload = judged((FIRST_GLOBAL.0, "g1-new"), FIRST_PROJECT, 4);
+    assert_eq!(
+        judge_policy(&payload, Some(&first_record())),
+        PolicyJudgement::Record
+    );
+}
+
+#[test]
+fn a_moved_diagnostic_left_unrecorded_is_caught() {
+    let payload = judged(("escalate = true\n\nnope = 1\n", "g1"), FIRST_PROJECT, 4);
+    assert_eq!(
+        judge_policy(&payload, Some(&first_record())),
+        PolicyJudgement::Record
+    );
+}
+
+#[test]
+fn a_changed_catalog_version_left_unrecorded_is_caught() {
+    let payload = judged(FIRST_GLOBAL, FIRST_PROJECT, 5);
+    assert_eq!(
+        judge_policy(&payload, Some(&first_record())),
+        PolicyJudgement::Record
+    );
+}
+
+#[test]
+fn a_first_policy_left_unrecorded_is_caught() {
+    let payload = judged(FIRST_GLOBAL, FIRST_PROJECT, 4);
+    assert_eq!(judge_policy(&payload, None), PolicyJudgement::Record);
+}
+
+#[test]
+fn a_stored_body_missing_a_compared_member_or_a_positive_version_taken_as_current_is_caught() {
+    let payload = judged(FIRST_GLOBAL, FIRST_PROJECT, 4);
+    let mut missing = first_record();
+    missing.as_object_mut().unwrap().remove("diagnostics");
+    assert_eq!(
+        judge_policy(&payload, Some(&missing)),
+        PolicyJudgement::Record
+    );
+    let mut unversioned = first_record();
+    unversioned["version"] = json!(0);
+    assert_eq!(
+        judge_policy(&payload, Some(&unversioned)),
+        PolicyJudgement::Record
+    );
+}
+
+#[test]
+fn a_comment_in_a_global_file_that_sets_nothing_recording_a_new_policy_is_caught() {
+    let stored = stored_at(12, judged(("# a\n", "c1"), FIRST_PROJECT, 4));
+    let payload = judged(("# a\n# b\n", "c2"), FIRST_PROJECT, 4);
+    assert_eq!(
+        judge_policy(&payload, Some(&stored)),
+        PolicyJudgement::Unchanged { version: 12 }
+    );
+}
+
+#[test]
+fn a_comment_in_a_global_file_that_sets_a_value_left_unrecorded_is_caught() {
+    let stored = stored_at(12, judged(("escalate = true\n", "g1"), FIRST_PROJECT, 4));
+    let payload = judged(("escalate = true\n# b\n", "g2"), FIRST_PROJECT, 4);
+    assert_eq!(
+        judge_policy(&payload, Some(&stored)),
+        PolicyJudgement::Record
+    );
+}
