@@ -154,7 +154,10 @@ Which policy each command runs under (CFG-R8, CFG-R9). Policy version 0 means th
 | `baley config interview` | discovery | only through its one `config set` | that set's version, and none when the interview is declined or every answer is blank |
 | `anchor`, `acknowledge-restore` | discovery | yes | the version in force |
 | `purge` | its argument | only when run from a checkout of that project | the version in force there, otherwise 0 |
-| `verify`, `doctor`, `export`, `rebuild`, `scrub` | their argument (`scrub` takes none), or discovery for the anchor remote | no: no event is appended | none |
+| `verify --local-only`, `verify --views`, `export`, `rebuild` | their argument | no: no event is appended | none |
+| `verify` with no flag | discovery, with an optional argument naming the same project | no: it reads the settings and appends nothing | none |
+| `doctor` | discovery for the discovered project's remote, every other project checked locally | no: it reads the settings and appends nothing | none |
+| `scrub` | none | no: no event is appended | none |
 | `baley models add`, `remove` and `update`, detection, seeding | the per-user project `user` | no | 0 |
 | `policy.effective` itself | the command it belongs to | it is the step's own record | the version it replaces, 0 for the first of its key |
 
