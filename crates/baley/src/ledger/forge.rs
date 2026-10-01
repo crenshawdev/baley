@@ -1,5 +1,5 @@
 //! Git observations for immutable tags without local references.
-use super::{CliRefusal, remotes::configured};
+use super::{CliRefusal, anchor_plan::configured};
 use crate::{
     git_process::{self, Caller},
     process::{Output, Process},

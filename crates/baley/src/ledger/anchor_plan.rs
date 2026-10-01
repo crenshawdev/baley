@@ -2,6 +2,7 @@
 //! checked against, from the discovered project and its `git.remote`. Pure:
 //! the callers gather the facts.
 use baley_core::policy::{EffectivePolicy, Value};
+use baley_store::ProjectId;
 
 /// The setting that names the checkout's anchor remote.
 const GIT_REMOTE: &str = "git.remote";
@@ -49,4 +50,65 @@ pub(super) fn judge_target(
         }),
         (found, _) => Ok(found.map(Into::into)),
     }
+}
+
+/// Why `doctor` checks a project without a remote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LocalReason {
+    /// The project is not the checkout's, and only a checkout names a remote.
+    NotDiscovered,
+    /// The checkout's project sets no `git.remote`.
+    NoForgeRemote,
+}
+
+/// What `doctor` checks one project against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum CheckAgainst {
+    /// The remote the checkout's `git.remote` names.
+    Remote(String),
+    /// Nothing outside the ledger.
+    Local(LocalReason),
+}
+
+/// The checks `doctor` runs, and the remote to validate before any of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DoctorChecks {
+    /// One check per ledger project, in the ledger's order.
+    pub(super) checks: Vec<(ProjectId, CheckAgainst)>,
+    /// The discovered project's `git.remote`. It is validated even when that
+    /// project is not in the ledger yet, since the setting is committed and
+    /// a wrong name should not wait for the first anchor to be found.
+    pub(super) validate: Option<String>,
+}
+
+/// Maps every ledger project to its check. The discovered project gets its
+/// `git.remote`, or a local check when it sets none. Every other project,
+/// `user` included, is checked locally. A discovered project absent from the
+/// ledger gets no check, since the store refuses one for an unknown project.
+pub(super) fn doctor_checks(
+    discovered: Option<&str>,
+    remote: Option<&str>,
+    projects: &[(ProjectId, String)],
+) -> DoctorChecks {
+    let remote = discovered.and(remote);
+    let checks = projects
+        .iter()
+        .map(|(project, _)| {
+            let against = match (discovered == Some(project.0.as_str()), remote) {
+                (true, Some(remote)) => CheckAgainst::Remote(remote.into()),
+                (true, None) => CheckAgainst::Local(LocalReason::NoForgeRemote),
+                (false, _) => CheckAgainst::Local(LocalReason::NotDiscovered),
+            };
+            (project.clone(), against)
+        })
+        .collect();
+    DoctorChecks {
+        checks,
+        validate: remote.map(Into::into),
+    }
+}
+
+/// Matches a configured remote as one complete line.
+pub(super) fn configured(stdout: &str, name: &str) -> bool {
+    stdout.lines().any(|line| line == name)
 }

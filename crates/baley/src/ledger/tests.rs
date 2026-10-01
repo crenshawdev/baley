@@ -91,19 +91,10 @@ rejects!(export_requires_a_destination, &["export", "P"]);
 rejects!(purge_requires_a_reason, &["purge", "P", &"ab".repeat(32)]);
 rejects!(purge_requires_hashes, &["purge", "P", "--reason", "r"]);
 #[test]
-fn doctor_splits_project_from_remote() {
-    assert!(
-        matches!(parse(&["doctor","--remote","P=origin","--local-only","Q"]).unwrap(),LedgerCommand::Doctor { remote,local_only } if remote == [("P".into(),"origin".into())] && local_only == ["Q"])
-    );
-}
-#[test]
-fn doctor_rejects_an_unsplit_remote() {
-    assert!(
-        parse(&["doctor", "--remote", "P"])
-            .unwrap_err()
-            .to_string()
-            .contains("expected PROJECT=REMOTE")
-    );
+fn doctor_takes_no_flags_and_parses_bare() {
+    assert!(matches!(parse(&["doctor"]).unwrap(), LedgerCommand::Doctor));
+    assert_eq!(exit_code(&["doctor", "--remote", "P=o"]), 2);
+    assert_eq!(exit_code(&["doctor", "--local-only", "Q"]), 2);
 }
 #[test]
 fn purge_parses_all_hash_bytes() {
@@ -151,11 +142,11 @@ fn acknowledge_restore_no_longer_takes_a_remote_flag() {
 
 #[test]
 fn a_configured_remote_matches_a_whole_line() {
-    assert!(remotes::configured("dead\norigin\n", "origin"));
+    assert!(anchor_plan::configured("dead\norigin\n", "origin"));
 }
 #[test]
 fn a_remote_prefix_is_not_configured() {
-    assert!(!remotes::configured("origin\n", "orig"));
+    assert!(!anchor_plan::configured("origin\n", "orig"));
 }
 fn projects() -> Vec<(ProjectId, String)> {
     vec![
@@ -163,94 +154,88 @@ fn projects() -> Vec<(ProjectId, String)> {
         (ProjectId("Q".into()), "Two".into()),
     ]
 }
-#[test]
-fn doctor_keeps_every_named_project() {
-    let plan =
-        remotes::anchor_plan(&projects(), &[("P".into(), "origin".into())], &["Q".into()]).unwrap();
-    assert_eq!(
-        plan,
-        std::collections::BTreeMap::from([
-            (ProjectId("P".into()), Some("origin".into())),
-            (ProjectId("Q".into()), None)
-        ])
-    );
+
+fn no_reasons() -> std::collections::BTreeMap<ProjectId, anchor_plan::LocalReason> {
+    std::collections::BTreeMap::new()
 }
-#[test]
-fn doctor_refuses_an_unnamed_project() {
-    assert_eq!(
-        remotes::anchor_plan(&projects(), &[], &["P".into()])
-            .unwrap_err()
-            .to_string(),
-        "baley: doctor needs --remote Q=REMOTE or --local-only Q for project Q (Two)"
-    );
-}
-#[test]
-fn doctor_refuses_a_duplicate_project() {
-    assert_eq!(
-        remotes::anchor_plan(&projects(), &[("P".into(), "o".into())], &["P".into()])
-            .unwrap_err()
-            .to_string(),
-        "baley: project P is named more than once"
-    );
-}
-#[test]
-fn doctor_refuses_an_unknown_project() {
-    assert_eq!(
-        remotes::anchor_plan(&projects(), &[], &["Z".into()])
-            .unwrap_err()
-            .to_string(),
-        "baley: project Z is not in the ledger"
-    );
-}
-fn with_user(ids: &[&str]) -> Vec<(ProjectId, String)> {
+fn ledger(ids: &[&str]) -> Vec<(ProjectId, String)> {
     ids.iter()
         .map(|id| (ProjectId((*id).into()), format!("{id} name")))
         .collect()
 }
+fn check_of<'a>(
+    plan: &'a anchor_plan::DoctorChecks,
+    id: &str,
+) -> Option<&'a anchor_plan::CheckAgainst> {
+    plan.checks
+        .iter()
+        .find(|(project, _)| project.0 == id)
+        .map(|(_, against)| against)
+}
+const NOT_DISCOVERED: anchor_plan::CheckAgainst =
+    anchor_plan::CheckAgainst::Local(anchor_plan::LocalReason::NotDiscovered);
 #[test]
-fn doctor_does_not_refuse_until_the_owner_names_user() {
-    let plan = remotes::anchor_plan(
-        &with_user(&["P", "user"]),
-        &[("P".into(), "origin".into())],
-        &[],
-    )
-    .unwrap();
+fn doctor_gives_only_the_discovered_project_the_remote_and_user_is_local() {
+    let plan = anchor_plan::doctor_checks(Some("P"), Some("origin"), &ledger(&["P", "Q", "user"]));
     assert_eq!(
-        plan,
-        std::collections::BTreeMap::from([
-            (ProjectId("P".into()), Some("origin".into())),
-            (ProjectId("user".into()), None)
-        ])
+        check_of(&plan, "P"),
+        Some(&anchor_plan::CheckAgainst::Remote("origin".into()))
     );
+    assert_eq!(check_of(&plan, "Q"), Some(&NOT_DISCOVERED));
+    assert_eq!(check_of(&plan, "user"), Some(&NOT_DISCOVERED));
+    assert_eq!(plan.validate.as_deref(), Some("origin"));
 }
 #[test]
-fn doctor_takes_an_explicit_local_only_user_without_a_duplicate() {
-    let plan = remotes::anchor_plan(
-        &with_user(&["P", "user"]),
-        &[("P".into(), "origin".into())],
-        &["user".into()],
-    )
-    .unwrap();
+fn doctor_checks_a_discovered_project_with_no_remote_locally_for_want_of_a_forge_remote() {
+    let plan = anchor_plan::doctor_checks(Some("P"), None, &ledger(&["P", "Q"]));
     assert_eq!(
-        plan,
-        std::collections::BTreeMap::from([
-            (ProjectId("P".into()), Some("origin".into())),
-            (ProjectId("user".into()), None)
-        ])
+        check_of(&plan, "P"),
+        Some(&anchor_plan::CheckAgainst::Local(
+            anchor_plan::LocalReason::NoForgeRemote
+        ))
     );
+    assert_eq!(plan.validate, None);
 }
 #[test]
-fn doctor_still_refuses_an_unnamed_project_beside_user_and_not_user() {
-    assert_eq!(
-        remotes::anchor_plan(
-            &with_user(&["P", "Q", "user"]),
-            &[("P".into(), "origin".into())],
-            &[]
-        )
-        .unwrap_err()
-        .to_string(),
-        "baley: doctor needs --remote Q=REMOTE or --local-only Q for project Q (Q name)"
-    );
+fn doctor_gives_a_discovered_project_missing_from_the_ledger_no_check() {
+    let plan = anchor_plan::doctor_checks(Some("Z"), None, &ledger(&["P", "Q"]));
+    assert_eq!(check_of(&plan, "Z"), None);
+    assert_eq!(plan.checks.len(), 2);
+    assert_eq!(check_of(&plan, "P"), Some(&NOT_DISCOVERED));
+    assert_eq!(check_of(&plan, "Q"), Some(&NOT_DISCOVERED));
+}
+#[test]
+fn doctor_still_validates_the_remote_of_a_discovered_project_missing_from_the_ledger() {
+    let plan = anchor_plan::doctor_checks(Some("Z"), Some("origin"), &ledger(&["P", "Q"]));
+    assert_eq!(plan.validate.as_deref(), Some("origin"));
+    assert_eq!(check_of(&plan, "Z"), None);
+}
+#[test]
+fn doctor_from_outside_a_checkout_checks_every_project_locally_and_validates_nothing() {
+    let plan = anchor_plan::doctor_checks(None, None, &ledger(&["P", "Q", "user"]));
+    for id in ["P", "Q", "user"] {
+        assert_eq!(check_of(&plan, id), Some(&NOT_DISCOVERED), "{id}");
+    }
+    assert_eq!(plan.validate, None);
+}
+#[test]
+fn doctor_labels_a_project_not_checked_from_this_directory() {
+    let reasons = std::collections::BTreeMap::from([(
+        ProjectId("P".into()),
+        anchor_plan::LocalReason::NotDiscovered,
+    )]);
+    let r = text(&display::doctor(&health(), &projects(), &reasons));
+    assert!(r.contains("project P (One): not checked against a remote from this directory"));
+}
+#[test]
+fn doctor_labels_a_checkout_without_git_remote_apart_from_one_not_discovered() {
+    let reasons = std::collections::BTreeMap::from([(
+        ProjectId("P".into()),
+        anchor_plan::LocalReason::NoForgeRemote,
+    )]);
+    let r = text(&display::doctor(&health(), &projects(), &reasons));
+    assert!(r.contains("project P (One): local only, no forge remote (git.remote is not set)"));
+    assert!(!r.contains("not checked against a remote from this directory"));
 }
 
 fn clean() -> VerifyReport {
@@ -407,7 +392,7 @@ fn view_versions_are_not_printed_as_options() {
             binary_version: 2,
         });
     }
-    let r = text(&display::doctor(&h, &projects()));
+    let r = text(&display::doctor(&h, &projects(), &no_reasons()));
     assert!(r.contains("view set 2, binary 2"));
     assert!(r.contains("view request: live none, binary 2"));
     assert!(!r.contains("Some("));
@@ -472,7 +457,7 @@ fn health() -> Health {
 fn doctor_prints_integrity_findings() {
     let mut h = health();
     h.integrity = vec!["damaged page".into()];
-    let r = display::doctor(&h, &projects());
+    let r = display::doctor(&h, &projects(), &no_reasons());
     assert_eq!(r.code, 1);
     assert!(text(&r).contains("integrity: damaged page"));
 }
@@ -483,7 +468,7 @@ fn doctor_prints_old_unanchored_work() {
         since: "T".into(),
         warning: true,
     };
-    let r = display::doctor(&h, &projects());
+    let r = display::doctor(&h, &projects(), &no_reasons());
     assert_eq!(r.code, 1);
     assert!(text(&r).contains("since T, more than a day"));
 }
@@ -494,7 +479,7 @@ fn one_verify_error_does_not_hide_another_project() {
     q.project = ProjectId("Q".into());
     h.projects.push(q);
     h.projects[0].verify = Err(StoreError::Busy);
-    let r = display::doctor(&h, &projects());
+    let r = display::doctor(&h, &projects(), &no_reasons());
     assert_eq!(r.code, 1);
     assert!(text(&r).contains("verify failed: store busy"));
     assert!(text(&r).contains("project Q (Two)"));
@@ -510,19 +495,22 @@ fn doctor_reports_a_vanished_remote_anchor() {
         tag: "tag".into(),
         pushed_at: "T".into(),
     });
-    let r = display::doctor(&h, &projects());
+    let r = display::doctor(&h, &projects(), &no_reasons());
     assert_eq!(r.code, 1);
     assert!(text(&r).contains("remote absent, local anchor 7"));
 }
 #[test]
 fn a_clean_doctor_report_succeeds() {
-    assert_eq!(display::doctor(&health(), &projects()).code, 0);
+    assert_eq!(
+        display::doctor(&health(), &projects(), &no_reasons()).code,
+        0
+    );
 }
 #[test]
 fn the_log_threshold_itself_is_not_a_warning() {
     let mut h = health();
     h.log_bytes = 8_192_000;
-    let r = display::doctor(&h, &projects());
+    let r = display::doctor(&h, &projects(), &no_reasons());
     assert_eq!(r.code, 0);
     assert!(!text(&r).contains("warning:"));
 }
@@ -530,7 +518,7 @@ fn the_log_threshold_itself_is_not_a_warning() {
 fn one_byte_above_the_log_threshold_warns() {
     let mut h = health();
     h.log_bytes = 8_192_001;
-    let r = display::doctor(&h, &projects());
+    let r = display::doctor(&h, &projects(), &no_reasons());
     assert_eq!(r.code, 1);
     assert!(text(&r).contains(
         "warning: the write-ahead log is 8192001 bytes, more than 8,192,000 (1,000 pages)"

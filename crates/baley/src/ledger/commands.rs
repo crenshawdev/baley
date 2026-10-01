@@ -1,12 +1,12 @@
 //! Gathering and wiring for the owner commands.
 use super::{
     LedgerCommand,
+    anchor_plan::{self, CheckAgainst},
     answer::answer_value,
     clock::SystemClock,
     command_plan::{self, Facts, Form, Op, ProjectFile, Settings, Verb},
     display::{self, Render},
     forge::GitForge,
-    remotes::anchor_plan,
     ticker::ThreadTicker,
     trace::StoreTrace,
 };
@@ -19,6 +19,7 @@ use baley_store::*;
 use baley_store_sqlite::SqliteStore;
 use serde_json::json;
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -49,9 +50,7 @@ pub(super) fn dispatch(
         } => command_plan::verify_form(project.as_deref(), local_only, views)
             .map_err(Render::refusal)
             .and_then(|form| verify(&store, &mut forge, config, &cwd, form)),
-        LedgerCommand::Doctor { remote, local_only } => {
-            doctor(&store, &mut forge, &remote, &local_only)
-        }
+        LedgerCommand::Doctor => doctor(&store, &mut forge, config, &cwd),
         LedgerCommand::Export { project, to } => export(&store, &ProjectId(project), &to),
         LedgerCommand::Purge {
             project,
@@ -111,29 +110,49 @@ fn verify(
         _ => Err(unexpected_plan()),
     }
 }
+/// Checks the checkout's project against its `git.remote` and every other
+/// project locally.
 fn doctor(
     store: &SqliteStore,
     forge: &mut Forge,
-    remotes: &[(String, String)],
-    local: &[String],
+    config: &Path,
+    cwd: &Path,
 ) -> Result<Render, Render> {
     let projects = store
         .projects()
         .map_err(|e| display::store_error(&e, None))?;
-    let plan = anchor_plan(&projects, remotes, local).map_err(|e| Render::refusal(e.0))?;
-    for remote in plan.values().flatten() {
-        require_remote(forge, remote)?;
+    let gathered = gather_settings(cwd, config)?;
+    let settings = &gathered.settings;
+    let discovered = settings
+        .project_file
+        .as_ref()
+        .map(|file| command_plan::project_id(&file.path, &file.id))
+        .transpose()
+        .map_err(Render::refusal)?;
+    let policy = settings
+        .policy
+        .as_ref()
+        .map_err(|e| Render::refusal(e.to_string()))?;
+    let remote = discovered.as_ref().and(anchor_plan::remote_of(policy));
+    let plan = anchor_plan::doctor_checks(discovered.as_deref(), remote.as_deref(), &projects);
+    if let Some(name) = &plan.validate {
+        require_remote(forge, name)?;
     }
-    let checks = plan
-        .into_iter()
-        .map(|(project, remote)| {
-            let check = anchor_check(forge, &project, remote.as_deref());
-            (project, check)
-        })
-        .collect();
+    let mut reasons = BTreeMap::new();
+    let mut checks = BTreeMap::new();
+    for (project, against) in plan.checks {
+        let check = match &against {
+            CheckAgainst::Remote(name) => anchor_check(forge, &project, Some(name)),
+            CheckAgainst::Local(reason) => {
+                reasons.insert(project.clone(), *reason);
+                anchor_check(forge, &project, None)
+            }
+        };
+        checks.insert(project, check);
+    }
     store
         .doctor(&SystemClock::now(), &checks)
-        .map(|h| display::doctor(&h, &projects))
+        .map(|h| display::doctor(&h, &projects, &reasons))
         .map_err(|e| display::store_error(&e, None))
 }
 fn export(store: &SqliteStore, project: &ProjectId, to: &Path) -> Result<Render, Render> {

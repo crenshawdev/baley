@@ -1,8 +1,10 @@
 //! Plain reports and exit classes for owner commands.
+use super::anchor_plan::LocalReason;
 use super::answer::AnswerUnread;
 use baley_core::{AcknowledgeRestoreError, AnchorOutcome, AnchorReport, Verification};
 use baley_store::*;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// The log warning threshold: 1,000 pages of 8 KiB.
 pub(super) const LOG_WARNING_BYTES: u64 = 8_192_000;
@@ -290,8 +292,20 @@ pub(super) fn views(report: &ViewsReport) -> Render {
     }
     result
 }
-/// Reports every project even when another project has failed.
-pub(super) fn doctor(health: &Health, projects: &[(ProjectId, String)]) -> Render {
+/// Owner wording for why a project is checked without a remote.
+fn local_text(reason: LocalReason) -> &'static str {
+    match reason {
+        LocalReason::NotDiscovered => "not checked against a remote from this directory",
+        LocalReason::NoForgeRemote => "local only, no forge remote (git.remote is not set)",
+    }
+}
+/// Reports every project even when another project has failed. `reasons`
+/// says why a project was checked without a remote.
+pub(super) fn doctor(
+    health: &Health,
+    projects: &[(ProjectId, String)],
+    reasons: &BTreeMap<ProjectId, LocalReason>,
+) -> Render {
     let mut result = Render::line(format!("epoch {}", health.epoch), 0);
     if let Some(at) = &health.scrub_pending {
         result.lines.push(format!("scrub pending since {at}"));
@@ -316,11 +330,13 @@ pub(super) fn doctor(health: &Health, projects: &[(ProjectId, String)]) -> Rende
             .iter()
             .find(|(id, _)| id == &p.project)
             .map_or("", |(_, name)| name.as_str());
-        result.lines.push(format!(
-            "project {} ({name}): {}",
-            p.project.0,
-            check_text(&p.check)
-        ));
+        let check = match (&p.check, reasons.get(&p.project)) {
+            (AnchorCheck::LocalOnly, Some(reason)) => local_text(*reason).into(),
+            _ => check_text(&p.check),
+        };
+        result
+            .lines
+            .push(format!("project {} ({name}): {check}", p.project.0));
         match &p.verify {
             Ok(report) => {
                 let v = verify_report(report);

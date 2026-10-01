@@ -19,15 +19,9 @@ pub enum LedgerCommand {
         #[arg(long, requires = "project")]
         views: bool,
     },
-    /// Report the health of every project.
-    Doctor {
-        /// Project and configured remote, PROJECT=REMOTE.
-        #[arg(long, value_parser = project_remote)]
-        remote: Vec<(String, String)>,
-        /// Project to check without a remote witness.
-        #[arg(long)]
-        local_only: Vec<String>,
-    },
+    /// Report the health of every project. The checkout's project is checked
+    /// against the remote its `git.remote` names, every other one locally.
+    Doctor,
     /// Export one project into a new standalone home.
     Export {
         /// Ledger project id.
@@ -69,12 +63,6 @@ pub enum LedgerCommand {
 
 fn payload_hash(text: &str) -> Result<Hash, String> {
     Hash::from_hex(text).ok_or_else(|| "a payload hash is 64 hex digits".into())
-}
-fn project_remote(text: &str) -> Result<(String, String), String> {
-    text.split_once('=')
-        .filter(|(p, r)| !p.is_empty() && !r.is_empty())
-        .map(|(p, r)| (p.into(), r.into()))
-        .ok_or_else(|| "expected PROJECT=REMOTE".into())
 }
 fn purge_reason(text: &str) -> Result<String, String> {
     if text.is_empty() {

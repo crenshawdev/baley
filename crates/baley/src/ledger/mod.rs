@@ -8,7 +8,6 @@ pub(crate) mod commands;
 pub(crate) mod display;
 mod forge;
 pub(crate) mod open;
-mod remotes;
 #[cfg(test)]
 mod tests;
 mod ticker;
