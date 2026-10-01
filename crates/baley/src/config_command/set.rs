@@ -281,6 +281,23 @@ struct Prepared {
     project: Option<Project>,
 }
 
+/// The id the working-tree project file names, as a project set needs it. A
+/// read that finds no file is refused as not found, since a set in a project
+/// rewrites a file that exists, and a file with a missing or malformed id is
+/// refused. `baley config interview` runs it before its first question.
+pub(super) fn working_tree_id(
+    folder: &Path,
+    working: Result<Option<SettingsFile>, Unavailable>,
+) -> Result<String, Unavailable> {
+    let identity = init::observe_file(working)?.ok_or_else(|| Unavailable {
+        path: folder.join(PROJECT_FILE),
+        fault: Fault::Unreadable {
+            cause: "the file was not found".to_owned(),
+        },
+    })?;
+    Ok(identity.id)
+}
+
 /// Judges the supplied reads before anything is written, as `init::prepare`
 /// does. In order: the working-tree file's read and id, the policy from the
 /// reads (global, then HEAD's copy), then the target as its layer. The first
@@ -298,14 +315,8 @@ fn prepare(
 ) -> Result<Prepared, Unavailable> {
     let seen = match project {
         Some(seen) => {
-            let identity =
-                init::observe_file(seen.working.clone())?.ok_or_else(|| Unavailable {
-                    path: seen.folder.join(PROJECT_FILE),
-                    fault: Fault::Unreadable {
-                        cause: "the file was not found".to_owned(),
-                    },
-                })?;
-            Some((seen, identity.id))
+            let id = working_tree_id(&seen.folder, seen.working.clone())?;
+            Some((seen, id))
         }
         None => None,
     };
