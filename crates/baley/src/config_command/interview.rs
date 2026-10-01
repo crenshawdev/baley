@@ -9,6 +9,7 @@ use baley_core::policy::{
 };
 use baley_store::StoreError;
 use std::io::{self, BufRead, Write};
+use std::path::{Path, PathBuf};
 
 use super::set;
 use crate::discovery::{self, Discovery, PROJECT_FILE};
@@ -48,30 +49,34 @@ fn attempt(
             let head = working.as_ref().ok().and_then(Option::as_ref);
             let reads = policy_step::gather(&folders.config, &root, head);
             Seen {
-                in_project: true,
+                folder: Some(folder),
+                global_path,
                 working,
                 reads,
             }
         }
-        Discovery::Unmanaged { .. } | Discovery::Outside => Seen {
-            in_project: false,
-            working: Ok(None),
-            reads: Reads {
-                global: settings::read(&global_path),
-                head: None,
-            },
-        },
+        Discovery::Unmanaged { .. } | Discovery::Outside => {
+            let global = settings::read(&global_path);
+            Seen {
+                folder: None,
+                global_path,
+                working: Ok(None),
+                reads: Reads { global, head: None },
+            }
+        }
     };
     let start = begin(Schema::standard(), file, host, seen)?;
 
     let questions = questions(&start.policy);
     let outcome =
-        converse(&questions, start.layer, host, input, output).map_err(|error| Render {
-            lines: vec![format!(
-                "the interview failed: {error}; nothing was written"
-            )],
-            code: 1,
-            error: true,
+        converse(&questions, &start.target, start.layer, host, input, output).map_err(|error| {
+            Render {
+                lines: vec![format!(
+                    "the interview failed: {error}; nothing was written"
+                )],
+                code: 1,
+                error: true,
+            }
         })?;
     Ok(match outcome {
         Outcome::Declined => Render::line("Nothing was written.", 0),
@@ -84,8 +89,10 @@ fn attempt(
 
 /// What the gatherer found.
 struct Seen {
-    /// Whether the working directory is in a project.
-    in_project: bool,
+    /// The folder holding the project file, `None` outside a project.
+    folder: Option<PathBuf>,
+    /// The global file.
+    global_path: PathBuf,
     /// The working-tree project file as `settings::read` returned it.
     working: Result<Option<SettingsFile>, Unavailable>,
     /// The global file and HEAD's copy of the project file.
@@ -98,6 +105,8 @@ struct Start {
     policy: EffectivePolicy,
     /// The file the answers are written to.
     layer: FileLayer,
+    /// That file's path, which the owner confirms.
+    target: PathBuf,
 }
 
 /// Judges the reads before the first question. A refusal is exit 2 and no
@@ -112,7 +121,8 @@ fn begin(
     host: Option<Host>,
     seen: Seen,
 ) -> Result<Start, Render> {
-    if file == Some(FileLayer::Project) && !seen.in_project {
+    let project_file = seen.folder.map(|folder| folder.join(PROJECT_FILE));
+    if file == Some(FileLayer::Project) && project_file.is_none() {
         return Err(not_a_project());
     }
     let head = match seen.reads.head {
@@ -120,23 +130,25 @@ fn begin(
         Some(Ok(committed)) => Ok(committed.layer),
         Some(Err(refusal)) => Err(refusal),
     };
-    let in_project = seen.in_project;
     let layers = judge_show(
         schema,
         &[],
-        in_project,
+        project_file.is_some(),
         seen.reads.global,
         seen.working,
         head,
     )
     .map_err(|refusal| Render::refusal(refusal.to_string()))?;
     let layer = file.unwrap_or_else(|| default_layer(layers.global.as_ref()));
-    if layer == FileLayer::Project && !in_project {
-        return Err(not_a_project());
-    }
+    let target = match (layer, project_file) {
+        (FileLayer::Project, Some(path)) => path,
+        (FileLayer::Project, None) => return Err(not_a_project()),
+        (FileLayer::Global, _) => seen.global_path,
+    };
     Ok(Start {
         policy: merge(schema, host, layers.global.as_ref(), layers.head.as_ref()),
         layer,
+        target,
     })
 }
 
@@ -222,7 +234,7 @@ fn questions(policy: &EffectivePolicy) -> Vec<Question> {
 enum Collected {
     /// Every question was answered. The pairs are the non-blank answers.
     Answers(Vec<(String, String)>),
-    /// The input ended before the last answer.
+    /// The input ended before the last answer, or the owner did not confirm.
     Stopped,
 }
 
@@ -293,15 +305,70 @@ fn outcome(collected: Collected, layer: FileLayer, host: Option<Host>) -> Outcom
     }
 }
 
-/// Asks every question and decides what to send.
+/// The lines that say what is about to be written and where.
+fn summary(target: &Path, host: Option<Host>, pairs: &[(String, String)]) -> Vec<String> {
+    let section = host.map_or_else(String::new, |host| format!(" [host.{}]", host.name()));
+    let mut lines = vec![format!(
+        "The interview will write to {}{section}",
+        target.display()
+    )];
+    lines.extend(
+        pairs
+            .iter()
+            .map(|(name, value)| format!("  {name}={value}")),
+    );
+    lines
+}
+
+/// Only the word `yes` confirms, so a blank line, `y` and a closed input all
+/// decline.
+fn accepts(answer: Option<&str>) -> bool {
+    answer == Some("yes")
+}
+
+/// Lists what will be written and asks once. An interview with no answer has
+/// nothing to confirm, and one that is not confirmed is stopped.
+fn confirm(
+    collected: Collected,
+    target: &Path,
+    host: Option<Host>,
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+) -> io::Result<Collected> {
+    let Collected::Answers(pairs) = collected else {
+        return Ok(collected);
+    };
+    if pairs.is_empty() {
+        return Ok(Collected::Answers(pairs));
+    }
+    for line in summary(target, host, &pairs) {
+        writeln!(output, "{line}")?;
+    }
+    write!(output, "Write these values? Type yes to write: ")?;
+    output.flush()?;
+    let answer = read_answer(input)?;
+    if answer.is_none() {
+        // The prompt holds the line, so end it before anything else prints.
+        writeln!(output)?;
+    }
+    Ok(if accepts(answer.as_deref()) {
+        Collected::Answers(pairs)
+    } else {
+        Collected::Stopped
+    })
+}
+
+/// Asks every question, confirms, and decides what to send.
 fn converse(
     questions: &[Question],
+    target: &Path,
     layer: FileLayer,
     host: Option<Host>,
     input: &mut impl BufRead,
     output: &mut impl Write,
 ) -> io::Result<Outcome> {
     let collected = ask(questions, input, output)?;
+    let collected = confirm(collected, target, host, input, output)?;
     Ok(outcome(collected, layer, host))
 }
 
@@ -417,6 +484,7 @@ mod tests {
         let mut output = Vec::new();
         let outcome = converse(
             &asked,
+            Path::new(GLOBAL),
             FileLayer::Global,
             host,
             &mut input.as_bytes(),
@@ -457,21 +525,24 @@ mod tests {
 
     #[test]
     fn a_blank_and_an_all_whitespace_answer_each_give_no_pair() {
-        let (outcome, _) = converse_over(&answers(&[(1, "   \t "), (2, "sonnet")]), None);
+        let (outcome, _) = converse_over(
+            &format!("{}yes\n", answers(&[(1, "   \t "), (2, "sonnet")])),
+            None,
+        );
 
         assert_eq!(pairs_of(&outcome), [("roles.analyzer.model", "sonnet")]);
     }
 
     #[test]
     fn an_answer_is_trimmed_before_it_is_sent() {
-        let (outcome, _) = converse_over(&answers(&[(0, "  sonnet  ")]), None);
+        let (outcome, _) = converse_over(&format!("{}yes\n", answers(&[(0, "  sonnet  ")])), None);
 
         assert_eq!(pairs_of(&outcome), [("roles.planner.model", "sonnet")]);
     }
 
     #[test]
     fn an_answer_equal_to_the_value_in_force_is_still_sent() {
-        let (outcome, _) = converse_over(&answers(&[(1, "high")]), None);
+        let (outcome, _) = converse_over(&format!("{}yes\n", answers(&[(1, "high")])), None);
 
         assert_eq!(pairs_of(&outcome), [("roles.planner.effort", "high")]);
     }
@@ -494,7 +565,7 @@ mod tests {
     #[test]
     fn two_answers_give_one_request_in_question_order_with_the_layer_and_host() {
         let (outcome, output) = converse_over(
-            &answers(&[(12, "true"), (3, "max")]),
+            &format!("{}yes\n", answers(&[(12, "true"), (3, "max")])),
             Some(Host::ClaudeCode),
         );
 
@@ -517,7 +588,8 @@ mod tests {
 
     fn seen(global: &str, working: Option<&str>, head: Option<&str>) -> Seen {
         Seen {
-            in_project: true,
+            folder: Some(PathBuf::from("/r")),
+            global_path: GLOBAL.into(),
             working: Ok(working.map(|text| file(PROJECT, text))),
             reads: Reads {
                 global: Ok(Some(file(GLOBAL, global))),
@@ -606,7 +678,7 @@ mod tests {
 
     fn outside_a_project(global: &str) -> Seen {
         let mut seen = seen(global, None, None);
-        seen.in_project = false;
+        seen.folder = None;
         seen
     }
 
@@ -660,6 +732,25 @@ mod tests {
     }
 
     #[test]
+    fn the_target_path_is_the_file_the_chosen_layer_names() {
+        let global = begin(
+            Schema::standard(),
+            Some(FileLayer::Global),
+            None,
+            seen("", None, None),
+        );
+        let project = begin(
+            Schema::standard(),
+            Some(FileLayer::Project),
+            None,
+            seen("", None, None),
+        );
+
+        assert_eq!(global.ok().unwrap().target, Path::new(GLOBAL));
+        assert_eq!(project.ok().unwrap().target, Path::new(PROJECT));
+    }
+
+    #[test]
     fn a_flag_names_the_file_whatever_the_global_file_holds() {
         let seen = seen("[roles.planner]\neffort = \"low\"\n", None, None);
 
@@ -708,5 +799,69 @@ mod tests {
         );
 
         assert_eq!(start.ok().unwrap().layer, FileLayer::Global);
+    }
+
+    /// One answer, a model for the planner, then the confirmation line.
+    fn one_answer_then(confirmation: &str) -> String {
+        format!("{}{confirmation}", answers(&[(0, "sonnet")]))
+    }
+
+    #[test]
+    fn a_confirmation_that_is_not_yes_gives_no_request() {
+        for confirmation in ["no\n", "\n", "y\n", "YES\n", "yes please\n"] {
+            let (outcome, _) = converse_over(&one_answer_then(confirmation), None);
+
+            assert_eq!(outcome, Outcome::Declined, "{confirmation:?}");
+        }
+    }
+
+    #[test]
+    fn input_ending_right_after_the_last_answer_gives_no_request() {
+        let (outcome, output) = converse_over(&one_answer_then(""), None);
+
+        assert_eq!(outcome, Outcome::Declined);
+        assert!(output.ends_with('\n'), "{output:?}");
+    }
+
+    #[test]
+    fn thirteen_blank_answers_are_not_asked_to_confirm() {
+        let (outcome, output) = converse_over(&blanks(13), None);
+
+        assert_eq!(outcome, Outcome::Unchanged);
+        assert!(!output.contains("Write these values?"), "{output}");
+    }
+
+    #[test]
+    fn yes_with_or_without_spaces_gives_one_request_of_the_non_blank_answers() {
+        for confirmation in ["yes\n", " yes \n", "yes"] {
+            let (outcome, _) = converse_over(&one_answer_then(confirmation), None);
+
+            assert_eq!(
+                pairs_of(&outcome),
+                [("roles.planner.model", "sonnet")],
+                "{confirmation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_summary_comes_before_the_question_and_names_each_pair_and_the_file() {
+        let input = format!("{}yes\n", answers(&[(0, "sonnet"), (1, "max")]));
+
+        let (_, output) = converse_over(&input, None);
+
+        let summary = "The interview will write to /c/config.toml\n  roles.planner.model=sonnet\n  roles.planner.effort=max\nWrite these values? Type yes to write: ";
+        assert!(output.contains(summary), "{output}");
+        assert!(!output.contains("[host."), "{output}");
+    }
+
+    #[test]
+    fn the_summary_names_the_host_section_under_host() {
+        let (_, output) = converse_over(&one_answer_then("yes\n"), Some(Host::Codex));
+
+        assert!(
+            output.contains("The interview will write to /c/config.toml [host.codex]\n"),
+            "{output}"
+        );
     }
 }
