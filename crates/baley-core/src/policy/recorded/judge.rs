@@ -22,8 +22,9 @@ pub enum PolicyJudgement {
 /// Judges `payload` against the body stored at its key, if any.
 ///
 /// The whole-file refs and the pending note are not in the payload, so an
-/// uncommitted edit, or a comment in a file that sets nothing, records
-/// nothing. Any byte change to a file that sets a value moves that value's
+/// uncommitted edit records nothing, and neither does a comment in a file
+/// that sets nothing unless it moves an ignored name, since a diagnostic
+/// carries its line and column. Any byte change to a file that sets a value moves that value's
 /// source digest and records. A stored body missing a compared member or a
 /// positive `version` was not written by `PolicyProjector`, and recording
 /// again repairs it.
