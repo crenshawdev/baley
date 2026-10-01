@@ -1,11 +1,13 @@
 //! `baley config`: the owner's settings commands (design 0003 section 5).
-//! `set` changes a settings file and `show` reports every setting. The judges
+//! `set` changes a settings file, `show` reports every setting and `interview`
+//! asks for the model and effort of each role in the terminal. The judges
 //! live in `baley_core::policy::config_command`; the files here gather what
 //! they judge and print what they return.
 //!
 //! The module is not named `config`, which the inherited engine holds in
 //! `lib.rs` and `main.rs` until Build 9.
 
+mod interview;
 mod set;
 mod show;
 
@@ -29,6 +31,8 @@ enum ConfigCommand {
     Set(SetArgs),
     /// Show every setting with its layer, its diagnostics and where it was set.
     Show(ShowArgs),
+    /// Ask for each role's model and effort and for `escalate_on_failure`, then write the answers.
+    Interview(InterviewArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -39,6 +43,15 @@ struct ShowArgs {
     /// The settings to show, every setting when none is named.
     #[arg(value_name = "NAME")]
     names: Vec<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+struct InterviewArgs {
+    #[command(flatten)]
+    file: OptionalLayerFlags,
+    /// Apply this host's sections to each value in force and write the answers into them, claude-code or codex.
+    #[arg(long, value_name = "NAME", value_parser = host)]
+    host: Option<Host>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -63,6 +76,29 @@ struct LayerFlags {
     /// Write the project file, `baley.toml` in the project.
     #[arg(long)]
     project: bool,
+}
+
+/// At most one file: clap refuses both flags and accepts neither.
+#[derive(Args, Debug, Clone)]
+#[group(required = false, multiple = false)]
+struct OptionalLayerFlags {
+    /// Write the global file, `config.toml` in the config folder.
+    #[arg(long)]
+    global: bool,
+    /// Write the project file, `baley.toml` in the project.
+    #[arg(long)]
+    project: bool,
+}
+
+impl OptionalLayerFlags {
+    /// The file asked for, `None` when neither flag is given.
+    fn layer(&self) -> Option<FileLayer> {
+        match (self.global, self.project) {
+            (true, _) => Some(FileLayer::Global),
+            (_, true) => Some(FileLayer::Project),
+            _ => None,
+        }
+    }
 }
 
 impl LayerFlags {
@@ -94,6 +130,12 @@ pub fn run(args: ConfigArgs) -> ExitCode {
     let result = match args.command {
         ConfigCommand::Set(args) => set::set(args.layer.layer(), args.host, &args.pairs),
         ConfigCommand::Show(args) => show::show(args.host, &args.names),
+        ConfigCommand::Interview(args) => interview::interview(
+            args.file.layer(),
+            args.host,
+            &mut std::io::stdin().lock(),
+            &mut std::io::stdout().lock(),
+        ),
     };
     ExitCode::from(display::emit(
         &result,
@@ -148,6 +190,50 @@ mod tests {
             panic!("not a show");
         };
         Ok(show)
+    }
+
+    fn parse_interview(args: &[&str]) -> Result<InterviewArgs, clap::Error> {
+        let argv = ["baley", "config", "interview"]
+            .into_iter()
+            .chain(args.iter().copied());
+        let Top::Config(config) = Cli::try_parse_from(argv)?.command;
+        let ConfigCommand::Interview(interview) = config.command else {
+            panic!("not an interview");
+        };
+        Ok(interview)
+    }
+
+    #[test]
+    fn interview_alone_names_no_file_and_no_host() {
+        let interview = parse_interview(&[]).unwrap();
+        assert_eq!(interview.file.layer(), None);
+        assert_eq!(interview.host, None);
+    }
+
+    #[test]
+    fn interview_global_flag_selects_the_global_file() {
+        let interview = parse_interview(&["--global"]).unwrap();
+        assert_eq!(interview.file.layer(), Some(FileLayer::Global));
+    }
+
+    #[test]
+    fn interview_project_flag_selects_the_project_file_not_a_clash_with_project_root() {
+        let interview = parse_interview(&["--project"]).unwrap();
+        assert_eq!(interview.file.layer(), Some(FileLayer::Project));
+    }
+
+    #[test]
+    fn interview_with_both_file_flags_exits_2() {
+        let error = parse_interview(&["--global", "--project"]).unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+    }
+
+    #[test]
+    fn interview_takes_a_known_host_and_refuses_an_unknown_one_with_exit_2() {
+        let interview = parse_interview(&["--host", "codex"]).unwrap();
+        assert_eq!(interview.host, Some(Host::Codex));
+        let error = parse_interview(&["--host", "gemini"]).unwrap_err();
+        assert_eq!(error.exit_code(), 2);
     }
 
     #[test]
