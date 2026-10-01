@@ -1,7 +1,8 @@
 //! The owner's policy as a pure computation (design 0003): the settings
 //! schema, one settings file judged against it, the merge of the layers into
-//! the effective policy, the route of one dispatch resolved from it, and the
-//! project file's `[project]` table that identifies the project.
+//! the effective policy, the route of one dispatch resolved from it, the
+//! project file's `[project]` table that identifies the project, and the
+//! policy as the ledger records it.
 //!
 //! Nothing here reads a file, the environment or a clock: the binary supplies
 //! each file's path, bytes and digest, the connected host, the attempt, the
@@ -10,6 +11,7 @@
 pub mod merge;
 pub mod parse;
 pub mod project;
+pub mod recorded;
 pub mod route;
 pub mod schema;
 
