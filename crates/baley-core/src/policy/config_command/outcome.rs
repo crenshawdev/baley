@@ -2,6 +2,12 @@
 //! policy step follows, and where the printed version comes from (design 0003
 //! sections 3 and 5, build-2-plan decision 18).
 
+use std::path::Path;
+
+use super::file::value_text;
+use super::set::TypedPair;
+use crate::policy::FileLayer;
+
 /// Where a set runs, as the binary found it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Place {
@@ -60,4 +66,59 @@ pub fn choose_outcome(changes_file: bool, place: Place) -> SetOutcome {
         run_step,
         version,
     }
+}
+
+/// The lines `set` prints, in order (design 0003 section 5, CONF-03).
+///
+/// `changed` is the pairs the file did not already hold, empty for a no-op.
+/// A project-file set that changed the file names the file, each changed
+/// setting with its new value and the host section it went to, that the change
+/// applies at the next commit, and the version in force. A global set names
+/// each changed setting, the file and the version, and never says commit,
+/// since a global edit applies as soon as it is written. A no-op says nothing
+/// changed. A version 0 is followed by its meaning, which depends on where the
+/// set ran (D-04, D-05).
+pub fn render_set(
+    layer: FileLayer,
+    path: &Path,
+    changed: &[TypedPair],
+    outcome: &SetOutcome,
+    version: u64,
+) -> Vec<String> {
+    let wrote = format!("wrote {}", path.display());
+    let settings = changed.iter().map(|pair| {
+        let section = pair
+            .host
+            .map_or_else(String::new, |host| format!("[host.{}] ", host.name()));
+        format!("set {section}{} = {}", pair.name, value_text(&pair.value))
+    });
+    let mut lines: Vec<String> = Vec::new();
+    match (changed.is_empty(), layer) {
+        (true, _) => lines.push(format!(
+            "nothing changed: {} already holds every value given",
+            path.display()
+        )),
+        (false, FileLayer::Project) => {
+            lines.push(wrote);
+            lines.extend(settings);
+            lines.push("The change applies at the next commit.".to_owned());
+        }
+        (false, FileLayer::Global) => {
+            lines.extend(settings);
+            lines.push(wrote);
+        }
+    }
+    lines.push(match (version, outcome.version) {
+        (0, VersionSource::OutsideProject) => {
+            "policy version 0: no recorded policy applies outside a project".to_owned()
+        }
+        (0, VersionSource::NotInLedger) => "policy version 0: no recorded policy applies to \
+             this project on this machine, and baley init records it"
+            .to_owned(),
+        (0, VersionSource::Step | VersionSource::Stored) => {
+            "policy version 0: no recorded policy applies".to_owned()
+        }
+        (version, _) => format!("policy version {version}"),
+    });
+    lines
 }

@@ -831,3 +831,193 @@ fn a_no_op_outside_a_project_is_not_written_or_stepped() {
         }
     );
 }
+
+fn changed_effort() -> TypedPair {
+    pair("roles.planner.effort", None, Value::Rung(Rung::High))
+}
+
+fn changed_flag() -> TypedPair {
+    pair("example.flag", None, Value::Bool(true))
+}
+
+fn set_lines(
+    layer: FileLayer,
+    path: &str,
+    changed: &[TypedPair],
+    place: Place,
+    version: u64,
+) -> Vec<String> {
+    let outcome = choose_outcome(!changed.is_empty(), place);
+    render_set(
+        layer,
+        std::path::Path::new(path),
+        changed,
+        &outcome,
+        version,
+    )
+}
+
+fn line_with<'l>(lines: &'l [String], needle: &str) -> &'l String {
+    lines
+        .iter()
+        .find(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("no line holds {needle:?} in {lines:?}"))
+}
+
+#[test]
+fn a_project_file_set_output_missing_its_file_settings_commit_note_or_version_is_caught() {
+    let lines = set_lines(
+        FileLayer::Project,
+        "/r/baley.toml",
+        &[
+            changed_effort(),
+            pair(
+                "roles.planner.model",
+                Some(Host::Codex),
+                Value::ModelName("gpt-x".into()),
+            ),
+        ],
+        Place::LedgeredProject,
+        7,
+    );
+    assert_eq!(
+        lines,
+        vec![
+            "wrote /r/baley.toml",
+            "set roles.planner.effort = \"high\"",
+            "set [host.codex] roles.planner.model = \"gpt-x\"",
+            "The change applies at the next commit.",
+            "policy version 7",
+        ]
+    );
+}
+
+#[test]
+fn a_global_set_output_that_says_commit_or_misses_its_settings_file_or_version_is_caught() {
+    let lines = set_lines(
+        FileLayer::Global,
+        "/c/config.toml",
+        &[changed_effort(), changed_flag()],
+        Place::LedgeredProject,
+        7,
+    );
+    assert_eq!(
+        lines,
+        vec![
+            "set roles.planner.effort = \"high\"",
+            "set example.flag = true",
+            "wrote /c/config.toml",
+            "policy version 7",
+        ]
+    );
+    assert!(
+        lines.iter().all(|line| !line.contains("commit")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_no_op_output_that_claims_a_change_or_mentions_commit_is_caught() {
+    for (layer, path) in [
+        (FileLayer::Project, "/r/baley.toml"),
+        (FileLayer::Global, "/c/config.toml"),
+    ] {
+        let lines = set_lines(layer, path, &[], Place::LedgeredProject, 4);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains("nothing changed"), "{lines:?}");
+        assert!(lines[0].contains(path), "{lines:?}");
+        assert_eq!(lines[1], "policy version 4");
+        assert!(
+            lines.iter().all(|line| !line.contains("commit")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().all(|line| !line.contains("wrote")),
+            "{lines:?}"
+        );
+    }
+}
+
+#[test]
+fn a_version_zero_output_outside_a_project_that_drops_its_meaning_is_caught() {
+    let lines = set_lines(
+        FileLayer::Global,
+        "/c/config.toml",
+        &[changed_flag()],
+        Place::OutsideProject,
+        0,
+    );
+    let version = line_with(&lines, "policy version 0");
+    assert!(
+        version.contains("no recorded policy applies outside a project"),
+        "{version}"
+    );
+    assert!(!version.contains("baley init"), "{version}");
+}
+
+#[test]
+fn a_version_zero_output_for_a_project_not_in_the_ledger_that_does_not_name_init_is_caught() {
+    let lines = set_lines(
+        FileLayer::Project,
+        "/r/baley.toml",
+        &[changed_flag()],
+        Place::ProjectNotInLedger,
+        0,
+    );
+    let version = line_with(&lines, "policy version 0");
+    assert!(
+        version.contains("no recorded policy applies to this project on this machine"),
+        "{version}"
+    );
+    assert!(version.contains("baley init records it"), "{version}");
+}
+
+#[test]
+fn a_ledgered_checkout_with_no_stored_record_is_not_printed_as_a_bare_zero() {
+    let lines = set_lines(
+        FileLayer::Global,
+        "/c/config.toml",
+        &[],
+        Place::LedgeredProject,
+        0,
+    );
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some("policy version 0: no recorded policy applies")
+    );
+}
+
+#[test]
+fn a_nonzero_version_is_not_followed_by_a_meaning() {
+    for place in [
+        Place::OutsideProject,
+        Place::ProjectNotInLedger,
+        Place::LedgeredProject,
+    ] {
+        let lines = set_lines(
+            FileLayer::Global,
+            "/c/config.toml",
+            &[changed_flag()],
+            place,
+            3,
+        );
+        assert_eq!(lines.last().map(String::as_str), Some("policy version 3"));
+    }
+}
+
+#[test]
+fn a_model_name_with_a_line_break_is_not_printed_across_lines() {
+    let lines = set_lines(
+        FileLayer::Global,
+        "/c/config.toml",
+        &[pair(
+            "roles.planner.model",
+            None,
+            Value::ModelName("a\nb \"c\"".into()),
+        )],
+        Place::LedgeredProject,
+        1,
+    );
+    assert_eq!(lines[0], "set roles.planner.model = \"a\\nb \\\"c\\\"\"");
+    assert!(lines.iter().all(|line| !line.contains('\n')), "{lines:?}");
+}

@@ -106,3 +106,29 @@ pub fn changed_pairs(current: Option<&ParsedLayer>, pairs: &[TypedPair]) -> Vec<
         .cloned()
         .collect()
 }
+
+/// A value as TOML writes it (`true`, `"high"`), with every character a
+/// basic string must escape escaped, so the text stays on one line.
+pub(super) fn value_text(value: &Value) -> String {
+    match value {
+        Value::Bool(value) => value.to_string(),
+        Value::Rung(rung) => format!("\"{}\"", rung.name()),
+        Value::ModelName(name) => {
+            let mut text = String::with_capacity(name.len() + 2);
+            text.push('"');
+            for c in name.chars() {
+                match c {
+                    '"' => text.push_str("\\\""),
+                    '\\' => text.push_str("\\\\"),
+                    '\n' => text.push_str("\\n"),
+                    '\r' => text.push_str("\\r"),
+                    '\t' => text.push_str("\\t"),
+                    c if c.is_control() => text.push_str(&format!("\\u{:04X}", u32::from(c))),
+                    c => text.push(c),
+                }
+            }
+            text.push('"');
+            text
+        }
+    }
+}
