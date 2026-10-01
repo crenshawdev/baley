@@ -59,6 +59,19 @@ pub(super) enum LocalReason {
     NotDiscovered,
     /// The checkout's project sets no `git.remote`.
     NoForgeRemote,
+    /// A settings file could not be read, so `git.remote` may be set in it.
+    SettingsUnreadable,
+}
+
+/// What `doctor` knows of the discovered project's `git.remote`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum RemoteState {
+    /// The setting names this remote.
+    Name(String),
+    /// The setting is absent.
+    NotSet,
+    /// A settings file could not be read, so the setting is unknown.
+    Unknown,
 }
 
 /// What `doctor` checks one project against.
@@ -87,25 +100,28 @@ pub(super) struct DoctorChecks {
 /// ledger gets no check, since the store refuses one for an unknown project.
 pub(super) fn doctor_checks(
     discovered: Option<&str>,
-    remote: Option<&str>,
+    remote: &RemoteState,
     projects: &[(ProjectId, String)],
 ) -> DoctorChecks {
-    let remote = discovered.and(remote);
     let checks = projects
         .iter()
         .map(|(project, _)| {
             let against = match (discovered == Some(project.0.as_str()), remote) {
-                (true, Some(remote)) => CheckAgainst::Remote(remote.into()),
-                (true, None) => CheckAgainst::Local(LocalReason::NoForgeRemote),
+                (true, RemoteState::Name(remote)) => CheckAgainst::Remote(remote.clone()),
+                (true, RemoteState::NotSet) => CheckAgainst::Local(LocalReason::NoForgeRemote),
+                (true, RemoteState::Unknown) => {
+                    CheckAgainst::Local(LocalReason::SettingsUnreadable)
+                }
                 (false, _) => CheckAgainst::Local(LocalReason::NotDiscovered),
             };
             (project.clone(), against)
         })
         .collect();
-    DoctorChecks {
-        checks,
-        validate: remote.map(Into::into),
-    }
+    let validate = match (discovered, remote) {
+        (Some(_), RemoteState::Name(remote)) => Some(remote.clone()),
+        _ => None,
+    };
+    DoctorChecks { checks, validate }
 }
 
 /// Matches a configured remote as one complete line.

@@ -2,7 +2,7 @@
 //! the facts gathered so far it gives the operations the command requests
 //! next, in order, or its refusal. Pure: the wiring performs each operation
 //! and asks again, so a refusal always comes before the operation after it.
-use super::anchor_plan::{self, TargetRefusal};
+use super::anchor_plan::{self, RemoteState, TargetRefusal};
 use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, ProjectIdentity, Unavailable};
 use std::path::{Path, PathBuf};
 
@@ -111,6 +111,46 @@ pub(super) fn project_id(
             path.display()
         )),
         Err(unavailable) => Err(unavailable.to_string()),
+    }
+}
+
+/// What `doctor` makes of the checkout's settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DoctorSettings {
+    /// The discovered project's id, `None` outside a checkout or when the
+    /// project file yields no id.
+    pub(super) discovered: Option<String>,
+    /// The discovered project's `git.remote`.
+    pub(super) remote: RemoteState,
+    /// Each settings problem as its `config-unavailable` text, which names
+    /// the file. `doctor` reports them and keeps checking.
+    pub(super) faults: Vec<String>,
+}
+
+/// Judges the gathered settings for `doctor`. A problem is a finding, not a
+/// refusal, so one bad file never hides the store's own findings. The policy
+/// cannot be built from an invalid file, so the remote is then unknown: none
+/// is taken from HEAD's copy alone.
+pub(super) fn doctor_settings(settings: &Settings) -> DoctorSettings {
+    let mut faults = Vec::new();
+    let discovered = settings.discovered().unwrap_or_else(|fault| {
+        faults.push(fault);
+        None
+    });
+    let remote = match &settings.policy {
+        Ok(policy) => discovered
+            .as_ref()
+            .and_then(|_| anchor_plan::remote_of(policy))
+            .map_or(RemoteState::NotSet, RemoteState::Name),
+        Err(unavailable) => {
+            faults.push(unavailable.to_string());
+            RemoteState::Unknown
+        }
+    };
+    DoctorSettings {
+        discovered,
+        remote,
+        faults,
     }
 }
 

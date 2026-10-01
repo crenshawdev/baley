@@ -122,19 +122,8 @@ fn doctor(
         .projects()
         .map_err(|e| display::store_error(&e, None))?;
     let gathered = gather_settings(cwd, config)?;
-    let settings = &gathered.settings;
-    let discovered = settings
-        .project_file
-        .as_ref()
-        .map(|file| command_plan::project_id(&file.path, &file.id))
-        .transpose()
-        .map_err(Render::refusal)?;
-    let policy = settings
-        .policy
-        .as_ref()
-        .map_err(|e| Render::refusal(e.to_string()))?;
-    let remote = discovered.as_ref().and(anchor_plan::remote_of(policy));
-    let plan = anchor_plan::doctor_checks(discovered.as_deref(), remote.as_deref(), &projects);
+    let judged = command_plan::doctor_settings(&gathered.settings);
+    let plan = anchor_plan::doctor_checks(judged.discovered.as_deref(), &judged.remote, &projects);
     if let Some(name) = &plan.validate {
         require_remote(forge, name)?;
     }
@@ -152,7 +141,7 @@ fn doctor(
     }
     store
         .doctor(&SystemClock::now(), &checks)
-        .map(|h| display::doctor(&h, &projects, &reasons))
+        .map(|h| display::doctor(&h, &projects, &reasons, &judged))
         .map_err(|e| display::store_error(&e, None))
 }
 fn export(store: &SqliteStore, project: &ProjectId, to: &Path) -> Result<Render, Render> {

@@ -158,6 +158,16 @@ fn projects() -> Vec<(ProjectId, String)> {
 fn no_reasons() -> std::collections::BTreeMap<ProjectId, anchor_plan::LocalReason> {
     std::collections::BTreeMap::new()
 }
+fn named_remote() -> anchor_plan::RemoteState {
+    anchor_plan::RemoteState::Name("origin".into())
+}
+fn no_faults() -> command_plan::DoctorSettings {
+    command_plan::DoctorSettings {
+        discovered: None,
+        remote: anchor_plan::RemoteState::NotSet,
+        faults: vec![],
+    }
+}
 fn ledger(ids: &[&str]) -> Vec<(ProjectId, String)> {
     ids.iter()
         .map(|id| (ProjectId((*id).into()), format!("{id} name")))
@@ -176,7 +186,7 @@ const NOT_DISCOVERED: anchor_plan::CheckAgainst =
     anchor_plan::CheckAgainst::Local(anchor_plan::LocalReason::NotDiscovered);
 #[test]
 fn doctor_gives_only_the_discovered_project_the_remote_and_user_is_local() {
-    let plan = anchor_plan::doctor_checks(Some("P"), Some("origin"), &ledger(&["P", "Q", "user"]));
+    let plan = anchor_plan::doctor_checks(Some("P"), &named_remote(), &ledger(&["P", "Q", "user"]));
     assert_eq!(
         check_of(&plan, "P"),
         Some(&anchor_plan::CheckAgainst::Remote("origin".into()))
@@ -187,7 +197,11 @@ fn doctor_gives_only_the_discovered_project_the_remote_and_user_is_local() {
 }
 #[test]
 fn doctor_checks_a_discovered_project_with_no_remote_locally_for_want_of_a_forge_remote() {
-    let plan = anchor_plan::doctor_checks(Some("P"), None, &ledger(&["P", "Q"]));
+    let plan = anchor_plan::doctor_checks(
+        Some("P"),
+        &anchor_plan::RemoteState::NotSet,
+        &ledger(&["P", "Q"]),
+    );
     assert_eq!(
         check_of(&plan, "P"),
         Some(&anchor_plan::CheckAgainst::Local(
@@ -198,7 +212,11 @@ fn doctor_checks_a_discovered_project_with_no_remote_locally_for_want_of_a_forge
 }
 #[test]
 fn doctor_gives_a_discovered_project_missing_from_the_ledger_no_check() {
-    let plan = anchor_plan::doctor_checks(Some("Z"), None, &ledger(&["P", "Q"]));
+    let plan = anchor_plan::doctor_checks(
+        Some("Z"),
+        &anchor_plan::RemoteState::NotSet,
+        &ledger(&["P", "Q"]),
+    );
     assert_eq!(check_of(&plan, "Z"), None);
     assert_eq!(plan.checks.len(), 2);
     assert_eq!(check_of(&plan, "P"), Some(&NOT_DISCOVERED));
@@ -206,13 +224,17 @@ fn doctor_gives_a_discovered_project_missing_from_the_ledger_no_check() {
 }
 #[test]
 fn doctor_still_validates_the_remote_of_a_discovered_project_missing_from_the_ledger() {
-    let plan = anchor_plan::doctor_checks(Some("Z"), Some("origin"), &ledger(&["P", "Q"]));
+    let plan = anchor_plan::doctor_checks(Some("Z"), &named_remote(), &ledger(&["P", "Q"]));
     assert_eq!(plan.validate.as_deref(), Some("origin"));
     assert_eq!(check_of(&plan, "Z"), None);
 }
 #[test]
 fn doctor_from_outside_a_checkout_checks_every_project_locally_and_validates_nothing() {
-    let plan = anchor_plan::doctor_checks(None, None, &ledger(&["P", "Q", "user"]));
+    let plan = anchor_plan::doctor_checks(
+        None,
+        &anchor_plan::RemoteState::NotSet,
+        &ledger(&["P", "Q", "user"]),
+    );
     for id in ["P", "Q", "user"] {
         assert_eq!(check_of(&plan, id), Some(&NOT_DISCOVERED), "{id}");
     }
@@ -224,7 +246,12 @@ fn doctor_labels_a_project_not_checked_from_this_directory() {
         ProjectId("P".into()),
         anchor_plan::LocalReason::NotDiscovered,
     )]);
-    let r = text(&display::doctor(&health(), &projects(), &reasons));
+    let r = text(&display::doctor(
+        &health(),
+        &projects(),
+        &reasons,
+        &no_faults(),
+    ));
     assert!(r.contains("project P (One): not checked against a remote from this directory"));
 }
 #[test]
@@ -233,7 +260,12 @@ fn doctor_labels_a_checkout_without_git_remote_apart_from_one_not_discovered() {
         ProjectId("P".into()),
         anchor_plan::LocalReason::NoForgeRemote,
     )]);
-    let r = text(&display::doctor(&health(), &projects(), &reasons));
+    let r = text(&display::doctor(
+        &health(),
+        &projects(),
+        &reasons,
+        &no_faults(),
+    ));
     assert!(r.contains("project P (One): local only, no forge remote (git.remote is not set)"));
     assert!(!r.contains("not checked against a remote from this directory"));
 }
@@ -392,7 +424,12 @@ fn view_versions_are_not_printed_as_options() {
             binary_version: 2,
         });
     }
-    let r = text(&display::doctor(&h, &projects(), &no_reasons()));
+    let r = text(&display::doctor(
+        &h,
+        &projects(),
+        &no_reasons(),
+        &no_faults(),
+    ));
     assert!(r.contains("view set 2, binary 2"));
     assert!(r.contains("view request: live none, binary 2"));
     assert!(!r.contains("Some("));
@@ -457,7 +494,7 @@ fn health() -> Health {
 fn doctor_prints_integrity_findings() {
     let mut h = health();
     h.integrity = vec!["damaged page".into()];
-    let r = display::doctor(&h, &projects(), &no_reasons());
+    let r = display::doctor(&h, &projects(), &no_reasons(), &no_faults());
     assert_eq!(r.code, 1);
     assert!(text(&r).contains("integrity: damaged page"));
 }
@@ -468,7 +505,7 @@ fn doctor_prints_old_unanchored_work() {
         since: "T".into(),
         warning: true,
     };
-    let r = display::doctor(&h, &projects(), &no_reasons());
+    let r = display::doctor(&h, &projects(), &no_reasons(), &no_faults());
     assert_eq!(r.code, 1);
     assert!(text(&r).contains("since T, more than a day"));
 }
@@ -479,7 +516,7 @@ fn one_verify_error_does_not_hide_another_project() {
     q.project = ProjectId("Q".into());
     h.projects.push(q);
     h.projects[0].verify = Err(StoreError::Busy);
-    let r = display::doctor(&h, &projects(), &no_reasons());
+    let r = display::doctor(&h, &projects(), &no_reasons(), &no_faults());
     assert_eq!(r.code, 1);
     assert!(text(&r).contains("verify failed: store busy"));
     assert!(text(&r).contains("project Q (Two)"));
@@ -495,14 +532,14 @@ fn doctor_reports_a_vanished_remote_anchor() {
         tag: "tag".into(),
         pushed_at: "T".into(),
     });
-    let r = display::doctor(&h, &projects(), &no_reasons());
+    let r = display::doctor(&h, &projects(), &no_reasons(), &no_faults());
     assert_eq!(r.code, 1);
     assert!(text(&r).contains("remote absent, local anchor 7"));
 }
 #[test]
 fn a_clean_doctor_report_succeeds() {
     assert_eq!(
-        display::doctor(&health(), &projects(), &no_reasons()).code,
+        display::doctor(&health(), &projects(), &no_reasons(), &no_faults()).code,
         0
     );
 }
@@ -510,7 +547,7 @@ fn a_clean_doctor_report_succeeds() {
 fn the_log_threshold_itself_is_not_a_warning() {
     let mut h = health();
     h.log_bytes = 8_192_000;
-    let r = display::doctor(&h, &projects(), &no_reasons());
+    let r = display::doctor(&h, &projects(), &no_reasons(), &no_faults());
     assert_eq!(r.code, 0);
     assert!(!text(&r).contains("warning:"));
 }
@@ -518,7 +555,7 @@ fn the_log_threshold_itself_is_not_a_warning() {
 fn one_byte_above_the_log_threshold_warns() {
     let mut h = health();
     h.log_bytes = 8_192_001;
-    let r = display::doctor(&h, &projects(), &no_reasons());
+    let r = display::doctor(&h, &projects(), &no_reasons(), &no_faults());
     assert_eq!(r.code, 1);
     assert!(text(&r).contains(
         "warning: the write-ahead log is 8192001 bytes, more than 8,192,000 (1,000 pages)"
@@ -1498,6 +1535,161 @@ fn anchored_verify_checks_the_remote_then_verifies_against_it() {
         verify_next(anchored(), Some(&origin_settings()), Some(&Ok(()))),
         Ok(vec![verifies(Some("origin"))])
     );
+}
+#[test]
+fn a_checkout_file_without_an_id_is_a_fault_naming_it_and_no_discovered_project_in_doctor() {
+    let bad_id = "[project]\nid = \"0B5C1F6E-2A7D-4C3E-9F10-5A6B7C8D9E0F\"\nname = \"r\"\n";
+    let observations = [
+        (
+            "not TOML",
+            crate::init::observe_file(Ok(Some(checkout_file("[project\nid = ")))),
+        ),
+        (
+            "a bad id",
+            crate::init::observe_file(Ok(Some(checkout_file(bad_id)))),
+        ),
+        (
+            "removed since the walk",
+            crate::init::observe_file(Ok(None)),
+        ),
+    ];
+    for (case, observed) in observations {
+        let judged = command_plan::doctor_settings(&managed(observed, Ok(None), head_copy("")));
+        assert_eq!(judged.discovered, None, "{case}");
+        assert_eq!(judged.faults.len(), 1, "{case}: {:?}", judged.faults);
+        assert!(
+            judged.faults[0].contains(CHECKOUT_FILE),
+            "{case}: {:?}",
+            judged.faults
+        );
+    }
+}
+#[test]
+fn an_invalid_global_file_is_a_fault_with_the_remote_unknown_even_when_heads_copy_sets_one() {
+    let settings = managed(
+        valid_id(),
+        global_file("escalate_on_failure = [\n"),
+        head_copy("[git]\nremote = \"origin\"\n"),
+    );
+    let judged = command_plan::doctor_settings(&settings);
+    assert_eq!(judged.discovered.as_deref(), Some(PROJECT_ID));
+    assert_eq!(judged.remote, anchor_plan::RemoteState::Unknown);
+    assert_eq!(judged.faults.len(), 1);
+    assert!(
+        judged.faults[0].contains(GLOBAL_FILE),
+        "{:?}",
+        judged.faults
+    );
+}
+#[test]
+fn an_unreadable_global_file_and_a_wrong_typed_heads_copy_are_each_a_fault() {
+    let unreadable = policy::Unavailable {
+        path: GLOBAL_FILE.into(),
+        fault: policy::Fault::Unreadable {
+            cause: "Permission denied (os error 13)".into(),
+        },
+    };
+    let judged =
+        command_plan::doctor_settings(&managed(valid_id(), Err(unreadable), head_copy("")));
+    assert_eq!(judged.faults.len(), 1);
+    assert!(
+        judged.faults[0].contains("Permission denied"),
+        "{:?}",
+        judged.faults
+    );
+    let wrong = managed(
+        valid_id(),
+        Ok(None),
+        head_copy("escalate_on_failure = \"yes\"\n"),
+    );
+    let judged = command_plan::doctor_settings(&wrong);
+    assert_eq!(judged.remote, anchor_plan::RemoteState::Unknown);
+    assert_eq!(judged.faults.len(), 1);
+    assert!(
+        judged.faults[0].contains(CHECKOUT_FILE),
+        "{:?}",
+        judged.faults
+    );
+}
+#[test]
+fn outside_a_checkout_an_invalid_global_file_is_a_fault_in_doctor() {
+    let outside = command_plan::Settings {
+        project_file: None,
+        policy: crate::policy_step::build(&crate::policy_step::Reads {
+            global: global_file("escalate_on_failure = [\n"),
+            head: None,
+        }),
+    };
+    let judged = command_plan::doctor_settings(&outside);
+    assert_eq!(judged.discovered, None);
+    assert_eq!(judged.faults.len(), 1);
+    assert!(
+        judged.faults[0].contains(GLOBAL_FILE),
+        "{:?}",
+        judged.faults
+    );
+}
+#[test]
+fn clean_settings_give_doctor_no_fault_and_the_remote_from_git_remote() {
+    let judged = command_plan::doctor_settings(&origin_settings());
+    assert_eq!(judged.faults, Vec::<String>::new());
+    assert_eq!(judged.discovered.as_deref(), Some(PROJECT_ID));
+    assert_eq!(judged.remote, named_remote());
+    let unset = command_plan::doctor_settings(&unset_settings());
+    assert_eq!(unset.remote, anchor_plan::RemoteState::NotSet);
+}
+#[test]
+fn doctor_checks_a_discovered_project_with_unreadable_settings_locally_for_that_reason() {
+    let plan = anchor_plan::doctor_checks(
+        Some("P"),
+        &anchor_plan::RemoteState::Unknown,
+        &ledger(&["P", "Q"]),
+    );
+    assert_eq!(
+        check_of(&plan, "P"),
+        Some(&anchor_plan::CheckAgainst::Local(
+            anchor_plan::LocalReason::SettingsUnreadable
+        ))
+    );
+    assert_eq!(plan.validate, None);
+}
+#[test]
+fn a_settings_fault_is_listed_with_its_file_sets_exit_one_and_keeps_every_project() {
+    let mut h = health();
+    let mut q = h.projects[0].clone();
+    q.project = ProjectId("Q".into());
+    h.projects.push(q);
+    let faulted = command_plan::DoctorSettings {
+        faults: vec![format!(
+            "config-unavailable: {GLOBAL_FILE}:1:9: roles is an integer"
+        )],
+        ..no_faults()
+    };
+    let r = display::doctor(&h, &projects(), &no_reasons(), &faulted);
+    assert_eq!(r.code, 1);
+    assert!(text(&r).contains(&format!(
+        "settings finding: config-unavailable: {GLOBAL_FILE}:1:9"
+    )));
+    assert!(text(&r).contains("project P (One)"));
+    assert!(text(&r).contains("project Q (Two)"));
+    assert_eq!(
+        display::doctor(&h, &projects(), &no_reasons(), &no_faults()).code,
+        0
+    );
+}
+#[test]
+fn doctor_labels_a_project_whose_settings_could_not_be_read() {
+    let reasons = std::collections::BTreeMap::from([(
+        ProjectId("P".into()),
+        anchor_plan::LocalReason::SettingsUnreadable,
+    )]);
+    let r = text(&display::doctor(
+        &health(),
+        &projects(),
+        &reasons,
+        &no_faults(),
+    ));
+    assert!(r.contains("project P (One): local only, the settings could not be read"));
 }
 #[test]
 fn the_anchor_request_carries_the_step_version_and_remote_in_its_digest() {

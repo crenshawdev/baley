@@ -1,6 +1,7 @@
 //! Plain reports and exit classes for owner commands.
 use super::anchor_plan::LocalReason;
 use super::answer::AnswerUnread;
+use super::command_plan::DoctorSettings;
 use baley_core::{AcknowledgeRestoreError, AnchorOutcome, AnchorReport, Verification};
 use baley_store::*;
 use serde_json::Value;
@@ -297,6 +298,7 @@ fn local_text(reason: LocalReason) -> &'static str {
     match reason {
         LocalReason::NotDiscovered => "not checked against a remote from this directory",
         LocalReason::NoForgeRemote => "local only, no forge remote (git.remote is not set)",
+        LocalReason::SettingsUnreadable => "local only, the settings could not be read",
     }
 }
 /// Reports every project even when another project has failed. `reasons`
@@ -305,6 +307,7 @@ pub(super) fn doctor(
     health: &Health,
     projects: &[(ProjectId, String)],
     reasons: &BTreeMap<ProjectId, LocalReason>,
+    settings: &DoctorSettings,
 ) -> Render {
     let mut result = Render::line(format!("epoch {}", health.epoch), 0);
     if let Some(at) = &health.scrub_pending {
@@ -323,6 +326,10 @@ pub(super) fn doctor(
     ));
     if health.log_bytes > LOG_WARNING_BYTES {
         result.lines.push(format!("warning: the write-ahead log is {} bytes, more than 8,192,000 (1,000 pages); find the reader that keeps it from checkpointing", health.log_bytes));
+        result.code = 1;
+    }
+    for fault in &settings.faults {
+        result.lines.push(format!("settings finding: {fault}"));
         result.code = 1;
     }
     for p in &health.projects {
