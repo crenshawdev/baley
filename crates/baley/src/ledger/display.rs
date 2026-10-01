@@ -493,6 +493,24 @@ fn unread(kind: OutcomeKind, error: &AnswerUnread) -> Render {
     result.error = true;
     result
 }
+/// The line for a refused anchor's answer. A failed push records its reason
+/// under `failed` or at the top, and the claim decision records the code it
+/// refused on under `refused`.
+fn anchor_refusal_text(answer: &Value) -> Option<String> {
+    let reason = answer
+        .get("failed")
+        .and_then(|v| v.get("reason"))
+        .or_else(|| answer.get("reason"))
+        .and_then(Value::as_str);
+    if let Some(reason) = reason {
+        return Some(format!("anchor failed: {reason}"));
+    }
+    Some(match answer.get("refused")?.as_str()? {
+        "empty-chain" => "nothing to anchor: the project has no events".into(),
+        "no-remote" => "the project sets no git.remote; set it in baley.toml and commit it, then baley anchor can push".into(),
+        code => format!("anchor refused: {code}"),
+    })
+}
 /// Renders a loaded answer while preserving its recorded outcome.
 pub(super) fn recorded(
     kind: OutcomeKind,
@@ -525,12 +543,7 @@ pub(super) fn recorded(
             ))
         })
     } else {
-        value
-            .get("failed")
-            .and_then(|v| v.get("reason"))
-            .or_else(|| value.get("reason"))
-            .and_then(Value::as_str)
-            .map(|r| format!("anchor failed: {r}"))
+        anchor_refusal_text(value)
     };
     text.map_or_else(
         || unread(kind, &AnswerUnread::Malformed),
@@ -558,16 +571,7 @@ pub(super) fn anchor(
     };
     let mut result = match &report.outcome {
         AnchorOutcome::Recorded { outcome, .. } => render(outcome),
-        AnchorOutcome::Refused { outcome, .. } => {
-            if matches!(answer, Some(Ok(value)) if value.get("reason").and_then(Value::as_str) == Some("empty-chain"))
-            {
-                let mut result = Render::line("nothing to anchor: the project has no events", 1);
-                result.error = true;
-                result
-            } else {
-                render(outcome)
-            }
-        }
+        AnchorOutcome::Refused { outcome, .. } => render(outcome),
         AnchorOutcome::LateReplay { outcome, pushed } => {
             let mut r = render(outcome);
             r.lines.push(if *pushed { "this run's push reported the tag landed; it may have landed after reconciliation found it absent" } else { "this run's push did not report the tag landed" }.into());

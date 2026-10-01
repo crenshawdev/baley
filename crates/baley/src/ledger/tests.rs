@@ -824,7 +824,7 @@ fn an_empty_project_refusal_names_the_absent_events() {
         AnchorOutcome::Refused {
             outcome: Outcome {
                 kind: OutcomeKind::Refused,
-                answer: Answer::Inline(json!({"reason":"empty-chain"})),
+                answer: Answer::Inline(json!({"refused":"empty-chain"})),
             },
             head: head(),
         },
@@ -832,6 +832,51 @@ fn an_empty_project_refusal_names_the_absent_events() {
     );
     assert_eq!(r.code, 1);
     assert_eq!(text(&r), "nothing to anchor: the project has no events");
+}
+fn refused_with(answer: serde_json::Value) -> Outcome {
+    Outcome {
+        kind: OutcomeKind::Refused,
+        answer: Answer::Inline(answer),
+    }
+}
+const NO_REMOTE_LINE: &str = "the project sets no git.remote; set it in baley.toml and commit it, then baley anchor can push";
+#[test]
+fn a_no_remote_refusal_names_git_remote_and_is_not_a_malformed_answer() {
+    let r = anchor_render(
+        AnchorOutcome::Refused {
+            outcome: refused_with(json!({"refused":"no-remote"})),
+            head: head(),
+        },
+        vec![],
+    );
+    assert_eq!(r.code, 1);
+    assert!(r.error);
+    assert_eq!(text(&r), NO_REMOTE_LINE);
+    assert!(!text(&r).contains("malformed"));
+}
+#[test]
+fn a_replayed_no_remote_refusal_names_git_remote_after_the_replay_line() {
+    let r = anchor_render(
+        AnchorOutcome::Replayed(refused_with(json!({"refused":"no-remote"}))),
+        vec![],
+    );
+    assert_eq!(r.code, 1);
+    assert_eq!(
+        text(&r),
+        format!("request REQ was answered before:\n{NO_REMOTE_LINE}")
+    );
+}
+#[test]
+fn an_unknown_refusal_code_is_named_not_called_malformed() {
+    let r = anchor_render(
+        AnchorOutcome::Refused {
+            outcome: refused_with(json!({"refused":"later-code"})),
+            head: head(),
+        },
+        vec![],
+    );
+    assert_eq!(r.code, 1);
+    assert_eq!(text(&r), "anchor refused: later-code");
 }
 #[test]
 fn a_lost_reconciliation_is_a_finding() {
