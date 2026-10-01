@@ -6,8 +6,11 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use baley_store::EventSchema;
-use serde_json::json;
+use baley_store::{
+    Actor, Change, DocKey, Event, EventSchema, FieldKind, FieldSpec, Hash, KeyValue, ProjectId,
+    Projector, RequestId, ViewSpec,
+};
+use serde_json::{Value, json};
 
 use super::*;
 use crate::policy::schema::{Default as Builtin, Entry, Host, Kind, Rung, Schema, Scope};
@@ -228,4 +231,191 @@ fn policy_effective_registered_at_any_version_but_1_is_caught() {
     register_policy_events(&mut registry).unwrap();
     assert!(registry.reads("policy.effective", 1));
     assert!(!registry.reads("policy.effective", 2));
+}
+
+fn event(seq: u64, payload: Value) -> Event {
+    Event {
+        project_id: ProjectId(PROJECT_ID.into()),
+        seq,
+        stream: "project".into(),
+        stream_version: seq,
+        type_name: "policy.effective".into(),
+        type_version: 1,
+        actor: Actor::Baley,
+        recorded_at: "2026-09-30T18:00:00Z".into(),
+        request_id: RequestId("00000000-0000-4000-8000-000000000001".into()),
+        git: None,
+        policy_version: 0,
+        payload,
+        prev_hash: None,
+        hash: Hash([0; 32]),
+    }
+}
+
+/// A hand-written payload for `checkout` and `host`, with one value.
+fn stored_payload(checkout: &str, host: Value, escalate: bool) -> Value {
+    json!({
+        "project": PROJECT_ID,
+        "checkout": checkout,
+        "host": host,
+        "values": {"escalate": escalate},
+        "sources": {"escalate": {"layer": "default"}},
+        "diagnostics": [],
+        "catalog_version": 2,
+    })
+}
+
+fn put(changes: Vec<Change>) -> (DocKey, Value) {
+    match <[Change; 1]>::try_from(changes) {
+        Ok([Change::Put { key, body }]) => (key, body),
+        other => panic!("expected one put, got {other:?}"),
+    }
+}
+
+fn key(checkout: &str, host: &str) -> DocKey {
+    DocKey(vec![
+        KeyValue::Text(checkout.into()),
+        KeyValue::Text(host.into()),
+    ])
+}
+
+#[test]
+fn a_policy_view_keyed_by_a_field_named_host_or_holding_an_index_is_caught() {
+    assert_eq!(
+        policy_spec(),
+        ViewSpec {
+            name: "policy".into(),
+            version: 1,
+            key: vec![
+                FieldSpec {
+                    name: "checkout".into(),
+                    kind: FieldKind::Text,
+                },
+                FieldSpec {
+                    name: "host_key".into(),
+                    kind: FieldKind::Text,
+                },
+            ],
+            indexes: Vec::new(),
+            page_bound: 1,
+        }
+    );
+}
+
+#[test]
+fn a_document_whose_version_is_not_the_events_sequence_is_caught() {
+    let projector = PolicyProjector::new();
+    let first = event(5, stored_payload("/r", Value::Null, true));
+    let (at, body) = put(projector.apply(&first, &[]).unwrap());
+    assert_eq!(at, key("/r", ""));
+    assert_eq!(
+        body,
+        json!({
+            "project": PROJECT_ID,
+            "checkout": "/r",
+            "host": null,
+            "host_key": "",
+            "values": {"escalate": true},
+            "sources": {"escalate": {"layer": "default"}},
+            "diagnostics": [],
+            "catalog_version": 2,
+            "version": 5,
+        })
+    );
+}
+
+#[test]
+fn a_later_event_merged_into_the_stored_body_instead_of_replacing_it_is_caught() {
+    let projector = PolicyProjector::new();
+    let (at, first) = put(projector
+        .apply(&event(5, stored_payload("/r", Value::Null, true)), &[])
+        .unwrap());
+    // The second policy was merged over a schema that no longer has
+    // `escalate`, so a merge would keep the first body's value.
+    let second = json!({
+        "project": PROJECT_ID,
+        "checkout": "/r",
+        "host": null,
+        "values": {"effort": "max"},
+        "sources": {"effort": {"layer": "default"}},
+        "diagnostics": [],
+        "catalog_version": 3,
+    });
+    let (again, body) = put(projector
+        .apply(&event(9, second), &[(at.clone(), first)])
+        .unwrap());
+    assert_eq!(again, at);
+    assert_eq!(
+        body,
+        json!({
+            "project": PROJECT_ID,
+            "checkout": "/r",
+            "host": null,
+            "host_key": "",
+            "values": {"effort": "max"},
+            "sources": {"effort": {"layer": "default"}},
+            "diagnostics": [],
+            "catalog_version": 3,
+            "version": 9,
+        })
+    );
+}
+
+#[test]
+fn two_checkouts_of_one_project_sharing_a_document_is_caught() {
+    let projector = PolicyProjector::new();
+    let (one, _) = put(projector
+        .apply(&event(5, stored_payload("/r", Value::Null, true)), &[])
+        .unwrap());
+    let (two, _) = put(projector
+        .apply(
+            &event(6, stored_payload("/w/other", Value::Null, true)),
+            &[],
+        )
+        .unwrap());
+    assert_eq!(one, key("/r", ""));
+    assert_eq!(two, key("/w/other", ""));
+}
+
+#[test]
+fn the_command_line_and_a_host_on_one_checkout_sharing_a_document_is_caught() {
+    let projector = PolicyProjector::new();
+    let (none, _) = put(projector
+        .apply(&event(5, stored_payload("/r", Value::Null, true)), &[])
+        .unwrap());
+    let (claude, body) = put(projector
+        .apply(
+            &event(6, stored_payload("/r", json!("claude-code"), true)),
+            &[],
+        )
+        .unwrap());
+    assert_eq!(none, key("/r", ""));
+    assert_eq!(claude, key("/r", "claude-code"));
+    assert_eq!(body["host_key"], json!("claude-code"));
+    assert_eq!(policy_key("/r", None), none);
+    assert_eq!(policy_key("/r", Some(Host::ClaudeCode)), claude);
+}
+
+#[test]
+fn an_empty_host_taking_the_command_lines_key_is_caught() {
+    let refusal = PolicyProjector::new()
+        .apply(&event(4, stored_payload("/r", json!(""), true)), &[])
+        .unwrap_err();
+    assert_eq!(
+        refusal.0,
+        "policy.effective at seq 4: host is neither null nor non-empty text"
+    );
+}
+
+#[test]
+fn a_payload_without_a_checkout_projected_under_some_key_is_caught() {
+    let mut payload = stored_payload("/r", Value::Null, true);
+    payload.as_object_mut().unwrap().remove("checkout");
+    let refusal = PolicyProjector::new()
+        .apply(&event(4, payload), &[])
+        .unwrap_err();
+    assert_eq!(
+        refusal.0,
+        "policy.effective at seq 4: checkout is missing, not text or empty"
+    );
 }
