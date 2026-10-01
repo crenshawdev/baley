@@ -3,16 +3,21 @@
 //! CFG-R5, CFG-R7, CFG-R9). The judges live in `baley_core`; this file
 //! gathers what they judge and performs the write.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use baley_core::catalog::{
+    Catalog, MODEL_CATALOG_VIEW, USER_PROJECT, accepted_names, catalog_key, state_key,
+};
 use baley_core::policy::config_command::{
-    Place, VersionSource, changed_pairs, choose_outcome, collapse_repeats, judge_pairs,
-    render_file, render_set,
+    Place, VersionSource, changed_pairs, choose_outcome, collapse_repeats, judge_models,
+    judge_pairs, needs_catalog, render_file, render_set,
 };
 use baley_core::policy::recorded::{POLICY_VIEW, PathNotUtf8, policy_key, recorded_policy};
 use baley_core::policy::{
-    Fault, FileLayer, Host, ParsedLayer, Schema, SettingsFile, Unavailable, parse_layer,
+    AcceptedNames, Fault, FileLayer, Host, ParsedLayer, Schema, SettingsFile, Unavailable,
+    parse_layer,
 };
 use baley_store::{Admin, Ledger, ProjectId, RequestId, StoreError, Views};
 
@@ -23,7 +28,7 @@ use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
 use crate::ledger::open;
 use crate::policy_step::{self, Reads};
-use crate::{init, replace, settings};
+use crate::{init, models, replace, settings};
 
 /// Writes `pairs` into the file `layer` names and returns what the command
 /// prints. Every pair is judged before anything is written, then one file
@@ -98,6 +103,18 @@ fn attempt(
         };
         store = Some(opened);
     }
+    if needs_catalog(&typed) {
+        let seeded = match store.take() {
+            Some(store) => store,
+            None => open::store(&folders.home, &at, open::options())
+                .map_err(|error| display::store_error(&error, None))?,
+        };
+        let failed = |error: StoreError| display::store_error(&error, None);
+        models::seed(&seeded, new_request_id(), &at).map_err(failed)?;
+        let accepted = accepted_by_host(&seeded).map_err(failed)?;
+        judge_models(&typed, host, &accepted).map_err(refusal)?;
+        store = Some(seeded);
+    }
     let ledgered = match (place, &store, &prepared.project) {
         (Place::LedgeredProject, Some(store), Some(project)) => {
             let checkout = project.root.to_str().ok_or_else(|| {
@@ -160,6 +177,31 @@ fn regather(config: &Path, project: &Project) -> Result<Reads, Unavailable> {
         },
     })?;
     Ok(policy_step::gather(config, &project.root, Some(&working)))
+}
+
+/// Each host's accepted model names from the `user` project's `model_catalog`
+/// view: its compiled aliases and the entries in its own catalog. A provider's
+/// catalog is never read. One snapshot, so the names agree with each other.
+fn accepted_by_host(store: &impl Views) -> Result<BTreeMap<Host, AcceptedNames>, StoreError> {
+    let keys: Vec<_> = std::iter::once(state_key())
+        .chain(
+            Host::ALL
+                .iter()
+                .map(|host| catalog_key(Catalog::Host(*host))),
+        )
+        .collect();
+    let mut bodies = store
+        .get_many(&ProjectId(USER_PROJECT.into()), MODEL_CATALOG_VIEW, &keys)?
+        .into_iter()
+        .map(|document| document.map(|document| document.body));
+    let state = bodies.next().flatten();
+    let mut accepted = BTreeMap::new();
+    for (host, body) in Host::ALL.into_iter().zip(bodies) {
+        let names = accepted_names(host.name(), body.as_ref(), state.as_ref())
+            .map_err(|error| StoreError::Unavailable(error.to_string()))?;
+        accepted.insert(host, names);
+    }
+    Ok(accepted)
 }
 
 /// Whether the ledger lists the project. Nothing is created, since only
@@ -425,6 +467,30 @@ mod tests {
 
         assert_eq!(stored_version(&store, &id, ROOT).unwrap(), events[0].seq);
         assert_eq!(stored_version(&store, &id, "/w/other").unwrap(), 0);
+    }
+
+    #[test]
+    fn each_hosts_names_come_from_its_own_catalog_after_seeding() {
+        let (_dir, store) = store();
+        models::seed(&store, request(1), T0).unwrap();
+        models::change(
+            &store,
+            Catalog::Host(Host::Codex),
+            "gpt-owner-added",
+            baley_core::catalog::OwnerChange::Added(None),
+            request(2),
+            T1,
+        )
+        .unwrap();
+
+        let accepted = accepted_by_host(&store).unwrap();
+
+        let claude = &accepted[&Host::ClaudeCode].names;
+        let codex = &accepted[&Host::Codex].names;
+        assert!(claude.contains("opus"), "{claude:?}");
+        assert!(!codex.contains("opus"), "{codex:?}");
+        assert!(codex.contains("gpt-owner-added"), "{codex:?}");
+        assert!(!claude.contains("gpt-owner-added"), "{claude:?}");
     }
 
     #[test]
