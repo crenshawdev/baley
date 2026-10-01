@@ -18,9 +18,9 @@ pub use record::{RECORD_COMMAND, record};
 /// command. It runs as its own command, before the caller's, and prints
 /// nothing.
 ///
-/// `baley init` and `purge` call it now. `config set` (Build 2 T10),
-/// `anchor` and `acknowledge-restore` (T12), and the server and guard per
-/// request (Build 3) follow.
+/// `baley init`, `purge` and `config set` call it now. `anchor` and
+/// `acknowledge-restore` (T12), and the server and guard per request
+/// (Build 3), follow.
 pub fn step(
     store: &(impl Admin + Views + Ledger),
     project: &ProjectId,

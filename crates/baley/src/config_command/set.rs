@@ -7,16 +7,21 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use baley_core::policy::config_command::{
-    Place, changed_pairs, choose_outcome, collapse_repeats, judge_pairs, render_file, render_set,
+    Place, VersionSource, changed_pairs, choose_outcome, collapse_repeats, judge_pairs,
+    render_file, render_set,
 };
+use baley_core::policy::recorded::{POLICY_VIEW, PathNotUtf8, policy_key, recorded_policy};
 use baley_core::policy::{
     Fault, FileLayer, Host, ParsedLayer, Schema, SettingsFile, Unavailable, parse_layer,
 };
-use baley_store::StoreError;
+use baley_store::{Admin, Ledger, ProjectId, RequestId, StoreError, Views};
 
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{self, Environment, Folders, Platform};
+use crate::ledger::clock::SystemClock;
+use crate::ledger::commands::new_request_id;
 use crate::ledger::display::{self, Render};
+use crate::ledger::open;
 use crate::policy_step::{self, Reads};
 use crate::{init, replace, settings};
 
@@ -77,13 +82,36 @@ fn attempt(
         prepare(layer, &global_path, project.as_ref(), &reads, schema).map_err(refusal)?;
     refuse_link(&prepared.target).map_err(refusal)?;
 
+    // The store opens before the write, so an unsafe ledger refuses while the
+    // file is still as it was.
+    let at = SystemClock::now();
+    let mut store = None;
+    let mut place = Place::OutsideProject;
+    if let Some(project) = &prepared.project {
+        let opened = open::store(&folders.home, &at, open::options())
+            .map_err(|error| display::store_error(&error, None))?;
+        let failed = |error: StoreError| display::store_error(&error, Some(&project.id));
+        place = if in_ledger(&opened, &project.id).map_err(failed)? {
+            Place::LedgeredProject
+        } else {
+            Place::ProjectNotInLedger
+        };
+        store = Some(opened);
+    }
+    let ledgered = match (place, &store, &prepared.project) {
+        (Place::LedgeredProject, Some(store), Some(project)) => {
+            let checkout = project.root.to_str().ok_or_else(|| {
+                refusal(PathNotUtf8 {
+                    path: project.root.clone(),
+                })
+            })?;
+            Some((store, project, checkout))
+        }
+        _ => None,
+    };
+
     let typed = collapse_repeats(typed);
     let changed = changed_pairs(prepared.current.as_ref(), &typed);
-    // The ledger read is the next task's: every project counts as not in it.
-    let place = match prepared.project {
-        Some(_) => Place::ProjectNotInLedger,
-        None => Place::OutsideProject,
-    };
     let outcome = choose_outcome(!changed.is_empty(), place);
     if outcome.write {
         let bytes =
@@ -93,11 +121,86 @@ fn attempt(
         write_file(&prepared.target, &bytes, digest, config)
             .map_err(|failure| render_failure(&failure))?;
     }
+    let version = match (outcome.version, ledgered) {
+        (VersionSource::Step, Some((store, project, _))) => {
+            // A failure from here on leaves the change in place, so it says so.
+            let step = || -> Result<u64, Render> {
+                let reads = regather(&folders.config, project).map_err(refusal)?;
+                record_policy(store, project, &reads, new_request_id(), &at)
+            };
+            step().map_err(|mut render| {
+                let note = format!("wrote {}, and the change stands", prepared.target.display());
+                render.lines.insert(0, note);
+                render
+            })?
+        }
+        (VersionSource::Stored, Some((store, project, checkout))) => {
+            let id = ProjectId(project.id.clone());
+            stored_version(store, &id, checkout)
+                .map_err(|error| display::store_error(&error, Some(&project.id)))?
+        }
+        _ => 0,
+    };
     Ok(Render {
-        lines: render_set(layer, &prepared.target, &changed, &outcome, 0),
+        lines: render_set(layer, &prepared.target, &changed, &outcome, version),
         code: 0,
         error: false,
     })
+}
+
+/// Reads both settings files and HEAD's copy again after the write, so the
+/// step records the policy now in force. A project file that is gone or
+/// unreadable leaves no policy to record.
+fn regather(config: &Path, project: &Project) -> Result<Reads, Unavailable> {
+    let path = project.folder.join(PROJECT_FILE);
+    let working = settings::read(&path)?.ok_or_else(|| Unavailable {
+        path,
+        fault: Fault::Unreadable {
+            cause: "the file was not found".to_owned(),
+        },
+    })?;
+    Ok(policy_step::gather(config, &project.root, Some(&working)))
+}
+
+/// Whether the ledger lists the project. Nothing is created, since only
+/// `baley init` puts a project in the ledger.
+fn in_ledger(store: &impl Admin, id: &str) -> Result<bool, StoreError> {
+    Ok(store.projects()?.iter().any(|(known, _)| known.0 == id))
+}
+
+/// The version of the policy recorded for the checkout and the command line,
+/// 0 when none is recorded.
+fn stored_version(
+    store: &impl Views,
+    project: &ProjectId,
+    checkout: &str,
+) -> Result<u64, StoreError> {
+    let document = store.get(project, POLICY_VIEW, &policy_key(checkout, None))?;
+    Ok(document
+        .and_then(|document| document.body.get("version")?.as_u64())
+        .unwrap_or(0))
+}
+
+/// Builds the policy from `reads` and runs the policy step for the checkout
+/// at the project's root, never the project file's folder, so a nested project file keys
+/// its checkout by the repository root. Returns the version in force.
+fn record_policy(
+    store: &(impl Admin + Views + Ledger),
+    project: &Project,
+    reads: &Reads,
+    request_id: RequestId,
+    at: &str,
+) -> Result<u64, Render> {
+    let policy = policy_step::build(reads).map_err(refusal)?;
+    let recorded = recorded_policy(&project.root, &policy).map_err(refusal)?;
+    policy_step::step(
+        store,
+        &ProjectId(project.id.clone()),
+        &recorded,
+        request_id,
+        at,
+    )
+    .map_err(|error| display::store_error(&error, Some(&project.id)))
 }
 
 /// The project the working directory is in, with its project file as read.
@@ -114,6 +217,8 @@ struct ProjectSeen {
 /// The project a set runs in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Project {
+    /// The folder holding the project file.
+    folder: PathBuf,
     /// The id the working-tree file names.
     id: String,
     /// The repository root, the checkout the policy step records.
@@ -179,6 +284,7 @@ fn prepare(
         current,
         project: seen.map(|(seen, id)| Project {
             id,
+            folder: seen.folder.clone(),
             root: seen.root.clone(),
         }),
     })
@@ -250,6 +356,92 @@ mod tests {
 
     use super::*;
 
+    const T0: &str = "2026-10-01T10:00:00Z";
+    const T1: &str = "2026-10-01T10:00:01Z";
+
+    fn request(n: u8) -> RequestId {
+        RequestId(format!("00000000-0000-4000-8000-0000000000{n:02}"))
+    }
+
+    fn store() -> (tempfile::TempDir, baley_store_sqlite::SqliteStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let store = open::store(&home, T0, open::options()).unwrap();
+        (dir, store)
+    }
+
+    fn recorded_events(store: &baley_store_sqlite::SqliteStore) -> Vec<baley_store::Event> {
+        let page = baley_store::PageRequest {
+            limit: 100,
+            after: None,
+        };
+        let stream = baley_store::StreamName("project".into());
+        store
+            .stream(&ProjectId(ID.into()), &stream, 1, page)
+            .unwrap()
+            .items
+            .into_iter()
+            .filter(|event| event.type_name == "policy.effective")
+            .collect()
+    }
+
+    fn found() -> Project {
+        Project {
+            id: ID.into(),
+            folder: FOLDER.into(),
+            root: ROOT.into(),
+        }
+    }
+
+    /// Supplied reads for a project file in `/r/app`, with no git.
+    fn nested_reads() -> Reads {
+        reads(None, Some(PROJECT_TEXT))
+    }
+
+    #[test]
+    fn membership_reads_the_ledger_without_creating_the_project() {
+        let (_dir, store) = store();
+        store
+            .create_project(&ProjectId(ID.into()), "sample", T0)
+            .unwrap();
+        let before = store.projects().unwrap();
+
+        assert!(in_ledger(&store, ID).unwrap());
+        assert!(!in_ledger(&store, "0b5c1f6e-2a7d-4c3e-9f10-5a6b7c8d9e0f").unwrap());
+
+        assert_eq!(store.projects().unwrap(), before);
+    }
+
+    #[test]
+    fn the_stored_version_is_the_recorded_event_of_that_checkout_only() {
+        let (_dir, store) = store();
+        let id = ProjectId(ID.into());
+        store.create_project(&id, "sample", T0).unwrap();
+        let project = found();
+        let version = record_policy(&store, &project, &nested_reads(), request(1), T1).unwrap();
+        let events = recorded_events(&store);
+        assert_eq!(events.len(), 1);
+        assert_eq!(version, events[0].seq);
+
+        assert_eq!(stored_version(&store, &id, ROOT).unwrap(), events[0].seq);
+        assert_eq!(stored_version(&store, &id, "/w/other").unwrap(), 0);
+    }
+
+    #[test]
+    fn the_step_keys_its_checkout_by_the_repository_root_not_the_project_folder() {
+        let (_dir, store) = store();
+        store
+            .create_project(&ProjectId(ID.into()), "sample", T0)
+            .unwrap();
+
+        let version = record_policy(&store, &found(), &nested_reads(), request(1), T1).unwrap();
+
+        let events = recorded_events(&store);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload["checkout"], "/r");
+        assert_eq!(version, events[0].seq);
+    }
+
     const GLOBAL: &str = "/c/config.toml";
     const FOLDER: &str = "/r/app";
     const ROOT: &str = "/r";
@@ -314,6 +506,7 @@ mod tests {
         assert_eq!(
             prepared.project,
             Some(Project {
+                folder: FOLDER.into(),
                 id: ID.into(),
                 root: ROOT.into()
             })
