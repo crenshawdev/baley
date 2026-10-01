@@ -21,7 +21,7 @@ rusqlite = { version = "0.40", features = ["bundled", "blob"] }
 # `arbitrary_precision`, which this crate inherits through it.
 serde_json = "1"
 # Payloads are keyed by the SHA-256 of their uncompressed bytes (EVD-R11).
-sha2 = "0.10"
+sha2 = "0.11"
 # Payload bodies are stored zstd-compressed and read back through its
 # stream decoder.
 zstd = "0.14"
