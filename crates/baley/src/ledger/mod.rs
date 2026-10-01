@@ -37,7 +37,13 @@ pub fn run(command: LedgerCommand) -> ExitCode {
             open::store(&folders.home, &started_at, open::options())
                 .map_err(|e| display::store_error(&e, None))?,
         );
-        Ok(commands::dispatch(command, store, cwd, started_at))
+        Ok(commands::dispatch(
+            command,
+            store,
+            cwd,
+            &folders.config,
+            started_at,
+        ))
     })()
     .unwrap_or_else(|e| e);
     for line in result.lines {

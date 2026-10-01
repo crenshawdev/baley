@@ -930,3 +930,76 @@ fn unsafe_home_renders_every_fix_as_a_refusal_not_debug() {
     assert_eq!(rendered.code, 2);
     assert!(rendered.error);
 }
+
+const CHECKOUT_FILE: &str = "/r/baley.toml";
+const PURGE_HINT: &str = "a purge run outside a checkout of the project records policy version 0";
+fn checkout_file(text: &str) -> policy::SettingsFile {
+    crate::settings::file(
+        std::path::Path::new(CHECKOUT_FILE),
+        text.as_bytes().to_vec(),
+    )
+}
+#[test]
+fn purge_does_not_take_a_checkout_file_without_an_id_as_no_project() {
+    let path = std::path::Path::new(CHECKOUT_FILE);
+    let bad_id = "[project]\nid = \"0B5C1F6E-2A7D-4C3E-9F10-5A6B7C8D9E0F\"\nname = \"r\"\n";
+    let observations = [
+        (
+            "not TOML",
+            crate::init::observe_file(Ok(Some(checkout_file("[project\nid = ")))),
+        ),
+        (
+            "a bad id",
+            crate::init::observe_file(Ok(Some(checkout_file(bad_id)))),
+        ),
+        (
+            "removed since the walk",
+            crate::init::observe_file(Ok(None)),
+        ),
+    ];
+    for (case, observed) in observations {
+        let refusal = commands::purge_project(path, observed).unwrap_err();
+        assert!(
+            refusal.starts_with("config-unavailable: "),
+            "{case}: {refusal}"
+        );
+        assert!(refusal.contains(CHECKOUT_FILE), "{case}: {refusal}");
+        assert!(refusal.contains(PURGE_HINT), "{case}: {refusal}");
+    }
+}
+#[test]
+fn purge_takes_the_id_of_a_valid_checkout_file() {
+    let id = "0b5c1f6e-2a7d-4c3e-9f10-5a6b7c8d9e0f";
+    let bytes = policy::render_project(id, "r", None).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    let observed = crate::init::observe_file(Ok(Some(checkout_file(&text))));
+    let path = std::path::Path::new(CHECKOUT_FILE);
+    assert_eq!(commands::purge_project(path, observed), Ok(id.to_string()));
+}
+#[test]
+fn purge_command_does_not_keep_policy_version_0_in_its_digest_or_itself() {
+    let hashes = [Hash([0x0a; 32]), Hash([0xab; 32])];
+    let command = commands::purge_command(
+        &ProjectId("P".into()),
+        7,
+        &hashes,
+        "leaked",
+        RequestId("00000000-0000-4000-8000-000000000001".into()),
+        "2026-10-01T10:00:00Z",
+    )
+    .unwrap();
+    assert_eq!(command.policy_version, 7);
+    let expected = request_digest(&json!({
+        "kind": "payload.purge",
+        "project": "P",
+        "actor": "owner",
+        "policy_version": 7,
+        "hashes": ["0a".repeat(32), "ab".repeat(32)],
+        "reason": "leaked",
+        "scope": [],
+    }))
+    .unwrap();
+    assert_eq!(command.digest, expected);
+    assert_eq!(command.actor, Actor::Owner);
+    assert_eq!(command.kind, CommandKind("payload.purge".into()));
+}
