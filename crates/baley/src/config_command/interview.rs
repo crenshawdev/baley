@@ -3,9 +3,9 @@
 //! and for `escalate_on_failure` in the terminal, and writes the answers
 //! through one `set::set`. It opens no store and runs no policy step itself.
 
-use baley_core::policy::config_command::judge_show;
+use baley_core::policy::config_command::{SetRefusal, judge_show};
 use baley_core::policy::{
-    EffectivePolicy, FileLayer, Host, Role, Schema, SettingsFile, Unavailable, merge,
+    EffectivePolicy, FileLayer, Host, ParsedLayer, Role, Schema, SettingsFile, Unavailable, merge,
 };
 use baley_store::StoreError;
 use std::io::{self, BufRead, Write};
@@ -101,7 +101,9 @@ struct Start {
 }
 
 /// Judges the reads before the first question. A refusal is exit 2 and no
-/// question is asked. HEAD's read becomes the judge's input as `show` makes
+/// question is asked. In order: `--project` outside a project, the reads and
+/// their parses, then a default file that comes out as the project file
+/// outside a project. HEAD's read becomes the judge's input as `show` makes
 /// it: no read is no file, a copy is its layer, and a failed read stays its
 /// refusal.
 fn begin(
@@ -110,24 +112,61 @@ fn begin(
     host: Option<Host>,
     seen: Seen,
 ) -> Result<Start, Render> {
+    if file == Some(FileLayer::Project) && !seen.in_project {
+        return Err(not_a_project());
+    }
     let head = match seen.reads.head {
         None => Ok(None),
         Some(Ok(committed)) => Ok(committed.layer),
         Some(Err(refusal)) => Err(refusal),
     };
+    let in_project = seen.in_project;
     let layers = judge_show(
         schema,
         &[],
-        seen.in_project,
+        in_project,
         seen.reads.global,
         seen.working,
         head,
     )
     .map_err(|refusal| Render::refusal(refusal.to_string()))?;
+    let layer = file.unwrap_or_else(|| default_layer(layers.global.as_ref()));
+    if layer == FileLayer::Project && !in_project {
+        return Err(not_a_project());
+    }
     Ok(Start {
         policy: merge(schema, host, layers.global.as_ref(), layers.head.as_ref()),
-        layer: file.unwrap_or(FileLayer::Global),
+        layer,
     })
+}
+
+fn not_a_project() -> Render {
+    Render::refusal(SetRefusal::NotAProject.to_string())
+}
+
+/// The file written when neither flag is given: the global file while it holds
+/// no role value at its top level, so a first interview sets the owner's own
+/// defaults, and the project file once it does. A host section's role value
+/// does not count, and neither does a table that holds no role value.
+fn default_layer(global: Option<&ParsedLayer>) -> FileLayer {
+    let is_role_value = |name: &str| {
+        Role::ALL.into_iter().any(|role| {
+            ["model", "effort"]
+                .into_iter()
+                .any(|key| name == format!("roles.{}.{key}", role.name()))
+        })
+    };
+    let holds_one = global.is_some_and(|layer| {
+        layer
+            .values
+            .iter()
+            .any(|written| written.host.is_none() && is_role_value(&written.name))
+    });
+    if holds_one {
+        FileLayer::Project
+    } else {
+        FileLayer::Global
+    }
 }
 
 /// One question: a setting, the value in force and the layer it came from.
@@ -558,5 +597,116 @@ mod tests {
         let (code, text) = refusal_text(seen);
 
         assert_eq!((code, text), (2, failed.to_string()));
+    }
+
+    fn without_global(mut seen: Seen) -> Seen {
+        seen.reads.global = Ok(None);
+        seen
+    }
+
+    fn outside_a_project(global: &str) -> Seen {
+        let mut seen = seen(global, None, None);
+        seen.in_project = false;
+        seen
+    }
+
+    /// The file an interview with no flag writes, from a global file's text.
+    fn default_for(global: Option<&str>, host: Option<Host>) -> FileLayer {
+        let seen = match global {
+            Some(text) => seen(text, None, None),
+            None => without_global(seen("", None, None)),
+        };
+        begin(Schema::standard(), None, host, seen)
+            .ok()
+            .unwrap()
+            .layer
+    }
+
+    #[test]
+    fn with_no_flag_a_global_file_holding_no_role_value_is_the_file_written() {
+        assert_eq!(default_for(None, None), FileLayer::Global);
+        assert_eq!(
+            default_for(Some("escalate_on_failure = true\n"), None),
+            FileLayer::Global
+        );
+        assert_eq!(default_for(Some("[roles]\n"), None), FileLayer::Global);
+        assert_eq!(
+            default_for(Some("[roles]\nbogus = 1\n"), None),
+            FileLayer::Global
+        );
+    }
+
+    #[test]
+    fn a_host_sections_role_value_does_not_make_the_project_file_the_default() {
+        let global = "[host.codex.roles.planner]\neffort = \"max\"\n";
+
+        assert_eq!(default_for(Some(global), None), FileLayer::Global);
+        assert_eq!(
+            default_for(Some(global), Some(Host::Codex)),
+            FileLayer::Global
+        );
+    }
+
+    #[test]
+    fn with_no_flag_a_global_role_value_makes_the_project_file_the_default() {
+        assert_eq!(
+            default_for(Some("[roles.planner]\neffort = \"low\"\n"), None),
+            FileLayer::Project
+        );
+        assert_eq!(
+            default_for(Some("[roles.reviewer]\nmodel = \"opus\"\n"), None),
+            FileLayer::Project
+        );
+    }
+
+    #[test]
+    fn a_flag_names_the_file_whatever_the_global_file_holds() {
+        let seen = seen("[roles.planner]\neffort = \"low\"\n", None, None);
+
+        let start = begin(Schema::standard(), Some(FileLayer::Global), None, seen);
+
+        assert_eq!(start.ok().unwrap().layer, FileLayer::Global);
+    }
+
+    #[test]
+    fn project_outside_a_project_is_refused_before_a_bad_global_file_is_judged() {
+        let render = begin(
+            Schema::standard(),
+            Some(FileLayer::Project),
+            None,
+            outside_a_project("[roles"),
+        )
+        .err()
+        .unwrap();
+
+        assert_eq!(render.code, 2);
+        assert!(render.lines[0].starts_with("not-a-project: "), "{render:?}");
+    }
+
+    #[test]
+    fn a_default_that_is_the_project_file_outside_a_project_is_refused_not_sent_to_global() {
+        let render = begin(
+            Schema::standard(),
+            None,
+            None,
+            outside_a_project("[roles.planner]\neffort = \"low\"\n"),
+        )
+        .err()
+        .unwrap();
+
+        assert_eq!(render.code, 2);
+        assert!(render.lines[0].starts_with("not-a-project: "), "{render:?}");
+    }
+
+    #[test]
+    fn global_outside_a_project_passes() {
+        let start = begin(
+            Schema::standard(),
+            Some(FileLayer::Global),
+            None,
+            outside_a_project("[roles.planner]\neffort = \"low\"\n"),
+        );
+
+        assert_eq!(start.ok().unwrap().layer, FileLayer::Global);
     }
 }
