@@ -555,14 +555,19 @@ sequenceDiagram
   else found
     P->>L: checkout.seen if new
     P->>P: effective policy (project file at the checkout's HEAD, global file, host sections)
-    alt merged result changed
-      P->>L: policy.effective
+    alt a settings file is invalid or unreadable, or a path is not UTF-8
+      P-->>I: config-unavailable naming the file and the fault
+      I-->>H: the refusal, with no policy.effective recorded
+    else policy available
+      alt merged result changed
+        P->>L: policy.effective
+      end
+      P-->>I: project and policy version
     end
-    P-->>I: project and policy version
   end
 ```
 
-*Figure 7. Finding the project and its policy on a request. The steps built so far serve the command line: the walk up to the nearest `baley.toml`, stopping at the git root (`discover`), the read of the project file at the checkout's HEAD (`committed::read`), and the merge with the global file and host sections. `baley init` calls the walk. No command calls the read yet; its first caller is Build 2 T9. Recording `checkout.seen` arrives in Build 2 T13, recording `policy.effective` when the merged result changes in T9, and the host's request through the host interface in Build 3.*
+*Figure 7. Finding the project and its policy on a request. The steps built so far serve the command line: the walk up to the nearest `baley.toml`, stopping at the git root (`discover`), the read of the project file at the checkout's HEAD (`committed::read`), and the merge with the global file and host sections. `baley init` and `purge` call the walk, and read HEAD's copy through the policy step. Recording `policy.effective` when the merged result changes is built for the command line: `baley init` records it after `project.initialized`, and `purge` from a checkout of the project it names. The command line connects no host, so no host section applies to it. An invalid or unreadable settings file, or a checkout or settings path that is not UTF-8, refuses with `config-unavailable` before the step records anything, and `baley init` refuses before it writes a file or opens the ledger. Recording `checkout.seen` arrives in Build 2 T13, and the host's request through the host interface in Build 3.*
 
 ## 9. Settings
 
