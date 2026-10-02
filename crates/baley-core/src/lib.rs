@@ -6,6 +6,7 @@
 
 pub mod anchor;
 pub mod catalog;
+pub mod checkout;
 pub mod forge;
 pub mod policy;
 pub mod reconcile;
