@@ -8,7 +8,7 @@ use baley_store::ProjectId;
 const GIT_REMOTE: &str = "git.remote";
 
 /// The remote a built policy names, `None` when `git.remote` is absent.
-pub(super) fn remote_of(policy: &EffectivePolicy) -> Option<String> {
+pub(crate) fn remote_of(policy: &EffectivePolicy) -> Option<String> {
     match policy.settings.get(GIT_REMOTE)?.value.as_ref()? {
         Value::RemoteName(name) => Some(name.clone()),
         _ => None,

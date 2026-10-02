@@ -299,3 +299,4 @@ Some words name different things in different areas. Qualify them, as the entrie
 | Waiver | A truth waiver (0007) and a surface waiver (0009). |
 | Task | A plan's task (0006) and a hotfix task (0014). |
 | Close | A task close, a phase close, a milestone close, and the close of a debug episode that never reproduced. |
+| Admission | Phase admission (0006), which binds a phase's approved plans so execution can begin, and checkout admission (0001), which judges a checkout against its project's other checkouts and records `checkout.seen` before a command records. |

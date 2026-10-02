@@ -97,6 +97,12 @@ fn git_subprocesses_run_under_a_deadline() {
             "git ls-tree HEAD -- baley.toml",
             60,
         ),
+        (
+            Caller::CheckoutFacts,
+            &["rev-list", "--max-parents=0", "HEAD"],
+            "git rev-list --max-parents=0 HEAD",
+            60,
+        ),
     ];
     for &(caller, args, command, seconds) in rows {
         let args: Vec<OsString> = args.iter().map(OsString::from).collect();
@@ -147,6 +153,7 @@ fn registered_callers_select_their_deadlines() {
         (Caller::ReadDocumentHead, 60, 60),
         (Caller::LandingGit, 60, 60),
         (Caller::ProjectHead, 60, 60),
+        (Caller::CheckoutFacts, 60, 60),
     ] {
         assert_eq!(
             deadline(caller).nominal,

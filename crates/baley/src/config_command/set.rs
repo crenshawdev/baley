@@ -14,13 +14,16 @@ use baley_core::policy::config_command::{
     Place, VersionSource, changed_pairs, choose_outcome, collapse_repeats, judge_models,
     judge_pairs, needs_catalog, render_file, render_set,
 };
-use baley_core::policy::recorded::{POLICY_VIEW, PathNotUtf8, policy_key, recorded_policy};
+use baley_core::policy::recorded::{
+    POLICY_VIEW, PathNotUtf8, RecordedPolicy, policy_key, recorded_policy,
+};
 use baley_core::policy::{
-    AcceptedNames, Fault, FileLayer, Host, ParsedLayer, Schema, SettingsFile, Unavailable,
-    parse_layer,
+    AcceptedNames, EffectivePolicy, Fault, FileLayer, Host, ParsedLayer, Schema, SettingsFile,
+    Unavailable, parse_layer,
 };
 use baley_store::{Admin, Ledger, ProjectId, RequestId, StoreError, Views};
 
+use crate::checkout::{Site, gather_and_admit};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{self, Environment, Folders, Platform};
 use crate::ledger::clock::SystemClock;
@@ -143,7 +146,24 @@ fn attempt(
             // A failure from here on leaves the change in place, so it says so.
             let step = || -> Result<u64, Render> {
                 let reads = regather(&folders.config, project).map_err(refusal)?;
-                record_policy(store, project, &reads, new_request_id(), &at)
+                let (policy, recorded) = build_policy(project, &reads)?;
+                // Checkout admission runs only here, where the set runs the
+                // policy step, so it sits inside the note's closure.
+                let site = Site {
+                    root: &project.root,
+                    policy: &policy,
+                    path: &recorded.checkout,
+                };
+                gather_and_admit(
+                    store,
+                    &ProjectId(project.id.clone()),
+                    &site,
+                    &mut crate::process::System,
+                    new_request_id(),
+                    &at,
+                )
+                .map_err(|error| init::admission_render(error, &project.id))?;
+                record_policy(store, project, &recorded, new_request_id(), &at)
             };
             step().map_err(|mut render| {
                 let note = format!("wrote {}, and the change stands", prepared.target.display());
@@ -223,22 +243,32 @@ fn stored_version(
         .unwrap_or(0))
 }
 
-/// Builds the policy from `reads` and runs the policy step for the checkout
-/// at the project's root, never the project file's folder, so a nested project file keys
-/// its checkout by the repository root. Returns the version in force.
+/// Builds the policy from `reads` and the checkout it is recorded for, at the
+/// project's root, never the project file's folder, so a nested project file
+/// keys its checkout by the repository root. Checkout admission and the
+/// policy step share the one build.
+fn build_policy(
+    project: &Project,
+    reads: &Reads,
+) -> Result<(EffectivePolicy, RecordedPolicy), Render> {
+    let policy = policy_step::build(reads).map_err(refusal)?;
+    let recorded = recorded_policy(&project.root, &policy).map_err(refusal)?;
+    Ok((policy, recorded))
+}
+
+/// Runs the policy step for `recorded`, built at the project's root by
+/// `build_policy`. Returns the version in force.
 fn record_policy(
     store: &(impl Admin + Views + Ledger),
     project: &Project,
-    reads: &Reads,
+    recorded: &RecordedPolicy,
     request_id: RequestId,
     at: &str,
 ) -> Result<u64, Render> {
-    let policy = policy_step::build(reads).map_err(refusal)?;
-    let recorded = recorded_policy(&project.root, &policy).map_err(refusal)?;
     policy_step::step(
         store,
         &ProjectId(project.id.clone()),
-        &recorded,
+        recorded,
         request_id,
         at,
     )
@@ -451,6 +481,10 @@ mod tests {
         reads(None, Some(PROJECT_TEXT))
     }
 
+    fn built(project: &Project) -> RecordedPolicy {
+        build_policy(project, &nested_reads()).ok().unwrap().1
+    }
+
     #[test]
     fn membership_reads_the_ledger_without_creating_the_project() {
         let (_dir, store) = store();
@@ -471,7 +505,8 @@ mod tests {
         let id = ProjectId(ID.into());
         store.create_project(&id, "sample", T0).unwrap();
         let project = found();
-        let version = record_policy(&store, &project, &nested_reads(), request(1), T1).unwrap();
+        let recorded = built(&project);
+        let version = record_policy(&store, &project, &recorded, request(1), T1).unwrap();
         let events = recorded_events(&store);
         assert_eq!(events.len(), 1);
         assert_eq!(version, events[0].seq);
@@ -511,7 +546,9 @@ mod tests {
             .create_project(&ProjectId(ID.into()), "sample", T0)
             .unwrap();
 
-        let version = record_policy(&store, &found(), &nested_reads(), request(1), T1).unwrap();
+        let project = found();
+        let recorded = built(&project);
+        let version = record_policy(&store, &project, &recorded, request(1), T1).unwrap();
 
         let events = recorded_events(&store);
         assert_eq!(events.len(), 1);

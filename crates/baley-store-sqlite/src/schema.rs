@@ -22,15 +22,6 @@ CREATE TABLE project (
   head_hash BLOB CHECK (head_hash IS NULL OR length(head_hash) = 32)
 ) STRICT, WITHOUT ROWID;
 
-CREATE TABLE checkout (
-  project_id TEXT NOT NULL REFERENCES project(project_id),
-  path TEXT NOT NULL,
-  root_commit TEXT,
-  remote_url TEXT,
-  last_seen TEXT NOT NULL,
-  PRIMARY KEY (project_id, path)
-) STRICT, WITHOUT ROWID;
-
 CREATE TABLE anchor (
   project_id TEXT NOT NULL REFERENCES project(project_id),
   seq INTEGER NOT NULL,

@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status includes Build 2 T1 to T12 merged, as of origin/main `337da595`, on 2026-10-01, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status includes Build 2 T1 to T13 merged, as of origin/main `8132051a`, on 2026-10-02, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
 
 ## The path to the first release
 
@@ -33,10 +33,10 @@ flowchart TB
     classDef blocked fill:#cf222e,stroke:#a40e26,color:#ffffff
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
 
-    class B1 done
-    class B2 progress
+    class B1,B2 done
+    class B3 next
     class B4,R1 blocked
-    class B3,B5,B6,B7,B8,B9,D134,OTHER,R2,R3 planned
+    class B5,B6,B7,B8,B9,D134,OTHER,R2,R3 planned
 ```
 
 Figure 1. The path from Build 1 to publishing. Arrows point from a piece of work to what waits on it.
@@ -88,7 +88,7 @@ Figure 2. Build 1's tasks. One pull request per task.
 
 ## Build 2: Identity, settings and keys
 
-[#23](https://github.com/crenshawdev/baley/issues/23) · milestone Evidence · in progress
+[#23](https://github.com/crenshawdev/baley/issues/23) · milestone Evidence · done
 
 Baley finds its per-user ledger safely, and `baley init` ties a repository to a project through a committed `baley.toml`. Baley keeps its files in its own folder under a crenshawdev vendor folder: the global settings file `config.toml` and the keys file `keys.env` in `$XDG_CONFIG_HOME/crenshawdev/baley` and the ledger in `$XDG_DATA_HOME/crenshawdev/baley` on Linux (an empty or relative XDG variable counts as unset), all three in `~/Library/Application Support/crenshawdev/baley` on macOS, and all three in `BALEY_HOME` when it is set ([ADR 0027](adr/0027-vendor-folders-and-plain-keys.md)). The ledger's home is not supported on a network share, and Baley does not check for one. Baley reads the two TOML settings files ([ADR 0015](adr/0015-settings-in-toml.md)) and resolves routes against a model catalog it refreshes by calling each provider's model-list endpoint with `reqwest` ([ADR 0028](adr/0028-one-http-stack.md)). Provider keys are plain `NAME=value` lines in `keys.env`, which the owner edits by hand and Baley only reads, refusing it with `keys-file-exposed` when group or others can read it or another user owns it, and with `keys-file-invalid` when a line is invalid, a value is empty or a name appears twice, and with `keys-file-unreadable` when it is not a regular file or cannot be read. There is no encryption, no master key and no OS secret store. Keys reach a command only through `baley exec --key`; detection also reads them for provider model-list requests. Key values never enter events, views or exports. All of it runs from the command line, on Linux and macOS.
 
@@ -135,8 +135,7 @@ flowchart LR
 
     classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
-    class T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12 done
-    class T13 planned
+    class T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12,T13 done
 ```
 
 Figure 3. Build 2's tasks. Arrows point from a task to what waits on it. One pull request per task.
@@ -155,11 +154,11 @@ Figure 3. Build 2's tasks. Arrows point from a task to what waits on it. One pul
 | T10 | `baley config show` and `baley config set` | [#170](https://github.com/crenshawdev/baley/pull/170) | Merged |
 | T11 | `baley config interview` | [#171](https://github.com/crenshawdev/baley/pull/171) | Merged |
 | T12 | The anchor remote from the project's settings | [#172](https://github.com/crenshawdev/baley/pull/172) | Merged |
-| T13 | Checkouts and forks | | Planned |
+| T13 | Checkouts and forks | [#173](https://github.com/crenshawdev/baley/pull/173) | Merged |
 
 ## Build 3: Hosts
 
-[#24](https://github.com/crenshawdev/baley/issues/24) · milestone Evidence · planned
+[#24](https://github.com/crenshawdev/baley/issues/24) · milestone Evidence · next
 
 One global Baley MCP server per user serves every session and worker on Claude Code and Codex. It is reached two ways: over HTTP, when it runs as a background service (systemd user unit or launchd agent), and over stdio, through a small launcher that starts the server or joins the one already running. Every call carries its working directory, host, session and call id. `baley install` asks which way to run, registers both hosts, installs the guard hook and configures the sandbox. The sandbox refuses agent writes to Baley's home and its config folder (`config.toml` and `keys.env`) on both hosts, and reads of both only on Claude Code ([ADR 0020](adr/0020-sandbox-is-a-write-barrier.md)). Install also writes the instruction stubs ([ADR 0009](adr/0009-served-instructions.md)). On Codex, the guard's `ask` becomes `deny` with guidance. `baley doctor` checks the hook, the sandbox and the stubs. Writes use optimistic concurrency ([ADR 0012](adr/0012-optimistic-concurrency.md)). Whether Codex works over HTTP is still untested, so stdio through the launcher is the fallback. Captures are recorded.
 

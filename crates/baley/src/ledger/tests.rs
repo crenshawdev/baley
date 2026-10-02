@@ -1285,10 +1285,15 @@ fn anchor_checks_a_set_remote_before_it_requests_the_step() {
     );
 }
 #[test]
-fn anchor_requests_the_step_then_the_anchor_on_the_remote_once_it_is_checked() {
+fn anchor_requests_checkout_admission_then_the_step_then_the_anchor_on_the_remote_once_it_is_checked()
+ {
     assert_eq!(
         anchor_next(Some(&origin_settings()), Some(&Ok(())), None),
-        Ok(vec![command_plan::Op::Step, anchors(Some("origin"))])
+        Ok(vec![
+            command_plan::Op::AdmitCheckout,
+            command_plan::Op::Step,
+            anchors(Some("origin"))
+        ])
     );
 }
 #[test]
@@ -1300,10 +1305,15 @@ fn an_unconfigured_remote_refuses_anchor_with_no_operation() {
     );
 }
 #[test]
-fn anchor_with_no_remote_set_requests_the_step_and_an_anchor_with_none_and_no_check() {
+fn anchor_with_no_remote_set_requests_checkout_admission_the_step_and_an_anchor_with_none_and_no_check()
+ {
     assert_eq!(
         anchor_next(Some(&unset_settings()), None, None),
-        Ok(vec![command_plan::Op::Step, anchors(None)])
+        Ok(vec![
+            command_plan::Op::AdmitCheckout,
+            command_plan::Op::Step,
+            anchors(None)
+        ])
     );
 }
 #[test]
@@ -1390,7 +1400,8 @@ fn acknowledge_restore_with_no_git_remote_refuses_naming_it_with_no_operation_an
     assert!(refusal.contains("baley.toml"), "{refusal}");
 }
 #[test]
-fn acknowledge_restore_checks_the_remote_then_requests_the_step_and_the_acknowledgement() {
+fn acknowledge_restore_checks_the_remote_then_requests_checkout_admission_the_step_and_the_acknowledgement()
+ {
     assert_eq!(
         ack_next(Some(&origin_settings()), None),
         Ok(vec![command_plan::Op::CheckRemote("origin".into())])
@@ -1398,6 +1409,7 @@ fn acknowledge_restore_checks_the_remote_then_requests_the_step_and_the_acknowle
     assert_eq!(
         ack_next(Some(&origin_settings()), Some(&Ok(()))),
         Ok(vec![
+            command_plan::Op::AdmitCheckout,
             command_plan::Op::Step,
             command_plan::Op::Acknowledge {
                 project: PROJECT_ID.into(),
@@ -1461,18 +1473,26 @@ fn verifies(remote: Option<&str>) -> command_plan::Op {
         remote: remote.map(Into::into),
     }
 }
-#[test]
-fn anchored_verify_never_requests_the_policy_step_at_any_stage() {
+fn anchored_verify_stages() -> Vec<Result<Vec<command_plan::Op>, String>> {
     let origin = origin_settings();
     let unset = unset_settings();
-    let stages = [
+    vec![
         verify_next(anchored(), None, None),
         verify_next(anchored(), Some(&origin), None),
         verify_next(anchored(), Some(&origin), Some(&Ok(()))),
         verify_next(anchored(), Some(&unset), None),
-    ];
-    for stage in stages {
+    ]
+}
+#[test]
+fn anchored_verify_never_requests_the_policy_step_at_any_stage() {
+    for stage in anchored_verify_stages() {
         assert!(!stage.unwrap().contains(&command_plan::Op::Step));
+    }
+}
+#[test]
+fn anchored_verify_never_requests_checkout_admission_at_any_stage() {
+    for stage in anchored_verify_stages() {
+        assert!(!stage.unwrap().contains(&command_plan::Op::AdmitCheckout));
     }
 }
 #[test]

@@ -19,10 +19,8 @@ pub use record::{RECORD_COMMAND, record};
 /// nothing.
 ///
 /// `baley init`, `purge`, `config set`, `anchor` and `acknowledge-restore`
-/// call it. The server and guard follow per request in Build 3. T13
-/// (phase 9) adds the checkout's admission in each caller, between the
-/// settings read and this step, at the slot marked in
-/// `ledger/command_plan.rs` and `ledger/commands.rs`.
+/// call it, each right after checkout admission and in a transaction of its
+/// own. The server and guard follow per request in Build 3.
 pub fn step(
     store: &(impl Admin + Views + Ledger),
     project: &ProjectId,

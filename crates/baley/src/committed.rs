@@ -125,10 +125,10 @@ fn git(root: &Path, args: &[&str]) -> Launch {
         .env("GIT_TERMINAL_PROMPT", "0")
 }
 
-type Ran = Result<Output, git_process::Error>;
+pub(crate) type Ran = Result<Output, git_process::Error>;
 
 /// `rev-parse --verify -q HEAD`: exit 0 is a commit, exit 1 an unborn HEAD.
-fn born(launch: &Launch, ran: Ran) -> Result<bool, String> {
+pub(crate) fn born(launch: &Launch, ran: Ran) -> Result<bool, String> {
     let output = finished(launch, ran)?;
     match output.code() {
         Some(0) => Ok(true),
@@ -195,7 +195,7 @@ fn blob(launch: &Launch, ran: Ran) -> Result<Vec<u8>, String> {
 }
 
 /// A git that could not start or ran out of time.
-fn finished(launch: &Launch, ran: Ran) -> Result<Output, String> {
+pub(crate) fn finished(launch: &Launch, ran: Ran) -> Result<Output, String> {
     ran.map_err(|error| match error {
         git_process::Error::Limit(limit) => limit.to_string(),
         git_process::Error::Io(error) => format!("{} could not run: {error}", command(launch)),
@@ -203,7 +203,7 @@ fn finished(launch: &Launch, ran: Ran) -> Result<Output, String> {
 }
 
 /// A git that exited with an unexpected code or died by a signal.
-fn failed(launch: &Launch, output: &Output) -> String {
+pub(crate) fn failed(launch: &Launch, output: &Output) -> String {
     let Some(code) = output.code() else {
         let signal = output.signal().unwrap_or_default();
         return format!("{} was killed by signal {signal}", command(launch));
@@ -221,7 +221,7 @@ fn failed(launch: &Launch, output: &Output) -> String {
     }
 }
 
-fn command(launch: &Launch) -> String {
+pub(crate) fn command(launch: &Launch) -> String {
     format!("git {}", launch.argument_text())
 }
 

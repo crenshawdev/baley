@@ -41,6 +41,10 @@ pub mod verification;
 /// Why a file line is as it is: the git chain joined to the record.
 pub mod why;
 
+/// The checkout's root commit and remote URL gathered through git, and checkout
+/// admission: the fork judgement and `checkout.seen` before every chain-writing
+/// command.
+pub mod checkout;
 /// HEAD's copy of the project file, read through git as the project layer.
 pub mod committed;
 /// `baley config`, the owner's settings commands.
