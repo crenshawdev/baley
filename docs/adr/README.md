@@ -29,7 +29,7 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0019](0019-reviews-adjudicated-and-ruled.md) | Run every configured reviewer, adjudicate in the host session, and let the owner rule on each finding | Accepted |
 | [0020](0020-sandbox-is-a-write-barrier.md) | State what each host's sandbox denies; reads are the host's policy | Accepted, supersedes 0008 in part, superseded in part by 0027 |
 | [0021](0021-claim-rules-in-the-port.md) | Claim liveness and scope rules in the port | Accepted |
-| [0022](0022-acknowledged-restore.md) | Report owner-acknowledged restores behind a remote anchor | Accepted |
+| [0022](0022-acknowledged-restore.md) | Report owner-acknowledged restores behind a remote anchor | Accepted, superseded in part by 0035 |
 | [0023](0023-no-backups-in-baley.md) | Keep whole-store backups outside Baley | Accepted, supersedes 0003 and 0016 in part |
 | [0024](0024-conformance-suite-and-adapter-tests.md) | Separate port conformance from adapter mechanism tests | Accepted |
 | [0025](0025-anchor-tag-objects.md) | Point anchor tags at the empty tree | Accepted |
@@ -40,3 +40,4 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0030](0030-question-rounds.md) | Put refinement and planning decisions to the owner in dependency-ordered question rounds | Accepted |
 | [0031](0031-one-term-per-concept.md) | Use one term per concept, kept in a glossary: phase, not sprint, and story, not requirement | Accepted, supersedes 0017 in part |
 | [0032](0032-gemini-is-not-a-provider.md) | Drop Gemini from the model catalog and detection | Accepted, supersedes 0027 in part |
+| [0035](0035-restore-purge-uncertainty.md) | Report purge uncertainty after restoring a store | Accepted, supersedes 0022 in part |
