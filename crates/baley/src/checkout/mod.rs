@@ -4,5 +4,7 @@
 //! project's `checkout` view.
 
 mod admit;
+mod strip;
 
 pub use admit::{ADMIT_COMMAND, AdmitError, admit};
+pub use strip::strip_user_information;
