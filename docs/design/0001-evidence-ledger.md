@@ -1474,7 +1474,7 @@ classDiagram
 - [ADR 0004: Identify projects by a committed project file](../adr/0004-project-identity.md)
 - [ADR 0005: Put storage behind a port with engine adapters](../adr/0005-storage-port.md), superseded in part by ADR 0010
 - [ADR 0006: Keep every operational record in the ledger](../adr/0006-no-markdown-records.md)
-- [ADR 0007: Anchor chain heads on the forge](../adr/0007-forge-anchors.md)
+- [ADR 0007: Anchor chain heads on the forge](../adr/0007-forge-anchors.md), superseded in part by ADR 0026
 - [ADR 0008: Use host sandboxes to keep agents out of the ledger](../adr/0008-host-sandbox-isolation.md)
 - [ADR 0009: Serve instructions from the binary; files on disk are stubs](../adr/0009-served-instructions.md)
 - [ADR 0010: Define the projector and event schema traits in the port](../adr/0010-projector-traits-in-the-port.md), superseding ADR 0005 in part, superseded in part by ADR 0021
@@ -1483,7 +1483,7 @@ classDiagram
 - [ADR 0023: Keep whole-store backups outside Baley](../adr/0023-no-backups-in-baley.md)
 - [ADR 0024: Separate port conformance from adapter mechanism tests](../adr/0024-conformance-suite-and-adapter-tests.md)
 - [ADR 0025: Point anchor tags at the empty tree](../adr/0025-anchor-tag-objects.md)
-- [ADR 0026: Anchors are read by Baley, and a missing tag ruleset is reported](../adr/0026-anchors-read-by-baley.md)
+- [ADR 0026: Anchors are read by Baley, and a missing tag ruleset is reported](../adr/0026-anchors-read-by-baley.md), superseding ADR 0007 in part
 - [ADR 0027: Keep Baley's files in its own crenshawdev folders, with provider keys in a plain keys.env](../adr/0027-vendor-folders-and-plain-keys.md), superseding ADR 0002 and ADR 0003 in part
 
 ## Future work
