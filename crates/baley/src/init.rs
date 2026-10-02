@@ -113,8 +113,8 @@ pub struct Naming {
     pub note: Option<String>,
 }
 
-/// Chooses the project's name. An existing file's name always wins, since
-/// the file is never changed. Otherwise `--name` as given, empty included,
+/// Chooses the project's name. An existing file's name always wins: init
+/// never renames a project, and `--new-id` keeps the name too. Otherwise `--name` as given, empty included,
 /// then the root's folder name. A name nobody chose is never made up: no
 /// lossy conversion and no empty default.
 pub fn name(
@@ -148,25 +148,93 @@ pub fn name(
     })
 }
 
-/// A new project: a fresh id, the chosen name, and the bytes of a project file
-/// naming both. The id is a lower-case hyphenated UUID version 4, the one form
+/// A fresh project id: a lower-case hyphenated UUID version 4, the one form
 /// `read_project` accepts.
-pub fn new_project(name: &str) -> Result<(ProjectIdentity, Vec<u8>), Unavailable> {
-    let id = uuid::Uuid::new_v4().to_string();
-    let bytes = render_project(&id, name, None)?;
-    let identity = ProjectIdentity {
-        id,
-        name: name.into(),
-    };
-    Ok((identity, bytes))
+pub fn fresh_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
-/// Writes a new `baley.toml` at the root and returns its path. Only an absent
-/// file is written, so the expected digest is none: `replace` refuses a file
-/// that appeared since it was read, and a link. The file gets the umask's mode.
-pub fn write_project_file(root: &Path, bytes: &[u8]) -> Result<PathBuf, replace::Failure> {
+/// What a run does to `baley.toml`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileAction {
+    /// There is no file: write a new one with the fresh id.
+    Write,
+    /// `--new-id` over a file: replace it with the fresh id, keeping its name
+    /// and every other setting.
+    Replace,
+    /// Leave the file as it is.
+    Keep,
+}
+
+/// The project a run acts on, and what it does to the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Acting {
+    /// The id and name the project in the ledger carries.
+    pub identity: ProjectIdentity,
+    /// What happens to `baley.toml`.
+    pub file: FileAction,
+}
+
+/// Decides which project this run acts on from the file's identity,
+/// `--new-id`, the name chosen for a new file and a fresh id. With no file, or
+/// with `--new-id` over one, the run acts on the fresh id, and the file's own
+/// name is kept in the second case. The file's old id is never acted on, so
+/// `--new-id` leaves that project as it is.
+pub fn acting(
+    file: Option<&ProjectIdentity>,
+    new_id: bool,
+    chosen_name: &str,
+    fresh_id: &str,
+) -> Acting {
+    match file {
+        None => Acting {
+            identity: ProjectIdentity {
+                id: fresh_id.into(),
+                name: chosen_name.into(),
+            },
+            file: FileAction::Write,
+        },
+        Some(file) if new_id => Acting {
+            identity: ProjectIdentity {
+                id: fresh_id.into(),
+                name: file.name.clone(),
+            },
+            file: FileAction::Replace,
+        },
+        Some(file) => Acting {
+            identity: file.clone(),
+            file: FileAction::Keep,
+        },
+    }
+}
+
+/// The bytes the run writes to `baley.toml`, `None` when it keeps the file.
+/// A replaced file is rendered from the working-tree file as read, so every
+/// other table, unknown keys and the other `[project]` keys stay (comments and
+/// key order do not, ADR 0027).
+pub fn file_bytes(
+    acting: &Acting,
+    working: Option<&SettingsFile>,
+) -> Result<Option<Vec<u8>>, Unavailable> {
+    let base = match acting.file {
+        FileAction::Keep => return Ok(None),
+        FileAction::Write => None,
+        FileAction::Replace => working,
+    };
+    render_project(&acting.identity.id, &acting.identity.name, base).map(Some)
+}
+
+/// Writes `baley.toml` at the root and returns its path. `digest` is the
+/// working-tree file's as read, or none for a new file, so `replace` refuses a
+/// file that appeared or changed since it was read, and a link. A new file
+/// gets the umask's mode.
+pub fn write_project_file(
+    root: &Path,
+    bytes: &[u8],
+    digest: Option<&str>,
+) -> Result<PathBuf, replace::Failure> {
     let path = root.join(PROJECT_FILE);
-    replace::replace(&path, bytes, None)?;
+    replace::replace(&path, bytes, digest)?;
     Ok(path)
 }
 
@@ -319,6 +387,8 @@ pub fn record_initialized_on_empty(
 pub enum Step {
     /// Write a new `baley.toml` with a fresh id.
     WriteFile,
+    /// Replace `baley.toml` with one holding a fresh id.
+    ReplaceFile,
     /// Create the project in the ledger.
     CreateProject,
     /// Record `project.initialized` as the first event of an empty chain, which
@@ -352,35 +422,44 @@ pub struct LedgerObservation {
 /// admission comes first and a missing `project.initialized` follows, so a
 /// fork's plain init is refused before it appends anything to the chain it
 /// does not own. A finished init plans checkout admission alone, which
-/// appends nothing while the checkout is unchanged.
+/// appends nothing while the checkout is unchanged. `--new-id` over a file
+/// replaces its id, then takes the empty-chain order: the fresh project has
+/// no chain yet.
 ///
 /// The policy step, like detection, is not a step of the plan: on every run
 /// that passes the refusals it runs after the steps and before detection,
 /// and it appends nothing while the policy is unchanged.
-pub fn plan(file: Option<&ProjectIdentity>, ledger: LedgerObservation) -> Vec<Step> {
+pub fn plan(file: FileAction, ledger: LedgerObservation) -> Vec<Step> {
     match (file, ledger) {
         // A new id has nothing to look up, and its chain is empty.
-        (None, _) => vec![
+        (FileAction::Write, _) => vec![
             Step::WriteFile,
             Step::CreateProject,
             Step::RecordInitializedOnEmpty,
             Step::AdmitCheckout,
         ],
-        (Some(_), LedgerObservation { project: false, .. }) => vec![
+        // The same whatever the file's old id holds in the ledger.
+        (FileAction::Replace, _) => vec![
+            Step::ReplaceFile,
             Step::CreateProject,
             Step::RecordInitializedOnEmpty,
             Step::AdmitCheckout,
         ],
-        (Some(_), LedgerObservation { events: false, .. }) => {
+        (FileAction::Keep, LedgerObservation { project: false, .. }) => vec![
+            Step::CreateProject,
+            Step::RecordInitializedOnEmpty,
+            Step::AdmitCheckout,
+        ],
+        (FileAction::Keep, LedgerObservation { events: false, .. }) => {
             vec![Step::RecordInitializedOnEmpty, Step::AdmitCheckout]
         }
         (
-            Some(_),
+            FileAction::Keep,
             LedgerObservation {
                 initialized: false, ..
             },
         ) => vec![Step::AdmitCheckout, Step::RecordInitialized],
-        (Some(_), _) => vec![Step::AdmitCheckout],
+        (FileAction::Keep, _) => vec![Step::AdmitCheckout],
     }
 }
 
@@ -477,6 +556,11 @@ pub struct InitArgs {
     /// folder's name. An existing file's name is never changed.
     #[arg(long, value_name = "NAME")]
     pub name: Option<String>,
+    /// Writes a new project id into baley.toml, keeping every other setting,
+    /// creates that project, and leaves the old project as it is. Use it in a
+    /// fork or a copy that must not share the original's project.
+    #[arg(long)]
+    pub new_id: bool,
 }
 
 /// Runs `baley init` in the working directory and prints what it did.
@@ -504,8 +588,8 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
     let root = locate(&discovery::discover(&ancestors), canonical).map_err(|e| refuse(&e))?;
     let path = root.join(PROJECT_FILE);
     let file = settings::read(&path);
-    let working = file.as_ref().ok().and_then(Option::as_ref);
-    let reads = policy_step::gather(&folders.config, &root, working);
+    let working = file.as_ref().ok().and_then(Option::as_ref).cloned();
+    let reads = policy_step::gather(&folders.config, &root, working.as_ref());
     let Prepared {
         existing,
         naming,
@@ -522,43 +606,51 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
         root_commit: facts.root_commit,
         remote_url: facts.remote_url,
     };
+    let action = acting(existing.as_ref(), args.new_id, &naming.name, &fresh_id());
+    let mut new_bytes = file_bytes(&action, working.as_ref()).map_err(|e| refuse(&e))?;
 
     // Nothing above opens the store, so a refusal leaves no ledger home behind.
     let store = open::store(&folders.home, started_at, open::options())
         .map_err(|e| display::store_error(&e, None))?;
-    // A new id is in no ledger, so only an existing file's project is looked up.
-    let observed = match &existing {
-        Some(identity) => observe_ledger(&store, &identity.id)
-            .map_err(|e| display::store_error(&e, Some(&identity.id)))?,
-        None => LedgerObservation::default(),
+    // A new id is in no ledger, and a replaced id is never looked up, so only
+    // a file that is kept has its project observed.
+    let observed = match action.file {
+        FileAction::Keep => observe_ledger(&store, &action.identity.id)
+            .map_err(|e| display::store_error(&e, Some(&action.identity.id)))?,
+        FileAction::Write | FileAction::Replace => LedgerObservation::default(),
     };
-    let mut steps: VecDeque<Step> = plan(existing.as_ref(), observed).into();
+    let mut steps: VecDeque<Step> = plan(action.file, observed).into();
     let mut lines: Vec<String> = naming.note.into_iter().collect();
     let mut acted = false;
-    // The plan writes the file exactly when there is none.
-    let (identity, mut new_bytes) = match existing {
-        Some(identity) => (identity, None),
-        None => {
-            let (identity, bytes) = new_project(&naming.name).map_err(|e| refuse(&e))?;
-            (identity, Some(bytes))
-        }
+    let identity = action.identity;
+    let write_failure = |failure: replace::Failure| match failure {
+        replace::Failure::Refused(conflict) => refuse(&conflict),
+        other => Render {
+            lines: vec![other.to_string()],
+            code: 3,
+            error: true,
+        },
     };
     let failed = |e: StoreError| display::store_error(&e, Some(&identity.id));
     while let Some(step) = steps.pop_front() {
         match step {
-            Step::WriteFile => {
+            Step::WriteFile | Step::ReplaceFile => {
                 let bytes = new_bytes
                     .take()
                     .ok_or_else(|| refuse(&"init planned a second write"))?;
-                write_project_file(&root, &bytes).map_err(|failure| match failure {
-                    replace::Failure::Refused(conflict) => refuse(&conflict),
-                    other => Render {
-                        lines: vec![other.to_string()],
-                        code: 3,
-                        error: true,
-                    },
-                })?;
-                lines.push(format!("wrote {} (commit this file)", path.display()));
+                // A replaced file is checked against the working-tree digest.
+                let digest = working.as_ref().map(|file| file.digest.as_str());
+                if step == Step::ReplaceFile {
+                    write_project_file(&root, &bytes, digest).map_err(write_failure)?;
+                    lines.push(format!(
+                        "wrote {} with new project id {} (commit this file)",
+                        path.display(),
+                        identity.id
+                    ));
+                } else {
+                    write_project_file(&root, &bytes, None).map_err(write_failure)?;
+                    lines.push(format!("wrote {} (commit this file)", path.display()));
+                }
                 acted = true;
             }
             Step::CreateProject => {
@@ -740,13 +832,146 @@ mod tests {
         }
     }
 
+    const FRESH: &str = "7d1e9c3a-5b2f-4a68-8c0d-1e2f3a4b5c6d";
+
     #[test]
     fn a_new_project_file_reads_back_the_id_and_name_it_was_rendered_from() {
-        let (identity, bytes) = new_project("sample").unwrap();
+        let action = acting(None, false, "sample", FRESH);
+        let bytes = file_bytes(&action, None).unwrap().unwrap();
         let file = crate::settings::file(Path::new("/r/baley.toml"), bytes);
         let read = baley_core::policy::read_project(&file).unwrap();
-        assert_eq!(read, identity);
+        assert_eq!(read, action.identity);
+        assert_eq!(read.id, FRESH);
         assert_eq!(read.name, "sample");
+    }
+
+    #[derive(clap::Parser)]
+    struct Cli {
+        #[command(flatten)]
+        init: InitArgs,
+    }
+
+    #[test]
+    fn the_new_id_flag_is_not_ignored_and_is_off_without_it() {
+        use clap::Parser;
+        let with = Cli::try_parse_from(["init", "--new-id"]).unwrap();
+        assert!(with.init.new_id);
+        let plain = Cli::try_parse_from(["init"]).unwrap();
+        assert!(!plain.init.new_id);
+    }
+
+    /// A working file with every kind of content a new id must carry over.
+    const WORKING_TEXT: &str = "escalate_on_failure = true\n\
+        [host.codex.roles.checker]\n\
+        effort = \"xhigh\"\n\
+        [review]\n\
+        depth = 3\n\
+        [project]\n\
+        id = \"0b5c1f6e-2a7d-4c3e-9f10-5a6b7c8d9e0f\"\n\
+        name = \"kept\"\n\
+        owner = \"someone\"\n";
+
+    /// What the layer parser makes of a project file, positions aside.
+    fn layer_of(text: &str) -> (Vec<String>, Vec<String>) {
+        let file = crate::settings::file(Path::new(WORKING), text.as_bytes().to_vec());
+        let parsed = baley_core::policy::parse_layer(
+            &file,
+            baley_core::policy::FileLayer::Project,
+            baley_core::policy::Schema::standard(),
+        )
+        .unwrap();
+        let values = parsed
+            .values
+            .iter()
+            .map(|w| format!("{} {:?} {:?}", w.name, w.host, w.value))
+            .collect();
+        let ignored = parsed
+            .diagnostics
+            .iter()
+            .map(|d| format!("{} {:?}", d.name, d.kind))
+            .collect();
+        (values, ignored)
+    }
+
+    #[test]
+    fn a_new_id_over_a_file_loses_no_name_setting_host_table_or_unknown_table() {
+        let working = settings_file(WORKING, WORKING_TEXT);
+        let old = observe_file(Ok(Some(working.clone()))).unwrap().unwrap();
+        let action = acting(Some(&old), true, "ignored", FRESH);
+
+        let bytes = file_bytes(&action, Some(&working)).unwrap().unwrap();
+
+        let after = String::from_utf8(bytes).unwrap();
+        let read = read_project(&settings_file(WORKING, &after)).unwrap();
+        assert!(baley_core::policy::is_project_id(&read.id), "{after}");
+        assert_ne!(read.id, old.id);
+        assert_eq!(read.name, "kept");
+        assert!(after.contains("owner = \"someone\""), "{after}");
+        let (values_before, ignored_before) = layer_of(WORKING_TEXT);
+        let (values_after, ignored_after) = layer_of(&after);
+        assert!(!values_before.is_empty());
+        assert_eq!(values_after, values_before, "{after}");
+        assert!(ignored_before.iter().any(|d| d.starts_with("review.depth")));
+        assert_eq!(ignored_after, ignored_before, "{after}");
+    }
+
+    #[test]
+    fn a_new_id_over_a_file_acts_on_the_fresh_id_and_replaces_the_file_for_every_observation() {
+        let old = identity("kept");
+        let action = acting(Some(&old), true, "ignored", FRESH);
+
+        assert_eq!(action.identity.id, FRESH);
+        assert_ne!(action.identity.id, old.id);
+        assert_eq!(action.identity.name, "kept");
+        assert_eq!(action.file, FileAction::Replace);
+        for observed in ALL {
+            assert_eq!(
+                plan(action.file, observed),
+                vec![
+                    Step::ReplaceFile,
+                    Step::CreateProject,
+                    Step::RecordInitializedOnEmpty,
+                    Step::AdmitCheckout
+                ],
+                "observed {observed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_without_the_flag_is_kept_with_its_own_id() {
+        let old = identity("kept");
+        let action = acting(Some(&old), false, "ignored", FRESH);
+        assert_eq!(action.identity, old);
+        assert_eq!(action.file, FileAction::Keep);
+        assert_eq!(file_bytes(&action, None), Ok(None));
+    }
+
+    #[test]
+    fn a_new_id_with_no_file_is_plain_init_not_a_replace_or_a_refusal() {
+        let flagged = acting(None, true, "sample", FRESH);
+        let plain = acting(None, false, "sample", FRESH);
+        assert_eq!(flagged, plain);
+        assert_eq!(flagged.file, FileAction::Write);
+        for observed in ALL {
+            assert_eq!(
+                plan(flagged.file, observed),
+                plan(FileAction::Write, observed)
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_id_with_a_differing_name_keeps_the_files_name_and_says_so() {
+        let old = identity("kept");
+        let naming = name(Path::new("/w/r"), Some("other"), Some(&old)).unwrap();
+        let action = acting(Some(&old), true, &naming.name, FRESH);
+
+        assert_eq!(action.identity.name, "kept");
+        assert_eq!(
+            naming.note.as_deref(),
+            Some("--name was not applied: baley.toml already names the project \"kept\"")
+        );
     }
 
     #[test]
@@ -878,7 +1103,7 @@ mod tests {
     fn a_first_run_records_on_the_empty_chain_before_it_admits_the_checkout() {
         for observed in ALL {
             assert_eq!(
-                plan(None, observed),
+                plan(FileAction::Write, observed),
                 vec![
                     Step::WriteFile,
                     Step::CreateProject,
@@ -894,7 +1119,7 @@ mod tests {
     fn a_file_without_a_project_is_not_taken_as_a_finished_init() {
         let observed = LedgerObservation::default();
         assert_eq!(
-            plan(Some(&identity("kept")), observed),
+            plan(FileAction::Keep, observed),
             vec![
                 Step::CreateProject,
                 Step::RecordInitializedOnEmpty,
@@ -911,7 +1136,7 @@ mod tests {
             events: false,
         };
         assert_eq!(
-            plan(Some(&identity("kept")), observed),
+            plan(FileAction::Keep, observed),
             vec![Step::RecordInitializedOnEmpty, Step::AdmitCheckout]
         );
     }
@@ -924,7 +1149,7 @@ mod tests {
             events: true,
         };
         assert_eq!(
-            plan(Some(&identity("kept")), observed),
+            plan(FileAction::Keep, observed),
             vec![Step::AdmitCheckout, Step::RecordInitialized]
         );
     }
@@ -936,10 +1161,7 @@ mod tests {
             initialized: true,
             events: true,
         };
-        assert_eq!(
-            plan(Some(&identity("kept")), observed),
-            vec![Step::AdmitCheckout]
-        );
+        assert_eq!(plan(FileAction::Keep, observed), vec![Step::AdmitCheckout]);
     }
 
     #[test]
@@ -991,7 +1213,7 @@ mod tests {
                 events: true,
             }
         );
-        assert_eq!(plan(Some(&project), observed), vec![Step::AdmitCheckout]);
+        assert_eq!(plan(FileAction::Keep, observed), vec![Step::AdmitCheckout]);
     }
 
     const ROOT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -1258,7 +1480,13 @@ mod tests {
         let valid = reads(Some("escalate_on_failure = true\n"), None);
         let prepared = prepare(root, None, Ok(None), &valid).unwrap();
         assert_eq!(prepared.existing, None);
-        let steps = plan(prepared.existing.as_ref(), LedgerObservation::default());
+        let action = acting(
+            prepared.existing.as_ref(),
+            false,
+            &prepared.naming.name,
+            FRESH,
+        );
+        let steps = plan(action.file, LedgerObservation::default());
         assert_eq!(steps.first(), Some(&Step::WriteFile));
     }
 
