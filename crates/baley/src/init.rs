@@ -1,14 +1,15 @@
 //! `baley init`: ties a repository to a ledger project (design 0001, EVD-R17).
 //! The judges here take plain values; the command gathers them.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use baley_core::checkout::Checkout;
 use baley_core::policy::recorded::{RecordedPolicy, recorded_policy};
 use baley_core::policy::{
-    ProjectIdentity, SettingsFile, Unavailable, read_project, render_project,
+    EffectivePolicy, ProjectIdentity, SettingsFile, Unavailable, read_project, render_project,
 };
 use baley_core::{PROJECT_INITIALIZED, PROJECT_INITIALIZED_VERSION};
 use baley_store::{
@@ -19,7 +20,7 @@ use baley_store::{
 use clap::Args;
 use serde_json::json;
 
-use crate::checkout::{AdmitError, EntryError};
+use crate::checkout::{self, AdmitError, EntryError};
 use crate::detection::{Trigger, detect_blocking};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{Environment, Folders, Platform};
@@ -320,7 +321,13 @@ pub enum Step {
     WriteFile,
     /// Create the project in the ledger.
     CreateProject,
-    /// Record `project.initialized`.
+    /// Record `project.initialized` as the first event of an empty chain, which
+    /// comes before checkout admission.
+    RecordInitializedOnEmpty,
+    /// Run checkout admission for this checkout.
+    AdmitCheckout,
+    /// Record a missing `project.initialized` on a chain that already holds
+    /// events, which comes after checkout admission.
     RecordInitialized,
 }
 
@@ -337,31 +344,43 @@ pub struct LedgerObservation {
 }
 
 /// Decides which actions this run takes, from what was observed before any
-/// of them. A fully initialized checkout plans nothing, so a rerun appends
-/// nothing to the chain.
+/// of them.
+///
+/// There are two orders, and they turn on whether the chain holds events. On
+/// an empty chain `project.initialized` is recorded first and checkout
+/// admission follows. On a chain that already holds events, checkout
+/// admission comes first and a missing `project.initialized` follows, so a
+/// fork's plain init is refused before it appends anything to the chain it
+/// does not own. A finished init plans checkout admission alone, which
+/// appends nothing while the checkout is unchanged.
 ///
 /// The policy step, like detection, is not a step of the plan: on every run
 /// that passes the refusals it runs after the steps and before detection,
-/// and it appends nothing while the policy is unchanged. Checkout admission
-/// with `--new-id` (T13) is later work here.
+/// and it appends nothing while the policy is unchanged.
 pub fn plan(file: Option<&ProjectIdentity>, ledger: LedgerObservation) -> Vec<Step> {
     match (file, ledger) {
-        // A new id has nothing to look up.
+        // A new id has nothing to look up, and its chain is empty.
         (None, _) => vec![
             Step::WriteFile,
             Step::CreateProject,
-            Step::RecordInitialized,
+            Step::RecordInitializedOnEmpty,
+            Step::AdmitCheckout,
         ],
-        (Some(_), LedgerObservation { project: false, .. }) => {
-            vec![Step::CreateProject, Step::RecordInitialized]
+        (Some(_), LedgerObservation { project: false, .. }) => vec![
+            Step::CreateProject,
+            Step::RecordInitializedOnEmpty,
+            Step::AdmitCheckout,
+        ],
+        (Some(_), LedgerObservation { events: false, .. }) => {
+            vec![Step::RecordInitializedOnEmpty, Step::AdmitCheckout]
         }
         (
             Some(_),
             LedgerObservation {
                 initialized: false, ..
             },
-        ) => vec![Step::RecordInitialized],
-        (Some(_), _) => vec![],
+        ) => vec![Step::AdmitCheckout, Step::RecordInitialized],
+        (Some(_), _) => vec![Step::AdmitCheckout],
     }
 }
 
@@ -383,6 +402,9 @@ pub struct Prepared {
     pub naming: Naming,
     /// The checkout and the policy the step records.
     pub recorded: RecordedPolicy,
+    /// The policy `recorded` was built from, which names the remote the
+    /// checkout's facts are gathered from.
+    pub policy: EffectivePolicy,
 }
 
 /// Judges init's observations before the store opens or a file is written:
@@ -402,6 +424,7 @@ pub fn prepare(
         existing,
         naming,
         recorded,
+        policy,
     })
 }
 
@@ -487,7 +510,18 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
         existing,
         naming,
         recorded,
+        policy,
     } = prepare(&root, args.name.as_deref(), file, &reads).map_err(Render::refusal)?;
+    // Gathered before anything is written or opened, so a remote the policy
+    // names and the checkout lacks, or a git failure, refuses like init's
+    // other refusals.
+    let facts =
+        checkout::gather(&root, &policy, &mut crate::process::System).map_err(Render::refusal)?;
+    let checkout = Checkout {
+        path: recorded.checkout.clone(),
+        root_commit: facts.root_commit,
+        remote_url: facts.remote_url,
+    };
 
     // Nothing above opens the store, so a refusal leaves no ledger home behind.
     let store = open::store(&folders.home, started_at, open::options())
@@ -498,46 +532,73 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
             .map_err(|e| display::store_error(&e, Some(&identity.id)))?,
         None => LedgerObservation::default(),
     };
-    let steps = plan(existing.as_ref(), observed);
+    let mut steps: VecDeque<Step> = plan(existing.as_ref(), observed).into();
     let mut lines: Vec<String> = naming.note.into_iter().collect();
     let mut acted = false;
-    let identity = match existing {
-        Some(identity) => identity,
-        // The plan writes the file exactly when there is none.
+    // The plan writes the file exactly when there is none.
+    let (identity, mut new_bytes) = match existing {
+        Some(identity) => (identity, None),
         None => {
             let (identity, bytes) = new_project(&naming.name).map_err(|e| refuse(&e))?;
-            write_project_file(&root, &bytes).map_err(|failure| match failure {
-                replace::Failure::Refused(conflict) => refuse(&conflict),
-                other => Render {
-                    lines: vec![other.to_string()],
-                    code: 3,
-                    error: true,
-                },
-            })?;
-            lines.push(format!("wrote {} (commit this file)", path.display()));
-            acted = true;
-            identity
+            (identity, Some(bytes))
         }
     };
     let failed = |e: StoreError| display::store_error(&e, Some(&identity.id));
-    if steps.contains(&Step::CreateProject)
-        && create_project(&store, &identity, started_at).map_err(failed)?
-    {
-        lines.push(format!(
-            "created project {} in the ledger at {}",
-            identity.id,
-            folders.home.display()
-        ));
-        acted = true;
-    }
-    if steps.contains(&Step::RecordInitialized)
-        && record_initialized(&store, &identity, new_request_id(), started_at).map_err(failed)?
-    {
-        lines.push(format!(
-            "recorded project.initialized for project {}",
-            identity.id
-        ));
-        acted = true;
+    while let Some(step) = steps.pop_front() {
+        match step {
+            Step::WriteFile => {
+                let bytes = new_bytes
+                    .take()
+                    .ok_or_else(|| refuse(&"init planned a second write"))?;
+                write_project_file(&root, &bytes).map_err(|failure| match failure {
+                    replace::Failure::Refused(conflict) => refuse(&conflict),
+                    other => Render {
+                        lines: vec![other.to_string()],
+                        code: 3,
+                        error: true,
+                    },
+                })?;
+                lines.push(format!("wrote {} (commit this file)", path.display()));
+                acted = true;
+            }
+            Step::CreateProject => {
+                if create_project(&store, &identity, started_at).map_err(failed)? {
+                    lines.push(format!(
+                        "created project {} in the ledger at {}",
+                        identity.id,
+                        folders.home.display()
+                    ));
+                    acted = true;
+                }
+            }
+            Step::RecordInitializedOnEmpty => {
+                match record_initialized_on_empty(&store, &identity, new_request_id(), started_at)
+                    .map_err(failed)?
+                {
+                    EmptyChain::Recorded => {
+                        lines.push(initialized_line(&identity));
+                        acted = true;
+                    }
+                    // A checkout got there first: go on in the other order.
+                    // Checkout admission is the plan's last step here, so the
+                    // missing record queues behind it.
+                    EmptyChain::FoundEvents => steps.push_back(Step::RecordInitialized),
+                }
+            }
+            Step::AdmitCheckout => {
+                let project = ProjectId(identity.id.clone());
+                checkout::admit(&store, &project, &checkout, new_request_id(), started_at)
+                    .map_err(|e| admission_render(EntryError::Admit(e), &identity.id))?;
+            }
+            Step::RecordInitialized => {
+                if record_initialized(&store, &identity, new_request_id(), started_at)
+                    .map_err(failed)?
+                {
+                    lines.push(initialized_line(&identity));
+                    acted = true;
+                }
+            }
+        }
     }
     // Outside the plan, so a rerun finishes a crash between
     // `project.initialized` and the first `policy.effective`. It prints
@@ -562,6 +623,11 @@ fn initialize(args: &InitArgs, started_at: &str) -> Result<Render, Render> {
         code: 0,
         error: false,
     })
+}
+
+/// The line printed when this run appended `project.initialized`.
+fn initialized_line(identity: &ProjectIdentity) -> String {
+    format!("recorded project.initialized for project {}", identity.id)
 }
 
 #[cfg(test)]
@@ -785,11 +851,21 @@ mod tests {
         assert_eq!(events(&store, &project.id, "project").len(), 1);
     }
 
-    const ALL: [LedgerObservation; 2] = [
+    const ALL: [LedgerObservation; 4] = [
         LedgerObservation {
             project: false,
             initialized: false,
             events: false,
+        },
+        LedgerObservation {
+            project: true,
+            initialized: false,
+            events: false,
+        },
+        LedgerObservation {
+            project: true,
+            initialized: false,
+            events: true,
         },
         LedgerObservation {
             project: true,
@@ -799,14 +875,15 @@ mod tests {
     ];
 
     #[test]
-    fn a_first_run_plans_write_create_record_in_that_order() {
+    fn a_first_run_records_on_the_empty_chain_before_it_admits_the_checkout() {
         for observed in ALL {
             assert_eq!(
                 plan(None, observed),
                 vec![
                     Step::WriteFile,
                     Step::CreateProject,
-                    Step::RecordInitialized
+                    Step::RecordInitializedOnEmpty,
+                    Step::AdmitCheckout
                 ],
                 "observed {observed:?}"
             );
@@ -818,12 +895,16 @@ mod tests {
         let observed = LedgerObservation::default();
         assert_eq!(
             plan(Some(&identity("kept")), observed),
-            vec![Step::CreateProject, Step::RecordInitialized]
+            vec![
+                Step::CreateProject,
+                Step::RecordInitializedOnEmpty,
+                Step::AdmitCheckout
+            ]
         );
     }
 
     #[test]
-    fn a_project_row_without_its_event_is_not_taken_as_a_finished_init() {
+    fn a_project_without_events_records_first_and_is_not_admitted_before_it() {
         let observed = LedgerObservation {
             project: true,
             initialized: false,
@@ -831,18 +912,34 @@ mod tests {
         };
         assert_eq!(
             plan(Some(&identity("kept")), observed),
-            vec![Step::RecordInitialized]
+            vec![Step::RecordInitializedOnEmpty, Step::AdmitCheckout]
         );
     }
 
     #[test]
-    fn a_rerun_on_a_finished_init_plans_nothing() {
+    fn a_project_with_events_and_no_initialized_admits_before_the_missing_record() {
+        let observed = LedgerObservation {
+            project: true,
+            initialized: false,
+            events: true,
+        };
+        assert_eq!(
+            plan(Some(&identity("kept")), observed),
+            vec![Step::AdmitCheckout, Step::RecordInitialized]
+        );
+    }
+
+    #[test]
+    fn a_rerun_on_a_finished_init_admits_the_checkout_and_nothing_else() {
         let observed = LedgerObservation {
             project: true,
             initialized: true,
             events: true,
         };
-        assert_eq!(plan(Some(&identity("kept")), observed), vec![]);
+        assert_eq!(
+            plan(Some(&identity("kept")), observed),
+            vec![Step::AdmitCheckout]
+        );
     }
 
     #[test]
@@ -894,7 +991,7 @@ mod tests {
                 events: true,
             }
         );
-        assert_eq!(plan(Some(&project), observed), vec![]);
+        assert_eq!(plan(Some(&project), observed), vec![Step::AdmitCheckout]);
     }
 
     const ROOT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
