@@ -173,7 +173,8 @@ fn purge(
 }
 
 /// The policy version purge records: the policy step's from a checkout of
-/// the project it names, 0 anywhere else, where no settings file is read.
+/// the project it names, after checkout admission, 0 anywhere else, where no
+/// settings file is read and nothing is admitted.
 fn purge_policy_version(
     store: &SqliteStore,
     config: &Path,
@@ -200,14 +201,13 @@ fn purge_policy_version(
     let reads = policy_step::gather(config, &root, working.as_ref());
     let policy = policy_step::build(&reads).map_err(|e| Render::refusal(e.to_string()))?;
     let recorded = recorded_policy(&root, &policy).map_err(|e| Render::refusal(e.to_string()))?;
-    policy_step::step(
-        store,
-        project,
-        &recorded,
-        new_request_id(),
-        &SystemClock::now(),
-    )
-    .map_err(|e| display::store_error(&e, Some(&project.0)))
+    let site = Site {
+        root: &root,
+        policy: &policy,
+        path: &recorded.checkout,
+    };
+    admit_checkout(store, project, &site)?;
+    run_step(store, &recorded, project)
 }
 
 /// The project id of the checkout's `baley.toml` at `path`, from
