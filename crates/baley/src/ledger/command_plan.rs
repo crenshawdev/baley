@@ -195,6 +195,9 @@ pub(super) enum Op {
     ReadSettings,
     /// Check that git lists the remote by exactly this name.
     CheckRemote(String),
+    /// Gather the checkout's facts and run checkout admission, before the
+    /// policy step.
+    AdmitCheckout,
     /// Run the policy step for the checkout.
     Step,
     /// Anchor the project on the remote, or on none.
@@ -260,7 +263,7 @@ fn no_project_text(command: Verb) -> String {
 }
 
 /// The operations to request next, or the refusal. Every refusal comes
-/// before the policy step, so a refused command records nothing.
+/// before checkout admission, so a refused command records nothing.
 pub(super) fn next(facts: &Facts) -> Result<Vec<Op>, String> {
     let command = facts.command;
     // The two flagged forms read no settings file, so no file can refuse them.
@@ -290,8 +293,6 @@ pub(super) fn next(facts: &Facts) -> Result<Vec<Op>, String> {
             Some(Ok(())) => {}
         }
     }
-    // Owner: T13 (phase 9). Its admission of the checkout is requested here,
-    // between the settings read and the policy step.
     let last = match (command, remote) {
         // Anchored verify only reads: it requests no policy step and appends
         // nothing.
@@ -304,5 +305,5 @@ pub(super) fn next(facts: &Facts) -> Result<Vec<Op>, String> {
             return Err("git.remote is not set; acknowledge-restore needs the remote that holds the anchor, so set it in baley.toml and commit it".into());
         }
     };
-    Ok(vec![Op::Step, last])
+    Ok(vec![Op::AdmitCheckout, Op::Step, last])
 }

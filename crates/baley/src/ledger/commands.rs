@@ -10,10 +10,11 @@ use super::{
     ticker::ThreadTicker,
     trace::StoreTrace,
 };
+use crate::checkout::{AdmitError, EntryError, Site, gather_and_admit};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::{init, policy_step, settings};
-use baley_core::policy::recorded::{PurgePolicy, purge_policy, recorded_policy};
-use baley_core::policy::{CONFIG_UNAVAILABLE, ProjectIdentity, Unavailable};
+use baley_core::policy::recorded::{PurgePolicy, RecordedPolicy, purge_policy, recorded_policy};
+use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, ProjectIdentity, Unavailable};
 use baley_core::*;
 use baley_store::*;
 use baley_store_sqlite::SqliteStore;
@@ -369,12 +370,11 @@ fn unexpected_plan() -> Render {
     Render::refusal("internal error: the command plan asked for an operation it has no facts for")
 }
 
-/// Runs the policy step for the checkout and returns the version in force.
-fn run_step(
-    store: &SqliteStore,
+/// The checkout's root, built policy and recorded policy, built once for
+/// checkout admission and the policy step.
+fn checkout_policy(
     gathered: Option<&Gathered>,
-    project: &ProjectId,
-) -> Result<u64, Render> {
+) -> Result<(&Path, &EffectivePolicy, RecordedPolicy), Render> {
     let Some(Gathered {
         settings: Settings {
             policy: Ok(policy), ..
@@ -385,10 +385,43 @@ fn run_step(
         return Err(unexpected_plan());
     };
     let recorded = recorded_policy(root, policy).map_err(|e| Render::refusal(e.to_string()))?;
+    Ok((root, policy, recorded))
+}
+
+/// Renders why checkout admission stopped: a gather or fork refusal as a
+/// refusal, a store error through `display::store_error`.
+fn admission_render(error: EntryError, project: &ProjectId) -> Render {
+    match error {
+        EntryError::Gather(text) => Render::refusal(text),
+        EntryError::Admit(AdmitError::Fork(conflict)) => Render::refusal(conflict.to_string()),
+        EntryError::Admit(AdmitError::Store(e)) => display::store_error(&e, Some(&project.0)),
+    }
+}
+
+/// Gathers the checkout's facts and admits it, before the policy step. It
+/// prints nothing.
+fn admit_checkout(store: &SqliteStore, project: &ProjectId, site: &Site<'_>) -> Result<(), Render> {
+    gather_and_admit(
+        store,
+        project,
+        site,
+        &mut crate::process::System,
+        new_request_id(),
+        &SystemClock::now(),
+    )
+    .map_err(|e| admission_render(e, project))
+}
+
+/// Runs the policy step for the checkout and returns the version in force.
+fn run_step(
+    store: &SqliteStore,
+    recorded: &RecordedPolicy,
+    project: &ProjectId,
+) -> Result<u64, Render> {
     policy_step::step(
         store,
         project,
-        &recorded,
+        recorded,
         new_request_id(),
         &SystemClock::now(),
     )
@@ -425,13 +458,18 @@ fn anchor(
     started_at: String,
 ) -> Result<Render, Render> {
     let (ops, gathered) = settle(Verb::Anchor { named }, forge, config, cwd)?;
-    let [Op::Step, Op::Anchor { project, remote }] = ops.as_slice() else {
+    let [Op::AdmitCheckout, Op::Step, Op::Anchor { project, remote }] = ops.as_slice() else {
         return Err(unexpected_plan());
     };
     let project = ProjectId(project.clone());
-    // Owner: T13 (phase 9) adds the checkout's admission here, between the
-    // settings read above and the policy step below.
-    let policy_version = run_step(&store, gathered.as_ref(), &project)?;
+    let (root, policy, recorded) = checkout_policy(gathered.as_ref())?;
+    let site = Site {
+        root,
+        policy,
+        path: &recorded.checkout,
+    };
+    admit_checkout(&store, &project, &site)?;
+    let policy_version = run_step(&store, &recorded, &project)?;
     let request_id = new_request_id();
     display::request_line(&mut std::io::stdout(), &request_id.0);
     let owner = ClaimOwner {
@@ -499,13 +537,23 @@ fn acknowledge(
     named: Option<&str>,
 ) -> Result<Render, Render> {
     let (ops, gathered) = settle(Verb::AcknowledgeRestore { named }, forge, config, cwd)?;
-    let [Op::Step, Op::Acknowledge { project, remote }] = ops.as_slice() else {
+    let [
+        Op::AdmitCheckout,
+        Op::Step,
+        Op::Acknowledge { project, remote },
+    ] = ops.as_slice()
+    else {
         return Err(unexpected_plan());
     };
     let project = ProjectId(project.clone());
-    // Owner: T13 (phase 9) adds the checkout's admission here, between the
-    // settings read above and the policy step below.
-    let policy_version = run_step(store, gathered.as_ref(), &project)?;
+    let (root, policy, recorded) = checkout_policy(gathered.as_ref())?;
+    let site = Site {
+        root,
+        policy,
+        path: &recorded.checkout,
+    };
+    admit_checkout(store, &project, &site)?;
+    let policy_version = run_step(store, &recorded, &project)?;
     let request = acknowledge_request(&project, remote, policy_version, new_request_id());
     display::request_line(&mut std::io::stdout(), &request.request_id.0);
     let result = acknowledge_restore(&request, store, forge, &mut SystemClock::now)
