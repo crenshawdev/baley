@@ -747,6 +747,7 @@ The store-owned `request` view is at version 2. It projects `command.claimed` to
 | `milestone` | (project, name) | state | Close, archive, release and landing state |
 | `pause` | project | | The active pause and its resume bindings |
 | `policy` | (project, checkout, host) | | The latest `policy.effective` per checkout and host, with its version |
+| `checkout` | (project, path) | path | Each checkout's latest `checkout.seen`, its root commit and remote URL, which checkout admission judges a fork against |
 | `guard_policy` | project | | The remembered denial policy |
 | `capture` | (project, item id) | phase, disposition | The capture queue |
 | `request` | (project, command kind, request id) | state | Each request's open claim, held claim or outcome, for retries and open claims |
@@ -842,7 +843,6 @@ sequenceDiagram
 ```mermaid
 erDiagram
   PROJECT ||--o{ EVENT : "records"
-  PROJECT ||--o{ CHECKOUT : "is seen at"
   PROJECT ||--o{ ANCHOR : "is anchored by"
   PROJECT ||--o{ EXPORT_RECORD : "has exports"
   PROJECT ||--o{ CLAIM_LEASE : "leases the open claims of"
@@ -860,13 +860,6 @@ erDiagram
     text created_at
     integer head_seq
     blob head_hash
-  }
-  CHECKOUT {
-    text project_id PK, FK
-    text path PK
-    text root_commit
-    text remote_url
-    text last_seen
   }
   ANCHOR {
     text project_id PK, FK
@@ -969,9 +962,9 @@ erDiagram
 
 Further tables: `schema_meta` (compatibility epoch, `schema_digest`, creation time and `scrub_pending`) and `trace` (diagnostics, outside the chain, size-capped, with an optional payload hash). `export_record` records project id, canonical target, export time and verified head sequence; a null head means pending. It is operational metadata outside the chain, read by purge to list copies it cannot reach. A `claim_lease` row is liveness only, matched to its claim by `claim_seq`, and never rebuilt. An `anchor` row caches a tag Baley confirmed on the remote. `Transaction::record_anchor` writes it in the transaction that records its `anchor.pushed` event, so neither commits without the other, and a second row for the same sequence must agree in every value. The row is outside the chain and outside generation rebuilds, and it is never the witness `verify` compares against: it is reported beside the remote anchor, and a difference is reported, not corrected.
 
-`project_gen` holds each project's live generation and, while a rebuild or verification runs, the generation it builds and the last event applied to it. `view_gen` holds, per generation, each view's projector version and the view set version of the binary that built it. Per generation, a view's documents and its `view_gen` stamp belong to that generation; a rebuild or cleanup never touches events, payloads, references and their `released_seq`, anchors, checkouts, leases, trace rows, `schema_meta` or either catalog. `view_catalog` records each view version's spec, and `view_set_catalog` each view set version's sorted view names, seeded with version 1 as `request` alone and version 2 as `claim_scope request`. Both are global and independent of any project's generations: they say what a version means, not which project uses it.
+`project_gen` holds each project's live generation and, while a rebuild or verification runs, the generation it builds and the last event applied to it. `view_gen` holds, per generation, each view's projector version and the view set version of the binary that built it. Per generation, a view's documents and its `view_gen` stamp belong to that generation; a rebuild or cleanup never touches events, payloads, references and their `released_seq`, anchors, leases, trace rows, `schema_meta` or either catalog. `view_catalog` records each view version's spec, and `view_set_catalog` each view set version's sorted view names, seeded with version 1 as `request` alone and version 2 as `claim_scope request`. Both are global and independent of any project's generations: they say what a version means, not which project uses it.
 
-The schema stays at epoch 1 until the first release and is edited in place: `view_gen.view_set_version`, `view_set_catalog` and `export_record` are part of it, no table or column is added to an existing file at open, and a file written before the T12 schema change is disposable. `schema_meta` records the SHA-256 digest of the schema text at creation. A build whose schema text differs refuses to open the file and tells the owner to delete it; there is no migration.
+The schema stays at epoch 1 until the first release and is edited in place: `view_gen.view_set_version`, `view_set_catalog` and `export_record` are part of it, no table or column is added to an existing file at open, and a file written before Build 2 T13 removed the `checkout` table is disposable, so it refuses to open and the owner is told to delete it. `schema_meta` records the SHA-256 digest of the schema text at creation. A build whose schema text differs refuses to open the file and tells the owner to delete it; there is no migration.
 
 `PAYLOAD_REF.released_seq` is the sequence of the `payload.reduced` event naming its original `[seq, hash]` reference or of the `payload.purged` event listing that reference in `released`. It is derived from those events, not an independent fact.
 
@@ -1410,7 +1403,7 @@ Builds:
 | EVD-R13 | Search returns hits in relevance order with stable ties, scoped by project and phase, over a fixture corpus. |
 | EVD-R15 | Conformance opens exports independently, lists only the exported project, compares history, verifies the chain, refuses the other project's body, checks released-body tombstones and the reported head, and checks purge export listings including replay and shared references. Export records, pending exports and stored released-body bytes remain adapter tests. Rows of a project an export does not list are not observable through the port; the adapter counts them in the exported file. |
 | EVD-R16, R22 | Folder resolution is tested as a pure function of the platform and supplied values; the open checks' judge over supplied user ids, modes and kinds. A linked home, a linked database and a link above the home are checked at open in the test's own temporary folder. No test asserts a mode the filesystem produced, and macOS paths are tested on Linux as values. |
-| EVD-R17 | Discovery is tested as a pure function over supplied ancestors, and the fork judgement over supplied checkouts, in Build 2. |
+| EVD-R17 | Discovery is tested as a pure function over supplied ancestors. The fork judgement, the user-information strip and the checkout admission plan are tested over supplied values. The root commit and the remote URL are tested through the process fake. The `checkout` view, its one row per path and a refused checkout admission leaving the chain head unchanged are tested in a store in a fresh temporary directory. All in Build 2. |
 | EVD-R18 | Each command's test asserts it writes nothing in the working tree beyond the named exceptions. |
 | EVD-R19 | Conformance checks opening a newer epoch read-only and fencing an already-open connection, newer view and view-set read/write fences, refusal to rebuild backward, forward rebuilds before first use including removed views, and changed sets refused without a new version. A missing view stamp, the raw epoch getter and epoch fences on trace writes remain adapter tests. The migration check arrives with the first migration. |
 | EVD-R20 | Relies on SQLite's documented durability with `synchronous=FULL`. Power loss is not reproducible in a portable test and is not re-tested. |
