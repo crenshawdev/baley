@@ -122,7 +122,10 @@ fn a_later_checkout_seen_merged_into_the_stored_row_instead_of_replacing_it_is_c
     let first = seen("/r", Some("c1"), Some("https://h/o/r.git"));
     let second = seen("/r", None, None);
     let (first_key, first_body) = put(projector.apply(&event(2, first.clone()), &[]).unwrap());
-    let (second_key, second_body) = put(projector.apply(&event(5, second.clone()), &[]).unwrap());
+    // The earlier row is handed in, so a projector that merged it would show.
+    let stored = [(key("/r"), first.clone())];
+    let (second_key, second_body) =
+        put(projector.apply(&event(5, second.clone()), &stored).unwrap());
     assert_eq!(first_key, key("/r"));
     assert_eq!(second_key, key("/r"));
     assert_eq!(first_body, first);
