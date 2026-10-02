@@ -408,6 +408,122 @@ fn an_earlier_acknowledgement_stays_listed_after_a_newer_anchor() {
         });
     assert!(text(&display::verify_report(&report)).contains("acknowledged restore at 1"));
 }
+fn restore_at(seq: u64) -> AcknowledgedRestore {
+    AcknowledgedRestore {
+        seq,
+        anchor: Anchor {
+            seq: 60,
+            hash: Hash([6; 32]),
+        },
+        restored: None,
+    }
+}
+fn with_restores(seqs: &[u64]) -> VerifyReport {
+    let mut report = clean();
+    report.chain.acknowledged_restores = seqs.iter().map(|s| restore_at(*s)).collect();
+    report
+}
+#[test]
+fn a_later_matching_anchor_does_not_hide_the_purge_warning() {
+    let report = with_restores(&[1]);
+    assert!(matches!(report.chain.anchor, AnchorVerdict::Matches));
+    let r = display::verify_report(&report);
+    assert_eq!(r.code, 0);
+    assert_eq!(warnings(&r), 1);
+}
+#[test]
+fn the_purge_warning_prints_once_per_report_not_once_per_acknowledgement() {
+    let mut report = with_restores(&[1, 2]);
+    report.chain.anchor = AnchorVerdict::Acknowledged {
+        anchored: 60,
+        restored: None,
+        acknowledged_seq: 2,
+    };
+    let r = display::verify_report(&report);
+    assert_eq!(r.code, 0);
+    assert_eq!(warnings(&r), 1);
+}
+#[test]
+fn an_acknowledged_verdict_with_no_listed_restore_still_prints_the_purge_warning() {
+    let mut report = clean();
+    report.chain.anchor = AnchorVerdict::Acknowledged {
+        anchored: 60,
+        restored: None,
+        acknowledged_seq: 1,
+    };
+    assert!(report.chain.acknowledged_restores.is_empty());
+    let r = display::verify_report(&report);
+    assert_eq!(r.code, 0);
+    assert_eq!(warnings(&r), 1);
+}
+#[test]
+fn a_local_only_check_still_prints_the_purge_warning() {
+    let mut report = with_restores(&[1]);
+    report.chain.anchor = AnchorVerdict::NoAnchor;
+    let r = display::verification(
+        &Verification {
+            status: AnchorCheck::LocalOnly,
+            report,
+            checked_at: "T".into(),
+        },
+        None,
+    );
+    assert_eq!(r.code, 0);
+    assert_eq!(warnings(&r), 1);
+}
+#[test]
+fn an_unacknowledged_truncation_or_rewrite_prints_no_purge_warning() {
+    for verdict in [
+        AnchorVerdict::Truncated {
+            anchored: 60,
+            head: 50,
+        },
+        AnchorVerdict::Rewritten {
+            seq: 40,
+            anchored: Hash([1; 32]),
+            found: Hash([2; 32]),
+        },
+    ] {
+        let mut report = clean();
+        report.chain.anchor = verdict;
+        let r = display::verify_report(&report);
+        assert_eq!(r.code, 1);
+        assert_eq!(warnings(&r), 0);
+    }
+}
+#[test]
+fn a_report_with_no_accepted_gap_prints_no_purge_warning() {
+    for verdict in [AnchorVerdict::Matches, AnchorVerdict::NoAnchor] {
+        let mut report = clean();
+        report.chain.anchor = verdict;
+        let r = display::verify_report(&report);
+        assert_eq!(r.code, 0);
+        assert_eq!(warnings(&r), 0);
+    }
+}
+#[test]
+fn doctor_prints_the_purge_warning_once_for_the_project_that_lists_a_restore() {
+    let mut h = health();
+    let mut other = h.projects[0].clone();
+    other.project = ProjectId("Q".into());
+    h.projects[0].verify = Ok(with_restores(&[1]));
+    h.projects.push(other);
+    let r = display::doctor(&h, &projects(), &no_reasons(), &no_faults());
+    assert_eq!(r.code, 0);
+    assert_eq!(warnings(&r), 1);
+}
+#[test]
+fn a_failed_export_prints_the_purge_warning_and_exits_one() {
+    let r = display::store_error(
+        &StoreError::Refused(Refusal::ExportUnverified {
+            project: ProjectId("P".into()),
+            report: Box::new(with_restores(&[1])),
+        }),
+        Some("P"),
+    );
+    assert_eq!(r.code, 1);
+    assert_eq!(warnings(&r), 1);
+}
 #[test]
 fn anchor_row_comparison_is_not_printed_as_a_type_name() {
     let mut report = clean();

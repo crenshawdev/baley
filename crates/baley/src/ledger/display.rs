@@ -242,6 +242,11 @@ pub(super) fn verify_report(report: &VerifyReport) -> Render {
             restore.anchor.hash.to_hex()
         ));
     }
+    // Once per report, whichever way the accepted gap shows. A later match
+    // does not prove the purge history complete.
+    if !report.chain.acknowledged_restores.is_empty() || shown.is_some() {
+        lines.extend(PURGE_WARNING.map(String::from));
+    }
     lines.push(format!(
         "bodies checked {}, tombstones {}",
         report.bodies_checked, report.tombstones_checked
