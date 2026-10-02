@@ -8,5 +8,5 @@ mod gather;
 mod strip;
 
 pub use admit::{ADMIT_COMMAND, AdmitError, admit};
-pub use gather::root_commit;
+pub use gather::{Facts, gather, root_commit};
 pub use strip::strip_user_information;

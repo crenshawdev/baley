@@ -1,11 +1,15 @@
-//! A checkout's facts read through git: its root commit and, later, its remote
-//! URL (design 0001 Project identity and policy, EVD-R17). Git's messages are
+//! A checkout's facts read through git: its root commit and its remote URL (design 0001 Project identity and policy, EVD-R17). Git's messages are
 //! translated, so only exit codes classify a result.
 
 use std::path::Path;
 
+use baley_core::policy::EffectivePolicy;
+
+use super::strip_user_information;
 use crate::committed::{Ran, born, command, failed, finished};
 use crate::git_process::{self, Caller};
+use crate::ledger::anchor_plan::remote_of;
+use crate::ledger::forge::not_configured;
 use crate::process::{Launch, Process};
 
 /// One git launch at the root, read-only: no index lock, no lazy fetch from a
@@ -65,6 +69,71 @@ fn object_id(text: &str) -> bool {
         && text
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// A checkout's root commit and the stripped URL of the remote it records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Facts {
+    /// The root commit, `None` when HEAD is unborn.
+    pub root_commit: Option<String>,
+    /// The remote's URL without user information, `None` when the checkout has
+    /// no `origin` and `git.remote` is unset.
+    pub remote_url: Option<String>,
+}
+
+/// Gathers the facts of the checkout at `root` under `policy`, the root commit
+/// first. It needs no store. The remote is the policy's `git.remote`, else
+/// `origin`. The refusal is text, since a caller words it as its own.
+pub fn gather(
+    root: &Path,
+    policy: &EffectivePolicy,
+    process: &mut dyn Process,
+) -> Result<Facts, String> {
+    let root_commit = root_commit(root, process)?;
+    let named = remote_of(policy);
+    let name = named.as_deref().unwrap_or("origin");
+    let get_url = git(root, &["remote", "get-url", name]);
+    let remote_url = remote_url(
+        &get_url,
+        git_process::run(&get_url, process),
+        named.is_some().then_some(name),
+        root,
+    )?;
+    Ok(Facts {
+        root_commit,
+        remote_url,
+    })
+}
+
+/// `remote get-url <name>`: exit 0 with one line is the URL, stripped. Exit 2
+/// is no such remote, which refuses for a name `git.remote` gave (`named`) and
+/// is none for the `origin` fallback. Anything else refuses.
+fn remote_url(
+    launch: &Launch,
+    ran: Ran,
+    named: Option<&str>,
+    root: &Path,
+) -> Result<Option<String>, String> {
+    let output = finished(launch, ran)?;
+    if output.code() == Some(2) {
+        return match named {
+            Some(name) => Err(not_configured(name, root)),
+            None => Ok(None),
+        };
+    }
+    if !output.success() {
+        return Err(failed(launch, &output));
+    }
+    if !output.stdout_complete {
+        return Err(format!("{} gave incomplete output", command(launch)));
+    }
+    let unreadable = || format!("{} gave output that is not one URL", command(launch));
+    let text = std::str::from_utf8(&output.stdout).map_err(|_| unreadable())?;
+    let line = text.strip_suffix('\n').unwrap_or(text);
+    if line.is_empty() || line.contains('\n') {
+        return Err(unreadable());
+    }
+    Ok(Some(strip_user_information(line)))
 }
 
 #[cfg(test)]
@@ -173,5 +242,114 @@ mod tests {
         let mut fake = Recorded::new().unavailable(std::io::ErrorKind::NotFound.into());
         let refusal = gathered(&mut fake).unwrap_err();
         assert!(refusal.starts_with("git rev-parse --verify -q HEAD could not run"));
+    }
+
+    fn policy(project_file: &str) -> EffectivePolicy {
+        let file = crate::settings::file(Path::new("/r/baley.toml"), project_file.into());
+        let reads = crate::policy_step::Reads {
+            global: Ok(None),
+            head: Some(Ok(crate::committed::Committed {
+                layer: Some(file),
+                pending: None,
+            })),
+        };
+        crate::policy_step::build(&reads).unwrap()
+    }
+
+    fn upstream() -> EffectivePolicy {
+        policy("[git]\nremote = \"upstream\"\n")
+    }
+
+    fn unset() -> EffectivePolicy {
+        policy("")
+    }
+
+    fn facts(policy: &EffectivePolicy, fake: &mut Recorded) -> Result<Facts, String> {
+        let result = gather(Path::new(ROOT), policy, fake);
+        for launch in fake.launches() {
+            assert_eq!(launch.git_caller(), Some(Caller::CheckoutFacts));
+            assert_eq!(launch.cwd.as_deref(), Some(Path::new(ROOT)));
+        }
+        result
+    }
+
+    /// A born HEAD with one root, ready for the remote's answer.
+    fn born_with() -> Recorded {
+        Recorded::new().out("").out(format!("{A}\n"))
+    }
+
+    #[test]
+    fn a_named_remote_is_not_replaced_by_origin_and_its_token_is_not_kept() {
+        let mut fake = born_with().out("https://ghp_x@host/o/r.git\n");
+        let gathered = facts(&upstream(), &mut fake).unwrap();
+        assert_eq!(gathered.remote_url.as_deref(), Some("https://host/o/r.git"));
+        assert_eq!(gathered.root_commit.as_deref(), Some(A));
+        assert_eq!(fake.arguments()[2], ["remote", "get-url", "upstream"]);
+    }
+
+    #[test]
+    fn an_unset_git_remote_does_not_skip_the_url_of_origin() {
+        let mut fake = born_with().out("ssh://git@host/o/r.git\n");
+        let gathered = facts(&unset(), &mut fake).unwrap();
+        assert_eq!(gathered.remote_url.as_deref(), Some("ssh://host/o/r.git"));
+        assert_eq!(fake.arguments()[2], ["remote", "get-url", "origin"]);
+    }
+
+    #[test]
+    fn an_unborn_head_does_not_stop_the_remote_from_being_gathered() {
+        let mut fake = Recorded::new().fail(1, "").out("git@host:o/r.git\n");
+        let gathered = facts(&unset(), &mut fake).unwrap();
+        assert_eq!(gathered.root_commit, None);
+        assert_eq!(gathered.remote_url.as_deref(), Some("git@host:o/r.git"));
+        assert_eq!(fake.launches().len(), 2);
+    }
+
+    #[test]
+    fn a_missing_origin_without_git_remote_is_none_not_a_refusal() {
+        let mut fake = born_with().fail(2, "error: No such remote 'origin'\n");
+        let gathered = facts(&unset(), &mut fake).unwrap();
+        assert_eq!(gathered.remote_url, None);
+    }
+
+    #[test]
+    fn a_missing_named_remote_is_not_none_and_not_origin() {
+        let mut fake = born_with().fail(2, "error: No such remote 'upstream'\n");
+        let refusal = facts(&upstream(), &mut fake).unwrap_err();
+        assert_eq!(
+            refusal,
+            "remote upstream is not configured in the git repository at /r"
+        );
+        assert_eq!(fake.launches().len(), 3, "origin is never asked for");
+    }
+
+    #[test]
+    fn a_failed_get_url_on_the_origin_fallback_is_not_read_as_none() {
+        let mut fake = born_with().fail(128, "fatal: not a git repository\n");
+        let refusal = facts(&unset(), &mut fake).unwrap_err();
+        assert!(
+            refusal.starts_with("git remote get-url origin exited with code 128"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn two_urls_or_none_with_a_clean_exit_are_not_taken_for_a_url() {
+        for bad in ["https://a/x\nhttps://b/y\n", "", "\n"] {
+            let mut fake = born_with().out(bad);
+            let refusal = facts(&unset(), &mut fake).unwrap_err();
+            assert!(refusal.contains("not one URL"), "{bad:?}: {refusal}");
+        }
+    }
+
+    #[test]
+    fn an_incomplete_url_is_not_read_as_one() {
+        let mut cut = Output::exited(0, "https://host/o/r", "");
+        cut.stdout_complete = false;
+        let mut fake = born_with().answer(cut);
+        assert!(
+            facts(&unset(), &mut fake)
+                .unwrap_err()
+                .contains("incomplete")
+        );
     }
 }

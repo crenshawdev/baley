@@ -6,7 +6,7 @@ use crate::{
 };
 use baley_core::{FetchObservation, Forge, PushObservation, TagQuery, tag_sequence};
 use baley_store::ProjectId;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Translates bounded git observations into forge observations.
 pub(super) struct GitForge<P: Process> {
@@ -65,7 +65,7 @@ impl<P: Process> GitForge<P> {
     pub(super) fn require_remote(&mut self, name: &str) -> Result<(), CliRefusal> {
         match self.remote(name) {
             Some(true) => Ok(()),
-            Some(false) => Err(CliRefusal(format!("remote {name} is not configured in the git repository at {}", self.cwd.display()))),
+            Some(false) => Err(CliRefusal(not_configured(name, &self.cwd))),
             None => Err(CliRefusal("the current directory is not in a git repository; remotes are read from the repository at the current directory".into())),
         }
     }
@@ -98,6 +98,15 @@ impl<P: Process> GitForge<P> {
         }
     }
 }
+/// The refusal for a remote the repository at `root` does not have, one text for
+/// the forge and for checkout admission.
+pub(crate) fn not_configured(name: &str, root: &Path) -> String {
+    format!(
+        "remote {name} is not configured in the git repository at {}",
+        root.display()
+    )
+}
+
 fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).into()).collect()
 }
