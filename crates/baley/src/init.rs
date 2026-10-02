@@ -19,6 +19,7 @@ use baley_store::{
 use clap::Args;
 use serde_json::json;
 
+use crate::checkout::{AdmitError, EntryError};
 use crate::detection::{Trigger, detect_blocking};
 use crate::discovery::{self, Discovery, PROJECT_FILE};
 use crate::folders::{Environment, Folders, Platform};
@@ -361,6 +362,16 @@ pub fn observe_ledger(
             });
         }
         after = page.next;
+    }
+}
+
+/// Renders why checkout admission stopped: a gather or fork refusal as a
+/// refusal, a store error through `display::store_error` with the project id.
+pub(crate) fn admission_render(error: EntryError, project: &str) -> Render {
+    match error {
+        EntryError::Gather(text) => Render::refusal(text),
+        EntryError::Admit(AdmitError::Fork(conflict)) => Render::refusal(conflict.to_string()),
+        EntryError::Admit(AdmitError::Store(error)) => display::store_error(&error, Some(project)),
     }
 }
 
