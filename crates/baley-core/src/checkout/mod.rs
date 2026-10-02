@@ -8,6 +8,7 @@
 //! every checkout, row and stored document it judges.
 
 mod event;
+mod view;
 
 #[cfg(test)]
 mod tests;
@@ -15,3 +16,4 @@ mod tests;
 pub use event::{
     CHECKOUT_SEEN, CHECKOUT_SEEN_VERSION, Checkout, register_checkout_events, seen_payload,
 };
+pub use view::{CHECKOUT_VIEW, CheckoutProjector, checkout_key, checkout_spec};
