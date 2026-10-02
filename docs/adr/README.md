@@ -2,7 +2,7 @@
 
 Each file records one architectural decision: its context, the options weighed, the choice and its consequences. The format is [MADR](https://adr.github.io/madr/), after Michael Nygard. How records are written, reviewed and superseded is described in [the design process](../design/README.md).
 
-Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit number.
+Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit number, skipping any number the index reserves. A reservation holds a number for a decision whose record is not written yet. Its row gains its link when its record lands.
 
 ## Index
 
@@ -40,4 +40,7 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0030](0030-question-rounds.md) | Put refinement and planning decisions to the owner in dependency-ordered question rounds | Accepted |
 | [0031](0031-one-term-per-concept.md) | Use one term per concept, kept in a glossary: phase, not sprint, and story, not requirement | Accepted, supersedes 0017 in part |
 | [0032](0032-gemini-is-not-a-provider.md) | Drop Gemini from the model catalog and detection | Accepted, supersedes 0027 in part |
+| 0033 | Support only hosts whose sandboxing and execution controls meet Baley's requirements | Reserved |
+| 0034 | Run one Baley server per session over stdio | Reserved |
 | [0035](0035-restore-purge-uncertainty.md) | Report purge uncertainty after restoring a store | Accepted, supersedes 0022 in part |
+| 0036 | Keep guard records per user and bound the guard's access | Reserved |
