@@ -145,11 +145,11 @@ graph LR
 | CFG-R28 | A provider the owner reaches by its own command-line login needs no line in the keys file; every command that needs a key names the key missing from the file, and no command forces the owner to add one. | No one is forced to hand over a key. | SYS-R10 | Active |
 | CFG-R29 | `git.forge_provider` accepts `github`, `gitlab` and `forgejo`; the first release acts on `github` only, and choosing another value is accepted and reported as not yet supported by [0011: Landing](0011-milestones-landing-undo-pause.md). | All three forges are planned; the setting must not need to change when they arrive. | | Active |
 
-Which policy each command runs under (CFG-R8, CFG-R9). Policy version 0 means that no recorded policy applies. The policy step runs before every command that appends to a project's chain from a checkout: it re-reads both files, records `policy.effective` when the merged result changed, and returns the version in force for the command's own record. A command that appends to no chain runs no step. Records in the per-user project `user` carry 0 and build no policy. `purge` is the one chain-writing command that may run outside a checkout, and records 0 there. A `baley config set` outside any project, one in a project that is not in this machine's ledger, and one that changes nothing run no step. The first two give 0, since no recorded policy applies, and one that changes nothing gives the version in force. `baley config interview` runs no step of its own: its one `config set` runs the step as that set does, and an interview that is declined or has every answer blank opens no store and runs no step.
+Which policy each command runs under (CFG-R8, CFG-R9). Policy version 0 means that no recorded policy applies. Checkout admission runs before the policy step for every command that runs one: it judges the checkout against the project's other checkouts and records `checkout.seen` when the checkout is new or changed ([0001](0001-evidence-ledger.md), EVD-R17). The policy step runs before every command that appends to a project's chain from a checkout: it re-reads both files, records `policy.effective` when the merged result changed, and returns the version in force for the command's own record. A command that appends to no chain runs no step. Records in the per-user project `user` carry 0 and build no policy. `purge` is the one chain-writing command that may run outside a checkout, and records 0 there. A `baley config set` outside any project, one in a project that is not in this machine's ledger, and one that changes nothing run no step. The first two give 0, since no recorded policy applies, and one that changes nothing gives the version in force. `baley config interview` runs no step of its own: its one `config set` runs the step as that set does, and an interview that is declined or has every answer blank opens no store and runs no step.
 
 | Command | Project from | Policy step | Version recorded |
 |---|---|---|---|
-| `baley init` | discovery at the repository root | yes, after `project.initialized` | 0 on `project.initialized` |
+| `baley init` | discovery at the repository root | yes, after `project.initialized` and checkout admission | 0 on `project.initialized` |
 | `baley config set` in a project | discovery | yes, after the write, when the project is in this machine's ledger | the version in force after it, or 0 when the project is not in this machine's ledger, where `baley init` records the policy |
 | `baley config interview` | discovery | only through its one `config set` | that set's version, and none when the interview is declined or every answer is blank |
 | `anchor`, `acknowledge-restore` | discovery | yes | the version in force |
@@ -160,6 +160,7 @@ Which policy each command runs under (CFG-R8, CFG-R9). Policy version 0 means th
 | `scrub` | none | no: no event is appended | none |
 | `baley models add`, `remove` and `update`, detection, seeding | the per-user project `user` | no | 0 |
 | `policy.effective` itself | the command it belongs to | it is the step's own record | the version it replaces, 0 for the first of its key |
+| `checkout.seen` itself | the command it belongs to | no: it runs before the step, as a command of its own | the policy version stored for the checkout and no host, 0 when none is stored |
 
 
 ## 4. Roles and actors
@@ -628,21 +629,36 @@ sequenceDiagram
     P-->>I: unmanaged
     I-->>H: answer for an unmanaged directory (silent guard, refusal for a process command)
   else found
-    P->>L: checkout.seen if new
     P->>P: effective policy (project file at the checkout's HEAD, global file, host sections)
     alt a settings file is invalid or unreadable, or a path is not UTF-8
       P-->>I: config-unavailable naming the file and the fault
-      I-->>H: the refusal, with no policy.effective recorded
+      I-->>H: the refusal, with nothing recorded
     else policy available
-      alt merged result changed
-        P->>L: policy.effective
+      P->>P: the checkout's root commit and remote URL, from the remote git.remote names else origin, user information removed
+      alt git fails or git.remote names a remote the checkout lacks
+        P-->>I: the refusal naming the remote or the git command
+        I-->>H: the refusal, with nothing recorded
+      else facts gathered
+        P->>L: checkout admission judges the checkout against the project's other checkouts
+        alt another checkout of the project holds a different remote URL
+          L-->>P: refused
+          P-->>I: project-id-conflict naming both checkouts and baley init --new-id
+          I-->>H: the refusal, with nothing recorded in the project
+        else not a fork
+          opt the checkout is new or changed
+            P->>L: checkout.seen
+          end
+          opt merged result changed
+            P->>L: policy.effective
+          end
+          P-->>I: project and policy version
+        end
       end
-      P-->>I: project and policy version
     end
   end
 ```
 
-*Figure 7. Finding the project and its policy on a request. The steps built so far serve the command line: the walk up to the nearest `baley.toml`, stopping at the git root (`discover`), the read of the project file at the checkout's HEAD (`committed::read`), and the merge with the global file and host sections. `baley init`, `purge`, `baley config set`, `baley config show`, `baley config interview`, `anchor`, `acknowledge-restore`, anchored `verify` and `doctor` call the walk. `baley init`, `purge` and `config set` read HEAD's copy through the policy step. `anchor` and `acknowledge-restore` read it through the policy step's reads, check the project's `git.remote` against `git remote`, and run the step before their own command. `config show`, `config interview`, anchored `verify` and `doctor` read it through the step's gatherer and record nothing, and the interview's answers are written by its one `config set`. Recording `policy.effective` when the merged result changes is built for the command line: `baley init` records it after `project.initialized`, `purge` from a checkout of the project it names, `config set` after its write in a project in this machine's ledger, and `anchor` and `acknowledge-restore` before their own command. The command line connects no host, so no host section applies to it unless `--host` names one for `config show` or `config interview`. An invalid or unreadable settings file, or a checkout or settings path that is not UTF-8, refuses with `config-unavailable` before the step records anything, and `baley init` refuses before it writes a file or opens the ledger. `doctor` is the exception: it reports such a file as a finding and keeps checking. Recording `checkout.seen` arrives in Build 2 T13, and the host's request through the host interface in Build 3.*
+*Figure 7. Finding the project and its policy on a request. The steps built so far serve the command line: the walk up to the nearest `baley.toml`, stopping at the git root (`discover`), the read of the project file at the checkout's HEAD (`committed::read`), the merge with the global file and host sections, the gathering of the checkout's facts, checkout admission and the policy step. `baley init`, `purge`, `baley config set`, `baley config show`, `baley config interview`, `anchor`, `acknowledge-restore`, anchored `verify` and `doctor` call the walk. `baley init`, `purge` and `config set` read HEAD's copy through the policy step. `anchor` and `acknowledge-restore` read it through the policy step's reads and check the project's `git.remote` against `git remote` by exact name. `config show`, `config interview`, anchored `verify` and `doctor` read it through the step's gatherer and record nothing, and the interview's answers are written by its one `config set`. Checkout admission and the recording of `policy.effective` are built for the command line, in the order the figure shows, for `baley init`, `purge` from a checkout of the project it names, `config set` after its write in a project in this machine's ledger, `anchor` and `acknowledge-restore`: the settings are read and validated, the checkout's root commit and remote URL are gathered, the checkout is judged and `checkout.seen` is recorded when it is new or changed, then `policy.effective` is recorded when the merged result changed, and the command's own events follow. The remote a checkout records is the fetch URL of the remote `git.remote` names, else of `origin`, with user information removed, and a named remote the checkout lacks is refused. A checkout whose remote URL differs from another checkout's in the project is a fork. It is refused `project-id-conflict`, naming both checkouts and `baley init --new-id`, and nothing is recorded in the project. `config set` writes its file before it admits the checkout, so in a fork the refusal comes after the write and says the change stands. `baley init` has two orders: on an empty chain it records `project.initialized` before checkout admission, and on a chain that holds events it admits the checkout first and records a missing `project.initialized` after, so a fork's plain init is refused before it appends anything. The command line connects no host, so no host section applies to it unless `--host` names one for `config show` or `config interview`. An invalid or unreadable settings file, or a checkout or settings path that is not UTF-8, refuses with `config-unavailable` before checkout admission or the step records anything. `baley init` refuses before it writes a file or opens the ledger, except for the fork refusal, which needs the ledger. `doctor` is the exception to the settings refusal: it reports such a file as a finding and keeps checking. The host's request through the host interface is Build 3's, which takes discovery, checkout admission and the policy step as its seam.*
 
 ## 9. Settings
 
