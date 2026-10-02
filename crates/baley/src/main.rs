@@ -267,7 +267,7 @@ mod ledger_argument_tests {
     fn verify_reaches_the_flattened_ledger_surface() {
         let cli = Cli::try_parse_from(["baley", "verify", "P", "--local-only"]).unwrap();
         assert!(
-            matches!(cli.command,Command::Ledger(baley::ledger::LedgerCommand::Verify { project,local_only:true,.. }) if project == "P")
+            matches!(cli.command,Command::Ledger(baley::ledger::LedgerCommand::Verify { project,local_only:true,.. }) if project.as_deref() == Some("P"))
         );
     }
 }

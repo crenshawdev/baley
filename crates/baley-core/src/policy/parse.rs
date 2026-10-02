@@ -44,6 +44,8 @@ pub enum Value {
     Rung(Rung),
     /// A non-empty model name.
     ModelName(String),
+    /// A non-empty git remote name.
+    RemoteName(String),
 }
 
 /// One setting a file writes, typed and within its scope.
@@ -204,6 +206,8 @@ pub enum Expected {
     Rung,
     /// A model name.
     ModelName,
+    /// A git remote name.
+    RemoteName,
 }
 impl From<Kind> for Expected {
     fn from(kind: Kind) -> Expected {
@@ -211,6 +215,7 @@ impl From<Kind> for Expected {
             Kind::Bool => Expected::Bool,
             Kind::Rung => Expected::Rung,
             Kind::ModelName => Expected::ModelName,
+            Kind::RemoteName => Expected::RemoteName,
         }
     }
 }
@@ -273,6 +278,7 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
                 Expected::Bool => "a boolean".to_owned(),
                 Expected::Rung => format!("a rung ({})", rungs()),
                 Expected::ModelName => "a model name".to_owned(),
+                Expected::RemoteName => "a remote name".to_owned(),
             };
             write!(
                 f,
@@ -292,6 +298,7 @@ fn describe(f: &mut fmt::Formatter<'_>, path: &str, fault: &Fault) -> fmt::Resul
             match kind {
                 Kind::Rung => write!(f, "\"{written}\", which is not a rung ({})", rungs()),
                 Kind::ModelName => f.write_str("empty; write a model name or remove the line"),
+                Kind::RemoteName => f.write_str("empty; write a remote name or remove the line"),
                 Kind::Bool => write!(f, "\"{written}\", which is not a boolean"),
             }
         }
@@ -509,6 +516,10 @@ fn typed(kind: Kind, value: &DeValue<'_>) -> Result<Value, Mismatch> {
         Kind::ModelName => match value.as_str().ok_or_else(wrong)? {
             "" => Err(Mismatch::Grammar(String::new())),
             name => Ok(Value::ModelName(name.to_owned())),
+        },
+        Kind::RemoteName => match value.as_str().ok_or_else(wrong)? {
+            "" => Err(Mismatch::Grammar(String::new())),
+            name => Ok(Value::RemoteName(name.to_owned())),
         },
     }
 }

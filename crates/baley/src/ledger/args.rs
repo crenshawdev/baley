@@ -1,35 +1,27 @@
 //! Arguments for owner operations on the ledger.
 use baley_store::Hash;
-use clap::{ArgGroup, Subcommand};
+use clap::Subcommand;
 use std::path::PathBuf;
 
 /// Ledger commands, beside the inherited command surface.
 #[derive(Debug, Clone, Subcommand)]
 pub enum LedgerCommand {
-    /// Check the chain against a remote, locally, or compare replayed views.
-    #[command(group(ArgGroup::new("check").required(true).args(["remote", "local_only", "views"])))]
+    /// Check the chain. With no flag it checks the checkout's project against
+    /// the remote its `git.remote` names, or locally when none is set.
+    /// `--local-only` and `--views` name the project and need no checkout.
     Verify {
-        /// Ledger project id.
-        project: String,
-        /// Configured git remote.
-        #[arg(long)]
-        remote: Option<String>,
-        /// Check without a remote witness.
-        #[arg(long)]
+        /// Ledger project id; required with `--local-only` or `--views`.
+        project: Option<String>,
+        /// Check the named project without a remote witness.
+        #[arg(long, requires = "project", conflicts_with = "views")]
         local_only: bool,
-        /// Compare views with a replay.
-        #[arg(long)]
+        /// Compare the named project's views with a replay.
+        #[arg(long, requires = "project")]
         views: bool,
     },
-    /// Report the health of every project.
-    Doctor {
-        /// Project and configured remote, PROJECT=REMOTE.
-        #[arg(long, value_parser = project_remote)]
-        remote: Vec<(String, String)>,
-        /// Project to check without a remote witness.
-        #[arg(long)]
-        local_only: Vec<String>,
-    },
+    /// Report the health of every project. The checkout's project is checked
+    /// against the remote its `git.remote` names, every other one locally.
+    Doctor,
     /// Export one project into a new standalone home.
     Export {
         /// Ledger project id.
@@ -56,32 +48,21 @@ pub enum LedgerCommand {
         /// Ledger project id.
         project: String,
     },
-    /// Anchor a project on a configured git remote.
+    /// Anchor the checkout's project on the remote its `git.remote` names.
     Anchor {
-        /// Ledger project id.
-        project: String,
-        /// Configured git remote.
-        #[arg(long)]
-        remote: String,
+        /// Ledger project id; only the checkout's own project is accepted.
+        project: Option<String>,
     },
-    /// Accept a restored chain behind its remote anchor.
+    /// Accept a restored chain behind the anchor on the remote its
+    /// `git.remote` names.
     AcknowledgeRestore {
-        /// Ledger project id.
-        project: String,
-        /// Configured git remote.
-        #[arg(long)]
-        remote: String,
+        /// Ledger project id; only the checkout's own project is accepted.
+        project: Option<String>,
     },
 }
 
 fn payload_hash(text: &str) -> Result<Hash, String> {
     Hash::from_hex(text).ok_or_else(|| "a payload hash is 64 hex digits".into())
-}
-fn project_remote(text: &str) -> Result<(String, String), String> {
-    text.split_once('=')
-        .filter(|(p, r)| !p.is_empty() && !r.is_empty())
-        .map(|(p, r)| (p.into(), r.into()))
-        .ok_or_else(|| "expected PROJECT=REMOTE".into())
 }
 fn purge_reason(text: &str) -> Result<String, String> {
     if text.is_empty() {

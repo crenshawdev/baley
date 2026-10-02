@@ -112,7 +112,7 @@ fn route(policy: &EffectivePolicy, role: Role, host: Host, n: u32) -> Result<Rou
 }
 
 #[test]
-fn standard_schema_holds_build_2s_thirteen_entries_with_their_defaults() {
+fn standard_schema_holds_build_2s_fourteen_entries_with_their_defaults() {
     use Builtin::{Absent, Bool};
     let effort = Builtin::Rung;
     let expected = [
@@ -131,7 +131,7 @@ fn standard_schema_holds_build_2s_thirteen_entries_with_their_defaults() {
         ("escalate_on_failure", Kind::Bool, Bool(false)),
     ];
     let schema = Schema::standard();
-    assert_eq!(schema.entries().len(), 13);
+    assert_eq!(schema.entries().len(), 14);
     for (name, kind, default) in expected {
         let entry = schema
             .get(name)
@@ -142,6 +142,11 @@ fn standard_schema_holds_build_2s_thirteen_entries_with_their_defaults() {
             "{name}"
         );
     }
+    let remote = schema.get("git.remote").expect("git.remote is missing");
+    assert_eq!(
+        (remote.kind, remote.default, remote.scope, remote.owner),
+        (Kind::RemoteName, Absent, Scope::Project, "0001")
+    );
 }
 
 #[test]
@@ -661,7 +666,7 @@ fn an_empty_file_and_no_file_both_give_the_defaults_but_only_the_file_has_a_dige
     let with = effective_policy(Schema::standard(), None, Some(&empty), None).unwrap();
     let without = effective_policy(Schema::standard(), None, None, None).unwrap();
     for policy in [&with, &without] {
-        assert_eq!(policy.settings.len(), 13);
+        assert_eq!(policy.settings.len(), 14);
         assert!(
             policy
                 .settings
@@ -1129,4 +1134,82 @@ fn rendering_over_a_file_that_is_not_toml_refuses_naming_it() {
             .starts_with("config-unavailable: /r/baley.toml:1:10: "),
         "{refusal}"
     );
+}
+
+/// A schema of one remote-name setting, so the kind is tested apart from the
+/// standard schema.
+fn remote_schema() -> Schema {
+    Schema::new(vec![Entry {
+        name: "git.remote".into(),
+        kind: Kind::RemoteName,
+        default: Builtin::Absent,
+        scope: Scope::Both,
+        owner: "test",
+    }])
+}
+
+fn remote_policy(text: &str) -> Result<EffectivePolicy, Unavailable> {
+    effective_policy(&remote_schema(), None, Some(&file(GLOBAL, text)), None)
+}
+
+#[test]
+fn a_remote_name_read_as_a_model_name_is_caught() {
+    let policy = remote_policy("git.remote = \"origin\"\n").unwrap();
+    assert_eq!(
+        value_of(&policy, "git.remote").value,
+        Some(Value::RemoteName("origin".into()))
+    );
+}
+
+#[test]
+fn an_empty_remote_name_that_is_accepted_or_not_named_is_caught() {
+    let refusal = remote_policy("git.remote = \"\"\n").unwrap_err();
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /c/config.toml:1:14: git.remote is empty; write a remote name or remove the line"
+    );
+}
+
+#[test]
+fn a_remote_name_given_as_an_integer_that_is_not_a_type_fault_is_caught() {
+    let refusal = remote_policy("git.remote = 1\n").unwrap_err();
+    assert_eq!(
+        refusal.to_string(),
+        "config-unavailable: /c/config.toml:1:14: git.remote is an integer, not a remote name"
+    );
+}
+
+#[test]
+fn a_global_file_holding_git_remote_that_gives_a_value_or_no_diagnostic_is_caught() {
+    let layer = parse_layer(
+        &file(GLOBAL, "[git]\nremote = \"origin\"\n"),
+        FileLayer::Global,
+        Schema::standard(),
+    )
+    .unwrap();
+    assert!(layer.values.is_empty(), "{:?}", layer.values);
+    assert_eq!(layer.diagnostics.len(), 1);
+    assert_eq!(
+        layer.diagnostics[0].to_string(),
+        "/c/config.toml:2:1: git.remote is a project setting and was ignored in the global file"
+    );
+    let policy = standard(None, Some("[git]\nremote = \"origin\"\n"), None).unwrap();
+    assert_eq!(value_of(&policy, "git.remote").value, None);
+}
+
+#[test]
+fn a_host_section_git_remote_that_raises_a_diagnostic_or_applies_with_no_host_is_caught() {
+    let project = format!(
+        "[project]\nid = \"{ID}\"\nname = \"demo\"\n\n[host.claude-code.git]\nremote = \"origin\"\n"
+    );
+    let without = standard(None, None, Some(&project)).unwrap();
+    assert!(without.diagnostics.is_empty(), "{:?}", without.diagnostics);
+    let remote = value_of(&without, "git.remote");
+    assert_eq!((&remote.value, &remote.source), (&None, &default_source()));
+
+    let with = standard(Some(Host::ClaudeCode), None, Some(&project)).unwrap();
+    assert!(with.diagnostics.is_empty(), "{:?}", with.diagnostics);
+    let remote = value_of(&with, "git.remote");
+    assert_eq!(remote.value, Some(Value::RemoteName("origin".into())));
+    assert_eq!(remote.source.layer, Layer::ProjectHost);
 }

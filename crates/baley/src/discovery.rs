@@ -60,8 +60,9 @@ pub fn discover(ancestors: &[Ancestor]) -> Discovery {
 }
 
 /// Observes every ancestor of the working directory, nearest first, for
-/// `discover`. `baley init`, `purge`, `config set` and `config show` are its
-/// callers.
+/// `discover`. `baley init`, `purge`, `config set`, `config show`,
+/// `config interview`, `anchor`, `acknowledge-restore`, anchored `verify`
+/// and `doctor` are its callers.
 ///
 /// The directory is canonicalized first, so the root is the checkout's
 /// canonical path. `baley.toml` is followed through a link, as settings reads

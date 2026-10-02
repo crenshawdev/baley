@@ -140,6 +140,9 @@ pub enum Kind {
     Rung,
     /// A non-empty string; whether a host accepts it is the catalog's question.
     ModelName,
+    /// A non-empty string naming a git remote. Whether the repository has that
+    /// remote is the forge's exact-name check, not the schema's.
+    RemoteName,
 }
 
 /// A setting's built-in value.
@@ -205,7 +208,8 @@ impl Schema {
         Schema { entries }
     }
 
-    /// Build 2's schema: each role's model and effort, and `escalate_on_failure`.
+    /// Build 2's schema: each role's model and effort, `escalate_on_failure`
+    /// and `git.remote`.
     pub fn standard() -> &'static Schema {
         static STANDARD: OnceLock<Schema> = OnceLock::new();
         STANDARD.get_or_init(|| {
@@ -237,6 +241,13 @@ impl Schema {
                 default: Default::Bool(false),
                 scope: Scope::Both,
                 owner: "0003",
+            });
+            entries.push(Entry {
+                name: "git.remote".into(),
+                kind: Kind::RemoteName,
+                default: Default::Absent,
+                scope: Scope::Project,
+                owner: "0001",
             });
             Schema::new(entries)
         })

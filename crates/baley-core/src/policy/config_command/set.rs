@@ -104,6 +104,7 @@ impl fmt::Display for SetRefusal {
                         format!("a rung ({})", names.join(", "))
                     }
                     Kind::ModelName => "a model name (any non-empty text)".to_owned(),
+                    Kind::RemoteName => "a git remote name (any non-empty text)".to_owned(),
                 };
                 write!(
                     f,
@@ -161,6 +162,7 @@ fn convert(kind: Kind, text: &str) -> Option<Value> {
         },
         Kind::Rung => Rung::parse(text).map(Value::Rung),
         Kind::ModelName => (!text.is_empty()).then(|| Value::ModelName(text.to_owned())),
+        Kind::RemoteName => (!text.is_empty()).then(|| Value::RemoteName(text.to_owned())),
     }
 }
 

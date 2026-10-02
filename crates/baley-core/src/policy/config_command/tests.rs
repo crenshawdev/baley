@@ -21,9 +21,8 @@ fn entry(name: &str, kind: Kind, default: Builtin, scope: Scope) -> Entry {
     }
 }
 
-/// One setting of each kind and each scope, so `wrong-layer` and the model
-/// judge can be produced; Build 2's standard schema holds only both-scoped
-/// settings.
+/// One setting of each kind and each scope, so the judges are tested apart
+/// from the standard schema.
 fn schema() -> Schema {
     Schema::new(vec![
         entry(
@@ -42,6 +41,12 @@ fn schema() -> Schema {
             "example.flag",
             Kind::Bool,
             Builtin::Bool(false),
+            Scope::Both,
+        ),
+        entry(
+            "example.remote",
+            Kind::RemoteName,
+            Builtin::Absent,
             Scope::Both,
         ),
         entry(
@@ -1431,6 +1436,7 @@ fn a_settings_line_missing_its_kind_default_or_scope_is_caught() {
             "roles.planner.model: kind model name, default absent, scope both",
             "roles.planner.effort: kind rung, default \"high\", scope both",
             "example.flag: kind boolean, default false, scope both",
+            "example.remote: kind remote name, default absent, scope both",
             "example.project_only: kind boolean, default false, scope project",
             "example.global_only: kind boolean, default false, scope global",
         ]
@@ -1530,4 +1536,143 @@ fn asked_names_that_do_not_limit_or_order_the_settings_shown_are_caught() {
         .map(|line| line.split(':').next().unwrap())
         .collect();
     assert_eq!(headers, ["example.flag", "roles.planner.effort"]);
+}
+
+fn remote(name: &str) -> TypedPair {
+    pair("example.remote", None, Value::RemoteName(name.to_owned()))
+}
+
+#[test]
+fn a_remote_name_converted_as_a_model_name_is_caught() {
+    let pairs = judge(
+        FileLayer::Global,
+        false,
+        None,
+        &[("example.remote", "origin")],
+    )
+    .expect("a non-empty remote name is accepted");
+    assert_eq!(pairs, vec![remote("origin")]);
+}
+
+#[test]
+fn an_empty_remote_name_that_is_accepted_or_not_named_is_caught() {
+    let refusal = refused(FileLayer::Global, false, &[("example.remote", "")]);
+    assert_eq!(refusal.code(), "invalid-value");
+    let text = refusal.to_string();
+    assert!(text.contains("a git remote name"), "{text}");
+    assert!(text.contains("non-empty"), "{text}");
+}
+
+#[test]
+fn a_set_of_only_a_remote_name_that_is_said_to_need_the_catalog_is_caught() {
+    assert!(!needs_catalog(&[remote("origin")]));
+    // No names supplied: a remote value is not checked against any catalog.
+    assert_eq!(
+        judge_models(&[remote("origin")], None, &BTreeMap::new()),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_remote_name_not_written_as_a_string_that_reads_back_as_one_is_caught() {
+    let table = rendered(FileLayer::Global, None, &[remote("origin")]).unwrap();
+    assert_eq!(
+        table["example"]["remote"],
+        toml::Value::String("origin".into())
+    );
+    let bytes = render_file(&schema(), FileLayer::Global, None, &[remote("a \"b\"")]).unwrap();
+    let parsed = parse_layer(
+        &settings_file("/c/config.toml", &String::from_utf8(bytes).unwrap()),
+        FileLayer::Global,
+        &schema(),
+    )
+    .expect("the file reads back");
+    assert_eq!(parsed.values[0].value, Value::RemoteName("a \"b\"".into()));
+}
+
+#[test]
+fn a_report_that_names_a_remote_names_kind_as_a_model_name_is_caught() {
+    let layers = ShowLayers {
+        global: None,
+        working: None,
+        head: None,
+    };
+    let lines = report(None, &["example.remote"], &layers, None);
+    assert_eq!(
+        lines[0],
+        "example.remote: kind remote name, default absent, scope both"
+    );
+}
+
+#[test]
+fn a_remote_name_reported_without_its_quotes_or_across_lines_is_caught() {
+    let lines = set_lines(
+        FileLayer::Global,
+        "/c/config.toml",
+        &[remote("origin"), remote("a\nb \"c\"")],
+        Place::LedgeredProject,
+        1,
+    );
+    assert_eq!(lines[0], "set example.remote = \"origin\"");
+    assert_eq!(lines[1], "set example.remote = \"a\\nb \\\"c\\\"\"");
+    assert!(lines.iter().all(|line| !line.contains('\n')), "{lines:?}");
+}
+
+#[test]
+fn the_standard_schema_accepting_git_remote_in_the_global_file_is_caught() {
+    let refusal = judge_pairs(
+        Schema::standard(),
+        FileLayer::Global,
+        true,
+        None,
+        &[("git.remote", "origin")],
+    )
+    .expect_err("git.remote is a project setting");
+    assert_eq!(refusal.code(), "wrong-layer");
+    let text = refusal.to_string();
+    assert!(text.contains("git.remote"), "{text}");
+    assert!(text.contains("project"), "{text}");
+    assert!(text.contains("--project"), "{text}");
+}
+
+#[test]
+fn the_standard_schema_not_taking_git_remote_in_the_project_file_without_the_catalog_is_caught() {
+    let pairs = judge_pairs(
+        Schema::standard(),
+        FileLayer::Project,
+        true,
+        None,
+        &[("git.remote", "origin")],
+    )
+    .expect("the project file may set git.remote");
+    assert_eq!(
+        pairs,
+        vec![pair("git.remote", None, Value::RemoteName("origin".into()))]
+    );
+    assert!(!needs_catalog(&pairs));
+}
+
+#[test]
+fn the_standard_schema_accepting_an_empty_git_remote_is_caught() {
+    let refusal = judge_pairs(
+        Schema::standard(),
+        FileLayer::Project,
+        true,
+        None,
+        &[("git.remote", "")],
+    )
+    .expect_err("an empty remote name is refused");
+    assert_eq!(refusal.code(), "invalid-value");
+}
+
+#[test]
+fn the_standard_schema_showing_git_remote_outside_a_project_is_caught() {
+    let refusal = judge_show(Schema::standard(), &["git.remote"], false, NONE, NONE, NONE)
+        .expect_err("outside a project");
+    assert_eq!(
+        refusal,
+        ShowRefusal::NotAProject {
+            name: "git.remote".into()
+        }
+    );
 }

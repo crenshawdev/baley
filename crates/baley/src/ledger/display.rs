@@ -1,8 +1,11 @@
 //! Plain reports and exit classes for owner commands.
+use super::anchor_plan::LocalReason;
 use super::answer::AnswerUnread;
+use super::command_plan::DoctorSettings;
 use baley_core::{AcknowledgeRestoreError, AnchorOutcome, AnchorReport, Verification};
 use baley_store::*;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// The log warning threshold: 1,000 pages of 8 KiB.
 pub(super) const LOG_WARNING_BYTES: u64 = 8_192_000;
@@ -120,17 +123,15 @@ pub(crate) fn store_error(error: &StoreError, project: Option<&str>) -> Render {
     }
 }
 /// Preserves uncertainty after an anchor claim or push.
-pub(super) fn anchor_error(
-    error: &StoreError,
-    request: &str,
-    project: &str,
-    remote: &str,
-) -> Render {
+pub(super) fn anchor_error(error: &StoreError, request: &str, remote: Option<&str>) -> Render {
+    let reached = remote.map_or(String::new(), |remote| {
+        format!(" and its tag may have reached {remote}")
+    });
     Render {
         lines: vec![
             format!("anchor request {request} failed: {error}"),
             format!(
-                "its claim may already be recorded and its tag may have reached {remote}; once the claim's lease has expired (60 s), baley anchor {project} --remote {remote} reconciles it from the remote"
+                "its claim may already be recorded{reached}; once the claim's lease has expired (60 s), running baley anchor again from this checkout reconciles it from the remote"
             ),
         ],
         code: exit_class(error),
@@ -292,8 +293,24 @@ pub(super) fn views(report: &ViewsReport) -> Render {
     }
     result
 }
-/// Reports every project even when another project has failed.
-pub(super) fn doctor(health: &Health, projects: &[(ProjectId, String)]) -> Render {
+/// Owner wording for why a project is checked without a remote.
+fn local_text(reason: LocalReason) -> &'static str {
+    match reason {
+        LocalReason::NotDiscovered => "not checked against a remote from this directory",
+        LocalReason::NoForgeRemote => "local only, no forge remote (git.remote is not set)",
+        LocalReason::SettingsUnreadable => "local only, the settings could not be read",
+    }
+}
+/// Reports every project even when another project has failed. `reasons`
+/// says why a project was checked without a remote, and `settings` carries
+/// the settings faults, ignored settings and pending note, printed before
+/// the first project.
+pub(super) fn doctor(
+    health: &Health,
+    projects: &[(ProjectId, String)],
+    reasons: &BTreeMap<ProjectId, LocalReason>,
+    settings: &DoctorSettings,
+) -> Render {
     let mut result = Render::line(format!("epoch {}", health.epoch), 0);
     if let Some(at) = &health.scrub_pending {
         result.lines.push(format!("scrub pending since {at}"));
@@ -313,16 +330,29 @@ pub(super) fn doctor(health: &Health, projects: &[(ProjectId, String)]) -> Rende
         result.lines.push(format!("warning: the write-ahead log is {} bytes, more than 8,192,000 (1,000 pages); find the reader that keeps it from checkpointing", health.log_bytes));
         result.code = 1;
     }
+    for fault in &settings.faults {
+        result.lines.push(format!("settings finding: {fault}"));
+        result.code = 1;
+    }
+    // Ignored settings and the pending note are notices, never a failure.
+    result
+        .lines
+        .extend(settings.diagnostics.iter().map(ToString::to_string));
+    result
+        .lines
+        .extend(settings.pending.iter().map(ToString::to_string));
     for p in &health.projects {
         let name = projects
             .iter()
             .find(|(id, _)| id == &p.project)
             .map_or("", |(_, name)| name.as_str());
-        result.lines.push(format!(
-            "project {} ({name}): {}",
-            p.project.0,
-            check_text(&p.check)
-        ));
+        let check = match (&p.check, reasons.get(&p.project)) {
+            (AnchorCheck::LocalOnly, Some(reason)) => local_text(*reason).into(),
+            _ => check_text(&p.check),
+        };
+        result
+            .lines
+            .push(format!("project {} ({name}): {check}", p.project.0));
         match &p.verify {
             Ok(report) => {
                 let v = verify_report(report);
@@ -495,6 +525,24 @@ fn unread(kind: OutcomeKind, error: &AnswerUnread) -> Render {
     result.error = true;
     result
 }
+/// The line for a refused anchor's answer. A failed push records its reason
+/// under `failed` or at the top, and the claim decision records the code it
+/// refused on under `refused`.
+fn anchor_refusal_text(answer: &Value) -> Option<String> {
+    let reason = answer
+        .get("failed")
+        .and_then(|v| v.get("reason"))
+        .or_else(|| answer.get("reason"))
+        .and_then(Value::as_str);
+    if let Some(reason) = reason {
+        return Some(format!("anchor failed: {reason}"));
+    }
+    Some(match answer.get("refused")?.as_str()? {
+        "empty-chain" => "nothing to anchor: the project has no events".into(),
+        "no-remote" => "the project sets no git.remote; set it in baley.toml and commit it, then baley anchor can push".into(),
+        code => format!("anchor refused: {code}"),
+    })
+}
 /// Renders a loaded answer while preserving its recorded outcome.
 pub(super) fn recorded(
     kind: OutcomeKind,
@@ -527,12 +575,7 @@ pub(super) fn recorded(
             ))
         })
     } else {
-        value
-            .get("failed")
-            .and_then(|v| v.get("reason"))
-            .or_else(|| value.get("reason"))
-            .and_then(Value::as_str)
-            .map(|r| format!("anchor failed: {r}"))
+        anchor_refusal_text(value)
     };
     text.map_or_else(
         || unread(kind, &AnswerUnread::Malformed),
@@ -560,16 +603,7 @@ pub(super) fn anchor(
     };
     let mut result = match &report.outcome {
         AnchorOutcome::Recorded { outcome, .. } => render(outcome),
-        AnchorOutcome::Refused { outcome, .. } => {
-            if matches!(answer, Some(Ok(value)) if value.get("reason").and_then(Value::as_str) == Some("empty-chain"))
-            {
-                let mut result = Render::line("nothing to anchor: the project has no events", 1);
-                result.error = true;
-                result
-            } else {
-                render(outcome)
-            }
-        }
+        AnchorOutcome::Refused { outcome, .. } => render(outcome),
         AnchorOutcome::LateReplay { outcome, pushed } => {
             let mut r = render(outcome);
             r.lines.push(if *pushed { "this run's push reported the tag landed; it may have landed after reconciliation found it absent" } else { "this run's push did not report the tag landed" }.into());
@@ -619,14 +653,10 @@ pub(super) fn anchor(
     result
 }
 /// Names acknowledgement refusals and their recovery.
-pub(super) fn acknowledgement_error(
-    error: &AcknowledgeRestoreError,
-    project: &str,
-    remote: &str,
-) -> Render {
+pub(super) fn acknowledgement_error(error: &AcknowledgeRestoreError, project: &str) -> Render {
     match error {
         AcknowledgeRestoreError::NothingToAcknowledge(check) => Render::refusal(format!("nothing to acknowledge: {}",check_text(check))),
-        AcknowledgeRestoreError::Store(StoreError::Blocked(b)) => Render::refusal(format!("an anchor claim {} is {}; run baley anchor {project} --remote {remote} first to reconcile it", b.claim.request_id.0,claim_state_text(b.state))),
+        AcknowledgeRestoreError::Store(StoreError::Blocked(b)) => Render::refusal(format!("an anchor claim {} is {}; run baley anchor first from this checkout to reconcile it", b.claim.request_id.0,claim_state_text(b.state))),
         AcknowledgeRestoreError::Store(StoreError::Stale(StaleInput::Head { .. })) => Render { lines: vec!["the chain moved after it was verified; nothing was recorded, run the command again".into()],code:3,error:true },
         AcknowledgeRestoreError::Store(e) => store_error(e,Some(project)),
     }
