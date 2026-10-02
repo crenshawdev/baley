@@ -26,7 +26,7 @@ pub enum Caller {
     LandingGit,
     /// Anchor tag transport.
     AnchorForge,
-    /// HEAD.s copy of the project file.
+    /// HEAD's copy of the project file.
     ProjectHead,
     /// A checkout's root commit and remote URL, read for checkout admission.
     CheckoutFacts,
