@@ -189,15 +189,13 @@ pub fn create_project(
     }
 }
 
-/// Records `project.initialized` once. True when this run appended it. The
-/// check runs inside the transaction, so a racing second init records only
-/// its `command.completed`.
-pub fn record_initialized(
-    store: &impl Ledger,
+/// The command `baley init` records its request under: Owner's, at policy
+/// version 0, with the project's name in the digest.
+fn init_command(
     identity: &ProjectIdentity,
     request_id: RequestId,
     at: &str,
-) -> Result<bool, StoreError> {
+) -> Result<Command, StoreError> {
     let actor = Actor::Owner;
     let digest = request_digest(&json!({
         "kind": INIT_COMMAND,
@@ -208,7 +206,7 @@ pub fn record_initialized(
         "scope": [],
     }))
     .map_err(|error| StoreError::Refused(Refusal::InvalidEvent(error.to_string())))?;
-    let command = Command {
+    Ok(Command {
         project: ProjectId(identity.id.clone()),
         kind: CommandKind(INIT_COMMAND.into()),
         request_id,
@@ -217,7 +215,34 @@ pub fn record_initialized(
         policy_version: 0,
         recorded_at: at.into(),
         actor,
-    };
+    })
+}
+
+/// The `project.initialized` event for `identity`.
+fn initialized_event(identity: &ProjectIdentity) -> NewEvent {
+    NewEvent {
+        stream: StreamName(PROJECT_STREAM.into()),
+        type_name: PROJECT_INITIALIZED.into(),
+        type_version: PROJECT_INITIALIZED_VERSION,
+        git: None,
+        payload: json!({ "name": identity.name }),
+        attachments: vec![],
+    }
+}
+
+/// Records `project.initialized` once. True when this run appended it. The
+/// check runs inside the transaction, so a racing second init records only
+/// its `command.completed`.
+///
+/// This is the record for a chain that already holds events, after checkout
+/// admission. [`record_initialized_on_empty`] is the one before it.
+pub fn record_initialized(
+    store: &impl Ledger,
+    identity: &ProjectIdentity,
+    request_id: RequestId,
+    at: &str,
+) -> Result<bool, StoreError> {
+    let command = init_command(identity, request_id, at)?;
     let initialized = EventMatch {
         type_name: PROJECT_INITIALIZED.into(),
         stream: Some(StreamName(PROJECT_STREAM.into())),
@@ -227,14 +252,7 @@ pub fn record_initialized(
     store.transact(&command, &mut |tx| {
         appended = !tx.event_exists(&initialized)?;
         if appended {
-            tx.append(NewEvent {
-                stream: StreamName(PROJECT_STREAM.into()),
-                type_name: PROJECT_INITIALIZED.into(),
-                type_version: PROJECT_INITIALIZED_VERSION,
-                git: None,
-                payload: json!({ "name": identity.name }),
-                attachments: vec![],
-            })?;
+            tx.append(initialized_event(identity))?;
         }
         Ok(Decision {
             kind: OutcomeKind::Done,
@@ -245,6 +263,54 @@ pub fn record_initialized(
         })
     })?;
     Ok(appended)
+}
+
+/// What [`record_initialized_on_empty`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmptyChain {
+    /// The chain was empty and `project.initialized` is now its first event.
+    Recorded,
+    /// The chain already held events, so nothing was recorded.
+    FoundEvents,
+}
+
+/// Records `project.initialized` as the first event of an empty chain, before
+/// checkout admission. The emptiness is read with `Transaction::head` in the
+/// transaction that appends, so a checkout admitted since init looked is seen.
+///
+/// A chain holding events records nothing at all, not even `command.completed`:
+/// the decision returns an error, as checkout admission's does, and the
+/// finding is kept in a variable this function owns. The caller reads the
+/// finding, never that error.
+pub fn record_initialized_on_empty(
+    store: &impl Ledger,
+    identity: &ProjectIdentity,
+    request_id: RequestId,
+    at: &str,
+) -> Result<EmptyChain, StoreError> {
+    let command = init_command(identity, request_id, at)?;
+    let mut found_events = false;
+    let result = store.transact(&command, &mut |tx| {
+        if tx.head()?.is_some() {
+            found_events = true;
+            return Err(StoreError::Refused(Refusal::InvalidEvent(
+                "the project's chain already holds events".into(),
+            )));
+        }
+        tx.append(initialized_event(identity))?;
+        Ok(Decision {
+            kind: OutcomeKind::Done,
+            answer: json!({ "recorded": true }),
+            sensitive: false,
+            observed: Observed::default(),
+            git: None,
+        })
+    });
+    if found_events {
+        return Ok(EmptyChain::FoundEvents);
+    }
+    result?;
+    Ok(EmptyChain::Recorded)
 }
 
 /// One action of `baley init`, in the order the plan lists them.
@@ -265,6 +331,9 @@ pub struct LedgerObservation {
     pub project: bool,
     /// Its `project` stream holds a `project.initialized`.
     pub initialized: bool,
+    /// Its chain holds at least one event of any kind. False for a project
+    /// absent from the ledger.
+    pub events: bool,
 }
 
 /// Decides which actions this run takes, from what was observed before any
@@ -337,7 +406,8 @@ pub fn prepare(
 }
 
 /// Reads whether the project is in the ledger and, when it is, whether its
-/// `project` stream holds a `project.initialized`, following every page.
+/// chain holds any event and whether its `project` stream holds a
+/// `project.initialized`, following every page.
 pub fn observe_ledger(
     store: &(impl Admin + Ledger),
     id: &str,
@@ -346,6 +416,7 @@ pub fn observe_ledger(
     if !store.projects()?.iter().any(|(known, _)| *known == project) {
         return Ok(LedgerObservation::default());
     }
+    let events = store.head(&project)?.is_some();
     let stream = StreamName(PROJECT_STREAM.into());
     let mut after = None;
     loop {
@@ -359,6 +430,7 @@ pub fn observe_ledger(
             return Ok(LedgerObservation {
                 project: true,
                 initialized,
+                events,
             });
         }
         after = page.next;
@@ -717,10 +789,12 @@ mod tests {
         LedgerObservation {
             project: false,
             initialized: false,
+            events: false,
         },
         LedgerObservation {
             project: true,
             initialized: true,
+            events: true,
         },
     ];
 
@@ -753,6 +827,7 @@ mod tests {
         let observed = LedgerObservation {
             project: true,
             initialized: false,
+            events: false,
         };
         assert_eq!(
             plan(Some(&identity("kept")), observed),
@@ -765,6 +840,7 @@ mod tests {
         let observed = LedgerObservation {
             project: true,
             initialized: true,
+            events: true,
         };
         assert_eq!(plan(Some(&identity("kept")), observed), vec![]);
     }
@@ -796,6 +872,7 @@ mod tests {
             LedgerObservation {
                 project: false,
                 initialized: false,
+                events: false,
             }
         );
         create_project(&store, &project, T0).unwrap();
@@ -804,6 +881,7 @@ mod tests {
             LedgerObservation {
                 project: true,
                 initialized: false,
+                events: false,
             }
         );
         record_initialized(&store, &project, request(1), T1).unwrap();
@@ -813,9 +891,225 @@ mod tests {
             LedgerObservation {
                 project: true,
                 initialized: true,
+                events: true,
             }
         );
         assert_eq!(plan(Some(&project), observed), vec![]);
+    }
+
+    const ROOT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    /// Another remote's checkout, admitted through checkout admission's store
+    /// step, as a second clone of the project would be.
+    fn admit_other_remote(store: &(impl Ledger + baley_store::Views), project: &ProjectIdentity) {
+        let checkout = baley_core::checkout::Checkout {
+            path: "/w/other".into(),
+            root_commit: Some(ROOT_COMMIT.into()),
+            remote_url: Some("https://example.com/other.git".into()),
+        };
+        crate::checkout::admit(
+            store,
+            &ProjectId(project.id.clone()),
+            &checkout,
+            request(7),
+            T1,
+        )
+        .unwrap();
+    }
+
+    fn head_seq(store: &impl Ledger, project: &ProjectIdentity) -> Option<u64> {
+        store
+            .head(&ProjectId(project.id.clone()))
+            .unwrap()
+            .map(|head| head.seq)
+    }
+
+    fn type_names(
+        store: &baley_store_sqlite::SqliteStore,
+        project: &ProjectIdentity,
+    ) -> Vec<String> {
+        events(store, &project.id, "project")
+            .into_iter()
+            .map(|event| event.type_name)
+            .collect()
+    }
+
+    #[test]
+    fn an_observation_that_reports_events_for_a_fresh_project_or_none_after_a_checkout_is_wrong() {
+        let (_dir, store) = store();
+        let project = identity("sample");
+        create_project(&store, &project, T0).unwrap();
+        assert!(!observe_ledger(&store, &project.id).unwrap().events);
+
+        admit_other_remote(&store, &project);
+
+        let observed = observe_ledger(&store, &project.id).unwrap();
+        assert!(observed.events, "a checkout.seen is an event");
+        assert!(
+            !observed.initialized,
+            "checkout.seen is not project.initialized"
+        );
+    }
+
+    #[test]
+    fn an_empty_chain_gets_one_project_initialized_as_specified_not_a_skipped_record() {
+        let (_dir, store) = store();
+        let project = identity("sample");
+        create_project(&store, &project, T0).unwrap();
+
+        let found = record_initialized_on_empty(&store, &project, request(1), T1).unwrap();
+
+        assert_eq!(found, EmptyChain::Recorded);
+        let recorded = events(&store, &project.id, "project");
+        assert_eq!(recorded.len(), 1);
+        let event = &recorded[0];
+        assert_eq!(event.type_name, "project.initialized");
+        assert_eq!(event.policy_version, 0);
+        assert_eq!(event.actor, Actor::Owner);
+        assert_eq!(event.payload, serde_json::json!({ "name": "sample" }));
+        let completed = events(&store, &project.id, "command/project.init");
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].type_name, "command.completed");
+    }
+
+    #[test]
+    fn a_chain_holding_another_remotes_checkout_is_not_given_project_initialized_or_a_command() {
+        let (_dir, store) = store();
+        let project = identity("sample");
+        create_project(&store, &project, T0).unwrap();
+        admit_other_remote(&store, &project);
+        let before = head_seq(&store, &project);
+
+        let found = record_initialized_on_empty(&store, &project, request(1), T1).unwrap();
+
+        assert_eq!(found, EmptyChain::FoundEvents);
+        assert_eq!(head_seq(&store, &project), before);
+        assert!(!type_names(&store, &project).contains(&"project.initialized".to_string()));
+        assert!(events(&store, &project.id, "command/project.init").is_empty());
+    }
+
+    /// The real store, with another remote's checkout admitted on the first
+    /// `transact` only, after the caller looked and before its command runs.
+    struct AdmitsFirst<'a> {
+        store: &'a baley_store_sqlite::SqliteStore,
+        project: &'a ProjectIdentity,
+        raced: std::cell::Cell<bool>,
+    }
+
+    impl Ledger for AdmitsFirst<'_> {
+        fn transact(
+            &self,
+            command: &Command,
+            decide: &mut baley_store::Decide<'_>,
+        ) -> Result<baley_store::Recorded, StoreError> {
+            if !self.raced.replace(true) {
+                admit_other_remote(self.store, self.project);
+            }
+            Ledger::transact(self.store, command, decide)
+        }
+
+        fn claim(
+            &self,
+            command: &Command,
+            decide: &mut baley_store::DecideClaim<'_>,
+        ) -> Result<baley_store::Claimed, StoreError> {
+            Ledger::claim(self.store, command, decide)
+        }
+
+        fn renew_lease(
+            &self,
+            project: &ProjectId,
+            claim: &baley_store::ClaimId,
+            owner: &baley_store::ClaimOwner,
+            at: &str,
+        ) -> Result<(), StoreError> {
+            Ledger::renew_lease(self.store, project, claim, owner, at)
+        }
+
+        fn complete(
+            &self,
+            command: &Command,
+            owner: &baley_store::ClaimOwner,
+            decide: &mut baley_store::Decide<'_>,
+        ) -> Result<baley_store::Recorded, StoreError> {
+            Ledger::complete(self.store, command, owner, decide)
+        }
+
+        fn reconcile(
+            &self,
+            command: &Command,
+            claim: &baley_store::ClaimId,
+            authority: baley_store::ReconcileAuthority,
+            decide: &mut baley_store::DecideReconcile<'_>,
+        ) -> Result<baley_store::Recorded, StoreError> {
+            Ledger::reconcile(self.store, command, claim, authority, decide)
+        }
+
+        fn open_claims(&self, project: &ProjectId) -> Result<Vec<baley_store::Claim>, StoreError> {
+            Ledger::open_claims(self.store, project)
+        }
+
+        fn stream(
+            &self,
+            project: &ProjectId,
+            stream: &StreamName,
+            from_version: u64,
+            page: PageRequest,
+        ) -> Result<baley_store::Page<baley_store::Event>, StoreError> {
+            Ledger::stream(self.store, project, stream, from_version, page)
+        }
+
+        fn history(
+            &self,
+            project: &ProjectId,
+            range: std::ops::RangeInclusive<u64>,
+            filter: &baley_store::HistoryFilter,
+            page: PageRequest,
+        ) -> Result<baley_store::Page<baley_store::Event>, StoreError> {
+            Ledger::history(self.store, project, range, filter, page)
+        }
+
+        fn head(&self, project: &ProjectId) -> Result<Option<baley_store::Head>, StoreError> {
+            Ledger::head(self.store, project)
+        }
+
+        fn verify(
+            &self,
+            project: &ProjectId,
+            anchor: Option<&baley_store::Anchor>,
+        ) -> Result<baley_store::VerifyReport, StoreError> {
+            Ledger::verify(self.store, project, anchor)
+        }
+    }
+
+    #[test]
+    fn a_checkout_admitted_after_the_chain_was_read_empty_is_not_followed_by_project_initialized() {
+        let (_dir, store) = store();
+        let project = identity("sample");
+        create_project(&store, &project, T0).unwrap();
+        assert!(
+            !observe_ledger(&store, &project.id).unwrap().events,
+            "the chain is empty when read"
+        );
+        let racing = AdmitsFirst {
+            store: &store,
+            project: &project,
+            raced: std::cell::Cell::new(false),
+        };
+
+        let found = record_initialized_on_empty(&racing, &project, request(1), T1).unwrap();
+
+        assert_eq!(found, EmptyChain::FoundEvents);
+        assert!(racing.raced.get());
+        let seen = events(&store, &project.id, "project");
+        assert_eq!(seen.len(), 1, "only the racer's checkout.seen");
+        assert_eq!(seen[0].type_name, "checkout.seen");
+        let admitted = events(&store, &project.id, "command/checkout.admit");
+        assert_eq!(
+            head_seq(&store, &project),
+            admitted.last().map(|event| event.seq)
+        );
+        assert!(events(&store, &project.id, "command/project.init").is_empty());
     }
 
     const ID: &str = "0b5c1f6e-2a7d-4c3e-9f10-5a6b7c8d9e0f";
