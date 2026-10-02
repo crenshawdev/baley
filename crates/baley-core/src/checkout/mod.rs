@@ -9,6 +9,7 @@
 
 mod event;
 mod judge;
+mod plan;
 mod view;
 
 #[cfg(test)]
@@ -18,4 +19,5 @@ pub use event::{
     CHECKOUT_SEEN, CHECKOUT_SEEN_VERSION, Checkout, register_checkout_events, seen_payload,
 };
 pub use judge::{CheckoutVerdict, PROJECT_ID_CONFLICT, ProjectIdConflict, judge_checkout};
+pub use plan::{CheckoutAction, CheckoutOperation, CheckoutPlan, plan_checkout_admission};
 pub use view::{CHECKOUT_VIEW, CheckoutProjector, checkout_key, checkout_spec};

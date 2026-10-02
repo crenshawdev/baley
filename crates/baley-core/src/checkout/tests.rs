@@ -350,3 +350,92 @@ fn the_conflict_naming_a_path_that_depends_on_page_order_is_caught() {
     assert_eq!(forward.other_path, "/a");
     assert_eq!(forward, backward);
 }
+
+fn operations(plan: CheckoutPlan) -> Vec<CheckoutOperation> {
+    match plan.action {
+        CheckoutAction::Proceed(operations) => operations,
+        other => panic!("expected operations, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_new_checkout_requesting_its_record_after_the_step_or_the_step_after_the_command_is_caught() {
+    let checkout = here(Some("c1"), Some(GITHUB));
+    assert_eq!(
+        operations(plan_checkout_admission(&checkout, &[], None)),
+        vec![
+            CheckoutOperation::RecordSeen(json!({
+                "path": "/b",
+                "root_commit": "c1",
+                "remote_url": GITHUB,
+            })),
+            CheckoutOperation::PolicyStep,
+            CheckoutOperation::Command,
+        ]
+    );
+}
+
+#[test]
+fn a_changed_root_commit_left_unrecorded_is_caught() {
+    let rows = [seen("/b", Some("c1"), Some(GITHUB))];
+    let operations = operations(plan_checkout_admission(
+        &here(Some("c2"), Some(GITHUB)),
+        &rows,
+        None,
+    ));
+    assert!(matches!(
+        operations.first(),
+        Some(CheckoutOperation::RecordSeen(_))
+    ));
+}
+
+#[test]
+fn an_unchanged_checkout_recorded_again_is_caught() {
+    let rows = [seen("/b", Some("c1"), Some(GITHUB))];
+    assert_eq!(
+        operations(plan_checkout_admission(
+            &here(Some("c1"), Some(GITHUB)),
+            &rows,
+            None
+        )),
+        vec![CheckoutOperation::PolicyStep, CheckoutOperation::Command]
+    );
+}
+
+#[test]
+fn a_fork_that_still_requests_a_record_the_step_or_the_command_is_caught() {
+    let rows = [seen("/a", None, Some("https://github.com/o/other.git"))];
+    let plan = plan_checkout_admission(&here(None, Some(GITHUB)), &rows, None);
+    match plan.action {
+        CheckoutAction::Refuse(refusal) => assert_eq!(refusal.other_path, "/a"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_stored_policy_version_dropped_or_invented_is_caught() {
+    let checkout = here(None, None);
+    let versions = [
+        (Some(json!({"version": 7})), 7),
+        (None, 0),
+        (Some(json!({"values": {}})), 0),
+        (Some(json!({"version": 0})), 0),
+        (Some(json!({"version": "7"})), 0),
+    ];
+    for (stored, expected) in versions {
+        assert_eq!(
+            plan_checkout_admission(&checkout, &[], stored.as_ref()).policy_version,
+            expected,
+            "{stored:?}"
+        );
+    }
+}
+
+#[test]
+fn a_refusal_that_drops_the_stored_policy_version_is_caught() {
+    let rows = [seen("/a", None, Some("https://github.com/o/other.git"))];
+    let stored = json!({"version": 7});
+    let plan = plan_checkout_admission(&here(None, Some(GITHUB)), &rows, Some(&stored));
+    assert!(matches!(plan.action, CheckoutAction::Refuse(_)));
+    assert_eq!(plan.policy_version, 7);
+}
