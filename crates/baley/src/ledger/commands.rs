@@ -558,13 +558,5 @@ fn acknowledge(
     display::request_line(&mut std::io::stdout(), &request.request_id.0);
     let result = acknowledge_restore(&request, store, forge, &mut SystemClock::now)
         .map_err(|e| display::acknowledgement_error(&e, &project.0))?;
-    let outcome = match result {
-        Recorded::New { outcome, .. } | Recorded::Replayed { outcome } => outcome,
-    };
-    Ok(display::recorded(
-        outcome.kind,
-        &answer_value(&outcome.answer, store),
-        &project,
-        true,
-    ))
+    Ok(display::acknowledgement(&result, &project, store))
 }

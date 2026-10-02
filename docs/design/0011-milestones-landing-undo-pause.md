@@ -165,7 +165,7 @@ Owner commands under `baley land`, `baley milestone`, `baley release`, `baley un
 
 Version 1 of each. `anchor.pushed` is exactly `{"tag", "seq", "head", "remote", "observed_at"}`: the tag `baley-anchor/<project_id>/<seq>`, the pre-claim sequence and lower-case head hash it names, the configured remote's name, and when Baley confirmed the tag. The anchor row is written in the same transaction. `anchor.failed` carries the same five fields and `reason`: the remote's refusal, an unreachable or missing remote, or the chain mismatch found before the push; no row is written. The tag's annotation, one canonical JSON line with the head and sequence, is settled in ADR [0007](../adr/0007-forge-anchors.md) and [0001](0001-evidence-ledger.md) (The hash chain and anchors).
 
-`anchor.restore_acknowledged` version 1 records the owner-accepted remote anchor and the restored local head at the check time. Verification always lists it, even after a later matching anchor.
+`anchor.restore_acknowledged` version 1 records the owner-accepted remote anchor and the restored local head at the check time. Verification always lists it, even after a later matching anchor. The payload is unchanged. The acknowledgement and every later report that lists it state what a restore cannot undo ([ADR 0035](../adr/0035-restore-purge-uncertainty.md)).
 
 Reconciling an interrupted push records the same events: `anchor.pushed` and the row at the check time when the remote holds the matching tag, `anchor.failed` when it holds another or confirms none. A push that lands after reconciliation found its tag absent is harmless: the claim keeps the reconciled outcome, and verification reads the remote.
 
@@ -382,7 +382,7 @@ The binary crate holds the inherited engine; its landing, milestone and undo pat
 | LND-R15 | Built | `crates/baley/src/undo/manifest.rs:30-171`, `crates/baley/src/undo/revert.rs:36-109`, `crates/baley/src/undo_service.rs:189-311`; no pushed check |
 | LND-R16 | Not reachable | `crates/baley/src/pause_service.rs:1275` has no MCP route (`crates/baley/src/server.rs:127-134`) |
 | LND-R17 | Partly built | Stop as an owner answer (`crates/baley/src/execution_service.rs:451-465`) |
-| LND-R18 | Partly built | The anchor command, its latest-anchor check, its recorded outcomes and owner-only acknowledge-restore (`crates/baley-core/src/anchor.rs`, `crates/baley-core/src/forge.rs`); the CLI and its git forge are built in `crates/baley/src/ledger`. The triggers at verified phases, milestone steps, landings and daily arrive with Build 6 |
+| LND-R18 | Partly built | The anchor command, its latest-anchor check, its recorded outcomes and owner-only acknowledge-restore (`crates/baley-core/src/anchor.rs`, `crates/baley-core/src/forge.rs`); the CLI and its git forge are built in `crates/baley/src/ledger`, where `crates/baley/src/ledger/display.rs` prints the purge warning after an accepted restore and in every report that lists one. The triggers at verified phases, milestone steps, landings and daily arrive with Build 6 |
 | LND-R19 | Built | Receipts per namespace (`crates/baley/src/milestone_service.rs:253-549`, `crates/baley/src/landing_service.rs:310-316`) |
 
 ## 12. Open questions

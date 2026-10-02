@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0001: The evidence ledger](../design/0001-evidence-ledger.md) |
 | Supersedes | |
-| Superseded by | |
+| Superseded by | [0035](0035-restore-purge-uncertainty.md), in part: the reporting and recovery contract |
 
 ## Context and problem
 

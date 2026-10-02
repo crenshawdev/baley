@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0001: The evidence ledger](../design/0001-evidence-ledger.md) |
 | Supersedes | |
-| Superseded by | |
+| Superseded by | [0026](0026-anchors-read-by-baley.md), in part: anchors are read by Baley rather than shown in the forge's own history, and a missing tag ruleset is reported rather than required |
 
 ## Context and problem
 

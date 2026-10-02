@@ -408,6 +408,122 @@ fn an_earlier_acknowledgement_stays_listed_after_a_newer_anchor() {
         });
     assert!(text(&display::verify_report(&report)).contains("acknowledged restore at 1"));
 }
+fn restore_at(seq: u64) -> AcknowledgedRestore {
+    AcknowledgedRestore {
+        seq,
+        anchor: Anchor {
+            seq: 60,
+            hash: Hash([6; 32]),
+        },
+        restored: None,
+    }
+}
+fn with_restores(seqs: &[u64]) -> VerifyReport {
+    let mut report = clean();
+    report.chain.acknowledged_restores = seqs.iter().map(|s| restore_at(*s)).collect();
+    report
+}
+#[test]
+fn a_later_matching_anchor_does_not_hide_the_purge_warning() {
+    let report = with_restores(&[1]);
+    assert!(matches!(report.chain.anchor, AnchorVerdict::Matches));
+    let r = display::verify_report(&report);
+    assert_eq!(r.code, 0);
+    assert_eq!(warnings(&r), 1);
+}
+#[test]
+fn the_purge_warning_prints_once_per_report_not_once_per_acknowledgement() {
+    let mut report = with_restores(&[1, 2]);
+    report.chain.anchor = AnchorVerdict::Acknowledged {
+        anchored: 60,
+        restored: None,
+        acknowledged_seq: 2,
+    };
+    let r = display::verify_report(&report);
+    assert_eq!(r.code, 0);
+    assert_eq!(warnings(&r), 1);
+}
+#[test]
+fn an_acknowledged_verdict_with_no_listed_restore_still_prints_the_purge_warning() {
+    let mut report = clean();
+    report.chain.anchor = AnchorVerdict::Acknowledged {
+        anchored: 60,
+        restored: None,
+        acknowledged_seq: 1,
+    };
+    assert!(report.chain.acknowledged_restores.is_empty());
+    let r = display::verify_report(&report);
+    assert_eq!(r.code, 0);
+    assert_eq!(warnings(&r), 1);
+}
+#[test]
+fn a_local_only_check_still_prints_the_purge_warning() {
+    let mut report = with_restores(&[1]);
+    report.chain.anchor = AnchorVerdict::NoAnchor;
+    let r = display::verification(
+        &Verification {
+            status: AnchorCheck::LocalOnly,
+            report,
+            checked_at: "T".into(),
+        },
+        None,
+    );
+    assert_eq!(r.code, 0);
+    assert_eq!(warnings(&r), 1);
+}
+#[test]
+fn an_unacknowledged_truncation_or_rewrite_prints_no_purge_warning() {
+    for verdict in [
+        AnchorVerdict::Truncated {
+            anchored: 60,
+            head: 50,
+        },
+        AnchorVerdict::Rewritten {
+            seq: 40,
+            anchored: Hash([1; 32]),
+            found: Hash([2; 32]),
+        },
+    ] {
+        let mut report = clean();
+        report.chain.anchor = verdict;
+        let r = display::verify_report(&report);
+        assert_eq!(r.code, 1);
+        assert_eq!(warnings(&r), 0);
+    }
+}
+#[test]
+fn a_report_with_no_accepted_gap_prints_no_purge_warning() {
+    for verdict in [AnchorVerdict::Matches, AnchorVerdict::NoAnchor] {
+        let mut report = clean();
+        report.chain.anchor = verdict;
+        let r = display::verify_report(&report);
+        assert_eq!(r.code, 0);
+        assert_eq!(warnings(&r), 0);
+    }
+}
+#[test]
+fn doctor_prints_the_purge_warning_once_for_the_project_that_lists_a_restore() {
+    let mut h = health();
+    let mut other = h.projects[0].clone();
+    other.project = ProjectId("Q".into());
+    h.projects[0].verify = Ok(with_restores(&[1]));
+    h.projects.push(other);
+    let r = display::doctor(&h, &projects(), &no_reasons(), &no_faults());
+    assert_eq!(r.code, 0);
+    assert_eq!(warnings(&r), 1);
+}
+#[test]
+fn a_failed_export_prints_the_purge_warning_and_exits_one() {
+    let r = display::store_error(
+        &StoreError::Refused(Refusal::ExportUnverified {
+            project: ProjectId("P".into()),
+            report: Box::new(with_restores(&[1])),
+        }),
+        Some("P"),
+    );
+    assert_eq!(r.code, 1);
+    assert_eq!(warnings(&r), 1);
+}
 #[test]
 fn anchor_row_comparison_is_not_printed_as_a_type_name() {
     let mut report = clean();
@@ -606,22 +722,142 @@ fn a_recorded_acknowledgement_refusal_keeps_its_reason() {
     assert_eq!(r.code, 1);
     assert_eq!(text(&r), "not acknowledged: matches");
 }
+const WARNING_MARK: &str = "purges recorded in history this copy lacks may be missing";
+fn warnings(r: &display::Render) -> usize {
+    text(r).matches(WARNING_MARK).count()
+}
+fn ack_answer() -> serde_json::Value {
+    json!({"acknowledged":{"seq":60,"head":"ab".repeat(32)}})
+}
+fn ack_line() -> String {
+    format!(
+        "acknowledged: the restored chain is accepted behind remote anchor baley-anchor/P/60 (60 {}); anchoring may resume",
+        "ab".repeat(32)
+    )
+}
+fn acknowledged_outcome(answer: Answer) -> Outcome {
+    Outcome {
+        kind: OutcomeKind::Done,
+        answer,
+    }
+}
 #[test]
 fn acknowledgement_prints_the_remote_identity() {
     let r = display::recorded(
         OutcomeKind::Done,
-        &Ok(json!({"acknowledged":{"seq":60,"head":"ab".repeat(32)}})),
+        &Ok(ack_answer()),
         &ProjectId("P".into()),
         true,
     );
     assert_eq!(r.code, 0);
-    assert_eq!(
-        text(&r),
-        format!(
-            "acknowledged: the restored chain is accepted behind remote anchor baley-anchor/P/60 (60 {}); anchoring may resume",
-            "ab".repeat(32)
-        )
+    assert_eq!(r.lines[0], ack_line());
+}
+#[test]
+fn a_new_acknowledgement_prints_the_purge_warning() {
+    let r = display::recorded(
+        OutcomeKind::Done,
+        &Ok(ack_answer()),
+        &ProjectId("P".into()),
+        true,
     );
+    assert_eq!(r.code, 0);
+    assert!(!r.error);
+    assert_eq!(warnings(&r), 1);
+}
+#[test]
+fn a_replayed_acknowledgement_still_prints_the_purge_warning() {
+    let r = display::acknowledgement(
+        &Recorded::Replayed {
+            outcome: acknowledged_outcome(Answer::Inline(ack_answer())),
+        },
+        &ProjectId("P".into()),
+        &bodies(Err(StoreError::Busy)),
+    );
+    assert_eq!(r.code, 0);
+    assert_eq!(r.lines[0], ack_line());
+    assert_eq!(warnings(&r), 1);
+}
+#[test]
+fn a_replayed_acknowledgement_renders_as_a_new_one_does() {
+    let project = ProjectId("P".into());
+    let payloads = bodies(Err(StoreError::Busy));
+    let outcome = acknowledged_outcome(Answer::Inline(ack_answer()));
+    let new = display::acknowledgement(
+        &Recorded::New {
+            outcome: outcome.clone(),
+            head: head(),
+        },
+        &project,
+        &payloads,
+    );
+    let replayed = display::acknowledgement(&Recorded::Replayed { outcome }, &project, &payloads);
+    assert_eq!(replayed.lines, new.lines);
+    assert_eq!(replayed.code, new.code);
+    assert_eq!(replayed.error, new.error);
+}
+#[test]
+fn an_unreadable_done_acknowledgement_keeps_its_code_and_the_purge_warning() {
+    let project = ProjectId("P".into());
+    let cases = [
+        (
+            Err(answer::AnswerUnread::Gone(PayloadStatus::Purged {
+                reason: "secret".into(),
+            })),
+            0,
+        ),
+        (Err(answer::AnswerUnread::Malformed), 0),
+        (Err(answer::AnswerUnread::Read(StoreError::Busy)), 3),
+        (Ok(json!({"unrelated": 1})), 0),
+    ];
+    for (answer, code) in cases {
+        let r = display::recorded(OutcomeKind::Done, &answer, &project, true);
+        assert_eq!(r.code, code, "{answer:?}");
+        assert!(r.error, "{answer:?}");
+        assert_eq!(warnings(&r), 1, "{answer:?}");
+    }
+}
+#[test]
+fn an_unreadable_refused_acknowledgement_prints_no_purge_warning() {
+    let r = display::recorded(
+        OutcomeKind::Refused,
+        &Err(answer::AnswerUnread::Malformed),
+        &ProjectId("P".into()),
+        true,
+    );
+    assert_eq!(r.code, 1);
+    assert_eq!(warnings(&r), 0);
+}
+#[test]
+fn the_purge_warning_tells_the_owner_what_a_restore_cannot_undo() {
+    let r = display::recorded(
+        OutcomeKind::Done,
+        &Ok(ack_answer()),
+        &ProjectId("P".into()),
+        true,
+    );
+    let t = text(&r);
+    assert!(t.contains("bodies purged there may have reappeared"));
+    assert!(t.contains("Every secret that was in such a body must be rotated"));
+    assert!(t.contains("whether they came after the copy was taken or on a branch it replaced"));
+    assert!(t.contains(
+        "run baley purge <project> <hash>... --reason <text> for each project, from records kept outside the store"
+    ));
+    assert!(t.contains("Review first any hash with nothing left to release, because one such hash refuses the whole request"));
+    assert!(t.contains("\"kept ... because another reference still requires it\""));
+    assert!(!t.contains("history is complete"));
+}
+#[test]
+fn a_head_that_moved_during_acknowledgement_keeps_code_three_and_no_purge_warning() {
+    let r = display::acknowledgement_error(
+        &AcknowledgeRestoreError::Store(StoreError::Stale(StaleInput::Head {
+            seen: Some(head()),
+            now: None,
+        })),
+        "P",
+    );
+    assert_eq!(r.code, 3);
+    assert!(r.error);
+    assert_eq!(warnings(&r), 0);
 }
 #[test]
 fn trace_bridge_keeps_every_field() {

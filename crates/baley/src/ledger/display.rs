@@ -1,6 +1,6 @@
 //! Plain reports and exit classes for owner commands.
 use super::anchor_plan::LocalReason;
-use super::answer::AnswerUnread;
+use super::answer::{AnswerUnread, answer_value};
 use super::command_plan::DoctorSettings;
 use baley_core::{AcknowledgeRestoreError, AnchorOutcome, AnchorReport, Verification};
 use baley_store::*;
@@ -9,6 +9,17 @@ use std::collections::BTreeMap;
 
 /// The log warning threshold: 1,000 pages of 8 KiB.
 pub(super) const LOG_WARNING_BYTES: u64 = 8_192_000;
+
+/// What a restore cannot undo, and how to repeat the purges the owner knows
+/// of. Printed after a successful restore acceptance and in every report that
+/// lists an accepted restore. It names no copy time and no particular lost
+/// purge, since neither is known.
+pub(crate) const PURGE_WARNING: [&str; 4] = [
+    "warning: purges recorded in history this copy lacks may be missing, whether they came after the copy was taken or on a branch it replaced, and bodies purged there may have reappeared",
+    "Every secret that was in such a body must be rotated, as after any purge: a secret that already reached a review provider, an export or any other system must still be rotated.",
+    "To repeat the purges you know of, run baley purge <project> <hash>... --reason <text> for each project, from records kept outside the store.",
+    "Review first any hash with nothing left to release, because one such hash refuses the whole request, and check purge's \"kept ... because another reference still requires it\" lines for bodies another reference still holds.",
+];
 
 #[derive(Debug)]
 /// Plain output and its exit classification.
@@ -230,6 +241,11 @@ pub(super) fn verify_report(report: &VerifyReport) -> Render {
             restore.anchor.seq,
             restore.anchor.hash.to_hex()
         ));
+    }
+    // Once per report, whichever way the accepted gap shows. A later match
+    // does not prove the purge history complete.
+    if !report.chain.acknowledged_restores.is_empty() || shown.is_some() {
+        lines.extend(PURGE_WARNING.map(String::from));
     }
     lines.push(format!(
         "bodies checked {}, tombstones {}",
@@ -543,8 +559,23 @@ fn anchor_refusal_text(answer: &Value) -> Option<String> {
         code => format!("anchor refused: {code}"),
     })
 }
-/// Renders a loaded answer while preserving its recorded outcome.
+/// Renders a loaded answer while preserving its recorded outcome. A committed
+/// acknowledgement also carries the purge warning, even when its answer cannot
+/// be read, since the event was recorded either way.
 pub(super) fn recorded(
+    kind: OutcomeKind,
+    answer: &Result<Value, AnswerUnread>,
+    project: &ProjectId,
+    acknowledge: bool,
+) -> Render {
+    let mut result = recorded_text(kind, answer, project, acknowledge);
+    if acknowledge && kind == OutcomeKind::Done {
+        result.lines.extend(PURGE_WARNING.map(String::from));
+    }
+    result
+}
+/// The outcome's own lines, before any warning.
+fn recorded_text(
     kind: OutcomeKind,
     answer: &Result<Value, AnswerUnread>,
     project: &ProjectId,
@@ -584,6 +615,21 @@ pub(super) fn recorded(
             result.error = kind == OutcomeKind::Refused;
             result
         },
+    )
+}
+/// Renders what `acknowledge-restore` recorded. A replay is the original
+/// outcome, so it renders exactly as a new acknowledgement does.
+pub(super) fn acknowledgement(
+    result: &Recorded,
+    project: &ProjectId,
+    payloads: &dyn Payloads,
+) -> Render {
+    let (Recorded::New { outcome, .. } | Recorded::Replayed { outcome }) = result;
+    recorded(
+        outcome.kind,
+        &answer_value(&outcome.answer, payloads),
+        project,
+        true,
     )
 }
 /// Renders every anchor outcome and its accompanying diagnostics.

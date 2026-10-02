@@ -1,6 +1,6 @@
 # Roadmap
 
-This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status includes Build 2 T1 to T13 merged, as of origin/main `8132051a`, on 2026-10-02, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
+This file is the order of work from now to Baley's first public release: nine builds, then the release design, a live acceptance run on each host, and publishing. Status is Build 2 complete and Build 3 T1 merged, as of origin/main `d30aec09`, on 2026-10-02, taken from the GitHub issues, milestones and pull requests of crenshawdev/baley and from the [design documents](design/) and [decision records](adr/). No issue, milestone or design document gives a date, so this file shows order only. Each build pull request updates it.
 
 ## The path to the first release
 
@@ -18,7 +18,7 @@ flowchart TB
     B8["Build 8: Search, why and support work<br/>#29"]
     B9["Build 9: Removal<br/>#30"]
     D134["Design: what a plan re-check reads<br/>#134"]
-    OTHER["13 other open issues:<br/>designs, upkeep, bugs"]
+    OTHER["12 other open issues:<br/>designs, upkeep, bugs"]
     R1["Release design<br/>#14"]
     R2["Live acceptance run on each host"]
     R3["Publish and install"]
@@ -34,7 +34,7 @@ flowchart TB
     classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
 
     class B1,B2 done
-    class B3 next
+    class B3 progress
     class B4,R1 blocked
     class B5,B6,B7,B8,B9,D134,OTHER,R2,R3 planned
 ```
@@ -158,14 +158,90 @@ Figure 3. Build 2's tasks. Arrows point from a task to what waits on it. One pul
 
 ## Build 3: Hosts
 
-[#24](https://github.com/crenshawdev/baley/issues/24) · milestone Evidence · next
+[#24](https://github.com/crenshawdev/baley/issues/24) · milestone Evidence · in progress
 
-One global Baley MCP server per user serves every session and worker on Claude Code and Codex. It is reached two ways: over HTTP, when it runs as a background service (systemd user unit or launchd agent), and over stdio, through a small launcher that starts the server or joins the one already running. Every call carries its working directory, host, session and call id. `baley install` asks which way to run, registers both hosts, installs the guard hook and configures the sandbox. The sandbox refuses agent writes to Baley's home and its config folder (`config.toml` and `keys.env`) on both hosts, and reads of both only on Claude Code ([ADR 0020](adr/0020-sandbox-is-a-write-barrier.md)). Install also writes the instruction stubs ([ADR 0009](adr/0009-served-instructions.md)). On Codex, the guard's `ask` becomes `deny` with guidance. `baley doctor` checks the hook, the sandbox and the stubs. Writes use optimistic concurrency ([ADR 0012](adr/0012-optimistic-concurrency.md)). Whether Codex works over HTTP is still untested, so stdio through the launcher is the fallback. Captures are recorded.
+Claude Code is the only host Baley supports in this release, and Build 3 removes Codex support. Each Claude Code session starts its own Baley MCP server over stdio, and the session's subagents reach it through the session's connection. There is no launcher, no HTTP listener and no background service, and every worker in this release is a subagent of its session. The server takes its project from `CLAUDE_PROJECT_DIR`, records its working directory beside it, and creates a session id that every call carries, with the host's own session id beside it when one is set. Ledger events record which caller wrote them. Another host can connect and list the tools, but every tool call it makes is refused with Claude Code named as the supported host. Sessions share the ledger through the store: every write takes the writer queue and decides inside its transaction ([ADR 0012](adr/0012-optimistic-concurrency.md)), and the build's acceptance includes two live Claude Code sessions writing one project at once, with the record checked afterwards. Agents can neither read nor write Baley's home or its config folder (`config.toml` and `keys.env`). Claude Code's sandbox, its file permission rules and Baley's guard hook carry that together, and `baley doctor` reports what an agent can reach. The compiled instructions are served ([ADR 0009](adr/0009-served-instructions.md)), the build renders the stub content that the held delivery tasks will write, and it opens with warnings that say what a restore cannot undo. How Baley is delivered and updated, who writes its Claude artifacts and how setup is entered wait on an owner decision, so T14 to T17 are held. Captures are recorded.
 
 - Designs: [0001 evidence ledger](design/0001-evidence-ledger.md), [0002 system design](design/0002-system-design.md), [0003 configuration and routing](design/0003-configuration-and-routing.md), [0010 guard](design/0010-guard.md), [0012 host interface](design/0012-host-interface.md), [0014 support families](design/0014-support-families.md)
-- ADRs: [0008 host sandbox isolation](adr/0008-host-sandbox-isolation.md), [0009 served instructions](adr/0009-served-instructions.md), [0011 one shared server](adr/0011-one-shared-server.md), [0012 optimistic concurrency](adr/0012-optimistic-concurrency.md), [0020 sandbox is a write barrier](adr/0020-sandbox-is-a-write-barrier.md), [0028 one HTTP stack](adr/0028-one-http-stack.md), [0029 a host may offer more](adr/0029-a-host-may-offer-more.md)
-- Carries: [#71](https://github.com/crenshawdev/baley/issues/71)
+- ADRs: [0008 host sandbox isolation](adr/0008-host-sandbox-isolation.md), [0009 served instructions](adr/0009-served-instructions.md), [0011 one shared server](adr/0011-one-shared-server.md), [0012 optimistic concurrency](adr/0012-optimistic-concurrency.md), [0020 sandbox is a write barrier](adr/0020-sandbox-is-a-write-barrier.md), [0028 one HTTP stack](adr/0028-one-http-stack.md), [0029 a host may offer more](adr/0029-a-host-may-offer-more.md), [0035 restore purge uncertainty](adr/0035-restore-purge-uncertainty.md)
+- Carries: [#71](https://github.com/crenshawdev/baley/issues/71), [#146](https://github.com/crenshawdev/baley/issues/146)
 - Blocked by: Build 2 ([#23](https://github.com/crenshawdev/baley/issues/23))
+
+```mermaid
+flowchart LR
+    T1["T1: Restore warnings"]
+    T2["T2: Claude seam and removal"]
+    T3["T3: Caller provenance"]
+    T4["T4: Session stdio server"]
+    T5["T5: Request preparation"]
+    T6["T6: Guard decisions"]
+    T7["T7: Instructions and parts"]
+    T8["T8: Captures"]
+    T9["T9: Bounded guard access"]
+    T10["T10: Guard records and answers"]
+    T11["T11: Claude artifact content"]
+    T12["T12: Live Claude qualification"]
+    T13["T13: Runtime doctor"]
+    Delivery["Pending delivery decision"]
+    T14["T14: Binary delivery"]
+    T15["T15: Artifact application"]
+    T16["T16: Setup entry"]
+    T17["T17: Installed doctor and qualification"]
+
+    T1 --> T2
+    T2 --> T3
+    T2 --> T6
+    T3 --> T4
+    T4 --> T5
+    T4 --> T9
+    T4 --> T14
+    T5 --> T7
+    T5 --> T10
+    T6 --> T9
+    T7 --> T8
+    T8 --> T11
+    T9 --> T10
+    T10 --> T11
+    T11 --> T12
+    T11 --> T13
+    T11 --> T15
+    T12 --> T14
+    T12 -. evidence .-> T13
+    Delivery -.-> T14
+    T13 --> T17
+    T14 --> T15
+    T15 --> T16
+    T16 --> T17
+
+    classDef done fill:#1a7f37,stroke:#116329,color:#ffffff
+    classDef planned fill:#eaeef2,stroke:#6e7781,color:#24292f
+    classDef held fill:#ffffff,stroke:#6e7781,stroke-dasharray:4 3,color:#57606a
+    class T1 done
+    class T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12,T13 planned
+    class Delivery,T14,T15,T16,T17 held
+```
+
+Figure 4. Build 3's tasks. Arrows point from a task to what waits on it. A dotted arrow is an evidence link or a wait on the pending delivery decision, and a held task waits on that decision. One pull request per task.
+
+| Task | What | Pull requests | Status |
+|---|---|---|---|
+| T1 | Explain purge uncertainty after a restore | [#176](https://github.com/crenshawdev/baley/pull/176) | Merged |
+| T2 | Claude host seam and Codex removal | | Planned |
+| T3 | Caller provenance in the ledger | | Planned |
+| T4 | Per-session stdio server and store maintenance | | Planned |
+| T5 | Per-request discovery, admission and policy | | Planned |
+| T6 | Guard decisions and protected paths | | Planned |
+| T7 | Compiled instructions, help, schemas and parts | | Planned |
+| T8 | Ledger captures and project identity reads | | Planned |
+| T9 | Bounded guard process and storage access | | Planned |
+| T10 | Per-user guard records and Claude hook answers | | Planned |
+| T11 | Claude artifact content and logical stubs | | Planned |
+| T12 | Live Claude qualification and concurrent sessions | | Planned |
+| T13 | Runtime doctor host observations | | Planned |
+| T14 | Binary delivery and update activation | | Held |
+| T15 | Claude artifact ownership and application | | Held |
+| T16 | Owner setup entry and completion record | | Held |
+| T17 | Delivery doctor and installed qualification | | Held |
 
 ## Build 4: Planning
 
@@ -260,7 +336,6 @@ Every issue here except #134 blocks the release design #14. #134 blocks Build 4,
 | Issue | What | Milestone | Depends on / blocks |
 |---|---|---|---|
 | [#134](https://github.com/crenshawdev/baley/issues/134) | Choose what a plan re-check reads | Encyclopedists | Blocks Build 4 and lands before it |
-| [#146](https://github.com/crenshawdev/baley/issues/146) | Decide what a restored copy does with bodies purged after it was taken | Evidence | None |
 | [#47](https://github.com/crenshawdev/baley/issues/47) | Repository upkeep and the build gate | Encyclopedists | #49 #50 #54 wait on it (stated in their text; no GitHub link) |
 
 ### Upkeep and docs
@@ -302,8 +377,7 @@ Counts as of 2026-09-27.
 
 What the records leave open or do not say.
 
-- Builds 3 to 9 have no task breakdown. Each lists the design requirements it delivers, and all but Build 7 add a short list of settled points.
+- Builds 4 to 9 have no task breakdown. Each lists the design requirements it delivers, and all but Build 7 add a short list of settled points.
 - There is no first version number. The release design #14 picks it.
 - #44 was meant to land before Build 1 T10, which has merged. #49, #50 and #54 wait on the #47 design, as their text says; GitHub has no dependency link for them. No order is given for #47 itself or for bug #70.
-- Whether Codex connects reliably to a local HTTP MCP server is open in [design 0012](design/0012-host-interface.md), to be settled by a test when the service transport is built.
 - The board's Status field is set only on the build issues, #40 and #14.

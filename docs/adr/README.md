@@ -2,7 +2,7 @@
 
 Each file records one architectural decision: its context, the options weighed, the choice and its consequences. The format is [MADR](https://adr.github.io/madr/), after Michael Nygard. How records are written, reviewed and superseded is described in [the design process](../design/README.md).
 
-Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit number.
+Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit number, skipping any number the index reserves. A reservation holds a number for a decision whose record is not written yet. Its row gains its link when its record lands.
 
 ## Index
 
@@ -14,7 +14,7 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0004](0004-project-identity.md) | Identify projects by a committed project file | Accepted |
 | [0005](0005-storage-port.md) | Put storage behind a port with engine adapters | Accepted, superseded in part by 0010 |
 | [0006](0006-no-markdown-records.md) | Keep every operational record in the ledger | Accepted |
-| [0007](0007-forge-anchors.md) | Anchor chain heads on the forge | Accepted |
+| [0007](0007-forge-anchors.md) | Anchor chain heads on the forge | Accepted, superseded in part by 0026 |
 | [0008](0008-host-sandbox-isolation.md) | Use host sandboxes to keep agents out of the ledger | Accepted, superseded in part by 0020 |
 | [0009](0009-served-instructions.md) | Serve instructions from the binary; files on disk are stubs | Accepted |
 | [0010](0010-projector-traits-in-the-port.md) | Define the projector and event schema traits in the port | Accepted, superseded in part by 0021 |
@@ -29,7 +29,7 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0019](0019-reviews-adjudicated-and-ruled.md) | Run every configured reviewer, adjudicate in the host session, and let the owner rule on each finding | Accepted |
 | [0020](0020-sandbox-is-a-write-barrier.md) | State what each host's sandbox denies; reads are the host's policy | Accepted, supersedes 0008 in part, superseded in part by 0027 |
 | [0021](0021-claim-rules-in-the-port.md) | Claim liveness and scope rules in the port | Accepted |
-| [0022](0022-acknowledged-restore.md) | Report owner-acknowledged restores behind a remote anchor | Accepted |
+| [0022](0022-acknowledged-restore.md) | Report owner-acknowledged restores behind a remote anchor | Accepted, superseded in part by 0035 |
 | [0023](0023-no-backups-in-baley.md) | Keep whole-store backups outside Baley | Accepted, supersedes 0003 and 0016 in part |
 | [0024](0024-conformance-suite-and-adapter-tests.md) | Separate port conformance from adapter mechanism tests | Accepted |
 | [0025](0025-anchor-tag-objects.md) | Point anchor tags at the empty tree | Accepted |
@@ -40,3 +40,7 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0030](0030-question-rounds.md) | Put refinement and planning decisions to the owner in dependency-ordered question rounds | Accepted |
 | [0031](0031-one-term-per-concept.md) | Use one term per concept, kept in a glossary: phase, not sprint, and story, not requirement | Accepted, supersedes 0017 in part |
 | [0032](0032-gemini-is-not-a-provider.md) | Drop Gemini from the model catalog and detection | Accepted, supersedes 0027 in part |
+| 0033 | Support only hosts whose sandboxing and execution controls meet Baley's requirements | Reserved |
+| 0034 | Run one Baley server per session over stdio | Reserved |
+| [0035](0035-restore-purge-uncertainty.md) | Report purge uncertainty after restoring a store | Accepted, supersedes 0022 in part |
+| 0036 | Keep guard records per user and bound the guard's access | Reserved |
