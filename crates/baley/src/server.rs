@@ -6,8 +6,8 @@ use baley::execution::{
 };
 use rmcp::handler::server::wrapper::Json;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, Implementation,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler};
@@ -967,6 +967,19 @@ pub(crate) fn info() -> ServerConfig {
     info
 }
 
+/// The server's answer to `tools/list`.
+pub(crate) fn tool_list() -> ListToolsResult {
+    // MCP 2026-07-28 requires both fields on a list result, and a host drops
+    // a list without them. Zero makes the host fetch the list again rather
+    // than keep one from an older binary.
+    ListToolsResult {
+        tools: tools(),
+        ..Default::default()
+    }
+    .with_ttl_ms(0)
+    .with_cache_scope(CacheScope::Private)
+}
+
 pub(crate) fn tools() -> Vec<Tool> {
     vec![
         tool(
@@ -997,10 +1010,7 @@ impl ServerHandler for PublicServer {
         _: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult {
-            tools: tools(),
-            ..Default::default()
-        })
+        Ok(tool_list())
     }
 
     // Do not implement get_tool or use Parameters<T>: schema listing is descriptive;
@@ -2039,6 +2049,14 @@ mod wire_tests {
     #[test]
     fn the_initialize_answer_names_the_server_baley() {
         assert_eq!(info().server_info.name, "baley");
+    }
+
+    #[test]
+    fn a_tool_list_without_ttl_and_cache_scope_is_dropped_by_a_2026_07_28_host() {
+        let wire = serde_json::to_value(tool_list()).unwrap();
+        assert_eq!(wire["ttlMs"], json!(0), "{wire}");
+        assert_eq!(wire["cacheScope"], json!("private"), "{wire}");
+        assert_eq!(wire["tools"].as_array().map(Vec::len), Some(3));
     }
 
     #[test]
