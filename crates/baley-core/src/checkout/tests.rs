@@ -175,3 +175,178 @@ fn a_checkout_projector_handling_or_removing_anything_beyond_checkout_seen_is_ca
     assert_eq!(projector.handles(), ["checkout.seen"]);
     assert!(projector.keys(&event(2, seen("/r", None, None))).is_empty());
 }
+
+const GITHUB: &str = "https://github.com/o/r.git";
+
+fn here(root_commit: Option<&str>, remote_url: Option<&str>) -> Checkout {
+    Checkout {
+        path: "/b".into(),
+        root_commit: root_commit.map(str::to_owned),
+        remote_url: remote_url.map(str::to_owned),
+    }
+}
+
+fn conflict(verdict: CheckoutVerdict) -> ProjectIdConflict {
+    match verdict {
+        CheckoutVerdict::Conflict(conflict) => conflict,
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_fork_with_another_remote_admitted_or_its_refusal_missing_a_path_or_the_way_out_is_caught() {
+    let rows = [seen(
+        "/a",
+        Some("c1"),
+        Some("https://github.com/o/other.git"),
+    )];
+    let refusal = conflict(judge_checkout(&here(Some("c1"), Some(GITHUB)), &rows));
+    assert_eq!(refusal.code(), "project-id-conflict");
+    let text = refusal.to_string();
+    assert!(text.starts_with("project-id-conflict: "), "{text}");
+    for part in [
+        "/a",
+        "/b",
+        GITHUB,
+        "https://github.com/o/other.git",
+        "baley init --new-id",
+    ] {
+        assert!(text.contains(part), "{part} missing from {text}");
+    }
+}
+
+#[test]
+fn two_different_https_origins_admitted_as_one_project_is_caught() {
+    let rows = [seen("/a", None, Some("https://git.example.com/o/r.git"))];
+    let verdict = judge_checkout(&here(None, Some("https://github.com/o/r.git")), &rows);
+    assert!(
+        matches!(verdict, CheckoutVerdict::Conflict(_)),
+        "{verdict:?}"
+    );
+}
+
+#[test]
+fn an_https_clone_and_an_ssh_clone_of_one_repository_treated_as_one_remote_is_caught() {
+    let rows = [seen("/a", None, Some("git@github.com:o/r.git"))];
+    let verdict = judge_checkout(&here(None, Some(GITHUB)), &rows);
+    assert!(
+        matches!(verdict, CheckoutVerdict::Conflict(_)),
+        "{verdict:?}"
+    );
+}
+
+#[test]
+fn urls_that_differ_only_in_case_or_scheme_treated_as_one_remote_is_caught() {
+    let upper = [seen("/a", None, Some("HTTPS://GITHUB.COM/O/R.GIT"))];
+    let verdict = judge_checkout(&here(None, Some(GITHUB)), &upper);
+    assert!(
+        matches!(verdict, CheckoutVerdict::Conflict(_)),
+        "{verdict:?}"
+    );
+    let bare = [seen("/a", None, Some("github.com/o/r.git"))];
+    let verdict = judge_checkout(&here(None, Some(GITHUB)), &bare);
+    assert!(
+        matches!(verdict, CheckoutVerdict::Conflict(_)),
+        "{verdict:?}"
+    );
+}
+
+#[test]
+fn a_second_clone_of_the_same_url_refused_as_a_fork_is_caught() {
+    let rows = [seen("/a", Some("c1"), Some(GITHUB))];
+    assert_eq!(
+        judge_checkout(&here(Some("c1"), Some(GITHUB)), &rows),
+        CheckoutVerdict::Record
+    );
+}
+
+#[test]
+fn a_checkout_with_no_remote_refused_as_a_fork_is_caught() {
+    let rows = [seen("/a", Some("c1"), Some(GITHUB))];
+    assert_eq!(
+        judge_checkout(&here(Some("c1"), None), &rows),
+        CheckoutVerdict::Record
+    );
+}
+
+#[test]
+fn a_row_with_no_remote_conflicting_with_a_checkouts_url_is_caught() {
+    let rows = [seen("/a", Some("c1"), None)];
+    assert_eq!(
+        judge_checkout(&here(Some("c1"), Some(GITHUB)), &rows),
+        CheckoutVerdict::Record
+    );
+}
+
+#[test]
+fn a_remote_url_change_at_the_same_path_refused_as_a_fork_with_itself_is_caught() {
+    let rows = [seen("/b", Some("c1"), Some("https://github.com/o/old.git"))];
+    assert_eq!(
+        judge_checkout(&here(Some("c1"), Some(GITHUB)), &rows),
+        CheckoutVerdict::Record
+    );
+}
+
+#[test]
+fn a_different_root_commit_at_another_path_with_the_same_url_refused_is_caught() {
+    let rows = [seen("/a", Some("c1"), Some(GITHUB))];
+    assert_eq!(
+        judge_checkout(&here(Some("c2"), Some(GITHUB)), &rows),
+        CheckoutVerdict::Record
+    );
+}
+
+#[test]
+fn an_own_row_equal_in_both_fields_recorded_again_or_a_changed_one_left_alone_is_caught() {
+    let same = [seen("/b", Some("c1"), Some(GITHUB))];
+    assert_eq!(
+        judge_checkout(&here(Some("c1"), Some(GITHUB)), &same),
+        CheckoutVerdict::Unchanged
+    );
+    assert_eq!(
+        judge_checkout(&here(Some("c2"), Some(GITHUB)), &same),
+        CheckoutVerdict::Record
+    );
+    let bare = [seen("/b", None, None)];
+    assert_eq!(
+        judge_checkout(&here(None, None), &bare),
+        CheckoutVerdict::Unchanged
+    );
+    assert_eq!(
+        judge_checkout(&here(Some("c1"), None), &bare),
+        CheckoutVerdict::Record
+    );
+}
+
+#[test]
+fn an_own_row_not_as_the_projector_writes_it_taken_as_current_is_caught() {
+    let missing_url = [json!({"path": "/b", "root_commit": "c1"})];
+    assert_eq!(
+        judge_checkout(&here(Some("c1"), None), &missing_url),
+        CheckoutVerdict::Record
+    );
+}
+
+#[test]
+fn an_unchanged_own_row_judged_before_another_checkouts_conflict_is_caught() {
+    let rows = [
+        seen("/b", Some("c1"), Some(GITHUB)),
+        seen("/a", Some("c1"), Some("https://github.com/o/other.git")),
+    ];
+    let verdict = judge_checkout(&here(Some("c1"), Some(GITHUB)), &rows);
+    assert!(
+        matches!(verdict, CheckoutVerdict::Conflict(_)),
+        "{verdict:?}"
+    );
+}
+
+#[test]
+fn the_conflict_naming_a_path_that_depends_on_page_order_is_caught() {
+    let early = seen("/a", None, Some("https://one.example/r.git"));
+    let late = seen("/c", None, Some("https://two.example/r.git"));
+    let checkout = here(None, Some(GITHUB));
+    let forward = conflict(judge_checkout(&checkout, &[early.clone(), late.clone()]));
+    let backward = conflict(judge_checkout(&checkout, &[late, early]));
+    assert_eq!(forward.other_path, "/a");
+    assert_eq!(forward, backward);
+}
