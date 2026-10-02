@@ -26,8 +26,10 @@ pub enum Caller {
     LandingGit,
     /// Anchor tag transport.
     AnchorForge,
-    /// HEAD's copy of the project file.
+    /// HEAD.s copy of the project file.
     ProjectHead,
+    /// A checkout's root commit and remote URL, read for checkout admission.
+    CheckoutFacts,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,7 +68,8 @@ pub fn deadline(caller: Caller) -> Deadline {
         | Caller::ReadDocumentHead
         | Caller::LandingGit
         | Caller::AnchorForge
-        | Caller::ProjectHead => Deadline {
+        | Caller::ProjectHead
+        | Caller::CheckoutFacts => Deadline {
             nominal: OTHER_GIT_DEADLINE,
             work: OTHER_GIT_DEADLINE,
         },
