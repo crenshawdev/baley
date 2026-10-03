@@ -865,7 +865,7 @@ impl<'s, 't> Work<'s, 't> {
             type_name: event.type_name,
             type_version: event.type_version,
             actor: self.command.actor.clone(),
-            caller: None,
+            caller: self.command.caller.clone(),
             recorded_at: self.command.recorded_at.clone(),
             request_id: self.command.request_id.clone(),
             git: event.git,
@@ -1424,6 +1424,7 @@ mod tests {
             policy_version: 1,
             recorded_at: AT.into(),
             actor: Actor::Owner,
+            caller: None,
         }
     }
 

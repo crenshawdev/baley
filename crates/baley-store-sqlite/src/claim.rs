@@ -338,6 +338,7 @@ mod tests {
             policy_version: 1,
             recorded_at: at.into(),
             actor: Actor::Owner,
+            caller: None,
         }
     }
     fn owner() -> ClaimOwner {

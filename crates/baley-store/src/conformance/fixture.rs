@@ -312,6 +312,7 @@ pub(super) fn command(kind: &str, request: &str) -> Command {
         policy_version: 1,
         recorded_at: T0.into(),
         actor: Actor::Owner,
+        caller: None,
     }
 }
 

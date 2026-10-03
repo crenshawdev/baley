@@ -253,6 +253,7 @@ fn fixture_command(request: &str, at: &str) -> Command {
         policy_version: 1,
         recorded_at: at.into(),
         actor: Actor::Owner,
+        caller: None,
     }
 }
 

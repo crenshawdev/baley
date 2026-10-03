@@ -685,6 +685,7 @@ mod tests {
             policy_version: 1,
             recorded_at: AT.into(),
             actor: Actor::Owner,
+            caller: None,
         }
     }
 
