@@ -33,7 +33,7 @@ Three parties, one authority each.
 
 The host's main session is the model too. Baley gives it two jobs:
 
-- **Relay.** It launches the worker Baley names with Baley's work order, hands the results back, and puts Baley's questions to the owner. In this job it keeps no state and makes no decision.
+- **Relay.** It starts the worker Baley names as its own subagent, with Baley's work order, hands the results back, and puts Baley's questions to the owner. There is no headless worker path. In this job it keeps no state and makes no decision.
 - **Adjudicator.** When Baley asks, it judges other models' output. In adversarial and refute reviews it checks each finding against the code, drops what does not hold, and brings the owner each finding that survives, in plain words, with the options for fixing it. It does the same for the planner's plans, the plan checker's findings and the analyzer's draft truths. It does not adjudicate questions: the analyzer's and the planner's questions go to the owner as returned, in the rounds Baley works out, and the owner's answers come back unchanged ([0005](0005-context-plans-and-acceptance.md), PLN-R24). The owner rules; Baley records the ruling.
 
 Skills a host loads only tell the main session how to reach Baley's MCP server.
@@ -87,7 +87,7 @@ graph LR
 |---|---|---|
 | Owner | The person responsible for the work | Approves, rules and sets policy |
 | Baley | One Rust binary, run as one shared server per user | Decides, orchestrates, validates and keeps the record |
-| Host | Claude Code or Codex | Its main session relays and adjudicates; the worker agents it launches do one piece of engineering judgment each |
+| Host | Claude Code | Its main session relays and adjudicates, and the subagents it starts each do one piece of engineering judgment |
 | Outside reviewers | Model providers such as OpenAI, Gemini and DeepSeek | Review plans and diffs when the owner's policy asks for them; called by the host session, never by Baley. Baley itself only asks a provider which models a key in `keys.env` can use ([0003](0003-configuration-and-routing.md), CFG-R20) |
 | Repository | The project's git checkout | Holds the source; Baley reads git facts and runs tests and git there |
 | Forge | GitHub | Holds chain anchors, pull requests and issues |
@@ -141,8 +141,8 @@ Every area document applies these.
 | SYS-P8 | **Ports and adapters.** The domain core is plain synchronous code. Everything outside it is behind a port: storage, host, forge, and the process runner for git and tests. Baley has no port to outside models. Baley identifies its host and version on every connection, from the client information the host sends, and that host's adapter chooses the mechanisms: notification or waiting in steps, how a work order is delivered, where effort goes. A new host means a new adapter. |
 | SYS-P9 | **Instructions are part of the binary.** Every instruction a model sees is compiled into Baley and served in bounded parts by id. Files a host must load (skills, agent definitions) are stubs Baley renders ([ADR 0009](../adr/0009-served-instructions.md)). |
 | SYS-P10 | **A small, typed wire.** Few MCP tools, typed operations, operation names that are only ever added. Nothing is sent twice and nothing is echoed back. A refusal names a code and a place. |
-| SYS-P11 | **Enforcement by mechanism.** A rule that matters is enforced by Baley or its guard, never by prose asking the model to comply. The guard checks git commands and file writes at the host's edge; the host sandbox keeps agents from writing Baley's home and config folder, and on Claude Code from reading them ([ADR 0008](../adr/0008-host-sandbox-isolation.md), [ADR 0020](../adr/0020-sandbox-is-a-write-barrier.md)). |
-| SYS-P12 | **Host neutrality.** Everything works with Claude Code or Codex as the host. Each wire, tool or instruction decision is judged on both, and the host that offers less sets the floor: the whole process works on either host at that floor. A host that offers more may offer more, as an addition its adapter declares; no step of the process depends on an addition, and on a host without it `baley doctor` names it as unavailable and a setting that asks for it is refused there ([ADR 0029](../adr/0029-a-host-may-offer-more.md)). Every capability reaches every agent, not only the main session. |
+| SYS-P11 | **Enforcement by mechanism.** A rule that matters is enforced by Baley or its guard, never by prose asking the model to comply. The guard checks git commands and file writes at the host's edge; Claude Code's sandbox and its `Read` and `Edit` deny rules keep agents from reading or writing Baley's home and config folder ([ADR 0008](../adr/0008-host-sandbox-isolation.md), [ADR 0020](../adr/0020-sandbox-is-a-write-barrier.md), [ADR 0033](../adr/0033-host-security-bar.md)). |
+| SYS-P12 | **The security bar.** Claude Code is the reference host. Baley supports a host only when the host matrix shows that its sandboxing and execution controls meet the bar [ADR 0033](../adr/0033-host-security-bar.md) states, and adding one takes a new ADR and an adapter. Baley does not lower its security defaults to accommodate a host. A host that offers more than Claude Code may offer more, as an addition its adapter declares; no step of the process depends on an addition, and on a host without it `baley doctor` names it as unavailable and a setting that asks for it is refused there ([ADR 0029](../adr/0029-a-host-may-offer-more.md)). Every capability reaches every agent, not only the main session. |
 
 ## 7. Inside Baley
 
@@ -331,7 +331,7 @@ The one contract between Baley and every worker, including the outside reviews t
 - **Resources.** Memory use and read cost are defects a user sees: no loading the whole store, bounded reads, streaming.
 - **Concurrency.** One user, one machine, one shared server; several sessions write through its single writer with optimistic concurrency (SYS-R6). No parallel or worktree execution.
 - **Observability.** Every decision records its inputs, including the setting that decided a route.
-- **Testing.** Baley's own tests and the tests Baley derives for the projects it manages follow the same rules: a test checks one behavior of one unit with plain values, depends only on the language toolchain and its test libraries, starts no program, and gives the same result on any machine. There are no end-to-end tests; live behavior is checked by an acceptance run on both hosts before release.
+- **Testing.** Baley's own tests and the tests Baley derives for the projects it manages follow the same rules: a test checks one behavior of one unit with plain values, depends only on the language toolchain and its test libraries, starts no program, and gives the same result on any machine. There are no end-to-end tests; live behavior is checked by an acceptance run on Claude Code before release.
 
 ## 11. Decisions
 
@@ -342,14 +342,15 @@ Decision records this design produces.
 - Outside models are called by the host session, not Baley (SYS-R9 to SYS-R12): [ADR 0013](../adr/0013-host-session-calls-outside-models.md), superseded in part by ADR 0027
 - Baley runs tests itself and judges by exit code (SYS-R8): [ADR 0014](../adr/0014-baley-runs-tests.md)
 - Settings in TOML, global and project, with host sections (SYS-R13): [ADR 0015](../adr/0015-settings-in-toml.md), superseded in part by ADR 0027
-- Baley's own crenshawdev folders and provider keys in a plain `keys.env` (SYS-R11, SYS-R12, SYS-R13): [ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)
+- Baley's own crenshawdev folders and provider keys in a plain `keys.env` (SYS-R11, SYS-R12, SYS-R13): [ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md), superseded in part by ADR 0032 and ADR 0033
 - One HTTP stack on tokio and hyper, with axum hosting the MCP server over HTTP (SYS-R2): [ADR 0028](../adr/0028-one-http-stack.md)
-- The host that offers less sets the floor, and a host may offer more as a declared addition (SYS-P12): [ADR 0029](../adr/0029-a-host-may-offer-more.md)
+- A host may offer more than Claude Code as a declared addition (SYS-P12): [ADR 0029](../adr/0029-a-host-may-offer-more.md), superseded in part by ADR 0033
 - One term per concept across every document, kept in the glossary [CONTEXT.md](../../CONTEXT.md), with phase for the working increment and story for the owner's declared work: [ADR 0031](../adr/0031-one-term-per-concept.md), superseding ADR 0017 in part
+- Support only hosts whose sandboxing and execution controls meet Baley's requirements (SYS-P12): [ADR 0033](../adr/0033-host-security-bar.md), superseding ADR 0008, 0018, 0020, 0027 and 0029 in part
 
 ## 12. Open questions
 
 | Question | Where it is decided |
 |---|---|
-| How effort reaches each host, how the launcher passes the host's identity, and whether Codex connects over HTTP | [0012: Host interface](0012-host-interface.md) (HST-R3, HST-R4, HST-R12; the HTTP test is its open question) |
+| How the launcher passes the host's identity | [0012: Host interface](0012-host-interface.md) (HST-R3, HST-R4) |
 | Reading git facts inside the write transaction (issue #40) | Build 4 |
