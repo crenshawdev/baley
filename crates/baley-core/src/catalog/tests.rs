@@ -27,7 +27,6 @@ fn tier_parse_folds_no_case_and_takes_no_rung_name() {
 fn each_catalog_name_parses_to_its_own_catalog_and_round_trips() {
     let expected = [
         ("claude-code", Catalog::Host(Host::ClaudeCode)),
-        ("codex", Catalog::Host(Host::Codex)),
         ("openai", Catalog::Provider(Provider::OpenAi)),
         ("deepseek", Catalog::Provider(Provider::DeepSeek)),
     ];
@@ -46,7 +45,7 @@ fn anthropic_a_case_variant_and_the_empty_name_are_unknown_providers() {
     assert_eq!(
         Catalog::parse("anthropic").unwrap_err().to_string(),
         "unknown-provider: \"anthropic\" is no model catalog; \
-         catalogs: claude-code, codex, openai, deepseek"
+         catalogs: claude-code, openai, deepseek"
     );
 }
 

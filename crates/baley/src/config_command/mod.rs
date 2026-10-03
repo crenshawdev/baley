@@ -288,10 +288,7 @@ mod tests {
         let error = parse_set(&["--global", "--host", "gemini", "a=b"]).unwrap_err();
         assert_eq!(error.exit_code(), 2);
         let text = error.to_string();
-        assert!(
-            text.contains("claude-code") && text.contains("codex"),
-            "{text}"
-        );
+        assert!(text.contains("claude-code"), "{text}");
     }
 
     #[test]

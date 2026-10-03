@@ -418,14 +418,14 @@ fn the_project_table_of_the_project_file_is_not_a_setting() {
 
 #[test]
 fn an_unknown_host_section_is_ignored_with_one_diagnostic() {
-    let text = "[host.cursor]\nescalate_on_failure = 3\n";
+    let text = "[host.codex]\nescalate_on_failure = 3\n";
     let policy = standard(Some(Host::ClaudeCode), Some(text), None).unwrap();
     assert_eq!(
         policy.diagnostics,
         [Diagnostic {
             layer: FileLayer::Global,
             path: GLOBAL.into(),
-            name: "host.cursor".into(),
+            name: "host.codex".into(),
             line: 1,
             column: 7,
             kind: DiagnosticKind::UnknownHost,
@@ -433,7 +433,7 @@ fn an_unknown_host_section_is_ignored_with_one_diagnostic() {
     );
     assert_eq!(
         policy.diagnostics[0].to_string(),
-        "/c/config.toml:1:7: host.cursor is not a host Baley knows (claude-code, codex) and its section was ignored"
+        "/c/config.toml:1:7: host.codex is not a host Baley knows (claude-code) and its section was ignored"
     );
     assert_eq!(policy.escalate_on_failure(), (false, &default_source()));
 }

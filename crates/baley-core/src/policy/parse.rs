@@ -198,7 +198,7 @@ impl Fault {
 /// What a place in the file requires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Expected {
-    /// A table, such as `roles` or `host.codex`.
+    /// A table, such as `roles` or `host.claude-code`.
     Table,
     /// A boolean.
     Bool,

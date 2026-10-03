@@ -350,7 +350,6 @@ fn a_model_no_host_holds_is_not_accepted_and_every_hosts_names_are_listed() {
         text.contains("claude-code accepts: fable, haiku, opus, sonnet"),
         "{text}"
     );
-    assert!(text.contains("codex accepts: none"), "{text}");
 }
 
 #[test]
@@ -365,7 +364,7 @@ fn an_unknown_model_refusal_that_garbles_its_sentence_is_caught() {
     assert_eq!(
         unnamed.to_string(),
         "unknown-model: roles.planner.model is \"mystery\", which no host's catalog accepts; \
-         claude-code accepts: fable, haiku, opus, sonnet; codex accepts: none"
+         claude-code accepts: fable, haiku, opus, sonnet"
     );
 }
 
