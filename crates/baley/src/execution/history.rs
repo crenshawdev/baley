@@ -1110,7 +1110,7 @@ mod worker_exit_tests {
             plan: 1,
         };
         let exit = json!({"kind":"worker-exit","dispatch_id":"dispatch-A",
-            "host":"codex exec","outcome":"exited","detail":null,
+            "host":"claude-code subagent","outcome":"exited","detail":null,
             "at":100,"generation":7,"interrupted":true});
         let event: PlanEvent =
             serde_json::from_value(exit.clone()).expect("worker exit is a retained plan event");
