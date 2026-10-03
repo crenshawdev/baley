@@ -263,14 +263,14 @@ enum ModelsCommand {
     /// List every accepted name with its source, tier and placement, and
     /// the catalog version.
     List {
-        /// One catalog: claude-code, codex, openai or deepseek.
+        /// One catalog: claude-code, openai or deepseek.
         /// Every catalog when absent.
         #[arg(value_name = "CATALOG")]
         catalog: Option<String>,
     },
     /// Accept a name in a catalog, placed at --tier when given.
     Add {
-        /// claude-code, codex, openai or deepseek.
+        /// claude-code, openai or deepseek.
         #[arg(value_name = "CATALOG")]
         catalog: String,
         /// The model name.
@@ -283,7 +283,7 @@ enum ModelsCommand {
     /// Stop accepting a seeded, detected or owner name. A host's compiled
     /// aliases cannot be removed.
     Remove {
-        /// claude-code, codex, openai or deepseek.
+        /// claude-code, openai or deepseek.
         #[arg(value_name = "CATALOG")]
         catalog: String,
         /// The model name.

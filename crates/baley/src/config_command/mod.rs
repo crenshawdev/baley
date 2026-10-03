@@ -37,7 +37,7 @@ enum ConfigCommand {
 
 #[derive(Args, Debug, Clone)]
 struct ShowArgs {
-    /// Apply this host's sections, claude-code or codex.
+    /// Apply this host's sections. Only claude-code is supported.
     #[arg(long, value_name = "NAME", value_parser = host)]
     host: Option<Host>,
     /// The settings to show, every setting when none is named.
@@ -49,7 +49,7 @@ struct ShowArgs {
 struct InterviewArgs {
     #[command(flatten)]
     file: OptionalLayerFlags,
-    /// Apply this host's sections to each value in force and write the answers into them, claude-code or codex.
+    /// Apply this host's sections to each value in force and write the answers into them. Only claude-code is supported.
     #[arg(long, value_name = "NAME", value_parser = host)]
     host: Option<Host>,
 }
@@ -58,7 +58,7 @@ struct InterviewArgs {
 struct SetArgs {
     #[command(flatten)]
     layer: LayerFlags,
-    /// Write into this host's section, claude-code or codex.
+    /// Write into this host's section. Only claude-code is supported.
     #[arg(long, value_name = "NAME", value_parser = host)]
     host: Option<Host>,
     /// A setting and its value, as NAME=VALUE.
@@ -114,7 +114,8 @@ impl LayerFlags {
 fn host(text: &str) -> Result<Host, String> {
     Host::parse(text).ok_or_else(|| {
         let hosts: Vec<&str> = Host::ALL.iter().map(|host| host.name()).collect();
-        format!("hosts: {}", hosts.join(", "))
+        let noun = if hosts.len() == 1 { "host" } else { "hosts" };
+        format!("the supported {noun}: {}", hosts.join(", "))
     })
 }
 
@@ -282,13 +283,28 @@ mod tests {
     }
 
     #[test]
-    fn a_known_host_parses_and_an_unknown_one_exits_2_naming_the_hosts() {
+    fn a_known_host_parses_and_an_unknown_one_exits_2_naming_the_supported_host() {
         let set = parse_set(&["--global", "--host", "claude-code", "a=b"]).unwrap();
         assert_eq!(set.host, Some(Host::ClaudeCode));
         let error = parse_set(&["--global", "--host", "gemini", "a=b"]).unwrap_err();
         assert_eq!(error.exit_code(), 2);
         let text = error.to_string();
-        assert!(text.contains("claude-code"), "{text}");
+        assert!(text.contains("the supported host: claude-code"), "{text}");
+        assert!(!text.contains("codex"), "{text}");
+    }
+
+    #[test]
+    fn a_removed_host_is_still_refused_with_exit_2_naming_the_supported_host() {
+        let errors = [
+            parse_set(&["--global", "--host", "codex", "a=b"]).unwrap_err(),
+            parse_show(&["--host", "codex"]).unwrap_err(),
+            parse_interview(&["--host", "codex"]).unwrap_err(),
+        ];
+        for error in errors {
+            assert_eq!(error.exit_code(), 2);
+            let text = error.to_string();
+            assert!(text.contains("the supported host: claude-code"), "{text}");
+        }
     }
 
     #[test]
