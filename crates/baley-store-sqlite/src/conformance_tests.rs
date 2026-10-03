@@ -231,6 +231,9 @@ impl StoreFactory for SqliteFactory {
                         events.push(*event);
                         events.sort_by_key(|e| e.seq);
                     }
+                    Corruption::ReplaceCaller { seq, caller } => {
+                        events.iter_mut().find(|e| e.seq == seq).unwrap().caller = Some(caller)
+                    }
                     Corruption::Delete { seq } => events.retain(|e| e.seq != seq),
                     Corruption::Reorder { first, second } => {
                         for e in &mut events {

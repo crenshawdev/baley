@@ -3,8 +3,8 @@
 //! one fresh directory and the engine-specific damage and rebuild operations.
 
 use crate::{
-    Admin, DocKey, Event, EventSchema, Hash, Ledger, Payloads, ProjectId, Projector, RebuildReport,
-    StoreError, Views,
+    Admin, Caller, DocKey, Event, EventSchema, Hash, Ledger, Payloads, ProjectId, Projector,
+    RebuildReport, StoreError, Views,
 };
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -117,6 +117,15 @@ pub enum Corruption {
         /// The replacement document body.
         body: serde_json::Value,
     },
+    /// Replaces a stored event's caller with the one given, leaving its hashes
+    /// as they were. The replacement is a valid caller, so the event still
+    /// reads and only its hash can tell.
+    ReplaceCaller {
+        /// The stored event sequence.
+        seq: u64,
+        /// The replacement caller.
+        caller: Caller,
+    },
     /// Sets the building marker to the live generation.
     MarkLiveGenerationBuilding,
 }
@@ -131,6 +140,7 @@ pub use chain::{
     a_local_anchor_row_that_differs_from_the_remote_is_a_conflict,
     a_purge_leaves_every_recorded_event_as_it_was, a_purged_body_is_a_tombstone_not_a_fault,
     a_reduced_bodys_excerpt_is_hashed, a_regrown_older_copy_is_a_rewrite_of_its_anchor,
+    a_replaced_caller_is_named_at_its_sequence,
     a_restored_older_copy_is_a_truncation_of_its_anchor,
     a_truncated_tail_is_a_truncation_of_its_anchor, an_altered_payload_is_named_at_its_sequence,
     an_inserted_event_is_named_at_the_event_after_it,
@@ -230,6 +240,7 @@ macro_rules! conformance_suite {
         $crate::conformance_suite!(@checks $factory;
             an_untouched_chain_verifies_against_its_anchor,
             an_altered_payload_is_named_at_its_sequence,
+            a_replaced_caller_is_named_at_its_sequence,
             an_inserted_event_is_named_at_the_event_after_it,
             a_deleted_event_is_named_at_its_sequence,
             reordered_events_are_named_at_the_first_moved_sequence,
