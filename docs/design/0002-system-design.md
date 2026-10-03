@@ -57,7 +57,7 @@ graph LR
 
     1["<div style='font-weight: bold'>Owner</div><div style='font-size: 70%; margin-top: 0px'>[Person]</div><div style='font-size: 80%; margin-top:10px'>The person responsible for<br />the work. Approves plans,<br />rules on findings, sets<br />policy.</div>"]
     style 1 fill:#08427b,stroke:#052e56,color:#ffffff
-    15["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code or Codex: the<br />owner's session, which relays<br />Baley's work orders and<br />adjudicates, and the worker<br />agents it launches.</div>"]
+    15["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code: the owner's<br />session, which relays Baley's<br />work orders and adjudicates.<br />The session's workers are its<br />subagents, and they run<br />inside Claude Code's sandbox.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     16["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
@@ -156,7 +156,7 @@ graph LR
 
     1["<div style='font-weight: bold'>Owner</div><div style='font-size: 70%; margin-top: 0px'>[Person]</div><div style='font-size: 80%; margin-top:10px'>The person responsible for<br />the work. Approves plans,<br />rules on findings, sets<br />policy.</div>"]
     style 1 fill:#08427b,stroke:#052e56,color:#ffffff
-    15["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code or Codex: the<br />owner's session, which relays<br />Baley's work orders and<br />adjudicates, and the worker<br />agents it launches.</div>"]
+    15["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code: the owner's<br />session, which relays Baley's<br />work orders and adjudicates.<br />The session's workers are its<br />subagents, and they run<br />inside Claude Code's sandbox.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     16["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
@@ -208,7 +208,7 @@ graph LR
     1["<div style='font-weight: bold'>Owner</div><div style='font-size: 70%; margin-top: 0px'>[Person]</div><div style='font-size: 80%; margin-top:10px'>The person responsible for<br />the work. Approves plans,<br />rules on findings, sets<br />policy.</div>"]
     style 1 fill:#08427b,stroke:#052e56,color:#ffffff
 
-    15["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code or Codex: the<br />owner's session, which relays<br />Baley's work orders and<br />adjudicates, and the worker<br />agents it launches.</div>"]
+    15["<div style='font-weight: bold'>Host</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>Claude Code: the owner's<br />session, which relays Baley's<br />work orders and adjudicates.<br />The session's workers are its<br />subagents, and they run<br />inside Claude Code's sandbox.</div>"]
     style 15 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff
     16["<div style='font-weight: bold'>Repository</div><div style='font-size: 70%; margin-top: 0px'>[Software System]</div><div style='font-size: 80%; margin-top:10px'>The project's git checkout.</div>"]
     style 16 fill:#6b6b6b,stroke:#4d4d4d,color:#ffffff

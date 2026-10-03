@@ -19,7 +19,7 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
             keysFile = container "Keys file" "keys.env in Baley's config folder: one NAME=value line per key, written by the owner, read only by Baley." "Text" "File"
         }
 
-        host = softwareSystem "Host" "Claude Code or Codex: the owner's session, which relays Baley's work orders and adjudicates, and the worker agents it launches." "External"
+        host = softwareSystem "Host" "Claude Code: the owner's session, which relays Baley's work orders and adjudicates. The session's workers are its subagents, and they run inside Claude Code's sandbox." "External"
         repo = softwareSystem "Repository" "The project's git checkout." "External"
         forge = softwareSystem "Forge" "GitHub: chain anchors, pull requests, issues." "External"
         reviewers = softwareSystem "Outside reviewers" "Model providers such as OpenAI, Gemini and DeepSeek." "External"
