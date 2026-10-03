@@ -52,6 +52,8 @@ case "$1" in
 esac
 EOF
 
+# allowWrite widens the default write boundary over both trees, so the session and results folders
+# stay writable and a refused write to a stand-in comes from its denyWrite, not the default boundary.
 # Hooks and local MCP servers run outside the sandbox. Both stand-ins record what they were given.
 # The hook neither allows nor denies, so the deny rules and the sandbox decide.
 cat > "$SETTINGS_FILE" <<EOF
@@ -63,6 +65,7 @@ cat > "$SETTINGS_FILE" <<EOF
     "allowUnsandboxedCommands": false,
     "autoAllowBashIfSandboxed": true,
     "filesystem": {
+      "allowWrite": ["$DATA_TREE", "$CONF_TREE"],
       "denyRead": ["$STAND_HOME", "$STAND_CONF"],
       "denyWrite": ["$STAND_HOME", "$STAND_CONF"]
     }
@@ -130,6 +133,9 @@ Date:
 Fill the Result of every step with what the tool returned, in the owner's words and with exact
 error text. Say in Prompt appeared whether Claude Code asked for permission. Approve every
 prompt, so that each result shows the deny rules and the sandbox and not a refusal.
+
+The sandbox allows writes under both trees, so a refused write to a stand-in comes from its denyWrite
+entry and not from Claude Code's default boundary.
 
 EOF
   steps_for home "$STAND_HOME" "$DATA_TREE"
