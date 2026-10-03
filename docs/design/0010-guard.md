@@ -6,7 +6,7 @@
 | Design issue | none; build issue [#24](https://github.com/crenshawdev/baley/issues/24) |
 | Requirement prefix | GRD |
 | Applies | [0002: System design](0002-system-design.md) |
-| Related | ADRs: [0008](../adr/0008-host-sandbox-isolation.md), [0009](../adr/0009-served-instructions.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
+| Related | ADRs: [0008](../adr/0008-host-sandbox-isolation.md), [0009](../adr/0009-served-instructions.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md), [0033](../adr/0033-host-security-bar.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
 
 The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
 
@@ -14,11 +14,11 @@ The current design of this area, and nothing else. Edit it in place when the des
 
 This area decides what Baley does at the host's edge, before a tool call an agent makes runs:
 
-- the one hook Baley installs, what it sees on each host, and how it finds the project;
+- the one hook Baley installs, what it sees on Claude Code, and how it finds the project;
 - the Bash guard: which git commands it acts on, what it asks, what it refuses, and what it does when it cannot decide;
 - the Write/Edit guard: which paths an agent may not write;
 - how each answer is recorded, remembered and replayed;
-- the answer adapter per host, and the host sandbox that keeps agents from writing Baley's home and its config folder, and from reading both where the host can.
+- the answer adapter that renders an answer in the host's hook form, and the protection that keeps agents from reading or writing Baley's home and its config folder.
 
 It does not decide the lease itself or what an out-of-lease commit does at task close ([0006](0006-execution.md)); which branch work happens on or how landing pushes ([0011](0011-milestones-landing-undo-pause.md)); risk detection ([0009](0009-risk.md)); or how stubs are rendered and installed ([0012](0012-host-interface.md)).
 
@@ -30,7 +30,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) the guard is t
 
 | Term | Meaning |
 |---|---|
-| Hook | The host's pre-tool-use call into Baley: on Claude Code for `Bash`, `Write` and `Edit`; on Codex for `Bash`. The host passes the tool, its input, the working directory, the session and a call id. |
+| Hook | Claude Code's pre-tool-use call into Baley, for `Bash`, `Monitor`, `PowerShell`, `Read`, `Grep`, `Glob`, `Write`, `Edit` and `NotebookEdit`. The host passes the tool, its input, the working directory, the session and a call id. |
 | Guard | Baley's answer to a hook call: `pass`, `ask`, `deny`, or `pass on failure`. |
 | Verb | The git subcommand a Bash command carries: `commit` or `push`. |
 | Protected branch | A branch named in `git.protected_branches`. |
@@ -39,14 +39,14 @@ In the component view of [0002](0002-system-design.md) (Figure 4) the guard is t
 | Hard fail | The opt-in rule (`git.guard_hard_fail`) that turns a guard failure on a provably protected branch into a deny. |
 | Remembered policy | The last complete, successfully read policy for the project, kept so that a denial can still be given when the settings are torn. It never supplies an allow. |
 | Redelivery | The host calling the hook again with the same call id after a timeout. |
-| Answer adapter | The per-host translation of a guard answer into what that host accepts. |
+| Answer adapter | The translation of a guard answer into the host's hook form. Claude Code takes `allow`, `deny` and `ask`. |
 | Sandbox | The host's own restriction on what an agent process may read and write ([ADR 0008](../adr/0008-host-sandbox-isolation.md)). |
 
 ## 3. Requirements
 
 | Id | Rule | Why | Depends on | Status |
 |---|---|---|---|---|
-| GRD-R1 | Baley installs one hook per host: a pre-tool-use call for `Bash`, `Write` and `Edit` on Claude Code, and for `Bash` on Codex, with a bounded timeout. There is no other hook. | One edge, the same on both hosts as far as each allows. | SYS-P11, SYS-P12 | Active |
+| GRD-R1 | Baley installs one hook: Claude Code's pre-tool-use call for `Bash`, `Monitor`, `PowerShell`, `Read`, `Grep`, `Glob`, `Write`, `Edit` and `NotebookEdit`, with a bounded timeout. There is no other hook. | One edge for every tool that runs a shell command or reads or writes a file. | SYS-P11, SYS-P12 | Active |
 | GRD-R2 | The guard finds the project by walking up from the call's working directory to the nearest `baley.toml`, stopping at the git repository root (CFG-R4). Outside a project the guard is silent for Bash; the Write/Edit rules that need no project (Baley's config folder) still apply. | The guard acts only where Baley is responsible. | CFG-R4 | Active |
 | GRD-R3 | The Bash guard acts on a command only when it carries a git `commit` or `push` verb. It splits the command on `;`, `|`, `&`, `&&`, `||` and newlines, takes segments whose first word is `git` or ends in `/git`, skips git's global flags and their operands, and declines to judge a command containing substitutions, backticks, redirects, subshells, braces, a leading comment, a NUL or an unclosed quote. A declined command passes with nothing recorded. No other git verb is covered; this is a stated limit of the design. | Commit and push are where work reaches the record and the forge; everything else was tried and did not pay. | | Active |
 | GRD-R4 | A `push` always asks, on any branch, with a fixed reason. | Publishing is the owner's step. | SYS-P5 | Active |
@@ -57,8 +57,8 @@ In the component view of [0002](0002-system-design.md) (Figure 4) the guard is t
 | GRD-R9 | When the record cannot be written, an `ask` becomes `deny` with the reason that the guard could not record its decision, on stderr and in the answer; a `deny` stays a deny; a pass stays a pass. | An unrecorded ask is the gap the record exists to close. | GRD-R8 | Active |
 | GRD-R10 | A redelivered call with the same call id gets its confirmed answer again, from the record, even after the policy changed. | The host may deliver a call twice; the answer must not differ. | EVD-R26 | Active |
 | GRD-R11 | The Write/Edit guard denies a write to any path in Baley's config folder (the global settings file `config.toml` and the keys file `keys.env`, [0003](0003-configuration-and-routing.md) CFG-R2, CFG-R24), the project file `baley.toml`, any file Baley rendered as a stub, and, during an active dispatch, any path outside the dispatch's lease (EXE-R8). Path resolution canonicalizes the existing prefix and refuses control bytes, doubled separators and non-directory parents; a path it cannot resolve is denied. | The owner sets policy and holds the keys, Baley renders stubs, and the lease means something as the write happens. | CFG-R11, CFG-R24, ADR 0009, EXE-R8 | Active |
-| GRD-R12 | The answer adapter renders each answer in the host's form. Claude Code takes `allow`, `deny` and `ask`. Codex takes `deny` and an exit code; it rejects `ask`, so on Codex every `ask` is answered `deny` with the reason and the instruction to run the command outside the agent. | The host that offers less sets the floor. | SYS-P12 | Active |
-| GRD-R13 | The host sandbox, configured at install, keeps agent processes from writing Baley's home and its config folder on both hosts, and from reading both on Claude Code; Codex's sandbox grants reads under every policy, which is Codex's policy and not Baley's to change. The guard is a second layer, not the first. `baley doctor` checks the sandbox configuration on each host and reports what an agent can reach, reads included. | The record is protected by the host, and tampering is detected by the chain and its anchors. | ADR 0008 | Active |
+| GRD-R12 | The answer adapter renders each answer in the host's hook form. Claude Code takes `allow`, `deny` and `ask`. | One guard decision, rendered in the host's form. | SYS-P8 | Active |
+| GRD-R13 | Agents can neither read nor write Baley's home or its config folder. Three mechanisms carry it, configured at install: Claude Code's sandbox, for shell commands and their children (`Bash`, `Monitor`, `PowerShell`); its `Read` and `Edit` deny rules, for the built-in file tools; and the guard's refusal of a `Read`, `Grep` or `Glob` call whose path lies inside or contains either folder, because Claude Code applies `Read` rules to `Grep` and `Glob` only on a best-effort basis. An unavailable sandbox is reported, never passed over. A `keys.env` that is a symbolic link is covered only where its target lies inside those folders. `baley doctor` checks the configuration and reports what an agent can reach, reads included. | The record and the keys are protected by the host and the guard together, and tampering is detected by the chain and its anchors. | ADR 0008, ADR 0033 | Active |
 | GRD-R14 | The guard reads the hook's input up to a fixed bound, answers within the hook's timeout, and never launches a program except git for the branch; when git is unavailable it reads the branch from `.git/HEAD` directly, bounded and without following symbolic links. | The guard must answer fast and must not become a way to run things. | | Active |
 
 ## 4. Roles and actors
@@ -78,13 +78,13 @@ No model is dispatched by this area.
 ### baley guard (hook entry)
 
 - **Inputs:** the hook's JSON on standard input: tool name, tool input (command, or file path and content), working directory, session id, call id.
-- **Outputs:** nothing for pass and pass on failure; for ask and deny, the host's permission form with the reason (Claude Code), or a deny with exit code 2 (Codex).
+- **Outputs:** nothing for pass and pass on failure; for ask and deny, Claude Code's permission form with the reason.
 - **Refusals (as answers):**
 
   | Answer | When | Requirement |
   |---|---|---|
   | `ask` | push; protected commit under `ask`; torn settings | GRD-R4, GRD-R5, GRD-R7 |
-  | `deny` | protected commit under `refuse`; hard fail; remembered denial under torn settings; a Write/Edit to a protected path or outside the lease; an unrecordable ask; any ask on Codex | GRD-R5, GRD-R6, GRD-R7, GRD-R9, GRD-R11, GRD-R12 |
+  | `deny` | protected commit under `refuse`; hard fail; remembered denial under torn settings; a Write/Edit to a protected path or outside the lease; an unrecordable ask | GRD-R5, GRD-R6, GRD-R7, GRD-R9, GRD-R11 |
   | `pass on failure` | git or branch unreadable without hard fail | GRD-R6 |
   | `pass` | everything else, including a declined command and any call outside a project | GRD-R2, GRD-R3 |
 
@@ -166,18 +166,15 @@ sequenceDiagram
     alt record fails
       G-->>H: deny, reason: could not record
       H->>A: blocked
-    else Claude Code
+    else
       G-->>H: ask, reason
       H->>O: allow this push?
       O->>H: yes or no
-    else Codex
-      G-->>H: deny, reason: ask unsupported here, run it yourself
-      H->>A: blocked
     end
   end
 ```
 
-*Figure 2. A push through the guard on each host.*
+*Figure 2. A push through the guard.*
 
 ```mermaid
 sequenceDiagram
@@ -208,7 +205,7 @@ sequenceDiagram
       G-->>H: deny
     else ask
       G->>L: guard.answered ask
-      G-->>H: ask (deny on Codex)
+      G-->>H: ask
     else allow
       G-->>H: nothing
     end
@@ -237,7 +234,7 @@ The binary crate holds the inherited engine; its guard is close to this design.
 
 | Requirement | Status | Where |
 |---|---|---|
-| GRD-R1 | Partly built | One hook for Claude Code (`hooks/hooks.json`); no Codex hook installation |
+| GRD-R1 | Partly built | One Claude Code hook (`hooks/hooks.json`) whose matcher is `Bash\|Write\|Edit`, so `Monitor`, `PowerShell`, `Read`, `Grep`, `Glob` and `NotebookEdit` are not matched yet |
 | GRD-R2 | Partly built | Bash walks up to `.planning` (`crates/baley/src/guard/bash.rs:27-44`); Write/Edit has no discovery (`crates/baley/src/guard/mod.rs:116-126`) |
 | GRD-R3 | Built | `crates/baley/src/guard/bash.rs:47-151, 456-470` |
 | GRD-R4 | Built | `crates/baley/src/guard/bash.rs:481-486` |
@@ -248,12 +245,10 @@ The binary crate holds the inherited engine; its guard is close to this design.
 | GRD-R9 | Not built | An unrecordable ask becomes allow (`crates/baley/src/guard/bash.rs:444-454`) |
 | GRD-R10 | Built | `crates/baley/src/guard/bash.rs:491-501` |
 | GRD-R11 | Partly built | Settings files and rendered stubs denied (`crates/baley/src/guard/mod.rs:323-357`); `.planning` paths still listed (`mod.rs:358-385`); no lease check |
-| GRD-R12 | Not built | Claude Code form only (`crates/baley/src/guard/mod.rs:223-244`) |
-| GRD-R13 | Not built | No doctor; the sandbox probe is a spike (`spikes/host-matrix`) |
+| GRD-R12 | Not built | Only Claude Code's form is written, inline in the guard (`crates/baley/src/guard/mod.rs:223-244`). The renderer this requirement describes is built with Build 3 T10 |
+| GRD-R13 | Not built | No doctor, and the sandbox settings, the `Read` and `Edit` deny rules and the guard's refusal of a `Read`, `Grep` or `Glob` call are all unbuilt. The sandbox probe is a spike (`spikes/host-matrix`) that Build 3 T12 extends to separate home and config folders and the built-in file tools |
 | GRD-R14 | Built | `crates/baley/src/guard/mod.rs:15, 105-129`, `crates/baley/src/guard/bash.rs:254-367` |
 
 ## 12. Open questions
 
-| Question | Decided by |
-|---|---|
-| Whether Codex runs a hook before `apply_patch`, which would give the Write/Edit rules a Codex path | [0012: Host interface](0012-host-interface.md), by a probe on Codex |
+No question is open.
