@@ -8,6 +8,7 @@
 //! verifies them.
 
 pub mod anchor;
+pub mod caller;
 pub mod canonical;
 pub mod chain;
 pub mod claim;
@@ -27,6 +28,13 @@ pub use anchor::{
     ANCHOR_PUSHED_VERSION, ANCHOR_RECONCILE, ANCHOR_RESTORE_ACKNOWLEDGED,
     ANCHOR_RESTORE_ACKNOWLEDGED_VERSION, ANCHOR_SCOPE, ANCHOR_STREAM, ANCHOR_TAG_PREFIX,
     AnchorPushedPayload, RestoreAcknowledgedPayload, anchor_command_event, anchor_tag,
+};
+pub use caller::{
+    BALEY_SESSION_BYTES, CallIdentity, CallSource, Caller, CallerError, HookCaller,
+    InstructionEvidence, MAX_CALL_IDENTITY_BYTES, MAX_CLIENT_VERSION_BYTES, MAX_DIRECTORY_BYTES,
+    MAX_HOST_BYTES, MAX_HOST_SESSION_BYTES, MAX_INSTRUCTION_HASH_BYTES,
+    MAX_INSTRUCTION_IDENTITY_BYTES, MAX_INSTRUCTION_VERSION_BYTES, MAX_INSTRUCTIONS,
+    MAX_WORK_ORDER_BYTES, ServerCaller,
 };
 pub use canonical::{CanonicalError, MAX_SAFE_INTEGER, canonical_json};
 pub use chain::{
