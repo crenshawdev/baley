@@ -276,7 +276,7 @@ fn finish_as(store: &impl Ledger, cmd: &Command) {
         })
         .unwrap();
 }
-/// Claims by one caller and completes by another under one owner, then completes a second claim with no caller. Catches a completion stamped with the claim's caller, a claim's provenance rewritten, and a caller-free completion falling back to the claimer's.
+/// Claims by one caller and completes by another under one owner, completes a second claim with no caller, then takes a third claim with no caller. Catches a completion stamped with the claim's caller, a claim's provenance rewritten, a caller-free completion falling back to the claimer's, and a caller-free claim inheriting the previous claimer's caller.
 pub fn a_claim_and_its_completion_keep_their_own_callers<F: StoreFactory>(factory: &F) {
     let store = created(factory);
     let (server, hook) = (server_caller(), hook_caller());
@@ -284,6 +284,8 @@ pub fn a_claim_and_its_completion_keep_their_own_callers<F: StoreFactory>(factor
     finish_as(&store, &owned_by("effect", Some(&hook)));
     take_as(&store, &owned_by("effect2", Some(&server)));
     finish_as(&store, &owned_by("effect2", None));
+    take_as(&store, &owned_by("effect3", None));
+    finish_as(&store, &owned_by("effect3", None));
     let events = history(&store);
     let seen: Vec<(&str, Option<Caller>)> = events
         .iter()
@@ -296,6 +298,9 @@ pub fn a_claim_and_its_completion_keep_their_own_callers<F: StoreFactory>(factor
             ("fixture.item", Some(hook.clone())),
             (COMMAND_COMPLETED, Some(hook)),
             (COMMAND_CLAIMED, Some(server)),
+            ("fixture.item", None),
+            (COMMAND_COMPLETED, None),
+            (COMMAND_CLAIMED, None),
             ("fixture.item", None),
             (COMMAND_COMPLETED, None),
         ]
