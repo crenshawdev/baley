@@ -112,14 +112,14 @@ Three ideas carry the design.
 
 **The ledger is the only source of truth.** Everything Baley learns or decides is appended to the ledger as an event: a small, typed, attributed record of one fact, such as "plan 5-2 approved by the owner" or "suite run R7 passed". Events are never edited. A correction is a new event.
 
-**Current state is a projection.** Hardin, the Daneels and the owner mostly ask what is true now: what phase 5's status is, which plan is approved, what the next allowed step is. Those answers live in views: keyed documents computed from the events by domain code and updated in the same transaction that appends the events. Views can be thrown away and rebuilt from the ledger, so they never become a second source of truth, and decisions that grant authority check the events themselves.
+**Current state is a projection.** Hardin, the workers and the owner mostly ask what is true now: what phase 5's status is, which plan is approved, what the next allowed step is. Those answers live in views: keyed documents computed from the events by domain code and updated in the same transaction that appends the events. Views can be thrown away and rebuilt from the ledger, so they never become a second source of truth, and decisions that grant authority check the events themselves.
 
 **Storage is behind a port.** Domain code sees traits that speak Baley's language (append these events, get this view by key, store this payload) and never SQL. SQLite is one adapter behind that port.
 
 ```mermaid
 flowchart LR
   owner(["Owner<br/><small>Decides and answers for the work</small>"])
-  host["Host agent<br/><small>Claude Code or Codex, running the Daneels</small>"]
+  host["Host agent<br/><small>Claude Code, running Baley's workers as the session's subagents</small>"]
   baley["Baley<br/><small>Records the evidence, decides what may happen next</small>"]
   git["Git repository<br/><small>Source, commits, the project file</small>"]
   forge["Forge<br/><small>Immutable chain-head anchors</small>"]
@@ -129,7 +129,8 @@ flowchart LR
   host -->|tool calls: MCP| baley
   baley -->|reads history, runs git| git
   baley -->|pushes anchors| forge
-  baley -->|review material: HTTPS| prov
+  host -->|review calls with Baley's prompts: HTTPS| prov
+  baley -->|model lists: HTTPS| prov
   classDef person fill:#08427b,stroke:#052e56,color:#fff
   classDef system fill:#1168bd,stroke:#0b4884,color:#fff
   classDef external fill:#6b6b6b,stroke:#4d4d4d,color:#fff
@@ -138,12 +139,12 @@ flowchart LR
   class host,git,forge,prov external
 ```
 
-*Figure 1. System context, in the C4 model's sense. Baley sits between the owner, the host agent that runs the Daneels, the repository, the forge that holds its anchors, and the outside reviewers.*
+*Figure 1. System context, in the C4 model's sense. Baley sits between the owner, Claude Code, whose session runs Baley's workers as its subagents, the repository, the forge that holds its anchors, and the outside providers. The host session makes the review calls with the prompts Baley built, and Baley itself asks a provider only for its model list.*
 
 ```mermaid
 flowchart TB
   owner(["Owner"])
-  host["Host agent<br/><small>Claude Code or Codex, sandboxed</small>"]
+  host["Host agent<br/><small>Claude Code, sandboxed</small>"]
   subgraph baley [Baley]
     direction TB
     server["MCP server<br/><small>shared server in Build 3; Hardin decides the next step</small>"]
@@ -168,7 +169,7 @@ flowchart TB
   class host,checkout external
 ```
 
-*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. The host's sandbox keeps its agents from writing Baley's home and config folder, and on Claude Code from reading them; only Baley's own processes write the database.*
+*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. Claude Code's sandbox and its `Read` and `Edit` deny rules keep agents from reading or writing Baley's home and config folder, and only Baley's own processes write the database.*
 
 ### Terms
 
@@ -1477,16 +1478,18 @@ classDiagram
 - [ADR 0005: Put storage behind a port with engine adapters](../adr/0005-storage-port.md), superseded in part by ADR 0010
 - [ADR 0006: Keep every operational record in the ledger](../adr/0006-no-markdown-records.md)
 - [ADR 0007: Anchor chain heads on the forge](../adr/0007-forge-anchors.md), superseded in part by ADR 0026
-- [ADR 0008: Use host sandboxes to keep agents out of the ledger](../adr/0008-host-sandbox-isolation.md)
+- [ADR 0008: Use host sandboxes to keep agents out of the ledger](../adr/0008-host-sandbox-isolation.md), superseded in part by ADR 0020 and ADR 0033
 - [ADR 0009: Serve instructions from the binary; files on disk are stubs](../adr/0009-served-instructions.md)
 - [ADR 0010: Define the projector and event schema traits in the port](../adr/0010-projector-traits-in-the-port.md), superseding ADR 0005 in part, superseded in part by ADR 0021
+- [ADR 0020: State what each host's sandbox denies; reads are the host's policy](../adr/0020-sandbox-is-a-write-barrier.md), superseding ADR 0008 in part, superseded in part by ADR 0027 and ADR 0033
 - [ADR 0021: Claim liveness and scope rules in the port](../adr/0021-claim-rules-in-the-port.md)
 - [ADR 0022: Report owner-acknowledged restores behind a remote anchor](../adr/0022-acknowledged-restore.md), superseded in part by ADR 0035
 - [ADR 0023: Keep whole-store backups outside Baley](../adr/0023-no-backups-in-baley.md)
 - [ADR 0024: Separate port conformance from adapter mechanism tests](../adr/0024-conformance-suite-and-adapter-tests.md)
 - [ADR 0025: Point anchor tags at the empty tree](../adr/0025-anchor-tag-objects.md)
 - [ADR 0026: Anchors are read by Baley, and a missing tag ruleset is reported](../adr/0026-anchors-read-by-baley.md), superseding ADR 0007 in part
-- [ADR 0027: Keep Baley's files in its own crenshawdev folders, with provider keys in a plain keys.env](../adr/0027-vendor-folders-and-plain-keys.md), superseding ADR 0002 and ADR 0003 in part
+- [ADR 0027: Keep Baley's files in its own crenshawdev folders, with provider keys in a plain keys.env](../adr/0027-vendor-folders-and-plain-keys.md), superseding ADR 0002 and ADR 0003 in part, superseded in part by ADR 0032 and ADR 0033
+- [ADR 0033: Support only hosts whose sandboxing and execution controls meet Baley's requirements](../adr/0033-host-security-bar.md), superseding ADR 0008, ADR 0018, ADR 0020, ADR 0027 and ADR 0029 in part
 - [ADR 0035: Report purge uncertainty after restoring a store](../adr/0035-restore-purge-uncertainty.md), superseding ADR 0022 in part
 
 ## Future work
