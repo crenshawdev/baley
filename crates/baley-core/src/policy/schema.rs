@@ -95,22 +95,22 @@ impl Rung {
 }
 
 /// A host whose section a settings file may hold (design 0012 section 6).
+///
+/// The type stays generic on purpose. A host is added here, with its adapter,
+/// only by an ADR that shows it meets ADR 0033's security bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Host {
     /// Claude Code.
     ClaudeCode,
-    /// Codex.
-    Codex,
 }
 impl Host {
     /// Every host Baley knows.
-    pub const ALL: [Host; 2] = [Host::ClaudeCode, Host::Codex];
+    pub const ALL: [Host; 1] = [Host::ClaudeCode];
 
     /// The name in `[host.<name>]`.
     pub fn name(self) -> &'static str {
         match self {
             Host::ClaudeCode => "claude-code",
-            Host::Codex => "codex",
         }
     }
 

@@ -244,7 +244,7 @@ fn valid_pairs_are_not_returned_untyped_unordered_or_without_the_host() {
     let typed = judge(
         FileLayer::Project,
         true,
-        Some(Host::Codex),
+        Some(Host::ClaudeCode),
         &[
             ("roles.planner.effort", "xhigh"),
             ("example.flag", "true"),
@@ -257,13 +257,13 @@ fn valid_pairs_are_not_returned_untyped_unordered_or_without_the_host() {
         vec![
             pair(
                 "roles.planner.effort",
-                Some(Host::Codex),
+                Some(Host::ClaudeCode),
                 Value::Rung(Rung::Xhigh)
             ),
-            pair("example.flag", Some(Host::Codex), Value::Bool(true)),
+            pair("example.flag", Some(Host::ClaudeCode), Value::Bool(true)),
             pair(
                 "roles.planner.model",
-                Some(Host::Codex),
+                Some(Host::ClaudeCode),
                 Value::ModelName("opus".into())
             ),
         ]
@@ -314,15 +314,12 @@ fn names(list: &[&str]) -> AcceptedNames {
     }
 }
 
-/// Claude Code accepts four names and Codex none.
+/// Claude Code accepts four names.
 fn accepted() -> BTreeMap<Host, AcceptedNames> {
-    BTreeMap::from([
-        (
-            Host::ClaudeCode,
-            names(&["opus", "sonnet", "haiku", "fable"]),
-        ),
-        (Host::Codex, names(&[])),
-    ])
+    BTreeMap::from([(
+        Host::ClaudeCode,
+        names(&["opus", "sonnet", "haiku", "fable"]),
+    )])
 }
 
 fn model(value: &str) -> TypedPair {
@@ -339,40 +336,12 @@ fn a_model_the_named_host_holds_is_not_refused() {
 }
 
 #[test]
-fn a_model_the_named_host_lacks_is_not_accepted_because_another_host_holds_it() {
-    // AC3: opus is claude-code's, so codex refuses it.
-    let refusal = models(&[model("opus")], Some(Host::Codex)).expect_err("codex lacks opus");
-    assert_eq!(refusal.code(), "unknown-model");
-    assert_eq!(
-        refusal,
-        SetRefusal::UnknownModel {
-            setting: "roles.planner.model".into(),
-            model: "opus".into(),
-            host: Some(Host::Codex),
-            checked: vec![(Host::Codex, vec![])],
-        }
-    );
-    let text = refusal.to_string();
-    assert!(text.starts_with("unknown-model: "), "{text}");
-    assert!(text.contains("roles.planner.model"), "{text}");
-    assert!(text.contains("opus"), "{text}");
-    assert!(text.contains("codex accepts: none"), "{text}");
-    assert!(!text.contains("claude-code"), "{text}");
-}
-
-#[test]
 fn a_model_one_host_holds_is_not_refused_when_no_host_is_named() {
     assert_eq!(models(&[model("opus")], None), Ok(()));
-    // Codex's names hold it and Claude Code's do not: still enough.
-    let only_codex = BTreeMap::from([
-        (Host::ClaudeCode, names(&[])),
-        (Host::Codex, names(&["gpt-x"])),
-    ]);
-    assert_eq!(judge_models(&[model("gpt-x")], None, &only_codex), Ok(()));
 }
 
 #[test]
-fn a_model_no_host_holds_is_not_accepted_and_both_hosts_are_named() {
+fn a_model_no_host_holds_is_not_accepted_and_every_hosts_names_are_listed() {
     let refusal = models(&[model("mystery")], None).expect_err("no host holds it");
     let text = refusal.to_string();
     assert!(text.starts_with("unknown-model: "), "{text}");
@@ -381,31 +350,29 @@ fn a_model_no_host_holds_is_not_accepted_and_both_hosts_are_named() {
         text.contains("claude-code accepts: fable, haiku, opus, sonnet"),
         "{text}"
     );
-    assert!(text.contains("codex accepts: none"), "{text}");
 }
 
 #[test]
 fn an_unknown_model_refusal_that_garbles_its_sentence_is_caught() {
-    let named = models(&[model("opus")], Some(Host::Codex)).expect_err("codex lacks opus");
+    let named = models(&[model("mystery")], Some(Host::ClaudeCode)).expect_err("host lacks it");
     assert_eq!(
         named.to_string(),
-        "unknown-model: roles.planner.model is \"opus\", which the codex catalog does not \
-         accept; codex accepts: none"
+        "unknown-model: roles.planner.model is \"mystery\", which the claude-code catalog does not \
+         accept; claude-code accepts: fable, haiku, opus, sonnet"
     );
     let unnamed = models(&[model("mystery")], None).expect_err("no host holds it");
     assert_eq!(
         unnamed.to_string(),
         "unknown-model: roles.planner.model is \"mystery\", which no host's catalog accepts; \
-         claude-code accepts: fable, haiku, opus, sonnet; codex accepts: none"
+         claude-code accepts: fable, haiku, opus, sonnet"
     );
 }
 
 #[test]
 fn a_host_missing_from_the_supplied_names_is_not_taken_to_accept_anything() {
-    let only_claude = BTreeMap::from([(Host::ClaudeCode, names(&["opus"]))]);
-    let refusal = judge_models(&[model("opus")], Some(Host::Codex), &only_claude)
-        .expect_err("codex supplied no names");
-    assert!(refusal.to_string().contains("codex accepts: none"));
+    let refusal = judge_models(&[model("opus")], Some(Host::ClaudeCode), &BTreeMap::new())
+        .expect_err("claude-code supplied no names");
+    assert!(refusal.to_string().contains("claude-code accepts: none"));
 }
 
 #[test]
@@ -535,25 +502,25 @@ fn a_host_value_written_at_the_top_level_or_over_the_host_table_is_caught() {
     let base = settings_file(
         "/c/config.toml",
         "roles.planner.effort = \"low\"\n\
-         [host.codex]\n\
+         [host.claude-code]\n\
          example.flag = true\n\
-         [host.claude-code.roles.planner]\n\
+         [host.cursor.roles.planner]\n\
          model = \"kept\"\n",
     );
     let pairs = [pair(
         "roles.planner.effort",
-        Some(Host::Codex),
+        Some(Host::ClaudeCode),
         Value::Rung(Rung::Xhigh),
     )];
     let out = rendered(FileLayer::Global, Some(&base), &pairs).expect("a valid base");
     let expected = table(
         "[roles.planner]\n\
          effort = \"low\"\n\
-         [host.codex]\n\
+         [host.claude-code]\n\
          example.flag = true\n\
-         [host.codex.roles.planner]\n\
-         effort = \"xhigh\"\n\
          [host.claude-code.roles.planner]\n\
+         effort = \"xhigh\"\n\
+         [host.cursor.roles.planner]\n\
          model = \"kept\"\n",
     );
     assert_eq!(out, expected);
@@ -564,13 +531,13 @@ fn a_new_file_that_holds_a_value_a_read_would_refuse_or_misplace_is_caught() {
     let pairs = [
         pair(
             "roles.planner.effort",
-            Some(Host::Codex),
+            Some(Host::ClaudeCode),
             Value::Rung(Rung::Max),
         ),
-        pair("example.flag", Some(Host::Codex), Value::Bool(true)),
+        pair("example.flag", Some(Host::ClaudeCode), Value::Bool(true)),
         pair(
             "roles.planner.model",
-            Some(Host::Codex),
+            Some(Host::ClaudeCode),
             Value::ModelName("gpt-x".into()),
         ),
     ];
@@ -578,10 +545,10 @@ fn a_new_file_that_holds_a_value_a_read_would_refuse_or_misplace_is_caught() {
     assert_eq!(
         out,
         table(
-            "[host.codex.roles.planner]\n\
+            "[host.claude-code.roles.planner]\n\
              effort = \"max\"\n\
              model = \"gpt-x\"\n\
-             [host.codex.example]\n\
+             [host.claude-code.example]\n\
              flag = true\n"
         )
     );
@@ -603,15 +570,15 @@ fn a_new_file_that_holds_a_value_a_read_would_refuse_or_misplace_is_caught() {
     assert_eq!(
         read,
         vec![
-            ("example.flag", Some(Host::Codex), Value::Bool(true)),
+            ("example.flag", Some(Host::ClaudeCode), Value::Bool(true)),
             (
                 "roles.planner.effort",
-                Some(Host::Codex),
+                Some(Host::ClaudeCode),
                 Value::Rung(Rung::Max)
             ),
             (
                 "roles.planner.model",
-                Some(Host::Codex),
+                Some(Host::ClaudeCode),
                 Value::ModelName("gpt-x".into())
             ),
         ]
@@ -699,7 +666,7 @@ fn parsed(layer: FileLayer, text: &str) -> crate::policy::ParsedLayer {
 
 const HELD_FILE: &str = "example.flag = true\n\
                          roles.planner.effort = \"high\"\n\
-                         [host.codex.roles.planner]\n\
+                         [host.claude-code.roles.planner]\n\
                          model = \"gpt-x\"\n";
 
 #[test]
@@ -710,7 +677,7 @@ fn a_set_whose_every_pair_the_file_holds_is_not_a_change() {
         pair("roles.planner.effort", None, Value::Rung(Rung::High)),
         pair(
             "roles.planner.model",
-            Some(Host::Codex),
+            Some(Host::ClaudeCode),
             Value::ModelName("gpt-x".into()),
         ),
     ];
@@ -721,7 +688,7 @@ fn a_set_whose_every_pair_the_file_holds_is_not_a_change() {
 fn a_value_held_at_the_other_host_level_is_not_taken_as_held() {
     let file = parsed(FileLayer::Global, HELD_FILE);
     // Held at the top level, set under a host section.
-    let under_host = pair("example.flag", Some(Host::Codex), Value::Bool(true));
+    let under_host = pair("example.flag", Some(Host::ClaudeCode), Value::Bool(true));
     assert_eq!(
         changed_pairs(Some(&file), std::slice::from_ref(&under_host)),
         vec![under_host]
@@ -735,16 +702,6 @@ fn a_value_held_at_the_other_host_level_is_not_taken_as_held() {
     assert_eq!(
         changed_pairs(Some(&file), std::slice::from_ref(&top)),
         vec![top]
-    );
-    // Held in codex's section, set in claude-code's.
-    let other = pair(
-        "roles.planner.model",
-        Some(Host::ClaudeCode),
-        Value::ModelName("gpt-x".into()),
-    );
-    assert_eq!(
-        changed_pairs(Some(&file), std::slice::from_ref(&other)),
-        vec![other]
     );
 }
 
@@ -771,7 +728,7 @@ fn a_mixed_set_does_not_report_a_held_pair_or_lose_the_order_of_the_changed_ones
     let held = pair("example.flag", None, Value::Bool(true));
     let changed_b = pair(
         "roles.planner.model",
-        Some(Host::Codex),
+        Some(Host::ClaudeCode),
         Value::ModelName("other".into()),
     );
     let pairs = [changed_b.clone(), held, changed_a.clone()];
@@ -894,7 +851,7 @@ fn a_project_file_set_output_missing_its_file_settings_commit_note_or_version_is
             changed_effort(),
             pair(
                 "roles.planner.model",
-                Some(Host::Codex),
+                Some(Host::ClaudeCode),
                 Value::ModelName("gpt-x".into()),
             ),
         ],
@@ -906,7 +863,7 @@ fn a_project_file_set_output_missing_its_file_settings_commit_note_or_version_is
         vec![
             "wrote /r/baley.toml",
             "set roles.planner.effort = \"high\"",
-            "set [host.codex] roles.planner.model = \"gpt-x\"",
+            "set [host.claude-code] roles.planner.model = \"gpt-x\"",
             "The change applies at the next commit.",
             "policy version 7",
         ]
@@ -1389,32 +1346,20 @@ fn a_host_section_value_is_not_reported_from_the_wrong_layer_when_a_host_is_give
 #[test]
 fn a_report_with_no_host_that_leaves_out_a_host_section_or_applies_one_is_caught() {
     let layers = ShowLayers {
-        global: global(
-            "[host.codex.roles.planner]\neffort = \"low\"\n\
-             [host.claude-code.roles.planner]\neffort = \"max\"\n",
-        ),
+        global: global("[host.claude-code.roles.planner]\neffort = \"max\"\n"),
         working: None,
         head: None,
     };
     let lines = report(None, &["roles.planner.effort"], &layers, None);
     assert_eq!(
-        &lines[..5],
+        &lines[..4],
         [
             "roles.planner.effort: kind rung, default \"high\", scope both",
             "  global [host.claude-code]: \"max\"",
-            "  global [host.codex]: \"low\"",
             "  project: not set",
             "  effective: \"high\" from default",
         ]
     );
-    // With a host given, the other host's section is not listed.
-    let lines = report(Some(Host::Codex), &["roles.planner.effort"], &layers, None);
-    assert!(
-        lines.iter().all(|line| !line.contains("claude-code")),
-        "{lines:?}"
-    );
-    assert!(lines.contains(&"  global [host.codex]: \"low\"".to_owned()));
-    assert!(lines.contains(&"  effective: \"low\" from global-host (/c/config.toml)".to_owned()));
 }
 
 #[test]

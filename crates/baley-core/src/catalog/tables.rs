@@ -8,11 +8,9 @@ use crate::policy::Host;
 
 /// The short names a host resolves itself. They live only here, never in the
 /// view, so a later binary's alias change reaches every catalog at once.
-/// Codex has none until its host adapter fills them in.
 pub fn host_aliases(host: Host) -> &'static [&'static str] {
     match host {
         Host::ClaudeCode => &["opus", "sonnet", "haiku", "fable"],
-        Host::Codex => &[],
     }
 }
 

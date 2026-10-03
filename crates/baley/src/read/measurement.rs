@@ -12,19 +12,6 @@ use std::{
 const SHELL_READ_PROGRAMS: &[&str] = &[
     "cat", "head", "tail", "less", "more", "nl", "wc", "grep", "rg", "find", "ls", "tree",
 ];
-const KNOWN_NON_READ_ITEMS: &[&str] = &[
-    "AgentMessage",
-    "Reasoning",
-    "FileChange",
-    "UserMessage",
-    "ContextCompaction",
-];
-
-pub enum Host {
-    Claude,
-    Codex,
-}
-
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Tally {
     pub calls: u64,
@@ -32,7 +19,6 @@ pub struct Tally {
 }
 
 pub fn count_reads(
-    host: Host,
     records: &[Value],
     read_lines: &BTreeMap<String, u64>,
 ) -> Result<BTreeMap<String, Tally>, Value> {
@@ -42,60 +28,47 @@ pub fn count_reads(
         entry.calls += 1;
         entry.bytes += bytes;
     };
-    match host {
-        Host::Claude => {
-            let blocks: Vec<_> = records
-                .iter()
-                .filter_map(|record| record.pointer("/message/content").and_then(Value::as_array))
-                .flatten()
-                .collect();
-            let results: BTreeMap<_, _> = blocks
-                .iter()
-                .filter(|block| block["type"] == "tool_result")
-                .filter_map(|block| {
-                    block["tool_use_id"]
-                        .as_str()
-                        .map(|id| (id, &block["content"]))
-                })
-                .collect();
-            let mut seen = BTreeSet::new();
-            for block in blocks.iter().filter(|block| block["type"] == "tool_use") {
-                let id = block["id"].as_str().ok_or_else(|| {
-                    refusal("document-incomplete", "an actual tool use has no identity")
-                })?;
-                if !seen.insert(id) {
-                    continue;
-                }
-                let Some(kind) = claude_read_kind(
-                    block["name"].as_str().unwrap_or(""),
-                    &block["input"],
-                    read_lines,
-                ) else {
-                    continue;
-                };
-                let content = results.get(id).ok_or_else(|| {
-                    refusal(
-                        "document-incomplete",
-                        "a counted read has no recorded tool result",
-                    )
-                })?;
-                tally(
-                    kind,
-                    content
-                        .as_str()
-                        .map_or_else(|| text_bytes(content), |text| text.len() as u64),
-                );
-            }
+    let blocks: Vec<_> = records
+        .iter()
+        .filter_map(|record| record.pointer("/message/content").and_then(Value::as_array))
+        .flatten()
+        .collect();
+    let results: BTreeMap<_, _> = blocks
+        .iter()
+        .filter(|block| block["type"] == "tool_result")
+        .filter_map(|block| {
+            block["tool_use_id"]
+                .as_str()
+                .map(|id| (id, &block["content"]))
+        })
+        .collect();
+    let mut seen = BTreeSet::new();
+    for block in blocks.iter().filter(|block| block["type"] == "tool_use") {
+        let id = block["id"]
+            .as_str()
+            .ok_or_else(|| refusal("document-incomplete", "an actual tool use has no identity"))?;
+        if !seen.insert(id) {
+            continue;
         }
-        Host::Codex => {
-            for record in records.iter().filter(|record| {
-                record["type"] == "event_msg" && record["payload"]["type"] == "item_completed"
-            }) {
-                if let Some((kind, bytes)) = codex_read(&record["payload"]["item"]) {
-                    tally(kind, bytes);
-                }
-            }
-        }
+        let Some(kind) = claude_read_kind(
+            block["name"].as_str().unwrap_or(""),
+            &block["input"],
+            read_lines,
+        ) else {
+            continue;
+        };
+        let content = results.get(id).ok_or_else(|| {
+            refusal(
+                "document-incomplete",
+                "a counted read has no recorded tool result",
+            )
+        })?;
+        tally(
+            kind,
+            content
+                .as_str()
+                .map_or_else(|| text_bytes(content), |text| text.len() as u64),
+        );
     }
     Ok(counts)
 }
@@ -185,44 +158,6 @@ fn claude_read_kind(
         _ => return None,
     };
     Some(kind.into())
-}
-
-fn codex_read(item: &Value) -> Option<(String, u64)> {
-    match item["type"].as_str() {
-        Some("McpToolCall") => {
-            let tool = item["tool"].as_str().unwrap_or("");
-            let kind = if item["server"] == "baley" && tool == "baley_query" {
-                query_kind(&item["arguments"])
-            } else if read_name(tool) {
-                "unclassified".into()
-            } else {
-                return None;
-            };
-            Some((kind, text_bytes(&item["result"]["content"])))
-        }
-        Some("CommandExecution") => {
-            let is_read = item["parsed_cmd"].as_array().is_some_and(|commands| {
-                !commands.is_empty()
-                    && commands.iter().all(|command| {
-                        matches!(
-                            command["type"].as_str(),
-                            Some("read" | "search" | "list_files")
-                        )
-                    })
-            });
-            let kind = if is_read {
-                "shell read"
-            } else {
-                "unclassified"
-            };
-            Some((
-                kind.into(),
-                item["aggregated_output"].as_str().unwrap_or("").len() as u64,
-            ))
-        }
-        Some(kind) if KNOWN_NON_READ_ITEMS.contains(&kind) => None,
-        _ => Some(("unclassified".into(), 0)),
-    }
 }
 
 pub struct Report {
@@ -770,7 +705,7 @@ fn measure(
         .iter()
         .flat_map(|source| source.records.iter().cloned())
         .collect();
-    let counts = count_reads(Host::Claude, &records, read_lines)?;
+    let counts = count_reads(&records, read_lines)?;
     let read_count = counts.values().map(|tally| tally.calls).sum();
     let whole_file_reads = counts.get("Read whole").map_or(0, |tally| tally.calls);
     let unclassified_reads = counts.get("unclassified").map_or(0, |tally| tally.calls);
@@ -866,130 +801,6 @@ fn add(left: u64, right: u64) -> Result<u64, Value> {
             "document-incomplete",
             "planner-round token arithmetic overflowed",
         )
-    })
-}
-
-pub struct RolloutReport {
-    pub revision: String,
-    pub body: String,
-}
-
-fn rollout_for(names: &[String], session_id: &str) -> Result<usize, Value> {
-    if !valid_uuid(session_id) {
-        return Err(refusal(
-            "document-identity",
-            "codex-rollout session id must be a UUID",
-        ));
-    }
-    let suffix = format!("-{session_id}.jsonl");
-    let mut matches = names.iter().enumerate().filter(|(_, name)| {
-        name.strip_prefix("rollout-")
-            .and_then(|rest| rest.strip_suffix(&suffix))
-            .is_some_and(|time| !time.is_empty())
-    });
-    let (index, _) = matches.next().ok_or_else(|| {
-        refusal(
-            "document-not-found",
-            "the requested Codex rollout is absent",
-        )
-    })?;
-    if matches.next().is_some() {
-        return Err(refusal(
-            "document-ambiguous",
-            "several Codex rollouts carry the requested session id",
-        ));
-    }
-    Ok(index)
-}
-
-pub fn resolve_rollout(session_id: &str) -> Result<RolloutReport, Value> {
-    if !valid_uuid(session_id) {
-        return Err(refusal(
-            "document-identity",
-            "codex-rollout session id must be a UUID",
-        ));
-    }
-    let home = std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| refusal("document-unavailable", "the Codex host home is unavailable"))?;
-    let host_root = PathBuf::from(home).join(".codex/sessions");
-    let unavailable = |_| {
-        refusal(
-            "document-unavailable",
-            "the Codex rollout names cannot be listed",
-        )
-    };
-    let mut directories = if host_root.is_dir() {
-        vec![host_root]
-    } else {
-        Vec::new()
-    };
-    for _ in 0..3 {
-        let mut nested = Vec::new();
-        for directory in directories {
-            for entry in fs::read_dir(directory).map_err(unavailable)? {
-                let entry = entry.map_err(unavailable)?;
-                if entry.file_type().map_err(unavailable)?.is_dir() {
-                    nested.push(entry.path());
-                }
-            }
-        }
-        directories = nested;
-    }
-    let mut names = Vec::new();
-    let mut paths = Vec::new();
-    for directory in directories {
-        for entry in fs::read_dir(directory).map_err(unavailable)? {
-            let entry = entry.map_err(unavailable)?;
-            if entry.file_type().map_err(unavailable)?.is_file() {
-                names.push(entry.file_name().to_string_lossy().into_owned());
-                paths.push(entry.path());
-            }
-        }
-    }
-    let index = rollout_for(&names, session_id)?;
-    let bytes = fs::read(&paths[index]).map_err(|_| {
-        refusal(
-            "document-unavailable",
-            "the requested Codex rollout cannot be read",
-        )
-    })?;
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|_| refusal("document-incomplete", "the Codex rollout is not UTF-8"))?;
-    let records: Vec<Value> = text
-        .lines()
-        .map(|line| {
-            serde_json::from_str(line).map_err(|_| {
-                refusal(
-                    "document-incomplete",
-                    "the Codex rollout contains invalid JSON",
-                )
-            })
-        })
-        .collect::<Result<_, _>>()?;
-    let counts = count_reads(Host::Codex, &records, &BTreeMap::new())?;
-    let read_count: u64 = counts.values().map(|tally| tally.calls).sum();
-    let unclassified_reads = counts.get("unclassified").map_or(0, |tally| tally.calls);
-    let source_digest = crate::store::model::hex(&Sha256::digest(&bytes));
-    let body = format!(
-        concat!(
-            "Codex rollout measurement\n",
-            "host: codex\n",
-            "session_id: {session_id}\n",
-            "source_digest: {source_digest}\n",
-            "read_count: {read_count}\n",
-            "unclassified_reads: {unclassified_reads}\n",
-            "{reads}",
-        ),
-        session_id = session_id,
-        source_digest = source_digest,
-        read_count = read_count,
-        unclassified_reads = unclassified_reads,
-        reads = report_lines(&counts)
-    );
-    Ok(RolloutReport {
-        revision: source_digest,
-        body,
     })
 }
 

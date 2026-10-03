@@ -27,7 +27,6 @@ fn tier_parse_folds_no_case_and_takes_no_rung_name() {
 fn each_catalog_name_parses_to_its_own_catalog_and_round_trips() {
     let expected = [
         ("claude-code", Catalog::Host(Host::ClaudeCode)),
-        ("codex", Catalog::Host(Host::Codex)),
         ("openai", Catalog::Provider(Provider::OpenAi)),
         ("deepseek", Catalog::Provider(Provider::DeepSeek)),
     ];
@@ -39,14 +38,14 @@ fn each_catalog_name_parses_to_its_own_catalog_and_round_trips() {
 
 #[test]
 fn anthropic_a_case_variant_and_the_empty_name_are_unknown_providers() {
-    for name in ["anthropic", "Codex", ""] {
+    for name in ["anthropic", "Codex", "Claude-Code", ""] {
         let refusal = Catalog::parse(name).expect_err(name);
         assert_eq!(refusal.code(), "unknown-provider", "{name}");
     }
     assert_eq!(
         Catalog::parse("anthropic").unwrap_err().to_string(),
         "unknown-provider: \"anthropic\" is no model catalog; \
-         catalogs: claude-code, codex, openai, deepseek"
+         catalogs: claude-code, openai, deepseek"
     );
 }
 
@@ -57,12 +56,11 @@ fn the_reserved_user_project_is_no_id_a_project_file_could_name() {
 }
 
 #[test]
-fn claude_code_has_exactly_its_four_aliases_and_codex_none() {
+fn claude_code_has_exactly_its_four_aliases() {
     let claude: BTreeSet<&str> = host_aliases(Host::ClaudeCode).iter().copied().collect();
     let expected: BTreeSet<&str> = ["opus", "sonnet", "haiku", "fable"].into_iter().collect();
     assert_eq!(claude, expected);
     assert_eq!(host_aliases(Host::ClaudeCode).len(), 4);
-    assert!(host_aliases(Host::Codex).is_empty());
 }
 
 #[test]
@@ -130,10 +128,10 @@ fn an_owner_addition_without_a_tier_has_no_tier_key_and_one_with_a_tier_names_it
 
 #[test]
 fn an_owner_removal_payload_holds_exactly_catalog_name_change_and_version() {
-    let codex = Catalog::Host(Host::Codex);
+    let catalog = Catalog::Host(Host::ClaudeCode);
     assert_eq!(
-        owner_changed_payload(codex, "o-max", OwnerChange::Removed, 9),
-        json!({"catalog": "codex", "name": "o-max", "change": "removed", "catalog_version": 9})
+        owner_changed_payload(catalog, "o-max", OwnerChange::Removed, 9),
+        json!({"catalog": "claude-code", "name": "o-max", "change": "removed", "catalog_version": 9})
     );
 }
 
@@ -371,13 +369,16 @@ fn an_owner_addition_takes_its_tier_or_none_and_moves_the_version() {
     let mut docs = BTreeMap::new();
     project(
         &mut docs,
-        &owner(3, "codex", "o-cheap", "added", Some("cheap")),
+        &owner(3, "claude-code", "o-cheap", "added", Some("cheap")),
     );
     assert_eq!(docs[&key("state")], state(3, None));
-    project(&mut docs, &owner(4, "codex", "o-plain", "added", None));
+    project(
+        &mut docs,
+        &owner(4, "claude-code", "o-plain", "added", None),
+    );
     assert_eq!(docs[&key("state")], state(4, None));
     let expected = doc(
-        "codex",
+        "claude-code",
         json!([
             {
                 "id": "o-cheap", "source": "owner", "tier": "cheap", "high_effort": false,
@@ -391,7 +392,7 @@ fn an_owner_addition_takes_its_tier_or_none_and_moves_the_version() {
             },
         ]),
     );
-    assert_eq!(docs[&key("codex")], expected);
+    assert_eq!(docs[&key("claude-code")], expected);
 }
 
 #[test]
@@ -631,12 +632,10 @@ fn a_detection_sets_an_owner_entrys_high_effort_flag_but_not_its_tier() {
 }
 
 #[test]
-fn opus_is_a_claude_code_name_and_no_codex_name_with_no_documents() {
+fn opus_is_a_claude_code_name_with_no_documents() {
     let claude = accepted_names("claude-code", None, None).unwrap();
-    let codex = accepted_names("codex", None, None).unwrap();
     assert!(claude.names.contains("opus"));
-    assert!(!codex.names.contains("opus"));
-    assert_eq!((claude.version, codex.version), (0, 0));
+    assert_eq!(claude.version, 0);
 }
 
 #[test]
@@ -678,15 +677,18 @@ fn a_provider_accepts_its_seed_detected_and_owner_ids_but_not_a_removed_one() {
 
 #[test]
 fn a_hosts_owner_entries_are_accepted_beside_its_aliases() {
-    let codex = doc(
-        "codex",
+    let claude = doc(
+        "claude-code",
         json!([{
             "id": "o-own", "source": "owner", "high_effort": false, "placed": "owner",
             "first_seen": "2026-09-29T12:00:00Z", "accepted_seq": 3, "owner_removed": false,
         }]),
     );
-    let found = accepted_names("codex", Some(&codex), None).unwrap();
-    assert_eq!(found.names, BTreeSet::from(["o-own".to_owned()]));
+    let found = accepted_names("claude-code", Some(&claude), None).unwrap();
+    let expected: BTreeSet<String> = ["opus", "sonnet", "haiku", "fable", "o-own"]
+        .map(String::from)
+        .into();
+    assert_eq!(found.names, expected);
 }
 
 #[test]
@@ -794,21 +796,9 @@ fn adding_a_claude_code_alias_is_refused_before_it_reaches_the_ledger() {
          the binary owns its aliases and the host resolves them"
     );
     assert_eq!(
-        judge_alias_addition(Catalog::Host(Host::Codex), "sonnet"),
-        Ok(())
-    );
-    assert_eq!(
         judge_alias_addition(Catalog::Provider(Provider::OpenAi), "sonnet"),
         Ok(())
     );
-}
-
-#[test]
-fn removing_opus_from_codex_is_no_alias_removal_but_a_name_codex_does_not_hold() {
-    let codex = Catalog::Host(Host::Codex);
-    assert_eq!(judge_alias_removal(codex, "opus"), Ok(()));
-    let refusal = judge_held_removal(codex, "opus", None).unwrap_err();
-    assert_eq!(refusal.code(), "unknown-model");
 }
 
 #[test]
@@ -841,14 +831,14 @@ fn removing_an_id_the_owner_already_removed_is_refused() {
 
 #[test]
 fn removing_a_hosts_owner_entry_is_allowed() {
-    let codex = doc(
-        "codex",
+    let claude = doc(
+        "claude-code",
         json!([{
             "id": "o-own", "source": "owner", "high_effort": false, "placed": "owner",
             "first_seen": "2026-09-29T12:00:00Z", "accepted_seq": 3, "owner_removed": false,
         }]),
     );
-    let catalog = Catalog::Host(Host::Codex);
+    let catalog = Catalog::Host(Host::ClaudeCode);
     assert_eq!(judge_alias_removal(catalog, "o-own"), Ok(()));
-    assert_eq!(judge_held_removal(catalog, "o-own", Some(&codex)), Ok(()));
+    assert_eq!(judge_held_removal(catalog, "o-own", Some(&claude)), Ok(()));
 }

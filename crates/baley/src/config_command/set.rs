@@ -516,30 +516,6 @@ mod tests {
     }
 
     #[test]
-    fn each_hosts_names_come_from_its_own_catalog_after_seeding() {
-        let (_dir, store) = store();
-        models::seed(&store, request(1), T0).unwrap();
-        models::change(
-            &store,
-            Catalog::Host(Host::Codex),
-            "gpt-owner-added",
-            baley_core::catalog::OwnerChange::Added(None),
-            request(2),
-            T1,
-        )
-        .unwrap();
-
-        let accepted = accepted_by_host(&store).unwrap();
-
-        let claude = &accepted[&Host::ClaudeCode].names;
-        let codex = &accepted[&Host::Codex].names;
-        assert!(claude.contains("opus"), "{claude:?}");
-        assert!(!codex.contains("opus"), "{codex:?}");
-        assert!(codex.contains("gpt-owner-added"), "{codex:?}");
-        assert!(!claude.contains("gpt-owner-added"), "{claude:?}");
-    }
-
-    #[test]
     fn the_step_keys_its_checkout_by_the_repository_root_not_the_project_folder() {
         let (_dir, store) = store();
         store

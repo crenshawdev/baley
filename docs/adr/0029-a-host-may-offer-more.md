@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0002: System design](../design/0002-system-design.md), [0012: Host interface](../design/0012-host-interface.md) |
 | Supersedes | |
-| Superseded by | |
+| Superseded by | [0033](0033-host-security-bar.md), in part: the host that offers less sets the floor |
 
 ## Context and problem
 

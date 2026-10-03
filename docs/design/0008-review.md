@@ -436,5 +436,5 @@ The binary crate holds the inherited engine. Its review records are close to thi
 | Question | Decided by |
 |---|---|
 | How soon after a create the forge's search can be trusted to find the new issue by fingerprint | [0011: Milestones, landing, undo and pause](0011-milestones-landing-undo-pause.md) with the forge adapter, by a measurement on GitHub |
-| How the host session's outside call is made on each host and how its result returns typed | [0012: Host interface](0012-host-interface.md) |
+| How the host session's outside call is made on Claude Code and how its result returns typed | [0012: Host interface](0012-host-interface.md) |
 | Whether a reworded claim of a dismissed fault should also match. The fingerprint matches only a file, claim and failure scenario equal after normalization (REV-R21), so a reviewer's rewording of the same fault reaches the owner without its earlier dismissal | This area (0008), by measuring how often dismissed faults return reworded once REV-R22 is built |

@@ -9,7 +9,7 @@ Baley keeps AI coding agents accountable to the person who answers for their wor
 - **You approve before anything runs.** Work is a backlog of stories, each with the acceptance criteria you agreed, committed to phases. A phase's plan is written, checked and approved by you before any agent acts on it.
 - **Every step leaves evidence.** Which agent did what, against which commit, which tests ran and what they printed, which verdict was reached and why.
 - **The next step has to be earned.** Baley decides what may happen next from the recorded evidence. If the proof for a step is missing, it refuses and names what is missing.
-- **Plans and diffs get attacked, not just approved.** Reviews come from the reviewers you configure: the host's own subagent, and outside providers (OpenAI, Gemini, DeepSeek) if you want them. Every finding is checked against the code and brought to you; you rule on each one, and Baley never acts on a finding by itself.
+- **Plans and diffs get attacked, not just approved.** Reviews come from the reviewers you configure: the host's own subagent, and outside providers (OpenAI, DeepSeek) if you want them. Every finding is checked against the code and brought to you; you rule on each one, and Baley never acts on a finding by itself.
 - **Your branch policy holds.** A hook checks every commit and push an agent attempts against the branches you protect, and a plan's file lease is enforced when a task closes.
 
 ## What it refuses to do
@@ -20,7 +20,7 @@ Baley keeps AI coding agents accountable to the person who answers for their wor
 
 ## How it works
 
-- One Rust binary, run as one server per user. The host (Claude Code or Codex) talks to it as an MCP server over stdio or HTTP; a hook runs before each of the host's tool calls; a command line serves the owner.
+- One Rust binary. Each Claude Code session starts it as an MCP server over stdio; a hook runs before each of its tool calls; a command line serves the owner. Codex support has been removed because its sandboxing and execution controls do not meet Baley's requirements. Support may return when those requirements are met. Baley will not lower its security defaults to accommodate a host.
 - The binary owns the process. The model does the engineering; Baley decides every process step from the record and the settings, builds each agent's complete work order, runs the tests itself, and owns the rules about what happens next.
 - Records are an append-only, hash-chained event ledger in SQLite, kept outside the repository and anchored on the forge, so a rewrite is detectable. Settings are two TOML files, one for you and one committed with the project. API keys are plain `NAME=value` lines in one file, `keys.env`, in Baley's config folder; you edit it, Baley only reads it and refuses it when group or others can read it or another user owns it, and no key is taken from an environment variable.
 - The whole design is written before the code: one document per process area under [docs/design](docs/design/), with the decisions in [docs/adr](docs/adr/).

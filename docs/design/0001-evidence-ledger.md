@@ -19,7 +19,7 @@ Baley records every fact about the work it governs (plans the owner approved, wh
 
 ### What Baley is for
 
-Baley is an owner's control plane for AI-assisted engineering. The owner decides and answers for the work; agents (the Daneels) do it; the part of Baley that decides what may happen next (Hardin) allows a step only when the recorded evidence supports it. The records are the product: a claim that has no record behind it does not count.
+Baley is an owner's control plane for AI-assisted engineering. The owner decides and answers for the work; the host session and its workers do it; the part of Baley that decides what may happen next (Hardin) allows a step only when the recorded evidence supports it. The records are the product: a claim that has no record behind it does not count.
 
 ### What exists today
 
@@ -53,7 +53,7 @@ Baley starts with an empty store (the old records are not imported), so the reco
 
 - **Moving records between machines.** The ledger is designed so it can travel later (see [Future work](#future-work)); only chain-head anchors leave the machine in this milestone.
 - **Multi-user or server deployment.** One user, one machine. The port leaves room for a server adapter; none is built.
-- **A separate operating-system user for Baley.** Real process separation is future work; this design uses the hosts' sandboxes (see [Threat model](#threat-model)).
+- **A separate operating-system user for Baley.** Real process separation is future work; this design uses the host's sandbox (see [Threat model](#threat-model)).
 - **Importing records from the old store.** The store starts empty.
 - **Windows in the first release.** The first release ships for Linux and macOS; Windows comes in a later release ([0002](0002-system-design.md), SYS-R14).
 
@@ -63,7 +63,7 @@ Baley starts with an empty store (the old records are not imported), so the reco
 |---|---|---|
 | Accidental failure: crash, power loss, disk error, a bug | Leave a transaction half-done, corrupt pages | SQLite transactions and durability, `integrity_check`, and `verify` on any restored copy |
 | A person or program editing the database outside Baley | Change rows directly | The hash chain detects naive edits; forge anchors detect edits that recompute the chain |
-| An agent running as the owner's user | Everything the owner's files allow, including running `sqlite3` on the database and signing with the owner's cached GPG key | The host sandbox denies the agent writes to Baley's home and config folder on both hosts, and reads of them on Claude Code (prevention); the guard refuses file tools and shell commands that name the home (best effort); forge anchors detect a rewrite, truncation or rollback of anything before the latest anchor (detection) |
+| An agent running as the owner's user | Everything the owner's files allow, including running `sqlite3` on the database and signing with the owner's cached GPG key | Claude Code's sandbox and its `Read` and `Edit` deny rules deny the agent reads and writes of Baley's home and config folder (prevention); the guard refuses Read, Grep and Glob calls into them, file-tool writes into the home, and shell commands that name it (best effort); forge anchors detect a rewrite, truncation or rollback of anything before the latest anchor (detection) |
 | Another local user | Read or write files they have access to | Private file modes and ownership checks on every open |
 | A remote attacker | Nothing directly | The store makes no network calls; only the chain head is pushed to the forge |
 
@@ -98,7 +98,7 @@ Identifiers are stable. Requirements changed by the review keep their number; ne
 | EVD-R21 | Performance and size budgets hold on the reference workload, measured before acceptance, as set out in [Performance](#performance). | Goal 3 |
 | EVD-R22 | The store files are owned by and private to the owning user. Every open checks ownership, modes and symbolic links on the real home path and each store file in it. | Records hold source and output |
 | EVD-R23 | Withdrawn. The store makes no filesystem check; a data folder on a network share is not supported, because SQLite's write-ahead log does not work over a network filesystem ([Location, layout and file safety](#location-layout-and-file-safety-evd-r16-evd-r22), [ADR 0027](../adr/0027-vendor-folders-and-plain-keys.md)). | |
-| EVD-R24 | The design works with Claude Code and Codex as host, proven by the host matrix. Each host's sandbox denies agents writes to Baley's home and to its config folder while Baley's server and hook can still write the home; Claude Code's sandbox also denies reads of both, Codex's does not. The ledger's integrity never depends on reads being denied. | Host neutrality; threat model |
+| EVD-R24 | The design works with Claude Code as host, proven by the host matrix. Claude Code's sandbox denies agents reads and writes of Baley's home and its config folder, through shell commands and their child processes, and its `Read` and `Edit` deny rules do the same for its built-in file tools. Baley's server and hook still write the home. A host is added only when the matrix shows the same on it (ADR 0033). The ledger's integrity never depends on reads being denied. | Host seam and the host matrix; threat model |
 | EVD-R25 | An owner can see the state and history of any record without reading files: through the CLI, through the MCP document query, and through an explicit export. | Replaces Markdown copies |
 | EVD-R26 | A command with an effect outside the database claims its request and records its intent before acting, and records the result after. Retries and duplicates never repeat the effect. An active claim blocks only its own scope; an interrupted claim (lease expired) is reconciled before work in its scope continues. | External effects cannot be rolled back |
 | EVD-R27 | A decision that grants authority (admission, completion, landing, release) confirms its deciding facts against events inside its transaction, so an edited view cannot grant authority. | Views are derived data |
@@ -112,14 +112,14 @@ Three ideas carry the design.
 
 **The ledger is the only source of truth.** Everything Baley learns or decides is appended to the ledger as an event: a small, typed, attributed record of one fact, such as "plan 5-2 approved by the owner" or "suite run R7 passed". Events are never edited. A correction is a new event.
 
-**Current state is a projection.** Hardin, the Daneels and the owner mostly ask what is true now: what phase 5's status is, which plan is approved, what the next allowed step is. Those answers live in views: keyed documents computed from the events by domain code and updated in the same transaction that appends the events. Views can be thrown away and rebuilt from the ledger, so they never become a second source of truth, and decisions that grant authority check the events themselves.
+**Current state is a projection.** Hardin, the workers and the owner mostly ask what is true now: what phase 5's status is, which plan is approved, what the next allowed step is. Those answers live in views: keyed documents computed from the events by domain code and updated in the same transaction that appends the events. Views can be thrown away and rebuilt from the ledger, so they never become a second source of truth, and decisions that grant authority check the events themselves.
 
 **Storage is behind a port.** Domain code sees traits that speak Baley's language (append these events, get this view by key, store this payload) and never SQL. SQLite is one adapter behind that port.
 
 ```mermaid
 flowchart LR
   owner(["Owner<br/><small>Decides and answers for the work</small>"])
-  host["Host agent<br/><small>Claude Code or Codex, running the Daneels</small>"]
+  host["Host agent<br/><small>Claude Code, running Baley's workers as the session's subagents</small>"]
   baley["Baley<br/><small>Records the evidence, decides what may happen next</small>"]
   git["Git repository<br/><small>Source, commits, the project file</small>"]
   forge["Forge<br/><small>Immutable chain-head anchors</small>"]
@@ -129,7 +129,8 @@ flowchart LR
   host -->|tool calls: MCP| baley
   baley -->|reads history, runs git| git
   baley -->|pushes anchors| forge
-  baley -->|review material: HTTPS| prov
+  host -->|review calls with Baley's prompts: HTTPS| prov
+  baley -->|model lists: HTTPS| prov
   classDef person fill:#08427b,stroke:#052e56,color:#fff
   classDef system fill:#1168bd,stroke:#0b4884,color:#fff
   classDef external fill:#6b6b6b,stroke:#4d4d4d,color:#fff
@@ -138,12 +139,12 @@ flowchart LR
   class host,git,forge,prov external
 ```
 
-*Figure 1. System context, in the C4 model's sense. Baley sits between the owner, the host agent that runs the Daneels, the repository, the forge that holds its anchors, and the outside reviewers.*
+*Figure 1. System context, in the C4 model's sense. Baley sits between the owner, Claude Code, whose session runs Baley's workers as its subagents, the repository, the forge that holds its anchors, and the outside providers. The host session makes the review calls with the prompts Baley built, and Baley itself asks a provider only for its model list.*
 
 ```mermaid
 flowchart TB
   owner(["Owner"])
-  host["Host agent<br/><small>Claude Code or Codex, sandboxed</small>"]
+  host["Host agent<br/><small>Claude Code, sandboxed</small>"]
   subgraph baley [Baley]
     direction TB
     server["MCP server<br/><small>shared server in Build 3; Hardin decides the next step</small>"]
@@ -168,7 +169,7 @@ flowchart TB
   class host,checkout external
 ```
 
-*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. The host's sandbox keeps its agents from writing Baley's home and config folder, and on Claude Code from reading them; only Baley's own processes write the database.*
+*Figure 2. Containers, in the C4 model's sense. Every solid arrow into the database goes through the same storage port. Claude Code's sandbox and its `Read` and `Edit` deny rules keep agents from reading or writing Baley's home and config folder, and only Baley's own processes write the database.*
 
 ### Terms
 
@@ -191,7 +192,7 @@ flowchart TB
 | Port | The set of storage traits the domain depends on. |
 | Adapter | An implementation of the port for one engine. |
 | Hardin | The part of Baley that reads views and names the one allowed next step. |
-| Daneels | The agents, driven by a host, that do the work and record it through Baley's tools. |
+| Worker | A subagent the host session starts for one work order. The host session and its workers do the work and record it through Baley's tools. |
 
 ### Detailed design
 
@@ -414,7 +415,7 @@ The full mapping from today's namespaces is in [Appendix A](#appendix-a-mapping-
 
 A command is one request from a caller, carrying a request id and a scope: a list of exact tokens. An empty scope holds no token and skips the scope gate. The same-request rule still applies: another entry under an open claim's request id is `Blocked` whatever its scope. Scope carries authority and belongs in the request digest.
 
-**Request ids (EVD-R6).** The caller generates a fresh UUID for each command. Baley scopes it to the project and the command kind, so two sessions, two hosts or two command kinds can never collide or receive each other's answers. The request digest is the SHA-256 of the canonical form of the command kind and every field that carries authority (the approved content, the phase and plan, the target dispatch, the policy version). Guard decisions keep today's identity built from the host session and tool-call id.
+**Request ids (EVD-R6).** The caller generates a fresh UUID for each command. Baley scopes it to the project and the command kind, so two sessions or two command kinds can never collide or receive each other's answers. The request digest is the SHA-256 of the canonical form of the command kind and every field that carries authority (the approved content, the phase and plan, the target dispatch, the policy version). Guard decisions keep today's identity built from the host session and tool-call id.
 
 **Outcomes.** Every command that reaches a domain outcome, success or a real refusal, records a `command.completed` event carrying the command kind, request id, digest, outcome kind, the git facts it depended on and the answer. An answer is inline when its canonical JSON is at most 4 KiB and is not sensitive; otherwise it is a `record` payload reference. This includes commands that record no other event. The `request` view is built from those events and is rebuildable like any other. A replay whose answer its own project released by purge or reduction returns its tombstone even when another project still requires the body. The event and request document keep the reference. Infrastructure failures (store busy, disk full) and stale-input refusals are not outcomes. A failed database-only transaction records nothing. An external command can fail after its claim commits or its effect lands, so the CLI prints the anchor request id and directs the owner to reconcile after the lease expires rather than promise a clean no-op. Each CLI invocation uses a fresh UUID; a repeated invocation is a new request governed by the store's rules.
 
@@ -535,7 +536,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   autonumber
-  participant D as Daneel (host agent)
+  participant D as Host session or worker
   participant S as MCP server
   participant C as baley-core handler
   participant L as Ledger port
@@ -1135,7 +1136,7 @@ The MCP server runs SQLite's `quick_check` when it starts. The guard and the CLI
 ```mermaid
 sequenceDiagram
   actor O as Owner
-  participant D as Daneels (host)
+  participant D as Host session and workers
   participant B as Baley (Hardin decides)
   participant L as Ledger
   O->>B: approve plan 5-2
@@ -1213,7 +1214,7 @@ The domain rules are owned, specified and tested by the area design documents ([
 
 See [Threat model](#threat-model) for who is defended against.
 
-- **Agent isolation (EVD-R24).** Agents run as the owner's user, so file modes cannot keep them out. The barrier is the host's sandbox: Baley's setup adds a rule to each host's configuration that denies agents writes to Baley's home and its config folder, and reads of both where the host can (Claude Code). Claude Code's sandbox denies named paths for reading and writing. Codex's `workspace-write` sandbox confines agent writes to the workspace but grants full disk read under every policy, so on Codex an agent can read the ledger and cannot change it. That read permission is Codex's sandbox policy, not Baley's to change, and it applies to everything the owner's user can read, not to the ledger in particular; Baley does not claim to hide the ledger from a process running as the owner. What Baley guarantees without read isolation: writes are refused, tampering is detected by the chain and the anchors, and API keys never enter the ledger: they stay in `keys.env`, which an agent under a host that allows reads (Codex) can read like any other file of the owner's (0003, CFG-R24); nothing else sensitive is kept outside payloads, and payloads can be purged. The host matrix showed on both hosts that agents are blocked from writing while Baley's server and hook still write. As a second, best-effort layer, the guard refuses file-tool writes into the home and shell commands that name it.
+- **Agent isolation (EVD-R24).** Agents run as the owner's user, so file modes cannot keep them out. The barrier is Claude Code's, and three mechanisms carry it: the sandbox, which denies shell commands and their child processes reads and writes of Baley's home and its config folder; the `Read` and `Edit` deny rules, which cover its built-in file tools; and the guard's refusal of Read, Grep and Glob calls into either folder. Claude Code applies `Read` rules to Grep and Glob only on a best-effort basis, which is why the guard refusal is needed. An unavailable sandbox is reported, never passed over. The owner's own Claude Code settings can loosen the barrier, and `baley doctor` reports what an agent can reach. With these in place, `keys.env` and the ledger are out of an agent's reach (0003, CFG-R24). That holds for `keys.env` as a file in the config folder (or the home); where it is a symbolic link, which CFG-R24 follows, the target is protected only when it too lies inside those folders. Baley does not claim to hide the ledger from a process running as the owner outside the host. What Baley guarantees whether or not reads are denied: writes are refused, tampering is detected by the chain and the anchors, API keys never enter the ledger, nothing else sensitive is kept outside payloads, and payloads can be purged. The 2026-09-25 host matrix showed this for a stand-in home through Bash: the agent was blocked from reading and writing while Baley's server and hook still wrote. The extended probe adds the config folder and the built-in file tools. The guard also refuses file-tool writes into the home and shell commands that name it, as a best-effort layer.
 - **Detection.** Anchors on the forge make a rewrite, truncation or rollback detectable up to the latest anchor, even by an agent that can run `sqlite3` and sign with the owner's key.
 - **Secrets.** Test output and review material can carry secrets. They are always payloads, so they can always be purged, with the limits stated in [Payloads, retention and purge](#payloads-retention-and-purge-evd-r11-evd-r14). The existing fence that screens outbound review payloads stays.
 - **Network.** The store makes no network calls. Anchors are pushed with git to the project's own remote, and the latest anchor is fetched from it, through the core's forge seam; the binary implements that seam, and the store only receives the fetched anchor. A remote is named in the ledger by its configured name, never by URL or credentials. Git runs without prompts. The remote is the project's `git.remote`, from the committed `baley.toml`, and must be configured in the repository at the current directory.
@@ -1321,17 +1322,19 @@ SQLite's limits sit far beyond these numbers: 281 TB per database and about 1 GB
 - The `trace` table records diagnostics (timings, retries, busy waits) outside the chain, with its own size cap and rotation.
 - Every refusal carries a stable code and the facts that caused it, as refusals do today.
 
-### Host neutrality (EVD-R24)
+### Host seam and the host matrix (EVD-R24)
 
-| Concern | Claude Code | Codex | Evidence |
-|---|---|---|---|
-| Project discovery from the working directory | Hook and MCP server start in the session's directory, which may be a subdirectory | Same | Shown: both hosts start the MCP server with the session's directory as its working directory, and today's server binds that directory as the project. The hook already walks up. The server walks up too (Build 3). |
-| Hook contract (tool names, event names, answer format) | `PreToolUse`, `Bash`, `Write`, `Edit`; answers `allow`, `deny`, `ask` | The same `PreToolUse` event and stdin fields, `Bash` for shell; answers `deny` and exit code 2 only: `ask` is rejected as unsupported and the command runs | Shown: the hook's input needs no adapter. The guard's answer does: on Codex every `ask` becomes `deny` with the same reason, so a push that would ask for permission on Claude Code is refused on Codex. Proven in Build 3. |
-| Re-delivered tool calls | Retries after timeout | Retries after timeout | Shown for the hook: the same session and `tool_use_id` get the confirmed answer. Proven for MCP calls in Build 1, where the `request` view lands. |
-| Access to Baley's home | Server and hook write; agents denied read and write by the sandbox rule | Server and hook write; agents denied write by `workspace-write`, reads allowed | Shown on both. Claude Code: a denied read looks like a missing file, a denied write exits 0 and nothing lands. Codex: the write is refused with "Read-only file system"; every Codex sandbox policy grants full disk read, so on Codex agents can read the ledger. |
-| Store unreachable | Guard applies today's rules for a missing or failed audit store | Same | Shown: the guard answers pass-on-failure with its reason, and a denial still stands. |
+Claude Code is the only supported host. A host is added when the matrix shows the same on it (ADR 0033), and the table below is the matrix as it stands for Claude Code.
 
-**How it was measured.** The probes in [`spikes/host-matrix`](../../spikes/host-matrix/README.md) run one throwaway non-interactive session per host from a subdirectory of this repository, with a hook and a stand-in MCP server that record where they ran and whether they could write a stand-in home outside the checkout, and an agent that is asked to read and write that home. Run on 2026-09-25 with Codex CLI 0.156.1 and Claude Code 2.1.282 on Linux. The matrix is run again before each release.
+| Concern | Claude Code | Evidence |
+|---|---|---|
+| Project discovery from the working directory | Hook and MCP server start in the session's directory, which may be a subdirectory | Shown on 2026-09-25: Claude Code starts the MCP server with the session's directory as its working directory, and today's server binds that directory as the project. The hook already walks up. The server walks up too (Build 3). |
+| Hook contract (tool names, event names, answer format) | `PreToolUse` with the matcher `Bash\|Monitor\|PowerShell\|Read\|Grep\|Glob\|Write\|Edit\|NotebookEdit`, answering `allow`, `deny` and `ask` | Shown for Bash on 2026-09-25: the hook's input needs no adapter. The other tools are measured by the extended probe. |
+| Re-delivered tool calls | Retries after timeout | Shown for the hook: the same session and `tool_use_id` get the confirmed answer. Proven for MCP calls in Build 1, where the `request` view lands. |
+| Access to Baley's home and config folder | Server and hook write. Agents are denied reads and writes of both | The home was shown through Bash on 2026-09-25: a denied read looks like a missing file, a denied write exits 0 and nothing lands. The config folder and the built-in file tools are measured before release by Build 3 T12, and again before each release. |
+| Store unreachable | Guard applies today's rules for a missing or failed audit store | Shown: the guard answers pass-on-failure with its reason, and a denial still stands. |
+
+**How it was measured.** The probes in [`spikes/host-matrix`](../../spikes/host-matrix/README.md) started with one throwaway non-interactive session per host from a subdirectory of this repository, with a hook and a stand-in MCP server that recorded where they ran and whether they could write a stand-in home outside the checkout, and an agent that was asked to read and write that home. The 2026-09-25 run used Codex CLI 0.156.1 and Claude Code 2.1.282 on Linux. Its Codex results are why Codex was removed (ADR 0033). The Claude Code probe now prepares separate stand-in home and config folders and their settings, and prints a procedure for an interactive session the owner runs. It covers shell commands, their children and the built-in file tools. Build 3 T12 runs it first, and it runs again before each release. The Codex probe stays, to measure Codex against the bar.
 
 ### Compatibility and migration
 
@@ -1356,7 +1359,7 @@ Builds:
 
 1. **Foundation.** The workspace split, the port, the SQLite adapter, the conformance suite, payloads and references, the hash chain, anchors and the command line: `verify`, `doctor`, `export`, `purge`, `scrub`, `rebuild`, `anchor` and `acknowledge-restore`. The inherited command surface stays beside these. Nothing in the lifecycle uses the ledger yet.
 2. **Identity, settings and keys.** Folders and open checks, keys and `baley exec`, settings and `policy.effective`, `baley init`, discovery, checkouts, the model catalog and detection.
-3. **Hosts.** The shared server, its start routes, install, the guard with the Codex answer adapter, the sandbox over the home and the config folder, stubs and captures.
+3. **Hosts.** The shared server, its start routes, install, the guard's answer in Claude Code's hook form, Claude Code's sandbox and file-tool deny rules over the home and the config folder, stubs and captures.
 4. **Planning.** Project start, stories, phases, plans, plan review and risk scan, the first dispatches, and routing finished.
 5. **Doing the work.** Execution, runs, verification, diff review and the completion risk scan.
 6. **Milestones, landing, undo and pause.** The anchor triggers and the forge check.
@@ -1410,7 +1413,7 @@ Builds:
 | EVD-R20 | Relies on SQLite's documented durability with `synchronous=FULL`. Power loss is not reproducible in a portable test and is not re-tested. |
 | EVD-R21 | `crates/baley-bench` measures real-adapter open, commits, keyed reads, guard store work, writer waits, rebuild total and batches, flip, size, purge, scrub and verification. Search, server start and memory are measured in the builds named in Performance. The open figure includes the checks. Timings are measurements, never test assertions. |
 | EVD-R23 | Withdrawn. |
-| EVD-R24 | The host matrix, run by hand on both hosts before acceptance (done 2026-09-25, `spikes/host-matrix`), and again before each release. |
+| EVD-R24 | The host matrix, run by hand on Claude Code before acceptance and again before each release. The 2026-09-25 run, on both hosts at the time (`spikes/host-matrix`), covered the home through Bash only. Build 3 T12 measures the extended bar: the config folder and the built-in file tools. |
 | EVD-R25 | From Build 9, `show` and the record export render every record family from views. |
 | EVD-R26 | The conformance suite proves the store half with supplied times and findings: commands outside an active claim's scope proceed, commands inside return Blocked before deciding, a retry returns InProgress, a clean failure completes the claim, an interrupted claim reconciles from a supplied finding, and an awaiting-owner claim refuses automatic reconciliation and accepts owner resolution. The core's tests over the adapter prove the anchor call path in separate units: the claim step acts only after its claim event exists and names the pre-claim head; missing remote, in-progress, replayed and blocked requests do not act; refused and unreachable pushes complete the claim with `anchor.failed`; a successful record writes `anchor.pushed`, the completion and the row together, and a conflicting row leaves all three unwritten; matching, conflicting and absent holder tags reconcile and retry once under the original identity; an unreachable holder fetch writes one trace row and leaves the claim open; the heartbeat renews at once, ticks through the work and stops before the record step, and a failed renewal cancels nothing. The binary's git forge is tested over literal output and the process fake, and its ticker over a scripted pace and a ticker-local worker join seam. No test runs git. Build 6 proves a real revert held for the owner. |
 | EVD-R27 | An edited view document that says "approved" or "complete" does not grant admission or completion, because the event is missing. |
@@ -1475,16 +1478,18 @@ classDiagram
 - [ADR 0005: Put storage behind a port with engine adapters](../adr/0005-storage-port.md), superseded in part by ADR 0010
 - [ADR 0006: Keep every operational record in the ledger](../adr/0006-no-markdown-records.md)
 - [ADR 0007: Anchor chain heads on the forge](../adr/0007-forge-anchors.md), superseded in part by ADR 0026
-- [ADR 0008: Use host sandboxes to keep agents out of the ledger](../adr/0008-host-sandbox-isolation.md)
+- [ADR 0008: Use host sandboxes to keep agents out of the ledger](../adr/0008-host-sandbox-isolation.md), superseded in part by ADR 0020 and ADR 0033
 - [ADR 0009: Serve instructions from the binary; files on disk are stubs](../adr/0009-served-instructions.md)
 - [ADR 0010: Define the projector and event schema traits in the port](../adr/0010-projector-traits-in-the-port.md), superseding ADR 0005 in part, superseded in part by ADR 0021
+- [ADR 0020: State what each host's sandbox denies; reads are the host's policy](../adr/0020-sandbox-is-a-write-barrier.md), superseding ADR 0008 in part, superseded in part by ADR 0027 and ADR 0033
 - [ADR 0021: Claim liveness and scope rules in the port](../adr/0021-claim-rules-in-the-port.md)
 - [ADR 0022: Report owner-acknowledged restores behind a remote anchor](../adr/0022-acknowledged-restore.md), superseded in part by ADR 0035
 - [ADR 0023: Keep whole-store backups outside Baley](../adr/0023-no-backups-in-baley.md)
 - [ADR 0024: Separate port conformance from adapter mechanism tests](../adr/0024-conformance-suite-and-adapter-tests.md)
 - [ADR 0025: Point anchor tags at the empty tree](../adr/0025-anchor-tag-objects.md)
 - [ADR 0026: Anchors are read by Baley, and a missing tag ruleset is reported](../adr/0026-anchors-read-by-baley.md), superseding ADR 0007 in part
-- [ADR 0027: Keep Baley's files in its own crenshawdev folders, with provider keys in a plain keys.env](../adr/0027-vendor-folders-and-plain-keys.md), superseding ADR 0002 and ADR 0003 in part
+- [ADR 0027: Keep Baley's files in its own crenshawdev folders, with provider keys in a plain keys.env](../adr/0027-vendor-folders-and-plain-keys.md), superseding ADR 0002 and ADR 0003 in part, superseded in part by ADR 0032 and ADR 0033
+- [ADR 0033: Support only hosts whose sandboxing and execution controls meet Baley's requirements](../adr/0033-host-security-bar.md), superseding ADR 0008, ADR 0018, ADR 0020, ADR 0027 and ADR 0029 in part
 - [ADR 0035: Report purge uncertainty after restoring a store](../adr/0035-restore-purge-uncertainty.md), superseding ADR 0022 in part
 
 ## Future work

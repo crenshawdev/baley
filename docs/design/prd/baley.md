@@ -18,7 +18,7 @@ Baley is the owner's control plane for AI-assisted engineering. The owner approv
 
 Baley keeps one record of everything that happens to a project: plans, approvals, what each agent did, the tests that ran and what they printed, reviews, rulings and verdicts. It decides what may happen next from that record and refuses anything the evidence does not support, naming what is missing. It builds the complete instructions for every agent it dispatches, so the model never decides the process, only the engineering. It runs the tests itself, so a result is something Baley saw, not something an agent reported.
 
-The owner works in a familiar loop: start a project, discuss a phase, approve a plan, let the agents build it, review and verify it, then land it. Baley runs inside Claude Code or Codex, the host the owner already uses, and works the same way in both.
+The owner works in a familiar loop: start a project, discuss a phase, approve a plan, let the agents build it, review and verify it, then land it. Baley runs inside Claude Code, the host the owner already uses. Codex support has been removed because its sandboxing and execution controls do not meet Baley's requirements. Support may return when those requirements are met. Baley will not lower its security defaults to accommodate a host.
 
 ## User Stories
 
@@ -34,7 +34,7 @@ The owner works in a familiar loop: start a project, discuss a phase, approve a 
 
 6. As an owner, I want to set up Baley through a guided interview the first time, so that I get working defaults without reading every setting.
 7. As an owner, I want global settings shared by all my projects and project settings that override them, so that I configure once and adjust per project.
-8. As an owner, I want settings that differ between Claude Code and Codex kept in their own section for each host, so that each host uses the models it actually has.
+8. As an owner, I want settings that differ per host kept in that host's own section, so that Claude Code uses the models it has.
 9. As an owner, I want to choose which model and effort level each role uses (planner, analyzer, plan checker, executor, verifier, reviewer), so that I spend the strongest models where judgment matters.
 10. As an owner, I want a retry to step up one effort level when I allow it, so that a failed attempt gets more capacity without me intervening.
 11. As an owner, I want to see every setting, its value and where it came from, so that I never have to guess why Baley made a choice.
@@ -69,7 +69,7 @@ The owner works in a familiar loop: start a project, discuss a phase, approve a 
 ### Review and risk
 
 33. As an owner, I want Baley to decide from my policy when a plan or a diff must be reviewed and how strictly, so that reviews happen every time they should, not when someone remembers.
-34. As an owner, I want reviews from outside models (for example OpenAI, Gemini or DeepSeek) when my policy asks for them, so that the work is attacked by a different model than the one that wrote it.
+34. As an owner, I want reviews from outside models (for example OpenAI or DeepSeek) when my policy asks for them, so that the work is attacked by a different model than the one that wrote it.
 35. As an owner, I want each outside provider to use either its own command-line login or an API key, as I choose, so that I am never forced to hand over a key.
 36. As an owner, I want every review finding checked against the code and presented to me in plain words with the options for fixing it, so that I rule on real problems, not raw model output.
 37. As an owner, I want my ruling on each finding to be what clears a review gate, so that no finding is dropped or applied without me.
@@ -110,11 +110,11 @@ The owner works in a familiar loop: start a project, discuss a phase, approve a 
 
 ### Hosts and running
 
-60. As an owner, I want Baley to work the same way under Claude Code and Codex, so that I can use whichever host suits the task.
+60. As an owner, I want Baley to support a host only when its sandboxing and execution controls meet Baley's requirements, so that every security promise holds where Baley runs.
 61. As an owner, I want one Baley to serve all my sessions and projects at once, so that several terminals and agents work against the same record without conflict.
 62. As an owner, I want Baley to work with no background service at all, so that I install nothing extra.
 63. As an owner, I want to choose at install time to run Baley in the background, with Baley managing that itself, so that my hosts can use the newer protocol without me configuring a service.
-64. As an owner, I want Baley to adapt to each host's capabilities (such as being notified when long work finishes), so that I get the best behavior each host offers.
+64. As an owner, I want Baley to adapt to Claude Code's capabilities (such as being notified when long work finishes), so that I get the best behavior it offers.
 65. As an owner, I want two sessions changing the same thing at once to be handled safely, with the second one refused rather than merged, so that the record never becomes inconsistent.
 
 ### The record itself
@@ -147,7 +147,7 @@ The architecture is in [0002: System design](../0002-system-design.md); the stor
 - **Seam 1: the storage port.** Every store adapter passes one shared conformance suite that defines the port's behavior.
 - **Seam 2: the decision core.** Hardin and the domain rules are plain synchronous code, tested directly with plain values. This is the highest seam where every process decision can be checked without a host.
 - **Seam 3: the MCP operation boundary.** A typed request in, a typed answer or refusal out, tested inside the process with no host attached.
-- **Live behavior** on real hosts is checked by an acceptance run on both hosts before release, not by tests.
+- **Live behavior** on Claude Code is checked by an acceptance run before release, not by tests.
 - **Prior art.** The SQLite store adapter's tests and the conformance harness in the store crates.
 
 ## Out of Scope

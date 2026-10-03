@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0006: Execution](../design/0006-execution.md), [0010: Guard](../design/0010-guard.md) |
 | Supersedes |  |
-| Superseded by | |
+| Superseded by | [0033](0033-host-security-bar.md), in part: the reason for the close check and the Codex follow-up |
 
 ## Context and problem
 

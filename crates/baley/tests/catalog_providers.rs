@@ -6,13 +6,13 @@ use baley::models::named_providers;
 use baley_core::catalog::{Catalog, Provider};
 
 #[test]
-fn gemini_is_no_model_catalog_and_the_refusal_names_the_four_that_are() {
+fn gemini_is_no_model_catalog_and_the_refusal_names_the_three_that_are() {
     let refusal = Catalog::parse("gemini").unwrap_err();
     assert_eq!(refusal.code(), "unknown-provider");
     assert_eq!(
         refusal.to_string(),
         "unknown-provider: \"gemini\" is no model catalog; \
-         catalogs: claude-code, codex, openai, deepseek"
+         catalogs: claude-code, openai, deepseek"
     );
 }
 

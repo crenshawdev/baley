@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0001: The evidence ledger](../design/0001-evidence-ledger.md), [0010: Guard](../design/0010-guard.md) |
 | Supersedes | [0008](0008-host-sandbox-isolation.md), in part: the driver "agents must not be able to read or write the ledger directly" and the claim that each host denies access |
-| Superseded by | [0027](0027-vendor-folders-and-plain-keys.md), in part: keys are not encrypted and there is no master key |
+| Superseded by | [0027](0027-vendor-folders-and-plain-keys.md), in part: keys are not encrypted and there is no master key; [0033](0033-host-security-bar.md), in part: reads of Baley's home are the host's policy |
 
 ## Context and problem
 

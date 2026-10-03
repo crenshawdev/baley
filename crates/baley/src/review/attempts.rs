@@ -416,7 +416,7 @@ mod gap153_delivery_tests {
         crate::execution::runner::WorkerExit {
             request_id: request_id.into(),
             phase: 14,
-            host: "codex exec".into(),
+            host: "claude-code subagent".into(),
             outcome: crate::execution::runner::WorkerOutcome::Failed,
             detail: Some("host exited".into()),
             dispatch: None,

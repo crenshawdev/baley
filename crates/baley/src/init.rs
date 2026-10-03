@@ -862,7 +862,7 @@ mod tests {
 
     /// A working file with every kind of content a new id must carry over.
     const WORKING_TEXT: &str = "escalate_on_failure = true\n\
-        [host.codex.roles.checker]\n\
+        [host.claude-code.roles.checker]\n\
         effort = \"xhigh\"\n\
         [review]\n\
         depth = 3\n\

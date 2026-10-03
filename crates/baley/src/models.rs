@@ -263,14 +263,14 @@ enum ModelsCommand {
     /// List every accepted name with its source, tier and placement, and
     /// the catalog version.
     List {
-        /// One catalog: claude-code, codex, openai or deepseek.
+        /// One catalog: claude-code, openai or deepseek.
         /// Every catalog when absent.
         #[arg(value_name = "CATALOG")]
         catalog: Option<String>,
     },
     /// Accept a name in a catalog, placed at --tier when given.
     Add {
-        /// claude-code, codex, openai or deepseek.
+        /// claude-code, openai or deepseek.
         #[arg(value_name = "CATALOG")]
         catalog: String,
         /// The model name.
@@ -283,7 +283,7 @@ enum ModelsCommand {
     /// Stop accepting a seeded, detected or owner name. A host's compiled
     /// aliases cannot be removed.
     Remove {
-        /// claude-code, codex, openai or deepseek.
+        /// claude-code, openai or deepseek.
         #[arg(value_name = "CATALOG")]
         catalog: String,
         /// The model name.
@@ -1091,8 +1091,8 @@ mod tests {
         ]);
         let seq = append(&store, 1, &[seeded(rows)])[0];
         let deepseek = catalog_key(Catalog::Provider(Provider::DeepSeek));
-        let codex = catalog_key(Catalog::Host(Host::Codex));
-        let keys = [deepseek.clone(), state_key(), codex, catalog_key(OPENAI)];
+        let claude = catalog_key(Catalog::Host(Host::ClaudeCode));
+        let keys = [deepseek.clone(), state_key(), claude, catalog_key(OPENAI)];
 
         let documents = store.get_many(&user(), MODEL_CATALOG_VIEW, &keys).unwrap();
 
@@ -1100,7 +1100,7 @@ mod tests {
         let [deepseek_doc, state, absent, openai] = [0, 1, 2, 3].map(|i| documents[i].as_ref());
         assert_eq!(deepseek_doc.unwrap().key, deepseek);
         assert_eq!(state.unwrap().key, state_key());
-        assert!(absent.is_none(), "the seed writes no codex document");
+        assert!(absent.is_none(), "the seed writes no claude-code document");
         assert_eq!(openai.unwrap().key, catalog_key(OPENAI));
         let state = state.map(|document| &document.body);
         let names = |catalog: &str, document: Option<&baley_store::Document>| {

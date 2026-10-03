@@ -16,10 +16,10 @@ Two notes on history:
 | Owner | The person who decides and answers for the work: approves plans, rules on findings, grants waivers and landing steps, sets policy ([0002 section 2](docs/design/0002-system-design.md#2-separation-of-concerns)). | user, customer, operator |
 | Baley | The one Rust binary, run as one server per user, that keeps the record and makes every process decision from it ([0002 section 2](docs/design/0002-system-design.md#2-separation-of-concerns)). | the framework, the agent |
 | Model | The AI model that does the engineering judgment; it never decides process state, order, routing or whether proof is enough ([0002 section 2](docs/design/0002-system-design.md#2-separation-of-concerns)). | the AI, the assistant |
-| Host | Claude Code or Codex: the program the owner works in, which launches workers and connects to Baley over MCP ([0012](docs/design/0012-host-interface.md#2-terms)). | client, IDE, harness |
+| Host | Claude Code, the program the owner works in, whose session starts workers as subagents and connects to Baley over MCP. A host is supported only when it meets the security bar ([0012](docs/design/0012-host-interface.md#2-terms), [ADR 0033](docs/adr/0033-host-security-bar.md)). | client, IDE, harness |
 | Host session | The host's main conversation with the owner, in two jobs: relaying Baley's work orders, questions and answers, and adjudicating other models' output ([0002 section 2](docs/design/0002-system-design.md#2-separation-of-concerns)). | orchestrator, main thread, main agent |
 | Session | One host conversation with its own MCP connection ([0012](docs/design/0012-host-interface.md#2-terms)). | chat, thread |
-| Worker | A subagent or exec process the host launches for one work order, with its own connection ([0012](docs/design/0012-host-interface.md#2-terms)). | Daneel, Daneels, agent (as a Baley term) |
+| Worker | A subagent the host session starts for one work order, with its own connection ([0012](docs/design/0012-host-interface.md#2-terms)). | Daneel, Daneels, agent (as a Baley term) |
 | Role | A kind of worker Baley dispatches: planner, analyzer, checker, executor, verifier, reviewer ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | persona, agent type |
 | Hardin | The part of Baley that reads views and names the one allowed next step ([0001](docs/design/0001-evidence-ledger.md#terms)). | scheduler, state machine |
 | Relay | The host session putting Baley's question to the owner and returning the answer unchanged ([0012](docs/design/0012-host-interface.md#2-terms)). | proxy, paraphrase |
@@ -44,7 +44,7 @@ Two notes on history:
 | Claim lease | A claim's renewal time outside the chain: liveness only, expiring 60 seconds after renewal ([0001](docs/design/0001-evidence-ledger.md#terms), where it is called Lease). | heartbeat, lock, lease alone (a lease is also a plan's files) |
 | Scope token | An exact string declared on a command; an open claim holds its tokens and blocks other commands that declare one of them ([0001](docs/design/0001-evidence-ledger.md#terms)). | lock key, mutex, scope alone |
 | Port | The set of storage traits the domain depends on ([0001](docs/design/0001-evidence-ledger.md#terms)). | interface, API |
-| Adapter | An implementation of a port for one engine, host or forge: the SQLite adapter, a host adapter, the forge adapter, a guard answer adapter ([0001](docs/design/0001-evidence-ledger.md#terms), [0012](docs/design/0012-host-interface.md#2-terms)). | driver, plugin, backend |
+| Adapter | An implementation of a port for one engine, host or forge: the SQLite adapter, a host adapter, the forge adapter, the guard answer adapter that renders an answer in the host's hook form ([0001](docs/design/0001-evidence-ledger.md#terms), [0012](docs/design/0012-host-interface.md#2-terms)). | driver, plugin, backend |
 
 ## Configuration and routing
 
@@ -60,7 +60,7 @@ Two notes on history:
 | Route | The model and rung resolved for one role and one dispatch, with the settings that decided them ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | model choice, routing table |
 | Model catalog | The model names Baley accepts, per host and per provider, with the source each name came from ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | model list, registry |
 | Host alias | A short model name a host resolves itself, such as `opus` in Claude Code ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | nickname, shorthand |
-| Provider | An outside model vendor reached by API key or its own command-line login: Anthropic, OpenAI, Gemini, DeepSeek ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | vendor, backend |
+| Provider | An outside model vendor reached by API key or its own command-line login: OpenAI and DeepSeek are reached by key, and Anthropic only through the Claude Code login ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | vendor, backend |
 | Detection | Asking a provider's list endpoint, with the owner's key, which model names that key can use ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | discovery, probing |
 | Hint table | A table compiled into Baley that tags known model names with a tier and whether they accept high effort ([0003](docs/design/0003-configuration-and-routing.md#2-terms)). | model database |
 | Tier | A model class, `flagship`, `balanced` or `cheap`, mapped to a model name per provider ([0003](docs/design/0003-configuration-and-routing.md#2-terms), [0008](docs/design/0008-review.md#2-terms)). | size, rank, rung (a rung is effort) |
@@ -198,7 +198,7 @@ Two notes on history:
 |---|---|---|
 | Hook | The host's pre-tool-use call into Baley ([0010](docs/design/0010-guard.md#2-terms)). | callback, trigger (a trigger raises a review) |
 | Guard | Baley's answer to a hook call: `pass`, `ask`, `deny` or `pass on failure` ([0010](docs/design/0010-guard.md#2-terms)). | firewall, policy check |
-| Verb | The git subcommand a Bash command carries: `commit` or `push` ([0010](docs/design/0010-guard.md#2-terms)). | action, operation |
+| Verb | The git subcommand a `Bash`, `Monitor` or `PowerShell` command carries: `commit` or `push` ([0010](docs/design/0010-guard.md#2-terms)). | action, operation |
 | Protected branch | A branch named in `git.protected_branches` ([0010](docs/design/0010-guard.md#2-terms)). | base branch (not every base branch is protected), main |
 | Torn settings | A settings file that cannot be read or parsed at the moment of the call ([0010](docs/design/0010-guard.md#2-terms)). | corrupt config |
 | Guard failure | A call the guard could not decide because git or the branch could not be read ([0010](docs/design/0010-guard.md#2-terms)). | guard error, crash |

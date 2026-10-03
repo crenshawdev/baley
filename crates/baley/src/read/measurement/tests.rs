@@ -1,6 +1,8 @@
-use super::{Host, Tally, count_reads, report_lines, rollout_for, select_workers};
+use super::{Tally, count_reads, report_lines, resolve, select_workers};
+use crate::read::model::DocumentIdentity;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 
 #[test]
 fn transcript_reads_are_counted_by_kind() {
@@ -28,7 +30,7 @@ fn transcript_reads_are_counted_by_kind() {
     ];
     let read_lines = BTreeMap::from([("/p/src/a.rs".into(), 100)]);
     assert_eq!(
-        count_reads(Host::Claude, &claude, &read_lines).unwrap(),
+        count_reads(&claude, &read_lines).unwrap(),
         BTreeMap::from([
             (
                 "Read whole".into(),
@@ -74,62 +76,6 @@ fn transcript_reads_are_counted_by_kind() {
                     bytes: 60
                 }
             ),
-        ])
-    );
-
-    let codex = vec![
-        json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
-            "type": "McpToolCall", "server": "baley", "tool": "baley_query", "arguments": {"operation": "search"},
-            "result": {"content": [{"type": "text", "text": "s".repeat(100)}], "structuredContent": {"k": "v"}}
-        }}}),
-        json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
-            "type": "McpToolCall", "server": "baley", "tool": "baley_query", "arguments": {"operation": "read"},
-            "result": {"content": [{"type": "text", "text": "r".repeat(200)}], "structuredContent": {"k": "v"}}
-        }}}),
-        json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
-            "type": "McpToolCall", "server": "baley", "tool": "baley_apply", "arguments": {"operation": "plan-submit"},
-            "result": {"content": [{"type": "text", "text": "a".repeat(70)}]}
-        }}}),
-        json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
-            "type": "CommandExecution", "parsed_cmd": [{"type": "read"}], "aggregated_output": "b".repeat(300)
-        }}}),
-        json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
-            "type": "CommandExecution", "parsed_cmd": [{"type": "search"}], "aggregated_output": "c".repeat(400)
-        }}}),
-        json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
-            "type": "CommandExecution", "parsed_cmd": [{"type": "unknown", "cmd": "cargo nextest run"}], "aggregated_output": "d".repeat(7)
-        }}}),
-        json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "AgentMessage"}}}),
-        json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "Extension"}}}),
-        json!({"type": "event_msg", "payload": {"type": "item_completed"}}),
-        json!({"type": "event_msg", "payload": {"type": "token_count"}}),
-        json!({"type": "response_item", "payload": {"type": "message"}}),
-    ];
-    assert_eq!(
-        count_reads(Host::Codex, &codex, &BTreeMap::new()).unwrap(),
-        BTreeMap::from([
-            (
-                "baley_query search".into(),
-                Tally {
-                    calls: 1,
-                    bytes: 100
-                }
-            ),
-            (
-                "baley_query read".into(),
-                Tally {
-                    calls: 1,
-                    bytes: 200
-                }
-            ),
-            (
-                "shell read".into(),
-                Tally {
-                    calls: 2,
-                    bytes: 700
-                }
-            ),
-            ("unclassified".into(), Tally { calls: 3, bytes: 7 }),
         ])
     );
 }
@@ -186,49 +132,19 @@ fn the_report_lists_each_kind_with_its_calls_and_bytes() {
 }
 
 #[test]
-fn a_rollout_is_selected_by_its_session_id() {
-    let names = vec![
-        "rollout-2026-09-23T12-26-12-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
-        "rollout-2026-09-23T11-53-22-01a0cef8-bb58-7f22-8729-5c0e1e82b0f9.jsonl".into(),
-    ];
+fn a_planner_round_session_id_that_is_not_a_uuid_is_refused_as_an_identity() {
+    // The planning root's parent was never created, so a check that let the
+    // id through would stop at the unavailable-project refusal instead.
+    let dir = tempfile::tempdir().unwrap();
+    let planning_root = dir.path().join("missing").join(".planning");
+    let identity = DocumentIdentity::PlannerRound {
+        phase: NonZeroU32::new(2).unwrap(),
+        session_id: "01a0cf16".into(),
+        first_turn: "01a0cf16-cbd7-7910-be17-2003ce72549d".into(),
+        last_turn: "01a0cef8-bb58-7f22-8729-5c0e1e82b0f9".into(),
+    };
     assert_eq!(
-        rollout_for(&names, "01a0cf16-cbd7-7910-be17-2003ce72549d").unwrap(),
-        0
-    );
-}
-
-#[test]
-fn a_session_id_no_rollout_carries_is_not_found() {
-    let names = vec![
-        "rollout-2026-09-23T12-26-12-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
-        "rollout-2026-09-23T11-53-22-01a0cef8-bb58-7f22-8729-5c0e1e82b0f9.jsonl".into(),
-    ];
-    assert_eq!(
-        rollout_for(&names, "01a0cf16-cbd7-7910-be17-2003ce725490").unwrap_err()["code"],
-        "document-not-found"
-    );
-}
-
-#[test]
-fn two_rollouts_with_one_session_id_are_ambiguous() {
-    let names = vec![
-        "rollout-2026-09-23T12-26-12-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
-        "rollout-2026-09-23T13-00-00-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
-    ];
-    assert_eq!(
-        rollout_for(&names, "01a0cf16-cbd7-7910-be17-2003ce72549d").unwrap_err()["code"],
-        "document-ambiguous"
-    );
-}
-
-#[test]
-fn a_session_id_that_is_not_a_uuid_is_refused() {
-    let names = vec![
-        "rollout-2026-09-23T12-26-12-01a0cf16-cbd7-7910-be17-2003ce72549d.jsonl".into(),
-        "rollout-2026-09-23T11-53-22-01a0cef8-bb58-7f22-8729-5c0e1e82b0f9.jsonl".into(),
-    ];
-    assert_eq!(
-        rollout_for(&names, "01a0cf16").unwrap_err()["code"],
+        resolve(&planning_root, &identity).err().unwrap()["code"],
         "document-identity"
     );
 }

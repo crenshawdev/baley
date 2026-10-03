@@ -123,9 +123,8 @@ pub enum Catalog {
 }
 impl Catalog {
     /// Every catalog, in the order listings and the docs use.
-    pub const ALL: [Catalog; 4] = [
+    pub const ALL: [Catalog; 3] = [
         Catalog::Host(Host::ClaudeCode),
-        Catalog::Host(Host::Codex),
         Catalog::Provider(Provider::OpenAi),
         Catalog::Provider(Provider::DeepSeek),
     ];
