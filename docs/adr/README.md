@@ -40,7 +40,7 @@ Start a new record from [TEMPLATE.md](TEMPLATE.md) with the next free four-digit
 | [0030](0030-question-rounds.md) | Put refinement and planning decisions to the owner in dependency-ordered question rounds | Accepted |
 | [0031](0031-one-term-per-concept.md) | Use one term per concept, kept in a glossary: phase, not sprint, and story, not requirement | Accepted, supersedes 0017 in part |
 | [0032](0032-gemini-is-not-a-provider.md) | Drop Gemini from the model catalog and detection | Accepted, supersedes 0027 in part |
-| 0033 | Support only hosts whose sandboxing and execution controls meet Baley's requirements | Reserved |
+| [0033](0033-host-security-bar.md) | Support only hosts whose sandboxing and execution controls meet Baley's requirements | Accepted, supersedes 0008, 0018, 0020, 0027 and 0029 in part |
 | 0034 | Run one Baley server per session over stdio | Reserved |
 | [0035](0035-restore-purge-uncertainty.md) | Report purge uncertainty after restoring a store | Accepted, supersedes 0022 in part |
 | 0036 | Keep guard records per user and bound the guard's access | Reserved |
