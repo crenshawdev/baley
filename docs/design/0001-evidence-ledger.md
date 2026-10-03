@@ -19,7 +19,7 @@ Baley records every fact about the work it governs (plans the owner approved, wh
 
 ### What Baley is for
 
-Baley is an owner's control plane for AI-assisted engineering. The owner decides and answers for the work; agents (the Daneels) do it; the part of Baley that decides what may happen next (Hardin) allows a step only when the recorded evidence supports it. The records are the product: a claim that has no record behind it does not count.
+Baley is an owner's control plane for AI-assisted engineering. The owner decides and answers for the work; the host session and its workers do it; the part of Baley that decides what may happen next (Hardin) allows a step only when the recorded evidence supports it. The records are the product: a claim that has no record behind it does not count.
 
 ### What exists today
 
@@ -53,7 +53,7 @@ Baley starts with an empty store (the old records are not imported), so the reco
 
 - **Moving records between machines.** The ledger is designed so it can travel later (see [Future work](#future-work)); only chain-head anchors leave the machine in this milestone.
 - **Multi-user or server deployment.** One user, one machine. The port leaves room for a server adapter; none is built.
-- **A separate operating-system user for Baley.** Real process separation is future work; this design uses the hosts' sandboxes (see [Threat model](#threat-model)).
+- **A separate operating-system user for Baley.** Real process separation is future work; this design uses the host's sandbox (see [Threat model](#threat-model)).
 - **Importing records from the old store.** The store starts empty.
 - **Windows in the first release.** The first release ships for Linux and macOS; Windows comes in a later release ([0002](0002-system-design.md), SYS-R14).
 
@@ -192,7 +192,7 @@ flowchart TB
 | Port | The set of storage traits the domain depends on. |
 | Adapter | An implementation of the port for one engine. |
 | Hardin | The part of Baley that reads views and names the one allowed next step. |
-| Daneels | The agents, driven by a host, that do the work and record it through Baley's tools. |
+| Worker | A subagent the host session starts for one work order. The host session and its workers do the work and record it through Baley's tools. |
 
 ### Detailed design
 
@@ -536,7 +536,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   autonumber
-  participant D as Daneel (host agent)
+  participant D as Host session or worker
   participant S as MCP server
   participant C as baley-core handler
   participant L as Ledger port
@@ -1136,7 +1136,7 @@ The MCP server runs SQLite's `quick_check` when it starts. The guard and the CLI
 ```mermaid
 sequenceDiagram
   actor O as Owner
-  participant D as Daneels (host)
+  participant D as Host session and workers
   participant B as Baley (Hardin decides)
   participant L as Ledger
   O->>B: approve plan 5-2
