@@ -207,6 +207,11 @@ impl SqliteStore {
         if authority == ReconcileAuthority::Owner && command.actor != Actor::Owner {
             return Err(StoreError::Refused(Refusal::NotOwner));
         }
+        if command.caller.is_some() {
+            return Err(StoreError::Refused(Refusal::InvalidEvent(
+                "a reconciliation records no caller".into(),
+            )));
+        }
         match self.command_path_for(command, Entry::Reconcile(claim),
             |_tx, state, _| match state { RequestState::Completed(_, outcome) => Ok(outcome), _ => Err(StoreError::Unavailable("a reconciliation that cannot replay".into())) },
             |work, _| {

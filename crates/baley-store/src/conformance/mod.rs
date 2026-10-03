@@ -215,7 +215,9 @@ mod claims;
 pub use claims::{
     a_claim_and_its_completion_keep_their_own_callers, a_cleanly_failed_effect_completes_the_claim,
     a_command_inside_an_active_claims_scope_is_blocked,
-    a_command_outside_an_active_claims_scope_proceeds, a_retry_during_the_effect_is_in_progress,
+    a_command_outside_an_active_claims_scope_proceeds,
+    a_reconciliation_records_no_caller_and_copies_none,
+    a_reconciliation_that_carries_a_caller_is_refused, a_retry_during_the_effect_is_in_progress,
     an_interrupted_claim_reconciles_from_a_supplied_finding,
     automatic_reconciliation_leaves_an_awaiting_owner_claim_held,
     owner_reconciliation_resolves_an_awaiting_owner_claim,
@@ -315,6 +317,8 @@ macro_rules! conformance_suite {
             a_command_stamps_its_caller_on_every_event_it_appends,
             a_claim_and_its_completion_keep_their_own_callers,
             a_reduction_and_a_purge_record_their_callers,
+            a_reconciliation_that_carries_a_caller_is_refused,
+            a_reconciliation_records_no_caller_and_copies_none,
         );
     };
     (@checks $factory:expr; $($check:ident),* $(,)?) => {
