@@ -996,19 +996,6 @@ pub fn resolve(
                 }],
             })
         }
-        DocumentIdentity::CodexRollout { session_id } => {
-            let report = super::measurement::resolve_rollout(session_id)?;
-            Ok(Resolved {
-                identity: identity.clone(),
-                classification: "codex-rollout",
-                revision: report.revision,
-                parts: vec![Part {
-                    selector: "report".into(),
-                    title: "Codex rollout measurement".into(),
-                    body: report.body,
-                }],
-            })
-        }
     }
 }
 

@@ -72,7 +72,4 @@ pub enum DocumentIdentity {
         first_turn: String,
         last_turn: String,
     },
-    CodexRollout {
-        session_id: String,
-    },
 }
