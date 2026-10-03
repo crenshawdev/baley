@@ -20,6 +20,6 @@ body:
     id: version
     attributes:
       label: Commit or version
-      description: The commit of Baley you built, and the host (Claude Code or Codex) with its version.
+      description: The commit of Baley you built, and the version of Claude Code. Codex support has been removed because its sandboxing and execution controls do not meet Baley's requirements. Support may return when those requirements are met. Baley will not lower its security defaults to accommodate a host.
     validations:
       required: true
