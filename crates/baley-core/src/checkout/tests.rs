@@ -63,6 +63,7 @@ fn event(seq: u64, payload: Value) -> Event {
         type_name: "checkout.seen".into(),
         type_version: 1,
         actor: Actor::Baley,
+        caller: None,
         recorded_at: "2026-10-01T09:00:00Z".into(),
         request_id: RequestId("00000000-0000-4000-8000-000000000001".into()),
         git: None,

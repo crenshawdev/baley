@@ -375,6 +375,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::caller::{Caller, InstructionEvidence, ServerCaller};
     use crate::event::{Actor, EventDraft, GitFacts, RequestId};
 
     const PROJECT: &str = "3f2b1a9c-6d4e-4f0a-9b8c-7d6e5f4a3b2c";
@@ -386,6 +387,7 @@ mod tests {
             type_name: "phase.declared".into(),
             type_version: 1,
             actor: Actor::Owner,
+            caller: None,
             recorded_at: "2026-09-25T18:00:00Z".into(),
             request_id: RequestId(format!("00000000-0000-4000-8000-00000000000{seq}")),
             git: None,
@@ -644,6 +646,57 @@ mod tests {
         assert_eq!(event.hash, hex(GENESIS_HASH));
     }
 
+    // A server caller sealed at sequence 1, with every field set. The
+    // envelope bytes are written by hand with the caller nested under its own
+    // key, and the hash was computed outside this crate the same way as the
+    // genesis hash, with printf of the prefix, project id, envelope and
+    // payload piped through sha256sum. Catches a caller left out of the hash,
+    // flattened into the envelope, or written under another key.
+    #[test]
+    fn a_server_caller_sits_inside_the_hash_under_its_own_key() {
+        let caller = ServerCaller::new(
+            "/code/baley",
+            "/code/baley/crates",
+            "claude-code",
+            "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+            &json!(7),
+        )
+        .and_then(|caller| caller.with_client_version("2.1.278"))
+        .and_then(|caller| caller.with_host_session("host-sess-1"))
+        .and_then(|caller| caller.with_work_order("wo-42"))
+        .and_then(|caller| {
+            caller.with_instructions(vec![
+                InstructionEvidence::new(
+                    "instructions/executor",
+                    "3",
+                    "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                )
+                .expect("evidence"),
+            ])
+        })
+        .expect("caller");
+        let draft = EventDraft {
+            caller: Some(Caller::Server(caller)),
+            ..draft(1)
+        };
+        let event = Event::seal(ProjectId(PROJECT.into()), 1, None, draft).expect("seal");
+        assert_eq!(
+            String::from_utf8(event.canonical_envelope().expect("envelope")).expect("utf-8"),
+            concat!(
+                r#"{"actor":"owner","caller":{"baley_session":"7c9e6679-7425-40de-944b-e07fc1f90ae7","#,
+                r#""call":{"source":"jsonrpc_id","text":"7"},"client_version":"2.1.278","form":"server","#,
+                r#""host":"claude-code","host_session":"host-sess-1","instructions":[{"#,
+                r#""hash":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08","#,
+                r#""identity":"instructions/executor","version":"3"}],"project_directory":"/code/baley","#,
+                r#""work_order":"wo-42","working_directory":"/code/baley/crates"},"#,
+                r#""policy_version":1,"prev_hash":null,"project_id":"3f2b1a9c-6d4e-4f0a-9b8c-7d6e5f4a3b2c","#,
+                r#""recorded_at":"2026-09-25T18:00:00Z","request_id":"00000000-0000-4000-8000-000000000001","#,
+                r#""seq":1,"stream":"phase/1","stream_version":1,"type":"phase.declared","type_version":1}"#
+            )
+        );
+        assert_eq!(event.hash, hex(SERVER_CALLER_HASH));
+    }
+
     // The second hash chains the raw bytes of the first, with no domain
     // prefix and no project id. Computed outside this crate the same way,
     // with the first hash's bytes from xxd. Catches a formula that repeats
@@ -666,6 +719,8 @@ mod tests {
     }
 
     const GENESIS_HASH: &str = "3ea5d953b87d75ba33d12833b83e5655322060a5a3f14e1193cec86852f2360a";
+    const SERVER_CALLER_HASH: &str =
+        "1cc81360f3aa374764acca758a1a6a2762871570d34374b3ae4f5d60429a5475";
     const GENESIS_HASH_NO_GIT: &str =
         "2e8b0f17b8239b2c583c92e06aea027478083cba903cebd46dc70ff7e7afa5d6";
     const SECOND_HASH: &str = "9bdd1d9b39bc7861fa37c48f8328b7f10b2f89d70a55b3072aeef6fd867722da";

@@ -770,6 +770,7 @@ pub(crate) fn stored_event(
         type_name: row.get(3)?,
         type_version: row.get(4)?,
         actor: Actor::parse(&actor).map_err(|error| bad(5, format!("{error:?}")))?,
+        caller: None,
         recorded_at: row.get(6)?,
         request_id: RequestId(row.get(7)?),
         git,

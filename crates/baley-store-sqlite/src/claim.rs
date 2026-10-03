@@ -1055,7 +1055,7 @@ mod tests {
         use baley_store::{Event, EventDraft};
         let f = Fixture::new();
         let event = Event::seal(ProjectId(PROJECT.into()), 1, None, EventDraft { stream: "command/old".into(), stream_version: 1,
-            type_name: "command.completed".into(), type_version: 1, actor: Actor::Owner, recorded_at: AT.into(), request_id: RequestId("old".into()),
+            type_name: "command.completed".into(), type_version: 1, actor: Actor::Owner, caller: None, recorded_at: AT.into(), request_id: RequestId("old".into()),
             git: None, policy_version: 1, payload: json!({"kind": "old", "request_id": "old", "digest": "01".repeat(32), "outcome": "done", "answer": {"inline": null}}) }).expect("seal");
         let payload = String::from_utf8(baley_store::canonical_json(&event.payload).expect("json"))
             .expect("utf8");
