@@ -370,6 +370,7 @@ Every event has an envelope and a payload.
 | `stream`, `stream_version` | The stream and its version after this event. Unique together within a project. |
 | `type`, `type_version` | The event type, such as `plan.approved`, and the version of its payload schema. |
 | `actor` | `owner`, an agent role (for example `daneel:executor`), or `baley`. |
+| `caller` | Who asked for the append. It is absent, with no key, for command-line commands and for reconciliation: never `null`, and never a `cli` value. Otherwise it is an object of one of two forms, and every event a command appends carries that command's caller, the store's own `command.*` and `payload.*` events included. The server form (`form` is `server`) is what the Baley server records for a request. It requires `project_directory`, `working_directory`, `host`, `baley_session` and `call`, and takes `client_version`, `host_session`, `work_order` and `instructions`. The hook form (`form` is `hook`) is what the guard hook records for a tool call. It requires `working_directory`, `host` and `call`, and takes `project_directory`, `host_session`, `work_order` and `instructions`. It has no `baley_session`, so a hook caller cannot carry a Baley session, and a hook object that holds the key is refused. `call` is `{ "text", "source" }`. A server's `source` is `jsonrpc_id` and its `text` is the request's JSON-RPC id written as JSON, so the integer `1` and the string `"1"` stay apart. A hook's `source` is `tool_use_id` and its `text` is the id Claude Code gave the tool call. `instructions` is a list of 1 to 32 entries, each `{ "identity", "version", "hash" }`, and has no key when it is empty. Every text is non-empty and has a byte limit: directories 4096 and absolute, `host` 64 of lower-case letters, digits and `-` starting with a letter, `baley_session` exactly 36 as a lower-case UUID version 4, `client_version` 128, `host_session` 128, `call.text` 256, `work_order` 256, and an instruction's `identity` 256, `version` 64 and `hash` 128. Where documentation leaves a length open, the limit is a choice. An empty text or a `null` is refused, never read as absent, and so is an unknown key. A stored caller that fails these checks on reading makes history and verification unavailable. No caller enters a request digest or request key, so a replay records nothing and keeps the original caller, read from the event the request document's `produced_seq` names. |
 | `recorded_at` | UTC time the event was recorded. |
 | `request_id` | The command that recorded it. |
 | `git` | The git facts the event depends on: `commit`, `tree`, and the `checkout` it was observed in. Absent when the event depends on none. |
@@ -377,7 +378,7 @@ Every event has an envelope and a payload.
 | `payload` | The event's typed content, as canonical JSON. Every fact a projector or the search index needs is inline. Attachments (outputs, review material, prompts, plan and context text) are references `{ "payload": "<sha256>", "bytes": n, "class": "<retention class>" }`. |
 | `prev_hash`, `hash` | The hash chain. |
 
-Payloads are JSON so that the ledger stays readable with standard tools and queryable through SQLite's JSON functions. For hashing, the envelope (without `hash`) and the payload are serialized with the JSON Canonicalization Scheme (RFC 8785), so the same event always hashes the same way on any platform.
+Payloads are JSON so that the ledger stays readable with standard tools and queryable through SQLite's JSON functions. For hashing, the envelope (without `hash`) and the payload are serialized with the JSON Canonicalization Scheme (RFC 8785), so the same event always hashes the same way on any platform. The envelope includes the nested `caller` when the event has one and leaves the key out when it has none, as it does `git`, so an event with no caller hashes exactly as it did before the field existed.
 
 Payload numbers are integers within ±(2^53 − 1); floats are refused, because RFC 8785 writes numbers as IEEE doubles. Events and view documents never carry payload body text: a decision puts body content in a payload and records its reference, and an inline fact is never an excerpt of a body. `command.*` and `payload.*` events are recorded only by the store; a decision that appends one is refused.
 
@@ -624,6 +625,8 @@ Each project's events are chained in project-sequence order:
 
 - `hash(1) = SHA-256("baley-ledger/1" || project_id || JCS(envelope(1)) || JCS(payload(1)))`
 - `hash(n) = SHA-256(hash(n-1) || JCS(envelope(n)) || JCS(payload(n)))`
+
+The envelope in these formulas includes the nested `caller` when the event has one and has no `caller` key when it has none. A caller-free event hashes exactly as before, and the formulas and the `baley-ledger/1` prefix do not change.
 
 `prev_hash` is stored with each event so a break is located without recomputing from the start. A payload enters the chain as its reference, so the chain commits to the content's hash and length, not its bytes: it proves what was committed to, and when, even after the body is purged.
 
