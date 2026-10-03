@@ -207,7 +207,8 @@ mod export;
 pub use export::{
     a_purge_lists_an_earlier_export_of_its_project, a_purge_skips_an_export_made_after_the_release,
     a_replayed_purge_lists_the_same_exports, a_shared_purge_lists_another_projects_export,
-    an_export_reports_its_verified_head, an_export_tombstones_a_body_its_project_released,
+    an_export_keeps_every_events_caller, an_export_reports_its_verified_head,
+    an_export_tombstones_a_body_its_project_released,
     an_export_verifies_alone_and_holds_no_other_project,
 };
 mod compatibility;
@@ -304,6 +305,7 @@ macro_rules! conformance_suite {
             an_export_verifies_alone_and_holds_no_other_project,
             an_export_tombstones_a_body_its_project_released,
             an_export_reports_its_verified_head,
+            an_export_keeps_every_events_caller,
             a_purge_lists_an_earlier_export_of_its_project,
             a_purge_skips_an_export_made_after_the_release,
             a_shared_purge_lists_another_projects_export,
