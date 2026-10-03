@@ -7,7 +7,7 @@
 | Deciders | John Crenshaw |
 | Design document | [0001: The evidence ledger](../design/0001-evidence-ledger.md), [0002: System design](../design/0002-system-design.md), [0003: Configuration and routing](../design/0003-configuration-and-routing.md) |
 | Supersedes | [0015](0015-settings-in-toml.md), in part: the global file's location and name; [0016](0016-key-store.md); [0003](0003-per-user-database.md), in part: the data location; [0002](0002-sqlite.md), in part: detecting and refusing a network filesystem; [0013](0013-host-session-calls-outside-models.md), in part: where keys are kept and the name `baley exec --key` takes; [0020](0020-sandbox-is-a-write-barrier.md), in part: the statements about the master key and encrypted keys |
-| Superseded by | [0032](0032-gemini-is-not-a-provider.md), in part: the key-name table names `OPENAI_API_KEY` and `DEEPSEEK_API_KEY` only, since Gemini is no provider detection knows |
+| Superseded by | [0032](0032-gemini-is-not-a-provider.md), in part: the key-name table names `OPENAI_API_KEY` and `DEEPSEEK_API_KEY` only, since Gemini is no provider detection knows; [0033](0033-host-security-bar.md), in part: the Codex consequence |
 
 ## Context and problem
 
