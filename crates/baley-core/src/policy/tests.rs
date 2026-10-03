@@ -202,7 +202,7 @@ fn line_and_column_follow_tomls_rule() {
 fn each_layer_overrides_the_one_below() {
     // Each value is written at the leaf key `both`, column 9.
     let schema = test_schema();
-    let sectioned = "example.both = false\n[host.codex]\nexample.both = true\n";
+    let sectioned = "example.both = false\n[host.claude-code]\nexample.both = true\n";
     let top_only = "example.both = false\n";
     let (global_full, global_top) = (file(GLOBAL, sectioned), file(GLOBAL, top_only));
     let (project_full, project_top) = (file(PROJECT, sectioned), file(PROJECT, top_only));
@@ -235,7 +235,7 @@ fn each_layer_overrides_the_one_below() {
         (None, None, true, default_source()),
     ];
     for (global, project, value, expected) in cases {
-        let policy = effective_policy(&schema, Some(Host::Codex), global, project).unwrap();
+        let policy = effective_policy(&schema, Some(Host::ClaudeCode), global, project).unwrap();
         let effective = value_of(&policy, "example.both");
         assert_eq!(effective.value, Some(Value::Bool(value)), "{expected:?}");
         assert_eq!(effective.source, expected);
@@ -245,7 +245,7 @@ fn each_layer_overrides_the_one_below() {
 #[test]
 fn only_the_connected_hosts_section_applies() {
     let text = "[host.claude-code]\nescalate_on_failure = true\n\
-                [host.codex.roles.planner]\neffort = \"max\"\n";
+                [host.cursor.roles.planner]\neffort = \"max\"\n";
     let claude = standard(Some(Host::ClaudeCode), Some(text), None).unwrap();
     assert_eq!(
         claude.escalate_on_failure(),
@@ -256,18 +256,15 @@ fn only_the_connected_hosts_section_applies() {
         (Rung::High, &default_source())
     );
 
-    let codex = standard(Some(Host::Codex), Some(text), None).unwrap();
-    assert_eq!(codex.escalate_on_failure(), (false, &default_source()));
-    assert_eq!(
-        codex.effort(Role::Planner),
-        (Rung::Max, &source(Layer::GlobalHost, GLOBAL, 4, 1))
-    );
-
+    // With no host connected the claude-code section is not applied, and the
+    // unknown host's section is still reported once.
     let none = standard(None, Some(text), None).unwrap();
     assert_eq!(none.host, None);
     assert_eq!(none.escalate_on_failure(), (false, &default_source()));
     assert_eq!(none.effort(Role::Planner), (Rung::High, &default_source()));
-    assert!(none.diagnostics.is_empty());
+    assert_eq!(none.diagnostics.len(), 1);
+    assert_eq!(none.diagnostics[0].name, "host.cursor");
+    assert_eq!(none.diagnostics[0].kind, DiagnosticKind::UnknownHost);
 }
 
 #[test]
@@ -551,13 +548,13 @@ fn a_wrong_type_names_the_setting_and_its_position() {
 }
 
 #[test]
-fn a_section_for_another_host_is_still_validated() {
-    let text = "[host.codex]\nescalate_on_failure = \"no\"\n";
-    let refusal = standard(Some(Host::ClaudeCode), Some(text), None).unwrap_err();
+fn a_host_section_is_still_validated_when_no_host_is_connected() {
+    let text = "[host.claude-code]\nescalate_on_failure = \"no\"\n";
+    let refusal = standard(None, Some(text), None).unwrap_err();
     assert_eq!(
         refusal.fault,
         Fault::WrongType {
-            name: "host.codex.escalate_on_failure".into(),
+            name: "host.claude-code.escalate_on_failure".into(),
             expected: Expected::Bool,
             found: "string",
             line: 2,
@@ -824,13 +821,13 @@ fn escalation_off_keeps_the_rung() {
 #[test]
 fn the_route_names_the_setting_and_layer_of_its_model_and_effort() {
     let global = "[roles.checker]\nmodel = \"haiku\"\n";
-    let project = "[host.codex.roles.checker]\neffort = \"xhigh\"\n";
-    let policy = standard(Some(Host::Codex), Some(global), Some(project)).unwrap();
+    let project = "[host.claude-code.roles.checker]\neffort = \"xhigh\"\n";
+    let policy = standard(Some(Host::ClaudeCode), Some(global), Some(project)).unwrap();
     let route = resolve_route(&RouteRequest {
         policy: &policy,
         policy_version: 11,
         role: Role::Checker,
-        host: Host::Codex,
+        host: Host::ClaudeCode,
         attempt: attempt(1),
         catalog: &AcceptedNames {
             names: BTreeSet::from(["haiku".to_owned()]),
@@ -862,11 +859,11 @@ fn the_route_names_the_setting_and_layer_of_its_model_and_effort() {
             policy_version: 11,
             catalog_version: 3,
             reasons: vec![
-                "roles.checker.effort is xhigh from the project file's codex section /r/baley.toml"
+                "roles.checker.effort is xhigh from the project file's claude-code section /r/baley.toml"
                     .into(),
                 "roles.checker.model is haiku from the global file /c/config.toml".into(),
                 "attempt 1 runs at the starting rung".into(),
-                "codex runs rung xhigh as x".into(),
+                "claude-code runs rung xhigh as x".into(),
             ],
         }
     );
@@ -1072,7 +1069,7 @@ fn rendering_a_new_id_keeps_every_other_table_and_value() {
     let before = "escalate_on_failure = true\n\
                   [roles.planner]\n\
                   effort = \"low\"\n\
-                  [host.codex.roles.checker]\n\
+                  [host.cursor.roles.checker]\n\
                   effort = \"xhigh\"\n\
                   [review]\n\
                   depth = 3\n\
@@ -1099,7 +1096,7 @@ fn rendering_a_new_id_keeps_every_other_table_and_value() {
     project.insert("owner".into(), "kept".into());
     assert_eq!(project_after, Some(toml::Value::Table(project)), "{after}");
     let settings = settings_of(before);
-    assert_eq!(settings.len(), 3);
+    assert_eq!(settings.len(), 2);
     assert_eq!(settings_of(&after), settings, "{after}");
 }
 
