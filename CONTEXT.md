@@ -198,7 +198,7 @@ Two notes on history:
 |---|---|---|
 | Hook | The host's pre-tool-use call into Baley ([0010](docs/design/0010-guard.md#2-terms)). | callback, trigger (a trigger raises a review) |
 | Guard | Baley's answer to a hook call: `pass`, `ask`, `deny` or `pass on failure` ([0010](docs/design/0010-guard.md#2-terms)). | firewall, policy check |
-| Verb | The git subcommand a Bash command carries: `commit` or `push` ([0010](docs/design/0010-guard.md#2-terms)). | action, operation |
+| Verb | The git subcommand a `Bash`, `Monitor` or `PowerShell` command carries: `commit` or `push` ([0010](docs/design/0010-guard.md#2-terms)). | action, operation |
 | Protected branch | A branch named in `git.protected_branches` ([0010](docs/design/0010-guard.md#2-terms)). | base branch (not every base branch is protected), main |
 | Torn settings | A settings file that cannot be read or parsed at the moment of the call ([0010](docs/design/0010-guard.md#2-terms)). | corrupt config |
 | Guard failure | A call the guard could not decide because git or the branch could not be read ([0010](docs/design/0010-guard.md#2-terms)). | guard error, crash |
