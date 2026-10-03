@@ -248,6 +248,7 @@ pub fn command(project: &str, kind: &str, request: &str) -> baley_store::Command
         policy_version: 0,
         recorded_at: AT.into(),
         actor: Actor::Owner,
+        caller: None,
     }
 }
 /// Executes a prepared command through the adapter and returns material hashes.

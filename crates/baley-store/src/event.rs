@@ -6,6 +6,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::caller::Caller;
 use crate::canonical::{CanonicalError, canonical_json};
 use crate::chain::chain_hash;
 
@@ -171,6 +172,9 @@ pub struct EventDraft {
     pub type_name: String,
     pub type_version: u32,
     pub actor: Actor,
+    /// Who called, when a server or the guard hook did. Absent for the
+    /// command line and for reconciliation. It is part of the hashed envelope.
+    pub caller: Option<Caller>,
     /// UTC, RFC 3339, second or finer precision, `Z` suffix. Text because
     /// its bytes are hashed.
     pub recorded_at: String,
@@ -194,6 +198,8 @@ pub struct Event {
     pub type_name: String,
     pub type_version: u32,
     pub actor: Actor,
+    /// The caller that appended the event, if it had one.
+    pub caller: Option<Caller>,
     pub recorded_at: String,
     pub request_id: RequestId,
     pub git: Option<GitFacts>,
@@ -259,6 +265,7 @@ impl Event {
             type_name: draft.type_name,
             type_version: draft.type_version,
             actor: draft.actor,
+            caller: draft.caller,
             recorded_at: draft.recorded_at,
             request_id: draft.request_id,
             git: draft.git,
@@ -285,8 +292,8 @@ impl Event {
     }
 
     /// The envelope as the design's table lists it, without `hash`, as a
-    /// JSON object: `git` is left out when absent, `prev_hash` is `null` at
-    /// sequence 1, hashes are hex text.
+    /// JSON object: `git` and `caller` are left out when absent, `prev_hash`
+    /// is `null` at sequence 1, hashes are hex text.
     pub fn envelope(&self) -> Value {
         let mut envelope = Map::new();
         envelope.insert(
@@ -302,6 +309,9 @@ impl Event {
             "actor".into(),
             Value::String(self.actor.as_str().to_owned()),
         );
+        if let Some(caller) = &self.caller {
+            envelope.insert("caller".into(), caller.to_value());
+        }
         envelope.insert(
             "recorded_at".into(),
             Value::String(self.recorded_at.clone()),
@@ -404,12 +414,26 @@ mod tests {
             type_name: "phase.declared".into(),
             type_version: 1,
             actor: Actor::Owner,
+            caller: None,
             recorded_at: "2026-09-25T18:00:00Z".into(),
             request_id: RequestId("00000000-0000-4000-8000-000000000001".into()),
             git: None,
             policy_version: 1,
             payload: serde_json::json!({}),
         }
+    }
+
+    // An event with no caller has an envelope with no `caller` key at all.
+    // Catches `"caller": null`, which would change the hash shape of every
+    // command-line event.
+    #[test]
+    fn an_absent_caller_leaves_no_caller_key_in_the_envelope() {
+        let event = Event::seal(ProjectId("p".into()), 1, None, draft()).expect("seal");
+        let envelope = event.envelope();
+        assert!(envelope.get("caller").is_none());
+        let bytes =
+            String::from_utf8(event.canonical_envelope().expect("envelope")).expect("utf-8");
+        assert!(!bytes.contains("caller"));
     }
 
     // Sequence 1 with a predecessor, or a later sequence without one, is

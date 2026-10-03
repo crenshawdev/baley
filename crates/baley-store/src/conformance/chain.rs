@@ -355,3 +355,37 @@ pub fn a_purge_leaves_every_recorded_event_as_it_was<F: StoreFactory>(factory: &
     assert_eq!(after[before.len()].type_name, PAYLOAD_PURGED);
     assert_eq!(after[before.len() + 1].type_name, COMMAND_COMPLETED);
 }
+/// Swaps a stored caller for another valid one without its hash. Catches a caller kept outside the hashed envelope.
+pub fn a_replaced_caller_is_named_at_its_sequence<F: StoreFactory>(factory: &F) {
+    let store = sound(factory);
+    store
+        .transact(
+            &by(command("fixture.add", "by-caller"), &server_caller()),
+            &mut |tx| {
+                tx.append(event(
+                    2,
+                    json!({"id": 3, "state": "open", "rank": 0, "owner": ""}),
+                ))?;
+                Ok(done(json!("ok"), false))
+            },
+        )
+        .unwrap();
+    assert!(store.verify(&project(), None).unwrap().chain.is_intact());
+    factory
+        .corrupt(
+            &store,
+            &project(),
+            Corruption::ReplaceCaller {
+                seq: 6,
+                caller: hook_caller(),
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        store.verify(&project(), None).unwrap().chain.first_break,
+        Some(Break {
+            seq: 6,
+            kind: BreakKind::Hash { .. }
+        })
+    ));
+}

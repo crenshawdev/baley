@@ -175,6 +175,7 @@ fn event(seq: u64, type_name: &str, recorded_at: &str, payload: Value) -> Event 
         type_name: type_name.into(),
         type_version: 1,
         actor: Actor::Baley,
+        caller: None,
         recorded_at: recorded_at.into(),
         request_id: RequestId("00000000-0000-4000-8000-000000000001".into()),
         git: None,

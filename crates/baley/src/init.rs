@@ -284,6 +284,7 @@ fn init_command(
         policy_version: 0,
         recorded_at: at.into(),
         actor,
+        caller: None,
     })
 }
 

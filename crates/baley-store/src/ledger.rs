@@ -105,6 +105,10 @@ pub trait Ledger {
     /// the finding and the reconciler's receipt, and either completes the
     /// claim or holds it for the owner. Only an owner actor with owner
     /// authority may resolve a held claim.
+    ///
+    /// A command that carries a caller is refused as an invalid event, before
+    /// the request is looked up, so a retry with a caller never replays.
+    /// Reconciliation records no caller and never copies the claim's.
     fn reconcile(
         &self,
         command: &Command,

@@ -312,7 +312,40 @@ pub(super) fn command(kind: &str, request: &str) -> Command {
         policy_version: 1,
         recorded_at: T0.into(),
         actor: Actor::Owner,
+        caller: None,
     }
+}
+
+/// A server caller. It shares only its host with `hook_caller`.
+pub(super) fn server_caller() -> Caller {
+    Caller::Server(
+        ServerCaller::new(
+            "/work/fixture",
+            "/work/fixture/crates/store",
+            "claude-code",
+            "3f2b8c1e-5d4a-4e7b-9a60-1c2d3e4f5a6b",
+            &json!(7),
+        )
+        .expect("server caller"),
+    )
+}
+
+/// A hook caller, unequal to `server_caller` in every field but the host.
+pub(super) fn hook_caller() -> Caller {
+    Caller::Hook(
+        HookCaller::new(
+            "claude-code",
+            "/work/other/tools",
+            "toolu_01A09q90qw90lq917835lq9",
+        )
+        .expect("hook caller"),
+    )
+}
+
+/// The command, carrying the caller.
+pub(super) fn by(mut command: Command, caller: &Caller) -> Command {
+    command.caller = Some(caller.clone());
+    command
 }
 
 /// A completed decision with no observed inputs.

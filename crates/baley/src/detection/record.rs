@@ -71,6 +71,7 @@ pub fn record(
         policy_version: 0,
         recorded_at: at.into(),
         actor: trigger.actor(),
+        caller: None,
     };
     let mut recording = None;
     store.transact(&command, &mut |tx| {
@@ -266,6 +267,7 @@ mod tests {
             policy_version: 0,
             recorded_at: at(n),
             actor: Actor::Owner,
+            caller: None,
         };
         store
             .transact(&command, &mut |tx| {

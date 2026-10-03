@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+use crate::caller::Caller;
 use crate::chain::Head;
 use crate::event::{Actor, GitFacts, Hash, ProjectId, RequestId};
 use crate::payload::{PayloadRef, PayloadStatus};
@@ -39,6 +40,11 @@ pub struct Command {
     /// `YYYY-MM-DDTHH:MM:SS[.f{1,9}]Z`. Never read from a live clock inside the store.
     pub recorded_at: String,
     pub actor: Actor,
+    /// The caller that made the request. It is stamped on every event the
+    /// command appends, the store's own included. It is absent for the
+    /// command line and for reconciliation, which refuses one. It enters no
+    /// request digest and no request key.
+    pub caller: Option<Caller>,
 }
 
 /// An event as a decision appends it. The transaction adds the rest from

@@ -18,11 +18,12 @@ use baley_core::{
 };
 use baley_store::{
     ANCHOR_FAILED, ANCHOR_PUSHED, Actor, Admin, Anchor, AnchorCheck, AnchorVerdict,
-    COMMAND_CLAIMED, COMMAND_COMPLETED, COMMAND_RECONCILED, ClaimDecision, ClaimOwner, ClaimState,
-    Command, CommandKind, Decision, DocKey, Event, EventSchema, GitFacts, Hash, Head,
-    HistoryFilter, KeyValue, Ledger, NewEvent, Observed, OutcomeKind, PageRequest, PayloadFault,
-    PayloadReference, ProjectId, REQUEST_VIEW, Recorded, Refusal, RequestId, RetentionClass,
-    StoreError, StoredAnchorComparison, StreamName, Transaction, UnanchoredAge, Views, anchor_tag,
+    COMMAND_CLAIMED, COMMAND_COMPLETED, COMMAND_RECONCILED, Caller, ClaimDecision, ClaimOwner,
+    ClaimState, Command, CommandKind, Decision, DocKey, Event, EventSchema, GitFacts, Hash, Head,
+    HistoryFilter, HookCaller, KeyValue, Ledger, NewEvent, Observed, OutcomeKind, PageRequest,
+    PayloadFault, PayloadReference, ProjectId, REQUEST_VIEW, Recorded, Refusal, RequestId,
+    RetentionClass, StoreError, StoredAnchorComparison, StreamName, Transaction, UnanchoredAge,
+    Views, anchor_tag,
 };
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
@@ -253,6 +254,7 @@ fn fixture_command(request: &str, at: &str) -> Command {
         policy_version: 1,
         recorded_at: at.into(),
         actor: Actor::Owner,
+        caller: None,
     }
 }
 
@@ -583,6 +585,38 @@ fn verify_without_a_database_file_fails_and_creates_none() {
     std::fs::remove_file(&path).expect("remove");
     assert!(f.ledger().verify(&project(), None).is_err());
     assert!(!path.exists());
+}
+
+// A stored caller that is valid JSON but fails the caller's own checks makes
+// history and verification unavailable. Catches an undecodable caller read
+// as absent, which would hide it, or skipped.
+#[test]
+fn an_undecodable_stored_caller_is_unavailable_not_absent() {
+    let f = Fixture::new();
+    f.record("one", 1);
+    let hook = HookCaller::new("claude-code", "/work/project", "toolu_01").expect("hook caller");
+    let mut value = Caller::Hook(hook).to_value();
+    value["working_directory"] = json!("relative/dir");
+    assert!(Caller::from_value(&value).is_err());
+    f.raw()
+        .execute(
+            "UPDATE event SET caller = ?1 WHERE project_id = ?2 AND seq = 1",
+            params![value.to_string(), project().0],
+        )
+        .expect("plant caller");
+    assert!(matches!(
+        f.ledger().history(
+            &project(),
+            1..=u64::MAX,
+            &HistoryFilter::default(),
+            page(10)
+        ),
+        Err(StoreError::Unavailable(_))
+    ));
+    assert!(matches!(
+        f.ledger().verify(&project(), None),
+        Err(StoreError::Unavailable(_))
+    ));
 }
 
 // Catches malformed compressed bytes escaping body fault reporting.

@@ -139,6 +139,7 @@ fn command(
         policy_version,
         recorded_at: at.into(),
         actor,
+        caller: None,
     })
 }
 

@@ -81,6 +81,7 @@ impl AnchorRequest {
             policy_version: self.policy_version,
             recorded_at: recorded_at.into(),
             actor: self.actor.clone(),
+            caller: None,
         })
     }
 }
@@ -700,6 +701,7 @@ pub fn reconcile_from_observation(
         policy_version: request.policy_version,
         recorded_at: checked_at.into(),
         actor: Actor::Baley,
+        caller: None,
     };
     let recorded = ledger.reconcile(
         &command,

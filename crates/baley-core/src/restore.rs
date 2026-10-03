@@ -125,6 +125,7 @@ pub fn acknowledge_restore(
         policy_version: request.policy_version,
         recorded_at: now(),
         actor: request.actor.clone(),
+        caller: None,
     };
     ledger
         .transact(&command, &mut |tx| {

@@ -1,6 +1,7 @@
 //! EVD-R15: standalone exports and purge reports naming unreachable copies.
 use super::fixture::*;
 use crate::*;
+use serde_json::json;
 
 /// Opens an exported project independently. Catches incomplete exports and another project's payload leaking.
 pub fn an_export_verifies_alone_and_holds_no_other_project<F: StoreFactory>(factory: &F) {
@@ -136,4 +137,35 @@ pub fn a_replayed_purge_lists_the_same_exports<F: StoreFactory>(factory: &F) {
     assert_eq!(first.unreachable, vec![target]);
     assert_eq!(replay, first);
     assert_eq!(history(&store), before);
+}
+/// Exports a chain holding server, hook and no callers. Catches an export that drops or nulls callers, which would otherwise show only as an unverified export.
+pub fn an_export_keeps_every_events_caller<F: StoreFactory>(factory: &F) {
+    let store = created(factory);
+    for (request, caller) in [
+        ("by-server", Some(server_caller())),
+        ("by-hook", Some(hook_caller())),
+        ("by-none", None),
+    ] {
+        let mut cmd = command("fixture.add", request);
+        cmd.caller = caller;
+        store
+            .transact(&cmd, &mut |tx| {
+                tx.append(event(
+                    2,
+                    json!({"id": 1, "state": request, "rank": 0, "owner": ""}),
+                ))?;
+                Ok(done(json!("ok"), false))
+            })
+            .unwrap();
+    }
+    let source: Vec<_> = history(&store).into_iter().map(|e| e.caller).collect();
+    assert!(source.contains(&Some(server_caller())));
+    assert!(source.contains(&Some(hook_caller())));
+    assert!(source.contains(&None));
+    let target = factory.export_target();
+    store.export(&project(), &target, T0).unwrap();
+    let exported = factory.open_export(&target, binary()).unwrap();
+    let kept: Vec<_> = history(&exported).into_iter().map(|e| e.caller).collect();
+    assert_eq!(kept, source);
+    assert!(exported.verify(&project(), None).unwrap().chain.is_intact());
 }

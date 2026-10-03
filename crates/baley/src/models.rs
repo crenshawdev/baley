@@ -97,6 +97,7 @@ pub fn record_seed(
         policy_version: 0,
         recorded_at: at.into(),
         actor,
+        caller: None,
     };
     let mut appended = false;
     store.transact(&command, &mut |tx| {
@@ -201,6 +202,7 @@ pub fn change(
         policy_version: 0,
         recorded_at: at.into(),
         actor: Actor::Owner,
+        caller: None,
     };
     let recorded = store.transact(&command, &mut |tx| {
         if change == OwnerChange::Removed {
@@ -683,6 +685,7 @@ mod tests {
             policy_version: 0,
             recorded_at: at(n),
             actor: Actor::Owner,
+            caller: None,
         };
         let mut seqs = Vec::new();
         store

@@ -685,6 +685,7 @@ mod tests {
             policy_version: 1,
             recorded_at: AT.into(),
             actor: Actor::Owner,
+            caller: None,
         }
     }
 
@@ -841,6 +842,7 @@ mod tests {
                     type_name: row.get(3)?,
                     type_version: row.get(4)?,
                     actor: Actor::parse(&row.get::<_, String>(5)?).expect("actor"),
+                    caller: None,
                     recorded_at: row.get(6)?,
                     request_id: RequestId(row.get(7)?),
                     git: None,

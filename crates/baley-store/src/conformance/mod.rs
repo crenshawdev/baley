@@ -3,8 +3,8 @@
 //! one fresh directory and the engine-specific damage and rebuild operations.
 
 use crate::{
-    Admin, DocKey, Event, EventSchema, Hash, Ledger, Payloads, ProjectId, Projector, RebuildReport,
-    StoreError, Views,
+    Admin, Caller, DocKey, Event, EventSchema, Hash, Ledger, Payloads, ProjectId, Projector,
+    RebuildReport, StoreError, Views,
 };
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -117,6 +117,15 @@ pub enum Corruption {
         /// The replacement document body.
         body: serde_json::Value,
     },
+    /// Replaces a stored event's caller with the one given, leaving its hashes
+    /// as they were. The replacement is a valid caller, so the event still
+    /// reads and only its hash can tell.
+    ReplaceCaller {
+        /// The stored event sequence.
+        seq: u64,
+        /// The replacement caller.
+        caller: Caller,
+    },
     /// Sets the building marker to the live generation.
     MarkLiveGenerationBuilding,
 }
@@ -131,6 +140,7 @@ pub use chain::{
     a_local_anchor_row_that_differs_from_the_remote_is_a_conflict,
     a_purge_leaves_every_recorded_event_as_it_was, a_purged_body_is_a_tombstone_not_a_fault,
     a_reduced_bodys_excerpt_is_hashed, a_regrown_older_copy_is_a_rewrite_of_its_anchor,
+    a_replaced_caller_is_named_at_its_sequence,
     a_restored_older_copy_is_a_truncation_of_its_anchor,
     a_truncated_tail_is_a_truncation_of_its_anchor, an_altered_payload_is_named_at_its_sequence,
     an_inserted_event_is_named_at_the_event_after_it,
@@ -141,10 +151,11 @@ pub use chain::{
 };
 mod commands;
 pub use commands::{
+    a_command_stamps_its_caller_on_every_event_it_appends,
     a_document_moved_since_it_was_seen_is_stale,
     a_document_that_appeared_since_its_absence_was_seen_is_stale,
     a_git_head_moved_since_it_was_seen_is_stale, a_projector_failure_records_nothing,
-    a_replayed_request_returns_its_outcome_and_records_nothing,
+    a_replay_keeps_the_original_caller, a_replayed_request_returns_its_outcome_and_records_nothing,
     a_reused_request_id_with_another_digest_is_refused,
     an_event_that_appeared_since_its_absence_was_seen_is_stale,
     one_request_id_in_two_projects_is_two_requests,
@@ -188,6 +199,7 @@ pub use payloads::{
     a_body_over_several_chunks_streams_back_byte_for_byte,
     a_present_body_reports_its_uncompressed_length,
     a_purged_answer_leaves_its_request_document_unchanged,
+    a_reduction_and_a_purge_record_their_callers,
     a_reduction_keeps_the_first_and_last_64_kib_under_their_own_hash,
     a_retry_after_a_purge_gets_the_tombstone, a_shared_body_survives_one_projects_purge,
 };
@@ -195,7 +207,8 @@ mod export;
 pub use export::{
     a_purge_lists_an_earlier_export_of_its_project, a_purge_skips_an_export_made_after_the_release,
     a_replayed_purge_lists_the_same_exports, a_shared_purge_lists_another_projects_export,
-    an_export_reports_its_verified_head, an_export_tombstones_a_body_its_project_released,
+    an_export_keeps_every_events_caller, an_export_reports_its_verified_head,
+    an_export_tombstones_a_body_its_project_released,
     an_export_verifies_alone_and_holds_no_other_project,
 };
 mod compatibility;
@@ -211,9 +224,11 @@ pub use compatibility::{
 };
 mod claims;
 pub use claims::{
-    a_cleanly_failed_effect_completes_the_claim,
+    a_claim_and_its_completion_keep_their_own_callers, a_cleanly_failed_effect_completes_the_claim,
     a_command_inside_an_active_claims_scope_is_blocked,
-    a_command_outside_an_active_claims_scope_proceeds, a_retry_during_the_effect_is_in_progress,
+    a_command_outside_an_active_claims_scope_proceeds,
+    a_reconciliation_records_no_caller_and_copies_none,
+    a_reconciliation_that_carries_a_caller_is_refused, a_retry_during_the_effect_is_in_progress,
     an_interrupted_claim_reconciles_from_a_supplied_finding,
     automatic_reconciliation_leaves_an_awaiting_owner_claim_held,
     owner_reconciliation_resolves_an_awaiting_owner_claim,
@@ -226,6 +241,7 @@ macro_rules! conformance_suite {
         $crate::conformance_suite!(@checks $factory;
             an_untouched_chain_verifies_against_its_anchor,
             an_altered_payload_is_named_at_its_sequence,
+            a_replaced_caller_is_named_at_its_sequence,
             an_inserted_event_is_named_at_the_event_after_it,
             a_deleted_event_is_named_at_its_sequence,
             reordered_events_are_named_at_the_first_moved_sequence,
@@ -244,6 +260,7 @@ macro_rules! conformance_suite {
             a_purge_leaves_every_recorded_event_as_it_was,
             a_projector_failure_records_nothing,
             a_replayed_request_returns_its_outcome_and_records_nothing,
+            a_replay_keeps_the_original_caller,
             a_reused_request_id_with_another_digest_is_refused,
             one_request_id_under_two_command_kinds_is_two_requests,
             one_request_id_in_two_projects_is_two_requests,
@@ -289,6 +306,7 @@ macro_rules! conformance_suite {
             an_export_verifies_alone_and_holds_no_other_project,
             an_export_tombstones_a_body_its_project_released,
             an_export_reports_its_verified_head,
+            an_export_keeps_every_events_caller,
             a_purge_lists_an_earlier_export_of_its_project,
             a_purge_skips_an_export_made_after_the_release,
             a_shared_purge_lists_another_projects_export,
@@ -310,6 +328,11 @@ macro_rules! conformance_suite {
             an_interrupted_claim_reconciles_from_a_supplied_finding,
             automatic_reconciliation_leaves_an_awaiting_owner_claim_held,
             owner_reconciliation_resolves_an_awaiting_owner_claim,
+            a_command_stamps_its_caller_on_every_event_it_appends,
+            a_claim_and_its_completion_keep_their_own_callers,
+            a_reduction_and_a_purge_record_their_callers,
+            a_reconciliation_that_carries_a_caller_is_refused,
+            a_reconciliation_records_no_caller_and_copies_none,
         );
     };
     (@checks $factory:expr; $($check:ident),* $(,)?) => {

@@ -312,6 +312,7 @@ mod tests {
             type_name: type_name.into(),
             type_version,
             actor: Actor::Owner,
+            caller: None,
             recorded_at: "2026-09-25T18:00:00Z".into(),
             request_id: RequestId("00000000-0000-4000-8000-000000000001".into()),
             git: None,

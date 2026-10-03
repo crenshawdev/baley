@@ -259,6 +259,7 @@ pub(super) fn purge_command(
         policy_version,
         recorded_at: at.into(),
         actor: Actor::Owner,
+        caller: None,
     })
 }
 fn scrub(store: &SqliteStore) -> Result<Render, Render> {

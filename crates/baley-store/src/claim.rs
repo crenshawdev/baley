@@ -33,6 +33,12 @@ pub const LEASE_EXPIRY_SECONDS: u64 = 60;
 pub const CLAIM_SCOPE_VIEW: &str = "claim_scope";
 
 /// Who holds a claim.
+///
+/// A command-line claim puts `cli` in `host_session`. A server claim puts the
+/// Baley session UUID its server minted there and the operating system's
+/// process id, as decimal text, in `process`. The host's own session id is not
+/// the owner's: it stays in the event's caller. The store checks neither
+/// field's form, and no server claim path exists yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimOwner {
     pub process: String,

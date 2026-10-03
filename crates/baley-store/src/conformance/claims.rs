@@ -246,3 +246,138 @@ pub fn owner_reconciliation_resolves_an_awaiting_owner_claim<F: StoreFactory>(fa
         json!("completed")
     );
 }
+fn owned_by(request: &str, caller: Option<&Caller>) -> Command {
+    let mut cmd = command("fixture.effect", request);
+    cmd.scope = vec!["anchor".into()];
+    cmd.caller = caller.cloned();
+    cmd
+}
+fn take_as(store: &impl Ledger, cmd: &Command) {
+    assert!(matches!(
+        store.claim(cmd, &mut |_| Ok(ClaimDecision::Claim {
+            intent: json!({"action":"push"}),
+            owner: owner(),
+            git: None,
+            observed: Observed::default()
+        })),
+        Ok(Claimed::New { .. })
+    ));
+}
+fn finish_as(store: &impl Ledger, cmd: &Command) {
+    let mut cmd = cmd.clone();
+    cmd.recorded_at = ACTIVE.into();
+    store
+        .complete(&cmd, &owner(), &mut |tx| {
+            tx.append(event(
+                2,
+                json!({"id": 1, "state": "done", "rank": 0, "owner": ""}),
+            ))?;
+            Ok(done(json!("ok"), false))
+        })
+        .unwrap();
+}
+/// Claims by one caller and completes by another under one owner, completes a second claim with no caller, then takes a third claim with no caller. Catches a completion stamped with the claim's caller, a claim's provenance rewritten, a caller-free completion falling back to the claimer's, and a caller-free claim inheriting the previous claimer's caller.
+pub fn a_claim_and_its_completion_keep_their_own_callers<F: StoreFactory>(factory: &F) {
+    let store = created(factory);
+    let (server, hook) = (server_caller(), hook_caller());
+    take_as(&store, &owned_by("effect", Some(&server)));
+    finish_as(&store, &owned_by("effect", Some(&hook)));
+    take_as(&store, &owned_by("effect2", Some(&server)));
+    finish_as(&store, &owned_by("effect2", None));
+    take_as(&store, &owned_by("effect3", None));
+    finish_as(&store, &owned_by("effect3", None));
+    let events = history(&store);
+    let seen: Vec<(&str, Option<Caller>)> = events
+        .iter()
+        .map(|e| (e.type_name.as_str(), e.caller.clone()))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (COMMAND_CLAIMED, Some(server.clone())),
+            ("fixture.item", Some(hook.clone())),
+            (COMMAND_COMPLETED, Some(hook)),
+            (COMMAND_CLAIMED, Some(server)),
+            ("fixture.item", None),
+            (COMMAND_COMPLETED, None),
+            (COMMAND_CLAIMED, None),
+            ("fixture.item", None),
+            (COMMAND_COMPLETED, None),
+        ]
+    );
+}
+fn id_of(request: &str) -> ClaimId {
+    ClaimId {
+        kind: CommandKind("fixture.effect".into()),
+        request_id: RequestId(request.into()),
+    }
+}
+fn resolve_with(
+    store: &impl Ledger,
+    cmd: &Command,
+    claim: &ClaimId,
+) -> Result<Recorded, StoreError> {
+    store.reconcile(cmd, claim, ReconcileAuthority::Automatic, &mut |_, _| {
+        Ok(finding(Resolution::Resolved(Box::new(done(
+            json!("ok"),
+            false,
+        )))))
+    })
+}
+/// Reconciles under a command that carries a caller, then retries a finished reconciliation with one. Catches a caller ignored or stamped on reconciliation, and a refusal placed after the request lookup, where the retry would replay.
+pub fn a_reconciliation_that_carries_a_caller_is_refused<F: StoreFactory>(factory: &F) {
+    let store = created(factory);
+    let server = server_caller();
+    take_as(&store, &owned_by("effect", None));
+    let (before, claims) = (history(&store), store.open_claims(&project()).unwrap());
+    let error = resolve_with(
+        &store,
+        &by(reconcile_command("with-caller"), &server),
+        &id_of("effect"),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::Refused(Refusal::InvalidEvent(_))
+    ));
+    assert_eq!(history(&store), before);
+    assert_eq!(store.open_claims(&project()).unwrap(), claims);
+
+    let mut second = owned_by("effect2", None);
+    second.scope = vec!["other".into()];
+    take_as(&store, &second);
+    resolve_with(&store, &reconcile_command("retry"), &id_of("effect2")).unwrap();
+    let before = history(&store);
+    let claims = store.open_claims(&project()).unwrap();
+    let error = resolve_with(
+        &store,
+        &by(reconcile_command("retry"), &server),
+        &id_of("effect2"),
+    );
+    assert!(matches!(
+        error,
+        Err(StoreError::Refused(Refusal::InvalidEvent(_)))
+    ));
+    assert_eq!(history(&store), before);
+    assert_eq!(store.open_claims(&project()).unwrap(), claims);
+}
+/// Reconciles a server caller's expired claim with a caller-free command. Catches the claim's caller copied onto the reconciliation.
+pub fn a_reconciliation_records_no_caller_and_copies_none<F: StoreFactory>(factory: &F) {
+    let store = created(factory);
+    let server = server_caller();
+    take_as(&store, &owned_by("effect", Some(&server)));
+    resolve_with(&store, &reconcile_command("auto"), &id_of("effect")).unwrap();
+    let seen: Vec<(String, Option<Caller>)> = history(&store)
+        .into_iter()
+        .map(|e| (e.type_name, e.caller))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (COMMAND_CLAIMED.to_string(), Some(server)),
+            (COMMAND_RECONCILED.to_string(), None),
+            (COMMAND_COMPLETED.to_string(), None),
+            (COMMAND_COMPLETED.to_string(), None),
+        ]
+    );
+}

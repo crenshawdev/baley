@@ -20,8 +20,8 @@ use std::cmp::Ordering;
 use std::time::Duration;
 
 use baley_store::{
-    Actor, DocKey, Event, GitFacts, Hash, ProjectId, RebuildReport, Refusal, RequestId, StoreError,
-    ViewsReport,
+    Actor, Caller, DocKey, Event, GitFacts, Hash, ProjectId, RebuildReport, Refusal, RequestId,
+    StoreError, ViewsReport, canonical_json,
 };
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -717,7 +717,7 @@ fn next(
 macro_rules! event_columns {
     () => {
         "seq, stream, stream_version, type, type_version, actor, recorded_at, request_id,
-         git_commit, git_tree, git_checkout, policy_version, payload_json, prev_hash, hash"
+         git_commit, git_tree, git_checkout, policy_version, payload_json, prev_hash, hash, caller"
     };
 }
 pub(crate) use event_columns;
@@ -762,6 +762,20 @@ pub(crate) fn stored_event(
     };
     let actor: String = row.get(5)?;
     let payload: String = row.get(12)?;
+    let caller = match row.get::<_, Option<String>>(15)? {
+        None => None,
+        Some(text) => Some(
+            serde_json::from_str(&text)
+                .map_err(|error| error.to_string())
+                .and_then(|value| Caller::from_value(&value).map_err(|error| error.to_string()))
+                .map_err(|error| {
+                    bad(
+                        15,
+                        format!("a stored caller that fails its checks: {error}"),
+                    )
+                })?,
+        ),
+    };
     Ok(Event {
         project_id: project.clone(),
         seq: unsigned(0)?,
@@ -770,6 +784,7 @@ pub(crate) fn stored_event(
         type_name: row.get(3)?,
         type_version: row.get(4)?,
         actor: Actor::parse(&actor).map_err(|error| bad(5, format!("{error:?}")))?,
+        caller,
         recorded_at: row.get(6)?,
         request_id: RequestId(row.get(7)?),
         git,
@@ -781,6 +796,19 @@ pub(crate) fn stored_event(
             .transpose()?,
         hash: hash(14, row.get(14)?)?,
     })
+}
+
+/// The text the `caller` column holds: the caller's canonical JSON, or
+/// `NULL` for no caller.
+pub(crate) fn caller_text(caller: Option<&Caller>) -> Result<Option<String>, StoreError> {
+    caller
+        .map(|caller| {
+            let bytes = canonical_json(&caller.to_value())
+                .map_err(|error| StoreError::Refused(Refusal::InvalidEvent(error.to_string())))?;
+            String::from_utf8(bytes)
+                .map_err(|_| StoreError::Unavailable("canonical JSON that is not UTF-8".into()))
+        })
+        .transpose()
 }
 
 /// A stored generation number as the port reports it.
@@ -1189,6 +1217,7 @@ mod tests {
             policy_version: 1,
             recorded_at: AT.into(),
             actor: Actor::Owner,
+            caller: None,
         }
     }
 
