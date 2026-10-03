@@ -48,6 +48,7 @@ CREATE TABLE event (
   type TEXT NOT NULL,
   type_version INTEGER NOT NULL,
   actor TEXT NOT NULL,
+  caller TEXT CHECK (json_valid(caller)),
   recorded_at TEXT NOT NULL,
   request_id TEXT NOT NULL,
   git_commit TEXT,

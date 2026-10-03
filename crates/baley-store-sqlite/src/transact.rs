@@ -34,7 +34,7 @@ use serde_json::Value;
 
 use crate::claim::{claim_from_doc, open_claims_in};
 use crate::payload::{put_payload, put_reference, sql_int, stored};
-use crate::rebuild::read_only;
+use crate::rebuild::{caller_text, read_only};
 use crate::store::{SqliteStore, sql};
 use crate::view::{
     Fence, Staging, find_documents, find_with_staged, fold, get_document, live_views, write_staged,
@@ -1026,11 +1026,12 @@ fn insert_event(tx: &rusqlite::Transaction<'_>, event: &Event) -> Result<(), Sto
         .map_err(|error| StoreError::Refused(Refusal::InvalidEvent(error.to_string())))?;
     let payload = String::from_utf8(payload)
         .map_err(|_| StoreError::Unavailable("canonical JSON that is not UTF-8".into()))?;
+    let caller = caller_text(event.caller.as_ref())?;
     tx.execute(
         "INSERT INTO event (project_id, seq, stream, stream_version, type, type_version, actor,
-           recorded_at, request_id, git_commit, git_tree, git_checkout, policy_version,
+           caller, recorded_at, request_id, git_commit, git_tree, git_checkout, policy_version,
            payload_json, prev_hash, hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             event.project_id.0,
             sql_int(event.seq)?,
@@ -1039,6 +1040,7 @@ fn insert_event(tx: &rusqlite::Transaction<'_>, event: &Event) -> Result<(), Sto
             event.type_name,
             event.type_version,
             event.actor.as_str(),
+            caller,
             event.recorded_at,
             event.request_id.0,
             event.git.as_ref().map(|git| &git.commit),
@@ -1291,9 +1293,9 @@ mod tests {
     use std::num::NonZeroU32;
 
     use baley_store::{
-        Actor, Change, CommandKind, EventSchema, FieldKind, FieldSpec, IndexField, IndexSpec,
-        KeyValue, Order, OutcomeKind, PayloadBody, Payloads, Projector, ProjectorError, RequestId,
-        ViewSpec, Views, verify_chain,
+        Actor, Caller, Change, CommandKind, EventSchema, FieldKind, FieldSpec, HistoryFilter,
+        IndexField, IndexSpec, KeyValue, Ledger, Order, OutcomeKind, PayloadBody, Payloads,
+        Projector, ProjectorError, RequestId, ServerCaller, ViewSpec, Views, verify_chain,
     };
     use rusqlite::{Connection, ErrorCode};
     use serde_json::json;
@@ -1463,6 +1465,75 @@ mod tests {
 
     fn item_key(id: i64) -> DocKey {
         DocKey(vec![KeyValue::Integer(id)])
+    }
+
+    fn server_caller() -> Caller {
+        Caller::Server(
+            ServerCaller::new(
+                "/work/project",
+                "/work/project/crates",
+                "claude-code",
+                PROJECT,
+                &json!(7),
+            )
+            .expect("a valid server caller"),
+        )
+    }
+
+    // The caller column holds the caller's canonical bytes on every event of
+    // its command and NULL for a command without one, and history returns an
+    // equal caller. Catches a caller dropped at `push` or at the insert, and
+    // the text 'null' written for absence.
+    #[test]
+    fn the_caller_column_holds_the_canonical_bytes_or_null() {
+        let home = crate::checks::private_folder();
+        let store = open(home.path());
+        let caller = server_caller();
+        let expected = String::from_utf8(canonical_json(&caller.to_value()).expect("canonical"))
+            .expect("utf-8");
+        let with = Command {
+            caller: Some(caller.clone()),
+            ..command("item.add", "r1", 1)
+        };
+        store
+            .transact(&with, &mut |tx| {
+                tx.append(item(1, "open"))?;
+                tx.append(item(2, "open"))?;
+                Ok(done(json!("ok")))
+            })
+            .expect("with a caller");
+        record(&store, "r2", &[(3, "open")]);
+        let stored: Vec<Option<String>> = raw(home.path())
+            .prepare("SELECT caller FROM event ORDER BY seq")
+            .expect("prepare")
+            .query_map([], |row| row.get(0))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows");
+        // The command's two items and its own completion event, then a caller-free
+        // command's item and completion.
+        let stamped = Some(expected);
+        assert_eq!(
+            stored,
+            [stamped.clone(), stamped.clone(), stamped, None, None]
+        );
+        let page = store
+            .history(
+                &project(),
+                1..=u64::MAX,
+                &HistoryFilter::default(),
+                PageRequest {
+                    limit: 10,
+                    after: None,
+                },
+            )
+            .expect("history");
+        let callers: Vec<Option<Caller>> = page.items.into_iter().map(|e| e.caller).collect();
+        let stamped = Some(caller);
+        assert_eq!(
+            callers,
+            [stamped.clone(), stamped.clone(), stamped, None, None]
+        );
     }
 
     // Catches a replay fenced by a raw newer set stamp beside a current request view.

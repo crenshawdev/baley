@@ -603,6 +603,8 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use baley_store::Admin;
+
     use super::*;
 
     const AT: &str = "2026-09-25T18:00:00Z";
@@ -868,6 +870,53 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .expect("mode");
         assert_eq!(mode, "delete");
+    }
+
+    /// The digest of epoch 1's schema text before `event.caller` was added.
+    /// A file stamped with it must be refused now that the text has changed.
+    const DIGEST_BEFORE_EVENT_CALLER: &str =
+        "505ad005e25c990f5ee90fcc17ad927fbb35cf073c0326e02a70d06d8c816141";
+
+    fn stamp_digest(home: &Path, digest: &str) {
+        raw(home)
+            .execute(
+                "UPDATE schema_meta SET value = ?1 WHERE key = 'schema_digest'",
+                [digest],
+            )
+            .expect("stamp");
+    }
+
+    // A store created before `event.caller` carries the old schema digest and
+    // is refused. Catches an open that skips the digest comparison, or a
+    // schema edit that leaves the digest where it was.
+    #[test]
+    fn a_store_stamped_before_the_caller_column_is_refused() {
+        let home = crate::checks::private_folder();
+        drop(open(home.path()));
+        stamp_digest(home.path(), DIGEST_BEFORE_EVENT_CALLER);
+        let path = home.path().join("baley.db");
+        let result = SqliteStore::open(home.path(), AT, Options::default());
+        assert!(
+            matches!(result, Err(StoreError::Refused(Refusal::SchemaChanged { path: named })) if named == path)
+        );
+    }
+
+    // An export home stamped before `event.caller` is refused the same way.
+    // Catches an export that is allowed to open under another digest.
+    #[test]
+    fn an_export_home_stamped_before_the_caller_column_is_refused() {
+        let home = crate::checks::private_folder();
+        let store = open(home.path());
+        let project = ProjectId("7f0c2a4e-8d1b-4c3a-9e5f-2b6d8a1c4e70".into());
+        store.create_project(&project, "one", AT).expect("project");
+        let target = home.path().join("export");
+        store.export(&project, &target, AT).expect("export");
+        drop(store);
+        stamp_digest(&target, DIGEST_BEFORE_EVENT_CALLER);
+        let result = SqliteStore::open(&target, AT, Options::default());
+        assert!(
+            matches!(result, Err(StoreError::Refused(Refusal::SchemaChanged { path: named })) if named == target.join("baley.db"))
+        );
     }
 
     // A store whose epoch goes back, as when an older copy is restored

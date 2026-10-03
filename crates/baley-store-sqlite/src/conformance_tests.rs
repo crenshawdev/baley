@@ -1,7 +1,7 @@
 //! SQLite operations for the port's portable checks, confined to one directory.
 use crate::payload::sql_int;
 use crate::queue::scripted::Scripted;
-use crate::rebuild::{event_columns, stored_event};
+use crate::rebuild::{caller_text, event_columns, stored_event};
 use crate::store::sql;
 
 use crate::{EPOCH, Options, SqliteStore};
@@ -264,7 +264,7 @@ impl StoreFactory for SqliteFactory {
                 tx.execute("DELETE FROM event WHERE project_id=?1", [&project.0])
                     .map_err(sql)?;
                 for e in &events {
-                    tx.execute("INSERT INTO event (project_id,seq,stream,stream_version,type,type_version,actor,recorded_at,request_id,git_commit,git_tree,git_checkout,policy_version,payload_json,prev_hash,hash) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",params![e.project_id.0,sql_int(e.seq)?,e.stream,sql_int(e.stream_version)?,e.type_name,e.type_version,e.actor.as_str(),e.recorded_at,e.request_id.0,e.git.as_ref().map(|g|&g.commit),e.git.as_ref().map(|g|&g.tree),e.git.as_ref().map(|g|&g.checkout),sql_int(e.policy_version)?,e.payload.to_string(),e.prev_hash.as_ref().map(|h|&h.0[..]),&e.hash.0[..]]).map_err(sql)?;
+                    tx.execute("INSERT INTO event (project_id,seq,stream,stream_version,type,type_version,actor,caller,recorded_at,request_id,git_commit,git_tree,git_checkout,policy_version,payload_json,prev_hash,hash) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",params![e.project_id.0,sql_int(e.seq)?,e.stream,sql_int(e.stream_version)?,e.type_name,e.type_version,e.actor.as_str(),caller_text(e.caller.as_ref())?,e.recorded_at,e.request_id.0,e.git.as_ref().map(|g|&g.commit),e.git.as_ref().map(|g|&g.tree),e.git.as_ref().map(|g|&g.checkout),sql_int(e.policy_version)?,e.payload.to_string(),e.prev_hash.as_ref().map(|h|&h.0[..]),&e.hash.0[..]]).map_err(sql)?;
                 }
                 if change_head {
                     let head = events.last();
