@@ -25,12 +25,21 @@ SETTINGS_FILE="$OUT/settings.json"
 MCP_FILE="$OUT/mcp.json"
 SHEET="$OUT/observations.md"
 
-# The only deletion in this script: a tree has to be exactly one of the two named above.
+# The only deletion in this script: a tree has to be exactly one of the two named above, with no
+# symbolic link from HOME down to it, so the delete cannot land somewhere else, and owned by this user.
 fresh() {
   case "$1" in
     "$HOME/.local/share/baley-matrix/claude"|"$HOME/.config/baley-matrix/claude") ;;
     *) echo "refusing to clear $1" >&2; exit 1 ;;
   esac
+  P="$HOME"
+  for PART in $(printf '%s\n' "${1#"$HOME"/}" | tr '/' ' '); do
+    P="$P/$PART"
+    [ -L "$P" ] && { echo "refusing to clear $1: $P is a symbolic link" >&2; exit 1; }
+  done
+  if [ -e "$1" ] && [ -z "$(find "$1" -prune -user "$(id -u)")" ]; then
+    echo "refusing to clear $1: it is not owned by $(id -un)" >&2; exit 1
+  fi
   rm -rf "$1" && mkdir -p "$1"
 }
 fresh "$DATA_TREE"
