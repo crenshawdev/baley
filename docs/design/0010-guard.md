@@ -47,7 +47,7 @@ In the component view of [0002](0002-system-design.md) (Figure 4) the guard is t
 | Id | Rule | Why | Depends on | Status |
 |---|---|---|---|---|
 | GRD-R1 | Baley installs one hook: Claude Code's pre-tool-use call for `Bash`, `Monitor`, `PowerShell`, `Read`, `Grep`, `Glob`, `Write`, `Edit` and `NotebookEdit`, with a bounded timeout. There is no other hook. | One edge for every tool that runs a shell command or reads or writes a file. | SYS-P11, SYS-P12 | Active |
-| GRD-R2 | The guard finds the project by walking up from the call's working directory to the nearest `baley.toml`, stopping at the git repository root (CFG-R4). Outside a project the guard is silent for Bash; the Write/Edit rules that need no project (Baley's config folder) still apply. | The guard acts only where Baley is responsible. | CFG-R4 | Active |
+| GRD-R2 | The guard finds the project by walking up from the call's working directory to the nearest `baley.toml`, stopping at the git repository root (CFG-R4). Outside a project the guard is silent for Bash. The rules that need no project still apply: the Write/Edit refusal for Baley's config folder, and the refusal of a `Read`, `Grep` or `Glob` call that reaches Baley's home or its config folder (GRD-R13). | The guard acts only where Baley is responsible. | CFG-R4 | Active |
 | GRD-R3 | The Bash guard acts on a command only when it carries a git `commit` or `push` verb. It splits the command on `;`, `|`, `&`, `&&`, `||` and newlines, takes segments whose first word is `git` or ends in `/git`, skips git's global flags and their operands, and declines to judge a command containing substitutions, backticks, redirects, subshells, braces, a leading comment, a NUL or an unclosed quote. A declined command passes with nothing recorded. No other git verb is covered; this is a stated limit of the design. | Commit and push are where work reaches the record and the forge; everything else was tried and did not pay. | | Active |
 | GRD-R4 | A `push` always asks, on any branch, with a fixed reason. | Publishing is the owner's step. | SYS-P5 | Active |
 | GRD-R5 | A `commit` on a protected branch follows `git.on_protected`: `ask`, `refuse` (deny) or `allow`; an unknown value asks. On any other branch a commit passes. | The owner sets the branch discipline once. | CFG-R5 | Active |
@@ -84,9 +84,9 @@ No model is dispatched by this area.
   | Answer | When | Requirement |
   |---|---|---|
   | `ask` | push; protected commit under `ask`; torn settings | GRD-R4, GRD-R5, GRD-R7 |
-  | `deny` | protected commit under `refuse`; hard fail; remembered denial under torn settings; a Write/Edit to a protected path or outside the lease; an unrecordable ask | GRD-R5, GRD-R6, GRD-R7, GRD-R9, GRD-R11 |
+  | `deny` | protected commit under `refuse`; hard fail; remembered denial under torn settings; a Write/Edit to a protected path or outside the lease; a `Read`, `Grep` or `Glob` call whose path lies inside or contains Baley's home or its config folder, with or without a project; an unrecordable ask | GRD-R5, GRD-R6, GRD-R7, GRD-R9, GRD-R11, GRD-R13 |
   | `pass on failure` | git or branch unreadable without hard fail | GRD-R6 |
-  | `pass` | everything else, including a declined command and any call outside a project | GRD-R2, GRD-R3 |
+  | `pass` | everything else, including a declined command and any other call outside a project | GRD-R2, GRD-R3 |
 
 ### baley doctor (the guard's part)
 
@@ -101,7 +101,7 @@ No model is dispatched by this area.
 | Field | Type | Meaning |
 |---|---|---|
 | `call` | session id, call id | The hook call, for redelivery |
-| `tool` | `bash`, `write`, `edit` | |
+| `tool` | `bash`, `write`, `edit`, `read`, `grep`, `glob` | |
 | `command_digest` or `path` | digest, path | Never the command text |
 | `cwd` | path | |
 | `verb` | `commit`, `push`, absent | |
