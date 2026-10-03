@@ -284,4 +284,4 @@ The binary crate holds the inherited engine; its verification path is close to t
 
 | Question | Decided by |
 |---|---|
-| How the verifier reads run output on each host within the bounded read contract | [0012: Host interface](0012-host-interface.md) |
+| How the verifier, a subagent of the session, reads run output within the bounded read contract | [0012: Host interface](0012-host-interface.md) |

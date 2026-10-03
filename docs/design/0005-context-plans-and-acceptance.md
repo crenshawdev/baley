@@ -591,4 +591,4 @@ The binary crate holds the inherited engine. Truths belong to a phase's context 
 | Question | Decided by |
 |---|---|
 | The exact conditions under which a check's verdict is `rejected` for a test that could not have failed | [0007: Verification](0007-verification.md) |
-| How the analyzer, planner and checker work orders are delivered on each host, how their output is adjudicated there, and how each host puts a round's questions to the owner and returns the answers | [0012: Host interface](0012-host-interface.md) |
+| How the analyzer, planner and checker work orders are delivered to the session's subagents on Claude Code, how their output is adjudicated there, and how the session puts a round's questions to the owner and returns the answers | [0012: Host interface](0012-host-interface.md) |
