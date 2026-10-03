@@ -230,8 +230,8 @@ mod tests {
 
     #[test]
     fn interview_takes_a_known_host_and_refuses_an_unknown_one_with_exit_2() {
-        let interview = parse_interview(&["--host", "codex"]).unwrap();
-        assert_eq!(interview.host, Some(Host::Codex));
+        let interview = parse_interview(&["--host", "claude-code"]).unwrap();
+        assert_eq!(interview.host, Some(Host::ClaudeCode));
         let error = parse_interview(&["--host", "gemini"]).unwrap_err();
         assert_eq!(error.exit_code(), 2);
     }
@@ -252,8 +252,8 @@ mod tests {
     #[test]
     fn show_takes_a_known_host_and_refuses_an_unknown_one_with_exit_2() {
         assert_eq!(
-            parse_show(&["--host", "codex"]).unwrap().host,
-            Some(Host::Codex)
+            parse_show(&["--host", "claude-code"]).unwrap().host,
+            Some(Host::ClaudeCode)
         );
         let error = parse_show(&["--host", "gemini"]).unwrap_err();
         assert_eq!(error.exit_code(), 2);

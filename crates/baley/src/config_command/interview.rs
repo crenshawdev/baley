@@ -514,12 +514,12 @@ mod tests {
     }
 
     #[test]
-    fn a_host_section_applies_with_its_host_layer_and_another_host_changes_nothing() {
-        let global = "[host.codex.roles.planner]\nmodel = \"sonnet\"\n\
-                      [host.claude-code.roles.reviewer]\neffort = \"max\"\n";
-        let head = "[host.codex]\nescalate_on_failure = true\n";
+    fn a_host_section_applies_with_its_host_layer_and_an_unknown_hosts_section_changes_nothing() {
+        let global = "[host.claude-code.roles.planner]\nmodel = \"sonnet\"\n\
+                      [host.cursor.roles.reviewer]\neffort = \"max\"\n";
+        let head = "[host.claude-code]\nescalate_on_failure = true\n";
 
-        let asked = questions(&policy(Some(Host::Codex), Some(global), Some(head)));
+        let asked = questions(&policy(Some(Host::ClaudeCode), Some(global), Some(head)));
 
         assert_eq!(
             find(&asked, "roles.planner.model"),
@@ -682,12 +682,12 @@ mod tests {
 
     #[test]
     fn the_policy_asked_from_applies_the_host_the_command_names() {
-        let global = "[host.codex.roles.planner]\nmodel = \"sonnet\"\n";
+        let global = "[host.claude-code.roles.planner]\nmodel = \"sonnet\"\n";
 
         let start = begin(
             Schema::standard(),
             None,
-            Some(Host::Codex),
+            Some(Host::ClaudeCode),
             seen(global, None, None),
         )
         .ok()
@@ -785,11 +785,11 @@ mod tests {
 
     #[test]
     fn a_host_sections_role_value_does_not_make_the_project_file_the_default() {
-        let global = "[host.codex.roles.planner]\neffort = \"max\"\n";
+        let global = "[host.claude-code.roles.planner]\neffort = \"max\"\n";
 
         assert_eq!(default_for(Some(global), None), FileLayer::Global);
         assert_eq!(
-            default_for(Some(global), Some(Host::Codex)),
+            default_for(Some(global), Some(Host::ClaudeCode)),
             FileLayer::Global
         );
     }
@@ -932,10 +932,10 @@ mod tests {
 
     #[test]
     fn the_summary_names_the_host_section_under_host() {
-        let (_, output) = converse_over(&one_answer_then("yes\n"), Some(Host::Codex));
+        let (_, output) = converse_over(&one_answer_then("yes\n"), Some(Host::ClaudeCode));
 
         assert!(
-            output.contains("The interview will write to /c/config.toml [host.codex]\n"),
+            output.contains("The interview will write to /c/config.toml [host.claude-code]\n"),
             "{output}"
         );
     }
