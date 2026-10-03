@@ -241,3 +241,41 @@ pub fn a_git_head_moved_since_it_was_seen_is_stale<F: StoreFactory>(factory: &F)
         },
     );
 }
+/// Records one command by a caller and one with none. Catches a completion recorded without its command's context, and a caller stamped on the domain events only.
+pub fn a_command_stamps_its_caller_on_every_event_it_appends<F: StoreFactory>(factory: &F) {
+    let store = created(factory);
+    let server = server_caller();
+    store
+        .transact(
+            &by(command("fixture.add", "by-caller"), &server),
+            &mut |tx| {
+                for id in [1, 2] {
+                    tx.append(event(
+                        2,
+                        json!({"id": id, "state": "open", "rank": 0, "owner": ""}),
+                    ))?;
+                }
+                Ok(done(json!("ok"), false))
+            },
+        )
+        .unwrap();
+    record(&store, "no-caller", &[(3, "open")]).unwrap();
+    let events = history(&store);
+    let types: Vec<&str> = events.iter().map(|e| e.type_name.as_str()).collect();
+    assert_eq!(
+        types,
+        [
+            "fixture.item",
+            "fixture.item",
+            COMMAND_COMPLETED,
+            "fixture.item",
+            COMMAND_COMPLETED
+        ]
+    );
+    for event in &events[..3] {
+        assert_eq!(event.caller, Some(server.clone()), "seq {}", event.seq);
+    }
+    for event in &events[3..] {
+        assert_eq!(event.caller, None, "seq {}", event.seq);
+    }
+}

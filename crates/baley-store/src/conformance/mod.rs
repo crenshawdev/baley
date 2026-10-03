@@ -141,6 +141,7 @@ pub use chain::{
 };
 mod commands;
 pub use commands::{
+    a_command_stamps_its_caller_on_every_event_it_appends,
     a_document_moved_since_it_was_seen_is_stale,
     a_document_that_appeared_since_its_absence_was_seen_is_stale,
     a_git_head_moved_since_it_was_seen_is_stale, a_projector_failure_records_nothing,
@@ -188,6 +189,7 @@ pub use payloads::{
     a_body_over_several_chunks_streams_back_byte_for_byte,
     a_present_body_reports_its_uncompressed_length,
     a_purged_answer_leaves_its_request_document_unchanged,
+    a_reduction_and_a_purge_record_their_callers,
     a_reduction_keeps_the_first_and_last_64_kib_under_their_own_hash,
     a_retry_after_a_purge_gets_the_tombstone, a_shared_body_survives_one_projects_purge,
 };
@@ -211,7 +213,7 @@ pub use compatibility::{
 };
 mod claims;
 pub use claims::{
-    a_cleanly_failed_effect_completes_the_claim,
+    a_claim_and_its_completion_keep_their_own_callers, a_cleanly_failed_effect_completes_the_claim,
     a_command_inside_an_active_claims_scope_is_blocked,
     a_command_outside_an_active_claims_scope_proceeds, a_retry_during_the_effect_is_in_progress,
     an_interrupted_claim_reconciles_from_a_supplied_finding,
@@ -310,6 +312,9 @@ macro_rules! conformance_suite {
             an_interrupted_claim_reconciles_from_a_supplied_finding,
             automatic_reconciliation_leaves_an_awaiting_owner_claim_held,
             owner_reconciliation_resolves_an_awaiting_owner_claim,
+            a_command_stamps_its_caller_on_every_event_it_appends,
+            a_claim_and_its_completion_keep_their_own_callers,
+            a_reduction_and_a_purge_record_their_callers,
         );
     };
     (@checks $factory:expr; $($check:ident),* $(,)?) => {

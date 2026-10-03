@@ -199,3 +199,50 @@ pub fn a_retry_after_a_purge_gets_the_tombstone<F: StoreFactory>(factory: &F) {
         reference.to_value()
     );
 }
+/// Reduces one body and purges another, each by a caller. Catches store-owned retention events recorded without the caller.
+pub fn a_reduction_and_a_purge_record_their_callers<F: StoreFactory>(factory: &F) {
+    let store = created(factory);
+    let reduced = attach(&store, &command("fixture.add", "first"), &body_bytes());
+    let purged = attach(&store, &command("fixture.add", "second"), b"other body");
+    let (server, hook) = (server_caller(), hook_caller());
+    let before = history(&store).len();
+    store
+        .reduce(
+            &by(command("payload.reduce", "reduce"), &server),
+            &PayloadReference {
+                project: project(),
+                seq: 1,
+                hash: reduced.hash,
+            },
+        )
+        .unwrap();
+    let after_reduce = history(&store);
+    store
+        .purge(
+            &by(command("payload.purge", "purge"), &hook),
+            &[purged.hash],
+            "remove",
+        )
+        .unwrap();
+    let events = history(&store);
+    let seen = |range: &[Event]| -> Vec<(String, Option<Caller>)> {
+        range
+            .iter()
+            .map(|e| (e.type_name.clone(), e.caller.clone()))
+            .collect()
+    };
+    assert_eq!(
+        seen(&after_reduce[before..]),
+        [
+            (PAYLOAD_REDUCED.to_string(), Some(server.clone())),
+            (COMMAND_COMPLETED.to_string(), Some(server)),
+        ]
+    );
+    assert_eq!(
+        seen(&events[after_reduce.len()..]),
+        [
+            (PAYLOAD_PURGED.to_string(), Some(hook.clone())),
+            (COMMAND_COMPLETED.to_string(), Some(hook)),
+        ]
+    );
+}

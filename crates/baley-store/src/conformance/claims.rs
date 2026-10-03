@@ -246,3 +246,58 @@ pub fn owner_reconciliation_resolves_an_awaiting_owner_claim<F: StoreFactory>(fa
         json!("completed")
     );
 }
+fn owned_by(request: &str, caller: Option<&Caller>) -> Command {
+    let mut cmd = command("fixture.effect", request);
+    cmd.scope = vec!["anchor".into()];
+    cmd.caller = caller.cloned();
+    cmd
+}
+fn take_as(store: &impl Ledger, cmd: &Command) {
+    assert!(matches!(
+        store.claim(cmd, &mut |_| Ok(ClaimDecision::Claim {
+            intent: json!({"action":"push"}),
+            owner: owner(),
+            git: None,
+            observed: Observed::default()
+        })),
+        Ok(Claimed::New { .. })
+    ));
+}
+fn finish_as(store: &impl Ledger, cmd: &Command) {
+    let mut cmd = cmd.clone();
+    cmd.recorded_at = ACTIVE.into();
+    store
+        .complete(&cmd, &owner(), &mut |tx| {
+            tx.append(event(
+                2,
+                json!({"id": 1, "state": "done", "rank": 0, "owner": ""}),
+            ))?;
+            Ok(done(json!("ok"), false))
+        })
+        .unwrap();
+}
+/// Claims by one caller and completes by another under one owner, then completes a second claim with no caller. Catches a completion stamped with the claim's caller, a claim's provenance rewritten, and a caller-free completion falling back to the claimer's.
+pub fn a_claim_and_its_completion_keep_their_own_callers<F: StoreFactory>(factory: &F) {
+    let store = created(factory);
+    let (server, hook) = (server_caller(), hook_caller());
+    take_as(&store, &owned_by("effect", Some(&server)));
+    finish_as(&store, &owned_by("effect", Some(&hook)));
+    take_as(&store, &owned_by("effect2", Some(&server)));
+    finish_as(&store, &owned_by("effect2", None));
+    let events = history(&store);
+    let seen: Vec<(&str, Option<Caller>)> = events
+        .iter()
+        .map(|e| (e.type_name.as_str(), e.caller.clone()))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (COMMAND_CLAIMED, Some(server.clone())),
+            ("fixture.item", Some(hook.clone())),
+            (COMMAND_COMPLETED, Some(hook)),
+            (COMMAND_CLAIMED, Some(server)),
+            ("fixture.item", None),
+            (COMMAND_COMPLETED, None),
+        ]
+    );
+}
