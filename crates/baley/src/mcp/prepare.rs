@@ -18,8 +18,8 @@ use baley_core::checkout::PROJECT_ID_CONFLICT;
 use baley_core::policy::recorded::{RecordedPolicy, recorded_policy};
 use baley_core::policy::{CONFIG_UNAVAILABLE, EffectivePolicy, Host, SettingsFile, Unavailable};
 use baley_store::{
-    Actor, Admin, Caller, Command, CommandKind, Hash, Ledger, ProjectId, RequestId, ServerCaller,
-    StoreError, Views,
+    Actor, Admin, Caller, Command, CommandKind, DocKey, Hash, Ledger, ProjectId, REQUEST_VIEW,
+    RequestId, ServerCaller, StoreError, Views, request_key, request_state,
 };
 use serde_json::Value;
 
@@ -156,6 +156,9 @@ struct Seen {
     working: Option<Result<Option<SettingsFile>, Unavailable>>,
     /// The ledger's project ids.
     projects: Option<Result<Vec<ProjectId>, LedgerFault>>,
+    /// The body of the request document for the write's kind and request id,
+    /// `None` inside when the ledger holds none.
+    replay: Option<Result<Option<Value>, LedgerFault>>,
     /// The global file and HEAD's copy of the project file.
     reads: Option<Reads>,
     /// Checkout facts gathered and the checkout admitted.
@@ -181,6 +184,9 @@ enum Step {
     ReadProjectFile(PathBuf),
     /// List the ledger's projects.
     ListProjects,
+    /// Read the request document under this key, to see whether the write is a
+    /// retry of a request the ledger already holds.
+    LookUpRequest { project: ProjectId, key: DocKey },
     /// Read the global file and HEAD's copy of this working-tree file.
     ReadSettings {
         root: PathBuf,
@@ -257,7 +263,8 @@ fn fault_failed(fault: &LedgerFault) -> Next {
 /// The next step for the call, or its answer. Discovery starts from the
 /// project directory the caller holds and from nothing else. A read stops at
 /// the known-project check. A write goes on, in the command line's order, to
-/// the settings, checkout admission and the policy step.
+/// the replay lookup, then the settings, checkout admission and the policy
+/// step.
 fn next(call: &Call, seen: &Seen) -> Next {
     let caller = call.caller;
     let Some(ancestors) = &seen.ancestors else {
@@ -328,7 +335,8 @@ fn next(call: &Call, seen: &Seen) -> Next {
     write_next(call, request, seen, project, root, working)
 }
 
-/// The write's steps after the known-project check.
+/// The write's steps after the known-project check: the replay lookup, then
+/// the settings, checkout admission and the policy step.
 fn write_next(
     call: &Call,
     request: &WriteRequest,
@@ -337,6 +345,36 @@ fn write_next(
     root: PathBuf,
     working: &SettingsFile,
 ) -> Next {
+    // A request the ledger already holds is answered by its own transaction, so
+    // no implicit write is made for it and the settings are not read, which
+    // keeps a retry after the owner broke `baley.toml` a replay. The replay's
+    // command carries version 0: it appends nothing, and the version stays out
+    // of the digest.
+    let replay = prepared_command(&project, request, 0, call.at, call.caller);
+    let Some(looked_up) = &seen.replay else {
+        return Next::Do(Step::LookUpRequest {
+            key: request_key(&replay),
+            project,
+        });
+    };
+    match looked_up {
+        Err(fault) => return fault_failed(fault),
+        Ok(Some(body)) if request_state(body).is_some() => {
+            return Next::Ready(Prepared {
+                project,
+                root,
+                command: Some(replay),
+            });
+        }
+        Ok(Some(_)) => {
+            return failed(
+                LEDGER_UNAVAILABLE,
+                "the ledger holds a record of this request that cannot be read",
+                PLACE_LEDGER,
+            );
+        }
+        Ok(None) => {}
+    }
     let Some(reads) = &seen.reads else {
         return Next::Do(Step::ReadSettings {
             root,
@@ -391,7 +429,10 @@ fn unavailable_file(file: &Path) -> Next {
 /// It finds the project fresh on every call from the caller's project
 /// directory, reads the working-tree project file for its id and checks that
 /// the ledger lists it. A read stops there: it validates no settings, gathers
-/// no checkout facts and appends nothing. A write then reads and validates
+/// no checkout facts and appends nothing. A write then looks its request up in
+/// the ledger, and a request the ledger already holds is returned at once with
+/// policy version 0, whatever the settings now are, since the domain
+/// transaction keeps the final say on a replay. Otherwise it reads and validates
 /// the settings, gathers the checkout's facts through `process` and admits
 /// the checkout, runs the policy step for `host`, and returns the domain
 /// command carrying the version the step returned. Checkout admission and the
@@ -447,6 +488,15 @@ fn perform<S: Admin + Views + Ledger>(
                 Some(store) => store
                     .projects()
                     .map(|listed| listed.into_iter().map(|(id, _)| id).collect())
+                    .map_err(LedgerFault::Store),
+            });
+        }
+        Step::LookUpRequest { project, key } => {
+            seen.replay = Some(match store {
+                None => Err(LedgerFault::NoStore),
+                Some(store) => store
+                    .get(&project, REQUEST_VIEW, &key)
+                    .map(|found| found.map(|document| document.body))
                     .map_err(LedgerFault::Store),
             });
         }
@@ -887,6 +937,13 @@ mod tests {
         known(with_file(walked()), &[ID])
     }
 
+    /// A known project whose write found no request document in the ledger.
+    fn looked_up() -> Seen {
+        let mut seen = known_project();
+        seen.replay = Some(Ok(None));
+        seen
+    }
+
     fn with_reads(mut seen: Seen, text: &str) -> Seen {
         seen.reads = Some(reads(text));
         seen
@@ -916,8 +973,8 @@ mod tests {
 
     #[test]
     fn a_write_that_requests_settings_checkout_admission_and_the_step_out_of_order() {
-        let Next::Do(Step::ReadSettings { root, .. }) = write_step(&known_project()) else {
-            panic!("a known project's write must read the settings first");
+        let Next::Do(Step::ReadSettings { root, .. }) = write_step(&looked_up()) else {
+            panic!("an unknown request reads the settings first");
         };
         assert_eq!(root, Path::new("/real/r"));
 
@@ -926,7 +983,7 @@ mod tests {
             path,
             root,
             project,
-        }) = write_step(&with_reads(known_project(), SECTIONED))
+        }) = write_step(&with_reads(looked_up(), SECTIONED))
         else {
             panic!("settings read, so checkout admission is next");
         };
@@ -936,7 +993,7 @@ mod tests {
         assert_eq!(project, ProjectId(ID.into()));
 
         let Next::Do(Step::RecordPolicy { recorded, .. }) =
-            write_step(&admitted(with_reads(known_project(), SECTIONED)))
+            write_step(&admitted(with_reads(looked_up(), SECTIONED)))
         else {
             panic!("checkout admitted, so the policy step is next, not the command");
         };
@@ -955,14 +1012,14 @@ mod tests {
 
     #[test]
     fn a_settings_refusal_that_still_requests_checkout_admission() {
-        let seen = with_reads(known_project(), "escalate_on_failure = \"yes\"\n");
+        let seen = with_reads(looked_up(), "escalate_on_failure = \"yes\"\n");
         assert_failed(write_step(&seen), "config-unavailable", "settings", false);
     }
 
     #[test]
     fn a_fork_or_git_refusal_that_still_requests_the_step() {
         for fault in [git_fault(), fork_fault()] {
-            let mut seen = with_reads(known_project(), SECTIONED);
+            let mut seen = with_reads(looked_up(), SECTIONED);
             seen.admitted = Some(Err(fault));
             assert!(
                 matches!(write_step(&seen), Next::Failed(_)),
@@ -973,7 +1030,7 @@ mod tests {
 
     #[test]
     fn a_command_that_does_not_carry_the_version_the_step_returned() {
-        let mut seen = admitted(with_reads(known_project(), SECTIONED));
+        let mut seen = admitted(with_reads(looked_up(), SECTIONED));
         seen.stepped = Some(Ok(5));
         let Next::Ready(prepared) = write_step(&seen) else {
             panic!("the step's version is observed, so the command is ready");
@@ -986,7 +1043,7 @@ mod tests {
 
     #[test]
     fn a_git_refusal_that_has_another_code_or_place_or_is_retryable() {
-        let mut seen = with_reads(known_project(), SECTIONED);
+        let mut seen = with_reads(looked_up(), SECTIONED);
         seen.admitted = Some(Err(git_fault()));
         let value = assert_failed(
             write_step(&seen),
@@ -1002,7 +1059,7 @@ mod tests {
 
     #[test]
     fn a_fork_answer_that_tells_the_model_to_run_init_instead_of_naming_the_owners_step() {
-        let mut seen = with_reads(known_project(), SECTIONED);
+        let mut seen = with_reads(looked_up(), SECTIONED);
         seen.admitted = Some(Err(fork_fault()));
         let value = assert_failed(write_step(&seen), "project-id-conflict", "checkout", false);
         let reason = value["reason"].as_str().unwrap();
@@ -1023,16 +1080,99 @@ mod tests {
         let busy = LedgerFault::Checkout(EntryError::Admit(checkout::AdmitError::Store(
             StoreError::Busy,
         )));
-        let mut seen = with_reads(known_project(), SECTIONED);
+        let mut seen = with_reads(looked_up(), SECTIONED);
         seen.admitted = Some(Err(busy));
         assert_failed(write_step(&seen), "ledger-busy", "ledger", true);
 
-        let mut seen = admitted(with_reads(known_project(), SECTIONED));
+        let mut seen = admitted(with_reads(looked_up(), SECTIONED));
         seen.stepped = Some(Err(LedgerFault::Store(StoreError::Unavailable(
             "the ledger is fenced".into(),
         ))));
         assert_failed(write_step(&seen), "ledger-unavailable", "ledger", false);
         seen.stepped = Some(Err(LedgerFault::Store(StoreError::Busy)));
         assert_failed(write_step(&seen), "ledger-busy", "ledger", true);
+    }
+
+    /// The body of a `request` document for a completed request.
+    fn completed_request() -> Value {
+        json!({"state": "completed", "scope": [], "digest": "ab".repeat(32),
+            "outcome": "done", "answer": {"inline": {"captured": true}}})
+    }
+
+    fn with_replay(mut seen: Seen, found: Result<Option<Value>, LedgerFault>) -> Seen {
+        seen.replay = Some(found);
+        seen
+    }
+
+    #[test]
+    fn a_write_that_skips_the_replay_lookup_before_the_settings_read() {
+        let Next::Do(Step::LookUpRequest { project, key }) = write_step(&known_project()) else {
+            panic!("a known project's write looks its request up first");
+        };
+        assert_eq!(project, ProjectId(ID.into()));
+        assert_eq!(
+            key,
+            baley_store::DocKey(vec![
+                baley_store::KeyValue::Text("capture.record".into()),
+                baley_store::KeyValue::Text(REQUEST.into()),
+            ])
+        );
+        assert!(matches!(
+            write_step(&with_replay(known_project(), Ok(None))),
+            Next::Do(Step::ReadSettings { .. })
+        ));
+    }
+
+    #[test]
+    fn a_known_request_that_requests_the_settings_checkout_admission_or_the_step() {
+        let seen = with_replay(known_project(), Ok(Some(completed_request())));
+        let Next::Ready(prepared) = write_step(&seen) else {
+            panic!("a known request is ready with no other step");
+        };
+        let command = prepared.command.unwrap();
+        assert_eq!(command.request_id, RequestId(REQUEST.into()));
+        assert_eq!(command.digest, write_request(1).digest);
+        assert_eq!(command.policy_version, 0);
+    }
+
+    #[test]
+    fn a_known_request_turned_into_config_unavailable_by_an_invalid_heads_copy() {
+        let seen = with_reads(
+            with_replay(known_project(), Ok(Some(completed_request()))),
+            "escalate_on_failure = \"yes\"\n",
+        );
+        assert!(matches!(write_step(&seen), Next::Ready(_)));
+    }
+
+    #[test]
+    fn a_read_that_requests_the_replay_lookup() {
+        let caller = caller("/real/r/p", "/w");
+        assert!(matches!(
+            next(&read_call(&caller), &known_project()),
+            Next::Ready(Prepared { command: None, .. })
+        ));
+    }
+
+    #[test]
+    fn a_stateless_request_document_that_is_not_ledger_unavailable() {
+        for body in [
+            json!({}),
+            json!({"state": "unknown"}),
+            json!({"state": "completed"}),
+        ] {
+            let seen = with_replay(known_project(), Ok(Some(body)));
+            assert_failed(write_step(&seen), "ledger-unavailable", "ledger", false);
+        }
+    }
+
+    #[test]
+    fn a_lookup_store_error_that_is_not_busy_or_unavailable() {
+        let busy = with_replay(known_project(), Err(LedgerFault::Store(StoreError::Busy)));
+        assert_failed(write_step(&busy), "ledger-busy", "ledger", true);
+        let down = with_replay(
+            known_project(),
+            Err(LedgerFault::Store(StoreError::Unavailable("fenced".into()))),
+        );
+        assert_failed(write_step(&down), "ledger-unavailable", "ledger", false);
     }
 }
