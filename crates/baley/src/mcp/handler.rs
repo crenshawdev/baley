@@ -285,10 +285,13 @@ mod tests {
         );
         assert_eq!(help["status"], "ok");
         assert_ne!(help, version);
+        // Valid schema arguments, so only the schema operation can answer ok
+        // with help's schema.
         let schema = operate(
             &Called::Operation(Tool::Query, "schema".into()),
-            Some(&json!({"operation": "schema", "tool": "query", "name": "help"})),
+            Some(&json!({"operation": "schema", "tool": "query", "for": "help"})),
         );
-        assert_ne!(schema, help);
+        assert_eq!(schema["status"], "ok", "{schema}");
+        assert_eq!(schema["schema"]["properties"]["operation"]["const"], "help");
     }
 }
