@@ -3,6 +3,7 @@ use baley::process::Process;
 use baley::rail::branch::{self, Permission};
 use baley::store::model::digest;
 use baley::store::writer::audit::{self, Audit, Outcome, PolicyEvidence, Verb};
+use baley_core::guard::{GitVerb, git_verb};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -41,113 +42,6 @@ fn project(cwd: &Path) -> Option<PathBuf> {
         }
     }
     None
-}
-
-/// Linear bounded scan. Unsupported shell structure declines the entire input.
-fn verb(command: &str) -> Option<Verb> {
-    let mut quote = None;
-    let mut word = String::new();
-    let mut started = false;
-    let mut words = Vec::new();
-    let mut push = false;
-    let mut commit = false;
-    let mut chars = command.chars();
-    let finish_word = |word: &mut String, started: &mut bool, words: &mut Vec<String>| {
-        if *started {
-            words.push(std::mem::take(word));
-            *started = false;
-        }
-    };
-    let segment = |words: &mut Vec<String>, push: &mut bool, commit: &mut bool| {
-        if words
-            .first()
-            .is_some_and(|head| head == "git" || head.ends_with("/git"))
-        {
-            let mut i = 1;
-            while i < words.len() {
-                let word = &words[i];
-                if matches!(
-                    word.as_str(),
-                    "-C" | "-c"
-                        | "--git-dir"
-                        | "--work-tree"
-                        | "--namespace"
-                        | "--exec-path"
-                        | "--config-env"
-                ) {
-                    i += 2;
-                } else if word.starts_with('-') {
-                    i += 1;
-                } else {
-                    *push |= word == "push";
-                    *commit |= word == "commit";
-                    break;
-                }
-            }
-        }
-        words.clear();
-    };
-    while let Some(ch) = chars.next() {
-        if ch == '\0' {
-            return None;
-        }
-        if quote == Some('\'') {
-            if ch == '\'' {
-                quote = None;
-            } else {
-                word.push(ch);
-            }
-            continue;
-        }
-        if ch == '\\' {
-            let escaped = chars.next()?;
-            if escaped != '\n' {
-                word.push(escaped);
-                started = true;
-            }
-            continue;
-        }
-        if matches!(ch, '$' | '`') {
-            return None;
-        }
-        if quote == Some('"') {
-            if ch == '"' {
-                quote = None;
-            } else {
-                word.push(ch);
-            }
-            continue;
-        }
-        match ch {
-            '\'' | '"' => {
-                quote = Some(ch);
-                started = true;
-            }
-            ';' | '|' | '&' | '\n' => {
-                finish_word(&mut word, &mut started, &mut words);
-                segment(&mut words, &mut push, &mut commit);
-            }
-            '(' | ')' | '{' | '}' | '<' | '>' => return None,
-            '#' if !started => return None,
-            ch if ch.is_ascii_whitespace() => finish_word(&mut word, &mut started, &mut words),
-            ch => {
-                word.push(ch);
-                started = true;
-            }
-        }
-    }
-    if quote.is_some() {
-        return None;
-    }
-    finish_word(&mut word, &mut started, &mut words);
-    segment(&mut words, &mut push, &mut commit);
-    if push {
-        Some(Verb::Push)
-    } else if commit {
-        Some(Verb::Commit)
-    } else {
-        None
-    }
 }
 
 fn unavailable(input: impl Into<String>, reason: impl Into<String>) -> audit::Unavailable {
@@ -465,7 +359,10 @@ pub(super) fn run(bytes: &[u8], process: &mut dyn Process) -> ExitCode {
     {
         return ExitCode::SUCCESS;
     }
-    let Some(verb) = verb(&event.tool_input.command) else {
+    let Some(verb) = git_verb(&event.tool_input.command).map(|verb| match verb {
+        GitVerb::Commit => Verb::Commit,
+        GitVerb::Push => Verb::Push,
+    }) else {
         return ExitCode::SUCCESS;
     };
     let Some(project) = project(&event.cwd) else {
@@ -538,21 +435,5 @@ mod tests {
             failures[0].reason,
             "git symbolic-ref --quiet --short HEAD exceeded git deadline of 9 seconds"
         );
-    }
-
-    use super::{Verb, verb};
-
-    // The Bash guard decides on a Git push or commit, never on the files a
-    // command names: an owned output named without one is no decision.
-    #[test]
-    fn a_command_naming_an_owned_file_is_judged_by_its_git_verb_alone() {
-        for command in [
-            "cat .planning/state.json",
-            "rm .planning/decisions.jsonl",
-            "cp draft.md .planning/phases/6/SUMMARY.md",
-        ] {
-            assert_eq!(verb(command), None, "{command}");
-        }
-        assert_eq!(verb("git commit .planning/state.json"), Some(Verb::Commit));
     }
 }

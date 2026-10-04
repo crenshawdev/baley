@@ -8,6 +8,7 @@ pub mod anchor;
 pub mod catalog;
 pub mod checkout;
 pub mod forge;
+pub mod guard;
 pub mod policy;
 pub mod reconcile;
 pub mod registry;
