@@ -34,3 +34,6 @@ pub mod worker;
 
 /// Carries frames between stdio and rmcp through the bounded decoder.
 pub mod transport;
+
+/// The rmcp handler for one session: gates, queue and worker behind rmcp's validation.
+pub mod handler;
