@@ -124,11 +124,20 @@ impl Control {
     }
 }
 
+/// An error line that has been decided but not yet fully written.
+struct PendingLine {
+    bytes: Vec<u8>,
+    written: usize,
+}
+
 /// An rmcp server transport over any byte source and sink.
 pub struct StdioTransport<R, W> {
     reader: FrameReader<R>,
     // Responses and error lines share one writer so lines never interleave.
     writer: Arc<Mutex<W>>,
+    // rmcp may drop a `receive` future that is waiting on the writer. The reply
+    // for the frame it consumed is kept here until a later `receive` writes it.
+    pending: Option<PendingLine>,
     closing: watch::Receiver<bool>,
     ended: watch::Sender<Option<InputEnd>>,
 }
@@ -142,6 +151,7 @@ impl<R: AsyncRead + Unpin, W> StdioTransport<R, W> {
             Self {
                 reader: FrameReader::new(source),
                 writer: Arc::new(Mutex::new(sink)),
+                pending: None,
                 closing,
                 ended,
             },
@@ -153,12 +163,40 @@ impl<R: AsyncRead + Unpin, W> StdioTransport<R, W> {
     }
 }
 
-async fn write_line<W: AsyncWrite + Unpin>(writer: &Mutex<W>, line: &Value) -> io::Result<()> {
+fn encode_line(line: &Value) -> io::Result<Vec<u8>> {
     let mut bytes = serde_json::to_vec(line).map_err(io::Error::other)?;
     bytes.push(b'\n');
+    Ok(bytes)
+}
+
+async fn write_line<W: AsyncWrite + Unpin>(writer: &Mutex<W>, line: &Value) -> io::Result<()> {
+    let bytes = encode_line(line)?;
     let mut sink = writer.lock().await;
     sink.write_all(&bytes).await?;
     sink.flush().await
+}
+
+/// Writes the pending line and clears it. Every await here is safe to drop: the
+/// line and how much of it is out stay in `pending`, so the next call finishes
+/// the line without repeating a byte.
+async fn write_pending<W: AsyncWrite + Unpin>(
+    writer: &Mutex<W>,
+    pending: &mut Option<PendingLine>,
+) -> io::Result<()> {
+    let Some(line) = pending.as_mut() else {
+        return Ok(());
+    };
+    let mut sink = writer.lock().await;
+    while line.written < line.bytes.len() {
+        let count = sink.write(&line.bytes[line.written..]).await?;
+        if count == 0 {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        line.written += count;
+    }
+    sink.flush().await?;
+    *pending = None;
+    Ok(())
 }
 
 impl<R, W> Transport<RoleServer> for StdioTransport<R, W>
@@ -179,6 +217,11 @@ where
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
         loop {
+            if let Err(error) = write_pending(&self.writer, &mut self.pending).await {
+                eprintln!("baley: output failed: {error}");
+                self.ended.send_replace(Some(InputEnd::Failed));
+                return None;
+            }
             // A frame read after admission closed would be answered by nobody.
             let read = tokio::select! {
                 biased;
@@ -190,13 +233,11 @@ where
             }
             match decide(read) {
                 Decision::Deliver(message) => return Some(*message),
-                Decision::Reply(line) => {
-                    if let Err(error) = write_line(&self.writer, &line).await {
-                        eprintln!("baley: output failed: {error}");
-                        self.ended.send_replace(Some(InputEnd::Failed));
-                        return None;
-                    }
-                }
+                Decision::Reply(line) => match encode_line(&line) {
+                    // Written at the top of the loop, where a drop loses nothing.
+                    Ok(bytes) => self.pending = Some(PendingLine { bytes, written: 0 }),
+                    Err(error) => eprintln!("baley: reply not encoded: {error}"),
+                },
                 Decision::End(end) => {
                     self.ended.send_replace(Some(end));
                     return None;
@@ -321,6 +362,36 @@ mod tests {
             let mut message = delivered(decide(frame(body)));
             assert_eq!(size_of(&mut message), None);
         }
+    }
+
+    /// Polls a future once with a waker that does nothing. `None` means it was
+    /// still pending.
+    fn poll_once<F: std::future::Future>(future: std::pin::Pin<&mut F>) -> Option<F::Output> {
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match future.poll(&mut context) {
+            std::task::Poll::Ready(output) => Some(output),
+            std::task::Poll::Pending => None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dropped_receive_does_not_lose_the_error_reply_for_the_frame_it_consumed() {
+        let source: &[u8] = b"{not json\n";
+        let (mut transport, _control) = StdioTransport::new(source, Vec::<u8>::new());
+        // Another writer holds the sink, as a response in flight would.
+        let held = Arc::clone(&transport.writer).lock_owned().await;
+        {
+            let receive = std::pin::pin!(transport.receive());
+            assert!(poll_once(receive).is_none(), "receive should be waiting");
+            // The future is dropped here, as rmcp does when another branch wins.
+        }
+        drop(held);
+
+        assert!(transport.receive().await.is_none());
+        let written = transport.writer.lock().await.clone();
+        let line: Value = serde_json::from_slice(&written).unwrap();
+        assert_eq!(line["error"]["code"], -32700);
+        assert_eq!(written.iter().filter(|byte| **byte == b'\n').count(), 1);
     }
 
     #[test]
