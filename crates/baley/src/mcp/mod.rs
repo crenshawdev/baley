@@ -28,3 +28,6 @@ pub mod admission;
 
 /// Shutdown as transitions: stop admission, drain for at most ten seconds, one checkpoint attempt.
 pub mod lifecycle;
+
+/// The thread Baley owns that runs accepted decisions one at a time in queue order.
+pub mod worker;
