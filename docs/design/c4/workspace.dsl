@@ -4,8 +4,8 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         owner = person "Owner" "The person responsible for the work. Approves plans, rules on findings, sets policy."
 
         baley = softwareSystem "Baley" "Decides and orchestrates every step of the process; keeps the record." {
-            binary = container "Baley server" "One shared process per user. MCP server, command line and guard hook." "Rust" {
-                hostInterface = component "Host interface" "MCP server (stdio and HTTP), command line and guard hook: the only ways in."
+            binary = container "Baley server" "The Rust binary. Each Claude Code session starts its own process of it over stdio as an MCP server. The command line and guard hook run it as processes of their own." "Rust" {
+                hostInterface = component "Host interface" "MCP server (stdio), command line and guard hook: the only ways in."
                 hardin = component "Hardin" "Derives the state of the work from the record, answers what may happen next and refuses the rest."
                 domain = component "Domain areas" "The rules of each process area: planning, execution, verification, review, risk, landing and the rest."
                 composer = component "Work order composer" "Builds every dispatch: role, model and effort from policy, instructions from the binary, inputs from the record."
@@ -27,7 +27,7 @@ workspace "Baley" "The C4 model behind Baley's design documents. Every structure
         owner -> host "Works in"
         owner -> hostInterface "Uses the command line"
         owner -> keysFile "Writes provider keys by hand"
-        host -> hostInterface "Work orders, results, questions" "MCP over stdio or HTTP"
+        host -> hostInterface "Work orders, results, questions" "MCP over stdio"
         host -> repo "Workers edit source and commit"
         host -> reviewers "Outside review calls, with prompts built by Baley"
         hostInterface -> hardin "Asks what may happen next"

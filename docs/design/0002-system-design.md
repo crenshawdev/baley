@@ -70,7 +70,7 @@ graph LR
 
     1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->15
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->2
-    15-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio or HTTP]</div>" .->2
+    15-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->2
     15-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->16
     15-. "<div>Outside review calls, with<br />prompts built by Baley</div><div style='font-size: 70%'></div>" .->18
     2-. "<div>Lists models</div><div style='font-size: 70%'></div>" .->18
@@ -174,14 +174,14 @@ graph LR
       style 13 fill:#438dd5,stroke:#2e6295,color:#ffffff
       14["<div style='font-weight: bold'>Keys file</div><div style='font-size: 70%; margin-top: 0px'>[Container: Text]</div><div style='font-size: 80%; margin-top:10px'>keys.env in Baley's config<br />folder: one NAME=value line<br />per key, written by the<br />owner, read only by Baley.</div>"]
       style 14 fill:#438dd5,stroke:#2e6295,color:#ffffff
-      3["<div style='font-weight: bold'>Baley server</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>One shared process per user.<br />MCP server, command line and<br />guard hook.</div>"]
+      3["<div style='font-weight: bold'>Baley server</div><div style='font-size: 70%; margin-top: 0px'>[Container: Rust]</div><div style='font-size: 80%; margin-top:10px'>The Rust binary. Each Claude<br />Code session starts its own<br />process of it over stdio as<br />an MCP server. The command<br />line and guard hook run it as<br />processes of their own.</div>"]
       style 3 fill:#438dd5,stroke:#2e6295,color:#ffffff
     end
 
     1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->15
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->3
     1-. "<div>Writes provider keys by hand</div><div style='font-size: 70%'></div>" .->14
-    15-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio or HTTP]</div>" .->3
+    15-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->3
     15-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->16
     15-. "<div>Outside review calls, with<br />prompts built by Baley</div><div style='font-size: 70%'></div>" .->18
     3-. "<div>Reads, and writes a file<br />whole for config set</div><div style='font-size: 70%'></div>" .->13
@@ -195,7 +195,7 @@ graph LR
 ```
 <!-- /c4:containers -->
 
-*Figure 3. Containers: the shared Baley server, the ledger, the settings files and the keys file.*
+*Figure 3. Containers: the Baley server, one process per session, with the ledger, the settings files and the keys file.*
 
 <!-- c4:components -->
 ```mermaid
@@ -227,7 +227,7 @@ graph LR
         style 10 fill:#85bbf0,stroke:#5d82a8,color:#000000
         11["<div style='font-weight: bold'>Ports and adapters</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>Storage, git and test runner,<br />forge and host adapters. The<br />core sees only these ports.</div>"]
         style 11 fill:#85bbf0,stroke:#5d82a8,color:#000000
-        4["<div style='font-weight: bold'>Host interface</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>MCP server (stdio and HTTP),<br />command line and guard hook:<br />the only ways in.</div>"]
+        4["<div style='font-weight: bold'>Host interface</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>MCP server (stdio), command<br />line and guard hook: the only<br />ways in.</div>"]
         style 4 fill:#85bbf0,stroke:#5d82a8,color:#000000
         5["<div style='font-weight: bold'>Hardin</div><div style='font-size: 70%; margin-top: 0px'>[Component]</div><div style='font-size: 80%; margin-top:10px'>Derives the state of the work<br />from the record, answers what<br />may happen next and refuses<br />the rest.</div>"]
         style 5 fill:#85bbf0,stroke:#5d82a8,color:#000000
@@ -252,7 +252,7 @@ graph LR
     1-. "<div>Works in</div><div style='font-size: 70%'></div>" .->15
     1-. "<div>Uses the command line</div><div style='font-size: 70%'></div>" .->4
     1-. "<div>Writes provider keys by hand</div><div style='font-size: 70%'></div>" .->14
-    15-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio or HTTP]</div>" .->4
+    15-. "<div>Work orders, results,<br />questions</div><div style='font-size: 70%'>[MCP over stdio]</div>" .->4
     15-. "<div>Workers edit source and<br />commit</div><div style='font-size: 70%'></div>" .->16
     15-. "<div>Outside review calls, with<br />prompts built by Baley</div><div style='font-size: 70%'></div>" .->18
     4-. "<div>Asks what may happen next</div><div style='font-size: 70%'></div>" .->5
@@ -279,11 +279,11 @@ graph LR
 ```
 <!-- /c4:components -->
 
-*Figure 4. Components inside the Baley server.*
+*Figure 4. Components inside the Baley server, the binary each session starts over stdio.*
 
 | Component | Responsibility |
 |---|---|
-| Host interface | The MCP server (stdio and HTTP), the command line and the guard hook: the only ways in |
+| Host interface | The MCP server (stdio), the command line and the guard hook: the only ways in |
 | Hardin | Derives the state of the work from the ledger's views, answers what may happen next, refuses the rest |
 | Domain areas | The rules of each process area, one design document each |
 | Work order composer | Builds every dispatch: role, model and effort from policy, instructions from the binary, inputs from the ledger |
