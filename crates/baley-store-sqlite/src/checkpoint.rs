@@ -100,13 +100,22 @@ impl SqliteStore {
     /// since open is seen. A fenced store, or one at another epoch, is
     /// skipped. Nothing is written to stderr.
     pub fn checkpoint_at_exit(&self) -> ExitCheckpoint {
+        self.exit_checkpoint_running(attempt)
+    }
+
+    /// The exit checkpoint with its statements supplied, so a test can see
+    /// the connection state they run under. Production passes `attempt`.
+    fn exit_checkpoint_running(
+        &self,
+        run: impl FnOnce(&Connection) -> ExitCheckpoint,
+    ) -> ExitCheckpoint {
         if let Some(reason) = skip_reason(self.fenced(), None) {
             return ExitCheckpoint::Skipped(reason);
         }
         let Some(conn) = self.try_connection() else {
             return judge_exit_checkpoint(Attempt::NoConnection);
         };
-        without_waiting(&conn, attempt)
+        without_waiting(&conn, run)
     }
 }
 
@@ -385,23 +394,35 @@ mod tests {
         );
     }
 
-    // Catches statements that run with a busy timeout above zero, which could
-    // wait in SQLite's busy handler. The raw-connection route to a held
-    // database is closed: a connection cannot take exclusive locking while
-    // the store's own connections are attached, so the timeout is read from
-    // inside the wrapper the attempt runs in.
+    // Catches an exit call whose statements run with a busy timeout above
+    // zero, which could wait in SQLite's busy handler. The raw-connection
+    // route to a held database is closed: a connection cannot take exclusive
+    // locking while the store's own connections are attached. So the exit
+    // path runs a probe in place of the pragma and the timeout is read from
+    // inside it, on the connection the exit call chose.
     #[test]
-    fn the_attempt_runs_with_a_busy_timeout_that_can_wait() {
+    fn the_exit_call_runs_its_statements_with_a_busy_timeout_that_can_wait() {
         let home = private_folder();
         let store = open(home.path(), false);
-        let conn = store.writer.lock().expect("writer");
-        let inside = without_waiting(&conn, |conn| {
+        let inside = store.exit_checkpoint_running(|conn| {
             let timeout: i64 = conn
                 .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
                 .expect("timeout");
             ExitCheckpoint::Error(timeout.to_string())
         });
         assert_eq!(inside, ExitCheckpoint::Error("0".into()));
+    }
+
+    // Catches a connection choice that tries only the writer, so a writer
+    // held by a queued write leaves the exit call unavailable although the
+    // reader is free. No SQLite transaction is open, only the mutex is held.
+    #[test]
+    fn a_held_writer_mutex_still_checkpoints_through_the_free_reader() {
+        let home = private_folder();
+        let store = open(home.path(), false);
+        write_traces(&store, 3);
+        let _writer = store.writer.lock().expect("writer");
+        assert_eq!(store.checkpoint_at_exit(), ExitCheckpoint::Complete);
     }
 
     // Catches a connection left with no wait after the call.
