@@ -147,7 +147,8 @@ The last complete policy read, kept for GRD-R7. The `guard_policy` view holds th
 ```mermaid
 stateDiagram-v2
   [*] --> Received: hook call
-  Received --> Silent: no project, or no commit or push verb, or declined command
+  Received --> Silent: no project (a PowerShell call included), or no commit or push verb, or a declined or unreadable command, or a Monitor watch
+  Received --> Ask: PowerShell call in a project
   Received --> Deciding: project found, verb found
   Deciding --> Ask: push, or protected commit under ask, or torn settings
   Deciding --> Deny: protected commit under refuse, or hard fail, or remembered denial
