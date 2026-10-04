@@ -5,11 +5,14 @@
 /// The session's project, working directory and ids, gathered once and judged.
 pub mod context;
 
+/// The two gates around the queue and the one place answers become tool results.
+pub mod gate;
+
 /// Decodes the calling client in both protocol eras and selects a supported host.
 pub mod client;
 
 /// The literal operation baseline and the build that replaces each retired spelling.
 pub mod operations;
 
-/// The tools, starting with what `baley_version` answers.
+/// The three tools, what the server says about itself and what `baley_version` answers.
 pub mod tools;
