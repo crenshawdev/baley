@@ -186,18 +186,18 @@ Not applicable. This area reads no setting of its own; `workflow.skip_discuss` i
 
 ## 11. Build status
 
-The binary crate holds the inherited engine; its next action derives from `ROADMAP.md` and a memo it writes back.
+The binary parks the inherited engine for Build 9 to delete, and nothing in production reaches it (`crates/baley/src/inherited.rs:1-4`). The session server answers `progress` and `suggest` (`crates/baley/src/mcp/operations.rs:95-96`) as unavailable, and the operation baseline names Build 7 for them, and it answers `why` (`crates/baley/src/mcp/operations.rs:97`) as unavailable naming Build 8. The next action rode in the parked engine's answers to these and other lifecycle reads, and its derivation from `ROADMAP.md` and the memo it writes back are the parked engine's. Production reaches the progress, suggest and why front doors through `baley progress-instructions`, `baley suggest-instructions` and `baley why-instructions` (`crates/baley/src/instruction_surfaces.rs:11-13`).
 
 | Requirement | Status | Where |
 |---|---|---|
-| NXT-R1 | Not built as designed | A read writes the lifecycle memo into `state.json` (`crates/baley/src/derivation_service.rs:146-174`) |
-| NXT-R2 | Not built | Derivation parses `ROADMAP.md` and lists phase directories (`crates/baley/src/derivation/capture.rs:120-168`) |
-| NXT-R3 | Partly built | Rule order over phases, lowest number first (`crates/baley/src/next_action/select.rs:59-133, 165-197`); no rules for stories, the one active phase or landing |
-| NXT-R4 | Partly built | The resolve action tells the owner to hand-edit a roadmap tick (`crates/baley/src/next_action/select.rs:27-30`) and points at a `/bal-phase add` that does not exist (`select.rs:41`) |
-| NXT-R5 | Built | `derivation-conflict` and `state-conflict` (`crates/baley/src/derivation/memo.rs:291-337`, `crates/baley/src/derivation/consistency.rs:14-70`) |
-| NXT-R6 | Partly built | Phase rows, record counts, capture bound, next action (`crates/baley/src/progress/render.rs:14-141`, `crates/baley/src/progress_service.rs:47-211`); bounded at 24,576 bytes with a refusal instead of parts |
-| NXT-R7 | Built | `crates/baley/src/suggest/rules.rs:4-80`, `crates/baley/src/suggest_service.rs:160-216` |
-| NXT-R8 | Built over Markdown | `why` in `crates/baley/src/recall` ([0014](0014-support-families.md)) |
+| NXT-R1 | Not built | Only the parked engine writes the lifecycle memo into `state.json` on a read (`crates/baley/src/derivation_service.rs:146-174`). The session server answers `progress` and `suggest` as unavailable (`crates/baley/src/mcp/operations.rs:95-96`) until Build 7 |
+| NXT-R2 | Not built | The parked derivation parses `ROADMAP.md` and lists phase directories (`crates/baley/src/derivation/capture.rs:120-168`) |
+| NXT-R3 | Not built | Only the parked engine orders its rules over phases, lowest number first (`crates/baley/src/next_action/select.rs:59-133, 165-197`), with no rules for stories, the one active phase or landing. The session server answers `progress` and `suggest` as unavailable (`crates/baley/src/mcp/operations.rs:95-96`) until Build 7 |
+| NXT-R4 | Not built | The parked engine's resolve action tells the owner to hand-edit a roadmap tick (`crates/baley/src/next_action/select.rs:27-30`) and points at a `/bal-phase add` that does not exist (`crates/baley/src/next_action/select.rs:41`). The session server answers `progress` and `suggest` as unavailable (`crates/baley/src/mcp/operations.rs:95-96`) until Build 7 |
+| NXT-R5 | Not built | Only the parked engine refuses with `derivation-conflict` and `state-conflict` (`crates/baley/src/derivation/memo.rs:291-337`, `crates/baley/src/derivation/consistency.rs:14-70`). The session server answers `progress` and `suggest` as unavailable (`crates/baley/src/mcp/operations.rs:95-96`) until Build 7 |
+| NXT-R6 | Not built | Only the parked engine answers progress: phase rows, record counts, capture bound and next action (`crates/baley/src/progress/render.rs:14-141`, `crates/baley/src/progress_service.rs:47-213`), bounded at 24,576 bytes with a refusal instead of parts. The session server answers `progress` as unavailable (`crates/baley/src/mcp/operations.rs:95`) until Build 7 |
+| NXT-R7 | Not built | Only the parked engine answers suggest (`crates/baley/src/suggest/rules.rs:4-80`, `crates/baley/src/suggest_service.rs:160-217`). The session server answers `suggest` as unavailable (`crates/baley/src/mcp/operations.rs:96`) until Build 7 |
+| NXT-R8 | Not built | Only the parked engine answers `why` (`crates/baley/src/why_service.rs:22-160`), and [0014](0014-support-families.md) owns the query. The session server answers `why` as unavailable (`crates/baley/src/mcp/operations.rs:97`) until Build 8 |
 
 ## 12. Open questions
 
