@@ -385,13 +385,12 @@ fn schema_part(tool: &str, operation: &str, schema: &Value, part: Option<usize>)
         "bound":SCHEMA_PART_BOUND,"part":part,"body":body,"next":next})
 }
 
+/// Today's spellings written out again, independent of the data above, for the
+/// tests that hold the baseline and the advertised enums to them.
 #[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    const QUERY: &[&str] = &[
+pub(crate) mod expected {
+    /// `baley_query` spellings in order.
+    pub const QUERY: &[&str] = &[
         "help",
         "recall",
         "debug-list",
@@ -432,7 +431,8 @@ mod tests {
         "review-select",
     ];
 
-    const APPLY: &[&str] = &[
+    /// `baley_apply` spellings in order.
+    pub const APPLY: &[&str] = &[
         "verification-run",
         "verification-submit",
         "truth-waive",
@@ -500,6 +500,14 @@ mod tests {
         "task-open",
         "task-close",
     ];
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::expected::{APPLY, QUERY};
+    use super::*;
 
     fn names(tool: Tool) -> Vec<&'static str> {
         tool.operations().iter().map(|op| op.name).collect()
