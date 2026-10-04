@@ -254,6 +254,7 @@ pub fn outcome(envelope: &ExecutionEnvelope) -> String {
         Envelope::Refused { code, .. } => format!("refused:{code}"),
         Envelope::Unknown { code, .. } => format!("unknown:{code}"),
         Envelope::NotApplicable { code, .. } => format!("not-applicable:{code}"),
+        Envelope::Failed { code, .. } => format!("failed:{code}"),
     }
 }
 
@@ -336,7 +337,8 @@ impl PreparedAnswer {
         match &mut envelope {
             Envelope::Refused { reason, .. }
             | Envelope::Unknown { reason, .. }
-            | Envelope::NotApplicable { reason, .. } => {
+            | Envelope::NotApplicable { reason, .. }
+            | Envelope::Failed { reason, .. } => {
                 let mut end = reason.len().min(MAX_REASON_BYTES);
                 while !reason.is_char_boundary(end) {
                     end -= 1;
@@ -1032,6 +1034,18 @@ mod tests {
                 crate::store::model::digest(&canonical_bytes(&fixture).unwrap())
             );
         }
+    }
+
+    #[test]
+    fn a_failed_reason_is_cut_like_the_others_and_its_outcome_names_the_code() {
+        let envelope: ExecutionEnvelope =
+            Envelope::failed("server-overloaded", "x".repeat(1023) + "体", "queue");
+        assert_eq!(outcome(&envelope), "failed:server-overloaded");
+        let answer = PreparedAnswer::new(envelope).unwrap();
+        let Envelope::Failed { reason, .. } = answer.envelope else {
+            panic!("a failed answer stays failed");
+        };
+        assert_eq!(reason, "x".repeat(1023));
     }
 
     #[test]

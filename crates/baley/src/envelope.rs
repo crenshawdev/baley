@@ -1,6 +1,7 @@
-//! The typed answer vocabulary: `ok`, `refused`, `unknown`, `not-applicable`.
+//! The typed answer vocabulary: `ok`, `refused`, `unknown`, `not-applicable`
+//! and `failed`.
 //!
-//! Every operation answers with one of these four and nothing else. The point
+//! Every operation answers with one of these five and nothing else. The point
 //! is that a caller can branch on the tag alone without reading prose, so the
 //! spellings are load-bearing: `not-applicable` carries a hyphen because that
 //! is how the design document spells it and how every later skill will match
@@ -11,6 +12,11 @@
 //! from a crashed tool, and the informed-retry loop would have nothing left to
 //! branch on: it would see a failure where the binary was in fact telling it
 //! precisely why the thing it asked for is not allowed.
+//!
+//! `failed` is the server saying it could not take the call at all, and that
+//! nothing was recorded. A refusal reads as a domain answer the ledger may
+//! hold, so a server fault such as an unsupported client or a full queue does
+//! not borrow that tag. A `failed` answer is a successful tool call too.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -34,9 +40,13 @@ use serde::{Deserialize, Serialize};
 /// beside the tag. An operation with one value to report gives it a named
 /// field; there is no arm here for a payload without one.
 ///
-/// The three non-`ok` arms carry a machine `code` and a prose `reason`.
+/// The four non-`ok` arms carry a machine `code` and a prose `reason`.
 /// Goldens compare the code to the JavaScript refusal token (D-04), so two
 /// different refusals cannot agree just because they share an arm tag.
+///
+/// `failed` also names the `place` at fault and always says `recorded: false`
+/// and whether the caller may `retryable` try again. Build it with
+/// [`Envelope::failed`] so no call site writes those fields by hand.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub enum Envelope<T> {
@@ -67,6 +77,65 @@ pub enum Envelope<T> {
         /// Why the question does not apply, in words a person reads.
         reason: String,
     },
+    /// The server could not take the call and recorded nothing. Not a domain
+    /// answer: see the module comment on why this is not `refused`.
+    Failed {
+        /// Machine token in the operation's kebab-case vocabulary.
+        code: String,
+        /// What went wrong, in words a person reads.
+        reason: String,
+        /// The input at fault, such as `client-info` or `CLAUDE_PROJECT_DIR`.
+        place: String,
+        /// Always `false`: a failed call leaves no event behind.
+        recorded: bool,
+        /// True only when the same call may succeed later unchanged.
+        retryable: bool,
+        /// Structured detail a caller can act on, in the failure's own shape.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        details: Option<serde_json::Value>,
+    },
+}
+
+/// The one failed code a caller may retry unchanged.
+pub const SERVER_OVERLOADED: &str = "server-overloaded";
+
+impl<T> Envelope<T> {
+    /// A `failed` answer with no structured detail. `recorded` is always false
+    /// and `retryable` is true only for [`SERVER_OVERLOADED`], so a caller has
+    /// one shape to branch on.
+    pub fn failed(
+        code: impl Into<String>,
+        reason: impl Into<String>,
+        place: impl Into<String>,
+    ) -> Self {
+        Self::build_failed(code.into(), reason.into(), place.into(), None)
+    }
+
+    /// A `failed` answer that also carries structured detail.
+    pub fn failed_with_details(
+        code: impl Into<String>,
+        reason: impl Into<String>,
+        place: impl Into<String>,
+        details: serde_json::Value,
+    ) -> Self {
+        Self::build_failed(code.into(), reason.into(), place.into(), Some(details))
+    }
+
+    fn build_failed(
+        code: String,
+        reason: String,
+        place: String,
+        details: Option<serde_json::Value>,
+    ) -> Self {
+        Self::Failed {
+            retryable: code == SERVER_OVERLOADED,
+            code,
+            reason,
+            place,
+            recorded: false,
+            details,
+        }
+    }
 }
 
 /// A refusal built where a typed [`Envelope`] cannot be: the read layer's
@@ -261,6 +330,53 @@ mod tests {
     }
 
     #[test]
+    fn failed_serializes_under_its_own_status_with_place_and_recorded_false() {
+        let envelope: Envelope<Payload> = Envelope::failed(
+            "project-context-missing",
+            "CLAUDE_PROJECT_DIR is not set",
+            "CLAUDE_PROJECT_DIR",
+        );
+        assert_eq!(
+            serde_json::to_value(envelope).unwrap(),
+            json!({"status": "failed", "code": "project-context-missing",
+                "reason": "CLAUDE_PROJECT_DIR is not set", "place": "CLAUDE_PROJECT_DIR",
+                "recorded": false, "retryable": false})
+        );
+    }
+
+    #[test]
+    fn only_server_overloaded_is_retryable() {
+        let retryable = |code: &str| {
+            let value = serde_json::to_value(Envelope::<Payload>::failed(code, "r", "p")).unwrap();
+            value["retryable"].clone()
+        };
+        assert_eq!(retryable("server-overloaded"), json!(true));
+        for code in ["unknown-host", "project-context-invalid", "caller-invalid"] {
+            assert_eq!(
+                retryable(code),
+                json!(false),
+                "{code} must not be retryable"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_carries_details_only_when_given() {
+        let with: Envelope<Payload> = Envelope::failed_with_details(
+            "unknown-host",
+            "the client is not supported",
+            "client-info",
+            json!({"supported": ["claude-code"]}),
+        );
+        assert_eq!(
+            serde_json::to_value(with).unwrap()["details"],
+            json!({"supported": ["claude-code"]})
+        );
+        let bare = serde_json::to_value(Envelope::<Payload>::failed("c", "r", "p")).unwrap();
+        assert!(bare.get("details").is_none());
+    }
+
+    #[test]
     fn every_arm_round_trips_through_serde_json() {
         let arms: Vec<Envelope<Payload>> = vec![
             Envelope::Ok(Payload { phase: 4 }),
@@ -276,6 +392,13 @@ mod tests {
                 code: "no-phases".to_string(),
                 reason: "does not apply".to_string(),
             },
+            Envelope::failed_with_details(
+                "unknown-host",
+                "no",
+                "client-info",
+                json!({"supported": ["claude-code"]}),
+            ),
+            Envelope::failed("server-overloaded", "busy", "queue"),
         ];
         for arm in arms {
             let text = serde_json::to_string(&arm).unwrap();
