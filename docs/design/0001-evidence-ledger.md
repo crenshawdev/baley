@@ -614,7 +614,7 @@ The existing source checks are kept and run at these points:
 
 | Check | Today | Runs |
 |---|---|---|
-| Verification claim recomputed at commit | `store/writer.rs:1514` | Inside `decide` for `verdict.claimed` |
+| Verification claim recomputed at commit | `store/writer.rs:1436` | Inside `decide` for `verdict.claimed` |
 | Source reachability, commit signatures, staged-path leases | `execution/receipts.rs:1137-1210` | Before `transact`, facts recorded; HEAD re-checked inside |
 | Changed source or index refused on re-observation | `verification/inputs.rs:458-461` | Inside `decide` |
 | HEAD unchanged during an execution request | `execution_service.rs:2825` | Inside `decide` |
