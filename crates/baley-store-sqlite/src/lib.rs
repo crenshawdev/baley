@@ -11,6 +11,7 @@
 //! and keeps its own tests for SQLite mechanisms.
 
 mod admin;
+mod checkpoint;
 mod checks;
 mod claim;
 #[cfg(test)]
@@ -30,6 +31,7 @@ mod store;
 mod transact;
 mod view;
 
+pub use checkpoint::{ExitCheckpoint, SkipReason};
 pub use health::StartupHealth;
 pub use queue::{Monotonic, Timing};
 pub use schema::EPOCH;
