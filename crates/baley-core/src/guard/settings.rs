@@ -46,6 +46,11 @@ impl GuardSettings {
             hard_fail: *hard_fail,
         }
     }
+
+    /// Whether `branch` is in the protected list. Names match exactly.
+    pub fn protects(&self, branch: &str) -> bool {
+        self.protected_branches.iter().any(|name| name == branch)
+    }
 }
 
 /// The settings the judge is given for one call.

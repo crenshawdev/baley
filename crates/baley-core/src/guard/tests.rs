@@ -2,7 +2,9 @@
 //! 0010 and the guard's rules, never from running this code.
 
 use super::*;
-use crate::policy::{EffectivePolicy, Host, OnProtected, Schema, SettingsFile, effective_policy};
+use crate::policy::{
+    EffectivePolicy, Host, OnProtected, Schema, SettingsFile, Unavailable, effective_policy,
+};
 
 #[test]
 fn a_command_holding_unsupported_posix_syntax_is_judged_instead_of_declined_is_caught() {
@@ -179,19 +181,26 @@ fn a_deny_not_naming_the_setting_that_caused_it_is_caught() {
 
 // Settings.
 
-fn policy(project: Option<&str>) -> EffectivePolicy {
-    let project = project.map(|text| SettingsFile {
+fn project_file(text: &str) -> SettingsFile {
+    SettingsFile {
         path: "/r/baley.toml".into(),
         bytes: text.as_bytes().to_vec(),
         digest: "digest".into(),
-    });
+    }
+}
+
+fn merged(project: Option<&str>) -> Result<EffectivePolicy, Unavailable> {
+    let project = project.map(project_file);
     effective_policy(
         Schema::standard(),
         Some(Host::ClaudeCode),
         None,
         project.as_ref(),
     )
-    .expect("the file is valid")
+}
+
+fn policy(project: Option<&str>) -> EffectivePolicy {
+    merged(project).expect("the file is valid")
 }
 
 #[test]
@@ -219,4 +228,269 @@ fn a_guard_setting_read_from_the_wrong_name_or_dropped_is_caught() {
             hard_fail: true,
         }
     );
+}
+
+// The commit and push answer.
+
+fn settings_of(project: Option<&str>) -> SettingsInput {
+    SettingsInput::Complete(GuardSettings::from_policy(&policy(project)))
+}
+
+fn torn_by(project: &str) -> (SettingsInput, String) {
+    let torn = merged(Some(project)).expect_err("the file is torn");
+    let text = torn.to_string();
+    (SettingsInput::Torn(torn), text)
+}
+
+fn read(name: &str) -> BranchObservation {
+    BranchObservation::Read(name.into())
+}
+
+fn fallback(name: &str) -> BranchObservation {
+    BranchObservation::Fallback {
+        name: name.into(),
+        failure: "git exited with status 128".into(),
+    }
+}
+
+fn unreadable() -> BranchObservation {
+    BranchObservation::Unreadable {
+        description: "HEAD is detached".into(),
+    }
+}
+
+fn commit(
+    settings: &SettingsInput,
+    remembered: Option<&GuardSettings>,
+    branch: &BranchObservation,
+) -> Answer {
+    commit_push_answer(GitVerb::Commit, true, settings, remembered, branch)
+}
+
+fn remembered(on_protected: OnProtected, hard_fail: bool, branches: &[&str]) -> GuardSettings {
+    GuardSettings {
+        protected_branches: branches.iter().map(|name| (*name).to_owned()).collect(),
+        on_protected,
+        hard_fail,
+    }
+}
+
+#[test]
+fn the_wrong_branch_protected_by_default_is_caught() {
+    let settings = settings_of(None);
+    for name in ["main", "master"] {
+        assert_eq!(
+            commit(&settings, None, &read(name)),
+            Answer::Ask(reason::protected_ask(name))
+        );
+    }
+    assert_eq!(commit(&settings, None, &read("develop")), Answer::Pass);
+}
+
+#[test]
+fn an_empty_protected_list_still_asking_on_main_is_caught() {
+    let settings = settings_of(Some("[git]\nprotected_branches = []\n"));
+    assert_eq!(commit(&settings, None, &read("main")), Answer::Pass);
+}
+
+#[test]
+fn refuse_not_denying_a_commit_on_a_protected_branch_is_caught() {
+    let settings = settings_of(Some("[git]\non_protected = \"refuse\"\n"));
+    assert_eq!(
+        commit(&settings, None, &read("main")),
+        Answer::Deny(reason::refuse_deny("main"))
+    );
+    assert_eq!(commit(&settings, None, &read("develop")), Answer::Pass);
+}
+
+#[test]
+fn allow_still_asking_on_a_protected_branch_is_caught() {
+    let settings = settings_of(Some("[git]\non_protected = \"allow\"\n"));
+    assert_eq!(commit(&settings, None, &read("main")), Answer::Pass);
+}
+
+#[test]
+fn a_torn_file_passing_or_going_unnamed_in_the_ask_is_caught() {
+    for text in [
+        "[git]\nprotected_branches = \"main\"\n",
+        "[git]\non_protected = \"sometimes\"\n",
+    ] {
+        let (settings, named) = torn_by(text);
+        assert!(named.contains("/r/baley.toml"), "{named}");
+        for branch in [
+            read("main"),
+            read("develop"),
+            fallback("main"),
+            unreadable(),
+        ] {
+            let Answer::Ask(text) = commit(&settings, None, &branch) else {
+                panic!("a commit under torn settings must ask: {branch:?}");
+            };
+            assert!(text.contains(&named), "{text}");
+        }
+    }
+}
+
+#[test]
+fn a_remembered_refuse_not_denying_under_torn_settings_is_caught() {
+    let (settings, named) = torn_by("[git]\nprotected_branches = \"main\"\n");
+    let last = remembered(OnProtected::Refuse, false, &["main", "master"]);
+    assert_eq!(
+        commit(&settings, Some(&last), &read("main")),
+        Answer::Deny(reason::remembered_refuse_deny(&named, "main"))
+    );
+}
+
+#[test]
+fn a_remembered_refuse_judged_against_the_wrong_list_is_caught() {
+    let (settings, _) = torn_by("[git]\nprotected_branches = \"main\"\n");
+    let last = remembered(OnProtected::Refuse, false, &["release"]);
+    assert!(matches!(
+        commit(&settings, Some(&last), &read("main")),
+        Answer::Ask(_)
+    ));
+    assert!(matches!(
+        commit(&settings, Some(&last), &read("release")),
+        Answer::Deny(_)
+    ));
+}
+
+#[test]
+fn a_remembered_allow_or_ask_relaxing_torn_settings_is_caught() {
+    let (settings, named) = torn_by("[git]\nprotected_branches = \"main\"\n");
+    for on_protected in [OnProtected::Allow, OnProtected::Ask] {
+        let last = remembered(on_protected, false, &["main"]);
+        assert_eq!(
+            commit(&settings, Some(&last), &read("main")),
+            Answer::Ask(reason::torn_ask(&named, Some("main")))
+        );
+    }
+}
+
+#[test]
+fn a_remembered_refuse_acting_on_a_fallback_only_name_is_caught() {
+    let (settings, named) = torn_by("[git]\nprotected_branches = \"main\"\n");
+    let last = remembered(OnProtected::Refuse, false, &["main"]);
+    assert_eq!(
+        commit(&settings, Some(&last), &fallback("main")),
+        Answer::Ask(reason::torn_ask(&named, Some("main")))
+    );
+}
+
+#[test]
+fn a_remembered_hard_fail_not_denying_a_provably_protected_branch_is_caught() {
+    let (settings, named) = torn_by("[git]\nprotected_branches = \"main\"\n");
+    let last = remembered(OnProtected::Ask, true, &["main"]);
+    assert_eq!(
+        commit(&settings, Some(&last), &fallback("main")),
+        Answer::Deny(reason::remembered_hard_fail_deny(
+            &named,
+            "git could not read the branch (git exited with status 128)",
+            "main"
+        ))
+    );
+    assert!(matches!(
+        commit(&settings, Some(&last), &fallback("develop")),
+        Answer::Ask(_)
+    ));
+}
+
+#[test]
+fn a_torn_commit_with_no_branch_and_no_memory_passing_on_failure_is_caught() {
+    let (settings, named) = torn_by("[git]\nprotected_branches = \"main\"\n");
+    assert_eq!(
+        commit(&settings, None, &unreadable()),
+        Answer::Ask(reason::torn_ask(&named, None))
+    );
+}
+
+#[test]
+fn an_unreadable_branch_under_complete_settings_not_passing_on_failure_is_caught() {
+    let words = "git could not read the branch (HEAD is detached)";
+    for text in [None, Some("[git]\non_protected = \"refuse\"\n")] {
+        assert_eq!(
+            commit(&settings_of(text), None, &unreadable()),
+            Answer::PassOnFailure(reason::failure_pass(words))
+        );
+    }
+}
+
+#[test]
+fn hard_fail_not_denying_a_provably_protected_branch_is_caught() {
+    let settings = settings_of(Some("[git]\nguard_hard_fail = true\n"));
+    assert_eq!(
+        commit(&settings, None, &fallback("main")),
+        Answer::Deny(reason::hard_fail_deny(
+            "main",
+            "git could not read the branch (git exited with status 128)"
+        ))
+    );
+}
+
+#[test]
+fn hard_fail_denying_a_branch_that_is_not_protected_is_caught() {
+    let settings = settings_of(Some("[git]\nguard_hard_fail = true\n"));
+    assert!(matches!(
+        commit(&settings, None, &fallback("develop")),
+        Answer::PassOnFailure(_)
+    ));
+    assert!(matches!(
+        commit(&settings, None, &unreadable()),
+        Answer::PassOnFailure(_)
+    ));
+}
+
+#[test]
+fn refuse_acting_on_a_fallback_only_name_is_caught() {
+    let settings = settings_of(Some("[git]\non_protected = \"refuse\"\n"));
+    assert!(matches!(
+        commit(&settings, None, &fallback("main")),
+        Answer::PassOnFailure(_)
+    ));
+}
+
+#[test]
+fn a_fallback_name_on_a_protected_branch_denying_without_hard_fail_is_caught() {
+    let settings = settings_of(None);
+    assert!(matches!(
+        commit(&settings, None, &fallback("main")),
+        Answer::PassOnFailure(_)
+    ));
+}
+
+#[test]
+fn a_push_not_asking_on_any_branch_or_settings_is_caught() {
+    let (torn, _) = torn_by("[git]\nprotected_branches = \"main\"\n");
+    let allow = settings_of(Some("[git]\non_protected = \"allow\"\n"));
+    let none = settings_of(Some("[git]\nprotected_branches = []\n"));
+    for settings in [&settings_of(None), &allow, &none, &torn] {
+        for branch in [
+            read("develop"),
+            read("main"),
+            fallback("main"),
+            unreadable(),
+        ] {
+            assert_eq!(
+                commit_push_answer(GitVerb::Push, true, settings, None, &branch),
+                Answer::Ask(reason::push_ask()),
+                "{branch:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_call_outside_a_project_not_passing_is_caught() {
+    let (torn, _) = torn_by("[git]\nprotected_branches = \"main\"\n");
+    let refuse = settings_of(Some("[git]\non_protected = \"refuse\"\n"));
+    for verb in [GitVerb::Commit, GitVerb::Push] {
+        for settings in [&refuse, &torn] {
+            for branch in [read("main"), fallback("main"), unreadable()] {
+                assert_eq!(
+                    commit_push_answer(verb, false, settings, None, &branch),
+                    Answer::Pass
+                );
+            }
+        }
+    }
 }
