@@ -6,7 +6,7 @@
 | Design issue | none; build issues [#25](https://github.com/crenshawdev/baley/issues/25), [#127](https://github.com/crenshawdev/baley/issues/127), [#14](https://github.com/crenshawdev/baley/issues/14) (install) |
 | Requirement prefix | HST |
 | Applies | [0002: System design](0002-system-design.md) |
-| Related | ADRs: [0008](../adr/0008-host-sandbox-isolation.md), [0009](../adr/0009-served-instructions.md), [0011](../adr/0011-one-shared-server.md), [0012](../adr/0012-optimistic-concurrency.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md), [0028](../adr/0028-one-http-stack.md), [0033](../adr/0033-host-security-bar.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
+| Related | ADRs: [0008](../adr/0008-host-sandbox-isolation.md), [0009](../adr/0009-served-instructions.md), [0011](../adr/0011-one-shared-server.md), [0012](../adr/0012-optimistic-concurrency.md), [0027](../adr/0027-vendor-folders-and-plain-keys.md), [0028](../adr/0028-one-http-stack.md), [0033](../adr/0033-host-security-bar.md), [0034](../adr/0034-one-server-per-session.md) · C4 view: components ([0002](0002-system-design.md) Figure 4) |
 
 The current design of this area, and nothing else. Edit it in place when the design changes; git holds the history. It describes the design only, never the work still to do.
 
@@ -14,13 +14,13 @@ The current design of this area, and nothing else. Edit it in place when the des
 
 This area decides every way a host, a worker or the owner reaches Baley, and how Baley reaches back:
 
-- the shared server: its transports, protocol revisions, the launcher and the background service;
+- the per-session server: its stdio connection, protocol revisions, the project it serves and the bounded queue its calls share;
 - the host adapter: how Baley knows which host is connected and what that host can do;
 - the wire: the tools, the operation contract, refusals, bounded reads by identity, long work;
 - how Baley's questions reach the owner and how the owner's answers are recorded;
 - served instructions and the stubs a host loads: skills and per-rung agent definitions, written at install;
 - the command line;
-- install and doctor: registration, hook, sandbox, stubs, service, on Claude Code.
+- install and doctor: registration, hook, sandbox and stubs, on Claude Code.
 
 It does not decide the content of any instruction (each area owns its own), the settings ([0003](0003-configuration-and-routing.md)), the guard's decisions ([0010](0010-guard.md)), or how Baley's own binary is built, signed and fetched ([#14](https://github.com/crenshawdev/baley/issues/14)).
 
@@ -33,11 +33,9 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is t
 | Term | Meaning |
 |---|---|
 | Host | Claude Code, the program the owner works in, whose session starts workers as subagents and connects to Baley over MCP. |
-| Session | One host conversation with its own MCP connection. |
-| Worker | A subagent the host session starts for one work order, with its own connection. |
-| Server | The one Baley process per user that every session and worker connects to. |
-| Launcher | The small stdio process a host starts when Baley is not run as a service; it starts the server if none runs, otherwise joins it, and relays the session's stdio to it. |
-| Service | Baley run in the background by the operating system (a systemd user unit or a launchd agent), reached over HTTP. |
+| Session | One host conversation, with its own Baley server over stdio. |
+| Worker | A subagent the host session starts for one work order. It shares its session's connection. |
+| Server | The Baley process a session starts: one per session, over stdio, serving the session and its subagents. |
 | Adapter | The per-host code that knows what a host can do and translates: how a work order is launched, how effort is passed (the rung's own level, run at the model's highest supported level at or below it, HST-R12), how a question reaches the owner, how a long call behaves, how an answer is shaped. |
 | Client info | What a host sends when it connects: its name and version. |
 | Operation | One typed request under the `query` or `apply` tool, named by a string that is only ever added, never renamed or removed. |
@@ -83,21 +81,20 @@ In the component view of [0002](0002-system-design.md) (Figure 4) this area is t
 | Owner | The command line's receipts and refusals; questions relayed by the session | Commands; answers | Not applicable |
 | Host session | Tool results; work orders to launch; questions to relay | Tool calls; launched workers; the owner's answers | Not applicable |
 | Worker | Its work order by id; served instructions and records in parts | Typed results through `apply` | The route in its work order ([0003](0003-configuration-and-routing.md)): the rung's own effort level, recorded apart from the level the model runs at (HST-R12) |
-| Launcher | A host's stdio | The server's answers | Not applicable |
 | Host adapter (port) | The client info; a work order; a question; a long call | The host-specific mechanism for each | Not applicable |
-| Baley server | Every call | Results, parts, refusals | Not applicable |
+| Baley server | Its session's calls, from the session and its subagents | Results, parts, refusals and `failed` answers | Not applicable |
 
 ## 5. Commands and operations
 
 ### baley_version (tool)
 
 - **Inputs:** none.
-- **Outputs:** binary version, protocol revisions served, host detected, transport.
-- **Refusals:** none.
+- **Outputs:** `version`, `os` and `arch` of the running binary.
+- **Refusals:** `unknown-host`, a `failed` answer for a client that is missing or unsupported (HST-R4), and `invalid-arguments` for any argument.
 
 ### baley_query (tool)
 
-- **Inputs:** `operation` and its typed arguments; the caller's working directory; an optional `part`.
+- **Inputs:** `operation` and its typed arguments; an optional `part`.
 - **Outputs:** the operation's typed result, or one part with the next part's identity.
 - **Refusals:** `unknown-operation`, `malformed-arguments` (naming the field), `not-a-project`, plus the operation's own codes.
 
@@ -105,7 +102,7 @@ Query operations are the reads of every area: `help`, `schema`, `document` (a re
 
 ### baley_apply (tool)
 
-- **Inputs:** `operation`, a request id, its typed arguments, the caller's working directory.
+- **Inputs:** `operation`, a request id, its typed arguments.
 - **Outputs:** the operation's typed receipt; a replay of the same request id returns the same receipt.
 - **Refusals:** as `baley_query`, plus `request-id-reuse` (same id, different payload) and the operation's own codes.
 
@@ -117,11 +114,11 @@ Apply operations are the writes of every area, each named in its document: scope
 - **Outputs:** `completed` with the receipt, or `running` with the handle and how long the call waited.
 - **Refusals:** `unknown-handle`, `handle-expired` (HST-R8).
 
-### baley install, baley service, baley doctor
+### baley install, baley doctor
 
-- **Inputs:** `install`: the host (`claude-code`); `service`: `install` or `remove`; `doctor`: the host.
-- **Outputs:** `install`: what was placed, registered, rendered and asked, and the binary version recorded; `service`: the unit or agent written or removed; `doctor`: each check with its state and fix.
-- **Refusals:** `unknown-host`, `not-writable` (a location Baley cannot write, named), `service-unsupported` (an operating system with neither systemd user units nor launchd) (HST-R2, HST-R17).
+- **Inputs:** `install`: the host (`claude-code`); `doctor`: the host.
+- **Outputs:** `install`: what was placed, registered, rendered and asked, and the binary version recorded; `doctor`: each check with its state and fix.
+- **Refusals:** `unknown-host`, `not-writable` (a location Baley cannot write, named) (HST-R17).
 
 ### baley exec
 
